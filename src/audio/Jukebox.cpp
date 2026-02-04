@@ -8,8 +8,8 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
-#include <timeapi.h>
 #ifdef _WIN32
+#include <timeapi.h>
 #include <windows.h>
 #include <avrt.h>
 #pragma comment(lib, "avrt.lib")
