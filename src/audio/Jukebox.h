@@ -1,6 +1,7 @@
 #pragma once
 #include "../bms_parser.hpp"
 #include "AudioWrapper.h"
+#include <array>
 #include <future>
 #include <thread>
 #include <unordered_map>
@@ -20,8 +21,23 @@ struct ImageData {
 };
 class Jukebox {
 public:
+  struct PerformanceAnalytics{
+    static const int BUFFER_SIZE = 10000;
+    // ring buffer to store loop delta time
+    std::array<double, BUFFER_SIZE> loopDeltaTimes;
+    std::atomic<size_t> loopDeltaIndex{0};
+    size_t cursor = 0;
+    double avgDeltaTime = 0;
+    double statsSum = 0;
+    size_t statsCount = 0;
+  };
+  PerformanceAnalytics performanceAnalytics;
+  
   Jukebox(Stopwatch *stopwatch);
   ~Jukebox();
+
+  // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
+  double getAvgDeltaTime();
 
   void loadChart(bms_parser::Chart &chart, bool scheduleNotes,
                  std::atomic_bool &isCancelled);
