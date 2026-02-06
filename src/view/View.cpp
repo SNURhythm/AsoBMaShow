@@ -141,3 +141,16 @@ void View::applyYogaLayoutImmediate() {
     onResize(newWidth, newHeight);
   }
 }
+
+View* View::findViewByName(const std::string& targetName) {
+    if (this->name == targetName) {
+        return this;
+    }
+    for (auto* child : children) {
+        View* found = child->findViewByName(targetName);
+        if (found) {
+            return found;
+        }
+    }
+    return nullptr;
+}

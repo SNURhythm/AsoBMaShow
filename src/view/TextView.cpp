@@ -20,6 +20,7 @@ TextView::TextView(const std::string &fontPath, int fontSize)
   rect = {0, 0, 0, 0};
   s_texColor =
       rendering::UniformCache::getInstance().getSampler("s_texColor");
+  YGNodeSetMeasureFunc(getNode(), measureFunc);
 }
 
 TextView::~TextView() {
@@ -123,8 +124,16 @@ void TextView::createTexture() {
   }
   rect.w = surface->w;
   rect.h = surface->h;
+  YGNodeMarkDirty(getNode());
   texture = rendering::sdlSurfaceToBgfxTexture(surface);
   SDL_FreeSurface(surface);
+}
+
+YGSize TextView::measureFunc(YGNodeConstRef node, float width,
+                             YGMeasureMode widthMode, float height,
+                             YGMeasureMode heightMode) {
+  auto *view = static_cast<TextView *>(YGNodeGetContext(node));
+  return {static_cast<float>(view->rect.w), static_cast<float>(view->rect.h)};
 }
 
 void TextView::setAlign(TextAlign newAlign) { this->align = newAlign; }

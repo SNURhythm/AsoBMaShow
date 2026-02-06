@@ -28,6 +28,9 @@ protected:
   SDL_Rect rect{};
   std::string text;
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  static YGSize measureFunc(YGNodeConstRef node, float width,
+                            YGMeasureMode widthMode, float height,
+                            YGMeasureMode heightMode);
 
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
   void createTexture();

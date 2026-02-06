@@ -7,7 +7,9 @@
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../view/Button.h"
+#include "../../view/Button.h"
 #include "../../scene/MainMenuScene.h"
+#include "../ResultScene.h"
 void GamePlayScene::init() {
   auto chartNameText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   chartNameText->setText(chart->Meta.Title);
@@ -21,7 +23,14 @@ void GamePlayScene::init() {
     if (state != nullptr && state->isPlaying) {
       checkPassedTimeline(time);
       if (state->passedMeasureCount == chart->Measures.size()) {
-        //        SDL_Log("All measures passed");
+        SDL_Log("All measures passed");
+        defer(
+            [this]() {
+              context.sceneManager->changeScene(
+                  new ResultScene(context, chart->Meta, *state));
+              return false;
+            },
+            2000, true);
       }
     }
   });
@@ -399,11 +408,32 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
     state->comboBreak++;
   } else if (judgeResult.judgement != Kpoor) {
     state->combo++;
+    if (state->combo > state->maxCombo) {
+      state->maxCombo = state->combo;
+    }
   }
   renderer->onJudge(judgeResult, state->combo, state->getScore());
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);
+
+  if (judgeResult.judgement != None && judgeResult.judgement != Kpoor) {
+    if (judgeResult.Diff < 0)
+      state->fastCount++;
+    else if (judgeResult.Diff > 0)
+      state->slowCount++;
+  }
+
+  // TODO: implement standard groove gauge system
+
+  if (judgeResult.judgement == PGreat || judgeResult.judgement == Great) {
+    state->currentGauge = std::min(100.0f, state->currentGauge + 0.1f);
+  } else if (judgeResult.judgement == Good) {
+    state->currentGauge = std::max(0.0f, state->currentGauge - 0.5f);
+  } else {
+    state->currentGauge = std::max(0.0f, state->currentGauge - 2.0f);
+  }
+  state->gaugeHistory.push_back(state->currentGauge);
 }
 
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
