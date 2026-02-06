@@ -4,6 +4,7 @@
 class RhythmState {
 public:
   bool isPlaying = false;
+  bool isEnding = false;
 
   size_t passedMeasureCount = 0;
   size_t passedTimelineCount = 0;

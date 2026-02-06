@@ -20,10 +20,11 @@ void GamePlayScene::init() {
   // NOTE: should be set before "reset" call to avoid race condition with onTick
   // callback call
   context.jukebox.onTick([this](long long time) {
-    if (state != nullptr && state->isPlaying) {
+    if (state != nullptr && state->isPlaying && !state->isEnding) {
       checkPassedTimeline(time);
       if (state->passedMeasureCount == chart->Measures.size()) {
         SDL_Log("All measures passed");
+        state->isEnding = true;
         defer(
             [this]() {
               context.sceneManager->changeScene(
