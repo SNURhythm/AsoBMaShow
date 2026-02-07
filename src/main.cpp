@@ -107,6 +107,68 @@ void rendering::updateUIScale(int renderW, int renderH) {
   ui_offset_x = 0;
   ui_offset_y = 0;
 }
+
+#include <deque>
+#include <numeric>
+#include <algorithm>
+
+class FPSCounter {
+public:
+  void addFrame(float deltaTime) {
+    if (deltaTime <= 0.0f)
+      return;
+    frameTimes.push_back(deltaTime);
+    totalTime += deltaTime;
+
+    // Remove old frames outside the window
+    while (totalTime > WINDOW_SIZE && !frameTimes.empty()) {
+      totalTime -= frameTimes.front();
+      frameTimes.pop_front();
+    }
+  }
+
+  float getAverageFPS() const {
+    if (frameTimes.empty())
+      return 0.0f;
+    return frameTimes.size() / totalTime;
+  }
+
+  float get1PercentLowFPS() const {
+    if (frameTimes.empty())
+      return 0.0f;
+
+    std::vector<float> sortedTimes(frameTimes.begin(), frameTimes.end());
+    std::sort(sortedTimes.begin(), sortedTimes.end(),
+              std::greater<float>()); // Sort descending (longest frames first)
+
+    size_t onePercentIndex =
+        static_cast<size_t>(std::ceil(sortedTimes.size() * 0.01));
+    if (onePercentIndex >= sortedTimes.size())
+      onePercentIndex = sortedTimes.size() - 1;
+    if (onePercentIndex == 0 && !sortedTimes.empty())
+      onePercentIndex = 0; // At least consider the worst frame
+
+    // Average of the worst 1% frame times (or just the 99th percentile frame
+    // time?) "1% low" usually refers to the 1st percentile of FPS, which
+    // corresponds to the 99th percentile of frame times. A more robust "1% low"
+    // is often the average of the worst 1% of frames, strictly speaking "1% low
+    // average". Alternatively, it can be the single frame time at the 99th
+    // percentile. Let's use the 99th percentile frame time for simplicity and
+    // standard definitions.
+
+    // 99th percentile frame time
+    float p99FrameTime = sortedTimes[onePercentIndex];
+    if (p99FrameTime <= 0.000001f)
+      return 0.0f;
+
+    return 1.0f / p99FrameTime;
+  }
+
+private:
+  std::deque<float> frameTimes;
+  float totalTime = 0.0f;
+  static constexpr float WINDOW_SIZE = 1.0f; // 1 second window
+};
 int main(int argv, char **args) {
   // Set working directory to executable's directory
   std::filesystem::path exePath;
@@ -446,26 +508,34 @@ void run() {
                                        s_blurPass->finalView());
 
     // render fps, rounded to 2 decimal places
+    static FPSCounter fpsCounter;
+    fpsCounter.addFrame(deltaTime);
     timeSinceLastUpdate += deltaTime;
-    if (timeSinceLastUpdate > 0.2f) {
+    if (timeSinceLastUpdate > 0.5f) {
       std::ostringstream oss;
-      oss << std::fixed << std::setprecision(2) << 1.0f / deltaTime;
+      float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
+      float avgFps = fpsCounter.getAverageFPS();
+      float low1Fps = fpsCounter.get1PercentLowFPS();
+
+      oss << "FPS: " << std::fixed << std::setprecision(1) << currentFps
+          << "  Avg: " << avgFps << "  1% Low: " << low1Fps;
       fpsText.setText(oss.str());
 
       // render jukebox performance analytics
       auto avgDeltaTime = context.jukebox.getAvgDeltaTime();
       double freq = 1000000.0 / avgDeltaTime;
       std::ostringstream oss2;
-      oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us (" << freq << " Hz)";
+      oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us ("
+           << freq << " Hz)";
       avgDeltaTimeText.setText(oss2.str());
       timeSinceLastUpdate = 0.0f;
     }
 
-    fpsText.setPosition(10, 10);
+    fpsText.setPosition(10, 40);
     RenderContext renderContext;
     fpsText.render(renderContext);
 
-    avgDeltaTimeText.setPosition(10, 40);
+    avgDeltaTimeText.setPosition(10, 70);
     avgDeltaTimeText.render(renderContext);
 
     // shift left by 1
