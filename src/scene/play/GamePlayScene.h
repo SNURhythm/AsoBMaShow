@@ -57,5 +57,6 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::map<int, bool> lanePressed;
   TextView *laneStateText = nullptr;
+  void updateLaneStateText();
   std::mutex judgeMutex;
 };

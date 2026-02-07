@@ -4,20 +4,23 @@
 
 #pragma once
 
-#include <queue>
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
-#include "../../game/GameObject.h"
-#include "../../game/SpriteObject.h"
-#include "../../rendering/Color.h"
-#include "../../scene/play/RhythmState.h"
+#include "../../rendering/SimpleBatchRenderer.h"
+#include "../../rendering/TexBatchRenderer.h"
 #include "../../view/TextView.h"
+#include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
-#include "../../rendering/common.h"
+#include "Judge.h"
 #include <bx/math.h>
-
 #include <list>
 #include <mutex>
+
+namespace rendering {
+class SimpleBatchRenderer;
+class TexBatchRenderer;
+} // namespace rendering
+
 class SpriteLoader;
 struct LaneState {
   long long lastStateTime = -1;
@@ -31,10 +34,7 @@ enum ObjectType {
 };
 class BMSRendererState {
 public:
-  ~BMSRendererState();
-  std::map<bms_parser::Note *, SpriteObject *> noteObjectMap;
-  std::map<bms_parser::LongNote *, SpriteObject *> longBodyObjectMap;
-  std::map<ObjectType, std::queue<GameObject *>> objectPool;
+  ~BMSRendererState() = default;
   std::list<bms_parser::LongNote *>
       orphanLongNotes; // long note whose head is dead but tail is alive
   size_t currentTimelineIndex = 0;
@@ -68,17 +68,17 @@ private:
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
   long long latePoorTiming;
-  GameObject *getInstance(ObjectType type);
-  void recycleInstance(ObjectType type, GameObject *object);
-  void drawRect(RenderContext &context, float width, float height, float x,
-                float y, Color color);
-  void drawLaneBeam(RenderContext &context, int lane, const long long time);
+
+  rendering::SimpleBatchRenderer simpleBatchRenderer;
+  rendering::TexBatchRenderer texBatchRenderer;
+
+  void drawRect(float width, float height, float x, float y, Color color);
+  void drawLaneBeam(int lane, const long long time);
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
-  void drawLongNote(RenderContext context, float headY, float tailY,
+  void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
-  void drawNormalNote(RenderContext &context, float y,
-                      bms_parser::Note *const &note);
+  void drawNormalNote(float y, bms_parser::Note *const &note);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,
                                          const char *label);

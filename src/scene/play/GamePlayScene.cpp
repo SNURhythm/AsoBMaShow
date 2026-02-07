@@ -45,6 +45,7 @@ void GamePlayScene::init() {
     SDL_Log("Setting lane %d to false", lane);
     lanePressed[lane] = false;
   }
+  updateLaneStateText();
 
   /* pause screen */
   pauseLayout =
@@ -157,11 +158,6 @@ void GamePlayScene::renderScene() {
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext, context.jukebox.getTimeMicros());
   context.jukebox.render();
-  std::string str;
-  for (auto &[lane, pressed] : lanePressed) {
-    str += std::to_string(pressed) + "\n";
-  }
-  laneStateText->setText(str);
   laneStateText->render(renderContext);
 }
 void GamePlayScene::cleanupScene() {
@@ -211,6 +207,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
   if (!state->isPlaying) {
     lanePressed[mainLane] = true;
+    updateLaneStateText();
     return nullptr;
   }
 
@@ -243,6 +240,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
         }
         const JudgeResult judgement = pressNote(note, pressedTime);
         lanePressed[lane] = true;
+        updateLaneStateText();
         renderer->onLanePressed(
             lane, judgement,
             std::chrono::duration_cast<std::chrono::microseconds>(
@@ -253,6 +251,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     }
   }
   lanePressed[mainLane] = true;
+  updateLaneStateText();
   renderer->onLanePressed(
       mainLane, JudgeResult(None, 0),
       std::chrono::duration_cast<std::chrono::microseconds>(
@@ -265,6 +264,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
     return nullptr;
   }
   lanePressed[lane] = false;
+  updateLaneStateText();
   renderer->onLaneReleased(
       lane, std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::system_clock::now().time_since_epoch())
@@ -500,4 +500,14 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
     }
   }
   return {};
+}
+void GamePlayScene::updateLaneStateText() {
+  if (laneStateText == nullptr) {
+    return;
+  }
+  std::string str;
+  for (auto &[lane, pressed] : lanePressed) {
+    str += std::to_string(pressed) + "\n";
+  }
+  laneStateText->setText(str);
 }

@@ -7,7 +7,7 @@
 #include "Judge.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
-#include "../../rendering/ShaderManager.h"
+#include "../../rendering/common.h"
 #include "stb_image.h"
 #include "../../utils/SpriteLoader.h"
 
@@ -119,23 +119,9 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
   return handle;
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
-  if (state.latestJudgeResult.judgement == None) {
-    return;
-  }
-  std::stringstream ss;
-  ss << state.latestJudgeResult.toString();
-  ss << " ";
-  if (state.latestCombo > 0) {
-    ss << state.latestCombo;
-  }
-  judgeText->setText(ss.str());
-
   judgeText->render(context);
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
-  std::stringstream ss;
-  ss << "Score: " << state.latestScore;
-  scoreText->setText(ss.str());
   scoreText->render(context);
 }
 
@@ -160,9 +146,21 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
   state.latestJudgeResultTime = std::chrono::system_clock::now();
   state.latestCombo = combo;
   state.latestScore = score;
+
+  std::stringstream ss;
+  ss << judgeResult.toString();
+  ss << " ";
+  if (combo > 0) {
+    ss << combo;
+  }
+  judgeText->setText(ss.str());
+
+  std::stringstream ssScore;
+  ssScore << "Score: " << score;
+  scoreText->setText(ssScore.str());
 }
-void BMSRenderer::drawLongNote(RenderContext context, const float headY,
-                               float tailY, bms_parser::LongNote *const &head) {
+void BMSRenderer::drawLongNote(float headY, float tailY,
+                               bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
   if (head->Tail->IsPlayed)
@@ -170,34 +168,10 @@ void BMSRenderer::drawLongNote(RenderContext context, const float headY,
   float startY = head->IsPlayed ? judgeY : headY;
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
-  if (!state.noteObjectMap.contains(head)) {
-    state.noteObjectMap[head] =
-        dynamic_cast<SpriteObject *>(getInstance(ObjectType::Note));
-  }
-  if (!state.noteObjectMap.contains(head->Tail)) {
-    state.noteObjectMap[head->Tail] =
-        dynamic_cast<SpriteObject *>(getInstance(ObjectType::Note));
-  }
-  if (!state.longBodyObjectMap.contains(head)) {
-    state.longBodyObjectMap[head] =
-        dynamic_cast<SpriteObject *>(getInstance(ObjectType::LongBody));
-  }
 
-  SpriteObject *bodyObject = state.longBodyObjectMap[head];
-  bodyObject->width = bodyWidth;
-  bodyObject->height = bodyHeight;
-  bodyObject->tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
-                                                    : longBodyRenderHeightOff);
-  bodyObject->transform.position = {laneToX(head->Lane), startY, 0.0f};
-  bodyObject->transform.rotation = Quaternion::fromEuler(0.0f, 0.0f, 0.0f);
-  bodyObject->visible = true;
-
-  SpriteObject *tailObject = state.noteObjectMap[head->Tail];
-  tailObject->width = noteRenderWidth;
-  tailObject->height = noteRenderHeight;
-  tailObject->transform.position = {laneToX(head->Tail->Lane), tailY, 0.0f};
-  tailObject->transform.rotation = Quaternion::fromEuler(0.0f, 0.0f, 0.0f);
-  tailObject->visible = true;
+  // Body
+  float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
+                                              : longBodyRenderHeightOff);
   bgfx::TextureHandle bodyTexture{};
   bgfx::TextureHandle tailTexture{};
   bgfx::TextureHandle headTexture{};
@@ -221,48 +195,31 @@ void BMSRenderer::drawLongNote(RenderContext context, const float headY,
     }
   }
 
-  bodyObject->setTexture(bodyTexture);
-  tailObject->setTexture(tailTexture);
+  texBatchRenderer.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+                           1.0f, tileV, bodyTexture);
 
-  bodyObject->render(context);
-  // TODO: render tail only in Charge Note mode.
-  tailObject->render(context);
+  // Tail
+  texBatchRenderer.addRect(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
+                           noteRenderHeight, 1.0f, 1.0f, tailTexture);
 
   if (head->IsPlayed)
     return;
 
-  SpriteObject *headObject = state.noteObjectMap[head];
-  headObject->width = noteRenderWidth;
-  headObject->height = noteRenderHeight;
-  headObject->transform.position = {laneToX(head->Lane), startY, 0.0f};
-  headObject->transform.rotation = Quaternion::fromEuler(0.0f, 0.0f, 0.0f);
-  headObject->visible = true;
-  headObject->setTexture(headTexture);
-  headObject->render(context);
+  // Head
+  texBatchRenderer.addRect(laneToX(head->Lane), startY, noteRenderWidth,
+                           noteRenderHeight, 1.0f, 1.0f, headTexture);
 }
-void BMSRenderer::drawNormalNote(RenderContext &context, float y,
-                                 bms_parser::Note *const &note) {
+void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
     return;
-  if (!state.noteObjectMap.contains(note)) {
-    state.noteObjectMap[note] =
-        dynamic_cast<SpriteObject *>(getInstance(ObjectType::Note));
-  }
-  SpriteObject *noteObject = state.noteObjectMap[note];
-  noteObject->width = noteRenderWidth;
-  noteObject->height = noteRenderHeight;
 
-  auto x = laneToX(note->Lane);
-  noteObject->transform.position = {x, y, 0.0f};
-  noteObject->transform.rotation = Quaternion::fromEuler(0.0f, 0.0f, 0.0f);
-  noteObject->visible = true;
   const auto &texture =
       isScratch(note->Lane)
           ? scratchTexture
           : (note->Lane % 2 == 0 ? noteTexture : noteTexture2);
 
-  noteObject->setTexture(texture);
-  noteObject->render(context);
+  texBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
+                           noteRenderHeight, 1.0f, 1.0f, texture);
 }
 
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
@@ -331,12 +288,12 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
+  simpleBatchRenderer.begin();
+  texBatchRenderer.begin();
   // background
-  drawRect(context, 8.0f, upperBound - judgeY, 0.0f, judgeY,
-           Color(20, 20, 20, 122));
+  drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
   // judge line
-  drawRect(context, 8.0f, noteRenderHeight, 0.0f, judgeY,
-           Color(255, 255, 255, 255));
+  drawRect(8.0f, noteRenderHeight, 0.0f, judgeY, Color(255, 255, 255, 255));
   float greenNumber = 400.0f;
   float hispeed =
       240000.0f / chart->Meta.Bpm / greenNumber *
@@ -377,7 +334,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
       if (timeLine->IsFirstInMeasure) {
         // render measure line
-        drawRect(context, 8.0f, 0.05f, 0.0f, y, Color(255, 255, 255, 128));
+        drawRect(8.0f, 0.05f, 0.0f, y, Color(255, 255, 255, 128));
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
       y = judgeY + (micro - timeLine->Timing) /
@@ -405,17 +362,17 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
               // find head's y
               if (auto it = longNoteLookahead.find(longNote->Head);
                   it != longNoteLookahead.end()) {
-                drawLongNote(context, it->second, y, longNote->Head);
+                drawLongNote(it->second, y, longNote->Head);
                 // remove from lookahead
                 longNoteLookahead.erase(longNote->Head);
               } else {
-                drawLongNote(context, lowerBound, y, longNote->Head);
+                drawLongNote(lowerBound, y, longNote->Head);
               }
             } else {
               longNoteLookahead[longNote] = y;
             }
           } else {
-            drawNormalNote(context, y, note);
+            drawNormalNote(y, note);
           }
         } else {
           // note has passed the last hittable timing
@@ -439,10 +396,6 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
               longNoteLookahead[longNote] = lowerBound;
             }
           }
-          if (state.noteObjectMap.contains(note)) {
-            recycleInstance(ObjectType::Note, state.noteObjectMap[note]);
-            state.noteObjectMap.erase(note);
-          }
         }
       }
     }
@@ -456,67 +409,34 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(context, pair.second, upperBound, pair.first);
+    drawLongNote(pair.second, upperBound, pair.first);
   }
+
+  // Flush batch renderer so that lines are drawn first
+  // Actually, I was adding notes to texBatch and lines to simpleBatch.
+  // I should flush simpleBatch first to draw lines behind notes.
+  simpleBatchRenderer.flush();
+  texBatchRenderer.flush();
+
   // render lane beams
   for (auto &laneState : laneStates) {
-    drawLaneBeam(context, laneState.first,
+    drawLaneBeam(laneState.first,
                  std::chrono::duration_cast<std::chrono::microseconds>(
                      std::chrono::system_clock::now().time_since_epoch())
                      .count());
   }
+  simpleBatchRenderer.flush();
 
   // render judgement
   drawJudgement(context);
   drawScore(context);
 }
 void BMSRenderer::reset() { state.reset(); }
-void BMSRenderer::drawRect(RenderContext &context, float width, float height,
-                           float x, float y, Color color) {
-  // draw judge line
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-
-  // Define the vertex layout
-  bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
-
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-
-  auto *vertices = (rendering::PosColorVertex *)tvb.data;
-  auto *index = (uint16_t *)tib.data;
-
-  // Define the corners of the rectangle in local space (2D in X-Y plane)
-  uint32_t abgr = color.toABGR();
-  vertices[0] = {x, y, 0.0f, abgr};
-  vertices[1] = {x + width, y, 0.0f, abgr};
-  vertices[2] = {x + width, y + height, 0.0f, abgr};
-  vertices[3] = {x, y + height, 0.0f, abgr};
-
-  // Set up indices for two triangles (quad)
-  index[0] = 0;
-  index[1] = 1;
-  index[2] = 2;
-  index[3] = 2;
-  index[4] = 3;
-  index[5] = 0;
-
-  // Set up state (e.g., render state, texture, shaders)
-  uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-  bgfx::setState(state);
-
-  // Set the vertex and index buffers
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-
-  // Submit the draw call
-  bgfx::submit(
-      rendering::main_view,
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+void BMSRenderer::drawRect(float width, float height, float x, float y,
+                           Color color) {
+  simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
-void BMSRenderer::drawLaneBeam(RenderContext &context, int lane,
-                               const long long time) {
+void BMSRenderer::drawLaneBeam(int lane, const long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
   if (laneStates[lane].lastStateTime == -1) {
     return;
@@ -546,7 +466,7 @@ void BMSRenderer::drawLaneBeam(RenderContext &context, int lane,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
-  drawRect(context, noteRenderWidth, 10.0f, laneToX(lane), 0.0f, color);
+  drawRect(noteRenderWidth, 10.0f, laneToX(lane), 0.0f, color);
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) { return lane == 7; }
@@ -568,38 +488,6 @@ inline float BMSRenderer::laneToX(int lane) {
   }
 
   return (lane + 1) * noteRenderWidth;
-}
-GameObject *BMSRenderer::getInstance(ObjectType type) {
-  if (state.objectPool.find(type) == state.objectPool.end()) {
-    state.objectPool[type] = std::queue<GameObject *>();
-  }
-  if (!state.objectPool[type].empty()) {
-    GameObject *object = state.objectPool[type].front();
-    state.objectPool[type].pop();
-    return object;
-  }
-  switch (type) {
-  case Note:
-  case LongBody:
-    return new SpriteObject(noteTexture);
-  default:
-    throw std::runtime_error("Unknown object type");
-  }
-}
-void BMSRenderer::recycleInstance(ObjectType type, GameObject *object) {
-  object->visible = false;
-  if (!state.objectPool.contains(type)) {
-    state.objectPool[type] = std::queue<GameObject *>();
-  }
-  state.objectPool[type].push(object);
-}
-BMSRendererState::~BMSRendererState() {
-  for (auto &pair : objectPool) {
-    while (!pair.second.empty()) {
-      delete pair.second.front();
-      pair.second.pop();
-    }
-  }
 }
 void BMSRendererState::reset() {
   orphanLongNotes.clear();
