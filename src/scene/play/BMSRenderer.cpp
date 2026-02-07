@@ -141,12 +141,14 @@ void BMSRenderer::drawScore(RenderContext &context) const {
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
+  std::lock_guard<std::mutex> lock(laneMutex);
   laneStates[lane].isPressed = true;
   laneStates[lane].lastPressedJudge = judge;
   laneStates[lane].lastStateTime = time;
 }
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
+  std::lock_guard<std::mutex> lock(laneMutex);
   laneStates[lane].isPressed = false;
   laneStates[lane].lastStateTime = time;
 }
@@ -515,6 +517,7 @@ void BMSRenderer::drawRect(RenderContext &context, float width, float height,
 }
 void BMSRenderer::drawLaneBeam(RenderContext &context, int lane,
                                const long long time) {
+  std::lock_guard<std::mutex> lock(laneMutex);
   if (laneStates[lane].lastStateTime == -1) {
     return;
   }

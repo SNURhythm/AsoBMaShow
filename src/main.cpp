@@ -367,6 +367,7 @@ void run() {
 
   TextView fpsText("assets/fonts/notosanscjkjp.ttf", 24);
   TextView avgDeltaTimeText("assets/fonts/notosanscjkjp.ttf", 24);
+  float timeSinceLastUpdate = 0.0f;
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::high_resolution_clock::now();
@@ -445,19 +446,25 @@ void run() {
                                        s_blurPass->finalView());
 
     // render fps, rounded to 2 decimal places
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << 1.0f / deltaTime;
-    fpsText.setText(oss.str());
+    timeSinceLastUpdate += deltaTime;
+    if (timeSinceLastUpdate > 0.2f) {
+      std::ostringstream oss;
+      oss << std::fixed << std::setprecision(2) << 1.0f / deltaTime;
+      fpsText.setText(oss.str());
+
+      // render jukebox performance analytics
+      auto avgDeltaTime = context.jukebox.getAvgDeltaTime();
+      double freq = 1000000.0 / avgDeltaTime;
+      std::ostringstream oss2;
+      oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us (" << freq << " Hz)";
+      avgDeltaTimeText.setText(oss2.str());
+      timeSinceLastUpdate = 0.0f;
+    }
+
     fpsText.setPosition(10, 10);
     RenderContext renderContext;
     fpsText.render(renderContext);
 
-    // render jukebox performance analytics
-    auto avgDeltaTime = context.jukebox.getAvgDeltaTime();
-    double freq = 1000000.0 / avgDeltaTime;
-    std::ostringstream oss2;
-    oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us (" << freq << " Hz)";
-    avgDeltaTimeText.setText(oss2.str());
     avgDeltaTimeText.setPosition(10, 40);
     avgDeltaTimeText.render(renderContext);
 

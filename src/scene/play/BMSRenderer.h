@@ -17,6 +17,7 @@
 #include <bx/math.h>
 
 #include <list>
+#include <mutex>
 class SpriteLoader;
 struct LaneState {
   long long lastStateTime = -1;
@@ -50,6 +51,7 @@ public:
 private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
+  std::mutex laneMutex;
   std::map<int, LaneState> laneStates;
 
   float noteImageHeight = 0;
