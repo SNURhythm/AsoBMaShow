@@ -62,6 +62,12 @@
 #include <unistd.h>
 #endif
 
+#if defined(DEBUG) || defined(_DEBUG)
+#define APP_DEBUG_LOG(...) SDL_Log(__VA_ARGS__)
+#else
+#define APP_DEBUG_LOG(...) ((void)0)
+#endif
+
 bgfx::VertexLayout rendering::PosColorVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
@@ -238,7 +244,7 @@ int main(int argv, char **args) {
     std::filesystem::path exeDir = exePath.parent_path();
     if (!exeDir.empty() && std::filesystem::exists(exeDir)) {
       std::filesystem::current_path(exeDir);
-      SDL_Log("Changed working directory to: %s", exeDir.string().c_str());
+      APP_DEBUG_LOG("Changed working directory to: %s", exeDir.string().c_str());
     }
   }
 
@@ -259,21 +265,24 @@ int main(int argv, char **args) {
   lua.safe_script(code);
 
   assert(x == 1);
-  SDL_Log("lua result: %d", x);
+  APP_DEBUG_LOG("lua result: %d", x);
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
   // print bgfx version
-  SDL_Log("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
+  APP_DEBUG_LOG("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
   // print libsdl version
   SDL_version compiled;
   SDL_version linked;
   SDL_VERSION(&compiled);
   SDL_GetVersion(&linked);
 
-  SDL_Log("SDL compile version: %d.%d.%d", static_cast<int>(compiled.major),
-          static_cast<int>(compiled.minor), static_cast<int>(compiled.patch));
-  SDL_Log("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
-          static_cast<int>(linked.minor), static_cast<int>(linked.patch));
+  APP_DEBUG_LOG("SDL compile version: %d.%d.%d",
+                static_cast<int>(compiled.major),
+                static_cast<int>(compiled.minor),
+                static_cast<int>(compiled.patch));
+  APP_DEBUG_LOG("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
+                static_cast<int>(linked.minor),
+                static_cast<int>(linked.patch));
 
 #if TARGET_OS_OSX
   setSmoothScrolling(true);
@@ -296,8 +305,8 @@ int main(int argv, char **args) {
   int windowLogicalWidth = 0;
   int windowLogicalHeight = 0;
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
-  SDL_Log("Window size (logical): %d x %d", windowLogicalWidth,
-          windowLogicalHeight);
+  APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
+                windowLogicalHeight);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
@@ -315,9 +324,9 @@ int main(int argv, char **args) {
       static_cast<float>(rw) / static_cast<float>(windowLogicalWidth);
   rendering::heightScale =
       static_cast<float>(rh) / static_cast<float>(windowLogicalHeight);
-  SDL_Log("Drawable size: %d x %d", rw, rh);
-  SDL_Log("Drawable scale: %f x %f", rendering::widthScale,
-          rendering::heightScale);
+  APP_DEBUG_LOG("Drawable size: %d x %d", rw, rh);
+  APP_DEBUG_LOG("Drawable scale: %f x %f", rendering::widthScale,
+                rendering::heightScale);
   SDL_RenderSetScale(s_renderer, rendering::widthScale, rendering::heightScale);
   rendering::updateUIScale(rw, rh);
 #else
@@ -328,8 +337,8 @@ int main(int argv, char **args) {
 #if !BX_PLATFORM_EMSCRIPTEN
   SDL_SysWMinfo wmi;
   SDL_VERSION(&wmi.version);
-  SDL_Log("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n", wmi.version.major,
-          wmi.version.minor, wmi.version.patch);
+  APP_DEBUG_LOG("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n",
+                wmi.version.major, wmi.version.minor, wmi.version.patch);
   wmi.version.major = 2.0;
   wmi.version.minor = 0;
   if (!SDL_GetWindowWMInfo(win, &wmi)) {
@@ -366,7 +375,7 @@ int main(int argv, char **args) {
   }
   SDL_DestroyWindow(win);
   SDL_Quit();
-  SDL_Log("SDL quit");
+  APP_DEBUG_LOG("SDL quit");
 
   return EXIT_SUCCESS;
 }
@@ -429,6 +438,8 @@ void run() {
 
   TextView fpsText("assets/fonts/notosanscjkjp.ttf", 24);
   TextView avgDeltaTimeText("assets/fonts/notosanscjkjp.ttf", 24);
+  fpsText.setPositionNoLayout(10, 40);
+  avgDeltaTimeText.setPositionNoLayout(10, 70);
   float timeSinceLastUpdate = 0.0f;
   while (!context.quitFlag) {
 
@@ -471,8 +482,8 @@ void run() {
         bgfx::reset(rendering::render_width, rendering::render_height,
                     BGFX_RESET_MSAA_X2 |
                         (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0));
-        SDL_Log("Drawable size: %d x %d", rendering::render_width,
-                rendering::render_height);
+        APP_DEBUG_LOG("Drawable size: %d x %d", rendering::render_width,
+                      rendering::render_height);
         s_postProcess.resize(rendering::render_width, rendering::render_height);
         resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                            s_blurPass->blurViewH(), s_blurPass->blurViewV(),
@@ -500,10 +511,6 @@ void run() {
 
     sceneManager.render();
     s_postProcess.apply();
-    const float blurWidth = rendering::window_width * 0.1f;
-    const float blurHeight = rendering::window_height * 0.1f;
-    const float blurX = (rendering::window_width - blurWidth) * 0.5f;
-    const float blurY = (rendering::window_height - blurHeight) * 0.5f;
     rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
                                        s_blurPass->finalView());
 
@@ -512,30 +519,27 @@ void run() {
     fpsCounter.addFrame(deltaTime);
     timeSinceLastUpdate += deltaTime;
     if (timeSinceLastUpdate > 0.5f) {
-      std::ostringstream oss;
-      float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
-      float avgFps = fpsCounter.getAverageFPS();
-      float low1Fps = fpsCounter.get1PercentLowFPS();
-
-      oss << "FPS: " << std::fixed << std::setprecision(1) << currentFps
-          << "  Avg: " << avgFps << "  1% Low: " << low1Fps;
-      fpsText.setText(oss.str());
+      const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
+      const float avgFps = fpsCounter.getAverageFPS();
+      const float low1Fps = fpsCounter.get1PercentLowFPS();
+      char fpsLine[96];
+      SDL_snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f  Avg: %.1f  1%% Low: %.1f",
+                   currentFps, avgFps, low1Fps);
+      fpsText.setText(fpsLine);
 
       // render jukebox performance analytics
-      auto avgDeltaTime = context.jukebox.getAvgDeltaTime();
-      double freq = 1000000.0 / avgDeltaTime;
-      std::ostringstream oss2;
-      oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us ("
-           << freq << " Hz)";
-      avgDeltaTimeText.setText(oss2.str());
+      const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
+      const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
+      char timingLine[96];
+      SDL_snprintf(timingLine, sizeof(timingLine), "%.2f us (%.2f Hz)",
+                   avgDeltaTime, freq);
+      avgDeltaTimeText.setText(timingLine);
       timeSinceLastUpdate = 0.0f;
     }
 
-    fpsText.setPosition(10, 40);
     RenderContext renderContext;
     fpsText.render(renderContext);
 
-    avgDeltaTimeText.setPosition(10, 70);
     avgDeltaTimeText.render(renderContext);
 
     // shift left by 1

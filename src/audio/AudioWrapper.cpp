@@ -7,6 +7,7 @@
 #include <sndfile.h>
 #include <stdio.h>
 #include <mutex>
+#include <algorithm>
 #if TARGET_OS_DESKTOP
 #include <portaudio.h>
 #endif
@@ -287,17 +288,17 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     return;
 
   std::lock_guard<std::mutex> lock(*userData->mutex);
-  
+
   if (!userData->stopwatch->isRunning()) {
     // Fill with silence if paused
-    std::fill_n((ma_int16*)pOutput, frameCount * outputChannels, 0);
+    std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
     return;
   }
 
-  auto *soundDataList = userData->soundDataList;
-  if (soundDataList == nullptr || soundDataList->empty()) {
+  auto *playingSounds = userData->playingSounds;
+  if (playingSounds == nullptr || playingSounds->empty()) {
     // Fill with silence if no sounds
-    std::fill_n((ma_int16*)pOutput, frameCount * outputChannels, 0);
+    std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
     return;
   }
 
@@ -314,9 +315,12 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
 
   float gain = 0.9f;
 
-  for (auto &soundData : *soundDataList) {
-    if (!soundData->playing)
+  for (size_t i = 0; i < playingSounds->size();) {
+    SoundData *soundData = (*playingSounds)[i];
+    if (!soundData->playing) {
+      playingSounds->erase(playingSounds->begin() + i);
       continue;
+    }
 
     ma_uint32 framesToRead = frameCount;
     ma_uint32 framesAvailable =
@@ -345,7 +349,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     soundData->currentFrame += framesToRead;
     if (framesToRead < frameCount) {
       soundData->playing = false;
+      playingSounds->erase(playingSounds->begin() + i);
+      continue;
     }
+    ++i;
   }
 
   // Apply Effects
@@ -535,8 +542,8 @@ private:
 // AudioWrapper Implementation
 
 AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
-  userData.mutex = &soundDataListMutex;
-  userData.soundDataList = &soundDataList;
+  userData.mutex = &playingSoundsMutex;
+  userData.playingSounds = &playingSounds;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
   userData.bassFilter = &bassFilter;
@@ -683,6 +690,11 @@ bool AudioWrapper::playSound(const path_t &path) {
   soundData->currentFrame = 0;
   soundData->playing = true;
 
+  {
+    std::lock_guard<std::mutex> lock(playingSoundsMutex);
+    playingSounds.push_back(soundData.get());
+  }
+
   return true;
 }
 
@@ -693,13 +705,14 @@ void AudioWrapper::startDevice() {
 }
 
 void AudioWrapper::stopSounds() {
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  std::lock_guard<std::mutex> lock(playingSoundsMutex);
   if (backend) {
     backend->stop();
   }
-  for (auto &soundData : soundDataList) {
+  for (auto *soundData : playingSounds) {
     soundData->playing = false;
   }
+  playingSounds.clear();
 }
 
 void AudioWrapper::unloadSound(const path_t &path) {
@@ -707,6 +720,17 @@ void AudioWrapper::unloadSound(const path_t &path) {
   if (soundDataIndexMap.find(path) != soundDataIndexMap.end()) {
     size_t index = soundDataIndexMap[path];
     auto &soundData = soundDataList[index];
+
+    // Remove from playingSounds if present
+    {
+      std::lock_guard<std::mutex> lock(playingSoundsMutex);
+      auto it = std::find(playingSounds.begin(), playingSounds.end(),
+                          soundData.get());
+      if (it != playingSounds.end()) {
+        playingSounds.erase(it);
+      }
+    }
+
     if (soundData->isResampled) {
       ma_resampler_uninit(&soundData->resampler, nullptr); // Cleanup resampler
     }

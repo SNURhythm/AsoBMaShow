@@ -9,7 +9,7 @@
 #endif
 void parallel_for(size_t n, std::function<void(int start, int end)> f) {
   unsigned int nThreads = std::thread::hardware_concurrency();
-  nThreads = nThreads == 0 ? 1 : nThreads;
+  nThreads = nThreads > 2 ? nThreads - 2 : 1;
   unsigned int batchSize = n / nThreads;
   unsigned int remainder = n % nThreads;
   std::vector<std::thread> threads;

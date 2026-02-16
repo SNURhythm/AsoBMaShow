@@ -4,6 +4,16 @@
 
 namespace rendering {
 
+namespace {
+constexpr size_t kMaxBatchVertices = 65532;
+constexpr size_t kMaxBatchIndices = 65532;
+} // namespace
+
+SimpleBatchRenderer::SimpleBatchRenderer() {
+  vertices.reserve(4096);
+  indices.reserve(6144);
+}
+
 void SimpleBatchRenderer::begin() {
   vertices.clear();
   indices.clear();
@@ -13,11 +23,9 @@ void SimpleBatchRenderer::end() { flush(); }
 
 void SimpleBatchRenderer::addRect(float x, float y, float width, float height,
                                   uint32_t color) {
-  // Check if adding this rect would exceed transient buffer limits
-  // Max vertices per transient buffer is typically 65536, but let's be safe
-  // with a smaller batch limit or handle overflow by flushing.
-  // 4 vertices per rect.
-  if (vertices.size() + 4 > 65536) {
+  // 4 vertices and 6 indices per rect.
+  if (vertices.size() + 4 > kMaxBatchVertices ||
+      indices.size() + 6 > kMaxBatchIndices) {
     flush();
   }
 
@@ -50,15 +58,13 @@ void SimpleBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosColorVertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
-    // Not enough space in transient buffers for this frame/draw call.
-    // Ideally we should split the batch, but for now just logging.
-    // In a real scenario, we might need a dynamic buffer or multiple submit
-    // calls.
     SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
                 "SimpleBatchRenderer: Not enough transient buffer space. "
                 "Vertices: %d, Indices: %d",
                 numVertices, numIndices);
-    // Try to alloc anyway, bgfx might handle it or return empty
+    vertices.clear();
+    indices.clear();
+    return;
   }
 
   bgfx::allocTransientVertexBuffer(&tvb, numVertices, PosColorVertex::ms_decl);

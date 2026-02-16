@@ -13,8 +13,11 @@
 #include "../../rendering/Camera.h"
 #include "Judge.h"
 #include <bx/math.h>
-#include <list>
+#include <chrono>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace rendering {
 class SimpleBatchRenderer;
@@ -35,7 +38,7 @@ enum ObjectType {
 class BMSRendererState {
 public:
   ~BMSRendererState() = default;
-  std::list<bms_parser::LongNote *>
+  std::unordered_set<bms_parser::LongNote *>
       orphanLongNotes; // long note whose head is dead but tail is alive
   size_t currentTimelineIndex = 0;
   JudgeResult latestJudgeResult = JudgeResult(None, 0);
@@ -52,7 +55,8 @@ private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
   std::mutex laneMutex;
-  std::map<int, LaneState> laneStates;
+  std::unordered_map<int, LaneState> laneStates;
+  std::vector<int> laneOrder;
 
   float noteImageHeight = 0;
   float noteImageWidth = 0;
@@ -73,7 +77,7 @@ private:
   rendering::TexBatchRenderer texBatchRenderer;
 
   void drawRect(float width, float height, float x, float y, Color color);
-  void drawLaneBeam(int lane, const long long time);
+  void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
   void drawLongNote(float headY, float tailY,

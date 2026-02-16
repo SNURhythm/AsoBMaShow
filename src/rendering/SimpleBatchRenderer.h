@@ -7,7 +7,7 @@
 namespace rendering {
 class SimpleBatchRenderer {
 public:
-  SimpleBatchRenderer() = default;
+  SimpleBatchRenderer();
   ~SimpleBatchRenderer() = default;
 
   void begin();

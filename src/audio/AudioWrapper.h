@@ -98,7 +98,7 @@ struct SoundData {
 struct UserData {
   Stopwatch *stopwatch;
   std::mutex *mutex;
-  std::vector<std::shared_ptr<SoundData>> *soundDataList;
+  std::vector<SoundData *> *playingSounds;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -130,6 +130,8 @@ private:
   std::unique_ptr<IAudioBackend> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
+  std::vector<SoundData *> playingSounds;
+  std::mutex playingSoundsMutex;
   std::map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
   std::mutex soundDataListMutex;

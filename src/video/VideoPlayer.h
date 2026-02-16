@@ -97,7 +97,9 @@ private:
   bgfx::TextureHandle videoTextureY = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle videoTextureU = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle videoTextureV = BGFX_INVALID_HANDLE;
-  uint8_t *videoFrameDataY = nullptr;
-  uint8_t *videoFrameDataU = nullptr;
-  uint8_t *videoFrameDataV = nullptr;
+
+  std::vector<AVFrame *> recyclePool;
+  std::mutex recycleMutex;
+  AVFrame *getRecycledFrame();
+  void recycleFrame(AVFrame *frame);
 };

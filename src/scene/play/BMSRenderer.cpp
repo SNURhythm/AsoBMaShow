@@ -7,19 +7,25 @@
 #include "Judge.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
-#include "../../rendering/common.h"
 #include "stb_image.h"
 #include "../../utils/SpriteLoader.h"
 
 #include <assert.h>
-#include <sstream>
 #include <string>
+#include <unordered_map>
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     : latePoorTiming(latePoorTiming), chart(chart) {
-  for (auto lane : chart->Meta.GetTotalLaneIndices()) {
-    laneStates[lane] = LaneState();
+  laneOrder = chart->Meta.GetTotalLaneIndices();
+  laneStates.reserve(laneOrder.size());
+  for (int lane : laneOrder) {
+    laneStates.emplace(lane, LaneState{});
   }
   // flatten timeline
+  size_t timelineCount = 0;
+  for (const auto &measure : chart->Measures) {
+    timelineCount += measure->TimeLines.size();
+  }
+  timelines.reserve(timelineCount);
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
       timelines.push_back(timeLine);
@@ -128,15 +134,25 @@ void BMSRenderer::drawScore(RenderContext &context) const {
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  laneStates[lane].isPressed = true;
-  laneStates[lane].lastPressedJudge = judge;
-  laneStates[lane].lastStateTime = time;
+  auto [it, inserted] = laneStates.try_emplace(lane);
+  LaneState &laneState = it->second;
+  laneState.isPressed = true;
+  laneState.lastPressedJudge = judge;
+  laneState.lastStateTime = time;
+  if (inserted) {
+    laneOrder.push_back(lane);
+  }
 }
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  laneStates[lane].isPressed = false;
-  laneStates[lane].lastStateTime = time;
+  auto [it, inserted] = laneStates.try_emplace(lane);
+  LaneState &laneState = it->second;
+  laneState.isPressed = false;
+  laneState.lastStateTime = time;
+  if (inserted) {
+    laneOrder.push_back(lane);
+  }
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
   if (judgeResult.judgement == None) {
@@ -147,17 +163,13 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
   state.latestCombo = combo;
   state.latestScore = score;
 
-  std::stringstream ss;
-  ss << judgeResult.toString();
-  ss << " ";
+  std::string judgeLine = judgeResult.toString();
   if (combo > 0) {
-    ss << combo;
+    judgeLine.push_back(' ');
+    judgeLine += std::to_string(combo);
   }
-  judgeText->setText(ss.str());
-
-  std::stringstream ssScore;
-  ssScore << "Score: " << score;
-  scoreText->setText(ssScore.str());
+  judgeText->setText(judgeLine);
+  scoreText->setText("Score: " + std::to_string(score));
 }
 void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
@@ -303,8 +315,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
-  std::map<bms_parser::LongNote *, float> longNoteLookahead;
-  for (auto &orphanLongNote : state.orphanLongNotes) {
+  std::unordered_map<bms_parser::LongNote *, float> longNoteLookahead;
+  longNoteLookahead.reserve(state.orphanLongNotes.size() + 16);
+  for (auto *orphanLongNote : state.orphanLongNotes) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
   // render timeline
@@ -353,8 +366,8 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
           }
           // render note
           if (note->IsLongNote()) {
-            if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
-                longNote->IsTail()) {
+            auto *longNote = static_cast<bms_parser::LongNote *>(note);
+            if (longNote->IsTail()) {
               if (longNote->Head == nullptr) {
                 // ignore malformed chart: long note is not terminated
                 continue;
@@ -377,19 +390,19 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         } else {
           // note has passed the last hittable timing
           if (note->IsLongNote()) {
-            if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
-                longNote->IsTail()) {
+            auto *longNote = static_cast<bms_parser::LongNote *>(note);
+            if (longNote->IsTail()) {
               if (longNote->Head == nullptr) {
                 // ignore malformed chart: long note is not terminated
                 continue;
               }
               // remove from orphan long note
-              state.orphanLongNotes.remove(longNote->Head);
+              state.orphanLongNotes.erase(longNote->Head);
               // and from long note lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
               // add to orphan long note
-              state.orphanLongNotes.push_back(longNote);
+              state.orphanLongNotes.insert(longNote);
 
               // setting to lowerBound in all cases is OK because the played
               // state will be correctly handled by drawLongNote
@@ -419,11 +432,19 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   texBatchRenderer.flush();
 
   // render lane beams
-  for (auto &laneState : laneStates) {
-    drawLaneBeam(laneState.first,
-                 std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::system_clock::now().time_since_epoch())
-                     .count());
+  const long long nowMicros =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  {
+    std::lock_guard<std::mutex> lock(laneMutex);
+    for (int lane : laneOrder) {
+      const auto it = laneStates.find(lane);
+      if (it == laneStates.end()) {
+        continue;
+      }
+      drawLaneBeam(lane, it->second, nowMicros);
+    }
   }
   simpleBatchRenderer.flush();
 
@@ -436,12 +457,11 @@ void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
-void BMSRenderer::drawLaneBeam(int lane, const long long time) {
-  std::lock_guard<std::mutex> lock(laneMutex);
-  if (laneStates[lane].lastStateTime == -1) {
+void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
+                               const long long time) {
+  if (laneState.lastStateTime == -1) {
     return;
   }
-  const auto &laneState = laneStates[lane];
   // alpha
   double alpha;
   if (laneState.isPressed) {

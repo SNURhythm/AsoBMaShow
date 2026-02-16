@@ -5,8 +5,15 @@
 
 namespace rendering {
 
+namespace {
+constexpr size_t kMaxBatchVertices = 65532;
+constexpr size_t kMaxBatchIndices = 65532;
+} // namespace
+
 TexBatchRenderer::TexBatchRenderer() {
   s_texColor = UniformCache::getInstance().getSampler("s_texColor");
+  vertices.reserve(4096);
+  indices.reserve(6144);
 }
 
 void TexBatchRenderer::begin() {
@@ -25,8 +32,9 @@ void TexBatchRenderer::addRect(float x, float y, float width, float height,
     currentTexture = texture;
   }
 
-  // Check limits
-  if (vertices.size() + 4 > 65536) {
+  // 4 vertices and 6 indices per rect.
+  if (vertices.size() + 4 > kMaxBatchVertices ||
+      indices.size() + 6 > kMaxBatchIndices) {
     flush();
   }
 
@@ -75,6 +83,9 @@ void TexBatchRenderer::flush() {
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
     SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
                 "TexBatchRenderer: Not enough transient buffer space.");
+    vertices.clear();
+    indices.clear();
+    return;
   }
 
   bgfx::allocTransientVertexBuffer(&tvb, numVertices,

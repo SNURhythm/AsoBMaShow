@@ -22,7 +22,8 @@ protected:
   void renderImpl(RenderContext &context) override;
   TextAlign align = TextAlign::LEFT;
   TextVAlign valign = TextVAlign::TOP;
-  TTF_Font *font;
+  TTF_Font *font = nullptr;
+  bool ttfInitialized = false;
 
   SDL_Color color{};
   SDL_Rect rect{};

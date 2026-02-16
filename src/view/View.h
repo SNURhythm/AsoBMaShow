@@ -180,15 +180,13 @@ public:
   inline void setSize(int newWidth, int newHeight) {
     auto width = YGNodeLayoutGetWidth(node);
     auto height = YGNodeLayoutGetHeight(node);
-    bool isResized = width != newWidth || height != newHeight;
+    bool isResized = std::abs(width - newWidth) > 0.1f ||
+                     std::abs(height - newHeight) > 0.1f;
 
-    width = newWidth;
-    height = newHeight;
     if (isResized) {
-      SDL_Log("View::setSize: %d, %d", newWidth, newHeight);
       onResize(newWidth, newHeight);
-      YGNodeStyleSetWidth(node, width);
-      YGNodeStyleSetHeight(node, height);
+      YGNodeStyleSetWidth(node, newWidth);
+      YGNodeStyleSetHeight(node, newHeight);
       applyYogaLayout();
     }
   }
@@ -266,9 +264,9 @@ public:
   View *addView(View *view);
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }
-  void setName(const std::string& name) { this->name = name; }
-  const std::string& getName() const { return name; }
-  View* findViewByName(const std::string& name);
+  void setName(const std::string &name) { this->name = name; }
+  const std::string &getName() const { return name; }
+  View *findViewByName(const std::string &name);
 
   bool drawBoundingBox = false;
   void applyYogaLayout();
