@@ -314,11 +314,15 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   float *mixBuffer = userData->mixBuffer->data();
 
   float gain = 0.9f;
+  auto removePlayingSoundAt = [playingSounds](size_t index) {
+    (*playingSounds)[index] = playingSounds->back();
+    playingSounds->pop_back();
+  };
 
   for (size_t i = 0; i < playingSounds->size();) {
     SoundData *soundData = (*playingSounds)[i];
     if (!soundData->playing) {
-      playingSounds->erase(playingSounds->begin() + i);
+      removePlayingSoundAt(i);
       continue;
     }
 
@@ -349,7 +353,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     soundData->currentFrame += framesToRead;
     if (framesToRead < frameCount) {
       soundData->playing = false;
-      playingSounds->erase(playingSounds->begin() + i);
+      removePlayingSoundAt(i);
       continue;
     }
     ++i;

@@ -175,6 +175,12 @@ uint32_t VideoPlayer::setupFormat(char *chroma, unsigned *width,
 void VideoPlayer::update() {
   if (!isPlaying)
     return;
+  if (formatContext == nullptr || videoStreamIndex < 0) {
+    return;
+  }
+  if (bufferSize.load(std::memory_order_acquire) == 0) {
+    return;
+  }
 
   AVFrame *currentFrame;
   double elapsedTime;
@@ -212,7 +218,6 @@ void VideoPlayer::update() {
 
     if (elapsedTime > frameTime + 0.1) {
       lastFramePTS = frameTime;
-      SDL_Log("Skipping frame: too late for display");
       // Recycle the skipped frame
       recycleFrame(currentFrame);
       continue;
@@ -390,7 +395,7 @@ void VideoPlayer::seek(int64_t micro) {
     // Free all frames in the ring buffer
     for (size_t i = 0; i < maxBufferSize; ++i) {
       if (frameBuffer[i] != nullptr) {
-        av_frame_free(&frameBuffer[i]);
+        recycleFrame(frameBuffer[i]);
         frameBuffer[i] = nullptr;
       }
     }
@@ -419,6 +424,14 @@ void VideoPlayer::seek(int64_t micro) {
 }
 
 void VideoPlayer::predecodeFrames() {
+  AVPacket *localPacket = av_packet_alloc();
+  AVFrame *decodedFrame = av_frame_alloc();
+  if (localPacket == nullptr || decodedFrame == nullptr) {
+    av_packet_free(&localPacket);
+    av_frame_free(&decodedFrame);
+    return;
+  }
+
   while (predecodingActive) {
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
@@ -433,10 +446,11 @@ void VideoPlayer::predecodeFrames() {
     bool readFailed = false;
     {
       std::lock_guard<std::mutex> videoLock(videoMutex);
-      if (!formatContext || !codecContext)
+      if (!formatContext || !codecContext) {
         continue;
+      }
 
-      AVPacket *localPacket = av_packet_alloc();
+      av_packet_unref(localPacket);
       if (av_read_frame(formatContext, localPacket) >= 0) {
         if (localPacket->stream_index == videoStreamIndex) {
 
@@ -446,23 +460,36 @@ void VideoPlayer::predecodeFrames() {
           if (send_ret >= 0) {
             // FFmpeg 7.1 Fix: Drain all available frames from the decoder
             while (true) {
-              AVFrame *decodedFrame = av_frame_alloc();
-              int receive_ret =
-                  avcodec_receive_frame(codecContext, decodedFrame);
+              av_frame_unref(decodedFrame);
+              int receive_ret = avcodec_receive_frame(codecContext, decodedFrame);
 
               if (receive_ret == 0) {
                 // Frame decoded successfully. Now scale it on this thread.
                 AVFrame *targetFrame = getRecycledFrame();
                 if (targetFrame) {
-                  // Ensure frame properties are correct for scaling
-                  targetFrame->format = AV_PIX_FMT_YUV420P;
-                  targetFrame->width = videoFrameWidth;
-                  targetFrame->height = videoFrameHeight;
+                  if (videoFrameWidth <= 0 || videoFrameHeight <= 0) {
+                    recycleFrame(targetFrame);
+                    continue;
+                  }
 
-                  if (av_frame_get_buffer(targetFrame, 32) <
-                      0) { // 32 byte alignment
-                    SDL_Log("Failed to allocate buffer for target frame");
-                    av_frame_free(&decodedFrame);
+                  const bool canReuseExistingBuffer =
+                      targetFrame->buf[0] != nullptr &&
+                      targetFrame->format == AV_PIX_FMT_YUV420P &&
+                      targetFrame->width == videoFrameWidth &&
+                      targetFrame->height == videoFrameHeight;
+
+                  if (!canReuseExistingBuffer) {
+                    av_frame_unref(targetFrame);
+                    targetFrame->format = AV_PIX_FMT_YUV420P;
+                    targetFrame->width = videoFrameWidth;
+                    targetFrame->height = videoFrameHeight;
+                    if (av_frame_get_buffer(targetFrame, 32) < 0) {
+                      recycleFrame(targetFrame);
+                      continue;
+                    }
+                  }
+                  if (av_frame_make_writable(targetFrame) < 0) {
+                    SDL_Log("Failed to make target frame writable");
                     recycleFrame(targetFrame);
                     continue;
                   }
@@ -476,24 +503,30 @@ void VideoPlayer::predecodeFrames() {
                             decodedFrame->linesize, 0, codecContext->height,
                             targetFrame->data, targetFrame->linesize);
 
-                  targetFrame->pts = decodedFrame->pts;
+                  const int64_t bestPts =
+                      decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
+                          ? decodedFrame->best_effort_timestamp
+                          : decodedFrame->pts;
+                  targetFrame->pts = bestPts;
 
                   std::lock_guard<std::mutex> lock(bufferMutex);
-                  frameBuffer[bufferTail] = targetFrame;
-                  bufferTail = (bufferTail + 1) % maxBufferSize;
-                  ++bufferSize;
+                  if (bufferSize < maxBufferSize) {
+                    frameBuffer[bufferTail] = targetFrame;
+                    bufferTail = (bufferTail + 1) % maxBufferSize;
+                    ++bufferSize;
+                  } else {
+                    recycleFrame(targetFrame);
+                    break;
+                  }
 
                   // If buffer is full, we must stop receiving for now
                   if (bufferSize >= maxBufferSize) {
-                    av_frame_free(&decodedFrame);
                     break;
                   }
                 } else {
                   SDL_Log("Failed to get recycled frame");
                 }
-                av_frame_free(&decodedFrame);
               } else {
-                av_frame_free(&decodedFrame);
                 if (receive_ret == AVERROR(EAGAIN) ||
                     receive_ret == AVERROR_EOF)
                   break;
@@ -508,7 +541,6 @@ void VideoPlayer::predecodeFrames() {
         isEOF = true;
         readFailed = true;
       }
-      av_packet_free(&localPacket);
     }
 
     if (readFailed && isEOF) {
@@ -516,6 +548,9 @@ void VideoPlayer::predecodeFrames() {
       eofCV.wait(lock, [this] { return !isEOF || !predecodingActive; });
     }
   }
+
+  av_frame_free(&decodedFrame);
+  av_packet_free(&localPacket);
 }
 
 void VideoPlayer::stopPredecoding() {
@@ -551,8 +586,6 @@ AVFrame *VideoPlayer::getRecycledFrame() {
   }
   AVFrame *frame = recyclePool.back();
   recyclePool.pop_back();
-  // Reset frame properties but keep buffer if possible
-  av_frame_unref(frame);
   return frame;
 }
 
@@ -560,6 +593,9 @@ void VideoPlayer::recycleFrame(AVFrame *frame) {
   if (!frame)
     return;
   std::lock_guard<std::mutex> lock(recycleMutex);
-  // Reuse the frame
+  if (recyclePool.size() >= maxBufferSize * 2) {
+    av_frame_free(&frame);
+    return;
+  }
   recyclePool.push_back(frame);
 }

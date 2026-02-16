@@ -24,7 +24,6 @@
 #include "rendering/UniformCache.h"
 #include "context.h"
 #include "audio/AudioWrapper.h"
-#include "view/TextView.h"
 #ifdef _WIN32
 #include <windows.h>
 
@@ -115,14 +114,20 @@ void rendering::updateUIScale(int renderW, int renderH) {
 }
 
 #include <deque>
-#include <numeric>
 #include <algorithm>
 
 class FPSCounter {
 public:
   void addFrame(float deltaTime) {
-    if (deltaTime <= 0.0f)
+    if (deltaTime <= 0.0f) {
       return;
+    }
+    // Treat very large deltas as discontinuities (e.g. resize/app switch).
+    if (deltaTime > MAX_SAMPLE_DELTA) {
+      frameTimes.clear();
+      totalTime = 0.0f;
+      return;
+    }
     frameTimes.push_back(deltaTime);
     totalTime += deltaTime;
 
@@ -134,46 +139,39 @@ public:
   }
 
   float getAverageFPS() const {
-    if (frameTimes.empty())
+    if (frameTimes.empty() || totalTime <= 0.0f)
       return 0.0f;
-    return frameTimes.size() / totalTime;
+    return static_cast<float>(frameTimes.size()) / totalTime;
   }
 
   float get1PercentLowFPS() const {
-    if (frameTimes.empty())
+    if (frameTimes.empty()) {
+      return 0.0f;
+    }
+
+    std::vector<float> samples(frameTimes.begin(), frameTimes.end());
+    size_t worstCount = std::max<size_t>(1, samples.size() / 100);
+    worstCount = std::min(worstCount, samples.size());
+    std::nth_element(samples.begin(), samples.begin() + (worstCount - 1),
+                     samples.end(), std::greater<float>());
+
+    double worstFrameTimeSum = 0.0;
+    for (size_t i = 0; i < worstCount; ++i) {
+      worstFrameTimeSum += samples[i];
+    }
+    const double avgWorstFrameTime =
+        worstFrameTimeSum / static_cast<double>(worstCount);
+    if (avgWorstFrameTime <= 0.000001)
       return 0.0f;
 
-    std::vector<float> sortedTimes(frameTimes.begin(), frameTimes.end());
-    std::sort(sortedTimes.begin(), sortedTimes.end(),
-              std::greater<float>()); // Sort descending (longest frames first)
-
-    size_t onePercentIndex =
-        static_cast<size_t>(std::ceil(sortedTimes.size() * 0.01));
-    if (onePercentIndex >= sortedTimes.size())
-      onePercentIndex = sortedTimes.size() - 1;
-    if (onePercentIndex == 0 && !sortedTimes.empty())
-      onePercentIndex = 0; // At least consider the worst frame
-
-    // Average of the worst 1% frame times (or just the 99th percentile frame
-    // time?) "1% low" usually refers to the 1st percentile of FPS, which
-    // corresponds to the 99th percentile of frame times. A more robust "1% low"
-    // is often the average of the worst 1% of frames, strictly speaking "1% low
-    // average". Alternatively, it can be the single frame time at the 99th
-    // percentile. Let's use the 99th percentile frame time for simplicity and
-    // standard definitions.
-
-    // 99th percentile frame time
-    float p99FrameTime = sortedTimes[onePercentIndex];
-    if (p99FrameTime <= 0.000001f)
-      return 0.0f;
-
-    return 1.0f / p99FrameTime;
+    return static_cast<float>(1.0 / avgWorstFrameTime);
   }
 
 private:
   std::deque<float> frameTimes;
   float totalTime = 0.0f;
-  static constexpr float WINDOW_SIZE = 1.0f; // 1 second window
+  static constexpr float WINDOW_SIZE = 5.0f;       // 5 second window
+  static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
 };
 int main(int argv, char **args) {
   // Set working directory to executable's directory
@@ -244,7 +242,8 @@ int main(int argv, char **args) {
     std::filesystem::path exeDir = exePath.parent_path();
     if (!exeDir.empty() && std::filesystem::exists(exeDir)) {
       std::filesystem::current_path(exeDir);
-      APP_DEBUG_LOG("Changed working directory to: %s", exeDir.string().c_str());
+      APP_DEBUG_LOG("Changed working directory to: %s",
+                    exeDir.string().c_str());
     }
   }
 
@@ -276,13 +275,11 @@ int main(int argv, char **args) {
   SDL_VERSION(&compiled);
   SDL_GetVersion(&linked);
 
-  APP_DEBUG_LOG("SDL compile version: %d.%d.%d",
-                static_cast<int>(compiled.major),
-                static_cast<int>(compiled.minor),
-                static_cast<int>(compiled.patch));
+  APP_DEBUG_LOG(
+      "SDL compile version: %d.%d.%d", static_cast<int>(compiled.major),
+      static_cast<int>(compiled.minor), static_cast<int>(compiled.patch));
   APP_DEBUG_LOG("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
-                static_cast<int>(linked.minor),
-                static_cast<int>(linked.patch));
+                static_cast<int>(linked.minor), static_cast<int>(linked.patch));
 
 #if TARGET_OS_OSX
   setSmoothScrolling(true);
@@ -360,6 +357,8 @@ int main(int argv, char **args) {
       BGFX_RESET_MSAA_X2 | (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0);
   bgfx_init.platformData = pd;
   bgfx::init(bgfx_init);
+  // Keep debug rendering disabled in normal runtime to avoid perturbing
+  // frame pacing and post-process output.
   // bgfx::setDebug(BGFX_DEBUG_TEXT);
 
   // bgfx::setPlatformData(pd);
@@ -393,7 +392,7 @@ void run() {
   // SDL_RenderPresent(ren);
   SDL_Event e;
 
-  auto lastFrameTime = std::chrono::high_resolution_clock::now();
+  auto lastFrameTime = std::chrono::steady_clock::now();
 
   // Initialize bgfx
   rendering::PosColorVertex::init();
@@ -428,22 +427,16 @@ void run() {
   bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
                     rendering::ui_offset_y, rendering::ui_view_width,
                     rendering::ui_view_height);
-  auto program =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                      s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                      s_blurPass->finalView());
   rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                             s_blurPass->finalView());
 
-  TextView fpsText("assets/fonts/notosanscjkjp.ttf", 24);
-  TextView avgDeltaTimeText("assets/fonts/notosanscjkjp.ttf", 24);
-  fpsText.setPositionNoLayout(10, 40);
-  avgDeltaTimeText.setPositionNoLayout(10, 70);
-  float timeSinceLastUpdate = 0.0f;
+  constexpr bool kEnablePerfTelemetry = true;
   while (!context.quitFlag) {
 
-    auto currentFrameTime = std::chrono::high_resolution_clock::now();
+    auto currentFrameTime = std::chrono::steady_clock::now();
     float deltaTime =
         std::chrono::duration<float, std::chrono::seconds::period>(
             currentFrameTime - lastFrameTime)
@@ -501,7 +494,6 @@ void run() {
     // clear color
 
     bgfx::touch(rendering::clear_view);
-    bgfx::submit(rendering::clear_view, program);
     bgfx::touch(rendering::ui_view);
     bgfx::touch(rendering::bga_view);
     bgfx::touch(rendering::bga_layer_view);
@@ -514,33 +506,29 @@ void run() {
     rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
                                        s_blurPass->finalView());
 
-    // render fps, rounded to 2 decimal places
-    static FPSCounter fpsCounter;
-    fpsCounter.addFrame(deltaTime);
-    timeSinceLastUpdate += deltaTime;
-    if (timeSinceLastUpdate > 0.5f) {
-      const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
-      const float avgFps = fpsCounter.getAverageFPS();
-      const float low1Fps = fpsCounter.get1PercentLowFPS();
-      char fpsLine[96];
-      SDL_snprintf(fpsLine, sizeof(fpsLine), "FPS: %.1f  Avg: %.1f  1%% Low: %.1f",
-                   currentFps, avgFps, low1Fps);
-      fpsText.setText(fpsLine);
+    if constexpr (kEnablePerfTelemetry) {
+      static FPSCounter fpsCounter;
+      static float telemetryLogInterval = 0.0f;
+      static float timeSinceLastUpdate = 0.0f;
+      fpsCounter.addFrame(deltaTime);
+      timeSinceLastUpdate += deltaTime;
+      telemetryLogInterval += deltaTime;
+      if (timeSinceLastUpdate > 0.5f) {
+        const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
+        const float avgFps = fpsCounter.getAverageFPS();
+        const float low1Fps = fpsCounter.get1PercentLowFPS();
 
-      // render jukebox performance analytics
-      const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
-      const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
-      char timingLine[96];
-      SDL_snprintf(timingLine, sizeof(timingLine), "%.2f us (%.2f Hz)",
-                   avgDeltaTime, freq);
-      avgDeltaTimeText.setText(timingLine);
-      timeSinceLastUpdate = 0.0f;
+        const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
+        const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
+        if (telemetryLogInterval >= 1.0f) {
+          telemetryLogInterval = 0.0f;
+          SDL_Log(
+              "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz)",
+              currentFps, avgFps, low1Fps, avgDeltaTime, freq);
+        }
+        timeSinceLastUpdate = 0.0f;
+      }
     }
-
-    RenderContext renderContext;
-    fpsText.render(renderContext);
-
-    avgDeltaTimeText.render(renderContext);
 
     // shift left by 1
     // float translate[16];
