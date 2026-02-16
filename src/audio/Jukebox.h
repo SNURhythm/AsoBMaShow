@@ -47,6 +47,7 @@ public:
   void play();
   void stop();
   void render();
+  bool hasActiveVisuals() const;
 
   long long getTimeMicros();
   void seek(long long micro);
@@ -88,8 +89,8 @@ private:
   long long lastPositionMicro = 0;
   double diffSamples[100];
   int diffSampleCount = 0;
-  int currentBga = -1;
-  int currentBmpLayer = -1;
+  std::atomic<int> currentBga{-1};
+  std::atomic<int> currentBmpLayer{-1};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};

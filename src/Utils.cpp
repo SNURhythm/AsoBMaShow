@@ -8,19 +8,48 @@
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 void parallel_for(size_t n, std::function<void(int start, int end)> f) {
-  unsigned int nThreads = std::thread::hardware_concurrency();
-  nThreads = nThreads > 2 ? nThreads - 2 : 1;
-  unsigned int batchSize = n / nThreads;
-  unsigned int remainder = n % nThreads;
-  std::vector<std::thread> threads;
-  for (unsigned int i = 0; i < nThreads; i++) {
-    unsigned int start = i * batchSize;
-    unsigned int end = start + batchSize;
-    if (i == nThreads - 1) {
-      end += remainder;
-    }
-    threads.emplace_back(f, start, end);
+  if (n == 0) {
+    return;
   }
+
+  unsigned int hwThreads = std::thread::hardware_concurrency();
+  if (hwThreads == 0) {
+    hwThreads = 4;
+  }
+
+  // Keep headroom for render/audio/main threads to reduce frame-time spikes.
+  unsigned int reservedThreads = 1;
+  if (hwThreads > 8) {
+    reservedThreads = 4;
+  } else if (hwThreads > 4) {
+    reservedThreads = 2;
+  }
+
+  unsigned int workerThreads =
+      hwThreads > reservedThreads ? hwThreads - reservedThreads : 1;
+  workerThreads = std::min<unsigned int>(workerThreads,
+                                         static_cast<unsigned int>(n));
+
+  if (workerThreads <= 1) {
+    f(0, static_cast<int>(n));
+    return;
+  }
+
+  const size_t batchSize = (n + workerThreads - 1) / workerThreads;
+  std::vector<std::thread> threads;
+  threads.reserve(workerThreads);
+
+  for (unsigned int i = 0; i < workerThreads; ++i) {
+    const size_t start = static_cast<size_t>(i) * batchSize;
+    if (start >= n) {
+      break;
+    }
+    const size_t end = std::min(n, start + batchSize);
+    threads.emplace_back([&f, start, end]() {
+      f(static_cast<int>(start), static_cast<int>(end));
+    });
+  }
+
   for (auto &t : threads) {
     t.join();
   }

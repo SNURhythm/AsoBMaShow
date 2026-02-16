@@ -298,10 +298,12 @@ private:
     dirtyRoots.insert(root);
   }
   static void flushLayoutBatches() {
+    if (dirtyRoots.empty()) {
+      return;
+    }
     for (auto *root : dirtyRoots) {
       root->applyYogaLayoutImmediate();
     }
-    SDL_Log("flushLayoutBatches: %d", dirtyRoots.size());
     dirtyRoots.clear();
   }
   void applyYogaLayoutImmediate();

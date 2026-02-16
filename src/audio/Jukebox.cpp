@@ -33,32 +33,45 @@ Jukebox::~Jukebox() {
   }
 }
 void Jukebox::render() {
-  if (currentBga != -1) {
-    if (videoPlayerTable.find(currentBga) != videoPlayerTable.end()) {
-      auto videoPlayer = videoPlayerTable[currentBga];
+  const int bga = currentBga.load(std::memory_order_relaxed);
+  if (bga != -1) {
+    auto videoIt = videoPlayerTable.find(bga);
+    if (videoIt != videoPlayerTable.end()) {
+      auto *videoPlayer = videoIt->second;
       videoPlayer->viewWidth = rendering::window_width;
       videoPlayer->viewHeight = rendering::window_height;
       videoPlayer->viewId = rendering::bga_view;
       videoPlayer->update();
       videoPlayer->render();
-    } else if (imageTable.find(currentBga) != imageTable.end()) {
-      auto image = imageTable[currentBga];
-      renderImage(image, rendering::bga_view);
+    } else {
+      auto imageIt = imageTable.find(bga);
+      if (imageIt != imageTable.end()) {
+        renderImage(imageIt->second, rendering::bga_view);
+      }
     }
   }
-  if (currentBmpLayer != -1) {
-    if (videoPlayerTable.find(currentBmpLayer) != videoPlayerTable.end()) {
-      auto videoPlayer = videoPlayerTable[currentBmpLayer];
+  const int bmpLayer = currentBmpLayer.load(std::memory_order_relaxed);
+  if (bmpLayer != -1) {
+    auto videoIt = videoPlayerTable.find(bmpLayer);
+    if (videoIt != videoPlayerTable.end()) {
+      auto *videoPlayer = videoIt->second;
       videoPlayer->viewWidth = rendering::window_width;
       videoPlayer->viewHeight = rendering::window_height;
       videoPlayer->viewId = rendering::bga_layer_view;
       videoPlayer->update();
       videoPlayer->render();
-    } else if (imageTable.find(currentBmpLayer) != imageTable.end()) {
-      auto image = imageTable[currentBmpLayer];
-      renderImage(image, rendering::bga_layer_view);
+    } else {
+      auto imageIt = imageTable.find(bmpLayer);
+      if (imageIt != imageTable.end()) {
+        renderImage(imageIt->second, rendering::bga_layer_view);
+      }
     }
   }
+}
+
+bool Jukebox::hasActiveVisuals() const {
+  return currentBga.load(std::memory_order_relaxed) != -1 ||
+         currentBmpLayer.load(std::memory_order_relaxed) != -1;
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
@@ -211,8 +224,8 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   audio.stopSounds();
   audio.unloadSounds();
 
-  currentBga = -1;
-  currentBmpLayer = -1;
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
   for (auto &videoPlayer : videoPlayerTable) {
     delete videoPlayer.second;
   }
@@ -365,9 +378,9 @@ void Jukebox::play() {
           videoPlayer->viewWidth = rendering::window_width;
           videoPlayer->viewHeight = rendering::window_height;
           videoPlayer->viewId = rendering::bga_view;
-          currentBga = target.second;
+          currentBga.store(target.second, std::memory_order_relaxed);
         } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBga = target.second;
+          currentBga.store(target.second, std::memory_order_relaxed);
         }
         bmpCursor++;
         
@@ -387,9 +400,9 @@ void Jukebox::play() {
           videoPlayer->viewWidth = rendering::window_width;
           videoPlayer->viewHeight = rendering::window_height;
           videoPlayer->viewId = rendering::bga_layer_view;
-          currentBmpLayer = target.second;
+          currentBmpLayer.store(target.second, std::memory_order_relaxed);
         } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBmpLayer = target.second;
+          currentBmpLayer.store(target.second, std::memory_order_relaxed);
         }
         bmpLayerCursor++;
       }
@@ -499,8 +512,8 @@ void Jukebox::pause() {
 void Jukebox::resume() { stopwatch->resume(); }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 void Jukebox::stop() {
-  currentBga = -1;
-  currentBmpLayer = -1;
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
   isPlaying = false;
   if (playThread.joinable())
     playThread.join();

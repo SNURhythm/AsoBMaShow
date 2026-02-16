@@ -3,6 +3,28 @@
 #include "../rendering/ShaderManager.h"
 #include "SDL2/SDL_events.h"
 #include <cstring>
+
+namespace {
+SDL_Cursor *getCachedCursor(SDL_SystemCursor cursorType) {
+  static SDL_Cursor *s_ibeamCursor = nullptr;
+  static SDL_Cursor *s_arrowCursor = nullptr;
+  SDL_Cursor **slot = cursorType == SDL_SYSTEM_CURSOR_IBEAM ? &s_ibeamCursor
+                                                             : &s_arrowCursor;
+  if (*slot == nullptr) {
+    *slot = SDL_CreateSystemCursor(cursorType);
+  }
+  return *slot;
+}
+
+void updateHoverCursor(bool useIBeam) {
+  SDL_Cursor *target = getCachedCursor(useIBeam ? SDL_SYSTEM_CURSOR_IBEAM
+                                                : SDL_SYSTEM_CURSOR_ARROW);
+  if (target != nullptr && SDL_GetCursor() != target) {
+    SDL_SetCursor(target);
+  }
+}
+} // namespace
+
 TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
     : TextView(fontPath, fontSize) {
   viewRect = {getX(), getY(), getWidth(), getHeight()};
@@ -91,7 +113,6 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
   case SDL_TEXTEDITING:
     if (!isSelected)
       return true;
-    SDL_Log("Text editing: %s", event.edit.text);
     // Update the composition text.
     composition = event.edit.text;
     shouldUpdate = true;
@@ -101,7 +122,6 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (!isSelected)
       return true;
     shouldUpdate = true;
-    SDL_Log("Text editing: %s", event.editExt.text);
     // Update the composition text.
     composition = event.editExt.text;
     break;
@@ -138,9 +158,9 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     rendering::screenToUi(screenX, screenY, x, y);
     if (x >= getX() && x <= getX() + getWidth() && y >= getY() &&
         y <= getY() + getHeight()) {
-      SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM));
+      updateHoverCursor(true);
     } else {
-      SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW));
+      updateHoverCursor(false);
     }
     break;
   }
@@ -154,8 +174,6 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       cursorToPos(cursorPos + composition.size(), composited, compositionWidth,
                   compositionHeight);
       compositionWidth -= compositionX;
-      SDL_Log("Composition x: %d, y: %d, w: %d, h: %d", compositionX,
-              compositionY, compositionWidth, compositionHeight);
     }
     setText(composited);
     for (auto &callback : onTextChangedCallbacks) {

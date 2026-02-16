@@ -8,6 +8,9 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_video.h>
+#if __APPLE__
+#include <SDL2/SDL_metal.h>
+#endif
 #include "main.h"
 #include "scene/MainMenuScene.h"
 #include "scene/SceneManager.h"
@@ -173,6 +176,26 @@ private:
   static constexpr float WINDOW_SIZE = 5.0f;       // 5 second window
   static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
 };
+
+static int runApplication(const bgfx::Init &bgfxInit) {
+  SDL_Log("bgfx_init: %d x %d", bgfxInit.resolution.width,
+          bgfxInit.resolution.height);
+  if (!bgfx::init(bgfxInit)) {
+    SDL_Log("bgfx::init failed");
+    return EXIT_FAILURE;
+  }
+  SDL_Log("bgfx renderer: %s", bgfx::getRendererName(bgfx::getRendererType()));
+  // Keep debug rendering disabled in normal runtime to avoid perturbing
+  // frame pacing and post-process output.
+  // bgfx::setDebug(BGFX_DEBUG_TEXT);
+
+  run();
+  rendering::ShaderManager::getInstance().release();
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
+  return EXIT_SUCCESS;
+}
+
 int main(int argv, char **args) {
   // Set working directory to executable's directory
   std::filesystem::path exePath;
@@ -343,30 +366,36 @@ int main(int argv, char **args) {
            SDL_GetError());
     return 1;
   }
-  bgfx::renderFrame(); // single threaded mode
-#endif                 // !BX_PLATFORM_EMSCRIPTEN
+#endif // !BX_PLATFORM_EMSCRIPTEN
 
   bgfx::PlatformData pd{};
   setup_bgfx_platform_data(pd, wmi, win);
 
   bgfx::Init bgfx_init;
+#if __APPLE__
+  bgfx_init.type = bgfx::RendererType::Metal; // force Metal on Apple platforms
+#else
   bgfx_init.type = bgfx::RendererType::Count; // auto choose renderer
+#endif
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset =
       BGFX_RESET_MSAA_X2 | (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0);
   bgfx_init.platformData = pd;
-  bgfx::init(bgfx_init);
-  // Keep debug rendering disabled in normal runtime to avoid perturbing
-  // frame pacing and post-process output.
-  // bgfx::setDebug(BGFX_DEBUG_TEXT);
+#if !TARGET_OS_IPHONE
+  constexpr bool kUseSplitBgfxThreads = true;
+#else
+  constexpr bool kUseSplitBgfxThreads = false;
+#endif
 
-  // bgfx::setPlatformData(pd);
+  int appExitCode = EXIT_SUCCESS;
+  if (!kUseSplitBgfxThreads) {
+    SDL_Log("Using single thread");
 
-  run();
-  rendering::ShaderManager::getInstance().release();
-  rendering::UniformCache::getInstance().destroyAll();
-  bgfx::shutdown();
+    bgfx::renderFrame();
+  }
+
+  appExitCode = runApplication(bgfx_init);
 
   if (s_renderer != nullptr) {
     SDL_DestroyRenderer(s_renderer);
@@ -376,7 +405,7 @@ int main(int argv, char **args) {
   SDL_Quit();
   APP_DEBUG_LOG("SDL quit");
 
-  return EXIT_SUCCESS;
+  return appExitCode;
 }
 
 void run() {
@@ -434,6 +463,11 @@ void run() {
                             s_blurPass->finalView());
 
   constexpr bool kEnablePerfTelemetry = true;
+  uint64_t rawEventsInWindow = 0;
+  uint64_t processedEventsInWindow = 0;
+  uint64_t coalescedMouseMotionInWindow = 0;
+  uint64_t coalescedFingerMotionInWindow = 0;
+  uint64_t coalescedResizeInWindow = 0;
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -443,28 +477,82 @@ void run() {
             .count();
     lastFrameTime = currentFrameTime;
 
-    while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_QUIT) {
-        context.quitFlag = true;
+    SDL_Event pendingMouseMotion{};
+    SDL_Event pendingFingerMotion{};
+    SDL_Event pendingResizeEvent{};
+    uint32_t pendingMouseMotionCount = 0;
+    uint32_t pendingFingerMotionCount = 0;
+    uint32_t pendingResizeCount = 0;
+    bool hasPendingMouseMotion = false;
+    bool hasPendingFingerMotion = false;
+    bool hasPendingResize = false;
+
+    auto shouldDispatchToScene = [](Uint32 eventType) {
+      switch (eventType) {
+      case SDL_QUIT:
+      case SDL_WINDOWEVENT:
+      case SDL_KEYDOWN:
+      case SDL_KEYUP:
+      case SDL_TEXTINPUT:
+      case SDL_TEXTEDITING:
+      case SDL_TEXTEDITING_EXT:
+      case SDL_MOUSEMOTION:
+      case SDL_MOUSEBUTTONDOWN:
+      case SDL_MOUSEBUTTONUP:
+      case SDL_MOUSEWHEEL:
+      case SDL_FINGERDOWN:
+      case SDL_FINGERMOTION:
+      case SDL_FINGERUP:
+        return true;
+      default:
+        return false;
       }
-      auto result = sceneManager.handleEvents(e);
-      if (result.quit) {
+    };
+
+    auto processEvent = [&](SDL_Event event) {
+      ++processedEventsInWindow;
+      if (event.type == SDL_QUIT) {
         context.quitFlag = true;
       }
 
+      if (shouldDispatchToScene(event.type)) {
+        auto result = sceneManager.handleEvents(event);
+        if (result.quit) {
+          context.quitFlag = true;
+        }
+      }
+
       // on window resize
-      if (e.type == SDL_WINDOWEVENT &&
-          e.window.event == SDL_WINDOWEVENT_RESIZED) {
-        int logicalW = e.window.data1;
-        int logicalH = e.window.data2;
+      if (event.type == SDL_WINDOWEVENT &&
+          (event.window.event == SDL_WINDOWEVENT_RESIZED ||
+           event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+        int logicalW = event.window.data1;
+        int logicalH = event.window.data2;
+        if (logicalW <= 0 || logicalH <= 0) {
+          return;
+        }
 #if TARGET_OS_IPHONE
         int drawableW = 0;
         int drawableH = 0;
         SDL_GetRendererOutputSize(s_renderer, &drawableW, &drawableH);
+#elif TARGET_OS_OSX
+        int drawableW = logicalW;
+        int drawableH = logicalH;
+        if (SDL_Window *window = SDL_GetWindowFromID(event.window.windowID);
+            window != nullptr) {
+          SDL_Metal_GetDrawableSize(window, &drawableW, &drawableH);
+        }
 #else
         int drawableW = logicalW;
         int drawableH = logicalH;
 #endif
+        if (drawableW <= 0 || drawableH <= 0) {
+          return;
+        }
+        if (drawableW == rendering::render_width &&
+            drawableH == rendering::render_height) {
+          return;
+        }
         rendering::widthScale =
             static_cast<float>(drawableW) / static_cast<float>(logicalW);
         rendering::heightScale =
@@ -485,6 +573,52 @@ void run() {
                                   s_blurPass->blurViewV(),
                                   s_blurPass->finalView());
       }
+    };
+
+    while (SDL_PollEvent(&e)) {
+      ++rawEventsInWindow;
+
+      if (e.type == SDL_MOUSEMOTION) {
+        pendingMouseMotion = e;
+        hasPendingMouseMotion = true;
+        ++pendingMouseMotionCount;
+        continue;
+      }
+      if (e.type == SDL_FINGERMOTION) {
+        pendingFingerMotion = e;
+        hasPendingFingerMotion = true;
+        ++pendingFingerMotionCount;
+        continue;
+      }
+      if (e.type == SDL_WINDOWEVENT &&
+          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+        pendingResizeEvent = e;
+        hasPendingResize = true;
+        ++pendingResizeCount;
+        continue;
+      }
+
+      processEvent(e);
+    }
+
+    if (hasPendingResize) {
+      processEvent(pendingResizeEvent);
+      if (pendingResizeCount > 1) {
+        coalescedResizeInWindow += (pendingResizeCount - 1);
+      }
+    }
+    if (hasPendingFingerMotion) {
+      processEvent(pendingFingerMotion);
+      if (pendingFingerMotionCount > 1) {
+        coalescedFingerMotionInWindow += (pendingFingerMotionCount - 1);
+      }
+    }
+    if (hasPendingMouseMotion) {
+      processEvent(pendingMouseMotion);
+      if (pendingMouseMotionCount > 1) {
+        coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
+      }
     }
     sceneManager.update(deltaTime);
 
@@ -493,18 +627,24 @@ void run() {
     //         rendering::window_height);
     // clear color
 
+    const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
+
     bgfx::touch(rendering::clear_view);
     bgfx::touch(rendering::ui_view);
-    bgfx::touch(rendering::bga_view);
-    bgfx::touch(rendering::bga_layer_view);
-    bgfx::touch(s_blurPass->finalView());
-    bgfx::touch(s_blurPass->blurViewH());
-    bgfx::touch(s_blurPass->blurViewV());
+    if (hasActiveVisuals) {
+      bgfx::touch(rendering::bga_view);
+      bgfx::touch(rendering::bga_layer_view);
+      bgfx::touch(s_blurPass->finalView());
+      bgfx::touch(s_blurPass->blurViewH());
+      bgfx::touch(s_blurPass->blurViewV());
+    }
 
     sceneManager.render();
-    s_postProcess.apply();
-    rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
-                                       s_blurPass->finalView());
+    if (hasActiveVisuals) {
+      s_postProcess.apply();
+      rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
+                                         s_blurPass->finalView());
+    }
 
     if constexpr (kEnablePerfTelemetry) {
       static FPSCounter fpsCounter;
@@ -520,11 +660,24 @@ void run() {
 
         const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
         const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
-        if (telemetryLogInterval >= 1.0f) {
+        // Keep log I/O infrequent so telemetry itself does not dominate 1%
+        // lows.
+        if (telemetryLogInterval >= 5.0f) {
           telemetryLogInterval = 0.0f;
           SDL_Log(
-              "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz)",
-              currentFps, avgFps, low1Fps, avgDeltaTime, freq);
+              "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz) | "
+              "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
+              currentFps, avgFps, low1Fps, avgDeltaTime, freq,
+              static_cast<unsigned long long>(rawEventsInWindow),
+              static_cast<unsigned long long>(processedEventsInWindow),
+              static_cast<unsigned long long>(coalescedMouseMotionInWindow),
+              static_cast<unsigned long long>(coalescedFingerMotionInWindow),
+              static_cast<unsigned long long>(coalescedResizeInWindow));
+          rawEventsInWindow = 0;
+          processedEventsInWindow = 0;
+          coalescedMouseMotionInWindow = 0;
+          coalescedFingerMotionInWindow = 0;
+          coalescedResizeInWindow = 0;
         }
         timeSinceLastUpdate = 0.0f;
       }
