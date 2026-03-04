@@ -18,6 +18,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace rendering {
@@ -71,8 +72,10 @@ private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
   std::mutex laneMutex;
-  std::unordered_map<int, LaneState> laneStates;
   std::vector<int> laneOrder;
+  std::vector<LaneState> laneStatesByOrder;
+  std::unordered_map<int, size_t> laneToOrderIndex;
+  std::vector<std::pair<int, LaneState>> laneStateSnapshot;
   std::vector<int> evenKeyLanes;
   std::vector<int> oddKeyLanes;
   std::vector<int> scratchLanes;

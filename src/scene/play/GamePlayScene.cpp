@@ -16,7 +16,7 @@
 namespace {
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
+             std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 } // namespace

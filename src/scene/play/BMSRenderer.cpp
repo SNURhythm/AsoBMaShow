@@ -15,12 +15,15 @@
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     : latePoorTiming(latePoorTiming), chart(chart) {
   laneOrder = chart->Meta.GetTotalLaneIndices();
-  laneStates.reserve(laneOrder.size());
+  laneStatesByOrder.resize(laneOrder.size());
+  laneToOrderIndex.reserve(laneOrder.size());
+  laneStateSnapshot.reserve(laneOrder.size());
   evenKeyLanes.reserve(laneOrder.size());
   oddKeyLanes.reserve(laneOrder.size());
   scratchLanes.reserve(2);
-  for (int lane : laneOrder) {
-    laneStates.emplace(lane, LaneState{});
+  for (size_t i = 0; i < laneOrder.size(); ++i) {
+    const int lane = laneOrder[i];
+    laneToOrderIndex.emplace(lane, i);
     if (isScratch(lane)) {
       scratchLanes.push_back(lane);
     } else if ((lane & 1) == 0) {
@@ -183,11 +186,11 @@ void BMSRenderer::drawScore(RenderContext &context) const {
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  auto it = laneStates.find(lane);
-  if (it == laneStates.end()) {
+  const auto it = laneToOrderIndex.find(lane);
+  if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = it->second;
+  LaneState &laneState = laneStatesByOrder[it->second];
   laneState.isPressed = true;
   laneState.lastPressedJudge = judge;
   laneState.lastStateTime = time;
@@ -195,11 +198,11 @@ void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  auto it = laneStates.find(lane);
-  if (it == laneStates.end()) {
+  const auto it = laneToOrderIndex.find(lane);
+  if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = it->second;
+  LaneState &laneState = laneStatesByOrder[it->second];
   laneState.isPressed = false;
   laneState.lastStateTime = time;
 }
@@ -466,17 +469,17 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   simpleBatchRenderer.setSubmitDepth(kDepthBeams);
   const long long nowMicros =
       std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::system_clock::now().time_since_epoch())
+          std::chrono::steady_clock::now().time_since_epoch())
           .count();
+  laneStateSnapshot.clear();
   {
     std::lock_guard<std::mutex> lock(laneMutex);
-    for (int lane : laneOrder) {
-      const auto it = laneStates.find(lane);
-      if (it == laneStates.end()) {
-        continue;
-      }
-      drawLaneBeam(lane, it->second, nowMicros);
+    for (size_t i = 0; i < laneOrder.size(); ++i) {
+      laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
     }
+  }
+  for (const auto &entry : laneStateSnapshot) {
+    drawLaneBeam(entry.first, entry.second, nowMicros);
   }
   simpleBatchRenderer.flush();
 
