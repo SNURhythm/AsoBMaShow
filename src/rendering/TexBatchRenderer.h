@@ -20,6 +20,9 @@ public:
   // texture is the bugfx texture handle
   void addRect(float x, float y, float width, float height, float tileU,
                float tileV, bgfx::TextureHandle texture);
+  void addRectUV(float x, float y, float width, float height, float u0,
+                 float v0, float u1, float v1,
+                 bgfx::TextureHandle texture);
   void setSubmitDepth(uint32_t depth) { submitDepth = depth; }
 
   void flush();

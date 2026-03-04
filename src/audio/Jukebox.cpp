@@ -8,12 +8,35 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
+#include <cstdlib>
 #ifdef _WIN32
 #include <timeapi.h>
 #include <windows.h>
 #include <avrt.h>
 #pragma comment(lib, "avrt.lib")
 #endif
+
+namespace {
+int resolveAudioTickHz() {
+  constexpr int kDefaultHz = 8000;
+  constexpr int kMinHz = 250;
+  constexpr int kMaxHz = 8000;
+  const char *raw = std::getenv("ASOBMASHOW_AUDIO_TICK_HZ");
+  if (raw == nullptr || raw[0] == '\0') {
+    return kDefaultHz;
+  }
+  char *end = nullptr;
+  const long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || parsed < kMinHz || parsed > kMaxHz) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO,
+                "Invalid ASOBMASHOW_AUDIO_TICK_HZ='%s'. Using %d", raw,
+                kDefaultHz);
+    return kDefaultHz;
+  }
+  return static_cast<int>(parsed);
+}
+} // namespace
+
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : audio(stopwatch), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
@@ -316,7 +339,8 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  auto hz = 8000;
+  const int hz = resolveAudioTickHz();
+  SDL_Log("Jukebox scheduler tick: %d Hz", hz);
 
   playThread = std::thread([this, hz] {
 #ifdef _WIN32
@@ -330,111 +354,102 @@ void Jukebox::play() {
     }
     timeBeginPeriod(1);
 #endif
-    auto prevTimestamp = std::chrono::high_resolution_clock::now();
-    auto targetNextFrame = std::chrono::high_resolution_clock::now() + std::chrono::microseconds(1000000 / hz);
+    using Clock = std::chrono::steady_clock;
+    auto prevTimestamp = Clock::now();
     auto interval = std::chrono::microseconds(1000000 / hz);
+    auto targetNextFrame = Clock::now() + interval;
     while (isPlaying) {
-      auto loopStartTimestamp = std::chrono::high_resolution_clock::now();
+      auto loopStartTimestamp = Clock::now();
       if (!stopwatch->isRunning()) {
         std::this_thread::sleep_for(interval);
-        prevTimestamp = std::chrono::high_resolution_clock::now();
-        targetNextFrame = std::chrono::high_resolution_clock::now() + interval;
+        prevTimestamp = Clock::now();
+        targetNextFrame = prevTimestamp + interval;
         continue;
       }
-      // lock seek
-      std::lock_guard<std::mutex> lock(seekLock);
-      auto positionMicro = stopwatch->elapsedMicros();
+      {
+        // Keep scheduling state consistent with seek/reset.
+        std::lock_guard<std::mutex> lock(seekLock);
+        auto positionMicro = stopwatch->elapsedMicros();
 
-      lastPositionMicro = positionMicro;
-      if (onTickCb) {
-        onTickCb(positionMicro);
+        lastPositionMicro = positionMicro;
+        if (onTickCb) {
+          onTickCb(positionMicro);
+        }
+
+        while (audioCursor < audioList.size()) {
+          auto &target = audioList[audioCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          audio.playSound(wavTableAbs[target.second].c_str());
+          audioCursor++;
+        }
+
+        while (bmpCursor < bmpList.size()) {
+          auto &target = bmpList[bmpCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
+            auto videoPlayer = videoPlayerTable[target.second];
+            videoPlayer->seek(0);
+            videoPlayer->play();
+            videoPlayer->viewWidth = rendering::window_width;
+            videoPlayer->viewHeight = rendering::window_height;
+            videoPlayer->viewId = rendering::bga_view;
+            currentBga.store(target.second, std::memory_order_relaxed);
+          } else if (imageTable.find(target.second) != imageTable.end()) {
+            currentBga.store(target.second, std::memory_order_relaxed);
+          }
+          bmpCursor++;
+        }
+        while (bmpLayerCursor < bmpLayerList.size()) {
+          auto &target = bmpLayerList[bmpLayerCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
+            auto videoPlayer = videoPlayerTable[target.second];
+            videoPlayer->seek(0);
+            videoPlayer->play();
+            videoPlayer->viewWidth = rendering::window_width;
+            videoPlayer->viewHeight = rendering::window_height;
+            videoPlayer->viewId = rendering::bga_layer_view;
+            currentBmpLayer.store(target.second, std::memory_order_relaxed);
+          } else if (imageTable.find(target.second) != imageTable.end()) {
+            currentBmpLayer.store(target.second, std::memory_order_relaxed);
+          }
+          bmpLayerCursor++;
+        }
       }
 
-      
-      while (audioCursor < audioList.size()) {
-        auto &target = audioList[audioCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing sound at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        audio.playSound(wavTableAbs[target.second].c_str());
-        audioCursor++;
-      }
-      
-      while (bmpCursor < bmpList.size()) {
-        auto &target = bmpList[bmpCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing video at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-          auto videoPlayer = videoPlayerTable[target.second];
-          videoPlayer->seek(0);
-          videoPlayer->play();
-          videoPlayer->viewWidth = rendering::window_width;
-          videoPlayer->viewHeight = rendering::window_height;
-          videoPlayer->viewId = rendering::bga_view;
-          currentBga.store(target.second, std::memory_order_relaxed);
-        } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBga.store(target.second, std::memory_order_relaxed);
-        }
-        bmpCursor++;
-        
-      }
-      while (bmpLayerCursor < bmpLayerList.size()) {
-        auto &target = bmpLayerList[bmpLayerCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing video at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-          auto videoPlayer = videoPlayerTable[target.second];
-          videoPlayer->seek(0);
-          videoPlayer->play();
-          videoPlayer->viewWidth = rendering::window_width;
-          videoPlayer->viewHeight = rendering::window_height;
-          videoPlayer->viewId = rendering::bga_layer_view;
-          currentBmpLayer.store(target.second, std::memory_order_relaxed);
-        } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBmpLayer.store(target.second, std::memory_order_relaxed);
-        }
-        bmpLayerCursor++;
-      }
-      
-      auto currentTimestamp = std::chrono::high_resolution_clock::now();
-      size_t idx = performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
+      auto currentTimestamp = Clock::now();
+      size_t idx =
+          performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
       performanceAnalytics.loopDeltaTimes[idx] =
           std::chrono::duration_cast<std::chrono::microseconds>(
               currentTimestamp - prevTimestamp)
               .count();
       size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
-      performanceAnalytics.loopDeltaIndex.store(newIdx, std::memory_order_relaxed);
+      performanceAnalytics.loopDeltaIndex.store(newIdx,
+                                                std::memory_order_relaxed);
       prevTimestamp = currentTimestamp;
-      
-      // SDL_Log("loopRunTimeMicros: %lld",
-      // std::chrono::duration_cast<std::chrono::microseconds>(loopRunTime)
-      // .count());
+
       targetNextFrame += interval;
-      if(targetNextFrame < std::chrono::high_resolution_clock::now()) {
+      if(targetNextFrame < Clock::now()) {
         // we're late, skip sleeping
         continue;
       }
 
       // sleep only if hz is low enough
       if(hz <= 250) {
-        auto loopRunTime = std::chrono::high_resolution_clock::now() - loopStartTimestamp;
+        auto loopRunTime = Clock::now() - loopStartTimestamp;
         auto sleepTime = std::chrono::microseconds(1000000 / hz) - loopRunTime;
         // 1.4 is a magic number to avoid sleeping longer than needed
         std::this_thread::sleep_for(sleepTime/1.4);
       }
       // spin wait for the rest of the time
-      while (std::chrono::high_resolution_clock::now() < targetNextFrame) {
+      while (Clock::now() < targetNextFrame) {
         std::this_thread::yield();
       }
     }
@@ -452,16 +467,10 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   if (!bgfx::isValid(image.texture)) {
     return;
   }
-  bgfx::VertexLayout layout;
-  layout.begin()
-      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-      .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-      .end();
-
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
 
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
   // canvas extension (See "spread canvas" in
@@ -555,5 +564,5 @@ double Jukebox::getAvgDeltaTime() {
   }
 
   return performanceAnalytics.avgDeltaTime;
- 
+
 }

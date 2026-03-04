@@ -32,10 +32,25 @@ struct LaneState {
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
 };
 class JudgeResult;
-enum ObjectType {
-  Note,
-  LongBody,
+
+struct NoteUvRegion {
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 1.0f;
+  float v1 = 1.0f;
 };
+
+struct NoteSheet {
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle longBodyOffTexture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle longBodyOnTexture = BGFX_INVALID_HANDLE;
+  NoteUvRegion note;
+  NoteUvRegion longHead;
+  NoteUvRegion longBodyOff;
+  NoteUvRegion longBodyOn;
+  NoteUvRegion longTail;
+};
+
 class BMSRendererState {
 public:
   ~BMSRendererState() = default;
@@ -65,6 +80,7 @@ private:
   float noteImageHeight = 0;
   float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
+  std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int keyLaneCount;
   float noteRenderWidth = 1.0f;
@@ -88,6 +104,7 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
+  bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,
                                          const char *label);
@@ -96,23 +113,9 @@ private:
   bool isScratch(int lane);
   float laneToX(int lane);
   float calculateLanePlaneScreenTopIntersection();
-  bgfx::TextureHandle noteTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle noteTexture2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longHeadTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOn = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOff = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longTailTexture = BGFX_INVALID_HANDLE;
-
-  bgfx::TextureHandle longHeadTexture2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOn2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOff2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longTailTexture2 = BGFX_INVALID_HANDLE;
-
-  bgfx::TextureHandle scratchTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongHeadTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongBodyTextureOn = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongBodyTextureOff = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongTailTexture = BGFX_INVALID_HANDLE;
+  NoteSheet graySheet;
+  NoteSheet blueSheet;
+  NoteSheet scratchSheet;
   bms_parser::Chart *chart;
 
 public:

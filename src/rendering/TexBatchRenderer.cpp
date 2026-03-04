@@ -30,6 +30,12 @@ void TexBatchRenderer::end() { flush(); }
 void TexBatchRenderer::addRect(float x, float y, float width, float height,
                                float tileU, float tileV,
                                bgfx::TextureHandle texture) {
+  addRectUV(x, y, width, height, 0.0f, 0.0f, tileU, tileV, texture);
+}
+
+void TexBatchRenderer::addRectUV(float x, float y, float width, float height,
+                                 float u0, float v0, float u1, float v1,
+                                 bgfx::TextureHandle texture) {
   if (texture.idx != currentTexture.idx) {
     flush();
     currentTexture = texture;
@@ -45,10 +51,10 @@ void TexBatchRenderer::addRect(float x, float y, float width, float height,
   uint16_t baseIndex = static_cast<uint16_t>(vertices.size());
 
   // Match SpriteObject's vertex order/UV mapping to keep visual parity.
-  vertices.push_back({x, y + height, 0.0f, 0.0f, 0.0f});
-  vertices.push_back({x + width, y + height, 0.0f, tileU, 0.0f});
-  vertices.push_back({x, y, 0.0f, 0.0f, tileV});
-  vertices.push_back({x + width, y, 0.0f, tileU, tileV});
+  vertices.push_back({x, y + height, 0.0f, u0, v0});
+  vertices.push_back({x + width, y + height, 0.0f, u1, v0});
+  vertices.push_back({x, y, 0.0f, u0, v1});
+  vertices.push_back({x + width, y, 0.0f, u1, v1});
 
   indices.push_back(baseIndex + 0);
   indices.push_back(baseIndex + 1);

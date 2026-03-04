@@ -7,7 +7,6 @@
 #include "Judge.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
-#include "stb_image.h"
 #include "../../utils/SpriteLoader.h"
 
 #include <assert.h>
@@ -30,6 +29,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
       oddKeyLanes.push_back(lane);
     }
   }
+  state.orphanLongNotes.reserve(laneOrder.size() * 2);
+  longNoteLookaheadScratch.reserve(laneOrder.size() * 2);
   // flatten timeline
   size_t timelineCount = 0;
   for (const auto &measure : chart->Measures) {
@@ -45,16 +46,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
   }
-
-  // int width, height, channels;
-  // unsigned char *data =
-  //     stbi_load("assets/img/note.png", &width, &height, &channels, 4);
-  // if (!data) {
-  //   SDL_Log("Failed to load note texture");
-  //   throw std::runtime_error("Failed to load note texture");
-  // }
-  int width = 128;
-  int height = 40;
+  constexpr int width = 128;
+  constexpr int height = 40;
   keyLaneCount = chart->Meta.GetKeyLaneCount();
   noteRenderWidth = 1.0f * 8.0f / chart->Meta.GetTotalLaneCount();
   noteImageHeight = height;
@@ -68,43 +61,55 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
                             static_cast<float>(width) * noteRenderWidth;
   longBodyRenderHeightOn = static_cast<float>(onImageHeight) /
                            static_cast<float>(width) * noteRenderWidth;
-  noteTexture = loadCroppedTexture(spriteLoader, 0, 0, width, height, "note");
-  longHeadTexture =
-      loadCroppedTexture(spriteLoader, 0, 80, 128, 40, "long head");
-  longBodyTextureOff =
-      loadCroppedTexture(spriteLoader, 0, 120, 128, 12, "long body off");
-  longBodyTextureOn =
-      loadCroppedTexture(spriteLoader, 0, 132, 128, 24, "long body on");
-  longTailTexture =
-      loadCroppedTexture(spriteLoader, 0, 40, 128, 40, "long tail");
 
   SpriteLoader spriteLoader2(PATH("assets/img/simple_blue.png"));
   if (!spriteLoader2.load()) {
     throw std::runtime_error("Failed to load simple_blue.png");
   }
-  noteTexture2 = loadCroppedTexture(spriteLoader2, 0, 0, width, height, "note");
-  longHeadTexture2 =
-      loadCroppedTexture(spriteLoader2, 0, 80, 128, 40, "long head");
-  longBodyTextureOff2 =
-      loadCroppedTexture(spriteLoader2, 0, 120, 128, 12, "long body off");
-  longBodyTextureOn2 =
-      loadCroppedTexture(spriteLoader2, 0, 132, 128, 24, "long body on");
-  longTailTexture2 =
-      loadCroppedTexture(spriteLoader2, 0, 40, 128, 40, "long tail");
+
   SpriteLoader spriteLoader3(PATH("assets/img/orange.png"));
   if (!spriteLoader3.load()) {
     throw std::runtime_error("Failed to load orange.png");
   }
-  scratchTexture =
-      loadCroppedTexture(spriteLoader3, 0, 0, width, height, "scratch");
-  scratchLongHeadTexture =
-      loadCroppedTexture(spriteLoader3, 0, 80, 128, 40, "scratch long head");
-  scratchLongBodyTextureOff = loadCroppedTexture(spriteLoader3, 0, 120, 128, 12,
-                                                 "scratch long body off");
-  scratchLongBodyTextureOn = loadCroppedTexture(spriteLoader3, 0, 132, 128, 24,
-                                                "scratch long body on");
-  scratchLongTailTexture =
-      loadCroppedTexture(spriteLoader3, 0, 40, 128, 40, "scratch long tail");
+
+  graySheet.texture = loadSheetTexture(spriteLoader, "simple_gray");
+  blueSheet.texture = loadSheetTexture(spriteLoader2, "simple_blue");
+  scratchSheet.texture = loadSheetTexture(spriteLoader3, "orange");
+  graySheet.longBodyOffTexture =
+      loadCroppedTexture(spriteLoader, 0, 120, 128, 12, "gray long body off");
+  graySheet.longBodyOnTexture =
+      loadCroppedTexture(spriteLoader, 0, 132, 128, 24, "gray long body on");
+  blueSheet.longBodyOffTexture =
+      loadCroppedTexture(spriteLoader2, 0, 120, 128, 12, "blue long body off");
+  blueSheet.longBodyOnTexture =
+      loadCroppedTexture(spriteLoader2, 0, 132, 128, 24, "blue long body on");
+  scratchSheet.longBodyOffTexture = loadCroppedTexture(
+      spriteLoader3, 0, 120, 128, 12, "scratch long body off");
+  scratchSheet.longBodyOnTexture = loadCroppedTexture(
+      spriteLoader3, 0, 132, 128, 24, "scratch long body on");
+
+  auto makeUv = [](int x, int y, int w, int h, int textureW, int textureH) {
+    NoteUvRegion uv{};
+    uv.u0 = static_cast<float>(x) / static_cast<float>(textureW);
+    uv.v0 = static_cast<float>(y) / static_cast<float>(textureH);
+    uv.u1 = static_cast<float>(x + w) / static_cast<float>(textureW);
+    uv.v1 = static_cast<float>(y + h) / static_cast<float>(textureH);
+    return uv;
+  };
+
+  auto configureSheet = [&](NoteSheet &sheet, int textureW, int textureH) {
+    sheet.note = makeUv(0, 0, 128, 40, textureW, textureH);
+    sheet.longTail = makeUv(0, 40, 128, 40, textureW, textureH);
+    sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
+    sheet.longBodyOff = makeUv(0, 120, 128, 12, textureW, textureH);
+    sheet.longBodyOn = makeUv(0, 132, 128, 24, textureW, textureH);
+  };
+
+  configureSheet(graySheet, spriteLoader.getWidth(), spriteLoader.getHeight());
+  configureSheet(blueSheet, spriteLoader2.getWidth(), spriteLoader2.getHeight());
+  configureSheet(scratchSheet, spriteLoader3.getWidth(),
+                 spriteLoader3.getHeight());
+
   judgeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   judgeText->setPosition(rendering::window_width / 2,
                          rendering::window_height / 2);
@@ -117,21 +122,54 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   upperBound = calculateLanePlaneScreenTopIntersection();
 }
 
+bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
+                                                  const char *label) {
+  if (!loader.isLoaded() || loader.getData() == nullptr) {
+    SDL_Log("Failed to load %s texture: image is not loaded", label);
+    throw std::runtime_error(std::string("Failed to load ") + label +
+                             " texture");
+  }
+  const int width = loader.getWidth();
+  const int height = loader.getHeight();
+  if (width <= 0 || height <= 0) {
+    SDL_Log("Failed to load %s texture: invalid dimensions", label);
+    throw std::runtime_error(std::string("Failed to load ") + label +
+                             " texture");
+  }
+  constexpr int kBytesPerPixel = 4; // stbi_load(..., 4) in SpriteLoader
+  const auto handle = bgfx::createTexture2D(
+      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+      bgfx::TextureFormat::RGBA8, 0,
+      bgfx::copy(loader.getData(), width * height * kBytesPerPixel));
+  if (!bgfx::isValid(handle)) {
+    SDL_Log("Failed to create bgfx texture for %s", label);
+    throw std::runtime_error(std::string("Failed to create texture for ") +
+                             label);
+  }
+  return handle;
+}
+
 bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
                                                     int y, int width,
                                                     int height,
                                                     const char *label) {
-  auto data = loader.crop(x, y, width, height);
-  if (!data) {
+  auto *data = loader.crop(x, y, width, height);
+  if (data == nullptr) {
     SDL_Log("Failed to load %s texture", label);
     throw std::runtime_error(std::string("Failed to load ") + label +
                              " texture");
   }
-  int channels = loader.getChannels();
-  auto handle =
-      bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::RGBA8,
-                            0, bgfx::copy(data, width * height * channels));
+  constexpr int kBytesPerPixel = 4;
+  const auto handle = bgfx::createTexture2D(
+      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+      bgfx::TextureFormat::RGBA8, 0,
+      bgfx::copy(data, width * height * kBytesPerPixel));
   SDL_free(data);
+  if (!bgfx::isValid(handle)) {
+    SDL_Log("Failed to create %s texture", label);
+    throw std::runtime_error(std::string("Failed to create ") + label +
+                             " texture");
+  }
   return handle;
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
@@ -191,57 +229,50 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
-  // Body
-  float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
-                                              : longBodyRenderHeightOff);
-  bgfx::TextureHandle bodyTexture{};
-  bgfx::TextureHandle tailTexture{};
-  bgfx::TextureHandle headTexture{};
+  const NoteSheet *sheet = nullptr;
   if (isScratch(head->Lane)) {
-    headTexture = scratchLongHeadTexture;
-    tailTexture = scratchLongTailTexture;
-    if (head->IsHolding) {
-      bodyTexture = scratchLongBodyTextureOn;
-    } else {
-      bodyTexture = scratchLongBodyTextureOff;
-    }
+    sheet = &scratchSheet;
   } else {
-    headTexture = head->Lane % 2 == 0 ? longHeadTexture : longHeadTexture2;
-    tailTexture = head->Lane % 2 == 0 ? longTailTexture : longTailTexture2;
-    if (head->IsHolding) {
-      bodyTexture =
-          head->Lane % 2 == 0 ? longBodyTextureOn : longBodyTextureOn2;
-    } else {
-      bodyTexture =
-          head->Lane % 2 == 0 ? longBodyTextureOff : longBodyTextureOff2;
-    }
+    sheet = (head->Lane % 2 == 0) ? &graySheet : &blueSheet;
+  }
+  const NoteUvRegion &headUv = sheet->longHead;
+  const NoteUvRegion &tailUv = sheet->longTail;
+  const auto bodyTexture =
+      head->IsHolding ? sheet->longBodyOnTexture : sheet->longBodyOffTexture;
+
+  // Body
+  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
+    float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
+                                                : longBodyRenderHeightOff);
+    texBatchRenderer.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+                             1.0f, tileV, bodyTexture);
   }
 
-  texBatchRenderer.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
-                           1.0f, tileV, bodyTexture);
-
   // Tail
-  texBatchRenderer.addRect(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
-                           noteRenderHeight, 1.0f, 1.0f, tailTexture);
+  texBatchRenderer.addRectUV(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
+                             noteRenderHeight, tailUv.u0, tailUv.v0,
+                             tailUv.u1, tailUv.v1, sheet->texture);
 
   if (head->IsPlayed)
     return;
 
   // Head
-  texBatchRenderer.addRect(laneToX(head->Lane), startY, noteRenderWidth,
-                           noteRenderHeight, 1.0f, 1.0f, headTexture);
+  texBatchRenderer.addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
+                             noteRenderHeight, headUv.u0, headUv.v0, headUv.u1,
+                             headUv.v1, sheet->texture);
 }
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
     return;
 
-  const auto &texture =
+  const NoteSheet &sheet =
       isScratch(note->Lane)
-          ? scratchTexture
-          : (note->Lane % 2 == 0 ? noteTexture : noteTexture2);
+          ? scratchSheet
+          : ((note->Lane % 2 == 0) ? graySheet : blueSheet);
 
-  texBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
-                           noteRenderHeight, 1.0f, 1.0f, texture);
+  texBatchRenderer.addRectUV(laneToX(note->Lane), y, noteRenderWidth,
+                             noteRenderHeight, sheet.note.u0, sheet.note.v0,
+                             sheet.note.u1, sheet.note.v1, sheet.texture);
 }
 
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
@@ -331,8 +362,8 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
-  std::unordered_map<bms_parser::LongNote *, float> longNoteLookahead;
-  longNoteLookahead.reserve(state.orphanLongNotes.size() + 16);
+  auto &longNoteLookahead = longNoteLookaheadScratch;
+  longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
@@ -483,13 +514,15 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
   simpleBatchRenderer.flush();
 
+#if defined(DEBUG) || defined(_DEBUG)
   const uint64_t nowTicks = SDL_GetTicks64();
-  if (nowTicks - lastBatchTelemetryTick >= 5000) {
+  if (nowTicks - lastBatchTelemetryTick >= 15000) {
     lastBatchTelemetryTick = nowTicks;
     SDL_Log("BMS batch | rects %u flushes %u submits %u",
             texBatchRenderer.getRectCount(), texBatchRenderer.getFlushCount(),
             texBatchRenderer.getSubmitCount());
   }
+#endif
 
   // render judgement
   drawJudgement(context);
@@ -561,50 +594,32 @@ void BMSRendererState::reset() {
   latestScore = 0;
 }
 BMSRenderer::~BMSRenderer() {
-  if (bgfx::isValid(noteTexture)) {
-    bgfx::destroy(noteTexture);
+  if (bgfx::isValid(graySheet.texture)) {
+    bgfx::destroy(graySheet.texture);
   }
-  if (bgfx::isValid(noteTexture2)) {
-    bgfx::destroy(noteTexture2);
+  if (bgfx::isValid(graySheet.longBodyOffTexture)) {
+    bgfx::destroy(graySheet.longBodyOffTexture);
   }
-  if (bgfx::isValid(longHeadTexture)) {
-    bgfx::destroy(longHeadTexture);
+  if (bgfx::isValid(graySheet.longBodyOnTexture)) {
+    bgfx::destroy(graySheet.longBodyOnTexture);
   }
-  if (bgfx::isValid(longBodyTextureOn)) {
-    bgfx::destroy(longBodyTextureOn);
+  if (bgfx::isValid(blueSheet.texture)) {
+    bgfx::destroy(blueSheet.texture);
   }
-  if (bgfx::isValid(longBodyTextureOff)) {
-    bgfx::destroy(longBodyTextureOff);
+  if (bgfx::isValid(blueSheet.longBodyOffTexture)) {
+    bgfx::destroy(blueSheet.longBodyOffTexture);
   }
-  if (bgfx::isValid(longTailTexture)) {
-    bgfx::destroy(longTailTexture);
+  if (bgfx::isValid(blueSheet.longBodyOnTexture)) {
+    bgfx::destroy(blueSheet.longBodyOnTexture);
   }
-  if (bgfx::isValid(longHeadTexture2)) {
-    bgfx::destroy(longHeadTexture2);
+  if (bgfx::isValid(scratchSheet.texture)) {
+    bgfx::destroy(scratchSheet.texture);
   }
-  if (bgfx::isValid(longBodyTextureOn2)) {
-    bgfx::destroy(longBodyTextureOn2);
+  if (bgfx::isValid(scratchSheet.longBodyOffTexture)) {
+    bgfx::destroy(scratchSheet.longBodyOffTexture);
   }
-  if (bgfx::isValid(longBodyTextureOff2)) {
-    bgfx::destroy(longBodyTextureOff2);
-  }
-  if (bgfx::isValid(longTailTexture2)) {
-    bgfx::destroy(longTailTexture2);
-  }
-  if (bgfx::isValid(scratchTexture)) {
-    bgfx::destroy(scratchTexture);
-  }
-  if (bgfx::isValid(scratchLongHeadTexture)) {
-    bgfx::destroy(scratchLongHeadTexture);
-  }
-  if (bgfx::isValid(scratchLongBodyTextureOn)) {
-    bgfx::destroy(scratchLongBodyTextureOn);
-  }
-  if (bgfx::isValid(scratchLongBodyTextureOff)) {
-    bgfx::destroy(scratchLongBodyTextureOff);
-  }
-  if (bgfx::isValid(scratchLongTailTexture)) {
-    bgfx::destroy(scratchLongTailTexture);
+  if (bgfx::isValid(scratchSheet.longBodyOnTexture)) {
+    bgfx::destroy(scratchSheet.longBodyOnTexture);
   }
   delete judgeText;
   delete scoreText;
