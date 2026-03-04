@@ -20,18 +20,22 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
   laneStateSnapshot.reserve(laneOrder.size());
-  evenKeyLanes.reserve(laneOrder.size());
-  oddKeyLanes.reserve(laneOrder.size());
-  scratchLanes.reserve(2);
+  evenKeyLaneIndices.reserve(laneOrder.size());
+  oddKeyLaneIndices.reserve(laneOrder.size());
+  scratchLaneIndices.reserve(2);
   for (size_t i = 0; i < laneOrder.size(); ++i) {
     const int lane = laneOrder[i];
     laneToOrderIndex.emplace(lane, i);
+    if (lane < 0) {
+      continue;
+    }
+    const size_t laneIndex = static_cast<size_t>(lane);
     if (isScratch(lane)) {
-      scratchLanes.push_back(lane);
+      scratchLaneIndices.push_back(laneIndex);
     } else if ((lane & 1) == 0) {
-      evenKeyLanes.push_back(lane);
+      evenKeyLaneIndices.push_back(laneIndex);
     } else {
-      oddKeyLanes.push_back(lane);
+      oddKeyLaneIndices.push_back(laneIndex);
     }
   }
   state.orphanLongNotes.reserve(laneOrder.size() * 2);
@@ -449,13 +453,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       }
     };
 
-    auto processLaneGroup = [&](const std::vector<int> &laneGroup) {
+    auto processLaneGroup = [&](const std::vector<size_t> &laneGroup) {
       const size_t noteCount = timeLine->Notes.size();
-      for (int lane : laneGroup) {
-        if (lane < 0) {
-          continue;
-        }
-        const size_t laneIndex = static_cast<size_t>(lane);
+      for (size_t laneIndex : laneGroup) {
         if (laneIndex >= noteCount) {
           continue;
         }
@@ -463,9 +463,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       }
     };
 
-    processLaneGroup(evenKeyLanes);
-    processLaneGroup(oddKeyLanes);
-    processLaneGroup(scratchLanes);
+    processLaneGroup(evenKeyLaneIndices);
+    processLaneGroup(oddKeyLaneIndices);
+    processLaneGroup(scratchLaneIndices);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
