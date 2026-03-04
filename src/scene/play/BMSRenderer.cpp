@@ -10,7 +10,9 @@
 #include "../../utils/SpriteLoader.h"
 
 #include <assert.h>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     : latePoorTiming(latePoorTiming), chart(chart) {
@@ -57,6 +59,24 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   noteImageWidth = width;
   noteRenderHeight = static_cast<float>(noteImageHeight) /
                      static_cast<float>(noteImageWidth) * noteRenderWidth;
+  if (!laneOrder.empty()) {
+    const int maxLane = *std::max_element(laneOrder.begin(), laneOrder.end());
+    if (maxLane >= 0) {
+      laneXLookup.assign(static_cast<size_t>(maxLane + 1),
+                         std::numeric_limits<float>::quiet_NaN());
+      laneSheetLookup.assign(static_cast<size_t>(maxLane + 1), nullptr);
+      for (int lane : laneOrder) {
+        if (lane < 0) {
+          continue;
+        }
+        const size_t laneIndex = static_cast<size_t>(lane);
+        laneXLookup[laneIndex] = computeLaneX(lane);
+        laneSheetLookup[laneIndex] =
+            isScratch(lane) ? &scratchSheet
+                            : ((lane % 2 == 0) ? &graySheet : &blueSheet);
+      }
+    }
+  }
   float offImageHeight = 12.0f;
   float onImageHeight = 24.0f;
 
@@ -233,16 +253,11 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
-  const NoteSheet *sheet = nullptr;
-  if (isScratch(head->Lane)) {
-    sheet = &scratchSheet;
-  } else {
-    sheet = (head->Lane % 2 == 0) ? &graySheet : &blueSheet;
-  }
+  const NoteSheet &sheet = sheetForLane(head->Lane);
   const NoteUvRegion &headUv = sheet->longHead;
   const NoteUvRegion &tailUv = sheet->longTail;
   const auto bodyTexture =
-      head->IsHolding ? sheet->longBodyOnTexture : sheet->longBodyOffTexture;
+      head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
   // Body
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
@@ -255,7 +270,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   // Tail
   texBatchRenderer.addRectUV(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
                              noteRenderHeight, tailUv.u0, tailUv.v0,
-                             tailUv.u1, tailUv.v1, sheet->texture);
+                             tailUv.u1, tailUv.v1, sheet.texture);
 
   if (head->IsPlayed)
     return;
@@ -263,16 +278,13 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   // Head
   texBatchRenderer.addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
                              noteRenderHeight, headUv.u0, headUv.v0, headUv.u1,
-                             headUv.v1, sheet->texture);
+                             headUv.v1, sheet.texture);
 }
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
     return;
 
-  const NoteSheet &sheet =
-      isScratch(note->Lane)
-          ? scratchSheet
-          : ((note->Lane % 2 == 0) ? graySheet : blueSheet);
+  const NoteSheet &sheet = sheetForLane(note->Lane);
 
   texBatchRenderer.addRectUV(laneToX(note->Lane), y, noteRenderWidth,
                              noteRenderHeight, sheet.note.u0, sheet.note.v0,
@@ -524,12 +536,12 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   drawRect(noteRenderWidth, 10.0f, laneToX(lane), 0.0f, color);
 }
 
-inline bool BMSRenderer::isLeftScratch(int lane) { return lane == 7; }
-inline bool BMSRenderer::isRightScratch(int lane) { return lane == 15; }
-inline bool BMSRenderer::isScratch(int lane) {
+inline bool BMSRenderer::isLeftScratch(int lane) const { return lane == 7; }
+inline bool BMSRenderer::isRightScratch(int lane) const { return lane == 15; }
+inline bool BMSRenderer::isScratch(int lane) const {
   return isLeftScratch(lane) || isRightScratch(lane);
 }
-inline float BMSRenderer::laneToX(int lane) {
+inline float BMSRenderer::computeLaneX(int lane) const {
   if (isLeftScratch(lane)) {
     return 0.0f;
   }
@@ -543,6 +555,27 @@ inline float BMSRenderer::laneToX(int lane) {
   }
 
   return (lane + 1) * noteRenderWidth;
+}
+inline float BMSRenderer::laneToX(int lane) const {
+  if (lane >= 0 && static_cast<size_t>(lane) < laneXLookup.size()) {
+    const float cachedX = laneXLookup[static_cast<size_t>(lane)];
+    if (!std::isnan(cachedX)) {
+      return cachedX;
+    }
+  }
+  return computeLaneX(lane);
+}
+inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
+  if (lane >= 0 && static_cast<size_t>(lane) < laneSheetLookup.size()) {
+    if (const auto *sheet = laneSheetLookup[static_cast<size_t>(lane)];
+        sheet != nullptr) {
+      return *sheet;
+    }
+  }
+  if (isScratch(lane)) {
+    return scratchSheet;
+  }
+  return (lane % 2 == 0) ? graySheet : blueSheet;
 }
 void BMSRendererState::reset() {
   orphanLongNotes.clear();

@@ -76,6 +76,8 @@ private:
   std::vector<LaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
+  std::vector<float> laneXLookup;
+  std::vector<const NoteSheet *> laneSheetLookup;
   std::vector<int> evenKeyLanes;
   std::vector<int> oddKeyLanes;
   std::vector<int> scratchLanes;
@@ -110,10 +112,12 @@ private:
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,
                                          const char *label);
-  bool isLeftScratch(int lane);
-  bool isRightScratch(int lane);
-  bool isScratch(int lane);
-  float laneToX(int lane);
+  bool isLeftScratch(int lane) const;
+  bool isRightScratch(int lane) const;
+  bool isScratch(int lane) const;
+  float computeLaneX(int lane) const;
+  float laneToX(int lane) const;
+  const NoteSheet &sheetForLane(int lane) const;
   float calculateLanePlaneScreenTopIntersection();
   NoteSheet graySheet;
   NoteSheet blueSheet;

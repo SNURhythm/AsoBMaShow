@@ -203,13 +203,15 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (context.jukebox.isPaused()) {
     return nullptr;
   }
+  auto mainLaneIt = lanePressed.find(mainLane);
   std::array<int, 2> candidates{};
   size_t candidateCount = 0;
-  if (lanePressed.contains(mainLane) && !lanePressed[mainLane]) {
+  if (mainLaneIt != lanePressed.end() && !mainLaneIt->second) {
     candidates[candidateCount++] = mainLane;
   }
-  if (compensateLane != mainLane && lanePressed.contains(compensateLane) &&
-      !lanePressed[compensateLane]) {
+  auto compensateLaneIt = lanePressed.find(compensateLane);
+  if (compensateLane != mainLane && compensateLaneIt != lanePressed.end() &&
+      !compensateLaneIt->second) {
     candidates[candidateCount++] = compensateLane;
   }
   if (candidateCount == 0) {
@@ -221,12 +223,16 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
 
   if (state == nullptr) {
-    lanePressed[mainLane] = true;
+    if (mainLaneIt != lanePressed.end()) {
+      mainLaneIt->second = true;
+    }
     renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
     return nullptr;
   }
   if (!state->isPlaying) {
-    lanePressed[mainLane] = true;
+    if (mainLaneIt != lanePressed.end()) {
+      mainLaneIt->second = true;
+    }
     updateLaneStateText();
     return nullptr;
   }
@@ -261,23 +267,29 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
           continue;
         }
         const JudgeResult judgement = pressNote(note, pressedTime);
-        lanePressed[lane] = true;
+        if (const auto pressedIt = lanePressed.find(lane);
+            pressedIt != lanePressed.end()) {
+          pressedIt->second = true;
+        }
         updateLaneStateText();
         renderer->onLanePressed(lane, judgement, nowMicros());
         return note;
       }
     }
   }
-  lanePressed[mainLane] = true;
+  if (mainLaneIt != lanePressed.end()) {
+    mainLaneIt->second = true;
+  }
   updateLaneStateText();
   renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
   return nullptr;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
-  if (!lanePressed.contains(lane) || !lanePressed[lane]) {
+  auto laneIt = lanePressed.find(lane);
+  if (laneIt == lanePressed.end() || !laneIt->second) {
     return nullptr;
   }
-  lanePressed[lane] = false;
+  laneIt->second = false;
   updateLaneStateText();
   renderer->onLaneReleased(lane, nowMicros());
   const auto releasedTime = context.jukebox.getTimeMicros() -
