@@ -265,10 +265,12 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
         if (note->IsLandmineNote()) {
           continue;
         }
-        if (judge.judgeNow(note, pressedTime).judgement == None) {
+        const JudgeResult noteJudge = judge.judgeNow(note, pressedTime);
+        if (noteJudge.judgement == None) {
           continue;
         }
-        const JudgeResult judgement = pressNote(note, pressedTime);
+        const JudgeResult judgement =
+            pressNote(note, pressedTime, &noteJudge);
         if (const auto pressedIt = lanePressed.find(lane);
             pressedIt != lanePressed.end()) {
           pressedIt->second = true;
@@ -454,11 +456,14 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
 }
 
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
-                                     long long pressedTime) {
+                                     long long pressedTime,
+                                     const JudgeResult *precomputedJudge) {
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound) {
     context.jukebox.playKeySound(note->Wav);
   }
-  const auto judgeResult = judge.judgeNow(note, pressedTime);
+  const JudgeResult judgeResult =
+      precomputedJudge != nullptr ? *precomputedJudge
+                                  : judge.judgeNow(note, pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
       // TODO: play keybomb

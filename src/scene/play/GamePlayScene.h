@@ -51,7 +51,8 @@ private:
   StartOptions options;
   void checkPassedTimeline(long long time);
   void onJudge(const JudgeResult &judgeResult);
-  JudgeResult pressNote(bms_parser::Note *note, long long pressedTime);
+  JudgeResult pressNote(bms_parser::Note *note, long long pressedTime,
+                        const JudgeResult *precomputedJudge = nullptr);
   void releaseNote(bms_parser::Note *Note, long long ReleasedTime);
   RhythmState *state = nullptr;
   BMSRenderer *renderer = nullptr;
