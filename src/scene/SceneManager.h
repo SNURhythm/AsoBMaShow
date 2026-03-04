@@ -11,6 +11,8 @@ class ApplicationContext;
 class SceneManager {
 private:
   ApplicationContext &context;
+  bool isRegisteredScene(const Scene *scene) const;
+  void cleanupSceneInstance(Scene *scene);
 
 public:
   Scene* currentScene = nullptr;

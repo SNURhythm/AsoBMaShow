@@ -4,6 +4,29 @@ SceneManager::SceneManager(ApplicationContext &context) : context(context) {
   context.sceneManager = this;
 }
 
+bool SceneManager::isRegisteredScene(const Scene *scene) const {
+  if (scene == nullptr) {
+    return false;
+  }
+  for (const auto &[name, registeredScene] : registeredScenes) {
+    (void)name;
+    if (registeredScene.get() == scene) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void SceneManager::cleanupSceneInstance(Scene *scene) {
+  if (scene == nullptr) {
+    return;
+  }
+  scene->cleanup();
+  if (!isRegisteredScene(scene)) {
+    delete scene;
+  }
+}
+
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
   registeredScenes[name] = std::move(scene);
 }
@@ -14,7 +37,8 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
   
   // Handle current scene (common logic)
   if (currentScene && !keepBackground) {
-    currentScene->cleanup();
+    Scene *sceneToRelease = currentScene;
+    cleanupSceneInstance(sceneToRelease);
   }
   if (keepBackground && currentScene) {
     backgroundScenes.insert(currentScene);
@@ -28,6 +52,7 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
   } else {
     // Normal scene change for new or registered scenes
     currentScene = newScene;
+    currentScene->prepareForUse();
     currentScene->init();
   }
 }
@@ -69,10 +94,20 @@ void SceneManager::render() {
 }
 
 void SceneManager::cleanup() {
-  currentScene = nullptr;
+  if (currentScene != nullptr) {
+    cleanupSceneInstance(currentScene);
+    currentScene = nullptr;
+  }
+
+  for (auto *scene : backgroundScenes) {
+    if (!isRegisteredScene(scene)) {
+      cleanupSceneInstance(scene);
+    }
+  }
   backgroundScenes.clear();
-  
+
   for (auto &[name, scene] : registeredScenes) {
+    (void)name;
     scene->cleanup();
   }
   registeredScenes.clear();

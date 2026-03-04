@@ -72,11 +72,23 @@ public:
 
   // Cleanup resources when exiting the scene (non-virtual public method)
   inline void cleanup() {
+    if (isCleaned) {
+      return;
+    }
     isDead = true;
     cleanupScene(); // Additional custom cleanup
     for (auto view : views) {
       delete view;
     }
+    views.clear();
+    deferred.clear();
+    isCleaned = true;
+  }
+
+  inline void prepareForUse() {
+    isDead = false;
+    isCleaned = false;
+    deferred.clear();
   }
 
   inline void addView(View *view) { views.push_back(view); }
@@ -93,4 +105,5 @@ protected:
 
 private:
   bool isDead = false;
+  bool isCleaned = false;
 };
