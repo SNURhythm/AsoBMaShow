@@ -1,7 +1,6 @@
 #pragma once
 
 #include <miniaudio.h>
-#include <map>
 #include <string>
 #include <vector>
 #include "../path.h"
@@ -9,6 +8,7 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
 
 // Simple Biquad Filter
@@ -132,7 +132,7 @@ private:
   std::vector<std::shared_ptr<SoundData>> soundDataList;
   std::unordered_set<SoundData *> playingSounds;
   std::mutex playingSoundsMutex;
-  std::map<path_t, size_t>
+  std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
   std::mutex soundDataListMutex;
   std::vector<float> mixBuffer;

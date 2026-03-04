@@ -8,6 +8,7 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
+#include <unordered_set>
 #ifdef _WIN32
 #include <timeapi.h>
 #include <windows.h>
@@ -78,6 +79,8 @@ bool Jukebox::hasActiveVisuals() const {
 void Jukebox::loadSounds(bms_parser::Chart &chart,
                          std::atomic_bool &isCancelled) {
   std::mutex wavTableLock;
+  std::mutex loadedPathsLock;
+  std::unordered_set<path_t> loadedPaths;
 
   wavTableAbs.clear();
 
@@ -99,14 +102,33 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
         if (!std::filesystem::exists(path)) {
           continue;
         }
-        if (audio.loadSound(path.c_str(), isCancelled)) {
+
+        const path_t soundPath = fspath_to_path_t(path);
+        bool needsLoad = true;
+        {
+          std::lock_guard<std::mutex> lock(loadedPathsLock);
+          needsLoad = !loadedPaths.contains(soundPath);
+        }
+
+        if (needsLoad && !audio.loadSound(soundPath, isCancelled)) {
+          continue;
+        }
+
+        if (needsLoad) {
+          std::lock_guard<std::mutex> lock(loadedPathsLock);
+          loadedPaths.insert(soundPath);
+          SDL_Log("Loaded sound %d: %s", wav->first,
+                  path_t_to_utf8(soundPath).c_str());
+        }
+
+        {
           std::lock_guard<std::mutex> lock(wavTableLock);
           auto idx = wav->first;
-          SDL_Log("Loaded sound %d: %s", idx, path_t_to_utf8(path).c_str());
-          wavTableAbs[idx] = path;
-          found = true;
-          break;
+          wavTableAbs[idx] = soundPath;
         }
+
+        found = true;
+        break;
       }
       if (!found) {
         SDL_Log("Failed to load sound for all extensions: %s",
@@ -304,8 +326,11 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   }
 }
 void Jukebox::playKeySound(int wav) {
-  if (isPlaying && wavTableAbs.contains(wav)) {
-    audio.playSound(wavTableAbs[wav].c_str());
+  if (!isPlaying) {
+    return;
+  }
+  if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
+    audio.playSound(it->second.c_str());
   }
 }
 
@@ -357,7 +382,10 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          audio.playSound(wavTableAbs[target.second].c_str());
+          if (const auto it = wavTableAbs.find(target.second);
+              it != wavTableAbs.end()) {
+            audio.playSound(it->second.c_str());
+          }
           audioCursor++;
         }
 

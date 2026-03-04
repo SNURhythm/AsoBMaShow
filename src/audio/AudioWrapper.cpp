@@ -594,6 +594,13 @@ int AudioWrapper::IAudioBackend::getSampleRate() const {
 
 bool AudioWrapper::loadSound(const path_t &path,
                              std::atomic<bool> &isCancelled) {
+  {
+    std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+  }
+
   std::vector<short> pcmData;
   SF_INFO sfInfo;
   auto soundData = std::make_shared<SoundData>();
@@ -658,6 +665,9 @@ bool AudioWrapper::loadSound(const path_t &path,
 
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
     soundDataIndexMap[path] = soundDataList.size();
     soundDataList.push_back(soundData);
   }
