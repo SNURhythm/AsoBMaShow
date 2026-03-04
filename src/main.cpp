@@ -83,23 +83,9 @@ static uint32_t s_bgfxResetFlags = 0;
 
 namespace {
 
-float readRenderScaleFromEnv() {
-  constexpr float kDefaultScale = 1.0f;
-  const char *raw = std::getenv("ASOBMASHOW_RENDER_SCALE");
-  if (raw == nullptr || raw[0] == '\0') {
-    return kDefaultScale;
-  }
+constexpr float kDefaultRenderScale = 1.0f;
 
-  char *end = nullptr;
-  const float parsed = std::strtof(raw, &end);
-  if (end == raw || !std::isfinite(parsed)) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                "Invalid ASOBMASHOW_RENDER_SCALE='%s'. Using %.2f", raw,
-                kDefaultScale);
-    return kDefaultScale;
-  }
-  return std::clamp(parsed, 0.5f, 2.0f);
-}
+float resolveRenderScale() { return kDefaultRenderScale; }
 
 uint32_t parseMsaaFlag(int samples) {
   switch (samples) {
@@ -118,52 +104,18 @@ uint32_t parseMsaaFlag(int samples) {
   }
 }
 
-uint32_t readResetFlagsFromEnv() {
+uint32_t resolveResetFlags() {
 #if TARGET_OS_OSX
-  int msaaSamples = 0;
+  constexpr int msaaSamples = 0;
 #else
-  int msaaSamples = 2;
+  constexpr int msaaSamples = 2;
 #endif
-
-  const char *rawMsaa = std::getenv("ASOBMASHOW_MSAA");
-  if (rawMsaa != nullptr && rawMsaa[0] != '\0') {
-    char *end = nullptr;
-    const long parsed = std::strtol(rawMsaa, &end, 10);
-    if (end == rawMsaa || parsed < 0) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                  "Invalid ASOBMASHOW_MSAA='%s'. Using %d", rawMsaa,
-                  msaaSamples);
-    } else {
-      msaaSamples = static_cast<int>(parsed);
-    }
-  }
-
   uint32_t flags = parseMsaaFlag(msaaSamples);
-  if (msaaSamples != 0 && flags == BGFX_RESET_NONE) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                "Unsupported ASOBMASHOW_MSAA=%d. Falling back to no MSAA",
-                msaaSamples);
-  }
 
   if (TARGET_PLATFORM == iOS) {
     flags |= BGFX_RESET_VSYNC;
   }
   return flags;
-}
-
-bool readSplitBgfxThreadsFromEnv() {
-  const char *raw = std::getenv("ASOBMASHOW_BGFX_SPLIT_THREADS");
-  if (raw == nullptr || raw[0] == '\0') {
-    return true;
-  }
-  char *end = nullptr;
-  const long parsed = std::strtol(raw, &end, 10);
-  if (end == raw) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                "Invalid ASOBMASHOW_BGFX_SPLIT_THREADS='%s'. Using 1", raw);
-    return true;
-  }
-  return parsed != 0;
 }
 
 int scaledDimension(int logicalSize) {
@@ -410,8 +362,8 @@ int main(int argv, char **args) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
-  s_renderScale = readRenderScaleFromEnv();
-  s_bgfxResetFlags = readResetFlagsFromEnv();
+  s_renderScale = resolveRenderScale();
+  s_bgfxResetFlags = resolveResetFlags();
   SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
           s_bgfxResetFlags);
 
@@ -490,17 +442,9 @@ int main(int argv, char **args) {
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
   bgfx_init.platformData = pd;
-  const bool useSplitBgfxThreads = readSplitBgfxThreadsFromEnv();
+  SDL_Log("Using bgfx internal multithreaded mode");
 
-  int appExitCode = EXIT_SUCCESS;
-  if (!useSplitBgfxThreads) {
-    SDL_Log("Using bgfx single-thread mode");
-    bgfx::renderFrame();
-  } else {
-    SDL_Log("Using bgfx split-thread mode");
-  }
-
-  appExitCode = runApplication(bgfx_init);
+  int appExitCode = runApplication(bgfx_init);
 
   if (s_renderer != nullptr) {
     SDL_DestroyRenderer(s_renderer);

@@ -8,34 +8,12 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
-#include <cstdlib>
 #ifdef _WIN32
 #include <timeapi.h>
 #include <windows.h>
 #include <avrt.h>
 #pragma comment(lib, "avrt.lib")
 #endif
-
-namespace {
-int resolveAudioTickHz() {
-  constexpr int kDefaultHz = 8000;
-  constexpr int kMinHz = 250;
-  constexpr int kMaxHz = 8000;
-  const char *raw = std::getenv("ASOBMASHOW_AUDIO_TICK_HZ");
-  if (raw == nullptr || raw[0] == '\0') {
-    return kDefaultHz;
-  }
-  char *end = nullptr;
-  const long parsed = std::strtol(raw, &end, 10);
-  if (end == raw || parsed < kMinHz || parsed > kMaxHz) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO,
-                "Invalid ASOBMASHOW_AUDIO_TICK_HZ='%s'. Using %d", raw,
-                kDefaultHz);
-    return kDefaultHz;
-  }
-  return static_cast<int>(parsed);
-}
-} // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : audio(stopwatch), stopwatch(stopwatch) {
@@ -339,7 +317,7 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  const int hz = resolveAudioTickHz();
+  constexpr int hz = 8000;
   SDL_Log("Jukebox scheduler tick: %d Hz", hz);
 
   playThread = std::thread([this, hz] {

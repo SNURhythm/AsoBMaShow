@@ -37,7 +37,6 @@ set(BX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BGFX_CONFIG_MULTITHREADED "1" CACHE STRING "" FORCE)
 # Include directories
 include_directories(include)
 include_directories(bgfx/bgfx/include)
