@@ -7,7 +7,6 @@
 #include <sndfile.h>
 #include <stdio.h>
 #include <mutex>
-#include <algorithm>
 #if TARGET_OS_DESKTOP
 #include <portaudio.h>
 #endif
@@ -314,15 +313,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   float *mixBuffer = userData->mixBuffer->data();
 
   float gain = 0.9f;
-  auto removePlayingSoundAt = [playingSounds](size_t index) {
-    (*playingSounds)[index] = playingSounds->back();
-    playingSounds->pop_back();
-  };
-
-  for (size_t i = 0; i < playingSounds->size();) {
-    SoundData *soundData = (*playingSounds)[i];
+  for (auto it = playingSounds->begin(); it != playingSounds->end();) {
+    SoundData *soundData = *it;
     if (!soundData->playing) {
-      removePlayingSoundAt(i);
+      it = playingSounds->erase(it);
       continue;
     }
 
@@ -353,10 +347,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     soundData->currentFrame += framesToRead;
     if (framesToRead < frameCount) {
       soundData->playing = false;
-      removePlayingSoundAt(i);
+      it = playingSounds->erase(it);
       continue;
     }
-    ++i;
+    ++it;
   }
 
   // Apply Effects
@@ -678,7 +672,7 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
 }
 
 bool AudioWrapper::playSound(const path_t &path) {
-  // TODO: support multiplexing with same sound
+  // Note: current behavior is "retrigger same instance" (no multiplexing).
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
   if (backend && !backend->isStarted()) {
@@ -691,12 +685,12 @@ bool AudioWrapper::playSound(const path_t &path) {
   }
 
   auto &soundData = soundDataList[soundDataIndexMap[path]];
-  soundData->currentFrame = 0;
-  soundData->playing = true;
 
   {
     std::lock_guard<std::mutex> lock(playingSoundsMutex);
-    playingSounds.push_back(soundData.get());
+    soundData->currentFrame = 0;
+    soundData->playing = true;
+    playingSounds.insert(soundData.get());
   }
 
   return true;
@@ -728,11 +722,7 @@ void AudioWrapper::unloadSound(const path_t &path) {
     // Remove from playingSounds if present
     {
       std::lock_guard<std::mutex> lock(playingSoundsMutex);
-      auto it = std::find(playingSounds.begin(), playingSounds.end(),
-                          soundData.get());
-      if (it != playingSounds.end()) {
-        playingSounds.erase(it);
-      }
+      playingSounds.erase(soundData.get());
     }
 
     if (soundData->isResampled) {

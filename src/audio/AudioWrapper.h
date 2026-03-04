@@ -8,8 +8,8 @@
 #include "../utils/Stopwatch.h"
 #include <mutex>
 #include <atomic>
-#include <atomic>
 #include <cmath>
+#include <unordered_set>
 
 // Simple Biquad Filter
 struct Biquad {
@@ -98,7 +98,7 @@ struct SoundData {
 struct UserData {
   Stopwatch *stopwatch;
   std::mutex *mutex;
-  std::vector<SoundData *> *playingSounds;
+  std::unordered_set<SoundData *> *playingSounds;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -130,7 +130,7 @@ private:
   std::unique_ptr<IAudioBackend> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
-  std::vector<SoundData *> playingSounds;
+  std::unordered_set<SoundData *> playingSounds;
   std::mutex playingSoundsMutex;
   std::map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
