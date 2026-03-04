@@ -34,24 +34,6 @@ void GamePlayScene::init() {
   addView(chartNameText);
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second);
   context.jukebox.stop();
-  // NOTE: should be set before "reset" call to avoid race condition with onTick
-  // callback call
-  context.jukebox.onTick([this](long long time) {
-    if (state != nullptr && state->isPlaying && !state->isEnding) {
-      checkPassedTimeline(time);
-      if (state->passedMeasureCount == chart->Measures.size()) {
-        SDL_Log("All measures passed");
-        state->isEnding = true;
-        defer(
-            [this]() {
-              context.sceneManager->changeScene(
-                  new ResultScene(context, chart->Meta, *state));
-              return false;
-            },
-            2000, true);
-      }
-    }
-  });
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
   inputHandler->startListenSDL();
@@ -170,7 +152,27 @@ void GamePlayScene::reset() {
   state = new RhythmState(chart, false);
   state->isPlaying = true;
 }
-void GamePlayScene::update(float dt) {}
+void GamePlayScene::update(float dt) {
+  (void)dt;
+  if (state == nullptr || !state->isPlaying || state->isEnding) {
+    return;
+  }
+
+  checkPassedTimeline(context.jukebox.getTimeMicros());
+  if (state->passedMeasureCount != chart->Measures.size()) {
+    return;
+  }
+
+  SDL_Log("All measures passed");
+  state->isEnding = true;
+  defer(
+      [this]() {
+        context.sceneManager->changeScene(
+            new ResultScene(context, chart->Meta, *state));
+        return false;
+      },
+      2000, true);
+}
 
 void GamePlayScene::renderScene() {
   RenderContext renderContext;

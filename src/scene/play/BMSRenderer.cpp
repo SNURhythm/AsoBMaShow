@@ -258,8 +258,8 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
-  const NoteUvRegion &headUv = sheet->longHead;
-  const NoteUvRegion &tailUv = sheet->longTail;
+  const NoteUvRegion &headUv = sheet.longHead;
+  const NoteUvRegion &tailUv = sheet.longTail;
   const auto bodyTexture =
       head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
