@@ -317,7 +317,7 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  constexpr int hz = 8000;
+  constexpr int hz = 1000;
   SDL_Log("Jukebox scheduler tick: %d Hz", hz);
 
   playThread = std::thread([this, hz] {
@@ -335,11 +335,10 @@ void Jukebox::play() {
     using Clock = std::chrono::steady_clock;
     auto prevTimestamp = Clock::now();
     auto interval = std::chrono::microseconds(1000000 / hz);
-    auto targetNextFrame = Clock::now() + interval;
+    auto targetNextFrame = prevTimestamp + interval;
     while (isPlaying) {
-      auto loopStartTimestamp = Clock::now();
       if (!stopwatch->isRunning()) {
-        std::this_thread::sleep_for(interval);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
         prevTimestamp = Clock::now();
         targetNextFrame = prevTimestamp + interval;
         continue;
@@ -359,7 +358,10 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          audio.playSound(wavTableAbs[target.second].c_str());
+          if (const auto wavIt = wavTableAbs.find(target.second);
+              wavIt != wavTableAbs.end()) {
+            audio.playSound(wavIt->second.c_str());
+          }
           audioCursor++;
         }
 
@@ -368,8 +370,9 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-            auto videoPlayer = videoPlayerTable[target.second];
+          if (const auto videoIt = videoPlayerTable.find(target.second);
+              videoIt != videoPlayerTable.end()) {
+            auto *videoPlayer = videoIt->second;
             videoPlayer->seek(0);
             videoPlayer->play();
             videoPlayer->viewWidth = rendering::window_width;
@@ -386,8 +389,9 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-            auto videoPlayer = videoPlayerTable[target.second];
+          if (const auto videoIt = videoPlayerTable.find(target.second);
+              videoIt != videoPlayerTable.end()) {
+            auto *videoPlayer = videoIt->second;
             videoPlayer->seek(0);
             videoPlayer->play();
             videoPlayer->viewWidth = rendering::window_width;
@@ -414,22 +418,11 @@ void Jukebox::play() {
       prevTimestamp = currentTimestamp;
 
       targetNextFrame += interval;
-      if(targetNextFrame < Clock::now()) {
-        // we're late, skip sleeping
+      if (targetNextFrame <= currentTimestamp) {
+        targetNextFrame = currentTimestamp + interval;
         continue;
       }
-
-      // sleep only if hz is low enough
-      if(hz <= 250) {
-        auto loopRunTime = Clock::now() - loopStartTimestamp;
-        auto sleepTime = std::chrono::microseconds(1000000 / hz) - loopRunTime;
-        // 1.4 is a magic number to avoid sleeping longer than needed
-        std::this_thread::sleep_for(sleepTime/1.4);
-      }
-      // spin wait for the rest of the time
-      while (Clock::now() < targetNextFrame) {
-        std::this_thread::yield();
-      }
+      std::this_thread::sleep_until(targetNextFrame);
     }
 #ifdef _WIN32
     // Clean up MMCS handle
