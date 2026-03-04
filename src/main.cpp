@@ -676,6 +676,7 @@ void run() {
 
     sceneManager.render();
     if (hasActiveVisuals) {
+      context.jukebox.render();
       s_postProcess.apply();
       rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
                                          s_blurPass->finalView());

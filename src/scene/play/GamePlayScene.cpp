@@ -179,7 +179,6 @@ void GamePlayScene::renderScene() {
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext, context.jukebox.getTimeMicros());
-  context.jukebox.render();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
