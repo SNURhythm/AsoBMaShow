@@ -20,6 +20,9 @@ void TexBatchRenderer::begin() {
   vertices.clear();
   indices.clear();
   currentTexture = BGFX_INVALID_HANDLE;
+  rectCount = 0;
+  flushCount = 0;
+  submitCount = 0;
 }
 
 void TexBatchRenderer::end() { flush(); }
@@ -38,26 +41,21 @@ void TexBatchRenderer::addRect(float x, float y, float width, float height,
     flush();
   }
 
+  ++rectCount;
   uint16_t baseIndex = static_cast<uint16_t>(vertices.size());
 
-  // Vertices for a quad, Y is up, (0,0) is bottom-left of texture (v=1)
-  // v=0 is top of texture.
-
-  // BL
-  vertices.push_back({x, y, 0.0f, 0.0f, tileV});
-  // BR
-  vertices.push_back({x + width, y, 0.0f, tileU, tileV});
-  // TR
-  vertices.push_back({x + width, y + height, 0.0f, tileU, 0.0f});
-  // TL
+  // Match SpriteObject's vertex order/UV mapping to keep visual parity.
   vertices.push_back({x, y + height, 0.0f, 0.0f, 0.0f});
+  vertices.push_back({x + width, y + height, 0.0f, tileU, 0.0f});
+  vertices.push_back({x, y, 0.0f, 0.0f, tileV});
+  vertices.push_back({x + width, y, 0.0f, tileU, tileV});
 
   indices.push_back(baseIndex + 0);
   indices.push_back(baseIndex + 1);
   indices.push_back(baseIndex + 2);
-  indices.push_back(baseIndex + 2);
+  indices.push_back(baseIndex + 1);
   indices.push_back(baseIndex + 3);
-  indices.push_back(baseIndex + 0);
+  indices.push_back(baseIndex + 2);
 }
 
 void TexBatchRenderer::flush() {
@@ -65,6 +63,7 @@ void TexBatchRenderer::flush() {
     return;
   }
 
+  ++flushCount;
   if (!bgfx::isValid(currentTexture)) {
     // Should not happen if addRect logic is correct, but safe to clear
     vertices.clear();
@@ -103,11 +102,13 @@ void TexBatchRenderer::flush() {
   bgfx::setTexture(0, s_texColor, currentTexture);
 
   uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+                   BGFX_STATE_BLEND_ALPHA;
   bgfx::setState(state);
 
   bgfx::submit(rendering::main_view,
-               rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT));
+               rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT),
+               submitDepth);
+  ++submitCount;
 
   vertices.clear();
   indices.clear();

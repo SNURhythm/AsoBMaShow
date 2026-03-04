@@ -17,8 +17,18 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     : latePoorTiming(latePoorTiming), chart(chart) {
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStates.reserve(laneOrder.size());
+  evenKeyLanes.reserve(laneOrder.size());
+  oddKeyLanes.reserve(laneOrder.size());
+  scratchLanes.reserve(2);
   for (int lane : laneOrder) {
     laneStates.emplace(lane, LaneState{});
+    if (isScratch(lane)) {
+      scratchLanes.push_back(lane);
+    } else if ((lane & 1) == 0) {
+      evenKeyLanes.push_back(lane);
+    } else {
+      oddKeyLanes.push_back(lane);
+    }
   }
   // flatten timeline
   size_t timelineCount = 0;
@@ -300,6 +310,12 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
+  constexpr uint32_t kDepthBackground = 100;
+  constexpr uint32_t kDepthNotes = 200;
+  constexpr uint32_t kDepthBeams = 300;
+
+  simpleBatchRenderer.setSubmitDepth(kDepthBackground);
+  texBatchRenderer.setSubmitDepth(kDepthNotes);
   simpleBatchRenderer.begin();
   texBatchRenderer.begin();
   // background
@@ -356,62 +372,82 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       state.currentTimelineIndex = i;
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
-    // render notes
-    for (const auto &note : timeLine->Notes) {
-      if (note != nullptr) {
-        if (timeLine->Timing >= micro - latePoorTiming) {
-          // note is in the hittable timing
-          if (note->IsDead) {
-            continue;
-          }
-          // render note
-          if (note->IsLongNote()) {
-            auto *longNote = static_cast<bms_parser::LongNote *>(note);
-            if (longNote->IsTail()) {
-              if (longNote->Head == nullptr) {
-                // ignore malformed chart: long note is not terminated
-                continue;
-              }
-              // find head's y
-              if (auto it = longNoteLookahead.find(longNote->Head);
-                  it != longNoteLookahead.end()) {
-                drawLongNote(it->second, y, longNote->Head);
-                // remove from lookahead
-                longNoteLookahead.erase(longNote->Head);
-              } else {
-                drawLongNote(lowerBound, y, longNote->Head);
-              }
-            } else {
-              longNoteLookahead[longNote] = y;
+    // Render notes in grouped lane order (even/odd/scratch) to reduce texture
+    // switches while keeping per-lane ordering intact.
+    auto processNote = [&](bms_parser::Note *note) {
+      if (note == nullptr) {
+        return;
+      }
+      if (timeLine->Timing >= micro - latePoorTiming) {
+        // note is in the hittable timing
+        if (note->IsDead) {
+          return;
+        }
+        // render note
+        if (note->IsLongNote()) {
+          auto *longNote = static_cast<bms_parser::LongNote *>(note);
+          if (longNote->IsTail()) {
+            if (longNote->Head == nullptr) {
+              // ignore malformed chart: long note is not terminated
+              return;
             }
-          } else {
-            drawNormalNote(y, note);
-          }
-        } else {
-          // note has passed the last hittable timing
-          if (note->IsLongNote()) {
-            auto *longNote = static_cast<bms_parser::LongNote *>(note);
-            if (longNote->IsTail()) {
-              if (longNote->Head == nullptr) {
-                // ignore malformed chart: long note is not terminated
-                continue;
-              }
-              // remove from orphan long note
-              state.orphanLongNotes.erase(longNote->Head);
-              // and from long note lookahead
+            // find head's y
+            if (auto it = longNoteLookahead.find(longNote->Head);
+                it != longNoteLookahead.end()) {
+              drawLongNote(it->second, y, longNote->Head);
+              // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
-              // add to orphan long note
-              state.orphanLongNotes.insert(longNote);
-
-              // setting to lowerBound in all cases is OK because the played
-              // state will be correctly handled by drawLongNote
-              longNoteLookahead[longNote] = lowerBound;
+              drawLongNote(lowerBound, y, longNote->Head);
             }
+          } else {
+            longNoteLookahead[longNote] = y;
+          }
+        } else {
+          drawNormalNote(y, note);
+        }
+      } else {
+        // note has passed the last hittable timing
+        if (note->IsLongNote()) {
+          auto *longNote = static_cast<bms_parser::LongNote *>(note);
+          if (longNote->IsTail()) {
+            if (longNote->Head == nullptr) {
+              // ignore malformed chart: long note is not terminated
+              return;
+            }
+            // remove from orphan long note
+            state.orphanLongNotes.erase(longNote->Head);
+            // and from long note lookahead
+            longNoteLookahead.erase(longNote->Head);
+          } else {
+            // add to orphan long note
+            state.orphanLongNotes.insert(longNote);
+
+            // setting to lowerBound in all cases is OK because the played
+            // state will be correctly handled by drawLongNote
+            longNoteLookahead[longNote] = lowerBound;
           }
         }
       }
-    }
+    };
+
+    auto processLaneGroup = [&](const std::vector<int> &laneGroup) {
+      const size_t noteCount = timeLine->Notes.size();
+      for (int lane : laneGroup) {
+        if (lane < 0) {
+          continue;
+        }
+        const size_t laneIndex = static_cast<size_t>(lane);
+        if (laneIndex >= noteCount) {
+          continue;
+        }
+        processNote(timeLine->Notes[laneIndex]);
+      }
+    };
+
+    processLaneGroup(evenKeyLanes);
+    processLaneGroup(oddKeyLanes);
+    processLaneGroup(scratchLanes);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
@@ -425,13 +461,12 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     drawLongNote(pair.second, upperBound, pair.first);
   }
 
-  // Flush batch renderer so that lines are drawn first
-  // Actually, I was adding notes to texBatch and lines to simpleBatch.
-  // I should flush simpleBatch first to draw lines behind notes.
+  // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
   texBatchRenderer.flush();
 
   // render lane beams
+  simpleBatchRenderer.setSubmitDepth(kDepthBeams);
   const long long nowMicros =
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::system_clock::now().time_since_epoch())
@@ -447,6 +482,14 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     }
   }
   simpleBatchRenderer.flush();
+
+  const uint64_t nowTicks = SDL_GetTicks64();
+  if (nowTicks - lastBatchTelemetryTick >= 5000) {
+    lastBatchTelemetryTick = nowTicks;
+    SDL_Log("BMS batch | rects %u flushes %u submits %u",
+            texBatchRenderer.getRectCount(), texBatchRenderer.getFlushCount(),
+            texBatchRenderer.getSubmitCount());
+  }
 
   // render judgement
   drawJudgement(context);

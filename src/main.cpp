@@ -410,6 +410,8 @@ int main(int argv, char **args) {
 
 void run() {
   ApplicationContext context;
+  // Use depth-sorted main view for stable layering without sequential mode.
+  bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",

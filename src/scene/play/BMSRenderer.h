@@ -14,6 +14,7 @@
 #include "Judge.h"
 #include <bx/math.h>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -57,6 +58,9 @@ private:
   std::mutex laneMutex;
   std::unordered_map<int, LaneState> laneStates;
   std::vector<int> laneOrder;
+  std::vector<int> evenKeyLanes;
+  std::vector<int> oddKeyLanes;
+  std::vector<int> scratchLanes;
 
   float noteImageHeight = 0;
   float noteImageWidth = 0;
@@ -72,6 +76,7 @@ private:
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
   long long latePoorTiming;
+  uint64_t lastBatchTelemetryTick = 0;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::TexBatchRenderer texBatchRenderer;
