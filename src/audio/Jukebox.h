@@ -5,6 +5,7 @@
 #include <thread>
 #include <unordered_map>
 #include <atomic>
+#include <cstdint>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
 #include "../utils/Stopwatch.h"
@@ -23,7 +24,7 @@ public:
   struct PerformanceAnalytics{
     static const int BUFFER_SIZE = 10000;
     // ring buffer to store loop delta time
-    std::array<double, BUFFER_SIZE> loopDeltaTimes;
+    std::array<std::atomic<uint32_t>, BUFFER_SIZE> loopDeltaTimes{};
     std::atomic<size_t> loopDeltaIndex{0};
     size_t cursor = 0;
     double avgDeltaTime = 0;

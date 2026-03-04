@@ -402,10 +402,12 @@ void Jukebox::play() {
       auto currentTimestamp = Clock::now();
       size_t idx =
           performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
-      performanceAnalytics.loopDeltaTimes[idx] =
+      const auto deltaMicros =
           std::chrono::duration_cast<std::chrono::microseconds>(
               currentTimestamp - prevTimestamp)
               .count();
+      performanceAnalytics.loopDeltaTimes[idx].store(
+          static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
       size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
       performanceAnalytics.loopDeltaIndex.store(newIdx,
                                                 std::memory_order_relaxed);
@@ -528,7 +530,9 @@ void Jukebox::seek(long long micro) {
 double Jukebox::getAvgDeltaTime() {
   size_t currentWriteIndex = performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
   while(performanceAnalytics.cursor != currentWriteIndex) {
-    auto loopRunTime = performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor];
+    const auto loopRunTime = static_cast<double>(
+        performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor].load(
+            std::memory_order_relaxed));
     performanceAnalytics.statsSum += loopRunTime;
     performanceAnalytics.statsCount ++;
     if(performanceAnalytics.statsCount >= 100) {
