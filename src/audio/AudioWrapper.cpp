@@ -679,12 +679,13 @@ bool AudioWrapper::playSound(const path_t &path) {
     backend->start();
   }
 
-  if (soundDataIndexMap.find(path) == soundDataIndexMap.end()) {
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
     SDL_Log("Sound not found: %s", path_t_to_utf8(path).c_str());
     return false;
   }
 
-  auto &soundData = soundDataList[soundDataIndexMap[path]];
+  auto &soundData = soundDataList[indexIt->second];
 
   {
     std::lock_guard<std::mutex> lock(playingSoundsMutex);
@@ -715,8 +716,9 @@ void AudioWrapper::stopSounds() {
 
 void AudioWrapper::unloadSound(const path_t &path) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
-  if (soundDataIndexMap.find(path) != soundDataIndexMap.end()) {
-    size_t index = soundDataIndexMap[path];
+  if (const auto indexIt = soundDataIndexMap.find(path);
+      indexIt != soundDataIndexMap.end()) {
+    const size_t index = indexIt->second;
     auto &soundData = soundDataList[index];
 
     // Remove from playingSounds if present
@@ -730,7 +732,7 @@ void AudioWrapper::unloadSound(const path_t &path) {
     }
 
     soundDataList.erase(soundDataList.begin() + index);
-    soundDataIndexMap.erase(path);
+    soundDataIndexMap.erase(indexIt);
 
     // Update indices in the map
     for (auto &entry : soundDataIndexMap) {
