@@ -19,7 +19,14 @@ long long nowMicros() {
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
+
+#if defined(DEBUG) || defined(_DEBUG)
+constexpr bool kShowLaneStateOverlay = true;
+#else
+constexpr bool kShowLaneStateOverlay = false;
+#endif
 } // namespace
+
 void GamePlayScene::init() {
   auto chartNameText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   chartNameText->setText(chart->Meta.Title);
@@ -49,13 +56,16 @@ void GamePlayScene::init() {
   inputHandler = new RhythmInputHandler(this, chart->Meta);
   inputHandler->startListenSDL();
   inputHandler->startListenTouch();
-  laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  laneStateText->setPosition(100, 100);
+
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
-    SDL_Log("Setting lane %d to false", lane);
     lanePressed[lane] = false;
   }
-  updateLaneStateText();
+
+  if constexpr (kShowLaneStateOverlay) {
+    laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+    laneStateText->setPosition(100, 100);
+    updateLaneStateText();
+  }
 
   /* pause screen */
   pauseLayout =
@@ -168,7 +178,9 @@ void GamePlayScene::renderScene() {
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext, context.jukebox.getTimeMicros());
   context.jukebox.render();
-  laneStateText->render(renderContext);
+  if (laneStateText != nullptr) {
+    laneStateText->render(renderContext);
+  }
 }
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");

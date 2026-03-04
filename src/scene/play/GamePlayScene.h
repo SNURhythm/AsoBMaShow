@@ -8,6 +8,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
+#include <unordered_map>
 class Button;
 struct StartOptions {
   unsigned long long startPosition = 0;
@@ -55,7 +56,7 @@ private:
   RhythmState *state = nullptr;
   BMSRenderer *renderer = nullptr;
   RhythmInputHandler *inputHandler = nullptr;
-  std::map<int, bool> lanePressed;
+  std::unordered_map<int, bool> lanePressed;
   TextView *laneStateText = nullptr;
   void updateLaneStateText();
   std::mutex judgeMutex;
