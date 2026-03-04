@@ -10,8 +10,8 @@
 #include "../../utils/SpriteLoader.h"
 
 #include <assert.h>
+#include <cmath>
 #include <string>
-#include <unordered_map>
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     : latePoorTiming(latePoorTiming), chart(chart) {
   laneOrder = chart->Meta.GetTotalLaneIndices();
@@ -117,6 +117,7 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   scoreText->setPosition(0, rendering::window_height - 50);
   scoreText->setAlign(TextView::LEFT);
+  scoreText->setText("Score: 0");
 
   // Calculate the lane plane screen top intersection
   upperBound = calculateLanePlaneScreenTopIntersection();
@@ -182,25 +183,25 @@ void BMSRenderer::drawScore(RenderContext &context) const {
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  auto [it, inserted] = laneStates.try_emplace(lane);
+  auto it = laneStates.find(lane);
+  if (it == laneStates.end()) {
+    return;
+  }
   LaneState &laneState = it->second;
   laneState.isPressed = true;
   laneState.lastPressedJudge = judge;
   laneState.lastStateTime = time;
-  if (inserted) {
-    laneOrder.push_back(lane);
-  }
 }
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
-  auto [it, inserted] = laneStates.try_emplace(lane);
+  auto it = laneStates.find(lane);
+  if (it == laneStates.end()) {
+    return;
+  }
   LaneState &laneState = it->second;
   laneState.isPressed = false;
   laneState.lastStateTime = time;
-  if (inserted) {
-    laneOrder.push_back(lane);
-  }
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
   if (judgeResult.judgement == None) {
@@ -276,68 +277,33 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
 }
 
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
-  // Get the camera from the rendering context
   Camera &camera = rendering::game_camera;
+  constexpr float kFallbackLaneTop = 8.5f;
 
-  // Screen top in screen coordinates (Y=0 is top of screen)
-  float screenTopY = 0.0f;
-  float screenCenterX = rendering::window_width / 2.0f;
+  const float screenTopY = 0.0f;
+  const float screenCenterX = rendering::window_width / 2.0f;
+  const bx::Vec3 eye = camera.getEye();
+  const bx::Vec3 screenTopWorld =
+      camera.deproject(screenCenterX, screenTopY, 5.0f);
 
-  // Get camera position from camera
-  bx::Vec3 eye = camera.getEye();
-
-  // Deproject the screen top center to get a point in world space
-  float testDistance = 5.0f;
-  bx::Vec3 screenTopWorld =
-      camera.deproject(screenCenterX, screenTopY, testDistance);
-
-  SDL_Log("Camera eye: (%.2f, %.2f, %.2f)", eye.x, eye.y, eye.z);
-  SDL_Log("Screen top world: (%.2f, %.2f, %.2f)", screenTopWorld.x,
-          screenTopWorld.y, screenTopWorld.z);
-
-  // Calculate ray direction from camera to screen top
   bx::Vec3 rayDir = {screenTopWorld.x - eye.x, screenTopWorld.y - eye.y,
                      screenTopWorld.z - eye.z};
-  float rayLength = bx::length(rayDir);
+  const float rayLength = bx::length(rayDir);
+  if (rayLength <= 0.0001f) {
+    return kFallbackLaneTop;
+  }
   rayDir = {rayDir.x / rayLength, rayDir.y / rayLength, rayDir.z / rayLength};
 
-  SDL_Log("Ray direction: (%.2f, %.2f, %.2f)", rayDir.x, rayDir.y, rayDir.z);
-
-  // The lane plane is parallel to X-axis at z=0 (facing the camera)
-  // We need to find where the ray from camera intersects this plane
-  // Ray equation: eye + t * rayDir
-  // At intersection: eye.z + t * rayDir.z = 0
-
-  // Check if ray direction is nearly parallel to the lane plane (z=0)
   if (std::abs(rayDir.z) < 0.001f) {
-    SDL_Log(
-        "Warning: Ray is nearly parallel to lane plane, using fallback value");
-    return 8.5f; // Fallback to original hardcoded value
+    return kFallbackLaneTop;
   }
 
-  // Solve for t where z=0: eye.z + t * rayDir.z = 0
-  float t = -eye.z / rayDir.z;
-
-  SDL_Log("Calculated t: %.2f", t);
-
-  // Check if intersection is behind camera
-  if (t < 0) {
-    SDL_Log("Warning: Intersection is behind camera, using fallback value");
-    return 8.5f; // Fallback to original hardcoded value
+  const float t = -eye.z / rayDir.z;
+  if (t < 0.0f) {
+    return kFallbackLaneTop;
   }
 
-  // Calculate the intersection point
-  bx::Vec3 intersection = {eye.x + t * rayDir.x, eye.y + t * rayDir.y,
-                           eye.z + t * rayDir.z};
-
-  SDL_Log("Intersection point: (%.2f, %.2f, %.2f)", intersection.x,
-          intersection.y, intersection.z);
-
-  // Verify that z is actually 0 at intersection
-  float actualZ = eye.z + t * rayDir.z;
-  SDL_Log("Actual Z at intersection: %.6f", actualZ);
-
-  return intersection.y;
+  return eye.y + t * rayDir.y;
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
@@ -513,16 +479,6 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     }
   }
   simpleBatchRenderer.flush();
-
-#if defined(DEBUG) || defined(_DEBUG)
-  const uint64_t nowTicks = SDL_GetTicks64();
-  if (nowTicks - lastBatchTelemetryTick >= 15000) {
-    lastBatchTelemetryTick = nowTicks;
-    SDL_Log("BMS batch | rects %u flushes %u submits %u",
-            texBatchRenderer.getRectCount(), texBatchRenderer.getFlushCount(),
-            texBatchRenderer.getSubmitCount());
-  }
-#endif
 
   // render judgement
   drawJudgement(context);

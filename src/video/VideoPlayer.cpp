@@ -1,11 +1,9 @@
 #include "VideoPlayer.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
-#include <iostream>
 #include <cstring>
 
 #include <thread>
-#include <future>
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
       hasVideoFrame(false) {
@@ -35,16 +33,9 @@ VideoPlayer::~VideoPlayer() {
 
 void VideoPlayer::unloadVideo() {
   stopPredecoding();
+  hasVideoFrame = false;
   {
     std::lock_guard<std::mutex> videoLock(videoMutex);
-    if (frame) {
-      av_frame_free(&frame);
-      frame = nullptr;
-    }
-    if (packet) {
-      av_packet_free(&packet);
-      packet = nullptr;
-    }
     if (swsContext) {
       sws_freeContext(swsContext);
       swsContext = nullptr;
@@ -127,9 +118,6 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     if (startPTS == AV_NOPTS_VALUE) {
       startPTS = 0; // Default to 0 if start_time is not available
     }
-
-    frame = av_frame_alloc();
-    packet = av_packet_alloc();
     swsContext = sws_getContext(codecContext->width, codecContext->height,
                                 codecContext->pix_fmt, codecContext->width,
                                 codecContext->height, AV_PIX_FMT_YUV420P,
@@ -149,27 +137,6 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     predecodeThread = std::thread(&VideoPlayer::predecodeFrames, this);
     return true;
   }
-}
-uint32_t VideoPlayer::setupFormat(char *chroma, unsigned *width,
-                                  unsigned *height, unsigned *pitches,
-                                  unsigned *lines) {
-  if (chroma == nullptr || width == nullptr || height == nullptr ||
-      pitches == nullptr || lines == nullptr)
-    return 0;
-  chroma[0] = 'I';
-  chroma[1] = '4';
-  chroma[2] = '2';
-  chroma[3] = '0';
-  chroma[4] = '\0';
-  *width = videoFrameWidth;
-  *height = videoFrameHeight;
-  pitches[0] = videoFrameWidth;
-  pitches[1] = videoFrameWidth / 2;
-  pitches[2] = videoFrameWidth / 2;
-  lines[0] = videoFrameHeight;
-  lines[1] = videoFrameHeight / 2;
-  lines[2] = videoFrameHeight / 2;
-  return 1;
 }
 
 void VideoPlayer::update() {
@@ -336,7 +303,6 @@ void VideoPlayer::play() {
   }
   isPlaying = true;
   isPaused = false;
-  stopRequested = false;
   isEOF = false;
   eofCV.notify_all();
 }
@@ -345,8 +311,7 @@ void VideoPlayer::pause() { isPaused = true; }
 
 void VideoPlayer::stop() {
   isPlaying = false;
-  stopRequested = true;
-  seekPosition = -1; // Reset seek position
+  hasVideoFrame = false;
 }
 
 void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
@@ -416,6 +381,7 @@ void VideoPlayer::seek(int64_t micro) {
   // Reinitialize timing
   lastFramePTS = 0;
   startTime = stopwatch->elapsedMicros();
+  hasVideoFrame = false;
 
   // Notify predecoding thread to continue from the new position
   SDL_Log("Seeked to %lld microseconds", micro);

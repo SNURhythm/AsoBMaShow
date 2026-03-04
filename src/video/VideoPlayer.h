@@ -2,11 +2,10 @@
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
-#include <semaphore>
 #include <mutex>
+#include <vector>
 #include "../utils/Stopwatch.h"
 #include "../rendering/common.h"
-#include <queue>
 #include <thread>
 #include <atomic>
 #include <condition_variable>
@@ -39,17 +38,13 @@ public:
 private:
   std::atomic<bool> isEOF = false;
   Stopwatch *stopwatch;
-  std::atomic<bool> isPlaying;
-  std::atomic<bool> isPaused;
-  std::atomic<bool> stopRequested;
-  std::atomic<bool> predecodingActive;
-  std::atomic<int64_t> seekPosition;
+  std::atomic<bool> isPlaying{false};
+  std::atomic<bool> isPaused{false};
+  std::atomic<bool> predecodingActive{false};
   std::thread predecodeThread;
 
   AVFormatContext *formatContext = nullptr;
   AVCodecContext *codecContext = nullptr;
-  AVFrame *frame = nullptr;
-  AVPacket *packet = nullptr;
   SwsContext *swsContext = nullptr;
   int videoStreamIndex = -1;
   std::mutex videoMutex;
@@ -65,17 +60,9 @@ private:
   long long startTime;       // Start time for playback
   double lastFramePTS = 0.0; // Last decoded frame's PTS for synchronization
 
-  std::queue<AVFrame *> frameQueue; // Queue for pre-decoded frames
-  std::condition_variable bufferCV; // Condition variable for buffer signaling
-
   std::mutex eofMutex;
   std::condition_variable eofCV; // Condition variable for eof signaling
 
-  const size_t maxBufferFrames = 120; // Maximum number of frames in the buffer
-  bool isBuffering = false;           // Indicates if buffering is in progress
-
-  uint32_t setupFormat(char *chroma, unsigned *width, unsigned *height,
-                       unsigned *pitches, unsigned *lines);
   void unloadVideo();
   void predecodeFrames();
   void stopPredecoding();
@@ -93,7 +80,6 @@ private:
 
   int64_t startPTS = 0;
   unsigned int getPrecisePosition();
-  int currentTextureIndex = 0;
   bgfx::TextureHandle videoTextureY = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle videoTextureU = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle videoTextureV = BGFX_INVALID_HANDLE;

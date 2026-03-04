@@ -92,7 +92,6 @@ private:
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
   long long latePoorTiming;
-  uint64_t lastBatchTelemetryTick = 0;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::TexBatchRenderer texBatchRenderer;
