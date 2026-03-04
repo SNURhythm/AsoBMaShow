@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -71,6 +72,10 @@ public:
 private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
+  std::mutex hudMutex;
+  bool hudDirty = false;
+  std::string pendingJudgeText;
+  int pendingScore = 0;
   std::mutex laneMutex;
   std::vector<int> laneOrder;
   std::vector<LaneState> laneStatesByOrder;
@@ -108,6 +113,7 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
+  void applyPendingHudText();
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,

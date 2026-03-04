@@ -240,8 +240,12 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
     judgeLine.push_back(' ');
     judgeLine += std::to_string(combo);
   }
-  judgeText->setText(judgeLine);
-  scoreText->setText("Score: " + std::to_string(score));
+  {
+    std::lock_guard<std::mutex> lock(hudMutex);
+    pendingJudgeText = std::move(judgeLine);
+    pendingScore = score;
+    hudDirty = true;
+  }
 }
 void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
@@ -322,6 +326,8 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
+  applyPendingHudText();
+
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthBeams = 300;
@@ -499,6 +505,23 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   drawJudgement(context);
   drawScore(context);
 }
+
+void BMSRenderer::applyPendingHudText() {
+  std::string judgeLine;
+  int score = 0;
+  {
+    std::lock_guard<std::mutex> lock(hudMutex);
+    if (!hudDirty) {
+      return;
+    }
+    judgeLine = pendingJudgeText;
+    score = pendingScore;
+    hudDirty = false;
+  }
+  judgeText->setText(judgeLine);
+  scoreText->setText("Score: " + std::to_string(score));
+}
+
 void BMSRenderer::reset() { state.reset(); }
 void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
