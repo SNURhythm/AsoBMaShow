@@ -2,7 +2,6 @@
 #include "../bms_parser.hpp"
 #include "AudioWrapper.h"
 #include <array>
-#include <future>
 #include <thread>
 #include <unordered_map>
 #include <atomic>
@@ -85,10 +84,6 @@ private:
   std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
   std::mutex imageTableMutex;
-  std::vector<std::future<bool>> asyncVideoLoads;
-  long long lastPositionMicro = 0;
-  double diffSamples[100];
-  int diffSampleCount = 0;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};

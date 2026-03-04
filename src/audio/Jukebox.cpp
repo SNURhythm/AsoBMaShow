@@ -348,8 +348,6 @@ void Jukebox::play() {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
         auto positionMicro = stopwatch->elapsedMicros();
-
-        lastPositionMicro = positionMicro;
         if (onTickCb) {
           onTickCb(positionMicro);
         }
