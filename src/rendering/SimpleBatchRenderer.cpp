@@ -84,10 +84,10 @@ void SimpleBatchRenderer::flush() {
                    BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
   bgfx::setState(state);
 
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::submit(
-      rendering::main_view,
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE),
-      submitDepth);
+      rendering::main_view, kProgram, submitDepth);
 
   vertices.clear();
   indices.clear();

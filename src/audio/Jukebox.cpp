@@ -485,10 +485,14 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  bgfx::submit(viewId, rendering::ShaderManager::getInstance().getProgram(
-                           "vs_text.bin", viewId == rendering::bga_view
-                                              ? "fs_text.bin"
-                                              : "fs_bgalayer.bin"));
+  static const bgfx::ProgramHandle kBgaProgram =
+      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_text.bin");
+  static const bgfx::ProgramHandle kBgaLayerProgram =
+      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_bgalayer.bin");
+  bgfx::submit(viewId,
+               viewId == rendering::bga_view ? kBgaProgram : kBgaLayerProgram);
 }
 
 long long Jukebox::getTimeMicros() { return stopwatch->elapsedMicros(); }

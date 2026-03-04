@@ -3,13 +3,13 @@
 #include <stdexcept>
 #include <string>
 #include <SDL2/SDL.h>
-#include <map>
+#include <unordered_map>
 #include <filesystem>
 namespace rendering {
 // singleton
 class ShaderManager {
 private:
-  std::map<std::string, bgfx::ProgramHandle> programMap;
+  std::unordered_map<std::string, bgfx::ProgramHandle> programMap;
 
   ShaderManager() {} // Private constructor
   bgfx::ShaderHandle loadShader(const std::string &FILENAME) {
@@ -65,13 +65,21 @@ public:
   void operator=(const ShaderManager &) = delete;
 
   bgfx::ProgramHandle getProgram(const std::string &vs, const std::string &fs) {
-    std::string name = vs + "_" + fs;
-    if (programMap.find(name) == programMap.end()) {
-      bgfx::ShaderHandle vsh = loadShader(vs.c_str());
-      bgfx::ShaderHandle fsh = loadShader(fs.c_str());
-      programMap[name] = bgfx::createProgram(vsh, fsh, true);
+    std::string name;
+    name.reserve(vs.size() + fs.size() + 1);
+    name.append(vs);
+    name.push_back('_');
+    name.append(fs);
+
+    if (const auto it = programMap.find(name); it != programMap.end()) {
+      return it->second;
     }
-    return programMap[name];
+
+    bgfx::ShaderHandle vsh = loadShader(vs);
+    bgfx::ShaderHandle fsh = loadShader(fs);
+    const bgfx::ProgramHandle program = bgfx::createProgram(vsh, fsh, true);
+    programMap.emplace(std::move(name), program);
+    return program;
   }
 
   void preloadProgram(const std::string &vs, const std::string &fs) {
@@ -82,6 +90,7 @@ public:
     for (auto &program : programMap) {
       bgfx::destroy(program.second);
     }
+    programMap.clear();
   }
 };
 } // namespace rendering

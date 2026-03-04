@@ -152,9 +152,11 @@ public:
       bgfx::setIndexBuffer(&tib);
 
       // Submit the draw call
+      static const bgfx::ProgramHandle kSimpleProgram =
+          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
       bgfx::submit(
           rendering::ui_view,
-          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+          kSimpleProgram);
     }
 #endif
     renderImpl(context);

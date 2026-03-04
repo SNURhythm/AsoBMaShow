@@ -94,8 +94,9 @@ void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
   bgfx::setTexture(0, s_texColor, texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  bgfx::submit(viewId, rendering::ShaderManager::getInstance().getProgram(
-                           SHADER_TEXT));
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  bgfx::submit(viewId, kProgram);
 }
 
 void renderTextureRegionScissor(bgfx::TextureHandle texture, bgfx::ViewId viewId,

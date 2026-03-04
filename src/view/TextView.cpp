@@ -128,9 +128,9 @@ void TextView::renderImpl(RenderContext &context) {
                    BGFX_STATE_BLEND_ALPHA);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    bgfx::submit(
-        rendering::ui_view,
-        rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT));
+    static const bgfx::ProgramHandle kProgram =
+        rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+    bgfx::submit(rendering::ui_view, kProgram);
   }
 }
 

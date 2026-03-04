@@ -10,6 +10,8 @@
 #include "../skin/SkinTypes.h"
 
 static void drawRect(float x, float y, float width, float height, Color color) {
+  static const bgfx::ProgramHandle kSimpleProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
 
@@ -43,7 +45,7 @@ static void drawRect(float x, float y, float width, float height, Color color) {
 
   bgfx::submit(
       rendering::main_view,
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+      kSimpleProgram);
 }
 
 
@@ -137,9 +139,9 @@ void ResultScene::renderScene() {
         bgfx::setState(state);
         bgfx::setVertexBuffer(0, &tvb);
         bgfx::setIndexBuffer(&tib);
-        bgfx::submit(
-            rendering::ui_view,
-            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+        static const bgfx::ProgramHandle kSimpleProgram =
+            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+        bgfx::submit(rendering::ui_view, kSimpleProgram);
       } else {
         // Fallback or just don't draw if too many
         SDL_Log("Too many points in gauge history to draw: %zu", count);

@@ -117,9 +117,9 @@ void TexBatchRenderer::flush() {
                    BGFX_STATE_BLEND_ALPHA;
   bgfx::setState(state);
 
-  bgfx::submit(rendering::main_view,
-               rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT),
-               submitDepth);
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  bgfx::submit(rendering::main_view, kProgram, submitDepth);
   ++submitCount;
 
   vertices.clear();
