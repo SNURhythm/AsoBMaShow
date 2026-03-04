@@ -317,10 +317,8 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  const bool hasTickCallback = static_cast<bool>(onTickCb);
-  const int hz = hasTickCallback ? 1000 : 250;
-  SDL_Log("Jukebox scheduler tick: %d Hz (onTick: %s)", hz,
-          hasTickCallback ? "yes" : "no");
+  constexpr int hz = 1000;
+  SDL_Log("Jukebox scheduler tick: %d Hz", hz);
 
   playThread = std::thread([this, hz] {
 #ifdef _WIN32
@@ -340,7 +338,7 @@ void Jukebox::play() {
     auto targetNextFrame = prevTimestamp + interval;
     while (isPlaying) {
       if (!stopwatch->isRunning()) {
-        std::this_thread::sleep_for(interval);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
         prevTimestamp = Clock::now();
         targetNextFrame = prevTimestamp + interval;
         continue;
