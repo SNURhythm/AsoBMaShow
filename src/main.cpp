@@ -54,7 +54,6 @@
 #elif __posix
 // POSIX
 #endif
-#include <sol/sol.hpp>
 #include "rendering/Camera.h"
 #include <filesystem>
 #include <vector>
@@ -327,15 +326,6 @@ int main(int argv, char **args) {
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
   rendering::main_camera = &rendering::game_camera;
-  sol::state lua;
-  int x = 0;
-  lua.set_function("beep", [&x] { ++x; });
-  // call beep 100 times
-  auto code = "beep()";
-  lua.safe_script(code);
-
-  assert(x == 1);
-  APP_DEBUG_LOG("lua result: %d", x);
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
   // print bgfx version
