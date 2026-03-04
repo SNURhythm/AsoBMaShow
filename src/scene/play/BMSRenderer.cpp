@@ -46,9 +46,25 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
     timelineCount += measure->TimeLines.size();
   }
   timelines.reserve(timelineCount);
+  groupedTimelineNotes.reserve(timelineCount);
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
       timelines.push_back(timeLine);
+      auto &timelineNotes = groupedTimelineNotes.emplace_back();
+      timelineNotes.reserve(laneOrder.size());
+      auto appendLaneGroup = [&](const std::vector<size_t> &laneGroup) {
+        for (size_t laneIndex : laneGroup) {
+          if (laneIndex >= timeLine->Notes.size()) {
+            continue;
+          }
+          if (auto *note = timeLine->Notes[laneIndex]; note != nullptr) {
+            timelineNotes.push_back(note);
+          }
+        }
+      };
+      appendLaneGroup(evenKeyLaneIndices);
+      appendLaneGroup(oddKeyLaneIndices);
+      appendLaneGroup(scratchLaneIndices);
     }
   }
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
@@ -453,19 +469,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       }
     };
 
-    auto processLaneGroup = [&](const std::vector<size_t> &laneGroup) {
-      const size_t noteCount = timeLine->Notes.size();
-      for (size_t laneIndex : laneGroup) {
-        if (laneIndex >= noteCount) {
-          continue;
-        }
-        processNote(timeLine->Notes[laneIndex]);
+    if (i < groupedTimelineNotes.size()) {
+      for (auto *note : groupedTimelineNotes[i]) {
+        processNote(note);
       }
-    };
-
-    processLaneGroup(evenKeyLaneIndices);
-    processLaneGroup(oddKeyLaneIndices);
-    processLaneGroup(scratchLaneIndices);
+    }
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {

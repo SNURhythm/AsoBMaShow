@@ -90,6 +90,7 @@ private:
   float noteImageHeight = 0;
   float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
+  std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int keyLaneCount;
