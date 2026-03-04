@@ -27,25 +27,40 @@ Jukebox::~Jukebox() {
     playThread.join();
   audio.stopSounds();
   audio.unloadSounds();
-  for (auto &videoPlayer : videoPlayerTable) {
-    delete videoPlayer.second;
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      delete videoPlayer.second;
+    }
+    videoPlayerTable.clear();
   }
-  for (auto &image : imageTable) {
-    bgfx::destroy(image.second.texture);
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    for (auto &image : imageTable) {
+      bgfx::destroy(image.second.texture);
+    }
+    imageTable.clear();
   }
 }
 void Jukebox::render() {
   const int bga = currentBga.load(std::memory_order_relaxed);
   if (bga != -1) {
-    auto videoIt = videoPlayerTable.find(bga);
-    if (videoIt != videoPlayerTable.end()) {
-      auto *videoPlayer = videoIt->second;
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = rendering::bga_view;
-      videoPlayer->update();
-      videoPlayer->render();
-    } else {
+    bool rendered = false;
+    {
+      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+      auto videoIt = videoPlayerTable.find(bga);
+      if (videoIt != videoPlayerTable.end()) {
+        auto *videoPlayer = videoIt->second;
+        videoPlayer->viewWidth = rendering::window_width;
+        videoPlayer->viewHeight = rendering::window_height;
+        videoPlayer->viewId = rendering::bga_view;
+        videoPlayer->update();
+        videoPlayer->render();
+        rendered = true;
+      }
+    }
+    if (!rendered) {
+      std::lock_guard<std::mutex> lock(imageTableMutex);
       auto imageIt = imageTable.find(bga);
       if (imageIt != imageTable.end()) {
         renderImage(imageIt->second, rendering::bga_view);
@@ -54,15 +69,22 @@ void Jukebox::render() {
   }
   const int bmpLayer = currentBmpLayer.load(std::memory_order_relaxed);
   if (bmpLayer != -1) {
-    auto videoIt = videoPlayerTable.find(bmpLayer);
-    if (videoIt != videoPlayerTable.end()) {
-      auto *videoPlayer = videoIt->second;
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = rendering::bga_layer_view;
-      videoPlayer->update();
-      videoPlayer->render();
-    } else {
+    bool rendered = false;
+    {
+      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+      auto videoIt = videoPlayerTable.find(bmpLayer);
+      if (videoIt != videoPlayerTable.end()) {
+        auto *videoPlayer = videoIt->second;
+        videoPlayer->viewWidth = rendering::window_width;
+        videoPlayer->viewHeight = rendering::window_height;
+        videoPlayer->viewId = rendering::bga_layer_view;
+        videoPlayer->update();
+        videoPlayer->render();
+        rendered = true;
+      }
+    }
+    if (!rendered) {
+      std::lock_guard<std::mutex> lock(imageTableMutex);
       auto imageIt = imageTable.find(bmpLayer);
       if (imageIt != imageTable.end()) {
         renderImage(imageIt->second, rendering::bga_layer_view);
@@ -249,15 +271,20 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
 
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
-  for (auto &videoPlayer : videoPlayerTable) {
-    delete videoPlayer.second;
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      delete videoPlayer.second;
+    }
+    videoPlayerTable.clear();
   }
-  videoPlayerTable.clear();
-
-  for (auto &image : imageTable) {
-    bgfx::destroy(image.second.texture);
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    for (auto &image : imageTable) {
+      bgfx::destroy(image.second.texture);
+    }
+    imageTable.clear();
   }
-  imageTable.clear();
   if (isCancelled)
     return;
   SDL_Log("Loading sounds");
@@ -394,15 +421,27 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-            auto videoPlayer = videoPlayerTable[target.second];
-            videoPlayer->seek(0);
-            videoPlayer->play();
-            videoPlayer->viewWidth = rendering::window_width;
-            videoPlayer->viewHeight = rendering::window_height;
-            videoPlayer->viewId = rendering::bga_view;
-            currentBga.store(target.second, std::memory_order_relaxed);
-          } else if (imageTable.find(target.second) != imageTable.end()) {
+          bool activated = false;
+          {
+            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+            auto videoIt = videoPlayerTable.find(target.second);
+            if (videoIt != videoPlayerTable.end()) {
+              auto *videoPlayer = videoIt->second;
+              videoPlayer->seek(0);
+              videoPlayer->play();
+              videoPlayer->viewWidth = rendering::window_width;
+              videoPlayer->viewHeight = rendering::window_height;
+              videoPlayer->viewId = rendering::bga_view;
+              activated = true;
+            }
+          }
+          if (!activated) {
+            std::lock_guard<std::mutex> lock(imageTableMutex);
+            if (imageTable.find(target.second) != imageTable.end()) {
+              activated = true;
+            }
+          }
+          if (activated) {
             currentBga.store(target.second, std::memory_order_relaxed);
           }
           bmpCursor++;
@@ -412,15 +451,27 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
-          if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-            auto videoPlayer = videoPlayerTable[target.second];
-            videoPlayer->seek(0);
-            videoPlayer->play();
-            videoPlayer->viewWidth = rendering::window_width;
-            videoPlayer->viewHeight = rendering::window_height;
-            videoPlayer->viewId = rendering::bga_layer_view;
-            currentBmpLayer.store(target.second, std::memory_order_relaxed);
-          } else if (imageTable.find(target.second) != imageTable.end()) {
+          bool activated = false;
+          {
+            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+            auto videoIt = videoPlayerTable.find(target.second);
+            if (videoIt != videoPlayerTable.end()) {
+              auto *videoPlayer = videoIt->second;
+              videoPlayer->seek(0);
+              videoPlayer->play();
+              videoPlayer->viewWidth = rendering::window_width;
+              videoPlayer->viewHeight = rendering::window_height;
+              videoPlayer->viewId = rendering::bga_layer_view;
+              activated = true;
+            }
+          }
+          if (!activated) {
+            std::lock_guard<std::mutex> lock(imageTableMutex);
+            if (imageTable.find(target.second) != imageTable.end()) {
+              activated = true;
+            }
+          }
+          if (activated) {
             currentBmpLayer.store(target.second, std::memory_order_relaxed);
           }
           bmpLayerCursor++;
@@ -537,6 +588,7 @@ void Jukebox::stop() {
   if (playThread.joinable())
     playThread.join();
   audio.stopSounds();
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
   for (auto &videoPlayer : videoPlayerTable) {
     videoPlayer.second->stop();
   }
