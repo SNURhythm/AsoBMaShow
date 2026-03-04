@@ -31,6 +31,7 @@ struct Scissor {
   int x, y, width, height;
 };
 struct RenderContext {
+  RenderContext() { scissorStack.reserve(16); }
   Scissor scissor = {0, 0, -1, -1};
   std::vector<Scissor> scissorStack;
 
