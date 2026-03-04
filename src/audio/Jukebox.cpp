@@ -318,7 +318,7 @@ void Jukebox::play() {
   stopwatch->reset();
   stopwatch->start();
   const bool hasTickCallback = static_cast<bool>(onTickCb);
-  const int hz = hasTickCallback ? 1000 : 250;
+  const int hz = hasTickCallback ? 500 : 250;
   SDL_Log("Jukebox scheduler tick: %d Hz (onTick: %s)", hz,
           hasTickCallback ? "yes" : "no");
 
