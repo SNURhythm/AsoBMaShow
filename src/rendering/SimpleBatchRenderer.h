@@ -21,5 +21,6 @@ private:
   std::vector<PosColorVertex> vertices;
   std::vector<uint16_t> indices;
   uint32_t submitDepth = 0;
+  uint32_t transientBufferMissCount = 0;
 };
 } // namespace rendering

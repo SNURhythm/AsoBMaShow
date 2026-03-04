@@ -58,10 +58,14 @@ void SimpleBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosColorVertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
-                "SimpleBatchRenderer: Not enough transient buffer space. "
-                "Vertices: %d, Indices: %d",
-                numVertices, numIndices);
+    ++transientBufferMissCount;
+    if (transientBufferMissCount <= 3 ||
+        (transientBufferMissCount % 300) == 0) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
+                  "SimpleBatchRenderer: Not enough transient buffer space. "
+                  "Vertices: %d, Indices: %d (misses: %u)",
+                  numVertices, numIndices, transientBufferMissCount);
+    }
     vertices.clear();
     indices.clear();
     return;

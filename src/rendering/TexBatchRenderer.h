@@ -39,5 +39,6 @@ private:
   uint32_t rectCount = 0;
   uint32_t flushCount = 0;
   uint32_t submitCount = 0;
+  uint32_t transientBufferMissCount = 0;
 };
 } // namespace rendering

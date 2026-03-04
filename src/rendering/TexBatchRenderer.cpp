@@ -86,8 +86,14 @@ void TexBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosTexCoord0Vertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
-                "TexBatchRenderer: Not enough transient buffer space.");
+    ++transientBufferMissCount;
+    if (transientBufferMissCount <= 3 ||
+        (transientBufferMissCount % 300) == 0) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_RENDER,
+                  "TexBatchRenderer: Not enough transient buffer space "
+                  "(v:%u i:%u misses:%u).",
+                  numVertices, numIndices, transientBufferMissCount);
+    }
     vertices.clear();
     indices.clear();
     return;
