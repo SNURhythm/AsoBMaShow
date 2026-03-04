@@ -2,20 +2,14 @@
 #include <bx/platform.h>
 #include <cstdlib>
 #include <iostream>
-#include "SDL2/SDL_metal.h"
-#include "iOSNatives.hpp"
 void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi,
                               SDL_Window *sdlWindow) {
-#if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-  SDL_MetalView metalView = SDL_Metal_CreateView(sdlWindow);
-  void *mtlLayer = SDL_Metal_GetLayer(metalView);
+#if BX_PLATFORM_EMSCRIPTEN
   pd.ndt = nullptr;
-  pd.nwh = mtlLayer;
+  pd.nwh = (void *)"#canvas";
   pd.context = nullptr;
   pd.backBuffer = nullptr;
   pd.backBufferDS = nullptr;
-#elif BX_PLATFORM_EMSCRIPTEN
-  pd.nwh = (void *)"#canvas";
 #else
   switch (wmi.subsystem) {
   case SDL_SYSWM_UNKNOWN:
@@ -80,8 +74,8 @@ void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi,
   default:
     std::abort();
   }
+  pd.context = nullptr;
+  pd.backBuffer = nullptr;
+  pd.backBufferDS = nullptr;
 #endif
-  pd.context = NULL;
-  pd.backBuffer = NULL;
-  pd.backBufferDS = NULL;
 }

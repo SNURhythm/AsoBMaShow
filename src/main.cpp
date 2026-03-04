@@ -4,6 +4,7 @@
 #include "./audio/decoder.h"
 #include "bx/math.h"
 #include <cstdio>
+#include <cmath>
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
@@ -77,6 +78,101 @@ bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 static SDL_Renderer *s_renderer = nullptr;
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
+static float s_renderScale = 1.0f;
+static uint32_t s_bgfxResetFlags = 0;
+
+namespace {
+
+float readRenderScaleFromEnv() {
+  constexpr float kDefaultScale = 1.0f;
+  const char *raw = std::getenv("ASOBMASHOW_RENDER_SCALE");
+  if (raw == nullptr || raw[0] == '\0') {
+    return kDefaultScale;
+  }
+
+  char *end = nullptr;
+  const float parsed = std::strtof(raw, &end);
+  if (end == raw || !std::isfinite(parsed)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Invalid ASOBMASHOW_RENDER_SCALE='%s'. Using %.2f", raw,
+                kDefaultScale);
+    return kDefaultScale;
+  }
+  return std::clamp(parsed, 0.5f, 2.0f);
+}
+
+uint32_t parseMsaaFlag(int samples) {
+  switch (samples) {
+  case 0:
+    return BGFX_RESET_NONE;
+  case 2:
+    return BGFX_RESET_MSAA_X2;
+  case 4:
+    return BGFX_RESET_MSAA_X4;
+  case 8:
+    return BGFX_RESET_MSAA_X8;
+  case 16:
+    return BGFX_RESET_MSAA_X16;
+  default:
+    return BGFX_RESET_NONE;
+  }
+}
+
+uint32_t readResetFlagsFromEnv() {
+#if TARGET_OS_OSX
+  int msaaSamples = 0;
+#else
+  int msaaSamples = 2;
+#endif
+
+  const char *rawMsaa = std::getenv("ASOBMASHOW_MSAA");
+  if (rawMsaa != nullptr && rawMsaa[0] != '\0') {
+    char *end = nullptr;
+    const long parsed = std::strtol(rawMsaa, &end, 10);
+    if (end == rawMsaa || parsed < 0) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Invalid ASOBMASHOW_MSAA='%s'. Using %d", rawMsaa,
+                  msaaSamples);
+    } else {
+      msaaSamples = static_cast<int>(parsed);
+    }
+  }
+
+  uint32_t flags = parseMsaaFlag(msaaSamples);
+  if (msaaSamples != 0 && flags == BGFX_RESET_NONE) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Unsupported ASOBMASHOW_MSAA=%d. Falling back to no MSAA",
+                msaaSamples);
+  }
+
+  if (TARGET_PLATFORM == iOS) {
+    flags |= BGFX_RESET_VSYNC;
+  }
+  return flags;
+}
+
+bool readSplitBgfxThreadsFromEnv() {
+  const char *raw = std::getenv("ASOBMASHOW_BGFX_SPLIT_THREADS");
+  if (raw == nullptr || raw[0] == '\0') {
+    return true;
+  }
+  char *end = nullptr;
+  const long parsed = std::strtol(raw, &end, 10);
+  if (end == raw) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Invalid ASOBMASHOW_BGFX_SPLIT_THREADS='%s'. Using 1", raw);
+    return true;
+  }
+  return parsed != 0;
+}
+
+int scaledDimension(int logicalSize) {
+  return std::max(1, static_cast<int>(std::lround(
+                         static_cast<double>(logicalSize) *
+                         static_cast<double>(s_renderScale))));
+}
+
+} // namespace
 
 // static rendering::PosColorVertex cubeVertices[] = {
 //     {-1.0f, 1.0f, 1.0f, 0xff000000},   {1.0f, 1.0f, 1.0f, 0xff0000ff},
@@ -314,6 +410,10 @@ int main(int argv, char **args) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+  s_renderScale = readRenderScaleFromEnv();
+  s_bgfxResetFlags = readResetFlagsFromEnv();
+  SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
+          s_bgfxResetFlags);
 
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
@@ -322,15 +422,19 @@ int main(int argv, char **args) {
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
           (TARGET_PLATFORM == iOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
                                   : 0));
-  int windowLogicalWidth = 0;
-  int windowLogicalHeight = 0;
-  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
-  APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
-                windowLogicalHeight);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+  int windowLogicalWidth = 0;
+  int windowLogicalHeight = 0;
+  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
+  if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
+    windowLogicalWidth = windowCreateWidth;
+    windowLogicalHeight = windowCreateHeight;
+  }
+  APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
+                windowLogicalHeight);
 
   // this is intended; we don't need renderer for bgfx but SDL creates window
   // handler after renderer creation on iOS
@@ -350,17 +454,22 @@ int main(int argv, char **args) {
   SDL_RenderSetScale(s_renderer, rendering::widthScale, rendering::heightScale);
   rendering::updateUIScale(rw, rh);
 #else
-  rendering::widthScale = 1.0f;
-  rendering::heightScale = 1.0f;
-  rendering::updateUIScale(windowLogicalWidth, windowLogicalHeight);
+  const int initialRenderW = scaledDimension(windowLogicalWidth);
+  const int initialRenderH = scaledDimension(windowLogicalHeight);
+  rendering::widthScale = static_cast<float>(initialRenderW) /
+                          static_cast<float>(windowLogicalWidth);
+  rendering::heightScale = static_cast<float>(initialRenderH) /
+                           static_cast<float>(windowLogicalHeight);
+  rendering::updateUIScale(initialRenderW, initialRenderH);
+  APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
+                initialRenderW, initialRenderH, windowLogicalWidth,
+                windowLogicalHeight, s_renderScale);
 #endif
 #if !BX_PLATFORM_EMSCRIPTEN
   SDL_SysWMinfo wmi;
   SDL_VERSION(&wmi.version);
   APP_DEBUG_LOG("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n",
                 wmi.version.major, wmi.version.minor, wmi.version.patch);
-  wmi.version.major = 2.0;
-  wmi.version.minor = 0;
   if (!SDL_GetWindowWMInfo(win, &wmi)) {
     printf("SDL_SysWMinfo could not be retrieved. SDL_Error: %s\n",
            SDL_GetError());
@@ -379,20 +488,16 @@ int main(int argv, char **args) {
 #endif
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
-  bgfx_init.resolution.reset =
-      BGFX_RESET_MSAA_X2 | (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0);
+  bgfx_init.resolution.reset = s_bgfxResetFlags;
   bgfx_init.platformData = pd;
-#if !TARGET_OS_IPHONE
-  constexpr bool kUseSplitBgfxThreads = true;
-#else
-  constexpr bool kUseSplitBgfxThreads = false;
-#endif
+  const bool useSplitBgfxThreads = readSplitBgfxThreadsFromEnv();
 
   int appExitCode = EXIT_SUCCESS;
-  if (!kUseSplitBgfxThreads) {
-    SDL_Log("Using single thread");
-
+  if (!useSplitBgfxThreads) {
+    SDL_Log("Using bgfx single-thread mode");
     bgfx::renderFrame();
+  } else {
+    SDL_Log("Using bgfx split-thread mode");
   }
 
   appExitCode = runApplication(bgfx_init);
@@ -534,39 +639,33 @@ void run() {
           return;
         }
 #if TARGET_OS_IPHONE
-        int drawableW = 0;
-        int drawableH = 0;
-        SDL_GetRendererOutputSize(s_renderer, &drawableW, &drawableH);
-#elif TARGET_OS_OSX
-        int drawableW = logicalW;
-        int drawableH = logicalH;
-        if (SDL_Window *window = SDL_GetWindowFromID(event.window.windowID);
-            window != nullptr) {
-          SDL_Metal_GetDrawableSize(window, &drawableW, &drawableH);
-        }
+        int targetRenderW = 0;
+        int targetRenderH = 0;
+        SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
 #else
-        int drawableW = logicalW;
-        int drawableH = logicalH;
+        int targetRenderW = scaledDimension(logicalW);
+        int targetRenderH = scaledDimension(logicalH);
 #endif
-        if (drawableW <= 0 || drawableH <= 0) {
+        if (targetRenderW <= 0 || targetRenderH <= 0) {
           return;
         }
-        if (drawableW == rendering::render_width &&
-            drawableH == rendering::render_height) {
+        if (targetRenderW == rendering::render_width &&
+            targetRenderH == rendering::render_height) {
           return;
         }
         rendering::widthScale =
-            static_cast<float>(drawableW) / static_cast<float>(logicalW);
+            static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
         rendering::heightScale =
-            static_cast<float>(drawableH) / static_cast<float>(logicalH);
-        rendering::updateUIScale(drawableW, drawableH);
+            static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
+        rendering::updateUIScale(targetRenderW, targetRenderH);
 
         // set bgfx resolution
         bgfx::reset(rendering::render_width, rendering::render_height,
-                    BGFX_RESET_MSAA_X2 |
-                        (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0));
-        APP_DEBUG_LOG("Drawable size: %d x %d", rendering::render_width,
-                      rendering::render_height);
+                    s_bgfxResetFlags);
+        APP_DEBUG_LOG(
+            "Render size: %d x %d (logical: %d x %d, scale %.2f)",
+            rendering::render_width, rendering::render_height, logicalW,
+            logicalH, s_renderScale);
         s_postProcess.resize(rendering::render_width, rendering::render_height);
         resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                            s_blurPass->blurViewH(), s_blurPass->blurViewV(),
@@ -649,39 +748,33 @@ void run() {
     }
 
     if constexpr (kEnablePerfTelemetry) {
+      constexpr float kTelemetryLogIntervalSec = 5.0f;
       static FPSCounter fpsCounter;
       static float telemetryLogInterval = 0.0f;
-      static float timeSinceLastUpdate = 0.0f;
       fpsCounter.addFrame(deltaTime);
-      timeSinceLastUpdate += deltaTime;
       telemetryLogInterval += deltaTime;
-      if (timeSinceLastUpdate > 0.5f) {
+      if (telemetryLogInterval >= kTelemetryLogIntervalSec) {
+        telemetryLogInterval = 0.0f;
         const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
         const float avgFps = fpsCounter.getAverageFPS();
         const float low1Fps = fpsCounter.get1PercentLowFPS();
 
         const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
         const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
-        // Keep log I/O infrequent so telemetry itself does not dominate 1%
-        // lows.
-        if (telemetryLogInterval >= 5.0f) {
-          telemetryLogInterval = 0.0f;
-          SDL_Log(
-              "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz) | "
-              "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
-              currentFps, avgFps, low1Fps, avgDeltaTime, freq,
-              static_cast<unsigned long long>(rawEventsInWindow),
-              static_cast<unsigned long long>(processedEventsInWindow),
-              static_cast<unsigned long long>(coalescedMouseMotionInWindow),
-              static_cast<unsigned long long>(coalescedFingerMotionInWindow),
-              static_cast<unsigned long long>(coalescedResizeInWindow));
-          rawEventsInWindow = 0;
-          processedEventsInWindow = 0;
-          coalescedMouseMotionInWindow = 0;
-          coalescedFingerMotionInWindow = 0;
-          coalescedResizeInWindow = 0;
-        }
-        timeSinceLastUpdate = 0.0f;
+        SDL_Log(
+            "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz) | "
+            "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
+            currentFps, avgFps, low1Fps, avgDeltaTime, freq,
+            static_cast<unsigned long long>(rawEventsInWindow),
+            static_cast<unsigned long long>(processedEventsInWindow),
+            static_cast<unsigned long long>(coalescedMouseMotionInWindow),
+            static_cast<unsigned long long>(coalescedFingerMotionInWindow),
+            static_cast<unsigned long long>(coalescedResizeInWindow));
+        rawEventsInWindow = 0;
+        processedEventsInWindow = 0;
+        coalescedMouseMotionInWindow = 0;
+        coalescedFingerMotionInWindow = 0;
+        coalescedResizeInWindow = 0;
       }
     }
 
