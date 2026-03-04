@@ -218,6 +218,15 @@ else()
     add_executable(main)
 endif()
 
+option(ENABLE_DEBUG_OPTIMIZED_BUILD
+       "Use lightweight optimization in Debug builds for runtime profiling"
+       ON)
+if (ENABLE_DEBUG_OPTIMIZED_BUILD AND NOT MSVC)
+    target_compile_options(main PRIVATE
+        $<$<CONFIG:Debug>:-O1 -fno-omit-frame-pointer>
+    )
+endif()
+
 # Linking
 # Note: bgfx and yogacore are added via add_subdirectory later
 target_link_libraries(main 
