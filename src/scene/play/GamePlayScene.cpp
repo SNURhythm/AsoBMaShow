@@ -336,13 +336,14 @@ void GamePlayScene::checkPassedTimeline(long long time) {
     return;
   }
   const long long visualNow = nowMicros();
+  const long long poorCutoff = time - latePoorTiming;
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
          j < measure->TimeLines.size(); j++) {
       const auto &timeline = measure->TimeLines[j];
-      if (timeline->Timing < time - latePoorTiming) {
+      if (timeline->Timing < poorCutoff) {
         if (isFirstMeasure) {
           state->passedTimelineCount++;
         }
@@ -405,8 +406,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
         }
       } else {
-        i = measures.size();
-        break;
+        return;
       }
     }
     if (state->passedTimelineCount == measure->TimeLines.size() &&
