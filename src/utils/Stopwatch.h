@@ -3,10 +3,12 @@
 //
 
 #pragma once
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 class Stopwatch {
 public:
-  Stopwatch() : running(false), elapsed_time(0) {}
+  Stopwatch() = default;
 
   void start();
 
@@ -23,7 +25,8 @@ public:
   bool isRunning() const;
 
 private:
-  std::chrono::high_resolution_clock::time_point start_time;
-  bool running;
-  long long elapsed_time; // in milliseconds
+  static int64_t nowMicrosInternal();
+  std::atomic<int64_t> start_time_us{0};
+  std::atomic<int64_t> elapsed_time_us{0};
+  std::atomic<bool> running{false};
 };
