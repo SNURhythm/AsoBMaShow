@@ -29,6 +29,16 @@ endif()
 if (PLATFORM_MACOS)
     option(BUILD_MACOS_BUNDLE "Build macOS app bundle" OFF)
     message(STATUS "Build macOS bundle: ${BUILD_MACOS_BUNDLE}")
+
+    set(MACOS_BUNDLE_IDENTIFIER "com.SNURhythm.AsoBMaShow")
+    set(MACOS_BUNDLE_NAME "AsoBMaShow")
+    if (BUILD_MACOS_BUNDLE)
+        set(MACOS_EXECUTABLE_NAME "${MACOS_BUNDLE_NAME}")
+    else()
+        set(MACOS_EXECUTABLE_NAME "main")
+    endif()
+    set(MACOS_INFO_PLIST "${CMAKE_BINARY_DIR}/Info.plist")
+    configure_file(${CMAKE_SOURCE_DIR}/Info.plist ${MACOS_INFO_PLIST} @ONLY)
 endif()
 
 # Common Definitions
@@ -37,7 +47,6 @@ set(BX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
 # Include directories
 include_directories(include)
 include_directories(bgfx/bgfx/include)
@@ -207,16 +216,33 @@ if (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_executable(main MACOSX_BUNDLE)
     set_target_properties(main PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/Info.plist
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.SNURhythm.AsoBMaShow"
+        MACOSX_BUNDLE_INFO_PLIST ${MACOS_INFO_PLIST}
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${MACOS_BUNDLE_IDENTIFIER}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
-        MACOSX_BUNDLE_BUNDLE_NAME "AsoBMaShow"
+        MACOSX_BUNDLE_BUNDLE_NAME "${MACOS_BUNDLE_NAME}"
         MACOSX_BUNDLE_COPYRIGHT "Copyright © SNURhythm"
-        OUTPUT_NAME "AsoBMaShow"
+        OUTPUT_NAME "${MACOS_BUNDLE_NAME}"
     )
 else()
     add_executable(main)
+endif()
+
+option(ENABLE_DEBUG_OPTIMIZED_BUILD
+       "Use lightweight optimization in Debug builds for runtime profiling"
+       ON)
+if (ENABLE_DEBUG_OPTIMIZED_BUILD AND NOT MSVC)
+    target_compile_options(main PRIVATE
+        $<$<CONFIG:Debug>:-O1 -fno-omit-frame-pointer>
+    )
+endif()
+
+if (PLATFORM_MACOS AND NOT BUILD_MACOS_BUNDLE)
+    # Game Mode and several other macOS app capabilities are discovered from the
+    # embedded Info.plist even for a plain executable.
+    target_link_options(main PRIVATE
+        "LINKER:-sectcreate,__TEXT,__info_plist,${MACOS_INFO_PLIST}"
+    )
 endif()
 
 # Linking

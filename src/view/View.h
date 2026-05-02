@@ -31,6 +31,7 @@ struct Scissor {
   int x, y, width, height;
 };
 struct RenderContext {
+  RenderContext() { scissorStack.reserve(16); }
   Scissor scissor = {0, 0, -1, -1};
   std::vector<Scissor> scissorStack;
 
@@ -151,9 +152,11 @@ public:
       bgfx::setIndexBuffer(&tib);
 
       // Submit the draw call
+      static const bgfx::ProgramHandle kSimpleProgram =
+          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
       bgfx::submit(
           rendering::ui_view,
-          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+          kSimpleProgram);
     }
 #endif
     renderImpl(context);
@@ -180,15 +183,13 @@ public:
   inline void setSize(int newWidth, int newHeight) {
     auto width = YGNodeLayoutGetWidth(node);
     auto height = YGNodeLayoutGetHeight(node);
-    bool isResized = width != newWidth || height != newHeight;
+    bool isResized = std::abs(width - newWidth) > 0.1f ||
+                     std::abs(height - newHeight) > 0.1f;
 
-    width = newWidth;
-    height = newHeight;
     if (isResized) {
-      SDL_Log("View::setSize: %d, %d", newWidth, newHeight);
       onResize(newWidth, newHeight);
-      YGNodeStyleSetWidth(node, width);
-      YGNodeStyleSetHeight(node, height);
+      YGNodeStyleSetWidth(node, newWidth);
+      YGNodeStyleSetHeight(node, newHeight);
       applyYogaLayout();
     }
   }
@@ -266,9 +267,9 @@ public:
   View *addView(View *view);
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }
-  void setName(const std::string& name) { this->name = name; }
-  const std::string& getName() const { return name; }
-  View* findViewByName(const std::string& name);
+  void setName(const std::string &name) { this->name = name; }
+  const std::string &getName() const { return name; }
+  View *findViewByName(const std::string &name);
 
   bool drawBoundingBox = false;
   void applyYogaLayout();
@@ -300,10 +301,12 @@ private:
     dirtyRoots.insert(root);
   }
   static void flushLayoutBatches() {
+    if (dirtyRoots.empty()) {
+      return;
+    }
     for (auto *root : dirtyRoots) {
       root->applyYogaLayoutImmediate();
     }
-    SDL_Log("flushLayoutBatches: %d", dirtyRoots.size());
     dirtyRoots.clear();
   }
   void applyYogaLayoutImmediate();

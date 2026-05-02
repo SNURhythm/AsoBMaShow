@@ -287,17 +287,17 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     return;
 
   std::lock_guard<std::mutex> lock(*userData->mutex);
-  
+
   if (!userData->stopwatch->isRunning()) {
     // Fill with silence if paused
-    std::fill_n((ma_int16*)pOutput, frameCount * outputChannels, 0);
+    std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
     return;
   }
 
-  auto *soundDataList = userData->soundDataList;
-  if (soundDataList == nullptr || soundDataList->empty()) {
+  auto *playingSounds = userData->playingSounds;
+  if (playingSounds == nullptr || playingSounds->empty()) {
     // Fill with silence if no sounds
-    std::fill_n((ma_int16*)pOutput, frameCount * outputChannels, 0);
+    std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
     return;
   }
 
@@ -313,10 +313,12 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   float *mixBuffer = userData->mixBuffer->data();
 
   float gain = 0.9f;
-
-  for (auto &soundData : *soundDataList) {
-    if (!soundData->playing)
+  for (auto it = playingSounds->begin(); it != playingSounds->end();) {
+    SoundData *soundData = *it;
+    if (!soundData->playing) {
+      it = playingSounds->erase(it);
       continue;
+    }
 
     ma_uint32 framesToRead = frameCount;
     ma_uint32 framesAvailable =
@@ -345,7 +347,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     soundData->currentFrame += framesToRead;
     if (framesToRead < frameCount) {
       soundData->playing = false;
+      it = playingSounds->erase(it);
+      continue;
     }
+    ++it;
   }
 
   // Apply Effects
@@ -535,8 +540,8 @@ private:
 // AudioWrapper Implementation
 
 AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
-  userData.mutex = &soundDataListMutex;
-  userData.soundDataList = &soundDataList;
+  userData.mutex = &playingSoundsMutex;
+  userData.playingSounds = &playingSounds;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
   userData.bassFilter = &bassFilter;
@@ -589,6 +594,13 @@ int AudioWrapper::IAudioBackend::getSampleRate() const {
 
 bool AudioWrapper::loadSound(const path_t &path,
                              std::atomic<bool> &isCancelled) {
+  {
+    std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+  }
+
   std::vector<short> pcmData;
   SF_INFO sfInfo;
   auto soundData = std::make_shared<SoundData>();
@@ -653,6 +665,9 @@ bool AudioWrapper::loadSound(const path_t &path,
 
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
     soundDataIndexMap[path] = soundDataList.size();
     soundDataList.push_back(soundData);
   }
@@ -667,21 +682,27 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
 }
 
 bool AudioWrapper::playSound(const path_t &path) {
-  // TODO: support multiplexing with same sound
+  // Note: current behavior is "retrigger same instance" (no multiplexing).
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
   if (backend && !backend->isStarted()) {
     backend->start();
   }
 
-  if (soundDataIndexMap.find(path) == soundDataIndexMap.end()) {
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
     SDL_Log("Sound not found: %s", path_t_to_utf8(path).c_str());
     return false;
   }
 
-  auto &soundData = soundDataList[soundDataIndexMap[path]];
-  soundData->currentFrame = 0;
-  soundData->playing = true;
+  auto &soundData = soundDataList[indexIt->second];
+
+  {
+    std::lock_guard<std::mutex> lock(playingSoundsMutex);
+    soundData->currentFrame = 0;
+    soundData->playing = true;
+    playingSounds.insert(soundData.get());
+  }
 
   return true;
 }
@@ -693,26 +714,35 @@ void AudioWrapper::startDevice() {
 }
 
 void AudioWrapper::stopSounds() {
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  std::lock_guard<std::mutex> lock(playingSoundsMutex);
   if (backend) {
     backend->stop();
   }
-  for (auto &soundData : soundDataList) {
+  for (auto *soundData : playingSounds) {
     soundData->playing = false;
   }
+  playingSounds.clear();
 }
 
 void AudioWrapper::unloadSound(const path_t &path) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
-  if (soundDataIndexMap.find(path) != soundDataIndexMap.end()) {
-    size_t index = soundDataIndexMap[path];
+  if (const auto indexIt = soundDataIndexMap.find(path);
+      indexIt != soundDataIndexMap.end()) {
+    const size_t index = indexIt->second;
     auto &soundData = soundDataList[index];
+
+    // Remove from playingSounds if present
+    {
+      std::lock_guard<std::mutex> lock(playingSoundsMutex);
+      playingSounds.erase(soundData.get());
+    }
+
     if (soundData->isResampled) {
       ma_resampler_uninit(&soundData->resampler, nullptr); // Cleanup resampler
     }
 
     soundDataList.erase(soundDataList.begin() + index);
-    soundDataIndexMap.erase(path);
+    soundDataIndexMap.erase(indexIt);
 
     // Update indices in the map
     for (auto &entry : soundDataIndexMap) {

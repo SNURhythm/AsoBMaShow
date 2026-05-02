@@ -4,10 +4,14 @@
 #include "./audio/decoder.h"
 #include "bx/math.h"
 #include <cstdio>
+#include <cmath>
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_video.h>
+#if __APPLE__
+#include <SDL2/SDL_metal.h>
+#endif
 #include "main.h"
 #include "scene/MainMenuScene.h"
 #include "scene/SceneManager.h"
@@ -24,7 +28,6 @@
 #include "rendering/UniformCache.h"
 #include "context.h"
 #include "audio/AudioWrapper.h"
-#include "view/TextView.h"
 #ifdef _WIN32
 #include <windows.h>
 
@@ -51,7 +54,6 @@
 #elif __posix
 // POSIX
 #endif
-#include <sol/sol.hpp>
 #include "rendering/Camera.h"
 #include <filesystem>
 #include <vector>
@@ -62,6 +64,12 @@
 #include <unistd.h>
 #endif
 
+#if defined(DEBUG) || defined(_DEBUG)
+#define APP_DEBUG_LOG(...) SDL_Log(__VA_ARGS__)
+#else
+#define APP_DEBUG_LOG(...) ((void)0)
+#endif
+
 bgfx::VertexLayout rendering::PosColorVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
@@ -69,6 +77,53 @@ bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 static SDL_Renderer *s_renderer = nullptr;
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
+static float s_renderScale = 1.0f;
+static uint32_t s_bgfxResetFlags = 0;
+
+namespace {
+
+constexpr float kDefaultRenderScale = 1.0f;
+
+float resolveRenderScale() { return kDefaultRenderScale; }
+
+uint32_t parseMsaaFlag(int samples) {
+  switch (samples) {
+  case 0:
+    return BGFX_RESET_NONE;
+  case 2:
+    return BGFX_RESET_MSAA_X2;
+  case 4:
+    return BGFX_RESET_MSAA_X4;
+  case 8:
+    return BGFX_RESET_MSAA_X8;
+  case 16:
+    return BGFX_RESET_MSAA_X16;
+  default:
+    return BGFX_RESET_NONE;
+  }
+}
+
+uint32_t resolveResetFlags() {
+#if TARGET_OS_OSX
+  constexpr int msaaSamples = 0;
+#else
+  constexpr int msaaSamples = 2;
+#endif
+  uint32_t flags = parseMsaaFlag(msaaSamples);
+
+  if (TARGET_PLATFORM == iOS) {
+    flags |= BGFX_RESET_VSYNC;
+  }
+  return flags;
+}
+
+int scaledDimension(int logicalSize) {
+  return std::max(1, static_cast<int>(std::lround(
+                         static_cast<double>(logicalSize) *
+                         static_cast<double>(s_renderScale))));
+}
+
+} // namespace
 
 // static rendering::PosColorVertex cubeVertices[] = {
 //     {-1.0f, 1.0f, 1.0f, 0xff000000},   {1.0f, 1.0f, 1.0f, 0xff0000ff},
@@ -107,6 +162,87 @@ void rendering::updateUIScale(int renderW, int renderH) {
   ui_offset_x = 0;
   ui_offset_y = 0;
 }
+
+#include <deque>
+#include <algorithm>
+
+class FPSCounter {
+public:
+  void addFrame(float deltaTime) {
+    if (deltaTime <= 0.0f) {
+      return;
+    }
+    // Treat very large deltas as discontinuities (e.g. resize/app switch).
+    if (deltaTime > MAX_SAMPLE_DELTA) {
+      frameTimes.clear();
+      totalTime = 0.0f;
+      return;
+    }
+    frameTimes.push_back(deltaTime);
+    totalTime += deltaTime;
+
+    // Remove old frames outside the window
+    while (totalTime > WINDOW_SIZE && !frameTimes.empty()) {
+      totalTime -= frameTimes.front();
+      frameTimes.pop_front();
+    }
+  }
+
+  float getAverageFPS() const {
+    if (frameTimes.empty() || totalTime <= 0.0f)
+      return 0.0f;
+    return static_cast<float>(frameTimes.size()) / totalTime;
+  }
+
+  float get1PercentLowFPS() const {
+    if (frameTimes.empty()) {
+      return 0.0f;
+    }
+
+    std::vector<float> samples(frameTimes.begin(), frameTimes.end());
+    size_t worstCount = std::max<size_t>(1, samples.size() / 100);
+    worstCount = std::min(worstCount, samples.size());
+    std::nth_element(samples.begin(), samples.begin() + (worstCount - 1),
+                     samples.end(), std::greater<float>());
+
+    double worstFrameTimeSum = 0.0;
+    for (size_t i = 0; i < worstCount; ++i) {
+      worstFrameTimeSum += samples[i];
+    }
+    const double avgWorstFrameTime =
+        worstFrameTimeSum / static_cast<double>(worstCount);
+    if (avgWorstFrameTime <= 0.000001)
+      return 0.0f;
+
+    return static_cast<float>(1.0 / avgWorstFrameTime);
+  }
+
+private:
+  std::deque<float> frameTimes;
+  float totalTime = 0.0f;
+  static constexpr float WINDOW_SIZE = 5.0f;       // 5 second window
+  static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
+};
+
+static int runApplication(const bgfx::Init &bgfxInit) {
+  SDL_Log("bgfx_init: %d x %d", bgfxInit.resolution.width,
+          bgfxInit.resolution.height);
+  if (!bgfx::init(bgfxInit)) {
+    SDL_Log("bgfx::init failed");
+    return EXIT_FAILURE;
+  }
+  SDL_Log("bgfx renderer: %s", bgfx::getRendererName(bgfx::getRendererType()));
+  // Keep debug rendering disabled in normal runtime to avoid perturbing
+  // frame pacing and post-process output.
+  // bgfx::setDebug(BGFX_DEBUG_TEXT);
+
+  run();
+  rendering::ShaderManager::getInstance().release();
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
+  return EXIT_SUCCESS;
+}
+
 int main(int argv, char **args) {
   // Set working directory to executable's directory
   std::filesystem::path exePath;
@@ -176,7 +312,8 @@ int main(int argv, char **args) {
     std::filesystem::path exeDir = exePath.parent_path();
     if (!exeDir.empty() && std::filesystem::exists(exeDir)) {
       std::filesystem::current_path(exeDir);
-      SDL_Log("Changed working directory to: %s", exeDir.string().c_str());
+      APP_DEBUG_LOG("Changed working directory to: %s",
+                    exeDir.string().c_str());
     }
   }
 
@@ -189,29 +326,21 @@ int main(int argv, char **args) {
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
   rendering::main_camera = &rendering::game_camera;
-  sol::state lua;
-  int x = 0;
-  lua.set_function("beep", [&x] { ++x; });
-  // call beep 100 times
-  auto code = "beep()";
-  lua.safe_script(code);
-
-  assert(x == 1);
-  SDL_Log("lua result: %d", x);
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
   // print bgfx version
-  SDL_Log("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
+  APP_DEBUG_LOG("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
   // print libsdl version
   SDL_version compiled;
   SDL_version linked;
   SDL_VERSION(&compiled);
   SDL_GetVersion(&linked);
 
-  SDL_Log("SDL compile version: %d.%d.%d", static_cast<int>(compiled.major),
-          static_cast<int>(compiled.minor), static_cast<int>(compiled.patch));
-  SDL_Log("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
-          static_cast<int>(linked.minor), static_cast<int>(linked.patch));
+  APP_DEBUG_LOG(
+      "SDL compile version: %d.%d.%d", static_cast<int>(compiled.major),
+      static_cast<int>(compiled.minor), static_cast<int>(compiled.patch));
+  APP_DEBUG_LOG("SDL link version: %d.%d.%d", static_cast<int>(linked.major),
+                static_cast<int>(linked.minor), static_cast<int>(linked.patch));
 
 #if TARGET_OS_OSX
   setSmoothScrolling(true);
@@ -223,23 +352,31 @@ int main(int argv, char **args) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+  s_renderScale = resolveRenderScale();
+  s_bgfxResetFlags = resolveResetFlags();
+  SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
+          s_bgfxResetFlags);
 
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
   SDL_Window *win = SDL_CreateWindow(
       "AsoBMaShow", 100, 100, windowCreateWidth, windowCreateHeight,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-          (TARGET_PLATFORM == iOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
+          (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
                                   : 0));
-  int windowLogicalWidth = 0;
-  int windowLogicalHeight = 0;
-  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
-  SDL_Log("Window size (logical): %d x %d", windowLogicalWidth,
-          windowLogicalHeight);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+  int windowLogicalWidth = 0;
+  int windowLogicalHeight = 0;
+  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
+  if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
+    windowLogicalWidth = windowCreateWidth;
+    windowLogicalHeight = windowCreateHeight;
+  }
+  APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
+                windowLogicalHeight);
 
   // this is intended; we don't need renderer for bgfx but SDL creates window
   // handler after renderer creation on iOS
@@ -253,50 +390,51 @@ int main(int argv, char **args) {
       static_cast<float>(rw) / static_cast<float>(windowLogicalWidth);
   rendering::heightScale =
       static_cast<float>(rh) / static_cast<float>(windowLogicalHeight);
-  SDL_Log("Drawable size: %d x %d", rw, rh);
-  SDL_Log("Drawable scale: %f x %f", rendering::widthScale,
-          rendering::heightScale);
+  APP_DEBUG_LOG("Drawable size: %d x %d", rw, rh);
+  APP_DEBUG_LOG("Drawable scale: %f x %f", rendering::widthScale,
+                rendering::heightScale);
   SDL_RenderSetScale(s_renderer, rendering::widthScale, rendering::heightScale);
   rendering::updateUIScale(rw, rh);
 #else
-  rendering::widthScale = 1.0f;
-  rendering::heightScale = 1.0f;
-  rendering::updateUIScale(windowLogicalWidth, windowLogicalHeight);
+  const int initialRenderW = scaledDimension(windowLogicalWidth);
+  const int initialRenderH = scaledDimension(windowLogicalHeight);
+  rendering::widthScale = static_cast<float>(initialRenderW) /
+                          static_cast<float>(windowLogicalWidth);
+  rendering::heightScale = static_cast<float>(initialRenderH) /
+                           static_cast<float>(windowLogicalHeight);
+  rendering::updateUIScale(initialRenderW, initialRenderH);
+  APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
+                initialRenderW, initialRenderH, windowLogicalWidth,
+                windowLogicalHeight, s_renderScale);
 #endif
 #if !BX_PLATFORM_EMSCRIPTEN
   SDL_SysWMinfo wmi;
   SDL_VERSION(&wmi.version);
-  SDL_Log("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n", wmi.version.major,
-          wmi.version.minor, wmi.version.patch);
-  wmi.version.major = 2.0;
-  wmi.version.minor = 0;
+  APP_DEBUG_LOG("SDL_major: %d, SDL_minor: %d, SDL_patch: %d\n",
+                wmi.version.major, wmi.version.minor, wmi.version.patch);
   if (!SDL_GetWindowWMInfo(win, &wmi)) {
     printf("SDL_SysWMinfo could not be retrieved. SDL_Error: %s\n",
            SDL_GetError());
     return 1;
   }
-  bgfx::renderFrame(); // single threaded mode
-#endif                 // !BX_PLATFORM_EMSCRIPTEN
+#endif // !BX_PLATFORM_EMSCRIPTEN
 
   bgfx::PlatformData pd{};
   setup_bgfx_platform_data(pd, wmi, win);
 
   bgfx::Init bgfx_init;
+#if __APPLE__
+  bgfx_init.type = bgfx::RendererType::Metal; // force Metal on Apple platforms
+#else
   bgfx_init.type = bgfx::RendererType::Count; // auto choose renderer
+#endif
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
-  bgfx_init.resolution.reset =
-      BGFX_RESET_MSAA_X2 | (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0);
+  bgfx_init.resolution.reset = s_bgfxResetFlags;
   bgfx_init.platformData = pd;
-  bgfx::init(bgfx_init);
-  // bgfx::setDebug(BGFX_DEBUG_TEXT);
+  SDL_Log("Using bgfx internal multithreaded mode");
 
-  // bgfx::setPlatformData(pd);
-
-  run();
-  rendering::ShaderManager::getInstance().release();
-  rendering::UniformCache::getInstance().destroyAll();
-  bgfx::shutdown();
+  int appExitCode = runApplication(bgfx_init);
 
   if (s_renderer != nullptr) {
     SDL_DestroyRenderer(s_renderer);
@@ -304,13 +442,15 @@ int main(int argv, char **args) {
   }
   SDL_DestroyWindow(win);
   SDL_Quit();
-  SDL_Log("SDL quit");
+  APP_DEBUG_LOG("SDL quit");
 
-  return EXIT_SUCCESS;
+  return appExitCode;
 }
 
 void run() {
   ApplicationContext context;
+  // Use depth-sorted main view for stable layering without sequential mode.
+  bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",
@@ -322,7 +462,7 @@ void run() {
   // SDL_RenderPresent(ren);
   SDL_Event e;
 
-  auto lastFrameTime = std::chrono::high_resolution_clock::now();
+  auto lastFrameTime = std::chrono::steady_clock::now();
 
   // Initialize bgfx
   rendering::PosColorVertex::init();
@@ -357,59 +497,109 @@ void run() {
   bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
                     rendering::ui_offset_y, rendering::ui_view_width,
                     rendering::ui_view_height);
-  auto program =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                      s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                      s_blurPass->finalView());
   rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                             s_blurPass->finalView());
 
-  TextView fpsText("assets/fonts/notosanscjkjp.ttf", 24);
-  TextView avgDeltaTimeText("assets/fonts/notosanscjkjp.ttf", 24);
+  constexpr bool kEnablePerfTelemetry = true;
+  uint64_t rawEventsInWindow = 0;
+  uint64_t processedEventsInWindow = 0;
+  uint64_t coalescedMouseMotionInWindow = 0;
+  uint64_t coalescedFingerMotionInWindow = 0;
+  uint64_t coalescedResizeInWindow = 0;
   while (!context.quitFlag) {
 
-    auto currentFrameTime = std::chrono::high_resolution_clock::now();
+    auto currentFrameTime = std::chrono::steady_clock::now();
     float deltaTime =
         std::chrono::duration<float, std::chrono::seconds::period>(
             currentFrameTime - lastFrameTime)
             .count();
     lastFrameTime = currentFrameTime;
 
-    while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_QUIT) {
+    SDL_Event pendingMouseMotion{};
+    SDL_Event pendingFingerMotion{};
+    SDL_Event pendingResizeEvent{};
+    uint32_t pendingMouseMotionCount = 0;
+    uint32_t pendingFingerMotionCount = 0;
+    uint32_t pendingResizeCount = 0;
+    bool hasPendingMouseMotion = false;
+    bool hasPendingFingerMotion = false;
+    bool hasPendingResize = false;
+
+    auto shouldDispatchToScene = [](Uint32 eventType) {
+      switch (eventType) {
+      case SDL_QUIT:
+      case SDL_WINDOWEVENT:
+      case SDL_KEYDOWN:
+      case SDL_KEYUP:
+      case SDL_TEXTINPUT:
+      case SDL_TEXTEDITING:
+      case SDL_TEXTEDITING_EXT:
+      case SDL_MOUSEMOTION:
+      case SDL_MOUSEBUTTONDOWN:
+      case SDL_MOUSEBUTTONUP:
+      case SDL_MOUSEWHEEL:
+      case SDL_FINGERDOWN:
+      case SDL_FINGERMOTION:
+      case SDL_FINGERUP:
+        return true;
+      default:
+        return false;
+      }
+    };
+
+    auto processEvent = [&](SDL_Event event) {
+      ++processedEventsInWindow;
+      if (event.type == SDL_QUIT) {
         context.quitFlag = true;
       }
-      auto result = sceneManager.handleEvents(e);
-      if (result.quit) {
-        context.quitFlag = true;
+
+      if (shouldDispatchToScene(event.type)) {
+        auto result = sceneManager.handleEvents(event);
+        if (result.quit) {
+          context.quitFlag = true;
+        }
       }
 
       // on window resize
-      if (e.type == SDL_WINDOWEVENT &&
-          e.window.event == SDL_WINDOWEVENT_RESIZED) {
-        int logicalW = e.window.data1;
-        int logicalH = e.window.data2;
+      if (event.type == SDL_WINDOWEVENT &&
+          (event.window.event == SDL_WINDOWEVENT_RESIZED ||
+           event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+        int logicalW = event.window.data1;
+        int logicalH = event.window.data2;
+        if (logicalW <= 0 || logicalH <= 0) {
+          return;
+        }
 #if TARGET_OS_IPHONE
-        int drawableW = 0;
-        int drawableH = 0;
-        SDL_GetRendererOutputSize(s_renderer, &drawableW, &drawableH);
+        int targetRenderW = 0;
+        int targetRenderH = 0;
+        SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
 #else
-        int drawableW = logicalW;
-        int drawableH = logicalH;
+        int targetRenderW = scaledDimension(logicalW);
+        int targetRenderH = scaledDimension(logicalH);
 #endif
+        if (targetRenderW <= 0 || targetRenderH <= 0) {
+          return;
+        }
+        if (targetRenderW == rendering::render_width &&
+            targetRenderH == rendering::render_height) {
+          return;
+        }
         rendering::widthScale =
-            static_cast<float>(drawableW) / static_cast<float>(logicalW);
+            static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
         rendering::heightScale =
-            static_cast<float>(drawableH) / static_cast<float>(logicalH);
-        rendering::updateUIScale(drawableW, drawableH);
+            static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
+        rendering::updateUIScale(targetRenderW, targetRenderH);
 
         // set bgfx resolution
         bgfx::reset(rendering::render_width, rendering::render_height,
-                    BGFX_RESET_MSAA_X2 |
-                        (TARGET_PLATFORM == iOS ? BGFX_RESET_VSYNC : 0));
-        SDL_Log("Drawable size: %d x %d", rendering::render_width,
-                rendering::render_height);
+                    s_bgfxResetFlags);
+        APP_DEBUG_LOG(
+            "Render size: %d x %d (logical: %d x %d, scale %.2f)",
+            rendering::render_width, rendering::render_height, logicalW,
+            logicalH, s_renderScale);
         s_postProcess.resize(rendering::render_width, rendering::render_height);
         resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                            s_blurPass->blurViewH(), s_blurPass->blurViewV(),
@@ -417,6 +607,52 @@ void run() {
         rendering::applyViewOrder(s_blurPass->blurViewH(),
                                   s_blurPass->blurViewV(),
                                   s_blurPass->finalView());
+      }
+    };
+
+    while (SDL_PollEvent(&e)) {
+      ++rawEventsInWindow;
+
+      if (e.type == SDL_MOUSEMOTION) {
+        pendingMouseMotion = e;
+        hasPendingMouseMotion = true;
+        ++pendingMouseMotionCount;
+        continue;
+      }
+      if (e.type == SDL_FINGERMOTION) {
+        pendingFingerMotion = e;
+        hasPendingFingerMotion = true;
+        ++pendingFingerMotionCount;
+        continue;
+      }
+      if (e.type == SDL_WINDOWEVENT &&
+          (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+           e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+        pendingResizeEvent = e;
+        hasPendingResize = true;
+        ++pendingResizeCount;
+        continue;
+      }
+
+      processEvent(e);
+    }
+
+    if (hasPendingResize) {
+      processEvent(pendingResizeEvent);
+      if (pendingResizeCount > 1) {
+        coalescedResizeInWindow += (pendingResizeCount - 1);
+      }
+    }
+    if (hasPendingFingerMotion) {
+      processEvent(pendingFingerMotion);
+      if (pendingFingerMotionCount > 1) {
+        coalescedFingerMotionInWindow += (pendingFingerMotionCount - 1);
+      }
+    }
+    if (hasPendingMouseMotion) {
+      processEvent(pendingMouseMotion);
+      if (pendingMouseMotionCount > 1) {
+        coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
       }
     }
     sceneManager.update(deltaTime);
@@ -426,40 +662,56 @@ void run() {
     //         rendering::window_height);
     // clear color
 
+    const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
+
     bgfx::touch(rendering::clear_view);
-    bgfx::submit(rendering::clear_view, program);
     bgfx::touch(rendering::ui_view);
-    bgfx::touch(rendering::bga_view);
-    bgfx::touch(rendering::bga_layer_view);
-    bgfx::touch(s_blurPass->finalView());
-    bgfx::touch(s_blurPass->blurViewH());
-    bgfx::touch(s_blurPass->blurViewV());
+    if (hasActiveVisuals) {
+      bgfx::touch(rendering::bga_view);
+      bgfx::touch(rendering::bga_layer_view);
+      bgfx::touch(s_blurPass->finalView());
+      bgfx::touch(s_blurPass->blurViewH());
+      bgfx::touch(s_blurPass->blurViewV());
+    }
 
     sceneManager.render();
-    s_postProcess.apply();
-    const float blurWidth = rendering::window_width * 0.1f;
-    const float blurHeight = rendering::window_height * 0.1f;
-    const float blurX = (rendering::window_width - blurWidth) * 0.5f;
-    const float blurY = (rendering::window_height - blurHeight) * 0.5f;
-    rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
-                                       s_blurPass->finalView());
+    if (hasActiveVisuals) {
+      context.jukebox.render();
+      s_postProcess.apply();
+      rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
+                                         s_blurPass->finalView());
+    }
 
-    // render fps, rounded to 2 decimal places
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << 1.0f / deltaTime;
-    fpsText.setText(oss.str());
-    fpsText.setPosition(10, 10);
-    RenderContext renderContext;
-    fpsText.render(renderContext);
+    if constexpr (kEnablePerfTelemetry) {
+      constexpr float kTelemetryLogIntervalSec = 5.0f;
+      static FPSCounter fpsCounter;
+      static float telemetryLogInterval = 0.0f;
+      fpsCounter.addFrame(deltaTime);
+      telemetryLogInterval += deltaTime;
+      if (telemetryLogInterval >= kTelemetryLogIntervalSec) {
+        telemetryLogInterval = 0.0f;
+        const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
+        const float avgFps = fpsCounter.getAverageFPS();
+        const float low1Fps = fpsCounter.get1PercentLowFPS();
 
-    // render jukebox performance analytics
-    auto avgDeltaTime = context.jukebox.getAvgDeltaTime();
-    double freq = 1000000.0 / avgDeltaTime;
-    std::ostringstream oss2;
-    oss2 << std::fixed << std::setprecision(2) << avgDeltaTime << " us (" << freq << " Hz)";
-    avgDeltaTimeText.setText(oss2.str());
-    avgDeltaTimeText.setPosition(10, 40);
-    avgDeltaTimeText.render(renderContext);
+        const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
+        const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
+        SDL_Log(
+            "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz) | "
+            "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
+            currentFps, avgFps, low1Fps, avgDeltaTime, freq,
+            static_cast<unsigned long long>(rawEventsInWindow),
+            static_cast<unsigned long long>(processedEventsInWindow),
+            static_cast<unsigned long long>(coalescedMouseMotionInWindow),
+            static_cast<unsigned long long>(coalescedFingerMotionInWindow),
+            static_cast<unsigned long long>(coalescedResizeInWindow));
+        rawEventsInWindow = 0;
+        processedEventsInWindow = 0;
+        coalescedMouseMotionInWindow = 0;
+        coalescedFingerMotionInWindow = 0;
+        coalescedResizeInWindow = 0;
+      }
+    }
 
     // shift left by 1
     // float translate[16];

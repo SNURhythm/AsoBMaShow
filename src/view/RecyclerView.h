@@ -56,8 +56,7 @@ private:
 
     ScissorScope scissor(context, this->getX(), this->getY(), this->getWidth(),
                          this->getHeight());
-    for (auto entry : viewEntries) {
-
+    for (const auto &entry : viewEntries) {
       entry.first->render(context);
     }
     if (items.size() * itemHeight < this->getHeight()) {
@@ -86,7 +85,6 @@ private:
         bgfx::getAvailTransientVertexBuffer(
             4, rendering::PosColorVertex::ms_decl) < 4 ||
         bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      SDL_Log("Not enough space for transient buffers");
       return;
     }
     bgfx::allocTransientVertexBuffer(&tvb, 4,
@@ -110,11 +108,11 @@ private:
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&ibh);
-    auto program =
+    static const bgfx::ProgramHandle kProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    bgfx::submit(rendering::ui_view, program);
+    bgfx::submit(rendering::ui_view, kProgram);
 
     // // scroll bar thumb
     int itemsSize = std::max(1, static_cast<int>(items.size())) * itemHeight;
@@ -129,7 +127,7 @@ private:
     bgfx::setIndexBuffer(&ibh);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    bgfx::submit(rendering::ui_view, program);
+    bgfx::submit(rendering::ui_view, kProgram);
 
     // int itemsSize = std::max(6, static_cast<int>(items.size())) * itemHeight;
     // int thumbHeight = this->getHeight() * this->getHeight() / itemsSize;
@@ -206,8 +204,6 @@ private:
       // check mouse position
       int x, y;
       SDL_GetMouseState(&x, &y);
-      SDL_Log("mouse wheel: %d, %d, %d, %d, %d, %d", x, y, this->getX(),
-              this->getY(), this->getWidth(), this->getHeight());
       if (x < this->getX() || x > this->getX() + this->getWidth()) {
         return true;
       }
@@ -276,14 +272,11 @@ private:
       // Get the normalized touch coordinates
       float normX = event.tfinger.x;
       float normY = event.tfinger.y;
-      SDL_Log("Finger down: %f, %f", normX, normY);
-      SDL_Log("Finger down: %f, %f", normX, normY);
       // Get the window size
       // Convert normalized coordinates to screen coordinates
       float touchX = 0.0f;
       float touchY = 0.0f;
       rendering::normalizedToUi(normX, normY, touchX, touchY);
-      SDL_Log("Finger down (scaled): %f, %f", touchX, touchY);
 
       if (touchX < this->getX() || touchX > this->getX() + this->getWidth()) {
         return true;
@@ -367,7 +360,7 @@ public:
   int topMargin;    // Number of items to keep ready above the visible area
   int bottomMargin; // Number of items to keep ready below the visible area
 
-  inline void setItems(const std::vector<T> &&items) {
+  inline void setItems(std::vector<T> &&items) {
     this->items = std::move(items);
     // reset selected index
     selectedIndex = -1;
@@ -402,26 +395,26 @@ public:
 
   inline void clear() {
     items.clear();
-    for (auto view : viewEntries) {
-      recycleView(view);
+    for (auto &entry : viewEntries) {
+      recycleView(entry.first);
     }
     viewEntries.clear();
   }
 
-  inline T get(int index) { return items[index]; }
+  inline const T &get(int index) const { return items[index]; }
 
   inline int size() { return items.size(); }
 
-  inline std::vector<T> getItems() { return items; }
+  inline const std::vector<T> &getItems() const { return items; }
 
   // on bound to the view (delegate)
-  std::function<void(View *, T, int, bool isSelected)> onBind;
-  std::function<View *(T)> onCreateView;
+  std::function<void(View *, const T &, int, bool isSelected)> onBind;
+  std::function<View *(const T &)> onCreateView;
   std::function<bool(const T &, const T &)> itemComparator;
 
   // on click
-  std::function<void(T, int)> onSelected;
-  std::function<void(T, int)> onUnselected;
+  std::function<void(const T &, int)> onSelected;
+  std::function<void(const T &, int)> onUnselected;
   int selectedIndex = -1;
 
   inline View *getViewByIndex(int index) {
@@ -461,7 +454,7 @@ private:
     LayoutBatchScope layoutBatch;
     // Iterate over the range of visible items
     for (int i = startIndex; i <= endIndex; ++i) {
-      T item = items[i];
+      const T &item = items[i];
       View *view = nullptr;
 
       // Check if the item already has a corresponding view
@@ -491,7 +484,7 @@ private:
                                 YGPositionType::YGPositionTypeAbsolute);
       view->setSize(this->getWidth(), itemHeight);
 
-      newVisibleItems.push_back(std::make_pair(view, item));
+      newVisibleItems.emplace_back(view, item);
     }
 
     // Recycle any views that are no longer visible
@@ -515,7 +508,7 @@ private:
     return std::min(static_cast<int>(items.size()) - 1, lastPossibleIndex);
   }
 
-  inline View *getViewForItem(T item) {
+  inline View *getViewForItem(const T &item) {
     if (!recycledViewEntries.empty()) {
       View *view = recycledViewEntries.front();
       recycledViewEntries.pop_front();

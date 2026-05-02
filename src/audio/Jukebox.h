@@ -2,10 +2,10 @@
 #include "../bms_parser.hpp"
 #include "AudioWrapper.h"
 #include <array>
-#include <future>
 #include <thread>
 #include <unordered_map>
 #include <atomic>
+#include <cstdint>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
 #include "../utils/Stopwatch.h"
@@ -24,7 +24,7 @@ public:
   struct PerformanceAnalytics{
     static const int BUFFER_SIZE = 10000;
     // ring buffer to store loop delta time
-    std::array<double, BUFFER_SIZE> loopDeltaTimes;
+    std::array<std::atomic<uint32_t>, BUFFER_SIZE> loopDeltaTimes{};
     std::atomic<size_t> loopDeltaIndex{0};
     size_t cursor = 0;
     double avgDeltaTime = 0;
@@ -47,6 +47,7 @@ public:
   void play();
   void stop();
   void render();
+  bool hasActiveVisuals() const;
 
   long long getTimeMicros();
   void seek(long long micro);
@@ -84,12 +85,8 @@ private:
   std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
   std::mutex imageTableMutex;
-  std::vector<std::future<bool>> asyncVideoLoads;
-  long long lastPositionMicro = 0;
-  double diffSamples[100];
-  int diffSampleCount = 0;
-  int currentBga = -1;
-  int currentBmpLayer = -1;
+  std::atomic<int> currentBga{-1};
+  std::atomic<int> currentBmpLayer{-1};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};

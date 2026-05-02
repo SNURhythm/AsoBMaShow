@@ -1093,7 +1093,9 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
     ScrollTable[xx] = value;
     // std::wcout << "SCROLL: " << xx << " = " << value << std::endl;
   } else {
+#if BMS_PARSER_VERBOSE == 1
     std::cout << "Unknown command: " << cmd << std::endl;
+#endif
   }
 }
 
@@ -1841,4 +1843,3 @@ std::string md5(const std::string str) {
   return md5.hexdigest();
 }
 } // namespace bms_parser
-

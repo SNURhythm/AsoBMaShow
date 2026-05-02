@@ -8,6 +8,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
+#include <unordered_map>
 class Button;
 struct StartOptions {
   unsigned long long startPosition = 0;
@@ -50,12 +51,14 @@ private:
   StartOptions options;
   void checkPassedTimeline(long long time);
   void onJudge(const JudgeResult &judgeResult);
-  JudgeResult pressNote(bms_parser::Note *note, long long pressedTime);
+  JudgeResult pressNote(bms_parser::Note *note, long long pressedTime,
+                        const JudgeResult *precomputedJudge = nullptr);
   void releaseNote(bms_parser::Note *Note, long long ReleasedTime);
   RhythmState *state = nullptr;
   BMSRenderer *renderer = nullptr;
   RhythmInputHandler *inputHandler = nullptr;
-  std::map<int, bool> lanePressed;
+  std::unordered_map<int, bool> lanePressed;
   TextView *laneStateText = nullptr;
+  void updateLaneStateText();
   std::mutex judgeMutex;
 };

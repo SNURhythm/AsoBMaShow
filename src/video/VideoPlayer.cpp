@@ -1,15 +1,12 @@
 #include "VideoPlayer.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
-#include <iostream>
 #include <cstring>
 
 #include <thread>
-#include <future>
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
-      hasVideoFrame(false), videoFrameDataY(nullptr), videoFrameDataU(nullptr),
-      videoFrameDataV(nullptr) {
+      hasVideoFrame(false) {
 
   s_texY = bgfx::createUniform("s_texY", bgfx::UniformType::Sampler);
   s_texU = bgfx::createUniform("s_texU", bgfx::UniformType::Sampler);
@@ -32,26 +29,13 @@ VideoPlayer::~VideoPlayer() {
     bgfx::destroy(videoTextureV);
   }
   unloadVideo();
-  if (videoFrameDataY)
-    av_freep(&videoFrameDataY);
-  if (videoFrameDataU)
-    av_freep(&videoFrameDataU);
-  if (videoFrameDataV)
-    av_freep(&videoFrameDataV);
 }
 
 void VideoPlayer::unloadVideo() {
   stopPredecoding();
+  hasVideoFrame = false;
   {
     std::lock_guard<std::mutex> videoLock(videoMutex);
-    if (frame) {
-      av_frame_free(&frame);
-      frame = nullptr;
-    }
-    if (packet) {
-      av_packet_free(&packet);
-      packet = nullptr;
-    }
     if (swsContext) {
       sws_freeContext(swsContext);
       swsContext = nullptr;
@@ -64,6 +48,13 @@ void VideoPlayer::unloadVideo() {
       avcodec_free_context(&codecContext);
       codecContext = nullptr;
     }
+  }
+  {
+    std::lock_guard<std::mutex> lock(recycleMutex);
+    for (auto *f : recyclePool) {
+      av_frame_free(&f);
+    }
+    recyclePool.clear();
   }
 }
 
@@ -127,9 +118,6 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     if (startPTS == AV_NOPTS_VALUE) {
       startPTS = 0; // Default to 0 if start_time is not available
     }
-
-    frame = av_frame_alloc();
-    packet = av_packet_alloc();
     swsContext = sws_getContext(codecContext->width, codecContext->height,
                                 codecContext->pix_fmt, codecContext->width,
                                 codecContext->height, AV_PIX_FMT_YUV420P,
@@ -150,41 +138,30 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     return true;
   }
 }
-uint32_t VideoPlayer::setupFormat(char *chroma, unsigned *width,
-                                  unsigned *height, unsigned *pitches,
-                                  unsigned *lines) {
-  if (chroma == nullptr || width == nullptr || height == nullptr ||
-      pitches == nullptr || lines == nullptr)
-    return 0;
-  chroma[0] = 'I';
-  chroma[1] = '4';
-  chroma[2] = '2';
-  chroma[3] = '0';
-  chroma[4] = '\0';
-  *width = videoFrameWidth;
-  *height = videoFrameHeight;
-  pitches[0] = videoFrameWidth;
-  pitches[1] = videoFrameWidth / 2;
-  pitches[2] = videoFrameWidth / 2;
-  lines[0] = videoFrameHeight;
-  lines[1] = videoFrameHeight / 2;
-  lines[2] = videoFrameHeight / 2;
-  return 1;
-}
 
 void VideoPlayer::update() {
   if (!isPlaying)
     return;
+  if (formatContext == nullptr || videoStreamIndex < 0) {
+    return;
+  }
+  if (bufferSize.load(std::memory_order_acquire) == 0) {
+    return;
+  }
 
   AVFrame *currentFrame;
   double elapsedTime;
   double frameTime;
+  // Determine the next frame to display
+  // ... (existing buffering logic remains, but we get the frame from
+  // frameBuffer) ...
+
+  // Note: We need to handle frame skipping logic properly with the new pool
+  // The existing loop:
   while (true) {
     {
-      std::lock_guard<std::mutex> lock(bufferMutex);
-      // check if buffer is empty
+      std::unique_lock<std::mutex> lock(bufferMutex);
       if (bufferSize == 0) {
-        // SDL_Log("Buffer is empty");
         return;
       }
       currentFrame = frameBuffer[bufferHead];
@@ -192,47 +169,57 @@ void VideoPlayer::update() {
       elapsedTime = (now - startTime) / 1000000.0;
       frameTime = (currentFrame->pts - startPTS) *
                   av_q2d(formatContext->streams[videoStreamIndex]->time_base);
+
       if (elapsedTime < frameTime) {
+        // Not time yet
         return;
       }
+
       frameBuffer[bufferHead] = nullptr; // Clear buffer slot
       bufferHead = (bufferHead + 1) % maxBufferSize;
       --bufferSize;
     }
-    freeSpace.notify_one(); // Signal that a buffer slot is free
+
+    // We consumed a frame from the buffer
+    freeSpace.notify_one();
 
     if (elapsedTime > frameTime + 0.1) {
       lastFramePTS = frameTime;
-      SDL_Log("Skipping frame: too late for display");
-      av_frame_free(&currentFrame);
+      // Recycle the skipped frame
+      recycleFrame(currentFrame);
       continue;
     }
     break;
   }
-  uint8_t *data[3] = {videoFrameDataY, videoFrameDataU, videoFrameDataV};
-  int linesize[3] = {videoFrameWidth, videoFrameWidth / 2, videoFrameWidth / 2};
 
-  sws_scale(swsContext, currentFrame->data, currentFrame->linesize, 0,
-            codecContext->height, data, linesize);
+  // Upload to BGFX textures.
+  // Use bgfx::copy + explicit pitch because decoder output can be padded
+  // (linesize > plane width), and the frame is recycled right after upload.
+  const uint16_t yPitch = static_cast<uint16_t>(currentFrame->linesize[0]);
+  const uint16_t uPitch = static_cast<uint16_t>(currentFrame->linesize[1]);
+  const uint16_t vPitch = static_cast<uint16_t>(currentFrame->linesize[2]);
+  const uint32_t yBytes = static_cast<uint32_t>(currentFrame->linesize[0]) *
+                          static_cast<uint32_t>(videoFrameHeight);
+  const uint32_t uBytes = static_cast<uint32_t>(currentFrame->linesize[1]) *
+                          static_cast<uint32_t>(videoFrameHeight / 2);
+  const uint32_t vBytes = static_cast<uint32_t>(currentFrame->linesize[2]) *
+                          static_cast<uint32_t>(videoFrameHeight / 2);
 
-  lastFramePTS = frameTime; // Update the last displayed frame PTS
+  bgfx::updateTexture2D(videoTextureY, 0, 0, 0, 0, videoFrameWidth,
+                        videoFrameHeight,
+                        bgfx::copy(currentFrame->data[0], yBytes), yPitch);
+  bgfx::updateTexture2D(videoTextureU, 0, 0, 0, 0, videoFrameWidth / 2,
+                        videoFrameHeight / 2,
+                        bgfx::copy(currentFrame->data[1], uBytes), uPitch);
+  bgfx::updateTexture2D(videoTextureV, 0, 0, 0, 0, videoFrameWidth / 2,
+                        videoFrameHeight / 2,
+                        bgfx::copy(currentFrame->data[2], vBytes), vPitch);
 
-  // Upload to BGFX textures
-  bgfx::updateTexture2D(
-      videoTextureY, 0, 0, 0, 0, videoFrameWidth, videoFrameHeight,
-      bgfx::makeRef(videoFrameDataY, videoFrameWidth * videoFrameHeight));
-  bgfx::updateTexture2D(
-      videoTextureU, 0, 0, 0, 0, videoFrameWidth / 2, videoFrameHeight / 2,
-      bgfx::makeRef(videoFrameDataU,
-                    (videoFrameWidth / 2) * (videoFrameHeight / 2)));
-  bgfx::updateTexture2D(
-      videoTextureV, 0, 0, 0, 0, videoFrameWidth / 2, videoFrameHeight / 2,
-      bgfx::makeRef(videoFrameDataV,
-                    (videoFrameWidth / 2) * (videoFrameHeight / 2)));
-
+  lastFramePTS = frameTime;
   hasVideoFrame = true;
 
-  av_frame_free(&currentFrame);
+  // Recycle the displayed frame
+  recycleFrame(currentFrame);
 }
 unsigned int VideoPlayer::getPrecisePosition() {
   // calculate the frame position in microseconds
@@ -299,8 +286,9 @@ void VideoPlayer::render() {
   bgfx::setTexture(1, s_texU, videoTextureU);
   bgfx::setTexture(2, s_texV, videoTextureV);
 
-  bgfx::submit(viewId, rendering::ShaderManager::getInstance().getProgram(
-                           SHADER_YUVRGB));
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_YUVRGB);
+  bgfx::submit(viewId, kProgram);
 }
 
 void VideoPlayer::play() {
@@ -316,7 +304,6 @@ void VideoPlayer::play() {
   }
   isPlaying = true;
   isPaused = false;
-  stopRequested = false;
   isEOF = false;
   eofCV.notify_all();
 }
@@ -325,8 +312,7 @@ void VideoPlayer::pause() { isPaused = true; }
 
 void VideoPlayer::stop() {
   isPlaying = false;
-  stopRequested = true;
-  seekPosition = -1; // Reset seek position
+  hasVideoFrame = false;
 }
 
 void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
@@ -338,12 +324,7 @@ void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
       bgfx::destroy(videoTextureU);
     if (bgfx::isValid(videoTextureV))
       bgfx::destroy(videoTextureV);
-    if (videoFrameDataY)
-      av_freep(&videoFrameDataY);
-    if (videoFrameDataU)
-      av_freep(&videoFrameDataU);
-    if (videoFrameDataV)
-      av_freep(&videoFrameDataV);
+
     videoFrameWidth = width;
     videoFrameHeight = height;
 
@@ -359,19 +340,6 @@ void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
     videoTextureV = bgfx::createTexture2D(
         uint16_t(videoFrameWidth / 2), uint16_t(videoFrameHeight / 2), false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
-
-    // Allocate memory for YUV data
-
-    videoFrameDataY = (uint8_t *)av_malloc(videoFrameWidth * videoFrameHeight);
-    videoFrameDataU =
-        (uint8_t *)av_malloc((videoFrameWidth / 2) * (videoFrameHeight / 2));
-    videoFrameDataV =
-        (uint8_t *)av_malloc((videoFrameWidth / 2) * (videoFrameHeight / 2));
-
-    if (!videoFrameDataY || !videoFrameDataU || !videoFrameDataV) {
-      SDL_Log("Failed to allocate aligned memory for YUV data");
-      return;
-    }
   }
 }
 
@@ -393,7 +361,7 @@ void VideoPlayer::seek(int64_t micro) {
     // Free all frames in the ring buffer
     for (size_t i = 0; i < maxBufferSize; ++i) {
       if (frameBuffer[i] != nullptr) {
-        av_frame_free(&frameBuffer[i]);
+        recycleFrame(frameBuffer[i]);
         frameBuffer[i] = nullptr;
       }
     }
@@ -414,6 +382,7 @@ void VideoPlayer::seek(int64_t micro) {
   // Reinitialize timing
   lastFramePTS = 0;
   startTime = stopwatch->elapsedMicros();
+  hasVideoFrame = false;
 
   // Notify predecoding thread to continue from the new position
   SDL_Log("Seeked to %lld microseconds", micro);
@@ -422,6 +391,14 @@ void VideoPlayer::seek(int64_t micro) {
 }
 
 void VideoPlayer::predecodeFrames() {
+  AVPacket *localPacket = av_packet_alloc();
+  AVFrame *decodedFrame = av_frame_alloc();
+  if (localPacket == nullptr || decodedFrame == nullptr) {
+    av_packet_free(&localPacket);
+    av_frame_free(&decodedFrame);
+    return;
+  }
+
   while (predecodingActive) {
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
@@ -436,10 +413,11 @@ void VideoPlayer::predecodeFrames() {
     bool readFailed = false;
     {
       std::lock_guard<std::mutex> videoLock(videoMutex);
-      if (!formatContext || !codecContext)
+      if (!formatContext || !codecContext) {
         continue;
+      }
 
-      AVPacket *localPacket = av_packet_alloc();
+      av_packet_unref(localPacket);
       if (av_read_frame(formatContext, localPacket) >= 0) {
         if (localPacket->stream_index == videoStreamIndex) {
 
@@ -449,21 +427,73 @@ void VideoPlayer::predecodeFrames() {
           if (send_ret >= 0) {
             // FFmpeg 7.1 Fix: Drain all available frames from the decoder
             while (true) {
-              AVFrame *decodedFrame = av_frame_alloc();
-              int receive_ret =
-                  avcodec_receive_frame(codecContext, decodedFrame);
+              av_frame_unref(decodedFrame);
+              int receive_ret = avcodec_receive_frame(codecContext, decodedFrame);
 
               if (receive_ret == 0) {
-                std::lock_guard<std::mutex> lock(bufferMutex);
-                frameBuffer[bufferTail] = decodedFrame;
-                bufferTail = (bufferTail + 1) % maxBufferSize;
-                ++bufferSize;
+                // Frame decoded successfully. Now scale it on this thread.
+                AVFrame *targetFrame = getRecycledFrame();
+                if (targetFrame) {
+                  if (videoFrameWidth <= 0 || videoFrameHeight <= 0) {
+                    recycleFrame(targetFrame);
+                    continue;
+                  }
 
-                // If buffer is full, we must stop receiving for now
-                if (bufferSize >= maxBufferSize)
-                  break;
+                  const bool canReuseExistingBuffer =
+                      targetFrame->buf[0] != nullptr &&
+                      targetFrame->format == AV_PIX_FMT_YUV420P &&
+                      targetFrame->width == videoFrameWidth &&
+                      targetFrame->height == videoFrameHeight;
+
+                  if (!canReuseExistingBuffer) {
+                    av_frame_unref(targetFrame);
+                    targetFrame->format = AV_PIX_FMT_YUV420P;
+                    targetFrame->width = videoFrameWidth;
+                    targetFrame->height = videoFrameHeight;
+                    if (av_frame_get_buffer(targetFrame, 32) < 0) {
+                      recycleFrame(targetFrame);
+                      continue;
+                    }
+                  }
+                  if (av_frame_make_writable(targetFrame) < 0) {
+                    SDL_Log("Failed to make target frame writable");
+                    recycleFrame(targetFrame);
+                    continue;
+                  }
+
+                  // Perform sws_scale
+                  // We need to set up the data pointers for sws_scale
+                  // Since targetFrame is allocated by av_frame_get_buffer, its
+                  // data/linesize are set.
+
+                  sws_scale(swsContext, decodedFrame->data,
+                            decodedFrame->linesize, 0, codecContext->height,
+                            targetFrame->data, targetFrame->linesize);
+
+                  const int64_t bestPts =
+                      decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
+                          ? decodedFrame->best_effort_timestamp
+                          : decodedFrame->pts;
+                  targetFrame->pts = bestPts;
+
+                  std::lock_guard<std::mutex> lock(bufferMutex);
+                  if (bufferSize < maxBufferSize) {
+                    frameBuffer[bufferTail] = targetFrame;
+                    bufferTail = (bufferTail + 1) % maxBufferSize;
+                    ++bufferSize;
+                  } else {
+                    recycleFrame(targetFrame);
+                    break;
+                  }
+
+                  // If buffer is full, we must stop receiving for now
+                  if (bufferSize >= maxBufferSize) {
+                    break;
+                  }
+                } else {
+                  SDL_Log("Failed to get recycled frame");
+                }
               } else {
-                av_frame_free(&decodedFrame);
                 if (receive_ret == AVERROR(EAGAIN) ||
                     receive_ret == AVERROR_EOF)
                   break;
@@ -478,7 +508,6 @@ void VideoPlayer::predecodeFrames() {
         isEOF = true;
         readFailed = true;
       }
-      av_packet_free(&localPacket);
     }
 
     if (readFailed && isEOF) {
@@ -486,6 +515,9 @@ void VideoPlayer::predecodeFrames() {
       eofCV.wait(lock, [this] { return !isEOF || !predecodingActive; });
     }
   }
+
+  av_frame_free(&decodedFrame);
+  av_packet_free(&localPacket);
 }
 
 void VideoPlayer::stopPredecoding() {
@@ -504,11 +536,33 @@ void VideoPlayer::stopPredecoding() {
     std::lock_guard<std::mutex> lock(bufferMutex);
     for (size_t i = 0; i < maxBufferSize; ++i) {
       if (frameBuffer[i] != nullptr) {
-        av_frame_free(&frameBuffer[i]);
+        // Free frames from buffer using recycled pool or direct free
+        recycleFrame(frameBuffer[i]);
         frameBuffer[i] = nullptr;
       }
     }
     bufferHead = bufferTail = 0; // Reset buffer indices
     bufferSize = 0;
   }
+}
+
+AVFrame *VideoPlayer::getRecycledFrame() {
+  std::lock_guard<std::mutex> lock(recycleMutex);
+  if (recyclePool.empty()) {
+    return av_frame_alloc();
+  }
+  AVFrame *frame = recyclePool.back();
+  recyclePool.pop_back();
+  return frame;
+}
+
+void VideoPlayer::recycleFrame(AVFrame *frame) {
+  if (!frame)
+    return;
+  std::lock_guard<std::mutex> lock(recycleMutex);
+  if (recyclePool.size() >= maxBufferSize * 2) {
+    av_frame_free(&frame);
+    return;
+  }
+  recyclePool.push_back(frame);
 }

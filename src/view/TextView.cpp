@@ -2,19 +2,49 @@
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 #include <cstring>
+#include <mutex>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
 #include "bgfx/defines.h"
 #include "bx/math.h"
 
+namespace {
+std::mutex g_ttfMutex;
+int g_ttfRefCount = 0;
+
+bool acquireTtf() {
+  std::lock_guard<std::mutex> lock(g_ttfMutex);
+  if (g_ttfRefCount == 0 && TTF_Init() != 0) {
+    SDL_Log("Failed to initialize SDL_ttf: %s", TTF_GetError());
+    return false;
+  }
+  ++g_ttfRefCount;
+  return true;
+}
+
+void releaseTtf() {
+  std::lock_guard<std::mutex> lock(g_ttfMutex);
+  if (g_ttfRefCount <= 0) {
+    return;
+  }
+  --g_ttfRefCount;
+  if (g_ttfRefCount == 0) {
+    TTF_Quit();
+  }
+}
+} // namespace
+
 TextView::TextView(const std::string &fontPath, int fontSize)
     : View(), texture(BGFX_INVALID_HANDLE) {
-  TTF_Init();
-  font = TTF_OpenFont(fontPath.c_str(), fontSize);
-  if (!font) {
-    SDL_Log("Failed to load font: %s", TTF_GetError());
-    font = TTF_OpenFont("assets/fonts/arial.ttf", fontSize); // Fallback font
+  ttfInitialized = acquireTtf();
+  if (ttfInitialized) {
+    font = TTF_OpenFont(fontPath.c_str(), fontSize);
+    if (!font) {
+      SDL_Log("Failed to load font: %s", TTF_GetError());
+      font =
+          TTF_OpenFont("assets/fonts/arial.ttf", fontSize); // Fallback font
+    }
   }
   color = {255, 255, 255, 255}; // Default color: white
   rect = {0, 0, 0, 0};
@@ -31,7 +61,9 @@ TextView::~TextView() {
   if (font) {
     TTF_CloseFont(font);
   }
-  TTF_Quit();
+  if (ttfInitialized) {
+    releaseTtf();
+  }
 }
 
 void TextView::setText(const std::string &newText) {
@@ -96,28 +128,34 @@ void TextView::renderImpl(RenderContext &context) {
                    BGFX_STATE_BLEND_ALPHA);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    bgfx::submit(
-        rendering::ui_view,
-        rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT));
+    static const bgfx::ProgramHandle kProgram =
+        rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+    bgfx::submit(rendering::ui_view, kProgram);
   }
 }
 
 void TextView::setColor(SDL_Color newColor) {
+  if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
+      newColor.a == color.a) {
+    return;
+  }
   this->color = newColor;
   createTexture(); // Update the texture since newColor has changed
 }
 
 void TextView::createTexture() {
-  if (text.empty()) {
+  if (bgfx::isValid(texture)) {
+    bgfx::destroy(texture);
+    texture = BGFX_INVALID_HANDLE;
+  }
+
+  if (text.empty() || font == nullptr) {
     rect.w = 0;
     rect.h = 0;
-
+    YGNodeMarkDirty(getNode());
     return;
   }
   SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
-  if (bgfx::isValid(texture)) {
-    bgfx::destroy(texture);
-  }
   if (!surface) {
     SDL_Log("Failed to render text: %s", TTF_GetError());
     return;

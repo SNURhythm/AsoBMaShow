@@ -8,12 +8,14 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
+#include <unordered_set>
 #ifdef _WIN32
 #include <timeapi.h>
 #include <windows.h>
 #include <avrt.h>
 #pragma comment(lib, "avrt.lib")
 #endif
+
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : audio(stopwatch), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
@@ -25,45 +27,82 @@ Jukebox::~Jukebox() {
     playThread.join();
   audio.stopSounds();
   audio.unloadSounds();
-  for (auto &videoPlayer : videoPlayerTable) {
-    delete videoPlayer.second;
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      delete videoPlayer.second;
+    }
+    videoPlayerTable.clear();
   }
-  for (auto &image : imageTable) {
-    bgfx::destroy(image.second.texture);
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    for (auto &image : imageTable) {
+      bgfx::destroy(image.second.texture);
+    }
+    imageTable.clear();
   }
 }
 void Jukebox::render() {
-  if (currentBga != -1) {
-    if (videoPlayerTable.find(currentBga) != videoPlayerTable.end()) {
-      auto videoPlayer = videoPlayerTable[currentBga];
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = rendering::bga_view;
-      videoPlayer->update();
-      videoPlayer->render();
-    } else if (imageTable.find(currentBga) != imageTable.end()) {
-      auto image = imageTable[currentBga];
-      renderImage(image, rendering::bga_view);
+  const int bga = currentBga.load(std::memory_order_relaxed);
+  if (bga != -1) {
+    bool rendered = false;
+    {
+      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+      auto videoIt = videoPlayerTable.find(bga);
+      if (videoIt != videoPlayerTable.end()) {
+        auto *videoPlayer = videoIt->second;
+        videoPlayer->viewWidth = rendering::window_width;
+        videoPlayer->viewHeight = rendering::window_height;
+        videoPlayer->viewId = rendering::bga_view;
+        videoPlayer->update();
+        videoPlayer->render();
+        rendered = true;
+      }
+    }
+    if (!rendered) {
+      std::lock_guard<std::mutex> lock(imageTableMutex);
+      auto imageIt = imageTable.find(bga);
+      if (imageIt != imageTable.end()) {
+        renderImage(imageIt->second, rendering::bga_view);
+      }
     }
   }
-  if (currentBmpLayer != -1) {
-    if (videoPlayerTable.find(currentBmpLayer) != videoPlayerTable.end()) {
-      auto videoPlayer = videoPlayerTable[currentBmpLayer];
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = rendering::bga_layer_view;
-      videoPlayer->update();
-      videoPlayer->render();
-    } else if (imageTable.find(currentBmpLayer) != imageTable.end()) {
-      auto image = imageTable[currentBmpLayer];
-      renderImage(image, rendering::bga_layer_view);
+  const int bmpLayer = currentBmpLayer.load(std::memory_order_relaxed);
+  if (bmpLayer != -1) {
+    bool rendered = false;
+    {
+      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+      auto videoIt = videoPlayerTable.find(bmpLayer);
+      if (videoIt != videoPlayerTable.end()) {
+        auto *videoPlayer = videoIt->second;
+        videoPlayer->viewWidth = rendering::window_width;
+        videoPlayer->viewHeight = rendering::window_height;
+        videoPlayer->viewId = rendering::bga_layer_view;
+        videoPlayer->update();
+        videoPlayer->render();
+        rendered = true;
+      }
+    }
+    if (!rendered) {
+      std::lock_guard<std::mutex> lock(imageTableMutex);
+      auto imageIt = imageTable.find(bmpLayer);
+      if (imageIt != imageTable.end()) {
+        renderImage(imageIt->second, rendering::bga_layer_view);
+      }
     }
   }
+}
+
+bool Jukebox::hasActiveVisuals() const {
+  return currentBga.load(std::memory_order_relaxed) != -1 ||
+         currentBmpLayer.load(std::memory_order_relaxed) != -1;
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
                          std::atomic_bool &isCancelled) {
   std::mutex wavTableLock;
+  std::mutex loadedPathsLock;
+  std::unordered_set<path_t> loadedPaths;
 
   wavTableAbs.clear();
 
@@ -85,14 +124,33 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
         if (!std::filesystem::exists(path)) {
           continue;
         }
-        if (audio.loadSound(path.c_str(), isCancelled)) {
+
+        const path_t soundPath = fspath_to_path_t(path);
+        bool needsLoad = true;
+        {
+          std::lock_guard<std::mutex> lock(loadedPathsLock);
+          needsLoad = !loadedPaths.contains(soundPath);
+        }
+
+        if (needsLoad && !audio.loadSound(soundPath, isCancelled)) {
+          continue;
+        }
+
+        if (needsLoad) {
+          std::lock_guard<std::mutex> lock(loadedPathsLock);
+          loadedPaths.insert(soundPath);
+          SDL_Log("Loaded sound %d: %s", wav->first,
+                  path_t_to_utf8(soundPath).c_str());
+        }
+
+        {
           std::lock_guard<std::mutex> lock(wavTableLock);
           auto idx = wav->first;
-          SDL_Log("Loaded sound %d: %s", idx, path_t_to_utf8(path).c_str());
-          wavTableAbs[idx] = path;
-          found = true;
-          break;
+          wavTableAbs[idx] = soundPath;
         }
+
+        found = true;
+        break;
       }
       if (!found) {
         SDL_Log("Failed to load sound for all extensions: %s",
@@ -211,17 +269,22 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   audio.stopSounds();
   audio.unloadSounds();
 
-  currentBga = -1;
-  currentBmpLayer = -1;
-  for (auto &videoPlayer : videoPlayerTable) {
-    delete videoPlayer.second;
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      delete videoPlayer.second;
+    }
+    videoPlayerTable.clear();
   }
-  videoPlayerTable.clear();
-
-  for (auto &image : imageTable) {
-    bgfx::destroy(image.second.texture);
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    for (auto &image : imageTable) {
+      bgfx::destroy(image.second.texture);
+    }
+    imageTable.clear();
   }
-  imageTable.clear();
   if (isCancelled)
     return;
   SDL_Log("Loading sounds");
@@ -290,8 +353,11 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   }
 }
 void Jukebox::playKeySound(int wav) {
-  if (isPlaying && wavTableAbs.contains(wav)) {
-    audio.playSound(wavTableAbs[wav].c_str());
+  if (!isPlaying) {
+    return;
+  }
+  if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
+    audio.playSound(it->second.c_str());
   }
 }
 
@@ -303,7 +369,8 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  auto hz = 8000;
+  constexpr int hz = 8000;
+  SDL_Log("Jukebox scheduler tick: %d Hz", hz);
 
   playThread = std::thread([this, hz] {
 #ifdef _WIN32
@@ -317,111 +384,129 @@ void Jukebox::play() {
     }
     timeBeginPeriod(1);
 #endif
-    auto prevTimestamp = std::chrono::high_resolution_clock::now();
-    auto targetNextFrame = std::chrono::high_resolution_clock::now() + std::chrono::microseconds(1000000 / hz);
+    using Clock = std::chrono::steady_clock;
+    auto prevTimestamp = Clock::now();
     auto interval = std::chrono::microseconds(1000000 / hz);
+    auto targetNextFrame = Clock::now() + interval;
     while (isPlaying) {
-      auto loopStartTimestamp = std::chrono::high_resolution_clock::now();
+      auto loopStartTimestamp = Clock::now();
       if (!stopwatch->isRunning()) {
         std::this_thread::sleep_for(interval);
-        prevTimestamp = std::chrono::high_resolution_clock::now();
-        targetNextFrame = std::chrono::high_resolution_clock::now() + interval;
+        prevTimestamp = Clock::now();
+        targetNextFrame = prevTimestamp + interval;
         continue;
       }
-      // lock seek
-      std::lock_guard<std::mutex> lock(seekLock);
-      auto positionMicro = stopwatch->elapsedMicros();
+      {
+        // Keep scheduling state consistent with seek/reset.
+        std::lock_guard<std::mutex> lock(seekLock);
+        auto positionMicro = stopwatch->elapsedMicros();
+        if (onTickCb) {
+          onTickCb(positionMicro);
+        }
 
-      lastPositionMicro = positionMicro;
-      if (onTickCb) {
-        onTickCb(positionMicro);
+        while (audioCursor < audioList.size()) {
+          auto &target = audioList[audioCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          if (const auto it = wavTableAbs.find(target.second);
+              it != wavTableAbs.end()) {
+            audio.playSound(it->second.c_str());
+          }
+          audioCursor++;
+        }
+
+        while (bmpCursor < bmpList.size()) {
+          auto &target = bmpList[bmpCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          bool activated = false;
+          {
+            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+            auto videoIt = videoPlayerTable.find(target.second);
+            if (videoIt != videoPlayerTable.end()) {
+              auto *videoPlayer = videoIt->second;
+              videoPlayer->seek(0);
+              videoPlayer->play();
+              videoPlayer->viewWidth = rendering::window_width;
+              videoPlayer->viewHeight = rendering::window_height;
+              videoPlayer->viewId = rendering::bga_view;
+              activated = true;
+            }
+          }
+          if (!activated) {
+            std::lock_guard<std::mutex> lock(imageTableMutex);
+            if (imageTable.find(target.second) != imageTable.end()) {
+              activated = true;
+            }
+          }
+          if (activated) {
+            currentBga.store(target.second, std::memory_order_relaxed);
+          }
+          bmpCursor++;
+        }
+        while (bmpLayerCursor < bmpLayerList.size()) {
+          auto &target = bmpLayerList[bmpLayerCursor];
+          if (positionMicro < target.first) {
+            break;
+          }
+          bool activated = false;
+          {
+            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+            auto videoIt = videoPlayerTable.find(target.second);
+            if (videoIt != videoPlayerTable.end()) {
+              auto *videoPlayer = videoIt->second;
+              videoPlayer->seek(0);
+              videoPlayer->play();
+              videoPlayer->viewWidth = rendering::window_width;
+              videoPlayer->viewHeight = rendering::window_height;
+              videoPlayer->viewId = rendering::bga_layer_view;
+              activated = true;
+            }
+          }
+          if (!activated) {
+            std::lock_guard<std::mutex> lock(imageTableMutex);
+            if (imageTable.find(target.second) != imageTable.end()) {
+              activated = true;
+            }
+          }
+          if (activated) {
+            currentBmpLayer.store(target.second, std::memory_order_relaxed);
+          }
+          bmpLayerCursor++;
+        }
       }
 
-      
-      while (audioCursor < audioList.size()) {
-        auto &target = audioList[audioCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing sound at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        audio.playSound(wavTableAbs[target.second].c_str());
-        audioCursor++;
-      }
-      
-      while (bmpCursor < bmpList.size()) {
-        auto &target = bmpList[bmpCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing video at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-          auto videoPlayer = videoPlayerTable[target.second];
-          videoPlayer->seek(0);
-          videoPlayer->play();
-          videoPlayer->viewWidth = rendering::window_width;
-          videoPlayer->viewHeight = rendering::window_height;
-          videoPlayer->viewId = rendering::bga_view;
-          currentBga = target.second;
-        } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBga = target.second;
-        }
-        bmpCursor++;
-        
-      }
-      while (bmpLayerCursor < bmpLayerList.size()) {
-        auto &target = bmpLayerList[bmpLayerCursor];
-        if (positionMicro < target.first) {
-          break;
-        }
-        //          SDL_Log("Playing video at %lld; id: %d; actual time:
-        //          %lld",
-        //                  target.first, target.second, positionMicro);
-        if (videoPlayerTable.find(target.second) != videoPlayerTable.end()) {
-          auto videoPlayer = videoPlayerTable[target.second];
-          videoPlayer->seek(0);
-          videoPlayer->play();
-          videoPlayer->viewWidth = rendering::window_width;
-          videoPlayer->viewHeight = rendering::window_height;
-          videoPlayer->viewId = rendering::bga_layer_view;
-          currentBmpLayer = target.second;
-        } else if (imageTable.find(target.second) != imageTable.end()) {
-          currentBmpLayer = target.second;
-        }
-        bmpLayerCursor++;
-      }
-      
-      auto currentTimestamp = std::chrono::high_resolution_clock::now();
-      size_t idx = performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
-      performanceAnalytics.loopDeltaTimes[idx] =
+      auto currentTimestamp = Clock::now();
+      size_t idx =
+          performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
+      const auto deltaMicros =
           std::chrono::duration_cast<std::chrono::microseconds>(
               currentTimestamp - prevTimestamp)
               .count();
+      performanceAnalytics.loopDeltaTimes[idx].store(
+          static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
       size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
-      performanceAnalytics.loopDeltaIndex.store(newIdx, std::memory_order_relaxed);
+      performanceAnalytics.loopDeltaIndex.store(newIdx,
+                                                std::memory_order_relaxed);
       prevTimestamp = currentTimestamp;
-      
-      // SDL_Log("loopRunTimeMicros: %lld",
-      // std::chrono::duration_cast<std::chrono::microseconds>(loopRunTime)
-      // .count());
+
       targetNextFrame += interval;
-      if(targetNextFrame < std::chrono::high_resolution_clock::now()) {
+      if(targetNextFrame < Clock::now()) {
         // we're late, skip sleeping
         continue;
       }
 
       // sleep only if hz is low enough
       if(hz <= 250) {
-        auto loopRunTime = std::chrono::high_resolution_clock::now() - loopStartTimestamp;
+        auto loopRunTime = Clock::now() - loopStartTimestamp;
         auto sleepTime = std::chrono::microseconds(1000000 / hz) - loopRunTime;
         // 1.4 is a magic number to avoid sleeping longer than needed
         std::this_thread::sleep_for(sleepTime/1.4);
       }
       // spin wait for the rest of the time
-      while (std::chrono::high_resolution_clock::now() < targetNextFrame) {
+      while (Clock::now() < targetNextFrame) {
         std::this_thread::yield();
       }
     }
@@ -439,16 +524,10 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   if (!bgfx::isValid(image.texture)) {
     return;
   }
-  bgfx::VertexLayout layout;
-  layout.begin()
-      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-      .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-      .end();
-
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
 
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
   // canvas extension (See "spread canvas" in
@@ -485,10 +564,14 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  bgfx::submit(viewId, rendering::ShaderManager::getInstance().getProgram(
-                           "vs_text.bin", viewId == rendering::bga_view
-                                              ? "fs_text.bin"
-                                              : "fs_bgalayer.bin"));
+  static const bgfx::ProgramHandle kBgaProgram =
+      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_text.bin");
+  static const bgfx::ProgramHandle kBgaLayerProgram =
+      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_bgalayer.bin");
+  bgfx::submit(viewId,
+               viewId == rendering::bga_view ? kBgaProgram : kBgaLayerProgram);
 }
 
 long long Jukebox::getTimeMicros() { return stopwatch->elapsedMicros(); }
@@ -499,12 +582,13 @@ void Jukebox::pause() {
 void Jukebox::resume() { stopwatch->resume(); }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 void Jukebox::stop() {
-  currentBga = -1;
-  currentBmpLayer = -1;
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
   isPlaying = false;
   if (playThread.joinable())
     playThread.join();
   audio.stopSounds();
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
   for (auto &videoPlayer : videoPlayerTable) {
     videoPlayer.second->stop();
   }
@@ -530,7 +614,9 @@ void Jukebox::seek(long long micro) {
 double Jukebox::getAvgDeltaTime() {
   size_t currentWriteIndex = performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
   while(performanceAnalytics.cursor != currentWriteIndex) {
-    auto loopRunTime = performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor];
+    const auto loopRunTime = static_cast<double>(
+        performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor].load(
+            std::memory_order_relaxed));
     performanceAnalytics.statsSum += loopRunTime;
     performanceAnalytics.statsCount ++;
     if(performanceAnalytics.statsCount >= 100) {
@@ -542,5 +628,5 @@ double Jukebox::getAvgDeltaTime() {
   }
 
   return performanceAnalytics.avgDeltaTime;
- 
+
 }

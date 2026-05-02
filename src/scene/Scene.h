@@ -36,13 +36,15 @@ public:
     deferred[time].second.push_back(func);
   }
   void handleDeferred() {
+    if (deferred.empty()) {
+      return;
+    }
 
     Uint64 time = SDL_GetTicks64();
     auto it = deferred.begin();
     while (it != deferred.end()) {
       if (it->first <= time) {
         if (it->second.first <= context.currentFrame) {
-          SDL_Log("Handling deferred");
           for (const auto &func : it->second.second) {
             if (!func())
               return;
@@ -50,7 +52,6 @@ public:
               return;
             }
           }
-          SDL_Log("Done");
           it = deferred.erase(it);
         } else {
           ++it;
@@ -71,12 +72,23 @@ public:
 
   // Cleanup resources when exiting the scene (non-virtual public method)
   inline void cleanup() {
+    if (isCleaned) {
+      return;
+    }
     isDead = true;
-    SDL_Log("Cleaning up");
     cleanupScene(); // Additional custom cleanup
     for (auto view : views) {
       delete view;
     }
+    views.clear();
+    deferred.clear();
+    isCleaned = true;
+  }
+
+  inline void prepareForUse() {
+    isDead = false;
+    isCleaned = false;
+    deferred.clear();
   }
 
   inline void addView(View *view) { views.push_back(view); }
@@ -93,4 +105,5 @@ protected:
 
 private:
   bool isDead = false;
+  bool isCleaned = false;
 };

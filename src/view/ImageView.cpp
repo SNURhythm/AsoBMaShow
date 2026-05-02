@@ -68,12 +68,8 @@ void ImageView::renderImpl(RenderContext &context) {
   //  SDL_Log("Rendering video texture frame %d; time: %f", currentFrame,
   //  currentFrame / 30.0f);
 
-  bgfx::VertexLayout layout;
-  layout.begin()
-      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-      .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-      .end();
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+  bgfx::allocTransientVertexBuffer(&tvb, 4,
+                                   rendering::PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
 
@@ -115,8 +111,9 @@ void ImageView::renderImpl(RenderContext &context) {
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  bgfx::submit(rendering::ui_view,
-               rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT));
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  bgfx::submit(rendering::ui_view, kProgram);
 }
 ImageView::ImageView(int x, int y, int width, int height)
     : View(x, y, width, height) {

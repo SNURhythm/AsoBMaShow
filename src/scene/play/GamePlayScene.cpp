@@ -7,9 +7,26 @@
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../view/Button.h"
-#include "../../view/Button.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
+
+#include <array>
+#include <chrono>
+
+namespace {
+long long nowMicros() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+#if defined(DEBUG) || defined(_DEBUG)
+constexpr bool kShowLaneStateOverlay = true;
+#else
+constexpr bool kShowLaneStateOverlay = false;
+#endif
+} // namespace
+
 void GamePlayScene::init() {
   auto chartNameText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   chartNameText->setText(chart->Meta.Title);
@@ -17,33 +34,19 @@ void GamePlayScene::init() {
   addView(chartNameText);
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second);
   context.jukebox.stop();
-  // NOTE: should be set before "reset" call to avoid race condition with onTick
-  // callback call
-  context.jukebox.onTick([this](long long time) {
-    if (state != nullptr && state->isPlaying && !state->isEnding) {
-      checkPassedTimeline(time);
-      if (state->passedMeasureCount == chart->Measures.size()) {
-        SDL_Log("All measures passed");
-        state->isEnding = true;
-        defer(
-            [this]() {
-              context.sceneManager->changeScene(
-                  new ResultScene(context, chart->Meta, *state));
-              return false;
-            },
-            2000, true);
-      }
-    }
-  });
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
   inputHandler->startListenSDL();
   inputHandler->startListenTouch();
-  laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  laneStateText->setPosition(100, 100);
+
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
-    SDL_Log("Setting lane %d to false", lane);
     lanePressed[lane] = false;
+  }
+
+  if constexpr (kShowLaneStateOverlay) {
+    laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+    laneStateText->setPosition(100, 100);
+    updateLaneStateText();
   }
 
   /* pause screen */
@@ -149,20 +152,36 @@ void GamePlayScene::reset() {
   state = new RhythmState(chart, false);
   state->isPlaying = true;
 }
-void GamePlayScene::update(float dt) {}
+void GamePlayScene::update(float dt) {
+  (void)dt;
+  if (state == nullptr || !state->isPlaying || state->isEnding) {
+    return;
+  }
+
+  checkPassedTimeline(context.jukebox.getTimeMicros());
+  if (state->passedMeasureCount != chart->Measures.size()) {
+    return;
+  }
+
+  SDL_Log("All measures passed");
+  state->isEnding = true;
+  defer(
+      [this]() {
+        context.sceneManager->changeScene(
+            new ResultScene(context, chart->Meta, *state));
+        return false;
+      },
+      2000, true);
+}
 
 void GamePlayScene::renderScene() {
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext, context.jukebox.getTimeMicros());
-  context.jukebox.render();
-  std::string str;
-  for (auto &[lane, pressed] : lanePressed) {
-    str += std::to_string(pressed) + "\n";
+  if (laneStateText != nullptr) {
+    laneStateText->render(renderContext);
   }
-  laneStateText->setText(str);
-  laneStateText->render(renderContext);
 }
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
@@ -185,14 +204,18 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (context.jukebox.isPaused()) {
     return nullptr;
   }
-  std::vector<int> candidates;
-  if (lanePressed.contains(mainLane) && !lanePressed[mainLane]) {
-    candidates.push_back(mainLane);
+  auto mainLaneIt = lanePressed.find(mainLane);
+  std::array<int, 2> candidates{};
+  size_t candidateCount = 0;
+  if (mainLaneIt != lanePressed.end() && !mainLaneIt->second) {
+    candidates[candidateCount++] = mainLane;
   }
-  if (lanePressed.contains(compensateLane) && !lanePressed[compensateLane]) {
-    candidates.push_back(compensateLane);
+  auto compensateLaneIt = lanePressed.find(compensateLane);
+  if (compensateLane != mainLane && compensateLaneIt != lanePressed.end() &&
+      !compensateLaneIt->second) {
+    candidates[candidateCount++] = compensateLane;
   }
-  if (candidates.empty()) {
+  if (candidateCount == 0) {
     return nullptr;
   }
 
@@ -201,16 +224,17 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
 
   if (state == nullptr) {
-    lanePressed[mainLane] = true;
-    renderer->onLanePressed(
-        mainLane, JudgeResult(None, 0),
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
+    if (mainLaneIt != lanePressed.end()) {
+      mainLaneIt->second = true;
+    }
+    renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
     return nullptr;
   }
   if (!state->isPlaying) {
-    lanePressed[mainLane] = true;
+    if (mainLaneIt != lanePressed.end()) {
+      mainLaneIt->second = true;
+    }
+    updateLaneStateText();
     return nullptr;
   }
 
@@ -227,7 +251,9 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       if (timeline->Timing < pressedTime - latePoorTiming) {
         continue;
       }
-      for (auto lane : candidates) {
+      for (size_t candidateIdx = 0; candidateIdx < candidateCount;
+           ++candidateIdx) {
+        const int lane = candidates[candidateIdx];
         const auto &note = timeline->Notes[lane];
         if (note == nullptr) {
           continue;
@@ -238,37 +264,37 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
         if (note->IsLandmineNote()) {
           continue;
         }
-        if (judge.judgeNow(note, pressedTime).judgement == None) {
+        const JudgeResult noteJudge = judge.judgeNow(note, pressedTime);
+        if (noteJudge.judgement == None) {
           continue;
         }
-        const JudgeResult judgement = pressNote(note, pressedTime);
-        lanePressed[lane] = true;
-        renderer->onLanePressed(
-            lane, judgement,
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
+        const JudgeResult judgement =
+            pressNote(note, pressedTime, &noteJudge);
+        if (const auto pressedIt = lanePressed.find(lane);
+            pressedIt != lanePressed.end()) {
+          pressedIt->second = true;
+        }
+        updateLaneStateText();
+        renderer->onLanePressed(lane, judgement, nowMicros());
         return note;
       }
     }
   }
-  lanePressed[mainLane] = true;
-  renderer->onLanePressed(
-      mainLane, JudgeResult(None, 0),
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count());
+  if (mainLaneIt != lanePressed.end()) {
+    mainLaneIt->second = true;
+  }
+  updateLaneStateText();
+  renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
   return nullptr;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
-  if (!lanePressed.contains(lane) || !lanePressed[lane]) {
+  auto laneIt = lanePressed.find(lane);
+  if (laneIt == lanePressed.end() || !laneIt->second) {
     return nullptr;
   }
-  lanePressed[lane] = false;
-  renderer->onLaneReleased(
-      lane, std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
+  laneIt->second = false;
+  updateLaneStateText();
+  renderer->onLaneReleased(lane, nowMicros());
   const auto releasedTime = context.jukebox.getTimeMicros() -
                             static_cast<long long>(inputDelay * 1000000);
 
@@ -304,19 +330,19 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   return nullptr;
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
-  auto measures = chart->Measures;
+  const auto &measures = chart->Measures;
   if (state == nullptr) {
     return;
   }
-  int totalLoopCount = 0;
+  const long long visualNow = nowMicros();
+  const long long poorCutoff = time - latePoorTiming;
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
          j < measure->TimeLines.size(); j++) {
-      totalLoopCount++;
       const auto &timeline = measure->TimeLines[j];
-      if (timeline->Timing < time - latePoorTiming) {
+      if (timeline->Timing < poorCutoff) {
         if (isFirstMeasure) {
           state->passedTimelineCount++;
         }
@@ -364,11 +390,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
               onJudge(judgeResult);
               if (options.autoPlay) {
-                renderer->onLaneReleased(
-                    note->Lane,
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count());
+                renderer->onLaneReleased(note->Lane, visualNow);
               }
               continue;
             }
@@ -378,17 +400,12 @@ void GamePlayScene::checkPassedTimeline(long long time) {
             const JudgeResult judgeResult = pressNote(note, time);
             renderer->onLanePressed(note->Lane, judgeResult, time);
             if (!note->IsLongNote()) {
-              renderer->onLaneReleased(
-                  note->Lane,
-                  std::chrono::duration_cast<std::chrono::microseconds>(
-                      std::chrono::system_clock::now().time_since_epoch())
-                      .count());
+              renderer->onLaneReleased(note->Lane, visualNow);
             }
           }
         }
       } else {
-        i = measures.size();
-        break;
+        return;
       }
     }
     if (state->passedTimelineCount == measure->TimeLines.size() &&
@@ -438,11 +455,14 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
 }
 
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
-                                     long long pressedTime) {
+                                     long long pressedTime,
+                                     const JudgeResult *precomputedJudge) {
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound) {
     context.jukebox.playKeySound(note->Wav);
   }
-  const auto judgeResult = judge.judgeNow(note, pressedTime);
+  const JudgeResult judgeResult =
+      precomputedJudge != nullptr ? *precomputedJudge
+                                  : judge.judgeNow(note, pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
       // TODO: play keybomb
@@ -500,4 +520,14 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
     }
   }
   return {};
+}
+void GamePlayScene::updateLaneStateText() {
+  if (laneStateText == nullptr) {
+    return;
+  }
+  std::string str;
+  for (auto &[lane, pressed] : lanePressed) {
+    str += std::to_string(pressed) + "\n";
+  }
+  laneStateText->setText(str);
 }

@@ -27,11 +27,14 @@ bool SpriteLoader::load() {
     return true;
   }
   const std::string utf8Path = path_t_to_utf8(path);
-  data = stbi_load(utf8Path.c_str(), &width, &height, &channels, 4);
+  constexpr int kRequestedChannels = 4;
+  data = stbi_load(utf8Path.c_str(), &width, &height, &channels,
+                   kRequestedChannels);
   if (!data) {
     SDL_Log("Failed to load image: %s", SDL_GetError());
     return false;
   }
+  channels = kRequestedChannels;
   switch (channels) {
   case 1:
     SDL_Log("Image has 1 channel");

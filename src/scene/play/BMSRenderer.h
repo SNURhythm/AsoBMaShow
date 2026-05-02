@@ -4,19 +4,29 @@
 
 #pragma once
 
-#include <queue>
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
-#include "../../game/GameObject.h"
-#include "../../game/SpriteObject.h"
-#include "../../rendering/Color.h"
-#include "../../scene/play/RhythmState.h"
+#include "../../rendering/SimpleBatchRenderer.h"
+#include "../../rendering/TexBatchRenderer.h"
 #include "../../view/TextView.h"
+#include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
-#include "../../rendering/common.h"
+#include "Judge.h"
 #include <bx/math.h>
+#include <chrono>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include <list>
+namespace rendering {
+class SimpleBatchRenderer;
+class TexBatchRenderer;
+} // namespace rendering
+
 class SpriteLoader;
 struct LaneState {
   long long lastStateTime = -1;
@@ -24,17 +34,29 @@ struct LaneState {
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
 };
 class JudgeResult;
-enum ObjectType {
-  Note,
-  LongBody,
+
+struct NoteUvRegion {
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 1.0f;
+  float v1 = 1.0f;
 };
+
+struct NoteSheet {
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle longBodyOffTexture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle longBodyOnTexture = BGFX_INVALID_HANDLE;
+  NoteUvRegion note;
+  NoteUvRegion longHead;
+  NoteUvRegion longBodyOff;
+  NoteUvRegion longBodyOn;
+  NoteUvRegion longTail;
+};
+
 class BMSRendererState {
 public:
-  ~BMSRendererState();
-  std::map<bms_parser::Note *, SpriteObject *> noteObjectMap;
-  std::map<bms_parser::LongNote *, SpriteObject *> longBodyObjectMap;
-  std::map<ObjectType, std::queue<GameObject *>> objectPool;
-  std::list<bms_parser::LongNote *>
+  ~BMSRendererState() = default;
+  std::unordered_set<bms_parser::LongNote *>
       orphanLongNotes; // long note whose head is dead but tail is alive
   size_t currentTimelineIndex = 0;
   JudgeResult latestJudgeResult = JudgeResult(None, 0);
@@ -50,11 +72,26 @@ public:
 private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
-  std::map<int, LaneState> laneStates;
+  std::mutex hudMutex;
+  bool hudDirty = false;
+  std::string pendingJudgeText;
+  int pendingScore = 0;
+  std::mutex laneMutex;
+  std::vector<int> laneOrder;
+  std::vector<LaneState> laneStatesByOrder;
+  std::unordered_map<int, size_t> laneToOrderIndex;
+  std::vector<std::pair<int, LaneState>> laneStateSnapshot;
+  std::vector<float> laneXLookup;
+  std::vector<const NoteSheet *> laneSheetLookup;
+  std::vector<size_t> evenKeyLaneIndices;
+  std::vector<size_t> oddKeyLaneIndices;
+  std::vector<size_t> scratchLaneIndices;
 
   float noteImageHeight = 0;
   float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
+  std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
+  std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int keyLaneCount;
   float noteRenderWidth = 1.0f;
@@ -66,42 +103,32 @@ private:
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
   long long latePoorTiming;
-  GameObject *getInstance(ObjectType type);
-  void recycleInstance(ObjectType type, GameObject *object);
-  void drawRect(RenderContext &context, float width, float height, float x,
-                float y, Color color);
-  void drawLaneBeam(RenderContext &context, int lane, const long long time);
+
+  rendering::SimpleBatchRenderer simpleBatchRenderer;
+  rendering::TexBatchRenderer texBatchRenderer;
+
+  void drawRect(float width, float height, float x, float y, Color color);
+  void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
-  void drawLongNote(RenderContext context, float headY, float tailY,
+  void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
-  void drawNormalNote(RenderContext &context, float y,
-                      bms_parser::Note *const &note);
+  void drawNormalNote(float y, bms_parser::Note *const &note);
+  void applyPendingHudText();
+  bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,
                                          const char *label);
-  bool isLeftScratch(int lane);
-  bool isRightScratch(int lane);
-  bool isScratch(int lane);
-  float laneToX(int lane);
+  bool isLeftScratch(int lane) const;
+  bool isRightScratch(int lane) const;
+  bool isScratch(int lane) const;
+  float computeLaneX(int lane) const;
+  float laneToX(int lane) const;
+  const NoteSheet &sheetForLane(int lane) const;
   float calculateLanePlaneScreenTopIntersection();
-  bgfx::TextureHandle noteTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle noteTexture2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longHeadTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOn = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOff = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longTailTexture = BGFX_INVALID_HANDLE;
-
-  bgfx::TextureHandle longHeadTexture2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOn2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longBodyTextureOff2 = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle longTailTexture2 = BGFX_INVALID_HANDLE;
-
-  bgfx::TextureHandle scratchTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongHeadTexture = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongBodyTextureOn = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongBodyTextureOff = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle scratchLongTailTexture = BGFX_INVALID_HANDLE;
+  NoteSheet graySheet;
+  NoteSheet blueSheet;
+  NoteSheet scratchSheet;
   bms_parser::Chart *chart;
 
 public:
