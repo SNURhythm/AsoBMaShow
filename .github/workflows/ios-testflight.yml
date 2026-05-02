@@ -19,7 +19,7 @@ jobs:
         with:
           submodules: "recursive"
       # - run: security unlock-keychain -p '' ~/Library/Keychains/fastlane_tmp.keychain-db && /usr/bin/codesign --force --sign 34880200590025A82E9C5F3532E90943FF2C36D3 --generate-entitlement-der /Users/xf/Library/Developer/Xcode/DerivedData/AsoBMaShow-ctypzucmvdkvixehhworeabhoarv/Build/Intermediates.noindex/ArchiveIntermediates/AsoBMaShow/IntermediateBuildFilesPath/UninstalledProducts/iphoneos/SDL2.framework
-      - run: ./scripts/init_bgfx_ios.sh
+      - run: ./scripts/ios_init.sh
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.1.2"
