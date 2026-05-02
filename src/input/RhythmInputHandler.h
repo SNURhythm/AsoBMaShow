@@ -8,6 +8,7 @@
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"
 #include "IInputSource.h"
+#include <map>
 
 struct FlickState {
   float startX, startY;
@@ -23,9 +24,12 @@ private:
   int keyLaneCount;
   int totalLaneCount;
   bool isDP;
-  std::map<int, int> fingerToLane;
+  std::map<SDL_FingerID, int> fingerToLane;
   int clampLane(int lane) const;
-  std::map<int, FlickState> flickStates;
+  std::map<SDL_FingerID, FlickState> flickStates;
+  std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
+  void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
+  void releaseExpiredCancelledTouches();
 
 public:
   IRhythmControl *control;
@@ -33,12 +37,15 @@ public:
                      const bms_parser::ChartMeta &meta);
   void onKeyDown(int keyCode, KeySource keySource) override;
   void onKeyUp(int KeyCode, KeySource Source) override;
-  void onFingerDown(int fingerIndex, Vector3 normalizedLocation) override;
-  void onFingerUp(int fingerIndex, Vector3 normalizedLocation) override;
-  void onFingerMove(int fingerIndex, Vector3 normalizedLocation) override;
+  void onFingerDown(SDL_FingerID fingerIndex,
+                    Vector3 normalizedLocation) override;
+  void onFingerUp(SDL_FingerID fingerIndex, Vector3 normalizedLocation) override;
+  void onFingerMove(SDL_FingerID fingerIndex,
+                    Vector3 normalizedLocation) override;
   bool startListenSDL();
   bool startListenTouch();
   void stopListen();
+  void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
   std::map<SDL_Keycode, int> keyMap;
 };
