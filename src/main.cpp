@@ -362,7 +362,7 @@ int main(int argv, char **args) {
   SDL_Window *win = SDL_CreateWindow(
       "AsoBMaShow", 100, 100, windowCreateWidth, windowCreateHeight,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-          (TARGET_PLATFORM == iOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
+          (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
                                   : 0));
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
