@@ -292,7 +292,7 @@ DEPENDENCIES
   fastlane
 
 RUBY VERSION
-   ruby 3.1.2p20
+   ruby 3.4.9
 
 BUNDLED WITH
    2.3.26

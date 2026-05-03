@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        ruby: ["3.1.2"]
+        ruby: ["3.4.9"]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -22,7 +22,7 @@ jobs:
       - run: ./scripts/ios_init.sh
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.1.2"
+          ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
           self-hosted: true
       - uses: actions/cache@v3
