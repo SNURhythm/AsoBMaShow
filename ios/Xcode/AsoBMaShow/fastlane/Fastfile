@@ -36,12 +36,6 @@ platform :ios do
     build_app(
       scheme: "AsoBMaShow",
       export_method: "app-store",
-      export_options: {
-        provisioningProfiles: {
-          "com.snurhythm.AsoBMaShow" => "match AppStore com.snurhythm.AsoBMaShow"
-        },
-        signingStyle: "manual"
-      },
       xcargs: "-allowProvisioningUpdates",
       clean: true
     )
