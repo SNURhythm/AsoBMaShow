@@ -8,19 +8,8 @@
 #include "../rendering/common.h"
 #include "bx/math.h"
 #include "../rendering/Camera.h"
-#include "../targets.h"
-#include <array>
 #include <map>
 #include <cmath>
-#include <vector>
-
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-#include <SDL_uikit_rawtouch.h>
-#endif
-
-namespace {
-constexpr Uint32 kCancelledTouchGraceMs = 50;
-} // namespace
 
 void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
 
@@ -39,9 +28,8 @@ void RhythmInputHandler::onKeyUp(int keyCode, KeySource keySource) {
     control->releaseLane(lane);
   }
 }
-void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
+void RhythmInputHandler::onFingerDown(int fingerIndex,
                                       Vector3 normalizedLocation) {
-  cancelGraceExpiry.erase(fingerIndex);
 
   int lane = touchToLane({normalizedLocation.x * rendering::render_width,
                           normalizedLocation.y * rendering::render_height,
@@ -64,11 +52,10 @@ void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
 
   control->pressLane(lane);
 }
-void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
+void RhythmInputHandler::onFingerUp(int fingerIndex,
                                     Vector3 normalizedLocation) {
-  cancelGraceExpiry.erase(fingerIndex);
-  SDL_Log("FingerUp: %lld, (%f, %f, %f)", static_cast<long long>(fingerIndex),
-          normalizedLocation.x, normalizedLocation.y, normalizedLocation.z);
+  SDL_Log("FingerUp: %d, (%f, %f, %f)", fingerIndex, normalizedLocation.x,
+          normalizedLocation.y, normalizedLocation.z);
   if (flickStates.contains(fingerIndex)) {
     flickStates.erase(fingerIndex);
   }
@@ -78,7 +65,7 @@ void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
     control->releaseLane(lane);
   }
 }
-void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
+void RhythmInputHandler::onFingerMove(int fingerIndex,
                                       Vector3 normalizedLocation) {
   //  SDL_Log("FingerMove: %d, (%f, %f, %f)", fingerIndex, normalizedLocation.x,
   //  normalizedLocation.y,
@@ -131,44 +118,6 @@ void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
     }
   }
 }
-void RhythmInputHandler::onFingerCancel(SDL_FingerID fingerIndex,
-                                        Vector3 normalizedLocation) {
-  (void)normalizedLocation;
-  if (!fingerToLane.contains(fingerIndex)) {
-    flickStates.erase(fingerIndex);
-    cancelGraceExpiry.erase(fingerIndex);
-    return;
-  }
-  cancelGraceExpiry[fingerIndex] = SDL_GetTicks() + kCancelledTouchGraceMs;
-}
-
-void RhythmInputHandler::releaseExpiredCancelledTouches() {
-  if (cancelGraceExpiry.empty()) {
-    return;
-  }
-
-  const Uint32 now = SDL_GetTicks();
-  std::vector<SDL_FingerID> expiredFingers;
-  expiredFingers.reserve(cancelGraceExpiry.size());
-  for (const auto &[fingerId, expiry] : cancelGraceExpiry) {
-    if (SDL_TICKS_PASSED(now, expiry)) {
-      expiredFingers.push_back(fingerId);
-    }
-  }
-
-  for (const auto fingerId : expiredFingers) {
-    cancelGraceExpiry.erase(fingerId);
-    if (flickStates.contains(fingerId)) {
-      flickStates.erase(fingerId);
-    }
-    if (fingerToLane.contains(fingerId)) {
-      const int lane = fingerToLane[fingerId];
-      fingerToLane.erase(fingerId);
-      control->releaseLane(lane);
-    }
-  }
-}
-
 bool RhythmInputHandler::startListenSDL() {
   if (sdlInputSource != nullptr) {
     return false;
@@ -193,43 +142,6 @@ void RhythmInputHandler::stopListen() {
       *input = nullptr;
     }
   }
-}
-void RhythmInputHandler::pumpPendingTouchEvents() {
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  std::array<IOSRawTouchEvent, 64> pendingEvents{};
-  while (true) {
-    const size_t count =
-        IOSPopRawTouchEvents(pendingEvents.data(), pendingEvents.size());
-    if (count == 0) {
-      break;
-    }
-
-    for (size_t i = 0; i < count; ++i) {
-      const auto &event = pendingEvents[i];
-      float uiNormX = 0.0f;
-      float uiNormY = 0.0f;
-      rendering::normalizedToUiNormalized(event.normalizedX,
-                                          event.normalizedY, uiNormX, uiNormY);
-      const Vector3 location(uiNormX, uiNormY, 0.0f);
-      const SDL_FingerID fingerId = static_cast<SDL_FingerID>(event.fingerId);
-      switch (event.phase) {
-      case IOSRawTouchPhaseBegan:
-        onFingerDown(fingerId, location);
-        break;
-      case IOSRawTouchPhaseMoved:
-        onFingerMove(fingerId, location);
-        break;
-      case IOSRawTouchPhaseEnded:
-        onFingerUp(fingerId, location);
-        break;
-      case IOSRawTouchPhaseCancelled:
-        onFingerCancel(fingerId, location);
-        break;
-      }
-    }
-  }
-#endif
-  releaseExpiredCancelledTouches();
 }
 int RhythmInputHandler::clampLane(int lane) const {
   if (lane < 0) {

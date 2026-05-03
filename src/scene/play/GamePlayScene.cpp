@@ -6,7 +6,6 @@
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
-#include "../../targets.h"
 #include "../../view/Button.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
@@ -38,9 +37,7 @@ void GamePlayScene::init() {
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
   inputHandler->startListenSDL();
-#if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
   inputHandler->startListenTouch();
-#endif
 
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
@@ -157,7 +154,6 @@ void GamePlayScene::reset() {
 }
 void GamePlayScene::update(float dt) {
   (void)dt;
-  inputHandler->pumpPendingTouchEvents();
   if (state == nullptr || !state->isPlaying || state->isEnding) {
     return;
   }
