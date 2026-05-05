@@ -61,4 +61,5 @@ private:
   size_t getNextUnicodePos(size_t pos);
   size_t getPrevUnicodePos(size_t pos);
   void notifyEditingFinished();
+  void syncTextInputRect(int cursorX, int cursorY);
 };

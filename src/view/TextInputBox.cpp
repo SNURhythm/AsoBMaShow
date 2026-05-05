@@ -2,6 +2,7 @@
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "SDL2/SDL_events.h"
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -37,6 +38,38 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 
 TextInputBox::~TextInputBox() {}
 
+void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
+  SDL_Rect nextRect = {cursorX, cursorY, getWidth(), getHeight()};
+
+  SDL_Window *window = SDL_GetKeyboardFocus();
+  if (window == nullptr) {
+    window = SDL_GetMouseFocus();
+  }
+
+  int logicalW = 0;
+  int logicalH = 0;
+  if (window != nullptr) {
+    SDL_GetWindowSize(window, &logicalW, &logicalH);
+  }
+
+  if (logicalW > 0 && logicalH > 0 && rendering::window_width > 0 &&
+      rendering::window_height > 0) {
+    const float scaleX =
+        static_cast<float>(logicalW) / static_cast<float>(rendering::window_width);
+    const float scaleY = static_cast<float>(logicalH) /
+                         static_cast<float>(rendering::window_height);
+    nextRect.x = static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
+    nextRect.y = static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
+    nextRect.w =
+        std::max(1, static_cast<int>(std::lround(getWidth() * scaleX)));
+    nextRect.h =
+        std::max(1, static_cast<int>(std::lround(getHeight() * scaleY)));
+  }
+
+  viewRect = nextRect;
+  SDL_SetTextInputRect(&viewRect);
+}
+
 void TextInputBox::setEditingText(const std::string &newText) {
   editingText = newText;
   composition.clear();
@@ -46,8 +79,7 @@ void TextInputBox::setEditingText(const std::string &newText) {
   int cursorX = 0;
   int cursorY = 0;
   cursorToPos(cursorPos, editingText, cursorX, cursorY);
-  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-  SDL_SetTextInputRect(&viewRect);
+  syncTextInputRect(cursorX, cursorY);
 }
 
 size_t TextInputBox::getNextUnicodePos(size_t pos) {
@@ -154,7 +186,10 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
         isInsideTextInput(*this, static_cast<float>(x), static_cast<float>(y))) {
 
       cursorPos = posToCursor(x - getX(), y - getY());
-      SDL_SetTextInputRect(&viewRect);
+      int cursorX = 0;
+      int cursorY = 0;
+      cursorToPos(cursorPos, editingText, cursorX, cursorY);
+      syncTextInputRect(cursorX, cursorY);
       onSelected();
       SDL_StartTextInput();
       shouldUpdate = true;
@@ -208,8 +243,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     }
     int cursorX, cursorY;
     cursorToPos(cursorPos, editingText, cursorX, cursorY);
-    viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-    SDL_SetTextInputRect(&viewRect);
+    syncTextInputRect(cursorX, cursorY);
   }
   return true;
 }
@@ -217,15 +251,13 @@ void TextInputBox::onMove(int newX, int newY) {
   TextView::onMove(newX, newY);
   int cursorX, cursorY;
   cursorToPos(cursorPos, editingText, cursorX, cursorY);
-  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-  SDL_SetTextInputRect(&viewRect);
+  syncTextInputRect(cursorX, cursorY);
 }
 void TextInputBox::onResize(int newWidth, int newHeight) {
   TextView::onResize(newWidth, newHeight);
   int cursorX, cursorY;
   cursorToPos(cursorPos, editingText, cursorX, cursorY);
-  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-  SDL_SetTextInputRect(&viewRect);
+  syncTextInputRect(cursorX, cursorY);
 }
 
 void TextInputBox::renderImpl(RenderContext &context) {
