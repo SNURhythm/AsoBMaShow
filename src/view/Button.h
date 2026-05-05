@@ -13,7 +13,9 @@ private:
 
 private:
   std::function<void()> onClickListener;
-  View *contentView;
+  View *contentView = nullptr;
+  bool mousePressedInside = false;
+  SDL_FingerID activeTouchId = -1;
 
 public:
   Button() : View() {}
