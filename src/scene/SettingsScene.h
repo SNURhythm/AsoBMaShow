@@ -5,6 +5,7 @@
 class View;
 class TextView;
 class Button;
+class ScrollView;
 
 class SettingsScene : public Scene {
 public:
@@ -25,8 +26,17 @@ private:
   TextView *bgaModeText = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *bgaModeButton = nullptr;
+  ScrollView *scrollView = nullptr;
+  int lastLayoutWidth = -1;
+  int lastLayoutHeight = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
 
   void initView();
+  void resetViewState();
+  void ensureLayoutUpToDate();
   void refreshSettingsText();
   void persistSettings();
 };

@@ -1,1 +1,1 @@
-target_sources(main PRIVATE Button.cpp ChartListItemView.cpp TextInputBox.cpp TextView.cpp ImageView.cpp View.cpp)
+target_sources(main PRIVATE Button.cpp ChartListItemView.cpp ImageView.cpp ScrollView.cpp TextInputBox.cpp TextView.cpp View.cpp)
