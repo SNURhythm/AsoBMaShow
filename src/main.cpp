@@ -14,6 +14,7 @@
 #endif
 #include "main.h"
 #include "scene/MainMenuScene.h"
+#include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include <cstdlib>
 #include <iostream>
@@ -455,6 +456,8 @@ void run() {
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
+  sceneManager.registerScene("Settings",
+                             std::make_unique<SettingsScene>(context));
   sceneManager.changeScene("MainMenu");
 
   // SDL_RenderClear(ren);

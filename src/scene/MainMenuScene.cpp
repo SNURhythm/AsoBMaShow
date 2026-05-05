@@ -225,15 +225,37 @@ void MainMenuScene::initView(ApplicationContext &context) {
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout->setFlexDirection(FlexDirection::Row);
   rootLayout->setAlignItems(YGAlignStretch);
+  rootLayout->setGap(24);
+  rootLayout->setPadding(Edge::All, 28);
+  rootLayout->setBackgroundColor(Color(10, 18, 30));
   auto left = new View();
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
   left->setFlex(1);
-  recyclerView->setFlex(1);
-  left->addView(recyclerView);
+  left->setGap(14);
+  left->setPadding(Edge::All, 16);
+  left->setBackgroundColor(Color(17, 27, 42, 245));
+  left->setBorderColor(Color(70, 95, 124, 255));
+  left->setBorderWidth(2);
+
+  auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
+  libraryTitle->setText("Song Select");
+  libraryTitle->setColor({243, 247, 255, 255});
+  left->addView(libraryTitle);
+
+  auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  librarySubtitle->setText("Search your library and preview charts before starting.");
+  librarySubtitle->setColor({157, 177, 200, 255});
+  left->addView(librarySubtitle);
 
   auto *searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 32);
   searchBox->setText("");
+  searchBox->setHeight(56);
+  searchBox->setBackgroundColor(Color(11, 18, 30, 255));
+  searchBox->setBorderColor(Color(88, 115, 149, 255));
+  searchBox->setBorderWidth(2);
+  searchBox->setVAlign(TextView::MIDDLE);
+  searchBox->setColor({239, 244, 251, 255});
   searchBox->onSubmit([this, &context, searchBox](const std::string &text) {
     auto dbHelper = ChartDBHelper::GetInstance();
     if (text.empty()) {
@@ -247,21 +269,50 @@ void MainMenuScene::initView(ApplicationContext &context) {
       recyclerView->setItems(std::move(chartMetas));
     }
   });
-  searchBox->setHeight(50);
   left->addView(searchBox);
+
+  recyclerView->setFlex(1);
+  recyclerView->setBackgroundColor(Color(11, 18, 30, 255));
+  recyclerView->setBorderColor(Color(63, 86, 113, 255));
+  recyclerView->setBorderWidth(2);
+  left->addView(recyclerView);
   rootLayout->addView(left);
 
   auto right = new View();
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
-  right->setPadding(Edge::All, 12);
-  right->setGap(12);
+  right->setPadding(Edge::All, 24);
+  right->setGap(18);
+  right->setWidth(300);
+  right->setBackgroundColor(Color(17, 27, 42, 245));
+  right->setBorderColor(Color(70, 95, 124, 255));
+  right->setBorderWidth(2);
+
+  auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
+  rightTitle->setText("Ready");
+  rightTitle->setColor({243, 247, 255, 255});
+  rightTitle->setAlign(TextView::CENTER);
+  right->addView(rightTitle);
+
+  auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  rightSubtitle->setText("Preview, tweak, and start.");
+  rightSubtitle->setColor({157, 177, 200, 255});
+  rightSubtitle->setAlign(TextView::CENTER);
+  right->addView(rightSubtitle);
 
   auto startButton = new Button(0, 0, 200, 100);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   buttonText->setText("Start");
   buttonText->setAlign(TextView::CENTER);
+  buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
+  startButton->setBackgroundColors(Color(29, 73, 120, 255),
+                                   Color(40, 96, 156, 255),
+                                   Color(58, 129, 204, 255));
+  startButton->setBorderColors(Color(105, 162, 222, 255),
+                               Color(133, 190, 244, 255),
+                               Color(162, 212, 255, 255));
+  startButton->setStyledBorderWidth(2);
   startButton->setOnClickListener([this, &context, buttonText]() {
     SDL_Log("Start button clicked");
     auto selected = recyclerView->selectedIndex;
@@ -282,7 +333,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                 new GamePlayScene(context, selectedChart,
                                   {
                                       .startPosition = 0,
-                                      .autoKeySound = false,
+                                      .autoKeySound =
+                                          !context.settings.inputKeysoundEnabled,
                                       .autoPlay = false,
                                   }),
                 true);
@@ -293,11 +345,39 @@ void MainMenuScene::initView(ApplicationContext &context) {
           0, true);
     }
   });
-  jacketView->setWidth(150)->setHeight(150);
+  auto *jacketCard = new View();
+  jacketCard->setWidth(220);
+  jacketCard->setHeight(220);
+  jacketCard->setAlignItems(YGAlignCenter);
+  jacketCard->setJustifyContent(YGJustifyCenter);
+  jacketCard->setBackgroundColor(Color(11, 18, 30, 255));
+  jacketCard->setBorderColor(Color(88, 115, 149, 255));
+  jacketCard->setBorderWidth(2);
+  jacketView->setWidth(220)->setHeight(220);
+  jacketCard->addView(jacketView);
   startButton->setHeight(100);
-  right->addView(jacketView);
+  right->addView(jacketCard);
   right->addView(startButton);
-  right->setWidth(200);
+
+  auto *settingsButton = new Button(0, 0, 220, 78);
+  auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  settingsText->setText("Settings");
+  settingsText->setAlign(TextView::CENTER);
+  settingsText->setVAlign(TextView::MIDDLE);
+  settingsButton->setContentView(settingsText);
+  settingsButton->setBackgroundColors(Color(76, 49, 36, 255),
+                                      Color(101, 65, 47, 255),
+                                      Color(133, 87, 63, 255));
+  settingsButton->setBorderColors(Color(174, 124, 91, 255),
+                                  Color(207, 146, 105, 255),
+                                  Color(232, 169, 122, 255));
+  settingsButton->setStyledBorderWidth(2);
+  settingsButton->setOnClickListener([this, &context]() {
+    previewLoadCancelled = true;
+    context.jukebox.stop();
+    context.sceneManager->changeScene("Settings");
+  });
+  right->addView(settingsButton);
   rootLayout->addView(right);
   addView(rootLayout);
   std::vector<bms_parser::ChartMeta> chartMetas;

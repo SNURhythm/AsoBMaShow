@@ -43,6 +43,9 @@ Jukebox::~Jukebox() {
   }
 }
 void Jukebox::render() {
+  if (!visualsEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
   const int bga = currentBga.load(std::memory_order_relaxed);
   if (bga != -1) {
     bool rendered = false;
@@ -94,8 +97,27 @@ void Jukebox::render() {
 }
 
 bool Jukebox::hasActiveVisuals() const {
-  return currentBga.load(std::memory_order_relaxed) != -1 ||
-         currentBmpLayer.load(std::memory_order_relaxed) != -1;
+  return visualsEnabled.load(std::memory_order_relaxed) &&
+         (currentBga.load(std::memory_order_relaxed) != -1 ||
+          currentBmpLayer.load(std::memory_order_relaxed) != -1);
+}
+
+void Jukebox::setVisualsEnabled(bool enabled) {
+  visualsEnabled.store(enabled, std::memory_order_relaxed);
+  if (enabled) {
+    return;
+  }
+
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+  for (auto &videoPlayer : videoPlayerTable) {
+    videoPlayer.second->stop();
+  }
+}
+
+bool Jukebox::getVisualsEnabled() const {
+  return visualsEnabled.load(std::memory_order_relaxed);
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
@@ -290,8 +312,10 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   SDL_Log("Loading sounds");
   std::thread loadSoundThread(
       [this, &chart, &isCancelled] { loadSounds(chart, isCancelled); });
-  SDL_Log("Loading videos");
-  loadBMPs(chart, isCancelled);
+  if (visualsEnabled.load(std::memory_order_relaxed)) {
+    SDL_Log("Loading videos");
+    loadBMPs(chart, isCancelled);
+  }
   loadSoundThread.join();
 
   if (isCancelled)
@@ -421,6 +445,10 @@ void Jukebox::play() {
           if (positionMicro < target.first) {
             break;
           }
+          if (!visualsEnabled.load(std::memory_order_relaxed)) {
+            bmpCursor++;
+            continue;
+          }
           bool activated = false;
           {
             std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
@@ -450,6 +478,10 @@ void Jukebox::play() {
           auto &target = bmpLayerList[bmpLayerCursor];
           if (positionMicro < target.first) {
             break;
+          }
+          if (!visualsEnabled.load(std::memory_order_relaxed)) {
+            bmpLayerCursor++;
+            continue;
           }
           bool activated = false;
           {

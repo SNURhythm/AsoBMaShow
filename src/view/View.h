@@ -159,6 +159,7 @@ public:
           kSimpleProgram);
     }
 #endif
+    renderBoxDecoration(context);
     renderImpl(context);
     for (auto view : children) {
       view->render(context);
@@ -264,6 +265,11 @@ public:
   View *setGap(YGGutter gutter, float gap);
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
+  View *setBackgroundColor(const Color &color);
+  View *clearBackgroundColor();
+  View *setBorderColor(const Color &color);
+  View *clearBorderColor();
+  View *setBorderWidth(int width);
   View *addView(View *view);
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }
@@ -293,6 +299,7 @@ protected:
   virtual void onMove(int newX, int newY) {}
 
 private:
+  void renderBoxDecoration(RenderContext &context) const;
   void markLayoutDirty() {
     View *root = this;
     while (root->parent != nullptr) {
@@ -337,9 +344,14 @@ private:
   }
 
   Color dbgColor;
+  Color backgroundColor;
+  Color borderColor;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view
+  bool hasBackground = false;
+  bool hasBorder = false;
+  int borderWidth = 0;
   YGNodeRef node;
   View *parent = nullptr;
 

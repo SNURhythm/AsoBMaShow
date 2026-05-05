@@ -48,6 +48,8 @@ public:
   void stop();
   void render();
   bool hasActiveVisuals() const;
+  void setVisualsEnabled(bool enabled);
+  bool getVisualsEnabled() const;
 
   long long getTimeMicros();
   void seek(long long micro);
@@ -87,6 +89,7 @@ private:
   std::mutex imageTableMutex;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
+  std::atomic_bool visualsEnabled{true};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};

@@ -150,7 +150,7 @@ void GamePlayScene::reset() {
     }
   }
   context.jukebox.stop();
-  context.jukebox.schedule(*chart, false, isCancelled);
+  context.jukebox.schedule(*chart, options.autoKeySound, isCancelled);
   context.jukebox.play();
   state = new RhythmState(chart, false);
   state->isPlaying = true;
@@ -243,8 +243,11 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
 
   const auto &measures = chart->Measures;
+  const long long offsetMicros =
+      static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
   const auto pressedTime = context.jukebox.getTimeMicros() -
-                           static_cast<long long>(inputDelay * 1000000);
+                           static_cast<long long>(inputDelay * 1000000) +
+                           offsetMicros;
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -299,8 +302,11 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   laneIt->second = false;
   updateLaneStateText();
   renderer->onLaneReleased(lane, nowMicros());
+  const long long offsetMicros =
+      static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
   const auto releasedTime = context.jukebox.getTimeMicros() -
-                            static_cast<long long>(inputDelay * 1000000);
+                            static_cast<long long>(inputDelay * 1000000) +
+                            offsetMicros;
 
   if (state == nullptr) {
     return nullptr;
