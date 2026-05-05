@@ -41,6 +41,9 @@ void AppSettings::sanitize() {
       std::clamp(inputOffsetMs, kMinInputOffsetMs, kMaxInputOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
+  visibleTimeGreenNumber = std::clamp(visibleTimeGreenNumber,
+                                      kMinVisibleTimeGreenNumber,
+                                      kMaxVisibleTimeGreenNumber);
 }
 
 bool AppSettings::save() const {
@@ -65,6 +68,10 @@ bool AppSettings::save() const {
   file << "# AsoBMaShow settings\n";
   file << "input_offset_ms=" << sanitized.inputOffsetMs << "\n";
   file << "visual_offset_ms=" << sanitized.visualOffsetMs << "\n";
+  file << "visible_time_green_number=" << sanitized.visibleTimeGreenNumber
+       << "\n";
+  file << "visible_time_use_milliseconds="
+       << (sanitized.visibleTimeUseMilliseconds ? 1 : 0) << "\n";
   file << "input_keysound_enabled="
        << (sanitized.inputKeysoundEnabled ? 1 : 0) << "\n";
   file << "bga_enabled=" << (sanitized.bgaEnabled ? 1 : 0) << "\n";
@@ -100,6 +107,13 @@ AppSettings AppSettings::load() {
         settings.inputOffsetMs = std::stoi(value);
       } else if (key == "visual_offset_ms") {
         settings.visualOffsetMs = std::stoi(value);
+      } else if (key == "visible_time_green_number") {
+        settings.visibleTimeGreenNumber = std::stoi(value);
+      } else if (key == "visible_time_use_milliseconds") {
+        bool parsed = settings.visibleTimeUseMilliseconds;
+        if (parseBool(value, parsed)) {
+          settings.visibleTimeUseMilliseconds = parsed;
+        }
       } else if (key == "input_keysound_enabled") {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {

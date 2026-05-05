@@ -55,6 +55,7 @@ struct LayoutMetrics {
   int backButtonWidth = 180;
   int backButtonHeight = 64;
   int offsetCardHeight = 190;
+  int visibleTimeCardHeight = 250;
   int modeCardHeight = 180;
 };
 
@@ -105,6 +106,7 @@ LayoutMetrics resolveLayoutMetrics() {
     metrics.backButtonWidth = 146;
     metrics.backButtonHeight = 56;
     metrics.offsetCardHeight = 148;
+    metrics.visibleTimeCardHeight = 208;
     metrics.modeCardHeight = 148;
   } else if (metrics.compact) {
     metrics.horizontalPadding = 32;
@@ -131,6 +133,7 @@ LayoutMetrics resolveLayoutMetrics() {
     metrics.backButtonWidth = 156;
     metrics.backButtonHeight = 58;
     metrics.offsetCardHeight = 156;
+    metrics.visibleTimeCardHeight = 224;
     metrics.modeCardHeight = 156;
   }
 
@@ -249,8 +252,44 @@ int clampVisualOffset(int value) {
                     AppSettings::kMaxVisualOffsetMs);
 }
 
+int clampVisibleTimeGreenNumber(int value) {
+  return std::clamp(value, AppSettings::kMinVisibleTimeGreenNumber,
+                    AppSettings::kMaxVisibleTimeGreenNumber);
+}
+
+int greenNumberToMilliseconds(int greenNumber) {
+  return static_cast<int>(
+      std::lround(static_cast<double>(greenNumber) * 1000.0 / 600.0));
+}
+
+int millisecondsToGreenNumber(int milliseconds) {
+  return static_cast<int>(
+      std::lround(static_cast<double>(milliseconds) * 600.0 / 1000.0));
+}
+
+int adjustVisibleTimeGreenNumber(int currentGreenNumber,
+                                 bool useMilliseconds, int delta) {
+  if (!useMilliseconds) {
+    return clampVisibleTimeGreenNumber(currentGreenNumber + delta);
+  }
+
+  const int currentMilliseconds = greenNumberToMilliseconds(currentGreenNumber);
+  const int nextMilliseconds =
+      std::clamp(currentMilliseconds + delta, AppSettings::kMinVisibleTimeMs,
+                 AppSettings::kMaxVisibleTimeMs);
+  return clampVisibleTimeGreenNumber(
+      millisecondsToGreenNumber(nextMilliseconds));
+}
+
 std::string formatOffsetLabel(int offsetMs) {
   return (offsetMs > 0 ? "+" : "") + std::to_string(offsetMs) + " ms";
+}
+
+std::string formatVisibleTimeLabel(int greenNumber, bool useMilliseconds) {
+  if (useMilliseconds) {
+    return std::to_string(greenNumberToMilliseconds(greenNumber)) + " ms";
+  }
+  return std::to_string(greenNumber) + " green";
 }
 } // namespace
 
@@ -267,10 +306,14 @@ void SettingsScene::resetViewState() {
   summaryOffsetValueText = nullptr;
   visualOffsetValueText = nullptr;
   summaryVisualOffsetValueText = nullptr;
+  visibleTimeValueText = nullptr;
+  summaryVisibleTimeValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
+  visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   bgaModeText = nullptr;
+  visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
   bgaModeButton = nullptr;
 }
@@ -393,6 +436,8 @@ void SettingsScene::initView() {
   summaryCard->addView(
       makeSummaryRow(metrics, "Visual Offset", &summaryVisualOffsetValueText));
   summaryCard->addView(
+      makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
+  summaryCard->addView(
       makeSummaryRow(metrics, "Input Keysounds", &summaryKeysoundValueText));
   summaryCard->addView(
       makeSummaryRow(metrics, "BGA Playback", &summaryBgaValueText));
@@ -402,7 +447,8 @@ void SettingsScene::initView() {
             ? "Judgement offset shifts timing windows. Visual offset delays "
               "notes and BGA for late audio paths."
             : "Judgement offset shifts timing windows. Visual offset delays "
-              "notes and BGA to match late audio paths such as Bluetooth.",
+              "notes and BGA, while visible time controls how long notes stay "
+              "on screen.",
         metrics.smallTextSize, Color(131, 151, 176)));
   }
   body->addView(summaryCard);
@@ -585,6 +631,125 @@ void SettingsScene::initView() {
             "for late audio paths such as Bluetooth headphones.",
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
+  auto *visibleTimeControls = new View();
+  visibleTimeControls->setFlexDirection(FlexDirection::Column);
+  visibleTimeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  visibleTimeControls->setAlignItems(YGAlignFlexStart);
+  visibleTimeControls->addView(makeWrappedText(
+      metrics.compact
+          ? "600 green = 1000 ms. This controls how long notes stay visible."
+          : "Green Number is the legacy BMS unit for note visible time. "
+            "600 green equals 60 frames on a 60 FPS system, which is 1000 ms.",
+      metrics.bodyTextSize, Color(150, 171, 193)));
+
+  visibleTimeModeText =
+      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+               TextView::CENTER, TextView::MIDDLE);
+  visibleTimeModeButton = makeButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      visibleTimeModeText, Color(33, 56, 87, 255),
+      Color(43, 72, 110, 255), Color(59, 98, 147, 255),
+      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+      Color(139, 189, 244, 255));
+  visibleTimeModeButton->setOnClickListener([this]() {
+    context.settings.visibleTimeUseMilliseconds =
+        !context.settings.visibleTimeUseMilliseconds;
+    persistSettings();
+  });
+  visibleTimeControls->addView(visibleTimeModeButton);
+
+  auto *visibleTimeValueControls = new View();
+  visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
+  visibleTimeValueControls->setFlexWrap(YGWrapWrap);
+  visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  visibleTimeValueControls->setAlignItems(YGAlignFlexStart);
+
+  auto updateVisibleTime = [this](int delta) {
+    context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
+        context.settings.visibleTimeGreenNumber,
+        context.settings.visibleTimeUseMilliseconds, delta);
+    persistSettings();
+  };
+
+  auto *minusVisibleTimeLarge = makeButton(
+      metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
+      makeText("-100", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  minusVisibleTimeLarge->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(-100); });
+  visibleTimeValueControls->addView(minusVisibleTimeLarge);
+
+  auto *minusVisibleTimeSmall = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  minusVisibleTimeSmall->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(-10); });
+  visibleTimeValueControls->addView(minusVisibleTimeSmall);
+
+  auto *visibleTimeValue = new View();
+  visibleTimeValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
+  visibleTimeValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
+  visibleTimeValue->setBackgroundColor(Color(10, 17, 28, 255));
+  visibleTimeValue->setBorderColor(Color(78, 105, 140, 255));
+  visibleTimeValue->setBorderWidth(2);
+  visibleTimeValueText =
+      makeText("", metrics.bodyTextSize + 6, Color(244, 248, 255),
+               TextView::CENTER, TextView::MIDDLE);
+  visibleTimeValue->addView(visibleTimeValueText);
+  visibleTimeValueControls->addView(visibleTimeValue);
+
+  auto *plusVisibleTimeSmall = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  plusVisibleTimeSmall->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(10); });
+  visibleTimeValueControls->addView(plusVisibleTimeSmall);
+
+  auto *plusVisibleTimeLarge = makeButton(
+      metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
+      makeText("+100", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  plusVisibleTimeLarge->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(100); });
+  visibleTimeValueControls->addView(plusVisibleTimeLarge);
+
+  auto *resetVisibleTime = makeButton(
+      metrics.resetButtonWidth, metrics.actionButtonHeight,
+      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(96, 57, 44, 255), Color(117, 72, 55, 255),
+      Color(153, 96, 74, 255), Color(165, 105, 79, 255),
+      Color(193, 124, 93, 255), Color(219, 145, 108, 255));
+  resetVisibleTime->setOnClickListener([this]() {
+    context.settings.visibleTimeGreenNumber = 400;
+    persistSettings();
+  });
+  visibleTimeValueControls->addView(resetVisibleTime);
+
+  visibleTimeControls->addView(visibleTimeValueControls);
+  cardsColumn->addView(makeCard(
+      metrics, "Visible Time",
+      metrics.compact
+          ? "Controls how long notes stay on screen before the judgement line."
+          : "Controls how long notes stay visible before reaching the "
+            "judgement line. Switch units if you prefer legacy green number "
+            "or direct milliseconds.",
+      visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
+
   auto *secondaryCards = new View();
   secondaryCards->setFlexDirection(metrics.useDualCardRow ? FlexDirection::Row
                                                           : FlexDirection::Column);
@@ -679,8 +844,11 @@ void SettingsScene::initView() {
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.inputOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
+  const int visibleTimeGreenNumber = context.settings.visibleTimeGreenNumber;
   const std::string offsetLabel = formatOffsetLabel(offsetMs);
   const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
+  const std::string visibleTimeLabel = formatVisibleTimeLabel(
+      visibleTimeGreenNumber, context.settings.visibleTimeUseMilliseconds);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
   const std::string bgaLabel =
@@ -698,6 +866,12 @@ void SettingsScene::refreshSettingsText() {
   if (summaryVisualOffsetValueText != nullptr) {
     summaryVisualOffsetValueText->setText(visualOffsetLabel);
   }
+  if (visibleTimeValueText != nullptr) {
+    visibleTimeValueText->setText(visibleTimeLabel);
+  }
+  if (summaryVisibleTimeValueText != nullptr) {
+    summaryVisibleTimeValueText->setText(visibleTimeLabel);
+  }
   if (summaryKeysoundValueText != nullptr) {
     summaryKeysoundValueText->setText(keysoundLabel);
   }
@@ -709,6 +883,29 @@ void SettingsScene::refreshSettingsText() {
   }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
+  }
+  if (visibleTimeModeText != nullptr) {
+    visibleTimeModeText->setText(context.settings.visibleTimeUseMilliseconds
+                                     ? "Milliseconds"
+                                     : "Green Number");
+  }
+
+  if (visibleTimeModeButton != nullptr) {
+    if (context.settings.visibleTimeUseMilliseconds) {
+      visibleTimeModeButton->setBackgroundColors(Color(35, 68, 62, 255),
+                                                 Color(45, 88, 80, 255),
+                                                 Color(63, 118, 107, 255));
+      visibleTimeModeButton->setBorderColors(Color(97, 157, 142, 255),
+                                             Color(120, 187, 169, 255),
+                                             Color(145, 214, 195, 255));
+    } else {
+      visibleTimeModeButton->setBackgroundColors(Color(33, 56, 87, 255),
+                                                 Color(43, 72, 110, 255),
+                                                 Color(59, 98, 147, 255));
+      visibleTimeModeButton->setBorderColors(Color(92, 131, 177, 255),
+                                             Color(118, 163, 217, 255),
+                                             Color(139, 189, 244, 255));
+    }
   }
 
   if (keysoundModeButton != nullptr) {
@@ -783,10 +980,14 @@ void SettingsScene::cleanupScene() {
   summaryOffsetValueText = nullptr;
   visualOffsetValueText = nullptr;
   summaryVisualOffsetValueText = nullptr;
+  visibleTimeValueText = nullptr;
+  summaryVisibleTimeValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
+  visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   bgaModeText = nullptr;
+  visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
   bgaModeButton = nullptr;
   lastLayoutWidth = -1;

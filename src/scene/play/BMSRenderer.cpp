@@ -14,8 +14,10 @@
 #include <cmath>
 #include <limits>
 #include <string>
-BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
-    : latePoorTiming(latePoorTiming), chart(chart) {
+BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
+                         int visibleTimeGreenNumber)
+    : latePoorTiming(latePoorTiming), chart(chart),
+      visibleTimeGreenNumber(visibleTimeGreenNumber) {
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
@@ -360,12 +362,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
   // judge line
   drawRect(8.0f, noteRenderHeight, 0.0f, judgeY, Color(255, 255, 255, 255));
-  float greenNumber = 400.0f;
-  float hispeed =
-      240000.0f / chart->Meta.Bpm / greenNumber *
-      0.6f; // 0.6: need to convert green number to milliseconds.
-            // (300green = 0.5s)
-            // ... / ( greenNumber / 0.6f ) = ... / (greenNumber * 0.6f)
+  // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
+  const float visibleTimeMs =
+      std::max(1.0f, static_cast<float>(visibleTimeGreenNumber) *
+                         (1000.0f / 600.0f));
+  float hispeed = 240000.0f / chart->Meta.Bpm / visibleTimeMs;
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;

@@ -22,10 +22,14 @@ private:
   TextView *summaryOffsetValueText = nullptr;
   TextView *visualOffsetValueText = nullptr;
   TextView *summaryVisualOffsetValueText = nullptr;
+  TextView *visibleTimeValueText = nullptr;
+  TextView *summaryVisibleTimeValueText = nullptr;
   TextView *summaryKeysoundValueText = nullptr;
   TextView *summaryBgaValueText = nullptr;
+  TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *bgaModeText = nullptr;
+  Button *visibleTimeModeButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *bgaModeButton = nullptr;
   ScrollView *scrollView = nullptr;

@@ -33,7 +33,8 @@ void GamePlayScene::init() {
   chartNameText->setText(chart->Meta.Title);
   chartNameText->setPosition(10, 10);
   addView(chartNameText);
-  renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second);
+  renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
+                             context.settings.visibleTimeGreenNumber);
   context.jukebox.stop();
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
