@@ -23,6 +23,11 @@ void updateHoverCursor(bool useIBeam) {
     SDL_SetCursor(target);
   }
 }
+
+bool isInsideTextInput(const TextInputBox &input, float uiX, float uiY) {
+  return uiX >= input.getX() && uiX <= input.getX() + input.getWidth() &&
+         uiY >= input.getY() && uiY <= input.getY() + input.getHeight();
+}
 } // namespace
 
 TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
@@ -145,8 +150,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     int y = 0;
     rendering::screenToUi(screenX, screenY, x, y);
     // check if the mouse is inside the text box
-    if (event.button.button == SDL_BUTTON_LEFT && x >= getX() &&
-        x <= getX() + getWidth() && y >= getY() && y <= getY() + getHeight()) {
+    if (event.button.button == SDL_BUTTON_LEFT &&
+        isInsideTextInput(*this, static_cast<float>(x), static_cast<float>(y))) {
 
       cursorPos = posToCursor(x - getX(), y - getY());
       SDL_SetTextInputRect(&viewRect);
@@ -163,6 +168,28 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       SDL_StopTextInput();
     }
 
+    break;
+  }
+  case SDL_FINGERDOWN: {
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+    if (isInsideTextInput(*this, uiX, uiY)) {
+      cursorPos = posToCursor(static_cast<int>(uiX) - getX(),
+                              static_cast<int>(uiY) - getY());
+      SDL_SetTextInputRect(&viewRect);
+      onSelected();
+      SDL_StartTextInput();
+      shouldUpdate = true;
+      lastRenderedCaretCursor = -1;
+      return false;
+    }
+
+    if (isSelected) {
+      notifyEditingFinished();
+    }
+    onUnselected();
+    SDL_StopTextInput();
     break;
   }
   case SDL_MOUSEMOTION: {

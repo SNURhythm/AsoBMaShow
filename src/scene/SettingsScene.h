@@ -19,9 +19,9 @@ public:
 
 private:
   View *rootLayout = nullptr;
-  TextView *offsetValueText = nullptr;
+  TextInputBox *offsetInput = nullptr;
   TextView *summaryOffsetValueText = nullptr;
-  TextView *visualOffsetValueText = nullptr;
+  TextInputBox *visualOffsetInput = nullptr;
   TextView *summaryVisualOffsetValueText = nullptr;
   TextInputBox *visibleTimeInput = nullptr;
   TextView *summaryVisibleTimeValueText = nullptr;
@@ -46,6 +46,10 @@ private:
   void ensureLayoutUpToDate();
   void refreshSettingsText();
   void persistSettings();
+  void syncOffsetInputText(bool force = false);
+  void syncVisualOffsetInputText(bool force = false);
   void syncVisibleTimeInputText(bool force = false);
+  void commitOffsetInput();
+  void commitVisualOffsetInput();
   void commitVisibleTimeInput();
 };

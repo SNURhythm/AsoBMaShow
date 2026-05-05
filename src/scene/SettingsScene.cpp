@@ -286,6 +286,10 @@ std::string formatOffsetLabel(int offsetMs) {
   return (offsetMs > 0 ? "+" : "") + std::to_string(offsetMs) + " ms";
 }
 
+std::string formatOffsetInputValue(int offsetMs) {
+  return std::to_string(offsetMs);
+}
+
 std::string formatVisibleTimeLabel(int greenNumber, bool useMilliseconds) {
   if (useMilliseconds) {
     return std::to_string(greenNumberToMilliseconds(greenNumber)) + " ms";
@@ -310,9 +314,9 @@ void SettingsScene::resetViewState() {
   views.clear();
   rootLayout = nullptr;
   scrollView = nullptr;
-  offsetValueText = nullptr;
+  offsetInput = nullptr;
   summaryOffsetValueText = nullptr;
-  visualOffsetValueText = nullptr;
+  visualOffsetInput = nullptr;
   summaryVisualOffsetValueText = nullptr;
   visibleTimeInput = nullptr;
   summaryVisibleTimeValueText = nullptr;
@@ -476,6 +480,7 @@ void SettingsScene::initView() {
     context.settings.inputOffsetMs =
         clampOffset(context.settings.inputOffsetMs + delta);
     persistSettings();
+    syncOffsetInputText(true);
   };
 
   auto *minusTen = makeButton(
@@ -504,9 +509,17 @@ void SettingsScene::initView() {
   offsetValue->setBackgroundColor(Color(10, 17, 28, 255));
   offsetValue->setBorderColor(Color(78, 105, 140, 255));
   offsetValue->setBorderWidth(2);
-  offsetValueText = makeText("", metrics.bodyTextSize + 6, Color(244, 248, 255),
-                             TextView::CENTER, TextView::MIDDLE);
-  offsetValue->addView(offsetValueText);
+  offsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
+  offsetInput->setText("");
+  offsetInput->setSize(metrics.offsetValueWidth, metrics.actionButtonHeight);
+  offsetInput->setBackgroundColor(Color(0, 0, 0, 0));
+  offsetInput->setBorderWidth(0);
+  offsetInput->setAlign(TextView::CENTER);
+  offsetInput->setVAlign(TextView::MIDDLE);
+  offsetInput->setColor({244, 248, 255, 255});
+  offsetInput->onEditingFinished(
+      [this](const std::string &) { commitOffsetInput(); });
+  offsetValue->addView(offsetInput);
   offsetControls->addView(offsetValue);
 
   auto *plusOne = makeButton(
@@ -539,6 +552,7 @@ void SettingsScene::initView() {
   resetOffset->setOnClickListener([this]() {
     context.settings.inputOffsetMs = 0;
     persistSettings();
+    syncOffsetInputText(true);
   });
   offsetControls->addView(resetOffset);
 
@@ -560,6 +574,7 @@ void SettingsScene::initView() {
     context.settings.visualOffsetMs =
         clampVisualOffset(context.settings.visualOffsetMs + delta);
     persistSettings();
+    syncVisualOffsetInputText(true);
   };
 
   auto *minusVisualTen = makeButton(
@@ -590,10 +605,18 @@ void SettingsScene::initView() {
   visualOffsetValue->setBackgroundColor(Color(10, 17, 28, 255));
   visualOffsetValue->setBorderColor(Color(78, 105, 140, 255));
   visualOffsetValue->setBorderWidth(2);
-  visualOffsetValueText =
-      makeText("", metrics.bodyTextSize + 6, Color(244, 248, 255),
-               TextView::CENTER, TextView::MIDDLE);
-  visualOffsetValue->addView(visualOffsetValueText);
+  visualOffsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
+  visualOffsetInput->setText("");
+  visualOffsetInput->setSize(metrics.offsetValueWidth,
+                             metrics.actionButtonHeight);
+  visualOffsetInput->setBackgroundColor(Color(0, 0, 0, 0));
+  visualOffsetInput->setBorderWidth(0);
+  visualOffsetInput->setAlign(TextView::CENTER);
+  visualOffsetInput->setVAlign(TextView::MIDDLE);
+  visualOffsetInput->setColor({244, 248, 255, 255});
+  visualOffsetInput->onEditingFinished(
+      [this](const std::string &) { commitVisualOffsetInput(); });
+  visualOffsetValue->addView(visualOffsetInput);
   visualOffsetControls->addView(visualOffsetValue);
 
   auto *plusVisualOne = makeButton(
@@ -628,6 +651,7 @@ void SettingsScene::initView() {
   resetVisualOffset->setOnClickListener([this]() {
     context.settings.visualOffsetMs = 0;
     persistSettings();
+    syncVisualOffsetInputText(true);
   });
   visualOffsetControls->addView(resetVisualOffset);
 
@@ -663,6 +687,7 @@ void SettingsScene::initView() {
     context.settings.visibleTimeUseMilliseconds =
         !context.settings.visibleTimeUseMilliseconds;
     persistSettings();
+    syncVisibleTimeInputText(true);
   });
   visibleTimeControls->addView(visibleTimeModeButton);
 
@@ -677,6 +702,7 @@ void SettingsScene::initView() {
         context.settings.visibleTimeGreenNumber,
         context.settings.visibleTimeUseMilliseconds, delta);
     persistSettings();
+    syncVisibleTimeInputText(true);
   };
 
   auto *minusVisibleTimeLarge = makeButton(
@@ -776,6 +802,7 @@ void SettingsScene::initView() {
   resetVisibleTime->setOnClickListener([this]() {
     context.settings.visibleTimeGreenNumber = 400;
     persistSettings();
+    syncVisibleTimeInputText(true);
   });
   visibleTimeValueControls->addView(resetVisibleTime);
 
@@ -893,15 +920,11 @@ void SettingsScene::refreshSettingsText() {
   const std::string bgaLabel =
       context.settings.bgaEnabled ? "Enabled" : "Disabled";
 
-  if (offsetValueText != nullptr) {
-    offsetValueText->setText(offsetLabel);
-  }
+  syncOffsetInputText();
   if (summaryOffsetValueText != nullptr) {
     summaryOffsetValueText->setText(offsetLabel);
   }
-  if (visualOffsetValueText != nullptr) {
-    visualOffsetValueText->setText(visualOffsetLabel);
-  }
+  syncVisualOffsetInputText();
   if (summaryVisualOffsetValueText != nullptr) {
     summaryVisualOffsetValueText->setText(visualOffsetLabel);
   }
@@ -999,6 +1022,28 @@ void SettingsScene::persistSettings() {
   refreshSettingsText();
 }
 
+void SettingsScene::syncOffsetInputText(bool force) {
+  if (offsetInput == nullptr) {
+    return;
+  }
+  if (!force && offsetInput->getSelected()) {
+    return;
+  }
+  offsetInput->setEditingText(
+      formatOffsetInputValue(context.settings.inputOffsetMs));
+}
+
+void SettingsScene::syncVisualOffsetInputText(bool force) {
+  if (visualOffsetInput == nullptr) {
+    return;
+  }
+  if (!force && visualOffsetInput->getSelected()) {
+    return;
+  }
+  visualOffsetInput->setEditingText(
+      formatOffsetInputValue(context.settings.visualOffsetMs));
+}
+
 void SettingsScene::syncVisibleTimeInputText(bool force) {
   if (visibleTimeInput == nullptr) {
     return;
@@ -1009,6 +1054,46 @@ void SettingsScene::syncVisibleTimeInputText(bool force) {
   visibleTimeInput->setEditingText(formatVisibleTimeInputValue(
       context.settings.visibleTimeGreenNumber,
       context.settings.visibleTimeUseMilliseconds));
+}
+
+void SettingsScene::commitOffsetInput() {
+  if (offsetInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = offsetInput->getText();
+  if (rawText.empty()) {
+    syncOffsetInputText(true);
+    return;
+  }
+
+  try {
+    context.settings.inputOffsetMs = clampOffset(std::stoi(rawText));
+    persistSettings();
+    syncOffsetInputText(true);
+  } catch (const std::exception &) {
+    syncOffsetInputText(true);
+  }
+}
+
+void SettingsScene::commitVisualOffsetInput() {
+  if (visualOffsetInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = visualOffsetInput->getText();
+  if (rawText.empty()) {
+    syncVisualOffsetInputText(true);
+    return;
+  }
+
+  try {
+    context.settings.visualOffsetMs = clampVisualOffset(std::stoi(rawText));
+    persistSettings();
+    syncVisualOffsetInputText(true);
+  } catch (const std::exception &) {
+    syncVisualOffsetInputText(true);
+  }
 }
 
 void SettingsScene::commitVisibleTimeInput() {
@@ -1055,9 +1140,9 @@ void SettingsScene::renderScene() {
 void SettingsScene::cleanupScene() {
   rootLayout = nullptr;
   scrollView = nullptr;
-  offsetValueText = nullptr;
+  offsetInput = nullptr;
   summaryOffsetValueText = nullptr;
-  visualOffsetValueText = nullptr;
+  visualOffsetInput = nullptr;
   summaryVisualOffsetValueText = nullptr;
   visibleTimeInput = nullptr;
   summaryVisibleTimeValueText = nullptr;
