@@ -129,9 +129,9 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
 
-  const Color kBackdropTint(10, 18, 30, 112);
-  const Color kPanelFill(17, 27, 42, 196);
-  const Color kSurfaceFill(11, 18, 30, 168);
+  const Color kBackdropTint(10, 18, 30, 100);
+  const Color kPanelFill(17, 27, 42, 100);
+  const Color kSurfaceFill(11, 18, 30, 130);
   const Color kPrimaryButtonNormal(29, 73, 120, 216);
   const Color kPrimaryButtonHover(40, 96, 156, 228);
   const Color kPrimaryButtonPressed(58, 129, 204, 236);
