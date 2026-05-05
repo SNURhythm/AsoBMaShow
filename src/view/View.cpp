@@ -177,13 +177,24 @@ void View::renderBoxDecoration(RenderContext &context) const {
   const int width = getWidth();
   const int height = getHeight();
 
-  if (hasBorder && borderWidth > 0) {
-    submitColoredRect(context, x, y, width, height, borderColor);
+  int inset = hasBorder ? borderWidth : 0;
+  inset = std::min(inset, std::min(width / 2, height / 2));
+
+  if (hasBorder && inset > 0) {
+    submitColoredRect(context, x, y, width, inset, borderColor);
+    submitColoredRect(context, x, y + height - inset, width, inset,
+                      borderColor);
+
+    const int middleHeight = height - inset * 2;
+    if (middleHeight > 0) {
+      submitColoredRect(context, x, y + inset, inset, middleHeight,
+                        borderColor);
+      submitColoredRect(context, x + width - inset, y + inset, inset,
+                        middleHeight, borderColor);
+    }
   }
 
   if (hasBackground) {
-    int inset = hasBorder ? borderWidth : 0;
-    inset = std::min(inset, std::min(width / 2, height / 2));
     submitColoredRect(context, x + inset, y + inset, width - inset * 2,
                       height - inset * 2, backgroundColor);
   }
