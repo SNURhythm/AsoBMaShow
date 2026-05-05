@@ -4,6 +4,7 @@
 
 class View;
 class TextView;
+class TextInputBox;
 class Button;
 class ScrollView;
 
@@ -22,7 +23,7 @@ private:
   TextView *summaryOffsetValueText = nullptr;
   TextView *visualOffsetValueText = nullptr;
   TextView *summaryVisualOffsetValueText = nullptr;
-  TextView *visibleTimeValueText = nullptr;
+  TextInputBox *visibleTimeInput = nullptr;
   TextView *summaryVisibleTimeValueText = nullptr;
   TextView *summaryKeysoundValueText = nullptr;
   TextView *summaryBgaValueText = nullptr;
@@ -45,4 +46,6 @@ private:
   void ensureLayoutUpToDate();
   void refreshSettingsText();
   void persistSettings();
+  void syncVisibleTimeInputText(bool force = false);
+  void commitVisibleTimeInput();
 };

@@ -32,6 +32,19 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 
 TextInputBox::~TextInputBox() {}
 
+void TextInputBox::setEditingText(const std::string &newText) {
+  editingText = newText;
+  composition.clear();
+  cursorPos = editingText.size();
+  lastRenderedCaretCursor = -1;
+  TextView::setText(editingText);
+  int cursorX = 0;
+  int cursorY = 0;
+  cursorToPos(cursorPos, editingText, cursorX, cursorY);
+  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
+  SDL_SetTextInputRect(&viewRect);
+}
+
 size_t TextInputBox::getNextUnicodePos(size_t pos) {
   if (pos >= editingText.size())
     return pos;
@@ -143,6 +156,9 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       lastRenderedCaretCursor = -1;
       return false;
     } else {
+      if (isSelected) {
+        notifyEditingFinished();
+      }
       onUnselected();
       SDL_StopTextInput();
     }
@@ -183,6 +199,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       for (auto &callback : onSubmitCallbacks) {
         callback(text);
       }
+      notifyEditingFinished();
     }
     int cursorX, cursorY;
     cursorToPos(cursorPos, editingText, cursorX, cursorY);
@@ -322,6 +339,12 @@ void TextInputBox::onSelected() { isSelected = true; }
 
 void TextInputBox::onUnselected() { isSelected = false; }
 
+void TextInputBox::notifyEditingFinished() {
+  for (auto &callback : onEditingFinishedCallbacks) {
+    callback(editingText);
+  }
+}
+
 size_t
 TextInputBox::onTextChanged(std::function<void(const std::string &)> callback) {
   onTextChangedCallbacks.push_back(callback);
@@ -350,6 +373,22 @@ void TextInputBox::removeOnSubmit(
     if (onSubmitCallbacks[i].target<void(const std::string &)>() ==
         callback.target<void(const std::string &)>()) {
       onSubmitCallbacks.erase(onSubmitCallbacks.begin() + i);
+    }
+  }
+}
+
+size_t TextInputBox::onEditingFinished(
+    std::function<void(const std::string &)> callback) {
+  onEditingFinishedCallbacks.push_back(callback);
+  return onEditingFinishedCallbacks.size() - 1;
+}
+
+void TextInputBox::removeOnEditingFinished(
+    std::function<void(const std::string &)> callback) {
+  for (size_t i = 0; i < onEditingFinishedCallbacks.size(); i++) {
+    if (onEditingFinishedCallbacks[i].target<void(const std::string &)>() ==
+        callback.target<void(const std::string &)>()) {
+      onEditingFinishedCallbacks.erase(onEditingFinishedCallbacks.begin() + i);
     }
   }
 }

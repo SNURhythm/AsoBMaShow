@@ -14,6 +14,8 @@ public:
   TextInputBox(const std::string &fontPath, int fontSize);
   ~TextInputBox() override;
 
+  void setEditingText(const std::string &newText);
+
   void onSelected() override;
   void onUnselected() override;
   void onMove(int newX, int newY) override;
@@ -23,6 +25,9 @@ public:
   void removeOnTextChanged(std::function<void(const std::string &)> callback);
   size_t onSubmit(std::function<void(const std::string &)> callback);
   void removeOnSubmit(std::function<void(const std::string &)> callback);
+  size_t onEditingFinished(std::function<void(const std::string &)> callback);
+  void removeOnEditingFinished(
+      std::function<void(const std::string &)> callback);
 
   [[nodiscard]] inline std::string getText() const { return editingText; }
 
@@ -44,6 +49,8 @@ private:
   size_t cursorPos = 0;
   std::vector<std::function<void(const std::string &)>> onTextChangedCallbacks;
   std::vector<std::function<void(const std::string &)>> onSubmitCallbacks;
+  std::vector<std::function<void(const std::string &)>>
+      onEditingFinishedCallbacks;
 
   // convert cursor position to x, y position
   void cursorToPos(size_t cursorPos, const std::string &text, int &x, int &y);
@@ -53,4 +60,5 @@ private:
 
   size_t getNextUnicodePos(size_t pos);
   size_t getPrevUnicodePos(size_t pos);
+  void notifyEditingFinished();
 };

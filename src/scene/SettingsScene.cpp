@@ -3,6 +3,7 @@
 #include "../rendering/Color.h"
 #include "../view/Button.h"
 #include "../view/ScrollView.h"
+#include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -291,6 +292,13 @@ std::string formatVisibleTimeLabel(int greenNumber, bool useMilliseconds) {
   }
   return std::to_string(greenNumber) + " green";
 }
+
+std::string formatVisibleTimeInputValue(int greenNumber, bool useMilliseconds) {
+  if (useMilliseconds) {
+    return std::to_string(greenNumberToMilliseconds(greenNumber));
+  }
+  return std::to_string(greenNumber);
+}
 } // namespace
 
 void SettingsScene::init() { ensureLayoutUpToDate(); }
@@ -306,7 +314,7 @@ void SettingsScene::resetViewState() {
   summaryOffsetValueText = nullptr;
   visualOffsetValueText = nullptr;
   summaryVisualOffsetValueText = nullptr;
-  visibleTimeValueText = nullptr;
+  visibleTimeInput = nullptr;
   summaryVisibleTimeValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
@@ -682,6 +690,17 @@ void SettingsScene::initView() {
       [updateVisibleTime]() { updateVisibleTime(-100); });
   visibleTimeValueControls->addView(minusVisibleTimeLarge);
 
+  auto *minusVisibleTimeOne = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  minusVisibleTimeOne->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(-1); });
+  visibleTimeValueControls->addView(minusVisibleTimeOne);
+
   auto *minusVisibleTimeSmall = makeButton(
       metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
       makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
@@ -699,11 +718,31 @@ void SettingsScene::initView() {
   visibleTimeValue->setBackgroundColor(Color(10, 17, 28, 255));
   visibleTimeValue->setBorderColor(Color(78, 105, 140, 255));
   visibleTimeValue->setBorderWidth(2);
-  visibleTimeValueText =
-      makeText("", metrics.bodyTextSize + 6, Color(244, 248, 255),
-               TextView::CENTER, TextView::MIDDLE);
-  visibleTimeValue->addView(visibleTimeValueText);
+  visibleTimeInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
+  visibleTimeInput->setText("");
+  visibleTimeInput->setSize(metrics.offsetValueWidth,
+                            metrics.actionButtonHeight);
+  visibleTimeInput->setBackgroundColor(Color(0, 0, 0, 0));
+  visibleTimeInput->setBorderWidth(0);
+  visibleTimeInput->setAlign(TextView::CENTER);
+  visibleTimeInput->setVAlign(TextView::MIDDLE);
+  visibleTimeInput->setColor({244, 248, 255, 255});
+  visibleTimeInput->onEditingFinished([this](const std::string &) {
+    commitVisibleTimeInput();
+  });
+  visibleTimeValue->addView(visibleTimeInput);
   visibleTimeValueControls->addView(visibleTimeValue);
+
+  auto *plusVisibleTimeOne = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  plusVisibleTimeOne->setOnClickListener(
+      [updateVisibleTime]() { updateVisibleTime(1); });
+  visibleTimeValueControls->addView(plusVisibleTimeOne);
 
   auto *plusVisibleTimeSmall = makeButton(
       metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
@@ -866,9 +905,7 @@ void SettingsScene::refreshSettingsText() {
   if (summaryVisualOffsetValueText != nullptr) {
     summaryVisualOffsetValueText->setText(visualOffsetLabel);
   }
-  if (visibleTimeValueText != nullptr) {
-    visibleTimeValueText->setText(visibleTimeLabel);
-  }
+  syncVisibleTimeInputText();
   if (summaryVisibleTimeValueText != nullptr) {
     summaryVisibleTimeValueText->setText(visibleTimeLabel);
   }
@@ -962,6 +999,48 @@ void SettingsScene::persistSettings() {
   refreshSettingsText();
 }
 
+void SettingsScene::syncVisibleTimeInputText(bool force) {
+  if (visibleTimeInput == nullptr) {
+    return;
+  }
+  if (!force && visibleTimeInput->getSelected()) {
+    return;
+  }
+  visibleTimeInput->setEditingText(formatVisibleTimeInputValue(
+      context.settings.visibleTimeGreenNumber,
+      context.settings.visibleTimeUseMilliseconds));
+}
+
+void SettingsScene::commitVisibleTimeInput() {
+  if (visibleTimeInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = visibleTimeInput->getText();
+  if (rawText.empty()) {
+    syncVisibleTimeInputText(true);
+    return;
+  }
+
+  try {
+    const int parsedValue = std::stoi(rawText);
+    if (context.settings.visibleTimeUseMilliseconds) {
+      const int milliseconds =
+          std::clamp(parsedValue, AppSettings::kMinVisibleTimeMs,
+                     AppSettings::kMaxVisibleTimeMs);
+      context.settings.visibleTimeGreenNumber =
+          clampVisibleTimeGreenNumber(millisecondsToGreenNumber(milliseconds));
+    } else {
+      context.settings.visibleTimeGreenNumber =
+          clampVisibleTimeGreenNumber(parsedValue);
+    }
+    persistSettings();
+    syncVisibleTimeInputText(true);
+  } catch (const std::exception &) {
+    syncVisibleTimeInputText(true);
+  }
+}
+
 void SettingsScene::update(float dt) {
   (void)dt;
   ensureLayoutUpToDate();
@@ -980,7 +1059,7 @@ void SettingsScene::cleanupScene() {
   summaryOffsetValueText = nullptr;
   visualOffsetValueText = nullptr;
   summaryVisualOffsetValueText = nullptr;
-  visibleTimeValueText = nullptr;
+  visibleTimeInput = nullptr;
   summaryVisibleTimeValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
