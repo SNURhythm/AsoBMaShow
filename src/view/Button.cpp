@@ -46,6 +46,19 @@ void drawButtonRect(const RenderContext &context, int x, int y, int width,
 }
 } // namespace
 
+namespace {
+void syncContentFrame(Button &button, View *contentView, bool updateSize) {
+  if (contentView == nullptr) {
+    return;
+  }
+  contentView->setPositionNoLayout(button.getX(), button.getY(),
+                                   YGPositionTypeAbsolute);
+  if (updateSize) {
+    contentView->setSize(button.getWidth(), button.getHeight());
+  }
+}
+} // namespace
+
 void Button::renderImpl(RenderContext &context) {
   const bool isPressed = mousePressedInside || activeTouchId != -1;
   Color background = normalBackgroundColor;
@@ -80,8 +93,7 @@ void Button::setOnClickListener(std::function<void()> listener) {
 
 void Button::setContentView(View *view) {
   this->contentView = view;
-  view->setPosition(getX(), getY());
-  view->setSize(getWidth(), getHeight());
+  syncContentFrame(*this, contentView, true);
 }
 
 Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
@@ -109,10 +121,19 @@ Button *Button::setStyledBorderWidth(int width) {
 
 Button::~Button() { delete contentView; }
 void Button::onLayout() {
-  if (contentView) {
-    contentView->setPosition(getX(), getY());
-    contentView->setSize(getWidth(), getHeight());
-  }
+  syncContentFrame(*this, contentView, true);
+}
+
+void Button::onMove(int newX, int newY) {
+  (void)newX;
+  (void)newY;
+  syncContentFrame(*this, contentView, false);
+}
+
+void Button::onResize(int newWidth, int newHeight) {
+  (void)newWidth;
+  (void)newHeight;
+  syncContentFrame(*this, contentView, true);
 }
 
 bool Button::handleEventsImpl(SDL_Event &event) {

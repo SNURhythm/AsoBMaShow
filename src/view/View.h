@@ -328,6 +328,8 @@ private:
       child->absoluteX += dx;
       child->absoluteY += dy;
       child->updateChildrenAbsolute(dx, dy);
+      child->onMove(YGNodeLayoutGetLeft(child->node),
+                    YGNodeLayoutGetTop(child->node));
     }
   }
   void markChildrenOrderDirty() { childrenOrderDirty = true; }

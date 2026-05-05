@@ -33,6 +33,8 @@ public:
   ~Button() override;
 
   void onLayout() override;
+  void onMove(int newX, int newY) override;
+  void onResize(int newWidth, int newHeight) override;
 
   void setOnClickListener(std::function<void()> listener);
   void setContentView(View *view);
