@@ -249,6 +249,8 @@ public:
 
   View *setWidth(float width);
   View *setHeight(float height);
+  View *setMinWidth(float minWidth);
+  View *setMinHeight(float minHeight);
   View *setFlex(float flex);
   View *setFlexGrow(float flexGrow);
   View *setFlexWrap(YGWrap flexWrap);

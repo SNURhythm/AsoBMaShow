@@ -2,12 +2,14 @@
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 #include <cstring>
+#include <cmath>
 #include <mutex>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
 #include "bgfx/defines.h"
 #include "bx/math.h"
+#include <algorithm>
 
 namespace {
 std::mutex g_ttfMutex;
@@ -143,7 +145,16 @@ void TextView::setColor(SDL_Color newColor) {
   createTexture(); // Update the texture since newColor has changed
 }
 
-void TextView::createTexture() {
+void TextView::createTexture(bool markDirty, bool force, int requestedWrapWidth) {
+  const int effectiveWrapWidth =
+      wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
+                                                        : currentWrapWidth)
+                  : 0;
+  if (!force && effectiveWrapWidth == currentWrapWidth && bgfx::isValid(texture)) {
+    return;
+  }
+
+  currentWrapWidth = effectiveWrapWidth;
   if (bgfx::isValid(texture)) {
     bgfx::destroy(texture);
     texture = BGFX_INVALID_HANDLE;
@@ -152,17 +163,27 @@ void TextView::createTexture() {
   if (text.empty() || font == nullptr) {
     rect.w = 0;
     rect.h = 0;
-    YGNodeMarkDirty(getNode());
+    if (markDirty) {
+      YGNodeMarkDirty(getNode());
+    }
     return;
   }
-  SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+  SDL_Surface *surface = nullptr;
+  if (wrapEnabled && effectiveWrapWidth > 0) {
+    surface = TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
+                                             effectiveWrapWidth);
+  } else {
+    surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+  }
   if (!surface) {
     SDL_Log("Failed to render text: %s", TTF_GetError());
     return;
   }
   rect.w = surface->w;
   rect.h = surface->h;
-  YGNodeMarkDirty(getNode());
+  if (markDirty) {
+    YGNodeMarkDirty(getNode());
+  }
   texture = rendering::sdlSurfaceToBgfxTexture(surface);
   SDL_FreeSurface(surface);
 }
@@ -171,9 +192,25 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
                              YGMeasureMode widthMode, float height,
                              YGMeasureMode heightMode) {
   auto *view = static_cast<TextView *>(YGNodeGetContext(node));
+  (void)height;
+  (void)heightMode;
+  if (view->wrapEnabled && widthMode != YGMeasureModeUndefined && width > 0.0f) {
+    view->createTexture(false, false, static_cast<int>(std::floor(width)));
+  }
   return {static_cast<float>(view->rect.w), static_cast<float>(view->rect.h)};
 }
 
 void TextView::setAlign(TextAlign newAlign) { this->align = newAlign; }
 
 void TextView::setVAlign(TextVAlign newVAlign) { this->valign = newVAlign; }
+
+void TextView::setWrap(bool enabled) {
+  if (wrapEnabled == enabled) {
+    return;
+  }
+  wrapEnabled = enabled;
+  if (!wrapEnabled) {
+    currentWrapWidth = 0;
+  }
+  createTexture();
+}

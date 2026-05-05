@@ -32,6 +32,16 @@ View *View::setHeight(float height) {
   return this;
 }
 
+View *View::setMinWidth(float minWidth) {
+  YGNodeStyleSetMinWidth(node, minWidth);
+  return this;
+}
+
+View *View::setMinHeight(float minHeight) {
+  YGNodeStyleSetMinHeight(node, minHeight);
+  return this;
+}
+
 View *View::setFlex(float flex) {
   YGNodeStyleSetFlex(node, flex);
   return this;

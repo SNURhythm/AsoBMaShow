@@ -17,6 +17,7 @@ public:
   void setColor(SDL_Color newColor);
   void setAlign(TextAlign newAlign);
   void setVAlign(TextVAlign newVAlign);
+  void setWrap(bool enabled);
 
 protected:
   void renderImpl(RenderContext &context) override;
@@ -28,11 +29,14 @@ protected:
   SDL_Color color{};
   SDL_Rect rect{};
   std::string text;
+  bool wrapEnabled = false;
+  int currentWrapWidth = 0;
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   static YGSize measureFunc(YGNodeConstRef node, float width,
                             YGMeasureMode widthMode, float height,
                             YGMeasureMode heightMode);
 
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
-  void createTexture();
+  void createTexture(bool markDirty = true, bool force = true,
+                     int requestedWrapWidth = -1);
 };

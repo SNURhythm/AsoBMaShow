@@ -26,7 +26,9 @@ struct LayoutMetrics {
   SafeAreaInsets safe;
   bool compact = false;
   bool ultraCompact = false;
+  bool stackBody = false;
   bool useDualCardRow = true;
+  int contentWidth = 0;
   int horizontalPadding = 52;
   int verticalPadding = 60;
   int rootGap = 28;
@@ -135,9 +137,17 @@ LayoutMetrics resolveLayoutMetrics() {
   const int availableWidth = std::max(
       0, rendering::window_width - metrics.safe.left - metrics.safe.right -
              metrics.horizontalPadding * 2);
-  metrics.cardsWidth =
-      std::max(0, availableWidth - metrics.summaryWidth - metrics.bodyGap);
-  metrics.useDualCardRow = metrics.cardsWidth >= 980;
+  metrics.contentWidth = availableWidth;
+  metrics.stackBody = metrics.compact || availableWidth < 1500;
+  if (metrics.stackBody) {
+    metrics.summaryWidth = availableWidth;
+    metrics.cardsWidth = availableWidth;
+  } else {
+    metrics.cardsWidth =
+        std::max(0, availableWidth - metrics.summaryWidth - metrics.bodyGap);
+  }
+  metrics.useDualCardRow = !metrics.compact && !metrics.stackBody &&
+                           metrics.cardsWidth >= 980;
   metrics.secondaryCardWidth =
       metrics.useDualCardRow
           ? std::max(0, (metrics.cardsWidth - metrics.secondaryGap) / 2)
@@ -154,6 +164,14 @@ TextView *makeText(const std::string &text, int size, const Color &color,
   view->setColor({color.r, color.g, color.b, color.a});
   view->setAlign(align);
   view->setVAlign(valign);
+  return view;
+}
+
+TextView *makeWrappedText(const std::string &text, int size, const Color &color,
+                          TextView::TextAlign align = TextView::LEFT,
+                          TextView::TextVAlign valign = TextView::TOP) {
+  auto *view = makeText(text, size, color, align, valign);
+  view->setWrap(true);
   return view;
 }
 
@@ -184,7 +202,7 @@ View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setBackgroundColor(Color(19, 30, 46, 245));
   card->setBorderColor(Color(76, 104, 136, 255));
   card->setBorderWidth(2);
-  card->setHeight(static_cast<float>(minHeight));
+  card->setMinHeight(static_cast<float>(minHeight));
   if (width > 0) {
     card->setWidth(static_cast<float>(width));
   }
@@ -192,10 +210,12 @@ View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Column);
   header->setGap(metrics.compact ? 6.0f : 8.0f);
-  header->addView(
-      makeText(title, metrics.sectionTitleSize, Color(244, 248, 255)));
-  header->addView(
-      makeText(description, metrics.bodyTextSize, Color(168, 186, 209)));
+  auto *titleText = makeWrappedText(title, metrics.sectionTitleSize,
+                                    Color(244, 248, 255));
+  header->addView(titleText);
+  auto *descriptionText =
+      makeWrappedText(description, metrics.bodyTextSize, Color(168, 186, 209));
+  header->addView(descriptionText);
   card->addView(header);
   card->addView(body);
   return card;
@@ -308,7 +328,7 @@ void SettingsScene::initView() {
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
       makeText("Settings", metrics.titleSize, Color(244, 248, 255)));
-  headerText->addView(makeText(
+  headerText->addView(makeWrappedText(
       metrics.compact
           ? "Timing, keysound, and visual preferences."
           : "Persistent player preferences for timing, keysounds, and visual "
@@ -337,12 +357,14 @@ void SettingsScene::initView() {
   scrollContent->setGap(static_cast<float>(metrics.rootGap));
 
   auto *body = new View();
-  body->setFlexDirection(FlexDirection::Row);
+  body->setFlexDirection(metrics.stackBody ? FlexDirection::Column
+                                           : FlexDirection::Row);
   body->setGap(static_cast<float>(metrics.bodyGap));
   body->setAlignItems(YGAlignFlexStart);
 
   auto *summaryCard = new View();
-  summaryCard->setWidth(static_cast<float>(metrics.summaryWidth));
+  summaryCard->setWidth(static_cast<float>(metrics.stackBody ? metrics.contentWidth
+                                                             : metrics.summaryWidth));
   summaryCard->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
   summaryCard->setGap(metrics.compact ? 12.0f : 18.0f);
   summaryCard->setFlexDirection(FlexDirection::Column);
@@ -351,7 +373,7 @@ void SettingsScene::initView() {
   summaryCard->setBorderWidth(2);
   summaryCard->addView(
       makeText("Profile Snapshot", metrics.sectionTitleSize, Color(244, 248, 255)));
-  summaryCard->addView(makeText(
+  summaryCard->addView(makeWrappedText(
       metrics.compact ? "Saved immediately."
                       : "Saved immediately for new charts.",
       metrics.bodyTextSize, Color(160, 181, 204)));
@@ -362,7 +384,7 @@ void SettingsScene::initView() {
   summaryCard->addView(
       makeSummaryRow(metrics, "BGA Playback", &summaryBgaValueText));
   if (!metrics.ultraCompact) {
-    summaryCard->addView(makeText(
+    summaryCard->addView(makeWrappedText(
         metrics.compact
             ? "Positive offset judges later. Auto timed audio ignores hit "
               "timing."
@@ -379,8 +401,9 @@ void SettingsScene::initView() {
 
   auto *offsetControls = new View();
   offsetControls->setFlexDirection(FlexDirection::Row);
+  offsetControls->setFlexWrap(YGWrapWrap);
   offsetControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  offsetControls->setAlignItems(YGAlignCenter);
+  offsetControls->setAlignItems(YGAlignFlexStart);
 
   auto updateOffset = [this](int delta) {
     context.settings.inputOffsetMs =
@@ -469,7 +492,7 @@ void SettingsScene::initView() {
   keysoundControls->setFlexDirection(FlexDirection::Column);
   keysoundControls->setGap(metrics.compact ? 12.0f : 16.0f);
   keysoundControls->setAlignItems(YGAlignFlexStart);
-  keysoundControls->addView(makeText(
+  keysoundControls->addView(makeWrappedText(
       metrics.compact ? "Switch between manual hits and chart-timed playback."
                       : "Tap to switch modes. The current selection is shown on "
                         "the right.",
@@ -501,7 +524,7 @@ void SettingsScene::initView() {
   bgaControls->setFlexDirection(FlexDirection::Column);
   bgaControls->setGap(metrics.compact ? 12.0f : 16.0f);
   bgaControls->setAlignItems(YGAlignFlexStart);
-  bgaControls->addView(makeText(
+  bgaControls->addView(makeWrappedText(
       metrics.compact ? "Toggle BGA rendering for previews and gameplay."
                       : "Tap to switch BGA rendering on or off for future "
                         "previews and charts.",
@@ -536,7 +559,7 @@ void SettingsScene::initView() {
   footer->setBackgroundColor(Color(14, 22, 34, 220));
   footer->setBorderColor(Color(59, 80, 108, 255));
   footer->setBorderWidth(2);
-  footer->addView(makeText(
+  footer->addView(makeWrappedText(
       metrics.compact
           ? "Settings save automatically in the app documents directory."
           : "Settings are saved automatically in the app documents directory.",
