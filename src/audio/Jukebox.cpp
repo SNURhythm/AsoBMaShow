@@ -120,6 +120,16 @@ bool Jukebox::getVisualsEnabled() const {
   return visualsEnabled.load(std::memory_order_relaxed);
 }
 
+void Jukebox::setVisualOffsetMs(int offsetMs) {
+  visualOffsetMs.store(offsetMs, std::memory_order_relaxed);
+}
+
+long long Jukebox::getVisualOffsetMicros() const {
+  return static_cast<long long>(
+             visualOffsetMs.load(std::memory_order_relaxed)) *
+         1000LL;
+}
+
 void Jukebox::loadSounds(bms_parser::Chart &chart,
                          std::atomic_bool &isCancelled) {
   std::mutex wavTableLock;
@@ -424,6 +434,7 @@ void Jukebox::play() {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
         auto positionMicro = stopwatch->elapsedMicros();
+        const long long visualDelayMicros = getVisualOffsetMicros();
         if (onTickCb) {
           onTickCb(positionMicro);
         }
@@ -442,7 +453,7 @@ void Jukebox::play() {
 
         while (bmpCursor < bmpList.size()) {
           auto &target = bmpList[bmpCursor];
-          if (positionMicro < target.first) {
+          if (positionMicro < target.first + visualDelayMicros) {
             break;
           }
           if (!visualsEnabled.load(std::memory_order_relaxed)) {
@@ -476,7 +487,7 @@ void Jukebox::play() {
         }
         while (bmpLayerCursor < bmpLayerList.size()) {
           auto &target = bmpLayerList[bmpLayerCursor];
-          if (positionMicro < target.first) {
+          if (positionMicro < target.first + visualDelayMicros) {
             break;
           }
           if (!visualsEnabled.load(std::memory_order_relaxed)) {
@@ -631,15 +642,22 @@ void Jukebox::seek(long long micro) {
   std::lock_guard<std::mutex> lock(seekLock);
   stopwatch->seek(micro);
   audio.stopSounds();
+  const long long visualDelayMicros = getVisualOffsetMicros();
   // move cursors to micro
   audioCursor = 0;
   bmpCursor = 0;
+  bmpLayerCursor = 0;
   while (audioCursor < audioList.size() &&
          audioList[audioCursor].first < micro) {
     audioCursor++;
   }
-  while (bmpCursor < bmpList.size() && bmpList[bmpCursor].first < micro) {
+  while (bmpCursor < bmpList.size() &&
+         bmpList[bmpCursor].first + visualDelayMicros < micro) {
     bmpCursor++;
+  }
+  while (bmpLayerCursor < bmpLayerList.size() &&
+         bmpLayerList[bmpLayerCursor].first + visualDelayMicros < micro) {
+    bmpLayerCursor++;
   }
 }
 

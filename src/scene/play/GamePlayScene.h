@@ -48,6 +48,8 @@ private:
   [[nodiscard]] long long getJudgementOffsetMicros() const;
   [[nodiscard]] long long getJudgementTimeMicros(long long songTimeMicros,
                                                  double inputDelay = 0.0) const;
+  [[nodiscard]] long long getVisualOffsetMicros() const;
+  [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   View *pauseLayout = nullptr;
   Button *pauseButton = nullptr;
   Judge judge;

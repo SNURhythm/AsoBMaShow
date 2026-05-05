@@ -166,6 +166,14 @@ long long GamePlayScene::getJudgementTimeMicros(long long songTimeMicros,
          getJudgementOffsetMicros();
 }
 
+long long GamePlayScene::getVisualOffsetMicros() const {
+  return static_cast<long long>(context.settings.visualOffsetMs) * 1000LL;
+}
+
+long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
+  return std::max(0LL, songTimeMicros - getVisualOffsetMicros());
+}
+
 void GamePlayScene::update(float dt) {
   (void)dt;
   inputHandler->pumpPendingTouchEvents();
@@ -193,7 +201,8 @@ void GamePlayScene::renderScene() {
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   // pauseButton->setPosition(rendering::window_width - 40, 10);
-  renderer->render(renderContext, context.jukebox.getTimeMicros());
+  renderer->render(renderContext,
+                   getVisualTimeMicros(context.jukebox.getTimeMicros()));
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }

@@ -24,6 +24,7 @@ public:
                          jukebox(&gameStopwatch) {
     settings.sanitize();
     jukebox.setVisualsEnabled(settings.bgaEnabled);
+    jukebox.setVisualOffsetMs(settings.visualOffsetMs);
   }
   ~ApplicationContext() {
     quitFlag = true;

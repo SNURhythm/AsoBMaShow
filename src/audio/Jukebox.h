@@ -50,6 +50,7 @@ public:
   bool hasActiveVisuals() const;
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;
+  void setVisualOffsetMs(int offsetMs);
 
   long long getTimeMicros();
   void seek(long long micro);
@@ -90,9 +91,12 @@ private:
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};
+  std::atomic<int> visualOffsetMs{0};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};
   const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
                                           "bmp", "png",  "tga"};
+
+  [[nodiscard]] long long getVisualOffsetMicros() const;
 };

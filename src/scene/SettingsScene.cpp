@@ -243,6 +243,15 @@ int clampOffset(int value) {
   return std::clamp(value, AppSettings::kMinInputOffsetMs,
                     AppSettings::kMaxInputOffsetMs);
 }
+
+int clampVisualOffset(int value) {
+  return std::clamp(value, AppSettings::kMinVisualOffsetMs,
+                    AppSettings::kMaxVisualOffsetMs);
+}
+
+std::string formatOffsetLabel(int offsetMs) {
+  return (offsetMs > 0 ? "+" : "") + std::to_string(offsetMs) + " ms";
+}
 } // namespace
 
 void SettingsScene::init() { ensureLayoutUpToDate(); }
@@ -256,6 +265,8 @@ void SettingsScene::resetViewState() {
   scrollView = nullptr;
   offsetValueText = nullptr;
   summaryOffsetValueText = nullptr;
+  visualOffsetValueText = nullptr;
+  summaryVisualOffsetValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
   keysoundModeText = nullptr;
@@ -380,16 +391,18 @@ void SettingsScene::initView() {
   summaryCard->addView(
       makeSummaryRow(metrics, "Judgement Offset", &summaryOffsetValueText));
   summaryCard->addView(
+      makeSummaryRow(metrics, "Visual Offset", &summaryVisualOffsetValueText));
+  summaryCard->addView(
       makeSummaryRow(metrics, "Input Keysounds", &summaryKeysoundValueText));
   summaryCard->addView(
       makeSummaryRow(metrics, "BGA Playback", &summaryBgaValueText));
   if (!metrics.ultraCompact) {
     summaryCard->addView(makeWrappedText(
         metrics.compact
-            ? "Positive offset judges later. Auto timed audio ignores hit "
-              "timing."
-            : "Positive offset judges later. Auto timed audio ignores hit "
-              "timing.",
+            ? "Judgement offset shifts timing windows. Visual offset delays "
+              "notes and BGA for late audio paths."
+            : "Judgement offset shifts timing windows. Visual offset delays "
+              "notes and BGA to match late audio paths such as Bluetooth.",
         metrics.smallTextSize, Color(131, 151, 176)));
   }
   body->addView(summaryCard);
@@ -482,6 +495,95 @@ void SettingsScene::initView() {
           : "Positive values judge later. Use this when your hits consistently "
             "feel early relative to the music.",
       offsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
+
+  auto *visualOffsetControls = new View();
+  visualOffsetControls->setFlexDirection(FlexDirection::Row);
+  visualOffsetControls->setFlexWrap(YGWrapWrap);
+  visualOffsetControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  visualOffsetControls->setAlignItems(YGAlignFlexStart);
+
+  auto updateVisualOffset = [this](int delta) {
+    context.settings.visualOffsetMs =
+        clampVisualOffset(context.settings.visualOffsetMs + delta);
+    persistSettings();
+  };
+
+  auto *minusVisualTen = makeButton(
+      metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
+      makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  minusVisualTen->setOnClickListener(
+      [updateVisualOffset]() { updateVisualOffset(-10); });
+  visualOffsetControls->addView(minusVisualTen);
+
+  auto *minusVisualOne = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  minusVisualOne->setOnClickListener(
+      [updateVisualOffset]() { updateVisualOffset(-1); });
+  visualOffsetControls->addView(minusVisualOne);
+
+  auto *visualOffsetValue = new View();
+  visualOffsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
+  visualOffsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
+  visualOffsetValue->setBackgroundColor(Color(10, 17, 28, 255));
+  visualOffsetValue->setBorderColor(Color(78, 105, 140, 255));
+  visualOffsetValue->setBorderWidth(2);
+  visualOffsetValueText =
+      makeText("", metrics.bodyTextSize + 6, Color(244, 248, 255),
+               TextView::CENTER, TextView::MIDDLE);
+  visualOffsetValue->addView(visualOffsetValueText);
+  visualOffsetControls->addView(visualOffsetValue);
+
+  auto *plusVisualOne = makeButton(
+      metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
+      makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  plusVisualOne->setOnClickListener(
+      [updateVisualOffset]() { updateVisualOffset(1); });
+  visualOffsetControls->addView(plusVisualOne);
+
+  auto *plusVisualTen = makeButton(
+      metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
+      makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(28, 40, 58, 255), Color(36, 52, 75, 255),
+      Color(61, 87, 118, 255), Color(84, 107, 139, 255),
+      Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  plusVisualTen->setOnClickListener(
+      [updateVisualOffset]() { updateVisualOffset(10); });
+  visualOffsetControls->addView(plusVisualTen);
+
+  auto *resetVisualOffset = makeButton(
+      metrics.resetButtonWidth, metrics.actionButtonHeight,
+      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(96, 57, 44, 255), Color(117, 72, 55, 255),
+      Color(153, 96, 74, 255), Color(165, 105, 79, 255),
+      Color(193, 124, 93, 255), Color(219, 145, 108, 255));
+  resetVisualOffset->setOnClickListener([this]() {
+    context.settings.visualOffsetMs = 0;
+    persistSettings();
+  });
+  visualOffsetControls->addView(resetVisualOffset);
+
+  cardsColumn->addView(makeCard(
+      metrics, "Visual Offset",
+      metrics.compact
+          ? "Positive values delay notes and BGA to match late audio output."
+          : "Positive values delay note rendering and BGA playback. Use this "
+            "for late audio paths such as Bluetooth headphones.",
+      visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *secondaryCards = new View();
   secondaryCards->setFlexDirection(metrics.useDualCardRow ? FlexDirection::Row
@@ -576,8 +678,9 @@ void SettingsScene::initView() {
 
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.inputOffsetMs;
-  const std::string offsetLabel =
-      (offsetMs > 0 ? "+" : "") + std::to_string(offsetMs) + " ms";
+  const int visualOffsetMs = context.settings.visualOffsetMs;
+  const std::string offsetLabel = formatOffsetLabel(offsetMs);
+  const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
   const std::string bgaLabel =
@@ -588,6 +691,12 @@ void SettingsScene::refreshSettingsText() {
   }
   if (summaryOffsetValueText != nullptr) {
     summaryOffsetValueText->setText(offsetLabel);
+  }
+  if (visualOffsetValueText != nullptr) {
+    visualOffsetValueText->setText(visualOffsetLabel);
+  }
+  if (summaryVisualOffsetValueText != nullptr) {
+    summaryVisualOffsetValueText->setText(visualOffsetLabel);
   }
   if (summaryKeysoundValueText != nullptr) {
     summaryKeysoundValueText->setText(keysoundLabel);
@@ -652,6 +761,7 @@ void SettingsScene::persistSettings() {
     SDL_Log("Failed to save settings");
   }
   context.jukebox.setVisualsEnabled(context.settings.bgaEnabled);
+  context.jukebox.setVisualOffsetMs(context.settings.visualOffsetMs);
   refreshSettingsText();
 }
 
@@ -671,6 +781,8 @@ void SettingsScene::cleanupScene() {
   scrollView = nullptr;
   offsetValueText = nullptr;
   summaryOffsetValueText = nullptr;
+  visualOffsetValueText = nullptr;
+  summaryVisualOffsetValueText = nullptr;
   summaryKeysoundValueText = nullptr;
   summaryBgaValueText = nullptr;
   keysoundModeText = nullptr;

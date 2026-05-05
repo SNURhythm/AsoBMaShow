@@ -20,6 +20,8 @@ private:
   View *rootLayout = nullptr;
   TextView *offsetValueText = nullptr;
   TextView *summaryOffsetValueText = nullptr;
+  TextView *visualOffsetValueText = nullptr;
+  TextView *summaryVisualOffsetValueText = nullptr;
   TextView *summaryKeysoundValueText = nullptr;
   TextView *summaryBgaValueText = nullptr;
   TextView *keysoundModeText = nullptr;
