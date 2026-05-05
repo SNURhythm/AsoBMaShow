@@ -39,7 +39,10 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 TextInputBox::~TextInputBox() {}
 
 void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
-  SDL_Rect nextRect = {cursorX, cursorY, getWidth(), getHeight()};
+  const int lineHeight =
+      std::max(1, rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 1));
+  const int lineWidth = std::max(1, rect.w);
+  SDL_Rect nextRect = {cursorX, cursorY, lineWidth, lineHeight};
 
   SDL_Window *window = SDL_GetKeyboardFocus();
   if (window == nullptr) {
@@ -61,9 +64,9 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
     nextRect.x = static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
     nextRect.y = static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
     nextRect.w =
-        std::max(1, static_cast<int>(std::lround(getWidth() * scaleX)));
+        std::max(1, static_cast<int>(std::lround(lineWidth * scaleX)));
     nextRect.h =
-        std::max(1, static_cast<int>(std::lround(getHeight() * scaleY)));
+        std::max(1, static_cast<int>(std::lround(lineHeight * scaleY)));
   }
 
   viewRect = nextRect;
@@ -226,10 +229,15 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (!composition.empty()) {
       composited.insert(cursorPos, composition);
       cursorToPos(cursorPos, editingText, compositionX, compositionY);
-      compositionY += TTF_FontHeight(font);
       cursorToPos(cursorPos + composition.size(), composited, compositionWidth,
                   compositionHeight);
       compositionWidth -= compositionX;
+      const int underlineHeight = 2;
+      const int contentHeight = std::max(
+          underlineHeight,
+          rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 0));
+      compositionHeight = contentHeight;
+      compositionY += std::max(0, contentHeight - underlineHeight);
     }
     setText(composited);
     for (auto &callback : onTextChangedCallbacks) {
@@ -289,14 +297,14 @@ void TextInputBox::renderImpl(RenderContext &context) {
 
       if (!composition.empty()) {
         caretX = compositionX + compositionWidth;
-        caretY = compositionY;
+        caretY = resolvedTextRect().y;
       }
 
       uint32_t xcolor;
       // sdl color to abgr
       SDL_Color &c = color;
       xcolor = ((c.r << 24) | (c.g << 16) | (c.b << 8) | c.a);
-      rendering::createRect(tvb, tib, caretX, getY(), 2, height, xcolor);
+      rendering::createRect(tvb, tib, caretX, caretY, 2, height, xcolor);
       bgfx::setVertexBuffer(0, &tvb);
       bgfx::setIndexBuffer(&tib);
       rendering::setScissorUI(context.scissor.x, context.scissor.y,
@@ -335,18 +343,28 @@ void TextInputBox::cursorToPos(size_t cursorPos, const std::string &text,
     cursorPos = 0;
   utf8.resize(cursorPos);
 
-  TTF_SizeUTF8(font, utf8.c_str(), &x, &y);
-  x += getX();
-  y += getY() - TTF_FontHeight(font);
+  int textWidth = 0;
+  int textHeight = 0;
+  if (font != nullptr && !utf8.empty()) {
+    TTF_SizeUTF8(font, utf8.c_str(), &textWidth, &textHeight);
+  }
+
+  const SDL_Rect contentRect = resolvedTextRect();
+  x = contentRect.x + textWidth;
+  y = contentRect.y;
 }
 
 size_t TextInputBox::posToCursor(int x, int y) {
   // TODO: this will not work for multi-line text
+  (void)y;
   size_t cursorPos = 0;
   int w = 0, h = 0;
   int dw = 0;
   int dh = 0;
   size_t glyphs = 0;
+  const SDL_Rect contentRect = resolvedTextRect();
+  const int localX = std::max(0, x - (contentRect.x - getX()));
+
   for (cursorPos = 0; cursorPos < editingText.size();) {
 
     int prevW = w;
@@ -360,9 +378,9 @@ size_t TextInputBox::posToCursor(int x, int y) {
       dh = h - prevH;
     else
       dh = h;
-    if (glyphs == 1 && dw / 2 > x)
+    if (glyphs == 1 && dw / 2 > localX)
       return 0;
-    if (w + dw / 2 > x) {
+    if (w + dw / 2 > localX) {
 
       break;
     }

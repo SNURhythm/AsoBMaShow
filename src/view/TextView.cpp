@@ -78,37 +78,14 @@ void TextView::setText(const std::string &newText) {
 
 void TextView::renderImpl(RenderContext &context) {
   if (bgfx::isValid(texture)) {
-
-    rect.x = this->getX();
-    rect.y = this->getY();
-    auto width = this->getWidth();
-    auto height = this->getHeight();
-    switch (align) {
-    case TextAlign::LEFT:
-      break;
-    case TextAlign::CENTER:
-      rect.x += (width - rect.w) / 2; // center horizontally
-      break;
-    case TextAlign::RIGHT:
-      rect.x += width - rect.w; // align right
-      break;
-    }
-    switch (valign) {
-    case TextVAlign::TOP:
-      break;
-    case TextVAlign::MIDDLE:
-      rect.y += (height - rect.h) / 2; // center vertically
-      break;
-    case TextVAlign::BOTTOM:
-      rect.y += height - rect.h; // align bottom
-      break;
-    }
+    const SDL_Rect drawRect = resolvedTextRect();
 
     rendering::PosTexVertex vertices[] = {
         {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},                   // Top-left
-        {(float)rect.w, 0.0f, 0.0f, 1.0f, 0.0f},          // Top-right
-        {(float)rect.w, (float)rect.h, 0.0f, 1.0f, 1.0f}, // Bottom-right
-        {0.0f, (float)rect.h, 0.0f, 0.0f, 1.0f}           // Bottom-left
+        {(float)drawRect.w, 0.0f, 0.0f, 1.0f, 0.0f},      // Top-right
+        {(float)drawRect.w, (float)drawRect.h, 0.0f, 1.0f,
+         1.0f}, // Bottom-right
+        {0.0f, (float)drawRect.h, 0.0f, 0.0f, 1.0f} // Bottom-left
     };
 
     const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
@@ -120,7 +97,7 @@ void TextView::renderImpl(RenderContext &context) {
     bx::memCopy(tib.data, indices, sizeof(indices));
 
     float translate[16];
-    bx::mtxTranslate(translate, rect.x, rect.y, 0.0f);
+    bx::mtxTranslate(translate, drawRect.x, drawRect.y, 0.0f);
     bgfx::setTransform(translate);
     bgfx::setTexture(0, s_texColor, texture);
     bgfx::setVertexBuffer(0, &tvb);
@@ -134,6 +111,36 @@ void TextView::renderImpl(RenderContext &context) {
         rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
     bgfx::submit(rendering::ui_view, kProgram);
   }
+}
+
+SDL_Rect TextView::resolvedTextRect() const {
+  SDL_Rect drawRect = {getX(), getY(), rect.w, rect.h};
+  const int width = getWidth();
+  const int height = getHeight();
+
+  switch (align) {
+  case TextAlign::LEFT:
+    break;
+  case TextAlign::CENTER:
+    drawRect.x += (width - rect.w) / 2;
+    break;
+  case TextAlign::RIGHT:
+    drawRect.x += width - rect.w;
+    break;
+  }
+
+  switch (valign) {
+  case TextVAlign::TOP:
+    break;
+  case TextVAlign::MIDDLE:
+    drawRect.y += (height - rect.h) / 2;
+    break;
+  case TextVAlign::BOTTOM:
+    drawRect.y += height - rect.h;
+    break;
+  }
+
+  return drawRect;
 }
 
 void TextView::setColor(SDL_Color newColor) {

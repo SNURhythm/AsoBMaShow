@@ -21,6 +21,7 @@ public:
 
 protected:
   void renderImpl(RenderContext &context) override;
+  [[nodiscard]] SDL_Rect resolvedTextRect() const;
   TextAlign align = TextAlign::LEFT;
   TextVAlign valign = TextVAlign::TOP;
   TTF_Font *font = nullptr;
