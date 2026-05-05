@@ -129,15 +129,15 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
 
-  const Color kBackdropTint(10, 18, 30, 100);
-  const Color kPanelFill(17, 27, 42, 100);
-  const Color kSurfaceFill(11, 18, 30, 130);
-  const Color kPrimaryButtonNormal(29, 73, 120, 216);
-  const Color kPrimaryButtonHover(40, 96, 156, 228);
-  const Color kPrimaryButtonPressed(58, 129, 204, 236);
-  const Color kSecondaryButtonNormal(76, 49, 36, 208);
-  const Color kSecondaryButtonHover(101, 65, 47, 220);
-  const Color kSecondaryButtonPressed(133, 87, 63, 232);
+  const Color kBackdropTint(10, 18, 30, 28);
+  const Color kPanelFill(17, 27, 42, 76);
+  const Color kSurfaceFill(11, 18, 30, 64);
+  const Color kPrimaryButtonNormal(29, 73, 120, 176);
+  const Color kPrimaryButtonHover(40, 96, 156, 196);
+  const Color kPrimaryButtonPressed(58, 129, 204, 212);
+  const Color kSecondaryButtonNormal(76, 49, 36, 168);
+  const Color kSecondaryButtonHover(101, 65, 47, 188);
+  const Color kSecondaryButtonPressed(133, 87, 63, 204);
 
   recyclerView = new RecyclerView<bms_parser::ChartMeta>(
       [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
@@ -282,7 +282,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->addView(searchBox);
 
   recyclerView->setFlex(1);
-  recyclerView->setBackgroundColor(kSurfaceFill);
+  recyclerView->clearBackgroundColor();
   recyclerView->setBorderColor(Color(63, 86, 113, 255));
   recyclerView->setBorderWidth(2);
   left->addView(recyclerView);
