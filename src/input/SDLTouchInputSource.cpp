@@ -41,7 +41,8 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerDown(0, Vector3(uiNormX, uiNormY, 0.0f));
+    InputSource->handler->onFingerDown(static_cast<SDL_FingerID>(0),
+                                       Vector3(uiNormX, uiNormY, 0.0f));
   } break;
   case SDL_MOUSEBUTTONUP: {
     float screenX = static_cast<float>(event->button.x) * rendering::widthScale;
@@ -50,7 +51,8 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerUp(0, Vector3(uiNormX, uiNormY, 0.0f));
+    InputSource->handler->onFingerUp(static_cast<SDL_FingerID>(0),
+                                     Vector3(uiNormX, uiNormY, 0.0f));
   } break;
   case SDL_MOUSEMOTION: {
     float screenX = static_cast<float>(event->motion.x) * rendering::widthScale;
@@ -59,7 +61,8 @@ int SDLTouchInputSource::EventHandler(void *userdata, SDL_Event *event) {
     float uiNormX = 0.0f;
     float uiNormY = 0.0f;
     rendering::screenToUiNormalized(screenX, screenY, uiNormX, uiNormY);
-    InputSource->handler->onFingerMove(0, Vector3(uiNormX, uiNormY, 0.0f));
+    InputSource->handler->onFingerMove(static_cast<SDL_FingerID>(0),
+                                       Vector3(uiNormX, uiNormY, 0.0f));
   } break;
     // case SDL_FINGERMOTION:
     //   InputSource->handler->onFingerMove(

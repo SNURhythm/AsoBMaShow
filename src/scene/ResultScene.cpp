@@ -60,7 +60,6 @@ ResultScene::ResultScene(ApplicationContext &context,
     }
 
 ResultScene::~ResultScene() { 
-    delete rootLayout; 
     delete skin;
 }
 
