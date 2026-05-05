@@ -129,6 +129,16 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
 
+  const Color kBackdropTint(10, 18, 30, 112);
+  const Color kPanelFill(17, 27, 42, 196);
+  const Color kSurfaceFill(11, 18, 30, 168);
+  const Color kPrimaryButtonNormal(29, 73, 120, 216);
+  const Color kPrimaryButtonHover(40, 96, 156, 228);
+  const Color kPrimaryButtonPressed(58, 129, 204, 236);
+  const Color kSecondaryButtonNormal(76, 49, 36, 208);
+  const Color kSecondaryButtonHover(101, 65, 47, 220);
+  const Color kSecondaryButtonPressed(133, 87, 63, 232);
+
   recyclerView = new RecyclerView<bms_parser::ChartMeta>(
       [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
         return a.SHA256 == b.SHA256;
@@ -227,14 +237,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setGap(24);
   rootLayout->setPadding(Edge::All, 28);
-  rootLayout->setBackgroundColor(Color(10, 18, 30));
+  rootLayout->setBackgroundColor(kBackdropTint);
   auto left = new View();
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setBackgroundColor(Color(17, 27, 42, 245));
+  left->setBackgroundColor(kPanelFill);
   left->setBorderColor(Color(70, 95, 124, 255));
   left->setBorderWidth(2);
 
@@ -251,7 +261,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 32);
   searchBox->setText("");
   searchBox->setHeight(56);
-  searchBox->setBackgroundColor(Color(11, 18, 30, 255));
+  searchBox->setBackgroundColor(kSurfaceFill);
   searchBox->setBorderColor(Color(88, 115, 149, 255));
   searchBox->setBorderWidth(2);
   searchBox->setVAlign(TextView::MIDDLE);
@@ -272,7 +282,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->addView(searchBox);
 
   recyclerView->setFlex(1);
-  recyclerView->setBackgroundColor(Color(11, 18, 30, 255));
+  recyclerView->setBackgroundColor(kSurfaceFill);
   recyclerView->setBorderColor(Color(63, 86, 113, 255));
   recyclerView->setBorderWidth(2);
   left->addView(recyclerView);
@@ -284,7 +294,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setPadding(Edge::All, 24);
   right->setGap(18);
   right->setWidth(300);
-  right->setBackgroundColor(Color(17, 27, 42, 245));
+  right->setBackgroundColor(kPanelFill);
   right->setBorderColor(Color(70, 95, 124, 255));
   right->setBorderWidth(2);
 
@@ -306,9 +316,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
-  startButton->setBackgroundColors(Color(29, 73, 120, 255),
-                                   Color(40, 96, 156, 255),
-                                   Color(58, 129, 204, 255));
+  startButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
+                                   kPrimaryButtonPressed);
   startButton->setBorderColors(Color(105, 162, 222, 255),
                                Color(133, 190, 244, 255),
                                Color(162, 212, 255, 255));
@@ -350,7 +359,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setHeight(220);
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
-  jacketCard->setBackgroundColor(Color(11, 18, 30, 255));
+  jacketCard->setBackgroundColor(kSurfaceFill);
   jacketCard->setBorderColor(Color(88, 115, 149, 255));
   jacketCard->setBorderWidth(2);
   jacketView->setWidth(220)->setHeight(220);
@@ -365,9 +374,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
-  settingsButton->setBackgroundColors(Color(76, 49, 36, 255),
-                                      Color(101, 65, 47, 255),
-                                      Color(133, 87, 63, 255));
+  settingsButton->setBackgroundColors(kSecondaryButtonNormal,
+                                      kSecondaryButtonHover,
+                                      kSecondaryButtonPressed);
   settingsButton->setBorderColors(Color(174, 124, 91, 255),
                                   Color(207, 146, 105, 255),
                                   Color(232, 169, 122, 255));
