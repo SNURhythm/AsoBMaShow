@@ -14,8 +14,7 @@ void submitColoredRect(const RenderContext &context, int x, int y, int width,
   bgfx::setIndexBuffer(&tib);
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                 BGFX_STATE_BLEND_ALPHA);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::submit(rendering::ui_view, kSimpleProgram);

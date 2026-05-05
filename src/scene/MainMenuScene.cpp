@@ -387,6 +387,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     context.sceneManager->changeScene("Settings");
   });
   right->addView(settingsButton);
+
   rootLayout->addView(right);
   addView(rootLayout);
   std::vector<bms_parser::ChartMeta> chartMetas;

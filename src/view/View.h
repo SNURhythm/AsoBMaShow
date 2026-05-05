@@ -143,8 +143,8 @@ public:
       index[5] = 0;
 
       // Set up state (e.g., render state, texture, shaders)
-      uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+      uint64_t state =
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
       bgfx::setState(state);
 
       // Set the vertex and index buffers

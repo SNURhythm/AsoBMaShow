@@ -309,8 +309,7 @@ void TextInputBox::renderImpl(RenderContext &context) {
       bgfx::setIndexBuffer(&tib);
       rendering::setScissorUI(context.scissor.x, context.scissor.y,
                               context.scissor.width, context.scissor.height);
-      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                     BGFX_STATE_BLEND_ALPHA);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
       bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
     // render blue underline for composition text
@@ -326,8 +325,7 @@ void TextInputBox::renderImpl(RenderContext &context) {
       bgfx::setIndexBuffer(&tib2);
       rendering::setScissorUI(context.scissor.x, context.scissor.y,
                               context.scissor.width, context.scissor.height);
-      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                     BGFX_STATE_BLEND_ALPHA);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
       bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
   }

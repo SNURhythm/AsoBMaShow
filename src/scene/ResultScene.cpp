@@ -133,8 +133,8 @@ void ResultScene::renderScene() {
           index[i * 6 + 5] = i * 4 + 0;
         }
 
-        uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                         BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+        uint64_t state =
+            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
         bgfx::setState(state);
         bgfx::setVertexBuffer(0, &tvb);
         bgfx::setIndexBuffer(&tib);

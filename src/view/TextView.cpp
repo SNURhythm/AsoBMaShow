@@ -103,8 +103,7 @@ void TextView::renderImpl(RenderContext &context) {
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&tib);
 
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
     static const bgfx::ProgramHandle kProgram =

@@ -105,7 +105,7 @@ private:
                this->getX() + this->getWidth() - 5,
                this->getY() + this->getHeight() / 2, 0.0f);
     bgfx::setTransform(mtx);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::setState(BGFX_STATE_WRITE_RGB);
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&ibh);
     static const bgfx::ProgramHandle kProgram =
@@ -122,7 +122,7 @@ private:
     bx::mtxSRT(mtx, 10.0f, thumbHeight, 1.0f, 0.0f, 0.0f, 0.0f,
                this->getX() + this->getWidth() - 5, thumbY, 0.0f);
     bgfx::setTransform(mtx);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::setState(BGFX_STATE_WRITE_RGB);
     bgfx::setVertexBuffer(0, &thumbVbh);
     bgfx::setIndexBuffer(&ibh);
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
