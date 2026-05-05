@@ -155,6 +155,17 @@ void GamePlayScene::reset() {
   state = new RhythmState(chart, false);
   state->isPlaying = true;
 }
+
+long long GamePlayScene::getJudgementOffsetMicros() const {
+  return static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
+}
+
+long long GamePlayScene::getJudgementTimeMicros(long long songTimeMicros,
+                                                double inputDelay) const {
+  return songTimeMicros - static_cast<long long>(inputDelay * 1000000) +
+         getJudgementOffsetMicros();
+}
+
 void GamePlayScene::update(float dt) {
   (void)dt;
   inputHandler->pumpPendingTouchEvents();
@@ -243,11 +254,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
 
   const auto &measures = chart->Measures;
-  const long long offsetMicros =
-      static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
-  const auto pressedTime = context.jukebox.getTimeMicros() -
-                           static_cast<long long>(inputDelay * 1000000) +
-                           offsetMicros;
+  const auto pressedTime =
+      getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -302,11 +310,8 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   laneIt->second = false;
   updateLaneStateText();
   renderer->onLaneReleased(lane, nowMicros());
-  const long long offsetMicros =
-      static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
-  const auto releasedTime = context.jukebox.getTimeMicros() -
-                            static_cast<long long>(inputDelay * 1000000) +
-                            offsetMicros;
+  const auto releasedTime =
+      getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
 
   if (state == nullptr) {
     return nullptr;
@@ -345,7 +350,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
     return;
   }
   const long long visualNow = nowMicros();
-  const long long poorCutoff = time - latePoorTiming;
+  const long long judgedTime = getJudgementTimeMicros(time);
+  const long long poorCutoff = judgedTime - latePoorTiming;
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -370,10 +376,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           if (note->IsLongNote()) {
             const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             if (!longNote->IsTail()) {
-              longNote->MissPress(time);
+              longNote->MissPress(judgedTime);
             }
           }
-          const auto poorResult = JudgeResult(Poor, time - timeline->Timing);
+          const auto poorResult = JudgeResult(Poor, judgedTime - timeline->Timing);
           onJudge(poorResult);
         }
       } else if (timeline->Timing <= time) {

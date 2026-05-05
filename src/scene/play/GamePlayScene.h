@@ -45,6 +45,9 @@ public:
 
 private:
   void reset();
+  [[nodiscard]] long long getJudgementOffsetMicros() const;
+  [[nodiscard]] long long getJudgementTimeMicros(long long songTimeMicros,
+                                                 double inputDelay = 0.0) const;
   View *pauseLayout = nullptr;
   Button *pauseButton = nullptr;
   Judge judge;
