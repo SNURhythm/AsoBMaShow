@@ -170,28 +170,6 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
 
     break;
   }
-  case SDL_FINGERDOWN: {
-    float uiX = 0.0f;
-    float uiY = 0.0f;
-    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
-    if (isInsideTextInput(*this, uiX, uiY)) {
-      cursorPos = posToCursor(static_cast<int>(uiX) - getX(),
-                              static_cast<int>(uiY) - getY());
-      SDL_SetTextInputRect(&viewRect);
-      onSelected();
-      SDL_StartTextInput();
-      shouldUpdate = true;
-      lastRenderedCaretCursor = -1;
-      return false;
-    }
-
-    if (isSelected) {
-      notifyEditingFinished();
-    }
-    onUnselected();
-    SDL_StopTextInput();
-    break;
-  }
   case SDL_MOUSEMOTION: {
     // change mouse pointer to I-beam
     int screenX = static_cast<int>(event.motion.x * rendering::widthScale);

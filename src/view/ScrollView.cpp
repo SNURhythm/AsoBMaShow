@@ -73,9 +73,11 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     return false;
   }
   case SDL_MOUSEBUTTONDOWN: {
-    if (event.button.button != SDL_BUTTON_LEFT ||
-        event.button.which == SDL_TOUCH_MOUSEID || mousePressedInside) {
+    if (event.button.button != SDL_BUTTON_LEFT || mousePressedInside) {
       return true;
+    }
+    if (event.button.which == SDL_TOUCH_MOUSEID) {
+      break;
     }
     int uiX = 0;
     int uiY = 0;
@@ -114,9 +116,11 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
                                                                       : true;
   }
   case SDL_MOUSEBUTTONUP: {
-    if (event.button.button != SDL_BUTTON_LEFT ||
-        event.button.which == SDL_TOUCH_MOUSEID) {
+    if (event.button.button != SDL_BUTTON_LEFT) {
       return true;
+    }
+    if (event.button.which == SDL_TOUCH_MOUSEID) {
+      break;
     }
     int uiX = 0;
     int uiY = 0;
@@ -195,8 +199,10 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     return false;
   }
   default:
-    return contentView->handleEvents(event);
+    break;
   }
+
+  return contentView->handleEvents(event);
 }
 
 void ScrollView::onLayout() { refreshContentLayout(); }
