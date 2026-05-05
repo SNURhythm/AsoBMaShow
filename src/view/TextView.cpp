@@ -114,7 +114,9 @@ void TextView::renderImpl(RenderContext &context) {
 }
 
 SDL_Rect TextView::resolvedTextRect() const {
-  SDL_Rect drawRect = {getX(), getY(), rect.w, rect.h};
+  const int contentHeight =
+      rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 0);
+  SDL_Rect drawRect = {getX(), getY(), rect.w, contentHeight};
   const int width = getWidth();
   const int height = getHeight();
 
@@ -133,10 +135,10 @@ SDL_Rect TextView::resolvedTextRect() const {
   case TextVAlign::TOP:
     break;
   case TextVAlign::MIDDLE:
-    drawRect.y += (height - rect.h) / 2;
+    drawRect.y += (height - contentHeight) / 2;
     break;
   case TextVAlign::BOTTOM:
-    drawRect.y += height - rect.h;
+    drawRect.y += height - contentHeight;
     break;
   }
 
