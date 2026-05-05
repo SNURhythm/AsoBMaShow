@@ -132,7 +132,7 @@ inline void setScissorUI(int x, int y, int width, int height) {
   int sw = static_cast<int>(width * ui_scale_x);
   int sh = static_cast<int>(height * ui_scale_y);
   if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor();
+    bgfx::setScissor(0, 0, 0, 0);
     return;
   }
   if (sx < 0) {
@@ -148,7 +148,7 @@ inline void setScissorUI(int x, int y, int width, int height) {
   sw = std::min(sw, maxW);
   sh = std::min(sh, maxH);
   if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor();
+    bgfx::setScissor(0, 0, 0, 0);
     return;
   }
   bgfx::setScissor(static_cast<uint16_t>(sx), static_cast<uint16_t>(sy),
