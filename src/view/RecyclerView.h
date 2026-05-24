@@ -1,9 +1,12 @@
 #pragma once
 
 #include "SDL2/SDL_events.h"
+#include "ScrollMomentum.h"
 #include "View.h"
 #include <bgfx/bgfx.h>
 #include <SDL2/SDL.h>
+#include <algorithm>
+#include <cmath>
 #include <deque>
 #include <functional>
 #include <map>
@@ -13,7 +16,6 @@
 #include <bx/math.h>
 #include <string>
 #include <vector>
-#include <algorithm>
 #include <unordered_set>
 
 template <typename T> class RecyclerView : public View {
@@ -36,20 +38,10 @@ private:
 
 private:
   void renderImpl(RenderContext &context) override {
-    if (!touchDragging && touchDragged) {
-      touchScrollSpeed *= 0.98;
-      if (touchScrollSpeedReal > 0.01f || touchScrollSpeedReal < -0.01f) {
-        scrollOffset += touchScrollSpeedReal;
-        touchScrollSpeedReal *= 0.95;
-        int itemsSize =
-            std::max(1, static_cast<int>(items.size())) * itemHeight;
-        if (scrollOffset < 0) {
-          scrollOffset = 0;
-        }
-        if (scrollOffset > itemsSize - this->getHeight()) {
-          scrollOffset = itemsSize - this->getHeight();
-        }
-        updateVisibleItems();
+    if (!touchDragging) {
+      float momentumDelta = 0.0f;
+      if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
+        touchMomentum.stop();
       }
     }
     // clip the rendering area
@@ -210,15 +202,8 @@ private:
       if (y < this->getY() || y > this->getY() + this->getHeight()) {
         return true;
       }
-      scrollOffset -= event.wheel.y * 15.0f;
-      if (scrollOffset < 0) {
-        scrollOffset = 0;
-      }
-      int itemsSize = std::max(1, static_cast<int>(items.size())) * itemHeight;
-      if (scrollOffset > itemsSize - this->getHeight()) {
-        scrollOffset = itemsSize - this->getHeight();
-      }
-      updateVisibleItems();
+      touchMomentum.stop();
+      scrollBy(-event.wheel.y * 15.0f);
       break;
     }
     case SDL_MOUSEBUTTONUP:
@@ -256,6 +241,7 @@ private:
       if (uiY < this->getY() || uiY > this->getY() + this->getHeight()) {
         return true;
       }
+      touchMomentum.stop();
       int index = (uiY - this->getY() + scrollOffset) / itemHeight;
       if (index >= 0 && index < items.size()) {
         if (selectedIndex != -1 && onUnselected) {
@@ -284,9 +270,9 @@ private:
       if (touchY < this->getY() || touchY > this->getY() + this->getHeight()) {
         return true;
       }
+      touchMomentum.stop();
       touchLastY = touchY;
-      touchScrollSpeedReal = 0;
-      touchScrollInertia = 0;
+      touchDragging = false;
       touchId = event.tfinger.fingerId;
       break;
     }
@@ -309,36 +295,24 @@ private:
       if (touchY < this->getY() || touchY > this->getY() + this->getHeight()) {
         return true;
       }
-      scrollOffset += static_cast<int>(touchLastY - touchY);
-      touchScrollInertia = 1.2f * (touchLastY - touchY);
+      const float delta = touchLastY - touchY;
+      scrollBy(delta);
+      touchMomentum.recordDragDelta(delta);
       touchLastY = touchY;
       touchDragging = true;
-
-      int itemsSize = std::max(1, static_cast<int>(items.size())) * itemHeight;
-      if (scrollOffset < 0) {
-        scrollOffset = 0;
-      }
-      if (scrollOffset > itemsSize - this->getHeight()) {
-        scrollOffset = itemsSize - this->getHeight();
-      }
-      updateVisibleItems();
       break;
     }
     case SDL_FINGERUP: {
+      if (event.tfinger.fingerId != touchId) {
+        return true;
+      }
+      const bool hadDrag = touchDragging;
       touchDragging = false;
-      touchDragged = true;
-      if (touchScrollInertia < 2.0f && touchScrollInertia > -2.0f) {
-        touchScrollInertia = 0;
-        touchScrollSpeed = 0;
-      }
-      if (touchScrollSpeed < 0 && touchScrollInertia > 0 ||
-          touchScrollSpeed > 0 && touchScrollInertia < 0) {
-        touchScrollSpeed = touchScrollInertia;
+      if (hadDrag) {
+        touchMomentum.release();
       } else {
-        touchScrollSpeed += touchScrollInertia;
+        touchMomentum.stop();
       }
-      touchScrollSpeedReal = touchScrollSpeed;
-
       touchId = -1;
       break;
     }
@@ -431,12 +405,28 @@ private:
   std::deque<View *> recycledViewEntries; // Pool of recycled views
   std::map<int, View *> idxToView;
   float touchLastY = 0;
-  float touchScrollInertia = 0;
-  float touchScrollSpeed = 0;
-  float touchScrollSpeedReal = 0;
+  ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
   bool touchDragging = false;
-  bool touchDragged = false;
+  inline void clampScrollOffset() {
+    const int itemsSize =
+        std::max(1, static_cast<int>(items.size())) * itemHeight;
+    const float maxOffset =
+        std::max(0.0f, static_cast<float>(itemsSize - this->getHeight()));
+    scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
+  }
+
+  inline bool scrollBy(float delta) {
+    const float previousOffset = scrollOffset;
+    scrollOffset += delta;
+    clampScrollOffset();
+    if (std::fabs(scrollOffset - previousOffset) <= 0.001f) {
+      return false;
+    }
+    updateVisibleItems();
+    return true;
+  }
+
   inline void updateVisibleItems() {
     // Determine the range of visible items
     int startIndex = getStartIndex();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ScrollMomentum.h"
 #include "View.h"
 
 class ScrollView : public View {
@@ -35,10 +36,11 @@ private:
   float pressedTouchUiY = 0.0f;
   float lastTouchUiY = 0.0f;
   SDL_FingerID activeTouchId = -1;
+  ScrollMomentum touchMomentum;
 
   bool isInside(float uiX, float uiY) const;
   void clampScrollOffset();
-  void scrollBy(float delta);
+  bool scrollBy(float delta);
   void updateContentPosition();
   bool eventToUi(const SDL_MouseButtonEvent &event, int &uiX, int &uiY) const;
   bool eventToUi(const SDL_MouseMotionEvent &event, int &uiX, int &uiY) const;

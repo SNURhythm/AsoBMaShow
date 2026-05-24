@@ -47,6 +47,12 @@ void ScrollView::renderImpl(RenderContext &context) {
   if (contentView == nullptr) {
     return;
   }
+  if (!touchPressedInside) {
+    float momentumDelta = 0.0f;
+    if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
+      touchMomentum.stop();
+    }
+  }
   ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
   contentView->render(context);
 }
@@ -69,6 +75,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!isInside(static_cast<float>(uiX), static_cast<float>(uiY))) {
       return true;
     }
+    touchMomentum.stop();
     scrollBy(-event.wheel.y * kWheelStepUi);
     return false;
   }
@@ -85,6 +92,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
         !isInside(static_cast<float>(uiX), static_cast<float>(uiY))) {
       return true;
     }
+    touchMomentum.stop();
     mousePressedInside = true;
     mouseDragging = false;
     cancelMouseClick = false;
@@ -132,13 +140,14 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!eventToUi(event.button, uiX, uiY)) {
       return false;
     }
-    const bool inside = isInside(static_cast<float>(uiX), static_cast<float>(uiY));
+    const bool inside =
+        isInside(static_cast<float>(uiX), static_cast<float>(uiY));
     if (!hadPress && !inside) {
       return true;
     }
     if (hadPress) {
-      SDL_Event forwarded = shouldCancelClick ? makeCancelledMouseUpEvent(event)
-                                              : event;
+      SDL_Event forwarded =
+          shouldCancelClick ? makeCancelledMouseUpEvent(event) : event;
       contentView->handleEvents(forwarded);
       return false;
     }
@@ -154,6 +163,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!isInside(uiX, uiY)) {
       return true;
     }
+    touchMomentum.stop();
     activeTouchId = event.tfinger.fingerId;
     touchPressedInside = true;
     touchDragging = false;
@@ -178,7 +188,9 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       cancelTouchClick = true;
     }
     if (touchDragging) {
-      scrollBy(lastTouchUiY - uiY);
+      const float delta = lastTouchUiY - uiY;
+      scrollBy(delta);
+      touchMomentum.recordDragDelta(delta);
       lastTouchUiY = uiY;
       return false;
     }
@@ -189,10 +201,16 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       return true;
     }
     const bool shouldCancelClick = cancelTouchClick;
+    const bool hadDrag = touchDragging;
     activeTouchId = -1;
     touchPressedInside = false;
     touchDragging = false;
     cancelTouchClick = false;
+    if (hadDrag) {
+      touchMomentum.release();
+    } else {
+      touchMomentum.stop();
+    }
     SDL_Event forwarded =
         shouldCancelClick ? makeCancelledTouchUpEvent(event) : event;
     contentView->handleEvents(forwarded);
@@ -229,26 +247,28 @@ void ScrollView::clampScrollOffset() {
     scrollOffset = 0.0f;
     return;
   }
-  const float maxOffset =
-      std::max(0.0f, static_cast<float>(contentView->getHeight() - getHeight()));
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(contentView->getHeight() - getHeight()));
   scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
 }
 
-void ScrollView::scrollBy(float delta) {
+bool ScrollView::scrollBy(float delta) {
   if (contentView == nullptr) {
-    return;
+    return false;
   }
+  const float previousOffset = scrollOffset;
   scrollOffset += delta;
   clampScrollOffset();
   updateContentPosition();
+  return std::fabs(scrollOffset - previousOffset) > 0.001f;
 }
 
 void ScrollView::updateContentPosition() {
   if (contentView == nullptr) {
     return;
   }
-  contentView->setPositionNoLayout(getX(), getY() - static_cast<int>(scrollOffset),
-                                   YGPositionTypeAbsolute);
+  contentView->setPositionNoLayout(
+      getX(), getY() - static_cast<int>(scrollOffset), YGPositionTypeAbsolute);
 }
 
 bool ScrollView::eventToUi(const SDL_MouseButtonEvent &event, int &uiX,
