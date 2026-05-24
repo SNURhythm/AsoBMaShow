@@ -5,6 +5,7 @@
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "play/BMSRenderer.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
@@ -60,7 +61,6 @@ struct LayoutMetrics {
   int offsetCardHeight = 190;
   int visibleTimeCardHeight = 250;
   int modeCardHeight = 180;
-  int lanePreviewHeight = 340;
 };
 
 SafeAreaInsets getSafeAreaInsetsUi() {
@@ -113,7 +113,6 @@ LayoutMetrics resolveLayoutMetrics() {
     metrics.offsetCardHeight = 148;
     metrics.visibleTimeCardHeight = 208;
     metrics.modeCardHeight = 148;
-    metrics.lanePreviewHeight = 260;
   } else if (metrics.compact) {
     metrics.horizontalPadding = 32;
     metrics.verticalPadding = 24;
@@ -141,7 +140,6 @@ LayoutMetrics resolveLayoutMetrics() {
     metrics.offsetCardHeight = 156;
     metrics.visibleTimeCardHeight = 224;
     metrics.modeCardHeight = 156;
-    metrics.lanePreviewHeight = 290;
   }
 
   const int availableWidth =
@@ -428,124 +426,142 @@ nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   return AppSettings::BgaDisplayMode::Fit;
 }
 
-class LanePreviewView : public View {
-public:
-  explicit LanePreviewView(ApplicationContext &context) : context(context) {}
+constexpr long long kPreviewLoopMicros = 8000000LL;
+constexpr int kPreviewTimelineLanes = 16;
+constexpr double kPreviewBpm = 120.0;
+constexpr long long kPreviewLatePoorMicros = 200000LL;
 
-private:
-  ApplicationContext &context;
+bms_parser::TimeLine *makePreviewTimeline(long long timingMicros,
+                                          bool firstInMeasure = false) {
+  auto *timeline = new bms_parser::TimeLine(kPreviewTimelineLanes, false);
+  timeline->Timing = timingMicros;
+  timeline->BeatPosition = static_cast<double>(timingMicros) / 2000000.0;
+  timeline->Bpm = kPreviewBpm;
+  timeline->Scroll = 1.0;
+  timeline->IsFirstInMeasure = firstInMeasure;
+  return timeline;
+}
 
-  void submitQuad(const RenderContext &renderContext, const Color &color,
-                  float x0, float y0, float x1, float y1, float x2, float y2,
-                  float x3, float y3) {
-    bgfx::TransientVertexBuffer tvb{};
-    bgfx::TransientIndexBuffer tib{};
-    if (bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosColorVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, 4,
-                                     rendering::PosColorVertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&tib, 6);
-    auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
-    const uint32_t abgr = color.toABGR();
-    vertices[0] = {x0, y0, 0.0f, abgr};
-    vertices[1] = {x1, y1, 0.0f, abgr};
-    vertices[2] = {x2, y2, 0.0f, abgr};
-    vertices[3] = {x3, y3, 0.0f, abgr};
+void addPreviewNote(bms_parser::TimeLine *timeline, int lane) {
+  timeline->SetNote(lane, new bms_parser::Note(bms_parser::Parser::NoWav));
+}
 
-    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-    indices[0] = 0;
-    indices[1] = 1;
-    indices[2] = 2;
-    indices[3] = 2;
-    indices[4] = 3;
-    indices[5] = 0;
+void addPreviewLongNote(bms_parser::TimeLine *headTimeline,
+                        bms_parser::TimeLine *tailTimeline, int lane) {
+  auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(lane, head);
+  tailTimeline->SetNote(lane, tail);
+}
 
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&tib);
-    rendering::setScissorUI(renderContext.scissor.x, renderContext.scissor.y,
-                            renderContext.scissor.width,
-                            renderContext.scissor.height);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA);
-    static const bgfx::ProgramHandle kProgram =
-        rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-    bgfx::submit(rendering::ui_view, kProgram);
-  }
+bms_parser::Chart *makePreviewChart() {
+  auto *chart = new bms_parser::Chart();
+  chart->Meta.Title = "Settings Preview";
+  chart->Meta.Bpm = kPreviewBpm;
+  chart->Meta.MinBpm = kPreviewBpm;
+  chart->Meta.MaxBpm = kPreviewBpm;
+  chart->Meta.KeyMode = 7;
+  chart->Meta.IsDP = false;
+  chart->Meta.Rank = 3;
+  chart->Meta.PlayLength = kPreviewLoopMicros;
+  chart->Meta.TotalLength = kPreviewLoopMicros;
 
-  void renderImpl(RenderContext &renderContext) override {
-    const float x = static_cast<float>(getX());
-    const float y = static_cast<float>(getY());
-    const float width = static_cast<float>(getWidth());
-    const float height = static_cast<float>(getHeight());
-    if (width <= 0.0f || height <= 0.0f) {
-      return;
-    }
+  auto *measure = new bms_parser::Measure();
+  measure->Timing = 0;
+  measure->Scale = 4.0;
+  measure->Pos = 0.0;
 
-    ScissorScope scissor(renderContext, getX(), getY(), getWidth(),
-                         getHeight());
+  auto appendTimeline = [measure](long long timingMicros,
+                                  bool firstInMeasure = false) {
+    auto *timeline = makePreviewTimeline(timingMicros, firstInMeasure);
+    measure->TimeLines.push_back(timeline);
+    return timeline;
+  };
 
-    submitQuad(renderContext, Color(10, 16, 26, 255), x, y, x + width, y,
-               x + width, y + height, x, y + height);
+  addPreviewNote(appendTimeline(500000, true), 0);
+  addPreviewNote(appendTimeline(850000), 2);
+  addPreviewNote(appendTimeline(1200000), 4);
+  addPreviewNote(appendTimeline(1550000), 6);
+  addPreviewNote(appendTimeline(1900000), 7);
 
-    const float angleNorm =
-        (context.settings.laneAngleDegrees -
-         AppSettings::kMinLaneAngleDegrees) /
-        (AppSettings::kMaxLaneAngleDegrees - AppSettings::kMinLaneAngleDegrees);
-    const float lengthNorm =
-        (context.settings.laneLength - AppSettings::kMinLaneLength) /
-        (AppSettings::kMaxLaneLength - AppSettings::kMinLaneLength);
-    const float bottomY = y + height - 22.0f;
-    const float topY = y + height * (0.12f + (1.0f - lengthNorm) * 0.14f);
-    const float bottomHalf = width * 0.42f;
-    const float topHalf = width * (0.16f + angleNorm * 0.13f);
-    const float centerX = x + width * 0.5f;
-    const float leftBottom = centerX - bottomHalf;
-    const float rightBottom = centerX + bottomHalf;
-    const float leftTop = centerX - topHalf;
-    const float rightTop = centerX + topHalf;
+  auto *longHead = appendTimeline(2400000);
+  auto *longTail = appendTimeline(3900000);
+  addPreviewLongNote(longHead, longTail, 3);
 
-    submitQuad(renderContext, Color(22, 33, 48, 255), leftTop, topY, rightTop,
-               topY, rightBottom, bottomY, leftBottom, bottomY);
+  addPreviewNote(appendTimeline(4300000), 1);
+  addPreviewNote(appendTimeline(4700000), 5);
+  addPreviewNote(appendTimeline(5200000), 0);
+  addPreviewNote(appendTimeline(5650000), 7);
+  addPreviewNote(appendTimeline(6100000), 2);
+  addPreviewNote(appendTimeline(6550000), 4);
+  addPreviewNote(appendTimeline(7000000), 6);
 
-    constexpr int kLaneCount = 8;
-    for (int i = 0; i < kLaneCount; ++i) {
-      const float t0 = static_cast<float>(i) / static_cast<float>(kLaneCount);
-      const float t1 =
-          static_cast<float>(i + 1) / static_cast<float>(kLaneCount);
-      const float laneLeftTop = leftTop + (rightTop - leftTop) * t0;
-      const float laneRightTop = leftTop + (rightTop - leftTop) * t1;
-      const float laneLeftBottom = leftBottom + (rightBottom - leftBottom) * t0;
-      const float laneRightBottom =
-          leftBottom + (rightBottom - leftBottom) * t1;
-      const Color laneColor = i == 0 ? Color(107, 70, 31, 210)
-                                     : (i % 2 == 0 ? Color(59, 73, 92, 210)
-                                                   : Color(37, 85, 130, 210));
-      submitQuad(renderContext, laneColor, laneLeftTop + 1.0f, topY,
-                 laneRightTop - 1.0f, topY, laneRightBottom - 2.0f, bottomY,
-                 laneLeftBottom + 2.0f, bottomY);
-    }
-
-    const float judgeHeight = 7.0f;
-    submitQuad(renderContext, Color(239, 246, 255, 245), leftBottom,
-               bottomY - judgeHeight, rightBottom, bottomY - judgeHeight,
-               rightBottom, bottomY, leftBottom, bottomY);
-
-    for (int i = 1; i < 4; ++i) {
-      const float depth = static_cast<float>(i) / 4.0f;
-      const float lineY = bottomY + (topY - bottomY) * depth;
-      const float half = bottomHalf + (topHalf - bottomHalf) * depth;
-      submitQuad(renderContext, Color(214, 224, 238, 72), centerX - half, lineY,
-                 centerX + half, lineY, centerX + half, lineY + 2.0f,
-                 centerX - half, lineY + 2.0f);
-    }
-  }
-};
+  chart->Measures.push_back(measure);
+  return chart;
+}
 } // namespace
 
 void SettingsScene::init() { ensureLayoutUpToDate(); }
+
+void SettingsScene::startLanePreview() {
+  activeTab = SettingsTab::Lane;
+  previewActive = true;
+  resetPreviewSimulation();
+  ensurePreviewRenderer();
+  lastLayoutWidth = -1;
+}
+
+void SettingsScene::stopLanePreview() {
+  previewActive = false;
+  destroyPreviewRenderer();
+  lastLayoutWidth = -1;
+}
+
+void SettingsScene::ensurePreviewRenderer() {
+  if (previewChart == nullptr) {
+    previewChart = makePreviewChart();
+  }
+  if (previewRenderer == nullptr && previewChart != nullptr) {
+    previewRenderer =
+        new BMSRenderer(previewChart, kPreviewLatePoorMicros,
+                        context.settings.visibleTimeGreenNumber, false);
+  }
+}
+
+void SettingsScene::destroyPreviewRenderer() {
+  delete previewRenderer;
+  previewRenderer = nullptr;
+  delete previewChart;
+  previewChart = nullptr;
+  previewElapsedMicros = 0;
+}
+
+void SettingsScene::resetPreviewSimulation() {
+  previewElapsedMicros = 0;
+  if (previewRenderer != nullptr) {
+    previewRenderer->reset();
+  }
+  if (previewChart == nullptr) {
+    return;
+  }
+  for (const auto *measure : previewChart->Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (auto *note : timeline->Notes) {
+        if (note != nullptr) {
+          note->Reset();
+        }
+      }
+    }
+  }
+}
 
 void SettingsScene::resetViewState() {
   for (auto *view : views) {
@@ -623,6 +639,111 @@ void SettingsScene::initView() {
       Edge::Bottom,
       static_cast<float>(metrics.safe.bottom + metrics.verticalPadding));
   rootLayout->setGap(static_cast<float>(metrics.rootGap));
+
+  if (previewActive) {
+    rootLayout->setFlexDirection(FlexDirection::Row);
+    rootLayout->setJustifyContent(YGJustifyFlexEnd);
+    rootLayout->setAlignItems(YGAlignFlexStart);
+
+    const int panelWidth =
+        metrics.compact ? std::min(metrics.contentWidth, 520) : 380;
+    auto *previewPanel = new View();
+    previewPanel->setWidth(static_cast<float>(panelWidth));
+    previewPanel->setPadding(Edge::All,
+                             static_cast<float>(metrics.cardPadding));
+    previewPanel->setGap(metrics.compact ? 12.0f : 16.0f);
+    previewPanel->setFlexDirection(FlexDirection::Column);
+    previewPanel->setBackgroundColor(Color(12, 20, 32, 232));
+    previewPanel->setBorderColor(Color(78, 105, 140, 255));
+    previewPanel->setBorderWidth(2);
+
+    previewPanel->addView(
+        makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
+    auto *angleControls = new View();
+    angleControls->setFlexDirection(FlexDirection::Row);
+    angleControls->setFlexWrap(YGWrapWrap);
+    angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateLaneAngle = [this](float delta) {
+      context.settings.laneAngleDegrees =
+          clampLaneAngle(context.settings.laneAngleDegrees + delta);
+      persistSettings();
+    };
+    auto *minusAngle =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
+    minusAngle->setOnClickListener(
+        [updateLaneAngle]() { updateLaneAngle(-1.0f); });
+    angleControls->addView(minusAngle);
+    auto *plusAngle =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
+    plusAngle->setOnClickListener(
+        [updateLaneAngle]() { updateLaneAngle(1.0f); });
+    angleControls->addView(plusAngle);
+    auto *resetAngle = makeResetButton(metrics);
+    resetAngle->setOnClickListener([this]() {
+      context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
+      persistSettings();
+    });
+    angleControls->addView(resetAngle);
+    previewPanel->addView(angleControls);
+
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Lane Length", &summaryLaneLengthValueText));
+    auto *lengthControls = new View();
+    lengthControls->setFlexDirection(FlexDirection::Row);
+    lengthControls->setFlexWrap(YGWrapWrap);
+    lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateLaneLength = [this](float delta) {
+      context.settings.laneLength =
+          clampLaneLength(context.settings.laneLength + delta);
+      persistSettings();
+    };
+    auto *minusLength =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
+    minusLength->setOnClickListener(
+        [updateLaneLength]() { updateLaneLength(-0.5f); });
+    lengthControls->addView(minusLength);
+    auto *plusLength =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
+    plusLength->setOnClickListener(
+        [updateLaneLength]() { updateLaneLength(0.5f); });
+    lengthControls->addView(plusLength);
+    auto *resetLength = makeResetButton(metrics);
+    resetLength->setOnClickListener([this]() {
+      context.settings.laneLength = AppSettings::kDefaultLaneLength;
+      persistSettings();
+    });
+    lengthControls->addView(resetLength);
+    previewPanel->addView(lengthControls);
+
+    auto *restartButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText("Restart", metrics.bodyTextSize + 4, Color(239, 244, 251),
+                 TextView::CENTER, TextView::MIDDLE),
+        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
+        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
+        Color(139, 172, 217, 255));
+    restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
+    previewPanel->addView(restartButton);
+
+    auto *doneButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText("Done", metrics.bodyTextSize + 4, Color(237, 243, 252),
+                 TextView::CENTER, TextView::MIDDLE),
+        Color(22, 33, 49, 255), Color(31, 46, 67, 255), Color(53, 78, 110, 255),
+        Color(96, 121, 156, 255), Color(120, 151, 190, 255),
+        Color(148, 186, 231, 255));
+    doneButton->setOnClickListener([this]() { stopLanePreview(); });
+    previewPanel->addView(doneButton);
+
+    rootLayout->addView(previewPanel);
+    addView(rootLayout);
+    rootLayout->applyYogaLayout();
+    refreshSettingsText();
+    return;
+  }
+
   rootLayout->setBackgroundColor(Color(10, 18, 30));
 
   if (!metrics.compact) {
@@ -1417,29 +1538,32 @@ void SettingsScene::initView() {
                           "top of the screen.",
         lengthControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
-    auto *previewBody = new View();
-    previewBody->setFlexDirection(FlexDirection::Column);
-    previewBody->setGap(metrics.compact ? 10.0f : 14.0f);
-    previewBody->addView(makeWrappedText(
+    auto *previewControls = new View();
+    previewControls->setFlexDirection(FlexDirection::Column);
+    previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    previewControls->setAlignItems(YGAlignFlexStart);
+    previewControls->addView(makeWrappedText(
         metrics.compact
-            ? "Preview updates with angle and length."
-            : "This preview uses the same angle and length values as "
-              "gameplay camera setup.",
+            ? "Open a live gameplay preview with falling notes."
+            : "Open a live gameplay preview with falling notes. It uses the "
+              "same lane renderer, camera, viewport, and note textures as "
+              "gameplay.",
         metrics.bodyTextSize, Color(150, 171, 193)));
-    auto *preview = new LanePreviewView(context);
-    preview->setHeight(static_cast<float>(metrics.lanePreviewHeight));
-    preview->setBackgroundColor(Color(10, 16, 26, 255));
-    preview->setBorderColor(Color(64, 89, 118, 255));
-    preview->setBorderWidth(2);
-    previewBody->addView(preview);
+    auto *previewButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText("Preview", metrics.bodyTextSize + 4, Color(239, 244, 251),
+                 TextView::CENTER, TextView::MIDDLE),
+        Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+        Color(63, 118, 107, 255), Color(97, 157, 142, 255),
+        Color(120, 187, 169, 255), Color(145, 214, 195, 255));
+    previewButton->setOnClickListener([this]() { startLanePreview(); });
+    previewControls->addView(previewButton);
     cardsColumn->addView(makeCard(
-        metrics, "Preview Lane",
-        metrics.compact
-            ? "Visual check for lane geometry."
-            : "Visual check for the lane geometry before entering a "
-              "chart.",
-        previewBody, metrics.lanePreviewHeight + metrics.modeCardHeight,
-        metrics.cardsWidth));
+        metrics, "Gameplay Preview",
+        metrics.compact ? "Test lane setup in the gameplay renderer."
+                        : "Test lane setup in the gameplay renderer before "
+                          "entering a chart.",
+        previewControls, metrics.modeCardHeight, metrics.cardsWidth));
   }
   body->addView(cardsColumn);
   scrollContent->addView(body);
@@ -1866,7 +1990,14 @@ void SettingsScene::commitLaneLengthInput() {
 }
 
 void SettingsScene::update(float dt) {
-  (void)dt;
+  if (previewActive) {
+    ensurePreviewRenderer();
+    previewElapsedMicros +=
+        static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
+    if (previewElapsedMicros >= kPreviewLoopMicros) {
+      resetPreviewSimulation();
+    }
+  }
   ensureLayoutUpToDate();
 }
 
@@ -1874,9 +2005,17 @@ void SettingsScene::renderScene() {
   if (rootLayout != nullptr) {
     rootLayout->setSize(rendering::window_width, rendering::window_height);
   }
+  if (previewActive && previewRenderer != nullptr) {
+    previewRenderer->setVisibleTimeGreenNumber(
+        context.settings.visibleTimeGreenNumber);
+    previewRenderer->refreshGeometry();
+    RenderContext renderContext;
+    previewRenderer->render(renderContext, previewElapsedMicros);
+  }
 }
 
 void SettingsScene::cleanupScene() {
+  destroyPreviewRenderer();
   rootLayout = nullptr;
   scrollView = nullptr;
   offsetInput = nullptr;

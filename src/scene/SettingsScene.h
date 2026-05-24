@@ -7,6 +7,11 @@ class TextView;
 class TextInputBox;
 class Button;
 class ScrollView;
+class BMSRenderer;
+
+namespace bms_parser {
+class Chart;
+}
 
 class SettingsScene : public Scene {
 public:
@@ -54,6 +59,10 @@ private:
   TextInputBox *laneAngleInput = nullptr;
   TextInputBox *laneLengthInput = nullptr;
   ScrollView *scrollView = nullptr;
+  bool previewActive = false;
+  bms_parser::Chart *previewChart = nullptr;
+  BMSRenderer *previewRenderer = nullptr;
+  long long previewElapsedMicros = 0;
   SettingsTab activeTab = SettingsTab::Timing;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
@@ -65,6 +74,11 @@ private:
   void initView();
   void resetViewState();
   void ensureLayoutUpToDate();
+  void startLanePreview();
+  void stopLanePreview();
+  void ensurePreviewRenderer();
+  void destroyPreviewRenderer();
+  void resetPreviewSimulation();
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

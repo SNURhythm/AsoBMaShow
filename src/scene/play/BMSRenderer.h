@@ -104,6 +104,7 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
+  bool renderHud = true;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::TexBatchRenderer texBatchRenderer;
@@ -137,8 +138,10 @@ public:
   void onLaneReleased(int lane, long long time);
   void onJudge(JudgeResult judgeResult, int combo, int score);
   explicit BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
-                       int visibleTimeGreenNumber);
+                       int visibleTimeGreenNumber, bool renderHud = true);
 
   void render(RenderContext &context, long long micro);
   void reset();
+  void refreshGeometry();
+  void setVisibleTimeGreenNumber(int greenNumber);
 };
