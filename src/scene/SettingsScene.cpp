@@ -620,7 +620,7 @@ void SettingsScene::ensureLayoutUpToDate() {
 }
 
 void SettingsScene::initView() {
-  const LayoutMetrics metrics = resolveLayoutMetrics();
+  LayoutMetrics metrics = resolveLayoutMetrics();
   View::LayoutBatchScope layoutBatch;
 
   rootLayout =
@@ -640,6 +640,107 @@ void SettingsScene::initView() {
       static_cast<float>(metrics.safe.bottom + metrics.verticalPadding));
   rootLayout->setGap(static_cast<float>(metrics.rootGap));
 
+  auto makeVisibleTimeControls = [this,
+                                  &metrics](bool includeDescription) -> View * {
+    auto *visibleTimeControls = new View();
+    visibleTimeControls->setFlexDirection(FlexDirection::Column);
+    visibleTimeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    visibleTimeControls->setAlignItems(YGAlignFlexStart);
+    if (includeDescription) {
+      visibleTimeControls->addView(makeWrappedText(
+          metrics.compact
+              ? "600 green = 1000 ms. This controls how long notes stay "
+                "visible."
+              : "Green Number is the legacy BMS unit for note visible time. "
+                "600 green equals 60 frames on a 60 FPS system, which is "
+                "1000 ms.",
+          metrics.bodyTextSize, Color(150, 171, 193)));
+    }
+
+    visibleTimeModeText =
+        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+                 TextView::CENTER, TextView::MIDDLE);
+    visibleTimeModeButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        visibleTimeModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+        Color(59, 98, 147, 255), Color(92, 131, 177, 255),
+        Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+    visibleTimeModeButton->setOnClickListener([this]() {
+      context.settings.visibleTimeUseMilliseconds =
+          !context.settings.visibleTimeUseMilliseconds;
+      persistSettings();
+      syncVisibleTimeInputText(true);
+    });
+    visibleTimeControls->addView(visibleTimeModeButton);
+
+    auto *visibleTimeValueControls = new View();
+    visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
+    visibleTimeValueControls->setFlexWrap(YGWrapWrap);
+    visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
+    visibleTimeValueControls->setAlignItems(YGAlignFlexStart);
+
+    auto updateVisibleTime = [this](int delta) {
+      context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
+          context.settings.visibleTimeGreenNumber,
+          context.settings.visibleTimeUseMilliseconds, delta);
+      persistSettings();
+      syncVisibleTimeInputText(true);
+    };
+
+    auto *minusVisibleTimeLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-100");
+    minusVisibleTimeLarge->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(-100); });
+    visibleTimeValueControls->addView(minusVisibleTimeLarge);
+
+    auto *minusVisibleTimeSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10");
+    minusVisibleTimeSmall->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(-10); });
+    visibleTimeValueControls->addView(minusVisibleTimeSmall);
+
+    auto *minusVisibleTimeOne =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
+    minusVisibleTimeOne->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(-1); });
+    visibleTimeValueControls->addView(minusVisibleTimeOne);
+
+    visibleTimeInput = makeNumericInput(metrics);
+    visibleTimeInput->onEditingFinished(
+        [this](const std::string &) { commitVisibleTimeInput(); });
+    visibleTimeValueControls->addView(
+        makeInputFrame(metrics, visibleTimeInput));
+
+    auto *plusVisibleTimeOne =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
+    plusVisibleTimeOne->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(1); });
+    visibleTimeValueControls->addView(plusVisibleTimeOne);
+
+    auto *plusVisibleTimeSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10");
+    plusVisibleTimeSmall->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(10); });
+    visibleTimeValueControls->addView(plusVisibleTimeSmall);
+
+    auto *plusVisibleTimeLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+100");
+    plusVisibleTimeLarge->setOnClickListener(
+        [updateVisibleTime]() { updateVisibleTime(100); });
+    visibleTimeValueControls->addView(plusVisibleTimeLarge);
+
+    auto *resetVisibleTime = makeResetButton(metrics);
+    resetVisibleTime->setOnClickListener([this]() {
+      context.settings.visibleTimeGreenNumber = 400;
+      persistSettings();
+      syncVisibleTimeInputText(true);
+    });
+    visibleTimeValueControls->addView(resetVisibleTime);
+
+    visibleTimeControls->addView(visibleTimeValueControls);
+    return visibleTimeControls;
+  };
+
   if (previewActive) {
     rootLayout->setFlexDirection(FlexDirection::Row);
     rootLayout->setJustifyContent(YGJustifyFlexEnd);
@@ -653,12 +754,15 @@ void SettingsScene::initView() {
                              static_cast<float>(metrics.cardPadding));
     previewPanel->setGap(metrics.compact ? 12.0f : 16.0f);
     previewPanel->setFlexDirection(FlexDirection::Column);
-    previewPanel->setBackgroundColor(Color(12, 20, 32, 232));
-    previewPanel->setBorderColor(Color(78, 105, 140, 255));
+    previewPanel->setBackgroundColor(Color(12, 20, 32, 184));
+    previewPanel->setBorderColor(Color(78, 105, 140, 220));
     previewPanel->setBorderWidth(2);
 
     previewPanel->addView(
         makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
+    previewPanel->addView(makeVisibleTimeControls(false));
     previewPanel->addView(
         makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
     auto *angleControls = new View();
@@ -790,78 +894,32 @@ void SettingsScene::initView() {
   header->addView(backButton);
   rootLayout->addView(header);
 
-  scrollView = new ScrollView();
-  scrollView->setFlex(1.0f);
+  const int tabColumnWidth = std::min(
+      metrics.contentWidth,
+      metrics.compact ? std::clamp(metrics.contentWidth / 4, 150, 190)
+                      : std::clamp(metrics.contentWidth / 6, 220, 280));
+  metrics.cardsWidth =
+      std::max(0, metrics.contentWidth - tabColumnWidth - metrics.bodyGap);
+  metrics.useDualCardRow = !metrics.compact && metrics.cardsWidth >= 980;
+  metrics.secondaryCardWidth =
+      metrics.useDualCardRow
+          ? std::max(0, (metrics.cardsWidth - metrics.secondaryGap) / 2)
+          : metrics.cardsWidth;
 
-  auto *scrollContent = new View();
-  scrollContent->setFlexDirection(FlexDirection::Column);
-  scrollContent->setGap(static_cast<float>(metrics.rootGap));
-
-  auto *body = new View();
-  body->setFlexDirection(metrics.stackBody ? FlexDirection::Column
-                                           : FlexDirection::Row);
-  body->setGap(static_cast<float>(metrics.bodyGap));
-  body->setAlignItems(YGAlignFlexStart);
-
-  auto *summaryCard = new View();
-  summaryCard->setWidth(static_cast<float>(
-      metrics.stackBody ? metrics.contentWidth : metrics.summaryWidth));
-  summaryCard->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  summaryCard->setGap(metrics.compact ? 12.0f : 18.0f);
-  summaryCard->setFlexDirection(FlexDirection::Column);
-  summaryCard->setBackgroundColor(Color(17, 27, 42, 245));
-  summaryCard->setBorderColor(Color(68, 94, 123, 255));
-  summaryCard->setBorderWidth(2);
-  summaryCard->addView(makeText("Profile Snapshot", metrics.sectionTitleSize,
-                                Color(244, 248, 255)));
-  summaryCard->addView(
-      makeWrappedText(metrics.compact ? "Saved immediately."
-                                      : "Saved immediately for new charts.",
-                      metrics.bodyTextSize, Color(160, 181, 204)));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Judgement Offset", &summaryOffsetValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Visual Offset", &summaryVisualOffsetValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Input Keysounds", &summaryKeysoundValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "BGA Playback", &summaryBgaValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "BGA Display", &summaryBgaDisplayValueText));
-  summaryCard->addView(makeSummaryRow(metrics, "BGA Brightness",
-                                      &summaryBgaBrightnessValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "BGA Blur", &summaryBgaBlurValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
-  summaryCard->addView(
-      makeSummaryRow(metrics, "Lane Length", &summaryLaneLengthValueText));
-  if (!metrics.ultraCompact) {
-    summaryCard->addView(makeWrappedText(
-        metrics.compact
-            ? "Judgement offset shifts timing windows. Visual offset delays "
-              "notes and BGA for late audio paths."
-            : "Judgement offset shifts timing windows. Visual offset delays "
-              "notes and BGA, while visible time controls how long notes stay "
-              "on screen.",
-        metrics.smallTextSize, Color(131, 151, 176)));
-  }
-  body->addView(summaryCard);
-
-  auto *cardsColumn = new View();
-  cardsColumn->setFlexDirection(FlexDirection::Column);
-  cardsColumn->setGap(static_cast<float>(metrics.secondaryGap));
-  cardsColumn->setWidth(static_cast<float>(metrics.cardsWidth));
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Row);
+  content->setGap(static_cast<float>(metrics.bodyGap));
+  content->setFlex(1.0f);
+  content->setAlignItems(YGAlignStretch);
 
   auto *tabControls = new View();
-  tabControls->setFlexDirection(FlexDirection::Row);
-  tabControls->setFlexWrap(YGWrapWrap);
+  tabControls->setFlexDirection(FlexDirection::Column);
   tabControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  tabControls->setWidth(static_cast<float>(tabColumnWidth));
+  tabControls->setFlexShrink(0.0f);
   auto makeTabButton = [&](SettingsTab tab, const std::string &label) {
     auto *button = makeButton(
-        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        tabColumnWidth, metrics.actionButtonHeight,
         makeText(label, metrics.bodyTextSize + 4, Color(239, 244, 251),
                  TextView::CENTER, TextView::MIDDLE),
         Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
@@ -882,7 +940,19 @@ void SettingsScene::initView() {
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
-  cardsColumn->addView(tabControls);
+  content->addView(tabControls);
+
+  scrollView = new ScrollView();
+  scrollView->setFlex(1.0f);
+
+  auto *scrollContent = new View();
+  scrollContent->setFlexDirection(FlexDirection::Column);
+  scrollContent->setGap(static_cast<float>(metrics.rootGap));
+
+  auto *cardsColumn = new View();
+  cardsColumn->setFlexDirection(FlexDirection::Column);
+  cardsColumn->setGap(static_cast<float>(metrics.secondaryGap));
+  cardsColumn->setWidth(static_cast<float>(metrics.cardsWidth));
 
   if (activeTab == SettingsTab::Timing) {
     auto *offsetControls = new View();
@@ -1079,160 +1149,6 @@ void SettingsScene::initView() {
             : "Positive values delay note rendering and BGA playback. Use this "
               "for late audio paths such as Bluetooth headphones.",
         visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
-
-    auto *visibleTimeControls = new View();
-    visibleTimeControls->setFlexDirection(FlexDirection::Column);
-    visibleTimeControls->setGap(metrics.compact ? 12.0f : 16.0f);
-    visibleTimeControls->setAlignItems(YGAlignFlexStart);
-    visibleTimeControls->addView(makeWrappedText(
-        metrics.compact
-            ? "600 green = 1000 ms. This controls how long notes stay visible."
-            : "Green Number is the legacy BMS unit for note visible time. "
-              "600 green equals 60 frames on a 60 FPS system, which is 1000 "
-              "ms.",
-        metrics.bodyTextSize, Color(150, 171, 193)));
-
-    visibleTimeModeText =
-        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
-                 TextView::CENTER, TextView::MIDDLE);
-    visibleTimeModeButton = makeButton(
-        metrics.actionButtonWidth, metrics.actionButtonHeight,
-        visibleTimeModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-        Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-        Color(118, 163, 217, 255), Color(139, 189, 244, 255));
-    visibleTimeModeButton->setOnClickListener([this]() {
-      context.settings.visibleTimeUseMilliseconds =
-          !context.settings.visibleTimeUseMilliseconds;
-      persistSettings();
-      syncVisibleTimeInputText(true);
-    });
-    visibleTimeControls->addView(visibleTimeModeButton);
-
-    auto *visibleTimeValueControls = new View();
-    visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
-    visibleTimeValueControls->setFlexWrap(YGWrapWrap);
-    visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
-    visibleTimeValueControls->setAlignItems(YGAlignFlexStart);
-
-    auto updateVisibleTime = [this](int delta) {
-      context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
-          context.settings.visibleTimeGreenNumber,
-          context.settings.visibleTimeUseMilliseconds, delta);
-      persistSettings();
-      syncVisibleTimeInputText(true);
-    };
-
-    auto *minusVisibleTimeLarge = makeButton(
-        metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-        makeText("-100", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    minusVisibleTimeLarge->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(-100); });
-    visibleTimeValueControls->addView(minusVisibleTimeLarge);
-
-    auto *minusVisibleTimeOne = makeButton(
-        metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-        makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    minusVisibleTimeOne->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(-1); });
-    visibleTimeValueControls->addView(minusVisibleTimeOne);
-
-    auto *minusVisibleTimeSmall = makeButton(
-        metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-        makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    minusVisibleTimeSmall->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(-10); });
-    visibleTimeValueControls->addView(minusVisibleTimeSmall);
-
-    auto *visibleTimeValue = new View();
-    visibleTimeValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
-    visibleTimeValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-    visibleTimeValue->setBackgroundColor(Color(10, 17, 28, 255));
-    visibleTimeValue->setBorderColor(Color(78, 105, 140, 255));
-    visibleTimeValue->setBorderWidth(2);
-    visibleTimeInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
-    visibleTimeInput->setText("");
-    visibleTimeInput->setSize(metrics.offsetValueWidth,
-                              metrics.actionButtonHeight);
-    visibleTimeInput->setBackgroundColor(Color(0, 0, 0, 0));
-    visibleTimeInput->setBorderWidth(0);
-    visibleTimeInput->setAlign(TextView::CENTER);
-    visibleTimeInput->setVAlign(TextView::MIDDLE);
-    visibleTimeInput->setColor({244, 248, 255, 255});
-    visibleTimeInput->onEditingFinished(
-        [this](const std::string &) { commitVisibleTimeInput(); });
-    visibleTimeValue->addView(visibleTimeInput);
-    visibleTimeValueControls->addView(visibleTimeValue);
-
-    auto *plusVisibleTimeOne = makeButton(
-        metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-        makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    plusVisibleTimeOne->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(1); });
-    visibleTimeValueControls->addView(plusVisibleTimeOne);
-
-    auto *plusVisibleTimeSmall = makeButton(
-        metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-        makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    plusVisibleTimeSmall->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(10); });
-    visibleTimeValueControls->addView(plusVisibleTimeSmall);
-
-    auto *plusVisibleTimeLarge = makeButton(
-        metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-        makeText("+100", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
-    plusVisibleTimeLarge->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(100); });
-    visibleTimeValueControls->addView(plusVisibleTimeLarge);
-
-    auto *resetVisibleTime = makeButton(
-        metrics.resetButtonWidth, metrics.actionButtonHeight,
-        makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(96, 57, 44, 255), Color(117, 72, 55, 255),
-        Color(153, 96, 74, 255), Color(165, 105, 79, 255),
-        Color(193, 124, 93, 255), Color(219, 145, 108, 255));
-    resetVisibleTime->setOnClickListener([this]() {
-      context.settings.visibleTimeGreenNumber = 400;
-      persistSettings();
-      syncVisibleTimeInputText(true);
-    });
-    visibleTimeValueControls->addView(resetVisibleTime);
-
-    visibleTimeControls->addView(visibleTimeValueControls);
-    cardsColumn->addView(makeCard(
-        metrics, "Visible Time",
-        metrics.compact
-            ? "Controls how long notes stay on screen before the judgement "
-              "line."
-            : "Controls how long notes stay visible before reaching the "
-              "judgement line. Switch units if you prefer legacy green number "
-              "or direct milliseconds.",
-        visibleTimeControls, metrics.visibleTimeCardHeight,
-        metrics.cardsWidth));
 
     auto *secondaryCards = new View();
     secondaryCards->setFlexDirection(
@@ -1439,6 +1355,18 @@ void SettingsScene::initView() {
   }
 
   if (activeTab == SettingsTab::Lane) {
+    auto *visibleTimeControls = makeVisibleTimeControls(true);
+    cardsColumn->addView(makeCard(
+        metrics, "Visible Time",
+        metrics.compact
+            ? "Controls how long notes stay on screen before the judgement "
+              "line."
+            : "Controls how long notes stay visible before reaching the "
+              "judgement line. Switch units if you prefer legacy green number "
+              "or direct milliseconds.",
+        visibleTimeControls, metrics.visibleTimeCardHeight,
+        metrics.cardsWidth));
+
     auto *angleControls = new View();
     angleControls->setFlexDirection(FlexDirection::Row);
     angleControls->setFlexWrap(YGWrapWrap);
@@ -1565,8 +1493,7 @@ void SettingsScene::initView() {
                           "entering a chart.",
         previewControls, metrics.modeCardHeight, metrics.cardsWidth));
   }
-  body->addView(cardsColumn);
-  scrollContent->addView(body);
+  scrollContent->addView(cardsColumn);
 
   auto *footer = new View();
   footer->setPadding(Edge::All, static_cast<float>(metrics.cardPadding - 4));
@@ -1581,7 +1508,8 @@ void SettingsScene::initView() {
   scrollContent->addView(footer);
 
   scrollView->setContentView(scrollContent);
-  rootLayout->addView(scrollView);
+  content->addView(scrollView);
+  rootLayout->addView(content);
 
   addView(rootLayout);
   rootLayout->applyYogaLayout();
