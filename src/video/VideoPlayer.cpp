@@ -246,26 +246,26 @@ void VideoPlayer::render() {
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
 
   // Define quad vertices
-  vertex[0].x = 0.0f;
-  vertex[0].y = viewHeight;
+  vertex[0].x = viewX;
+  vertex[0].y = viewY + viewHeight;
   vertex[0].z = 0.0f;
   vertex[0].u = 0.0f;
   vertex[0].v = 1.0f;
 
-  vertex[1].x = viewWidth;
-  vertex[1].y = viewHeight;
+  vertex[1].x = viewX + viewWidth;
+  vertex[1].y = viewY + viewHeight;
   vertex[1].z = 0.0f;
   vertex[1].u = 1.0f;
   vertex[1].v = 1.0f;
 
-  vertex[2].x = 0.0f;
-  vertex[2].y = 0.0f;
+  vertex[2].x = viewX;
+  vertex[2].y = viewY;
   vertex[2].z = 0.0f;
   vertex[2].u = 0.0f;
   vertex[2].v = 0.0f;
 
-  vertex[3].x = viewWidth;
-  vertex[3].y = 0.0f;
+  vertex[3].x = viewX + viewWidth;
+  vertex[3].y = viewY;
   vertex[3].z = 0.0f;
   vertex[3].u = 1.0f;
   vertex[3].v = 0.0f;
@@ -428,7 +428,8 @@ void VideoPlayer::predecodeFrames() {
             // FFmpeg 7.1 Fix: Drain all available frames from the decoder
             while (true) {
               av_frame_unref(decodedFrame);
-              int receive_ret = avcodec_receive_frame(codecContext, decodedFrame);
+              int receive_ret =
+                  avcodec_receive_frame(codecContext, decodedFrame);
 
               if (receive_ret == 0) {
                 // Frame decoded successfully. Now scale it on this thread.

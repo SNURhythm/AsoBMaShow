@@ -20,11 +20,13 @@ public:
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;
 
-  ApplicationContext() : quitFlag(false), settings(AppSettings::load()),
-                         jukebox(&gameStopwatch) {
+  ApplicationContext()
+      : quitFlag(false), settings(AppSettings::load()),
+        jukebox(&gameStopwatch) {
     settings.sanitize();
     jukebox.setVisualsEnabled(settings.bgaEnabled);
     jukebox.setVisualOffsetMs(settings.visualOffsetMs);
+    jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
   }
   ~ApplicationContext() {
     quitFlag = true;

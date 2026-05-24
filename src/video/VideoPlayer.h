@@ -28,6 +28,8 @@ public:
   void pause();
   void stop();
   void seek(int64_t micro);
+  int getFrameWidth() const { return videoFrameWidth; }
+  int getFrameHeight() const { return videoFrameHeight; }
   float viewWidth = 1920.0f;
   float viewHeight = 1080.0f;
   int viewId = rendering::bga_view;

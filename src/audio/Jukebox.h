@@ -11,6 +11,7 @@
 #include "../utils/Stopwatch.h"
 #include <functional>
 
+#include "../AppSettings.h"
 #include <cassert>
 
 struct ImageData {
@@ -21,7 +22,7 @@ struct ImageData {
 };
 class Jukebox {
 public:
-  struct PerformanceAnalytics{
+  struct PerformanceAnalytics {
     static const int BUFFER_SIZE = 10000;
     // ring buffer to store loop delta time
     std::array<std::atomic<uint32_t>, BUFFER_SIZE> loopDeltaTimes{};
@@ -32,7 +33,7 @@ public:
     size_t statsCount = 0;
   };
   PerformanceAnalytics performanceAnalytics;
-  
+
   Jukebox(Stopwatch *stopwatch);
   ~Jukebox();
 
@@ -51,6 +52,7 @@ public:
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;
   void setVisualOffsetMs(int offsetMs);
+  void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
   long long getTimeMicros();
   void seek(long long micro);
@@ -73,6 +75,13 @@ private:
   void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void renderImage(ImageData &image, int viewId);
+  struct BgaRect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+  BgaRect calculateBgaRect(int sourceWidth, int sourceHeight) const;
   std::atomic_bool isPlaying = false;
   std::thread playThread;
   Stopwatch *stopwatch;
@@ -92,6 +101,8 @@ private:
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};
   std::atomic<int> visualOffsetMs{0};
+  std::atomic<int> bgaDisplayMode{
+      static_cast<int>(AppSettings::BgaDisplayMode::Fit)};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};

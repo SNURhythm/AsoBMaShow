@@ -3,6 +3,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -30,6 +31,41 @@ bool parseBool(const std::string &value, bool &out) {
   }
   return false;
 }
+
+float sanitizeFloat(float value, float fallback, float minValue,
+                    float maxValue) {
+  if (!std::isfinite(value)) {
+    return fallback;
+  }
+  return std::clamp(value, minValue, maxValue);
+}
+
+AppSettings::BgaDisplayMode
+parseBgaDisplayMode(const std::string &value,
+                    AppSettings::BgaDisplayMode fallback) {
+  if (value == "fit" || value == "0") {
+    return AppSettings::BgaDisplayMode::Fit;
+  }
+  if (value == "fill" || value == "1") {
+    return AppSettings::BgaDisplayMode::Fill;
+  }
+  if (value == "stretch" || value == "2") {
+    return AppSettings::BgaDisplayMode::Stretch;
+  }
+  return fallback;
+}
+
+const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
+  switch (mode) {
+  case AppSettings::BgaDisplayMode::Fit:
+    return "fit";
+  case AppSettings::BgaDisplayMode::Fill:
+    return "fill";
+  case AppSettings::BgaDisplayMode::Stretch:
+    return "stretch";
+  }
+  return "fit";
+}
 } // namespace
 
 std::filesystem::path AppSettings::configPath() {
@@ -41,9 +77,26 @@ void AppSettings::sanitize() {
       std::clamp(inputOffsetMs, kMinInputOffsetMs, kMaxInputOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
-  visibleTimeGreenNumber = std::clamp(visibleTimeGreenNumber,
-                                      kMinVisibleTimeGreenNumber,
-                                      kMaxVisibleTimeGreenNumber);
+  visibleTimeGreenNumber =
+      std::clamp(visibleTimeGreenNumber, kMinVisibleTimeGreenNumber,
+                 kMaxVisibleTimeGreenNumber);
+  bgaBrightnessPercent = std::clamp(
+      bgaBrightnessPercent, kMinBgaBrightnessPercent, kMaxBgaBrightnessPercent);
+  bgaBlurStrength = sanitizeFloat(bgaBlurStrength, kDefaultBgaBlurStrength,
+                                  kMinBgaBlurStrength, kMaxBgaBlurStrength);
+  switch (bgaDisplayMode) {
+  case BgaDisplayMode::Fit:
+  case BgaDisplayMode::Fill:
+  case BgaDisplayMode::Stretch:
+    break;
+  default:
+    bgaDisplayMode = BgaDisplayMode::Fit;
+    break;
+  }
+  laneAngleDegrees = sanitizeFloat(laneAngleDegrees, kDefaultLaneAngleDegrees,
+                                   kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
+  laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
+                             kMaxLaneLength);
 }
 
 bool AppSettings::save() const {
@@ -72,9 +125,15 @@ bool AppSettings::save() const {
        << "\n";
   file << "visible_time_use_milliseconds="
        << (sanitized.visibleTimeUseMilliseconds ? 1 : 0) << "\n";
-  file << "input_keysound_enabled="
-       << (sanitized.inputKeysoundEnabled ? 1 : 0) << "\n";
+  file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
+       << "\n";
   file << "bga_enabled=" << (sanitized.bgaEnabled ? 1 : 0) << "\n";
+  file << "bga_brightness_percent=" << sanitized.bgaBrightnessPercent << "\n";
+  file << "bga_blur_strength=" << sanitized.bgaBlurStrength << "\n";
+  file << "bga_display_mode="
+       << bgaDisplayModeToString(sanitized.bgaDisplayMode) << "\n";
+  file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
+  file << "lane_length=" << sanitized.laneLength << "\n";
   return file.good();
 }
 
@@ -124,6 +183,17 @@ AppSettings AppSettings::load() {
         if (parseBool(value, parsed)) {
           settings.bgaEnabled = parsed;
         }
+      } else if (key == "bga_brightness_percent") {
+        settings.bgaBrightnessPercent = std::stoi(value);
+      } else if (key == "bga_blur_strength") {
+        settings.bgaBlurStrength = std::stof(value);
+      } else if (key == "bga_display_mode") {
+        settings.bgaDisplayMode =
+            parseBgaDisplayMode(value, settings.bgaDisplayMode);
+      } else if (key == "lane_angle_degrees") {
+        settings.laneAngleDegrees = std::stof(value);
+      } else if (key == "lane_length") {
+        settings.laneLength = std::stof(value);
       }
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),

@@ -8,6 +8,7 @@
 #include "../rendering/UniformCache.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
+#include <algorithm>
 #include <unordered_set>
 #ifdef _WIN32
 #include <timeapi.h>
@@ -54,10 +55,14 @@ void Jukebox::render() {
       auto videoIt = videoPlayerTable.find(bga);
       if (videoIt != videoPlayerTable.end()) {
         auto *videoPlayer = videoIt->second;
-        videoPlayer->viewWidth = rendering::window_width;
-        videoPlayer->viewHeight = rendering::window_height;
-        videoPlayer->viewId = rendering::bga_view;
         videoPlayer->update();
+        const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
+                                           videoPlayer->getFrameHeight());
+        videoPlayer->viewX = rect.x;
+        videoPlayer->viewY = rect.y;
+        videoPlayer->viewWidth = rect.width;
+        videoPlayer->viewHeight = rect.height;
+        videoPlayer->viewId = rendering::bga_view;
         videoPlayer->render();
         rendered = true;
       }
@@ -78,10 +83,14 @@ void Jukebox::render() {
       auto videoIt = videoPlayerTable.find(bmpLayer);
       if (videoIt != videoPlayerTable.end()) {
         auto *videoPlayer = videoIt->second;
-        videoPlayer->viewWidth = rendering::window_width;
-        videoPlayer->viewHeight = rendering::window_height;
-        videoPlayer->viewId = rendering::bga_layer_view;
         videoPlayer->update();
+        const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
+                                           videoPlayer->getFrameHeight());
+        videoPlayer->viewX = rect.x;
+        videoPlayer->viewY = rect.y;
+        videoPlayer->viewWidth = rect.width;
+        videoPlayer->viewHeight = rect.height;
+        videoPlayer->viewId = rendering::bga_layer_view;
         videoPlayer->render();
         rendered = true;
       }
@@ -122,6 +131,36 @@ bool Jukebox::getVisualsEnabled() const {
 
 void Jukebox::setVisualOffsetMs(int offsetMs) {
   visualOffsetMs.store(offsetMs, std::memory_order_relaxed);
+}
+
+void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
+  bgaDisplayMode.store(static_cast<int>(mode), std::memory_order_relaxed);
+}
+
+Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
+                                           int sourceHeight) const {
+  const float targetWidth = static_cast<float>(rendering::window_width);
+  const float targetHeight = static_cast<float>(rendering::window_height);
+  if (targetWidth <= 0.0f || targetHeight <= 0.0f) {
+    return {};
+  }
+
+  const auto mode = static_cast<AppSettings::BgaDisplayMode>(
+      bgaDisplayMode.load(std::memory_order_relaxed));
+  if (mode == AppSettings::BgaDisplayMode::Stretch || sourceWidth <= 0 ||
+      sourceHeight <= 0) {
+    return {0.0f, 0.0f, targetWidth, targetHeight};
+  }
+
+  const float scaleX = targetWidth / static_cast<float>(sourceWidth);
+  const float scaleY = targetHeight / static_cast<float>(sourceHeight);
+  const float scale = mode == AppSettings::BgaDisplayMode::Fill
+                          ? std::max(scaleX, scaleY)
+                          : std::min(scaleX, scaleY);
+  const float width = static_cast<float>(sourceWidth) * scale;
+  const float height = static_cast<float>(sourceHeight) * scale;
+  return {(targetWidth - width) * 0.5f, (targetHeight - height) * 0.5f, width,
+          height};
 }
 
 long long Jukebox::getVisualOffsetMicros() const {
@@ -536,17 +575,17 @@ void Jukebox::play() {
       prevTimestamp = currentTimestamp;
 
       targetNextFrame += interval;
-      if(targetNextFrame < Clock::now()) {
+      if (targetNextFrame < Clock::now()) {
         // we're late, skip sleeping
         continue;
       }
 
       // sleep only if hz is low enough
-      if(hz <= 250) {
+      if (hz <= 250) {
         auto loopRunTime = Clock::now() - loopStartTimestamp;
         auto sleepTime = std::chrono::microseconds(1000000 / hz) - loopRunTime;
         // 1.4 is a magic number to avoid sleeping longer than needed
-        std::this_thread::sleep_for(sleepTime/1.4);
+        std::this_thread::sleep_for(sleepTime / 1.4);
       }
       // spin wait for the rest of the time
       while (Clock::now() < targetNextFrame) {
@@ -570,28 +609,28 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
 
-  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosTexCoord0Vertex::ms_decl);
+  bgfx::allocTransientVertexBuffer(&tvb, 4,
+                                   rendering::PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
-  // canvas extension (See "spread canvas" in
-  // https://hitkey.nekokan.dyndns.info/cmds.htm#BMPXX-ADJUSTMENT)
-  vertex[0].x = rendering::window_width / 2.0f - image.width / 2.0f;
-  vertex[0].y = rendering::window_height / 2.0f - 256.0f / 2.0f + image.height;
+  const auto rect = calculateBgaRect(image.width, image.height);
+  vertex[0].x = rect.x;
+  vertex[0].y = rect.y + rect.height;
   vertex[0].z = 0.0f;
   vertex[0].u = 0.0f;
   vertex[0].v = 1.0f;
-  vertex[1].x = rendering::window_width / 2.0f + image.width / 2.0f;
-  vertex[1].y = rendering::window_height / 2.0f - 256.0f / 2.0f + image.height;
+  vertex[1].x = rect.x + rect.width;
+  vertex[1].y = rect.y + rect.height;
   vertex[1].z = 0.0f;
   vertex[1].u = 1.0f;
   vertex[1].v = 1.0f;
-  vertex[2].x = rendering::window_width / 2.0f - image.width / 2.0f;
-  vertex[2].y = rendering::window_height / 2.0f - 256.0f / 2.0f;
+  vertex[2].x = rect.x;
+  vertex[2].y = rect.y;
   vertex[2].z = 0.0f;
   vertex[2].u = 0.0f;
   vertex[2].v = 0.0f;
-  vertex[3].x = rendering::window_width / 2.0f + image.width / 2.0f;
-  vertex[3].y = rendering::window_height / 2.0f - 256.0f / 2.0f;
+  vertex[3].x = rect.x + rect.width;
+  vertex[3].y = rect.y;
   vertex[3].z = 0.0f;
   vertex[3].u = 1.0f;
   vertex[3].v = 0.0f;
@@ -662,21 +701,23 @@ void Jukebox::seek(long long micro) {
 }
 
 double Jukebox::getAvgDeltaTime() {
-  size_t currentWriteIndex = performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
-  while(performanceAnalytics.cursor != currentWriteIndex) {
+  size_t currentWriteIndex =
+      performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
+  while (performanceAnalytics.cursor != currentWriteIndex) {
     const auto loopRunTime = static_cast<double>(
         performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor].load(
             std::memory_order_relaxed));
     performanceAnalytics.statsSum += loopRunTime;
-    performanceAnalytics.statsCount ++;
-    if(performanceAnalytics.statsCount >= 100) {
-      performanceAnalytics.avgDeltaTime = performanceAnalytics.statsSum / performanceAnalytics.statsCount;
+    performanceAnalytics.statsCount++;
+    if (performanceAnalytics.statsCount >= 100) {
+      performanceAnalytics.avgDeltaTime =
+          performanceAnalytics.statsSum / performanceAnalytics.statsCount;
       performanceAnalytics.statsSum = 0;
       performanceAnalytics.statsCount = 0;
     }
-    performanceAnalytics.cursor = (performanceAnalytics.cursor + 1) % PerformanceAnalytics::BUFFER_SIZE;
+    performanceAnalytics.cursor =
+        (performanceAnalytics.cursor + 1) % PerformanceAnalytics::BUFFER_SIZE;
   }
 
   return performanceAnalytics.avgDeltaTime;
-
 }
