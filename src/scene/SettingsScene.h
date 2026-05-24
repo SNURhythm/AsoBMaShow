@@ -60,6 +60,7 @@ private:
   TextInputBox *laneLengthInput = nullptr;
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
+  bool previewPanelFolded = false;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
   long long previewElapsedMicros = 0;

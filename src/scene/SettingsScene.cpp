@@ -641,7 +641,8 @@ void SettingsScene::initView() {
   rootLayout->setGap(static_cast<float>(metrics.rootGap));
 
   auto makeVisibleTimeControls = [this,
-                                  &metrics](bool includeDescription) -> View * {
+                                  &metrics](bool includeDescription,
+                                            bool compactAdjustments) -> View * {
     auto *visibleTimeControls = new View();
     visibleTimeControls->setFlexDirection(FlexDirection::Column);
     visibleTimeControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -687,11 +688,13 @@ void SettingsScene::initView() {
       syncVisibleTimeInputText(true);
     };
 
-    auto *minusVisibleTimeLarge =
-        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-100");
-    minusVisibleTimeLarge->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(-100); });
-    visibleTimeValueControls->addView(minusVisibleTimeLarge);
+    if (!compactAdjustments) {
+      auto *minusVisibleTimeLarge =
+          makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-100");
+      minusVisibleTimeLarge->setOnClickListener(
+          [updateVisibleTime]() { updateVisibleTime(-100); });
+      visibleTimeValueControls->addView(minusVisibleTimeLarge);
+    }
 
     auto *minusVisibleTimeSmall =
         makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10");
@@ -699,11 +702,13 @@ void SettingsScene::initView() {
         [updateVisibleTime]() { updateVisibleTime(-10); });
     visibleTimeValueControls->addView(minusVisibleTimeSmall);
 
-    auto *minusVisibleTimeOne =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
-    minusVisibleTimeOne->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(-1); });
-    visibleTimeValueControls->addView(minusVisibleTimeOne);
+    if (!compactAdjustments) {
+      auto *minusVisibleTimeOne =
+          makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
+      minusVisibleTimeOne->setOnClickListener(
+          [updateVisibleTime]() { updateVisibleTime(-1); });
+      visibleTimeValueControls->addView(minusVisibleTimeOne);
+    }
 
     visibleTimeInput = makeNumericInput(metrics);
     visibleTimeInput->onEditingFinished(
@@ -711,11 +716,13 @@ void SettingsScene::initView() {
     visibleTimeValueControls->addView(
         makeInputFrame(metrics, visibleTimeInput));
 
-    auto *plusVisibleTimeOne =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
-    plusVisibleTimeOne->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(1); });
-    visibleTimeValueControls->addView(plusVisibleTimeOne);
+    if (!compactAdjustments) {
+      auto *plusVisibleTimeOne =
+          makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
+      plusVisibleTimeOne->setOnClickListener(
+          [updateVisibleTime]() { updateVisibleTime(1); });
+      visibleTimeValueControls->addView(plusVisibleTimeOne);
+    }
 
     auto *plusVisibleTimeSmall =
         makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10");
@@ -723,19 +730,21 @@ void SettingsScene::initView() {
         [updateVisibleTime]() { updateVisibleTime(10); });
     visibleTimeValueControls->addView(plusVisibleTimeSmall);
 
-    auto *plusVisibleTimeLarge =
-        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+100");
-    plusVisibleTimeLarge->setOnClickListener(
-        [updateVisibleTime]() { updateVisibleTime(100); });
-    visibleTimeValueControls->addView(plusVisibleTimeLarge);
+    if (!compactAdjustments) {
+      auto *plusVisibleTimeLarge =
+          makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+100");
+      plusVisibleTimeLarge->setOnClickListener(
+          [updateVisibleTime]() { updateVisibleTime(100); });
+      visibleTimeValueControls->addView(plusVisibleTimeLarge);
 
-    auto *resetVisibleTime = makeResetButton(metrics);
-    resetVisibleTime->setOnClickListener([this]() {
-      context.settings.visibleTimeGreenNumber = 400;
-      persistSettings();
-      syncVisibleTimeInputText(true);
-    });
-    visibleTimeValueControls->addView(resetVisibleTime);
+      auto *resetVisibleTime = makeResetButton(metrics);
+      resetVisibleTime->setOnClickListener([this]() {
+        context.settings.visibleTimeGreenNumber = 400;
+        persistSettings();
+        syncVisibleTimeInputText(true);
+      });
+      visibleTimeValueControls->addView(resetVisibleTime);
+    }
 
     visibleTimeControls->addView(visibleTimeValueControls);
     return visibleTimeControls;
@@ -746,23 +755,59 @@ void SettingsScene::initView() {
     rootLayout->setJustifyContent(YGJustifyFlexEnd);
     rootLayout->setAlignItems(YGAlignFlexStart);
 
+    const int foldButtonSize = metrics.compact ? 54 : 58;
     const int panelWidth =
-        metrics.compact ? std::min(metrics.contentWidth, 520) : 380;
+        previewPanelFolded
+            ? foldButtonSize
+            : (metrics.compact ? std::min(metrics.contentWidth, 520) : 380);
     auto *previewPanel = new View();
     previewPanel->setWidth(static_cast<float>(panelWidth));
-    previewPanel->setPadding(Edge::All,
-                             static_cast<float>(metrics.cardPadding));
+    previewPanel->setPadding(
+        Edge::All,
+        static_cast<float>(previewPanelFolded ? 0 : metrics.cardPadding));
     previewPanel->setGap(metrics.compact ? 12.0f : 16.0f);
     previewPanel->setFlexDirection(FlexDirection::Column);
+    previewPanel->setAlignItems(previewPanelFolded ? YGAlignFlexEnd
+                                                   : YGAlignStretch);
     previewPanel->setBackgroundColor(Color(12, 20, 32, 184));
     previewPanel->setBorderColor(Color(78, 105, 140, 220));
     previewPanel->setBorderWidth(2);
 
-    previewPanel->addView(
+    auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
+      auto *button =
+          makeButton(foldButtonSize, foldButtonSize,
+                     makeText(label, 28, Color(239, 244, 251), TextView::CENTER,
+                              TextView::MIDDLE),
+                     Color(22, 33, 49, 190), Color(31, 46, 67, 220),
+                     Color(53, 78, 110, 240), Color(96, 121, 156, 230),
+                     Color(120, 151, 190, 245), Color(148, 186, 231, 255));
+      button->setOnClickListener([this]() {
+        previewPanelFolded = !previewPanelFolded;
+        lastLayoutWidth = -1;
+      });
+      return button;
+    };
+
+    if (previewPanelFolded) {
+      previewPanel->addView(makeFoldButton("<"));
+      rootLayout->addView(previewPanel);
+      addView(rootLayout);
+      rootLayout->applyYogaLayout();
+      refreshSettingsText();
+      return;
+    }
+
+    auto *previewHeader = new View();
+    previewHeader->setFlexDirection(FlexDirection::Row);
+    previewHeader->setAlignItems(YGAlignCenter);
+    previewHeader->setJustifyContent(YGJustifySpaceBetween);
+    previewHeader->addView(
         makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
+    previewHeader->addView(makeFoldButton(">"));
+    previewPanel->addView(previewHeader);
     previewPanel->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
-    previewPanel->addView(makeVisibleTimeControls(false));
+    previewPanel->addView(makeVisibleTimeControls(false, true));
     previewPanel->addView(
         makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
     auto *angleControls = new View();
@@ -1355,7 +1400,7 @@ void SettingsScene::initView() {
   }
 
   if (activeTab == SettingsTab::Lane) {
-    auto *visibleTimeControls = makeVisibleTimeControls(true);
+    auto *visibleTimeControls = makeVisibleTimeControls(true, false);
     cardsColumn->addView(makeCard(
         metrics, "Visible Time",
         metrics.compact
