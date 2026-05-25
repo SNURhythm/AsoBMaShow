@@ -54,14 +54,6 @@ def firebase_build_number
   Time.now.utc.strftime("%Y%m%d%H%M")
 end
 
-def assert_firebase_distribution_target!(options)
-  return if options.key?(:groups) || options.key?(:testers)
-
-  UI.user_error!(
-    "Set FIREBASE_APP_DISTRIBUTION_GROUPS or FIREBASE_APP_DISTRIBUTION_TESTERS for Firebase App Distribution"
-  )
-end
-
 platform :ios do
   desc "Push a new beta build to Firebase App Distribution or TestFlight"
   lane :beta do
@@ -99,7 +91,6 @@ platform :ios do
 
     if distribute_to_firebase
       firebase_options = firebase_option_env
-      assert_firebase_distribution_target!(firebase_options)
       firebase_app_distribution(
         **firebase_options,
         release_notes: firebase_release_notes
