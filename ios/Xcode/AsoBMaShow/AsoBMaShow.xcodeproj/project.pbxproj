@@ -1048,7 +1048,7 @@
 				1A3EB0595D79BE96F6E16C91 /* [CP] Check Pods Manifest.lock */,
 				B70026FD2BF7A8D8000DB8EC /* Sources */,
 				B70026FE2BF7A8D8000DB8EC /* Frameworks */,
-				B7BAA5562DA3F719008F6FCD /* ShellScript */,
+				B7BAA5562DA3F719008F6FCD /* Touch resources when changed */,
 				B70026FF2BF7A8D8000DB8EC /* Resources */,
 				B72522FA2BF7AD8200C6C414 /* Embed Frameworks */,
 			);
@@ -1731,7 +1731,7 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
-		B7BAA5562DA3F719008F6FCD /* ShellScript */ = {
+		B7BAA5562DA3F719008F6FCD /* Touch resources when changed */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1746,7 +1746,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "find \"${SRCROOT}/../../../shaders/$1\" -type f -print0 | xargs -0 touch\nfind \"${SRCROOT}/../../../assets/$1\" -type f -print0 | xargs -0 touch\n\n";
+			shellScript = "set -eu\nstamp=\"${DERIVED_FILE_DIR}/AsoBMaShow-resource-inputs.sha1\"\ntmp=\"${stamp}.tmp\"\n\nfind \"${SRCROOT}/../../../shaders\" \"${SRCROOT}/../../../assets\" -type f -print0 | xargs -0 shasum | LC_ALL=C sort > \"${tmp}\"\n\nif [ -f \"${stamp}\" ] && cmp -s \"${tmp}\" \"${stamp}\"; then\n  rm \"${tmp}\"\n  exit 0\nfi\n\nmv \"${tmp}\" \"${stamp}\"\nfind \"${SRCROOT}/../../../shaders\" \"${SRCROOT}/../../../assets\" -type f -print0 | xargs -0 touch\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
