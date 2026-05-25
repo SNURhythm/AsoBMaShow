@@ -15,9 +15,60 @@
 
 default_platform(:ios)
 
+def github_pull_request_to_develop?
+  ENV["GITHUB_ACTIONS"] == "true" &&
+    ENV["GITHUB_EVENT_NAME"] == "pull_request" &&
+    ENV["GITHUB_BASE_REF"] == "develop"
+end
+
+def firebase_option_env
+  {
+    app: "FIREBASE_IOS_APP_ID",
+    groups: "FIREBASE_APP_DISTRIBUTION_GROUPS",
+    testers: "FIREBASE_APP_DISTRIBUTION_TESTERS",
+    firebase_cli_token: "FIREBASE_CLI_TOKEN",
+    service_credentials_json_data: "FIREBASE_SERVICE_CREDENTIALS_JSON"
+  }.each_with_object({}) do |(option, env_name), options|
+    value = ENV[env_name].to_s.strip
+    options[option] = value unless value.empty?
+  end
+end
+
+def firebase_release_notes
+  notes = ENV["FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES"].to_s.strip
+  return notes unless notes.empty?
+
+  [
+    "GitHub pull request build",
+    "Base: #{ENV['GITHUB_BASE_REF']}",
+    "Head: #{ENV['GITHUB_HEAD_REF']}",
+    "SHA: #{ENV['GITHUB_SHA']}",
+    "Run: #{ENV['GITHUB_SERVER_URL']}/#{ENV['GITHUB_REPOSITORY']}/actions/runs/#{ENV['GITHUB_RUN_ID']}"
+  ].reject { |line| line.end_with?(": ") }.join("\n")
+end
+
+def firebase_build_number
+  run_number = ENV["GITHUB_RUN_NUMBER"].to_s.strip
+  return run_number unless run_number.empty?
+
+  Time.now.utc.strftime("%Y%m%d%H%M")
+end
+
+def assert_firebase_distribution_target!(options)
+  return if options.key?(:groups) || options.key?(:testers)
+
+  UI.user_error!(
+    "Set FIREBASE_APP_DISTRIBUTION_GROUPS or FIREBASE_APP_DISTRIBUTION_TESTERS for Firebase App Distribution"
+  )
+end
+
 platform :ios do
-  desc "Push a new beta build to TestFlight"
+  desc "Push a new beta build to Firebase App Distribution or TestFlight"
   lane :beta do
+    distribute_to_firebase = github_pull_request_to_develop?
+    match_type = distribute_to_firebase ? "adhoc" : "appstore"
+    export_method = distribute_to_firebase ? "ad-hoc" : "app-store"
+
     unlock_keychain(
       password: ENV["KEYCHAIN_PASSWORD"]
     )
@@ -28,19 +79,34 @@ platform :ios do
       duration: 1200,
       in_house: false,
     )
-    match(type: "appstore", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
+    match(type: match_type, git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
+    build_number = if distribute_to_firebase
+                     firebase_build_number
+                   else
+                     latest_testflight_build_number(initial_build_number: 0) + 1
+                   end
     increment_build_number(
-      build_number: latest_testflight_build_number(initial_build_number: 0) + 1,
+      build_number: build_number,
       xcodeproj: "AsoBMaShow.xcodeproj"
     )
     build_app(
       scheme: "AsoBMaShow",
-      export_method: "app-store",
+      export_method: export_method,
       xcargs: "-allowProvisioningUpdates",
       clean: true
     )
     temporary_fix_ios_post_build
-    upload_to_testflight
+
+    if distribute_to_firebase
+      firebase_options = firebase_option_env
+      assert_firebase_distribution_target!(firebase_options)
+      firebase_app_distribution(
+        **firebase_options,
+        release_notes: firebase_release_notes
+      )
+    else
+      upload_to_testflight
+    end
   end
 end
 

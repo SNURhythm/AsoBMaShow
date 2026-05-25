@@ -18,7 +18,7 @@ jobs:
     env:
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8
-    name: Deploy to TestFlight
+    name: Deploy iOS beta
     runs-on: [self-hosted, macOS]
     timeout-minutes: 30
     strategy:
@@ -55,3 +55,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SPACESHIP_ONLY_ALLOW_INTERACTIVE_2FA: 1
           APP_STORE_KEY: ${{ secrets.APP_STORE_KEY }}
+          FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ secrets.FIREBASE_APP_DISTRIBUTION_GROUPS }}
+          FIREBASE_APP_DISTRIBUTION_TESTERS: ${{ secrets.FIREBASE_APP_DISTRIBUTION_TESTERS }}
+          FIREBASE_SERVICE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_CREDENTIALS_JSON }}
