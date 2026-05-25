@@ -50,6 +50,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   this->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setPadding(Edge::All, 8)
+      ->setPadding(Edge::End, 24)
       ->setGap(12);
 
   // Stage file jacket

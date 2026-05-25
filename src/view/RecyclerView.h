@@ -259,6 +259,9 @@ public:
   int itemHeight;
   int topMargin;    // Number of items to keep ready above the visible area
   int bottomMargin; // Number of items to keep ready below the visible area
+  // Keep false for overlay scrollbars; set true when item layout should avoid
+  // the scrollbar by shrinking content width.
+  bool reserveScrollbarGutter = false;
 
   inline void setItems(std::vector<T> &&items) {
     this->items = std::move(items);
@@ -352,8 +355,9 @@ private:
   }
 
   inline int visibleItemWidth() const {
-    return std::max(0, this->getWidth() -
-                           (canScroll() ? kScrollbarContentInset : 0));
+    const int reservedWidth =
+        reserveScrollbarGutter && canScroll() ? kScrollbarContentInset : 0;
+    return std::max(0, this->getWidth() - reservedWidth);
   }
 
   inline static float smoothStep(float value) {

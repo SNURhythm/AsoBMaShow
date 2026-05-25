@@ -13,6 +13,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   setFlexDirection(FlexDirection::Row);
   setAlignItems(YGAlignCenter);
   setPadding(Edge::All, 8);
+  setPadding(Edge::End, 24);
   setGap(8);
 
   labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
