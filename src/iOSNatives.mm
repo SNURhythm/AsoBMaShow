@@ -5,6 +5,31 @@
 #include <vector>
 #include <string>
 
+namespace {
+UIWindow *FindActiveWindow() {
+  if (@available(iOS 13.0, *)) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:[UIWindowScene class]]) {
+        continue;
+      }
+      UIWindowScene *windowScene = (UIWindowScene *)scene;
+      if (windowScene.activationState != UISceneActivationStateForegroundActive) {
+        continue;
+      }
+      for (UIWindow *window in windowScene.windows) {
+        if (window.isKeyWindow) {
+          return window;
+        }
+      }
+      if (windowScene.windows.count > 0) {
+        return windowScene.windows.firstObject;
+      }
+    }
+  }
+  return UIApplication.sharedApplication.keyWindow;
+}
+} // namespace
+
 std::string GetIOSDocumentsPath() {
   return std::string([[NSSearchPathForDirectoriesInDomains(
       NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0] UTF8String]);
@@ -35,6 +60,26 @@ std::vector<std::string> ListDocumentFilesRecursively() {
   }
   // return
   return filesVec;
+}
+
+IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
+  IOSNormalizedSafeAreaInsets insets;
+  UIWindow *window = FindActiveWindow();
+  if (window == nil) {
+    return insets;
+  }
+
+  const UIEdgeInsets safeInsets = window.safeAreaInsets;
+  const CGRect bounds = window.bounds;
+  if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
+    return insets;
+  }
+
+  insets.top = safeInsets.top / bounds.size.height;
+  insets.left = safeInsets.left / bounds.size.width;
+  insets.bottom = safeInsets.bottom / bounds.size.height;
+  insets.right = safeInsets.right / bounds.size.width;
+  return insets;
 }
 
 // register touch event

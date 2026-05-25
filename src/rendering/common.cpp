@@ -51,6 +51,13 @@ void renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId) {
                       static_cast<float>(rendering::window_height));
 }
 
+void renderFullscreenTextureTint(bgfx::TextureHandle texture,
+                                 bgfx::ViewId viewId, float brightness) {
+  renderTextureRegionTint(
+      texture, viewId, 0.0f, 0.0f, static_cast<float>(rendering::window_width),
+      static_cast<float>(rendering::window_height), brightness);
+}
+
 void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                          float x, float y, float width, float height) {
   if (!bgfx::isValid(texture)) {
@@ -99,8 +106,63 @@ void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
   bgfx::submit(viewId, kProgram);
 }
 
-void renderTextureRegionScissor(bgfx::TextureHandle texture, bgfx::ViewId viewId,
-                                int x, int y, int width, int height) {
+void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+                             float x, float y, float width, float height,
+                             float brightness) {
+  if (!bgfx::isValid(texture) || width <= 0.0f || height <= 0.0f) {
+    return;
+  }
+
+  auto s_texColor =
+      rendering::UniformCache::getInstance().getSampler("s_texColor");
+  const float invW = 1.0f / static_cast<float>(rendering::window_width);
+  const float invH = 1.0f / static_cast<float>(rendering::window_height);
+  const float u0 = x * invW;
+  const float v0 = y * invH;
+  const float u1 = (x + width) * invW;
+  const float v1 = (y + height) * invH;
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+
+  bgfx::VertexLayout &layout = rendering::PosTexCoord0Vertex::ms_decl;
+  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
+  bgfx::allocTransientIndexBuffer(&tib, 6);
+  auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
+
+  vertex[0] = {x, y + height, 0.0f, u0, v1};
+  vertex[1] = {x + width, y + height, 0.0f, u1, v1};
+  vertex[2] = {x, y, 0.0f, u0, v0};
+  vertex[3] = {x + width, y, 0.0f, u1, v0};
+
+  auto *indices = (uint16_t *)tib.data;
+  indices[0] = 0;
+  indices[1] = 1;
+  indices[2] = 2;
+  indices[3] = 1;
+  indices[4] = 3;
+  indices[5] = 2;
+
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  bgfx::setTexture(0, s_texColor, texture);
+  const float clampedBrightness = std::clamp(brightness, 0.0f, 1.0f);
+  const float tintColor[4] = {clampedBrightness, clampedBrightness,
+                              clampedBrightness, 1.0f};
+  const bgfx::UniformHandle u_tintColor =
+      rendering::UniformCache::getInstance().getVec4("u_tintColor");
+  bgfx::setUniform(u_tintColor, tintColor);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                 BGFX_STATE_BLEND_ALPHA);
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_rect_tint.bin");
+  bgfx::submit(viewId, kProgram);
+}
+
+void renderTextureRegionScissor(bgfx::TextureHandle texture,
+                                bgfx::ViewId viewId, int x, int y, int width,
+                                int height) {
   if (width <= 0 || height <= 0) {
     return;
   }

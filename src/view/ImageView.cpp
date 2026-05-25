@@ -109,8 +109,7 @@ void ImageView::renderImpl(RenderContext &context) {
   bgfx::setTexture(0, s_texColor, texture);
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                 BGFX_STATE_BLEND_ALPHA);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
   static const bgfx::ProgramHandle kProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
   bgfx::submit(rendering::ui_view, kProgram);

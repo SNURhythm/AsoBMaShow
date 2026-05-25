@@ -143,8 +143,8 @@ public:
       index[5] = 0;
 
       // Set up state (e.g., render state, texture, shaders)
-      uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+      uint64_t state =
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
       bgfx::setState(state);
 
       // Set the vertex and index buffers
@@ -159,6 +159,7 @@ public:
           kSimpleProgram);
     }
 #endif
+    renderBoxDecoration(context);
     renderImpl(context);
     for (auto view : children) {
       view->render(context);
@@ -248,6 +249,8 @@ public:
 
   View *setWidth(float width);
   View *setHeight(float height);
+  View *setMinWidth(float minWidth);
+  View *setMinHeight(float minHeight);
   View *setFlex(float flex);
   View *setFlexGrow(float flexGrow);
   View *setFlexWrap(YGWrap flexWrap);
@@ -264,6 +267,11 @@ public:
   View *setGap(YGGutter gutter, float gap);
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
+  View *setBackgroundColor(const Color &color);
+  View *clearBackgroundColor();
+  View *setBorderColor(const Color &color);
+  View *clearBorderColor();
+  View *setBorderWidth(int width);
   View *addView(View *view);
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }
@@ -293,6 +301,7 @@ protected:
   virtual void onMove(int newX, int newY) {}
 
 private:
+  void renderBoxDecoration(RenderContext &context) const;
   void markLayoutDirty() {
     View *root = this;
     while (root->parent != nullptr) {
@@ -319,6 +328,8 @@ private:
       child->absoluteX += dx;
       child->absoluteY += dy;
       child->updateChildrenAbsolute(dx, dy);
+      child->onMove(YGNodeLayoutGetLeft(child->node),
+                    YGNodeLayoutGetTop(child->node));
     }
   }
   void markChildrenOrderDirty() { childrenOrderDirty = true; }
@@ -337,9 +348,14 @@ private:
   }
 
   Color dbgColor;
+  Color backgroundColor;
+  Color borderColor;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view
+  bool hasBackground = false;
+  bool hasBorder = false;
+  int borderWidth = 0;
   YGNodeRef node;
   View *parent = nullptr;
 

@@ -1,5 +1,26 @@
 #include "View.h"
 
+namespace {
+void submitColoredRect(const RenderContext &context, int x, int y, int width,
+                       int height, const Color &color) {
+  if (width <= 0 || height <= 0 || color.a == 0) {
+    return;
+  }
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  rendering::createRect(tvb, tib, x, y, width, height, color.toABGR());
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  static const bgfx::ProgramHandle kSimpleProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  bgfx::submit(rendering::ui_view, kSimpleProgram);
+}
+} // namespace
+
 View *View::setWidth(float width) {
   YGNodeStyleSetWidth(node, width);
   return this;
@@ -7,6 +28,16 @@ View *View::setWidth(float width) {
 
 View *View::setHeight(float height) {
   YGNodeStyleSetHeight(node, height);
+  return this;
+}
+
+View *View::setMinWidth(float minWidth) {
+  YGNodeStyleSetMinWidth(node, minWidth);
+  return this;
+}
+
+View *View::setMinHeight(float minHeight) {
+  YGNodeStyleSetMinHeight(node, minHeight);
   return this;
 }
 
@@ -90,6 +121,33 @@ View *View::setDirection(YGDirection direction) {
   return this;
 }
 
+View *View::setBackgroundColor(const Color &color) {
+  backgroundColor = color;
+  hasBackground = true;
+  return this;
+}
+
+View *View::clearBackgroundColor() {
+  hasBackground = false;
+  return this;
+}
+
+View *View::setBorderColor(const Color &color) {
+  borderColor = color;
+  hasBorder = true;
+  return this;
+}
+
+View *View::clearBorderColor() {
+  hasBorder = false;
+  return this;
+}
+
+View *View::setBorderWidth(int width) {
+  borderWidth = std::max(0, width);
+  return this;
+}
+
 View *View::addView(View *view) {
   YGNodeInsertChild(node, view->getNode(), YGNodeGetChildCount(node));
   view->parent = this;
@@ -106,6 +164,40 @@ void View::applyYogaLayout() {
     return;
   }
   applyYogaLayoutImmediate();
+}
+
+void View::renderBoxDecoration(RenderContext &context) const {
+  if ((!hasBackground && (!hasBorder || borderWidth <= 0)) || getWidth() <= 0 ||
+      getHeight() <= 0) {
+    return;
+  }
+
+  const int x = getX();
+  const int y = getY();
+  const int width = getWidth();
+  const int height = getHeight();
+
+  int inset = hasBorder ? borderWidth : 0;
+  inset = std::min(inset, std::min(width / 2, height / 2));
+
+  if (hasBorder && inset > 0) {
+    submitColoredRect(context, x, y, width, inset, borderColor);
+    submitColoredRect(context, x, y + height - inset, width, inset,
+                      borderColor);
+
+    const int middleHeight = height - inset * 2;
+    if (middleHeight > 0) {
+      submitColoredRect(context, x, y + inset, inset, middleHeight,
+                        borderColor);
+      submitColoredRect(context, x + width - inset, y + inset, inset,
+                        middleHeight, borderColor);
+    }
+  }
+
+  if (hasBackground) {
+    submitColoredRect(context, x + inset, y + inset, width - inset * 2,
+                      height - inset * 2, backgroundColor);
+  }
 }
 
 void View::applyYogaLayoutImmediate() {

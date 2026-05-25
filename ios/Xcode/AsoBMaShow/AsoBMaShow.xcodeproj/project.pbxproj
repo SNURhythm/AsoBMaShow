@@ -694,6 +694,7 @@
 		B76AAF692DA4A1C400E8327C /* Exceptions for "src" folder in "AsoBMaShow" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				AppSettings.cpp,
 				audio/AudioWrapper.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
@@ -724,6 +725,7 @@
 				rendering/UniformCache.cpp,
 				scene/MainMenuScene.cpp,
 				scene/ResultScene.cpp,
+				scene/SettingsScene.cpp,
 				scene/play/BMSRenderer.cpp,
 				scene/play/GamePlayScene.cpp,
 				scene/play/Judge.cpp,
@@ -740,6 +742,7 @@
 				view/Button.cpp,
 				view/ChartListItemView.cpp,
 				view/ImageView.cpp,
+				view/ScrollView.cpp,
 				view/TextInputBox.cpp,
 				view/TextView.cpp,
 				view/View.cpp,

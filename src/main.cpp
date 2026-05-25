@@ -14,6 +14,7 @@
 #endif
 #include "main.h"
 #include "scene/MainMenuScene.h"
+#include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include <cstdlib>
 #include <iostream>
@@ -118,9 +119,9 @@ uint32_t resolveResetFlags() {
 }
 
 int scaledDimension(int logicalSize) {
-  return std::max(1, static_cast<int>(std::lround(
-                         static_cast<double>(logicalSize) *
-                         static_cast<double>(s_renderScale))));
+  return std::max(
+      1, static_cast<int>(std::lround(static_cast<double>(logicalSize) *
+                                      static_cast<double>(s_renderScale))));
 }
 
 } // namespace
@@ -362,8 +363,9 @@ int main(int argv, char **args) {
   SDL_Window *win = SDL_CreateWindow(
       "AsoBMaShow", 100, 100, windowCreateWidth, windowCreateHeight,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-          (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
-                                  : 0));
+          (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS
+               ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
+               : 0));
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
@@ -455,6 +457,8 @@ void run() {
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
+  sceneManager.registerScene("Settings",
+                             std::make_unique<SettingsScene>(context));
   sceneManager.changeScene("MainMenu");
 
   // SDL_RenderClear(ren);
@@ -472,7 +476,7 @@ void run() {
   s_blurPass = s_postProcess.addBlurPass();
   s_blurPass->setInputViews({rendering::bga_view, rendering::bga_layer_view});
   s_blurPass->setCompositeEnabled(false);
-  s_blurPass->setBlurStrength(2.0f);
+  s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
   // Example: s_blurPass->setCompositeEnabled(true);
 
   // We will use this to reference where we're drawing
@@ -499,7 +503,7 @@ void run() {
                     rendering::ui_view_height);
   resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                      s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                     s_blurPass->finalView());
+                     s_blurPass->finalView(), context.settings);
   rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                             s_blurPass->finalView());
 
@@ -509,6 +513,8 @@ void run() {
   uint64_t coalescedMouseMotionInWindow = 0;
   uint64_t coalescedFingerMotionInWindow = 0;
   uint64_t coalescedResizeInWindow = 0;
+  float appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
+  float appliedLaneLength = context.settings.laneLength;
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -596,14 +602,13 @@ void run() {
         // set bgfx resolution
         bgfx::reset(rendering::render_width, rendering::render_height,
                     s_bgfxResetFlags);
-        APP_DEBUG_LOG(
-            "Render size: %d x %d (logical: %d x %d, scale %.2f)",
-            rendering::render_width, rendering::render_height, logicalW,
-            logicalH, s_renderScale);
+        APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
+                      rendering::render_width, rendering::render_height,
+                      logicalW, logicalH, s_renderScale);
         s_postProcess.resize(rendering::render_width, rendering::render_height);
         resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                            s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                           s_blurPass->finalView());
+                           s_blurPass->finalView(), context.settings);
         rendering::applyViewOrder(s_blurPass->blurViewH(),
                                   s_blurPass->blurViewV(),
                                   s_blurPass->finalView());
@@ -656,6 +661,17 @@ void run() {
       }
     }
     sceneManager.update(deltaTime);
+    s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
+    context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
+    if (std::abs(appliedLaneAngleDegrees - context.settings.laneAngleDegrees) >
+            0.001f ||
+        std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f) {
+      appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
+      appliedLaneLength = context.settings.laneLength;
+      resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
+                         s_blurPass->blurViewH(), s_blurPass->blurViewV(),
+                         s_blurPass->finalView(), context.settings);
+    }
 
     //    bgfx::reset(rendering::window_width, rendering::window_height);
     // SDL_Log("Window size: %d x %d", rendering::window_width,
@@ -678,8 +694,9 @@ void run() {
     if (hasActiveVisuals) {
       context.jukebox.render();
       s_postProcess.apply();
-      rendering::renderFullscreenTexture(s_blurPass->outputTexture(),
-                                         s_blurPass->finalView());
+      rendering::renderFullscreenTextureTint(
+          s_blurPass->outputTexture(), s_blurPass->finalView(),
+          static_cast<float>(context.settings.bgaBrightnessPercent) / 100.0f);
     }
 
     if constexpr (kEnablePerfTelemetry) {
@@ -758,7 +775,7 @@ void run() {
 
 void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
                         bgfx::ViewId blurViewH, bgfx::ViewId blurViewV,
-                        bgfx::ViewId finalView) {
+                        bgfx::ViewId finalView, const AppSettings &settings) {
   float ortho[16];
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width, rendering::window_height,
                0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
@@ -780,8 +797,12 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
   bgfx::setViewTransform(blurViewH, nullptr, ortho);
   bgfx::setViewTransform(blurViewV, nullptr, ortho);
 
-  bx::Vec3 at = {4.0f, 2.0f, 0.0f};
-  bx::Vec3 eye = {4.0f, 1.5f, -2.1f};
+  constexpr float kCameraDepth = 2.1f;
+  const float laneLookAtY = settings.laneLength * 0.25f;
+  const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
+  bx::Vec3 at = {4.0f, laneLookAtY, 0.0f};
+  bx::Vec3 eye = {4.0f, laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
+                  -kCameraDepth};
 
   float aspect =
       float(rendering::window_width) / float(rendering::window_height);

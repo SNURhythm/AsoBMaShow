@@ -208,8 +208,8 @@ void RhythmInputHandler::pumpPendingTouchEvents() {
       const auto &event = pendingEvents[i];
       float uiNormX = 0.0f;
       float uiNormY = 0.0f;
-      rendering::normalizedToUiNormalized(event.normalizedX,
-                                          event.normalizedY, uiNormX, uiNormY);
+      rendering::normalizedToUiNormalized(event.normalizedX, event.normalizedY,
+                                          uiNormX, uiNormY);
       const Vector3 location(uiNormX, uiNormY, 0.0f);
       const SDL_FingerID fingerId = static_cast<SDL_FingerID>(event.fingerId);
       switch (event.phase) {
@@ -250,12 +250,19 @@ int RhythmInputHandler::clampLane(int lane) const {
 }
 int RhythmInputHandler::touchToLane(Vector3 location) {
   SDL_Log("Touch to lane: %f, %f, %f", location.x, location.y, location.z);
-  auto lookAt = rendering::game_camera.getLookAt();
-  auto eye = rendering::game_camera.getEye();
-  float distance = rendering::game_camera.getDistanceFromEye(lookAt);
-  float z = distance - sin(atan2(lookAt.y - eye.y, lookAt.z - eye.z)) * 2;
-  bx::Vec3 position =
-      rendering::game_camera.deproject(location.x, location.y, z);
+  const bx::Vec3 nearPoint = rendering::game_camera.deproject(
+      location.x, location.y, rendering::game_camera.getNearClip());
+  const bx::Vec3 farPoint = rendering::game_camera.deproject(
+      location.x, location.y, rendering::game_camera.getFarClip());
+  bx::Vec3 ray = {farPoint.x - nearPoint.x, farPoint.y - nearPoint.y,
+                  farPoint.z - nearPoint.z};
+
+  bx::Vec3 position = nearPoint;
+  if (std::abs(ray.z) > 0.0001f) {
+    const float t = -nearPoint.z / ray.z;
+    position = {nearPoint.x + ray.x * t, nearPoint.y + ray.y * t,
+                nearPoint.z + ray.z * t};
+  }
   int line = (int)(position.x * totalLaneCount / 8.0f) - 1;
   line = clampLane(line);
   SDL_Log("Touch to lane: %d", line);

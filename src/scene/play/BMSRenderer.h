@@ -103,6 +103,8 @@ private:
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
   long long latePoorTiming;
+  int visibleTimeGreenNumber = 400;
+  bool renderHud = true;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::TexBatchRenderer texBatchRenderer;
@@ -135,8 +137,11 @@ public:
   void onLanePressed(int lane, const JudgeResult judge, long long time);
   void onLaneReleased(int lane, long long time);
   void onJudge(JudgeResult judgeResult, int combo, int score);
-  explicit BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming);
+  explicit BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
+                       int visibleTimeGreenNumber, bool renderHud = true);
 
   void render(RenderContext &context, long long micro);
   void reset();
+  void refreshGeometry();
+  void setVisibleTimeGreenNumber(int greenNumber);
 };

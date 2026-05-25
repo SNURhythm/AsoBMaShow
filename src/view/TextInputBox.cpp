@@ -2,6 +2,7 @@
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "SDL2/SDL_events.h"
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -23,6 +24,11 @@ void updateHoverCursor(bool useIBeam) {
     SDL_SetCursor(target);
   }
 }
+
+bool isInsideTextInput(const TextInputBox &input, float uiX, float uiY) {
+  return uiX >= input.getX() && uiX <= input.getX() + input.getWidth() &&
+         uiY >= input.getY() && uiY <= input.getY() + input.getHeight();
+}
 } // namespace
 
 TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
@@ -31,6 +37,53 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 }
 
 TextInputBox::~TextInputBox() {}
+
+void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
+  const int lineHeight =
+      std::max(1, rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 1));
+  const int lineWidth = std::max(1, rect.w);
+  SDL_Rect nextRect = {cursorX, cursorY, lineWidth, lineHeight};
+
+  SDL_Window *window = SDL_GetKeyboardFocus();
+  if (window == nullptr) {
+    window = SDL_GetMouseFocus();
+  }
+
+  int logicalW = 0;
+  int logicalH = 0;
+  if (window != nullptr) {
+    SDL_GetWindowSize(window, &logicalW, &logicalH);
+  }
+
+  if (logicalW > 0 && logicalH > 0 && rendering::window_width > 0 &&
+      rendering::window_height > 0) {
+    const float scaleX =
+        static_cast<float>(logicalW) / static_cast<float>(rendering::window_width);
+    const float scaleY = static_cast<float>(logicalH) /
+                         static_cast<float>(rendering::window_height);
+    nextRect.x = static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
+    nextRect.y = static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
+    nextRect.w =
+        std::max(1, static_cast<int>(std::lround(lineWidth * scaleX)));
+    nextRect.h =
+        std::max(1, static_cast<int>(std::lround(lineHeight * scaleY)));
+  }
+
+  viewRect = nextRect;
+  SDL_SetTextInputRect(&viewRect);
+}
+
+void TextInputBox::setEditingText(const std::string &newText) {
+  editingText = newText;
+  composition.clear();
+  cursorPos = editingText.size();
+  lastRenderedCaretCursor = -1;
+  TextView::setText(editingText);
+  int cursorX = 0;
+  int cursorY = 0;
+  cursorToPos(cursorPos, editingText, cursorX, cursorY);
+  syncTextInputRect(cursorX, cursorY);
+}
 
 size_t TextInputBox::getNextUnicodePos(size_t pos) {
   if (pos >= editingText.size())
@@ -132,17 +185,23 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     int y = 0;
     rendering::screenToUi(screenX, screenY, x, y);
     // check if the mouse is inside the text box
-    if (event.button.button == SDL_BUTTON_LEFT && x >= getX() &&
-        x <= getX() + getWidth() && y >= getY() && y <= getY() + getHeight()) {
+    if (event.button.button == SDL_BUTTON_LEFT &&
+        isInsideTextInput(*this, static_cast<float>(x), static_cast<float>(y))) {
 
       cursorPos = posToCursor(x - getX(), y - getY());
-      SDL_SetTextInputRect(&viewRect);
+      int cursorX = 0;
+      int cursorY = 0;
+      cursorToPos(cursorPos, editingText, cursorX, cursorY);
+      syncTextInputRect(cursorX, cursorY);
       onSelected();
       SDL_StartTextInput();
       shouldUpdate = true;
       lastRenderedCaretCursor = -1;
       return false;
     } else {
+      if (isSelected) {
+        notifyEditingFinished();
+      }
       onUnselected();
       SDL_StopTextInput();
     }
@@ -170,10 +229,15 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (!composition.empty()) {
       composited.insert(cursorPos, composition);
       cursorToPos(cursorPos, editingText, compositionX, compositionY);
-      compositionY += TTF_FontHeight(font);
       cursorToPos(cursorPos + composition.size(), composited, compositionWidth,
                   compositionHeight);
       compositionWidth -= compositionX;
+      const int underlineHeight = 2;
+      const int contentHeight = std::max(
+          underlineHeight,
+          rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 0));
+      compositionHeight = contentHeight;
+      compositionY += std::max(0, contentHeight - underlineHeight);
     }
     setText(composited);
     for (auto &callback : onTextChangedCallbacks) {
@@ -183,11 +247,11 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       for (auto &callback : onSubmitCallbacks) {
         callback(text);
       }
+      notifyEditingFinished();
     }
     int cursorX, cursorY;
     cursorToPos(cursorPos, editingText, cursorX, cursorY);
-    viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-    SDL_SetTextInputRect(&viewRect);
+    syncTextInputRect(cursorX, cursorY);
   }
   return true;
 }
@@ -195,15 +259,13 @@ void TextInputBox::onMove(int newX, int newY) {
   TextView::onMove(newX, newY);
   int cursorX, cursorY;
   cursorToPos(cursorPos, editingText, cursorX, cursorY);
-  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-  SDL_SetTextInputRect(&viewRect);
+  syncTextInputRect(cursorX, cursorY);
 }
 void TextInputBox::onResize(int newWidth, int newHeight) {
   TextView::onResize(newWidth, newHeight);
   int cursorX, cursorY;
   cursorToPos(cursorPos, editingText, cursorX, cursorY);
-  viewRect = {cursorX, cursorY, getWidth(), getHeight()};
-  SDL_SetTextInputRect(&viewRect);
+  syncTextInputRect(cursorX, cursorY);
 }
 
 void TextInputBox::renderImpl(RenderContext &context) {
@@ -235,20 +297,19 @@ void TextInputBox::renderImpl(RenderContext &context) {
 
       if (!composition.empty()) {
         caretX = compositionX + compositionWidth;
-        caretY = compositionY;
+        caretY = resolvedTextRect().y;
       }
 
       uint32_t xcolor;
       // sdl color to abgr
       SDL_Color &c = color;
       xcolor = ((c.r << 24) | (c.g << 16) | (c.b << 8) | c.a);
-      rendering::createRect(tvb, tib, caretX, getY(), 2, height, xcolor);
+      rendering::createRect(tvb, tib, caretX, caretY, 2, height, xcolor);
       bgfx::setVertexBuffer(0, &tvb);
       bgfx::setIndexBuffer(&tib);
       rendering::setScissorUI(context.scissor.x, context.scissor.y,
                               context.scissor.width, context.scissor.height);
-      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                     BGFX_STATE_BLEND_ALPHA);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
       bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
     // render blue underline for composition text
@@ -264,8 +325,7 @@ void TextInputBox::renderImpl(RenderContext &context) {
       bgfx::setIndexBuffer(&tib2);
       rendering::setScissorUI(context.scissor.x, context.scissor.y,
                               context.scissor.width, context.scissor.height);
-      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                     BGFX_STATE_BLEND_ALPHA);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
       bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
   }
@@ -281,18 +341,28 @@ void TextInputBox::cursorToPos(size_t cursorPos, const std::string &text,
     cursorPos = 0;
   utf8.resize(cursorPos);
 
-  TTF_SizeUTF8(font, utf8.c_str(), &x, &y);
-  x += getX();
-  y += getY() - TTF_FontHeight(font);
+  int textWidth = 0;
+  int textHeight = 0;
+  if (font != nullptr && !utf8.empty()) {
+    TTF_SizeUTF8(font, utf8.c_str(), &textWidth, &textHeight);
+  }
+
+  const SDL_Rect contentRect = resolvedTextRect();
+  x = contentRect.x + textWidth;
+  y = contentRect.y;
 }
 
 size_t TextInputBox::posToCursor(int x, int y) {
   // TODO: this will not work for multi-line text
+  (void)y;
   size_t cursorPos = 0;
   int w = 0, h = 0;
   int dw = 0;
   int dh = 0;
   size_t glyphs = 0;
+  const SDL_Rect contentRect = resolvedTextRect();
+  const int localX = std::max(0, x - (contentRect.x - getX()));
+
   for (cursorPos = 0; cursorPos < editingText.size();) {
 
     int prevW = w;
@@ -306,9 +376,9 @@ size_t TextInputBox::posToCursor(int x, int y) {
       dh = h - prevH;
     else
       dh = h;
-    if (glyphs == 1 && dw / 2 > x)
+    if (glyphs == 1 && dw / 2 > localX)
       return 0;
-    if (w + dw / 2 > x) {
+    if (w + dw / 2 > localX) {
 
       break;
     }
@@ -321,6 +391,12 @@ size_t TextInputBox::posToCursor(int x, int y) {
 void TextInputBox::onSelected() { isSelected = true; }
 
 void TextInputBox::onUnselected() { isSelected = false; }
+
+void TextInputBox::notifyEditingFinished() {
+  for (auto &callback : onEditingFinishedCallbacks) {
+    callback(editingText);
+  }
+}
 
 size_t
 TextInputBox::onTextChanged(std::function<void(const std::string &)> callback) {
@@ -350,6 +426,22 @@ void TextInputBox::removeOnSubmit(
     if (onSubmitCallbacks[i].target<void(const std::string &)>() ==
         callback.target<void(const std::string &)>()) {
       onSubmitCallbacks.erase(onSubmitCallbacks.begin() + i);
+    }
+  }
+}
+
+size_t TextInputBox::onEditingFinished(
+    std::function<void(const std::string &)> callback) {
+  onEditingFinishedCallbacks.push_back(callback);
+  return onEditingFinishedCallbacks.size() - 1;
+}
+
+void TextInputBox::removeOnEditingFinished(
+    std::function<void(const std::string &)> callback) {
+  for (size_t i = 0; i < onEditingFinishedCallbacks.size(); i++) {
+    if (onEditingFinishedCallbacks[i].target<void(const std::string &)>() ==
+        callback.target<void(const std::string &)>()) {
+      onEditingFinishedCallbacks.erase(onEditingFinishedCallbacks.begin() + i);
     }
   }
 }

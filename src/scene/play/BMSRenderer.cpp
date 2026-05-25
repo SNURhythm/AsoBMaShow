@@ -14,8 +14,10 @@
 #include <cmath>
 #include <limits>
 #include <string>
-BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
-    : latePoorTiming(latePoorTiming), chart(chart) {
+BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
+                         int visibleTimeGreenNumber, bool renderHud)
+    : latePoorTiming(latePoorTiming), chart(chart),
+      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud) {
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
@@ -149,7 +151,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   };
 
   configureSheet(graySheet, spriteLoader.getWidth(), spriteLoader.getHeight());
-  configureSheet(blueSheet, spriteLoader2.getWidth(), spriteLoader2.getHeight());
+  configureSheet(blueSheet, spriteLoader2.getWidth(),
+                 spriteLoader2.getHeight());
   configureSheet(scratchSheet, spriteLoader3.getWidth(),
                  spriteLoader3.getHeight());
 
@@ -162,8 +165,7 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming)
   scoreText->setAlign(TextView::LEFT);
   scoreText->setText("Score: 0");
 
-  // Calculate the lane plane screen top intersection
-  upperBound = calculateLanePlaneScreenTopIntersection();
+  refreshGeometry();
 }
 
 bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
@@ -293,8 +295,8 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
 
   // Tail
   texBatchRenderer.addRectUV(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
-                             noteRenderHeight, tailUv.u0, tailUv.v0,
-                             tailUv.u1, tailUv.v1, sheet.texture);
+                             noteRenderHeight, tailUv.u0, tailUv.v0, tailUv.u1,
+                             tailUv.v1, sheet.texture);
 
   if (head->IsPlayed)
     return;
@@ -360,12 +362,10 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
   // judge line
   drawRect(8.0f, noteRenderHeight, 0.0f, judgeY, Color(255, 255, 255, 255));
-  float greenNumber = 400.0f;
-  float hispeed =
-      240000.0f / chart->Meta.Bpm / greenNumber *
-      0.6f; // 0.6: need to convert green number to milliseconds.
-            // (300green = 0.5s)
-            // ... / ( greenNumber / 0.6f ) = ... / (greenNumber * 0.6f)
+  // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
+  const float visibleTimeMs = std::max(
+      1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
+  float hispeed = 240000.0f / chart->Meta.Bpm / visibleTimeMs;
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
@@ -509,9 +509,10 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
   simpleBatchRenderer.flush();
 
-  // render judgement
-  drawJudgement(context);
-  drawScore(context);
+  if (renderHud) {
+    drawJudgement(context);
+    drawScore(context);
+  }
 }
 
 void BMSRenderer::applyPendingHudText() {
@@ -531,6 +532,15 @@ void BMSRenderer::applyPendingHudText() {
 }
 
 void BMSRenderer::reset() { state.reset(); }
+
+void BMSRenderer::refreshGeometry() {
+  upperBound = calculateLanePlaneScreenTopIntersection();
+}
+
+void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
+  visibleTimeGreenNumber = greenNumber;
+}
+
 void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
