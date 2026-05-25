@@ -36,9 +36,36 @@
 #elif __posix
 // POSIX
 #endif
+#include <cmath>
 #include <iostream>
 
 namespace {
+constexpr int kRootPadding = 28;
+
+struct SafeAreaInsets {
+  int top = 0;
+  int left = 0;
+  int bottom = 0;
+  int right = 0;
+};
+
+SafeAreaInsets getSafeAreaInsetsUi() {
+  SafeAreaInsets insets;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const IOSNormalizedSafeAreaInsets normalized =
+      GetIOSSafeAreaInsetsNormalized();
+  insets.top = static_cast<int>(std::lround(
+      normalized.top * static_cast<float>(rendering::window_height)));
+  insets.left = static_cast<int>(std::lround(
+      normalized.left * static_cast<float>(rendering::window_width)));
+  insets.bottom = static_cast<int>(std::lround(
+      normalized.bottom * static_cast<float>(rendering::window_height)));
+  insets.right = static_cast<int>(std::lround(
+      normalized.right * static_cast<float>(rendering::window_width)));
+#endif
+  return insets;
+}
+
 std::string folderKeyForTable(int tableId) {
   return "table:" + std::to_string(tableId);
 }
@@ -289,10 +316,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  lastLayoutWidth = rendering::window_width;
+  lastLayoutHeight = rendering::window_height;
+  lastSafeTop = safe.top;
+  lastSafeLeft = safe.left;
+  lastSafeBottom = safe.bottom;
+  lastSafeRight = safe.right;
   rootLayout->setFlexDirection(FlexDirection::Row);
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setGap(24);
-  rootLayout->setPadding(Edge::All, 28);
+  rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
+  rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
+  rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
+  rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setBackgroundColor(kBackdropTint);
 
   auto nav = new View();
@@ -766,7 +803,29 @@ void MainMenuScene::update(float dt) {
 void MainMenuScene::renderScene() {
   // Render the scene
   // SDL_Log("Rendering Main Menu Scene");
+  if (rootLayout == nullptr) {
+    return;
+  }
+  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  const bool layoutChanged =
+      rendering::window_width != lastLayoutWidth ||
+      rendering::window_height != lastLayoutHeight || safe.top != lastSafeTop ||
+      safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
+      safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
+  if (layoutChanged) {
+    lastLayoutWidth = rendering::window_width;
+    lastLayoutHeight = rendering::window_height;
+    lastSafeTop = safe.top;
+    lastSafeLeft = safe.left;
+    lastSafeBottom = safe.bottom;
+    lastSafeRight = safe.right;
+    rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
+    rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
+    rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
+    rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+    rootLayout->applyYogaLayout();
+  }
 }
 
 void MainMenuScene::cleanupScene() {
@@ -788,6 +847,12 @@ void MainMenuScene::cleanupScene() {
     loadThread.join();
   }
   ChartDBHelper::GetInstance().Close(db);
+  lastLayoutWidth = -1;
+  lastLayoutHeight = -1;
+  lastSafeTop = -1;
+  lastSafeLeft = -1;
+  lastSafeBottom = -1;
+  lastSafeRight = -1;
 }
 
 void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,

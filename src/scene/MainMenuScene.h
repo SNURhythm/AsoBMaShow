@@ -70,6 +70,12 @@ private:
   std::string searchText;
   std::string difficultyText;
   std::string tableUrlText;
+  int lastLayoutWidth = -1;
+  int lastLayoutHeight = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
 
   void initView(ApplicationContext &context);
   void reloadFolderItems();
