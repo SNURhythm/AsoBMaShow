@@ -2,9 +2,38 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <Foundation/Foundation.h>
 #include <UIKit/UIKit.h>
+#import <FirebaseCore/FirebaseCore.h>
 #include <dispatch/dispatch.h>
 #include <vector>
 #include <string>
+
+@interface SDLUIKitDelegate : NSObject <UIApplicationDelegate>
+@end
+
+@interface AsoBMaShowAppDelegate : SDLUIKitDelegate
+@end
+
+@implementation AsoBMaShowAppDelegate
+
+- (BOOL)application:(UIApplication *)application
+    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+  if ([FIRApp defaultApp] == nil) {
+    [FIRApp configure];
+  }
+  return [super application:application
+      didFinishLaunchingWithOptions:launchOptions];
+}
+
+@end
+
+// SDL's UIKit launcher asks this class method which delegate to instantiate.
+@implementation SDLUIKitDelegate (AsoBMaShowFirebase)
+
++ (NSString *)getAppDelegateClassName {
+  return NSStringFromClass([AsoBMaShowAppDelegate class]);
+}
+
+@end
 
 namespace {
 UIWindow *FindActiveWindow() {
