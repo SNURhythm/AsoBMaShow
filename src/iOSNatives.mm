@@ -7,33 +7,13 @@
 #include <vector>
 #include <string>
 
-@interface SDLUIKitDelegate : NSObject <UIApplicationDelegate>
-@end
-
-@interface AsoBMaShowAppDelegate : SDLUIKitDelegate
-@end
-
-@implementation AsoBMaShowAppDelegate
-
-- (BOOL)application:(UIApplication *)application
-    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-  if ([FIRApp defaultApp] == nil) {
-    [FIRApp configure];
+extern "C" void AsoBMaShowInitializeFirebase() {
+  @autoreleasepool {
+    if ([FIRApp defaultApp] == nil) {
+      [FIRApp configure];
+    }
   }
-  return [super application:application
-      didFinishLaunchingWithOptions:launchOptions];
 }
-
-@end
-
-// SDL's UIKit launcher asks this class method which delegate to instantiate.
-@implementation SDLUIKitDelegate (AsoBMaShowFirebase)
-
-+ (NSString *)getAppDelegateClassName {
-  return NSStringFromClass([AsoBMaShowAppDelegate class]);
-}
-
-@end
 
 namespace {
 UIWindow *FindActiveWindow() {

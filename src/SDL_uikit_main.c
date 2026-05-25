@@ -12,7 +12,14 @@
 #undef main
 #endif
 
+#if defined(__IPHONEOS__)
+void AsoBMaShowInitializeFirebase(void);
+#endif
+
 int main(int argc, char *argv[]) {
+#if defined(__IPHONEOS__)
+  AsoBMaShowInitializeFirebase();
+#endif
   return SDL_UIKitRunApp(argc, argv, SDL_main);
 }
 #endif /* !SDL_MAIN_HANDLED */
