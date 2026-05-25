@@ -14,6 +14,9 @@
 namespace {
 std::mutex g_ttfMutex;
 int g_ttfRefCount = 0;
+constexpr float kMarqueePixelsPerSecond = 48.0f;
+constexpr Uint64 kMarqueeStartDelayMs = 700;
+constexpr Uint64 kMarqueeEdgeDelayMs = 850;
 
 bool acquireTtf() {
   std::lock_guard<std::mutex> lock(g_ttfMutex);
@@ -44,14 +47,12 @@ TextView::TextView(const std::string &fontPath, int fontSize)
     font = TTF_OpenFont(fontPath.c_str(), fontSize);
     if (!font) {
       SDL_Log("Failed to load font: %s", TTF_GetError());
-      font =
-          TTF_OpenFont("assets/fonts/arial.ttf", fontSize); // Fallback font
+      font = TTF_OpenFont("assets/fonts/arial.ttf", fontSize); // Fallback font
     }
   }
   color = {255, 255, 255, 255}; // Default color: white
   rect = {0, 0, 0, 0};
-  s_texColor =
-      rendering::UniformCache::getInstance().getSampler("s_texColor");
+  s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
   YGNodeSetMeasureFunc(getNode(), measureFunc);
 }
 
@@ -73,19 +74,31 @@ void TextView::setText(const std::string &newText) {
     return;
   }
   this->text = newText;
+  marqueeStartedAt = SDL_GetTicks64();
   createTexture();
 }
 
 void TextView::renderImpl(RenderContext &context) {
-  if (bgfx::isValid(texture)) {
-    const SDL_Rect drawRect = resolvedTextRect();
+  if (!bgfx::isValid(texture)) {
+    return;
+  }
 
+  SDL_Rect drawRect = resolvedTextRect();
+  const bool clip =
+      overflow != TextOverflow::Visible && getWidth() > 0 && getHeight() > 0;
+  if (overflow == TextOverflow::Marquee && !wrapEnabled &&
+      rect.w > getWidth()) {
+    drawRect.x =
+        getX() - static_cast<int>(std::round(marqueeOffset(getWidth())));
+  }
+
+  const auto submitText = [this, &context, &drawRect]() {
     rendering::PosTexVertex vertices[] = {
-        {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},                   // Top-left
-        {(float)drawRect.w, 0.0f, 0.0f, 1.0f, 0.0f},      // Top-right
-        {(float)drawRect.w, (float)drawRect.h, 0.0f, 1.0f,
-         1.0f}, // Bottom-right
-        {0.0f, (float)drawRect.h, 0.0f, 0.0f, 1.0f} // Bottom-left
+        {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},                           // Top-left
+        {static_cast<float>(drawRect.w), 0.0f, 0.0f, 1.0f, 0.0f}, // Top-right
+        {static_cast<float>(drawRect.w), static_cast<float>(drawRect.h), 0.0f,
+         1.0f, 1.0f},                                            // Bottom-right
+        {0.0f, static_cast<float>(drawRect.h), 0.0f, 0.0f, 1.0f} // Bottom-left
     };
 
     const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
@@ -109,6 +122,13 @@ void TextView::renderImpl(RenderContext &context) {
     static const bgfx::ProgramHandle kProgram =
         rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
     bgfx::submit(rendering::ui_view, kProgram);
+  };
+
+  if (clip) {
+    ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
+    submitText();
+  } else {
+    submitText();
   }
 }
 
@@ -144,6 +164,48 @@ SDL_Rect TextView::resolvedTextRect() const {
   return drawRect;
 }
 
+float TextView::marqueeOffset(int viewportWidth) {
+  const int overflowWidth = rect.w - viewportWidth;
+  if (overflowWidth <= 0) {
+    return 0.0f;
+  }
+
+  if (marqueeStartedAt == 0) {
+    marqueeStartedAt = SDL_GetTicks64();
+  }
+
+  const float scrollDurationMs =
+      static_cast<float>(overflowWidth) / kMarqueePixelsPerSecond * 1000.0f;
+  const Uint64 scrollMs =
+      std::max<Uint64>(1, static_cast<Uint64>(std::round(scrollDurationMs)));
+  const Uint64 cycleMs = kMarqueeStartDelayMs + scrollMs + kMarqueeEdgeDelayMs +
+                         scrollMs + kMarqueeEdgeDelayMs;
+  Uint64 phase = (SDL_GetTicks64() - marqueeStartedAt) % cycleMs;
+
+  if (phase < kMarqueeStartDelayMs) {
+    return 0.0f;
+  }
+  phase -= kMarqueeStartDelayMs;
+
+  if (phase < scrollMs) {
+    return static_cast<float>(overflowWidth) * static_cast<float>(phase) /
+           static_cast<float>(scrollMs);
+  }
+  phase -= scrollMs;
+
+  if (phase < kMarqueeEdgeDelayMs) {
+    return static_cast<float>(overflowWidth);
+  }
+  phase -= kMarqueeEdgeDelayMs;
+
+  if (phase < scrollMs) {
+    return static_cast<float>(overflowWidth) *
+           (1.0f - static_cast<float>(phase) / static_cast<float>(scrollMs));
+  }
+
+  return 0.0f;
+}
+
 void TextView::setColor(SDL_Color newColor) {
   if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
       newColor.a == color.a) {
@@ -153,12 +215,14 @@ void TextView::setColor(SDL_Color newColor) {
   createTexture(); // Update the texture since newColor has changed
 }
 
-void TextView::createTexture(bool markDirty, bool force, int requestedWrapWidth) {
+void TextView::createTexture(bool markDirty, bool force,
+                             int requestedWrapWidth) {
   const int effectiveWrapWidth =
       wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
                                                         : currentWrapWidth)
                   : 0;
-  if (!force && effectiveWrapWidth == currentWrapWidth && bgfx::isValid(texture)) {
+  if (!force && effectiveWrapWidth == currentWrapWidth &&
+      bgfx::isValid(texture)) {
     return;
   }
 
@@ -202,15 +266,33 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
   auto *view = static_cast<TextView *>(YGNodeGetContext(node));
   (void)height;
   (void)heightMode;
-  if (view->wrapEnabled && widthMode != YGMeasureModeUndefined && width > 0.0f) {
+  if (view->wrapEnabled && widthMode != YGMeasureModeUndefined &&
+      width > 0.0f) {
     view->createTexture(false, false, static_cast<int>(std::floor(width)));
   }
-  return {static_cast<float>(view->rect.w), static_cast<float>(view->rect.h)};
+
+  float measuredWidth = static_cast<float>(view->rect.w);
+  if (view->overflow != TextOverflow::Visible &&
+      widthMode != YGMeasureModeUndefined && width > 0.0f) {
+    measuredWidth = widthMode == YGMeasureModeExactly
+                        ? width
+                        : std::min(measuredWidth, width);
+  }
+  return {measuredWidth, static_cast<float>(view->rect.h)};
 }
 
 void TextView::setAlign(TextAlign newAlign) { this->align = newAlign; }
 
 void TextView::setVAlign(TextVAlign newVAlign) { this->valign = newVAlign; }
+
+void TextView::setOverflow(TextOverflow newOverflow) {
+  if (overflow == newOverflow) {
+    return;
+  }
+  overflow = newOverflow;
+  marqueeStartedAt = SDL_GetTicks64();
+  YGNodeMarkDirty(getNode());
+}
 
 void TextView::setWrap(bool enabled) {
   if (wrapEnabled == enabled) {

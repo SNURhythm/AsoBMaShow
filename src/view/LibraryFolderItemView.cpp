@@ -17,12 +17,16 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
 
   labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   labelView->setVAlign(TextView::MIDDLE);
+  labelView->setOverflow(TextView::TextOverflow::Marquee);
   labelView->setFlex(1);
+  labelView->setFlexShrink(1);
+  labelView->setMinWidth(0);
   addView(labelView);
 
   countView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   countView->setAlign(TextView::RIGHT);
   countView->setVAlign(TextView::MIDDLE);
+  countView->setOverflow(TextView::TextOverflow::Hidden);
   countView->setWidth(48);
   addView(countView);
 }

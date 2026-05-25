@@ -70,15 +70,24 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setJustifyContent(YGJustifyCenter)
       ->setFlex(1)
       ->setFlexShrink(1)
+      ->setMinWidth(0)
       ->setGap(4);
   this->addView(textLayout);
 
   titleView->setHeight(36);
   titleView->setVAlign(TextView::TextVAlign::BOTTOM);
+  titleView->setOverflow(TextView::TextOverflow::Marquee);
+  titleView->setAlignSelf(YGAlignStretch);
+  titleView->setFlexShrink(1);
+  titleView->setMinWidth(0);
   textLayout->addView(titleView);
 
   artistView->setHeight(24);
   artistView->setVAlign(TextView::TextVAlign::TOP);
+  artistView->setOverflow(TextView::TextOverflow::Marquee);
+  artistView->setAlignSelf(YGAlignStretch);
+  artistView->setFlexShrink(1);
+  artistView->setMinWidth(0);
   textLayout->addView(artistView);
 
   // Difficulty and key mode
@@ -92,11 +101,13 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
 
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
+  levelView->setOverflow(TextView::TextOverflow::Marquee);
   levelView->setWidth(210)->setHeight(28);
   detailsLayout->addView(levelView);
 
   keyModeView->setAlign(TextView::TextAlign::RIGHT);
   keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
+  keyModeView->setOverflow(TextView::TextOverflow::Hidden);
   keyModeView->setWidth(210)->setHeight(20);
   detailsLayout->addView(keyModeView);
 
