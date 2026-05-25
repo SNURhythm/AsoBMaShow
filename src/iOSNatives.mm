@@ -2,18 +2,9 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <Foundation/Foundation.h>
 #include <UIKit/UIKit.h>
-#import <FirebaseCore/FirebaseCore.h>
 #include <dispatch/dispatch.h>
 #include <vector>
 #include <string>
-
-extern "C" void AsoBMaShowInitializeFirebase() {
-  @autoreleasepool {
-    if ([FIRApp defaultApp] == nil) {
-      [FIRApp configure];
-    }
-  }
-}
 
 namespace {
 UIWindow *FindActiveWindow() {

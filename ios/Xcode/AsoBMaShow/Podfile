@@ -3,10 +3,3 @@ platform :ios, '13.4'
 target 'AsoBMaShow' do
   pod 'Yoga', :git => 'https://github.com/facebook/yoga.git'
 end 
-
-
-# For Analytics without IDFA collection capability, use this pod instead
-pod 'Firebase', :modular_headers => true
-pod 'FirebaseCoreInternal', :modular_headers => true
-pod 'GoogleUtilities', :modular_headers => true
-pod 'FirebaseCore', :modular_headers => true
