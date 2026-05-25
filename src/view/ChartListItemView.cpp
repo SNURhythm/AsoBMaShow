@@ -40,7 +40,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
-  levelView->setWidth(100)->setHeight(20);
+  levelView->setWidth(160)->setHeight(20);
   this->addView(levelView);
 
   keyModeOverlay = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
@@ -57,7 +57,9 @@ void ChartListItemView::setMeta(const bms_parser::ChartMeta &meta) {
   }
   titleView->setText(title);
   artistView->setText(meta.Artist);
-  levelView->setText(std::to_string(meta.PlayLevel));
+  levelView->setText(meta.DifficultyTableLabels.empty()
+                         ? std::to_string(meta.PlayLevel)
+                         : meta.DifficultyTableLabels);
   std::string keyModeDesc;
   switch (meta.KeyMode) {
   case 5:

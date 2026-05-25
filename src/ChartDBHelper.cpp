@@ -53,7 +53,26 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_notes,"
                                                 "cm.total_long_notes,"
                                                 "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes";
+                                                "cm.total_backspin_notes,"
+                                                "(SELECT group_concat(label, "
+                                                "'/') FROM ("
+                                                "SELECT dt.symbol || dte.level "
+                                                "AS label,"
+                                                "MIN(dt.id) AS table_order,"
+                                                "MIN(dte.sort_order) AS "
+                                                "entry_order "
+                                                "FROM "
+                                                "difficulty_table_entries dte "
+                                                "JOIN difficulty_tables dt ON "
+                                                "dt.id = dte.table_id "
+                                                "WHERE ((dte.sha256 != '' AND "
+                                                "lower(cm.sha256) = "
+                                                "dte.sha256) "
+                                                "OR (dte.md5 != '' AND "
+                                                "lower(cm.md5) = dte.md5)) "
+                                                "GROUP BY label "
+                                                "ORDER BY table_order, "
+                                                "entry_order, label))";
 
 std::string trimCopy(const std::string &value) {
   const auto begin =
@@ -794,37 +813,11 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
 
 void ChartDBHelper::SelectAllChartMeta(
     sqlite3 *db, std::vector<bms_parser::ChartMeta> &chartMetas) {
-  auto query = "SELECT "
-               "path,"
-               "md5,"
-               "sha256,"
-               "title,"
-               "subtitle,"
-               "genre,"
-               "artist,"
-               "sub_artist,"
-               "folder,"
-               "stage_file,"
-               "banner,"
-               "back_bmp,"
-               "preview,"
-               "level,"
-               "difficulty,"
-               "total,"
-               "bpm,"
-               "max_bpm,"
-               "min_bpm,"
-               "length,"
-               "rank,"
-               "player,"
-               "keys,"
-               "total_notes,"
-               "total_long_notes,"
-               "total_scratch_notes,"
-               "total_backspin_notes"
-               " FROM chart_meta ORDER BY title";
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += " FROM chart_meta cm ORDER BY cm.title";
   sqlite3_stmt *stmt;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while getting all charts: " << sqlite3_errmsg(db)
               << "\n";
@@ -844,40 +837,13 @@ void ChartDBHelper::SelectAllChartMeta(
 void ChartDBHelper::SearchChartMeta(
     sqlite3 *db, const std::string &text,
     std::vector<bms_parser::ChartMeta> &chartMetas) {
-  auto query =
-      "SELECT "
-      "path,"
-      "md5,"
-      "sha256,"
-      "title,"
-      "subtitle,"
-      "genre,"
-      "artist,"
-      "sub_artist,"
-      "folder,"
-      "stage_file,"
-      "banner,"
-      "back_bmp,"
-      "preview,"
-      "level,"
-      "difficulty,"
-      "total,"
-      "bpm,"
-      "max_bpm,"
-      "min_bpm,"
-      "length,"
-      "rank,"
-      "player,"
-      "keys,"
-      "total_notes,"
-      "total_long_notes,"
-      "total_scratch_notes,"
-      "total_backspin_notes"
-      " FROM chart_meta WHERE rtrim(title || ' ' || subtitle || ' ' || artist "
-      "|| ' ' || sub_artist || ' ' || genre) LIKE @text GROUP BY sha256 ORDER "
-      "BY title";
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += " FROM chart_meta cm WHERE rtrim(cm.title || ' ' || cm.subtitle || "
+           "' ' || cm.artist || ' ' || cm.sub_artist || ' ' || cm.genre) LIKE "
+           "@text GROUP BY cm.sha256 ORDER BY cm.title";
   sqlite3_stmt *stmt;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while searching for charts: " << sqlite3_errmsg(db)
               << "\n";
@@ -1093,6 +1059,9 @@ bms_parser::ChartMeta ChartDBHelper::ReadChartMeta(sqlite3_stmt *stmt) {
   chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
+  if (sqlite3_column_count(stmt) > idx) {
+    chartMeta.DifficultyTableLabels = columnString(stmt, idx++);
+  }
 
   return chartMeta;
 }
