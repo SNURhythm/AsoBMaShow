@@ -51,6 +51,11 @@ View *View::setFlexGrow(float flexGrow) {
   return this;
 }
 
+View *View::setFlexBasis(float flexBasis) {
+  YGNodeStyleSetFlexBasis(node, flexBasis);
+  return this;
+}
+
 View *View::setFlexWrap(YGWrap flexWrap) {
   YGNodeStyleSetFlexWrap(node, flexWrap);
   return this;

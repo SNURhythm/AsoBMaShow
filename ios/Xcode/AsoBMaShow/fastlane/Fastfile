@@ -24,7 +24,6 @@ end
 def firebase_option_env
   {
     app: "FIREBASE_IOS_APP_ID",
-    groups: "FIREBASE_APP_DISTRIBUTION_GROUPS",
     testers: "FIREBASE_APP_DISTRIBUTION_TESTERS",
     firebase_cli_token: "FIREBASE_CLI_TOKEN",
     service_credentials_json_data: "FIREBASE_SERVICE_CREDENTIALS_JSON"
@@ -32,6 +31,11 @@ def firebase_option_env
     value = ENV[env_name].to_s.strip
     options[option] = value unless value.empty?
   end
+end
+
+def firebase_distribution_groups
+  groups = ENV["FIREBASE_APP_DISTRIBUTION_GROUPS"].to_s.split(",").map(&:strip)
+  (["internal"] + groups).reject(&:empty?).uniq.join(",")
 end
 
 def firebase_release_notes
@@ -93,6 +97,7 @@ platform :ios do
       firebase_options = firebase_option_env
       firebase_app_distribution(
         **firebase_options,
+        groups: firebase_distribution_groups,
         release_notes: firebase_release_notes
       )
     else

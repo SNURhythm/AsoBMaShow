@@ -56,6 +56,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   // Stage file jacket
   artworkFrame->setWidth(84)
       ->setHeight(84)
+      ->setFlexShrink(0)
       ->setPadding(Edge::All, 3)
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
@@ -66,31 +67,11 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artworkFrame->addView(jacketImage);
   this->addView(artworkFrame);
 
-  // Difficulty and key mode
-  detailsLayout->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignFlexStart)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setWidth(210)
-      ->setHeight(84)
-      ->setGap(6);
-  this->addView(detailsLayout);
-
-  levelView->setAlign(TextView::TextAlign::LEFT);
-  levelView->setVAlign(TextView::TextVAlign::MIDDLE);
-  levelView->setOverflow(TextView::TextOverflow::Marquee);
-  levelView->setWidth(210)->setHeight(28);
-  detailsLayout->addView(levelView);
-
-  keyModeView->setAlign(TextView::TextAlign::LEFT);
-  keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
-  keyModeView->setOverflow(TextView::TextOverflow::Hidden);
-  keyModeView->setWidth(210)->setHeight(20);
-  detailsLayout->addView(keyModeView);
-
   // Main text
   textLayout->setFlexDirection(FlexDirection::Column)
       ->setJustifyContent(YGJustifyCenter)
       ->setFlex(1)
+      ->setFlexBasis(0)
       ->setFlexShrink(1)
       ->setMinWidth(0)
       ->setGap(4);
@@ -111,6 +92,28 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artistView->setFlexShrink(1);
   artistView->setMinWidth(0);
   textLayout->addView(artistView);
+
+  // Difficulty and key mode
+  detailsLayout->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignFlexEnd)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setWidth(210)
+      ->setHeight(84)
+      ->setFlexShrink(0)
+      ->setGap(6);
+  this->addView(detailsLayout);
+
+  levelView->setAlign(TextView::TextAlign::RIGHT);
+  levelView->setVAlign(TextView::TextVAlign::MIDDLE);
+  levelView->setOverflow(TextView::TextOverflow::Marquee);
+  levelView->setWidth(210)->setHeight(28);
+  detailsLayout->addView(levelView);
+
+  keyModeView->setAlign(TextView::TextAlign::RIGHT);
+  keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
+  keyModeView->setOverflow(TextView::TextOverflow::Hidden);
+  keyModeView->setWidth(210)->setHeight(20);
+  detailsLayout->addView(keyModeView);
 
   onUnselected();
   this->applyYogaLayout();
