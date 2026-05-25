@@ -14,6 +14,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include <atomic>
+#include <mutex>
 #include <stop_token>
 
 class MainMenuScene : public Scene {
@@ -35,6 +36,12 @@ private:
   std::jthread checkEntriesThread;
   std::jthread tableImportThread;
   std::atomic_bool tableImportRunning = false;
+  std::atomic_bool folderItemsReloadRequested = false;
+  std::atomic_bool chartListReloadRequested = false;
+  std::mutex tableImportStatusMutex;
+  bool pendingTableImportStatus = false;
+  std::string pendingTableImportStatusText;
+  SDL_Color pendingTableImportStatusColor{157, 177, 200, 255};
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
@@ -80,6 +87,10 @@ private:
   void initView(ApplicationContext &context);
   void reloadFolderItems();
   void reloadChartList();
+  void requestLibraryReload(bool includeFolders);
+  void requestTableImportStatus(const std::string &text,
+                                const SDL_Color &color);
+  void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);
   void importDifficultyTableFromUrl();
   static void CheckEntries(const std::stop_token &stop_token,

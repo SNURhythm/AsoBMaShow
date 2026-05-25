@@ -101,8 +101,7 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
   const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
       db, Utils::GetDocumentsPath("tables"));
   if (importedTables > 0 && !stop_token.stop_requested()) {
-    scene.reloadFolderItems();
-    scene.reloadChartList();
+    scene.requestLibraryReload(true);
   }
   auto entries = dbHelper.SelectAllEntries(db);
 
@@ -192,7 +191,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   recyclerView = new RecyclerView<bms_parser::ChartMeta>(
       [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
-        return a.SHA256 == b.SHA256;
+        return a.BmsPath == b.BmsPath;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
@@ -732,6 +731,41 @@ void MainMenuScene::reloadChartList() {
   recyclerView->setItems(std::move(chartMetas));
 }
 
+void MainMenuScene::requestLibraryReload(bool includeFolders) {
+  if (includeFolders) {
+    folderItemsReloadRequested = true;
+  }
+  chartListReloadRequested = true;
+}
+
+void MainMenuScene::requestTableImportStatus(const std::string &text,
+                                             const SDL_Color &color) {
+  std::lock_guard<std::mutex> lock(tableImportStatusMutex);
+  pendingTableImportStatus = true;
+  pendingTableImportStatusText = text;
+  pendingTableImportStatusColor = color;
+}
+
+void MainMenuScene::applyPendingUiUpdates() {
+  {
+    std::lock_guard<std::mutex> lock(tableImportStatusMutex);
+    if (pendingTableImportStatus && tableImportStatus != nullptr) {
+      tableImportStatus->setText(pendingTableImportStatusText);
+      tableImportStatus->setColor(pendingTableImportStatusColor);
+      pendingTableImportStatus = false;
+    }
+  }
+
+  const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
+  const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  if (shouldReloadFolders) {
+    reloadFolderItems();
+  }
+  if (shouldReloadFolders || shouldReloadCharts) {
+    reloadChartList();
+  }
+}
+
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
   activeFolder = item;
   reloadChartList();
@@ -778,16 +812,12 @@ void MainMenuScene::importDifficultyTableFromUrl() {
     }
 
     if (imported) {
-      if (tableImportStatus != nullptr) {
-        tableImportStatus->setText("Imported.");
-        tableImportStatus->setColor({181, 228, 165, 255});
-      }
-      reloadFolderItems();
-      reloadChartList();
-    } else if (tableImportStatus != nullptr) {
-      tableImportStatus->setText(errorMessage.empty() ? "Import failed."
-                                                      : errorMessage);
-      tableImportStatus->setColor({255, 177, 170, 255});
+      requestTableImportStatus("Imported.", {181, 228, 165, 255});
+      requestLibraryReload(true);
+    } else {
+      requestTableImportStatus(errorMessage.empty() ? "Import failed."
+                                                    : errorMessage,
+                               {255, 177, 170, 255});
     }
     tableImportRunning = false;
   });
@@ -796,6 +826,7 @@ void MainMenuScene::importDifficultyTableFromUrl() {
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
+  applyPendingUiUpdates();
 }
 
 void MainMenuScene::renderScene() {
@@ -934,8 +965,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
   });
   dbHelper.CommitTransaction(db);
   SDL_Log("Inserted %d new charts", success_count.load());
-  scene.reloadFolderItems();
-  scene.reloadChartList();
+  scene.requestLibraryReload(true);
 }
 
 #ifdef _WIN32
