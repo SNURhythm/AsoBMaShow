@@ -509,6 +509,7 @@ private:
     for (int i = startIndex; i <= endIndex; ++i) {
       const T &item = items[i];
       View *view = nullptr;
+      bool shouldBind = false;
 
       // Check if the item already has a corresponding view
       auto it = std::find_if(viewEntries.begin(), viewEntries.end(),
@@ -525,16 +526,18 @@ private:
         // Otherwise, get a recycled view or create a new one
         view = getViewForItem(item);
         idxToView[i] = view;
-        if (onBind) {
-          onBind(view, item, i, selectedIndex == i);
-        }
+        shouldBind = true;
       }
-      // update the position of the view
 
+      // Size before binding so row content is laid out against the recycler
+      // width rather than the stale width of a created or recycled view.
       view->setPositionNoLayout(this->getX(),
                                 this->getY() + (i * itemHeight) - scrollOffset,
                                 YGPositionType::YGPositionTypeAbsolute);
       view->setSize(visibleItemWidth(), itemHeight);
+      if (shouldBind && onBind) {
+        onBind(view, item, i, selectedIndex == i);
+      }
 
       newVisibleItems.emplace_back(view, item);
     }
