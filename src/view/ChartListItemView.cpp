@@ -75,6 +75,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setFlexShrink(1)
       ->setMinWidth(0)
       ->setGap(4);
+  textLayout->setBackgroundColor(Color(255, 64, 64, 96));
   this->addView(textLayout);
 
   titleView->setHeight(36);
