@@ -1,0 +1,13 @@
+name: Clean iOS Project
+
+on:
+  workflow_dispatch:
+
+jobs:
+  clean:
+    name: Clean iOS project
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+      - run: ./scripts/ios_init.sh --clean-project-only

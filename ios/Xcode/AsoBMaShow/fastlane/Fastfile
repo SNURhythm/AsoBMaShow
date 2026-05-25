@@ -89,7 +89,7 @@ platform :ios do
       scheme: "AsoBMaShow",
       export_method: export_method,
       xcargs: "-allowProvisioningUpdates",
-      clean: true
+      clean: !distribute_to_firebase
     )
     temporary_fix_ios_post_build
 

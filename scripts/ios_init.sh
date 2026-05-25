@@ -4,6 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="${ROOT_DIR}/ios/Xcode/AsoBMaShow"
 CACHE_ROOT="${IOS_DEPLOY_CACHE_ROOT:-${HOME}/Library/Caches/AsoBMaShow/ios-deploy}"
+CLEAN_PROJECT_ONLY=0
+
+for arg in "$@"; do
+  case "${arg}" in
+    --clean-project-only)
+      CLEAN_PROJECT_ONLY=1
+      ;;
+    *)
+      echo "Unknown argument: ${arg}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 hash_stdin() {
   shasum | awk '{ print $1 }'
@@ -25,6 +38,21 @@ link_cache_dir() {
     ln -s "${cache_dir}" "${link_path}"
   else
     ln -s "${cache_dir}" "${link_path}"
+  fi
+}
+
+clean_project() {
+  echo "Cleaning iOS generated project and Xcode build state"
+  rm -rf "${ROOT_DIR}/bgfx/build"
+  rm -rf "${CACHE_ROOT}/bgfx-build"
+  rm -rf "${IOS_DIR}/build"
+  rm -f "${IOS_DIR}"/*.ipa "${IOS_DIR}"/*.dSYM.zip
+
+  if [ -d "${HOME}/Library/Developer/Xcode/DerivedData" ]; then
+    find "${HOME}/Library/Developer/Xcode/DerivedData" \
+      -maxdepth 1 \
+      -name 'AsoBMaShow-*' \
+      -exec rm -rf {} +
   fi
 }
 
@@ -96,6 +124,11 @@ install_pods() {
     bundle exec pod install --deployment
   fi
 }
+
+if [ "${CLEAN_PROJECT_ONLY}" -eq 1 ]; then
+  clean_project
+  exit 0
+fi
 
 prepare_bgfx_project
 install_gems
