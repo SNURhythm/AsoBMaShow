@@ -47,14 +47,15 @@ private:
         touchMomentum.stop();
       }
     }
-    // clip the rendering area
+    // Debug: leave item rendering unclipped so oversized row/content layout is
+    // visible outside the RecyclerView viewport.
+    for (const auto &entry : viewEntries) {
+      entry.first->render(context);
+    }
 
     {
       ScissorScope scissor(context, this->getX(), this->getY(),
                            this->getWidth(), this->getHeight());
-      for (const auto &entry : viewEntries) {
-        entry.first->render(context);
-      }
       renderScrollbar(context);
     }
   }
