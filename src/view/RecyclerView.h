@@ -38,6 +38,9 @@ private:
 
 private:
   void renderImpl(RenderContext &context) override {
+    if (visibleItemsNeedLayout()) {
+      updateVisibleItems();
+    }
     if (!touchDragging) {
       float momentumDelta = 0.0f;
       if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
@@ -340,6 +343,13 @@ private:
   bool touchDragging = false;
   Uint64 scrollbarFadeInStartedAt = 0;
   Uint64 scrollbarLastActivityAt = 0;
+  bool visibleItemsLayoutDirty = true;
+  int visibleItemsLayoutX = 0;
+  int visibleItemsLayoutY = 0;
+  int visibleItemsLayoutWidth = 0;
+  int visibleItemsLayoutHeight = 0;
+  int visibleItemsLayoutItemHeight = 0;
+  float visibleItemsLayoutScrollOffset = 0.0f;
 
   static constexpr int kScrollbarContentInset = 14;
   static constexpr int kScrollbarWidth = 4;
@@ -359,6 +369,15 @@ private:
     const int reservedWidth =
         reserveScrollbarGutter && canScroll() ? kScrollbarContentInset : 0;
     return std::max(0, this->getWidth() - reservedWidth);
+  }
+
+  inline bool visibleItemsNeedLayout() const {
+    return visibleItemsLayoutDirty || visibleItemsLayoutX != this->getX() ||
+           visibleItemsLayoutY != this->getY() ||
+           visibleItemsLayoutWidth != visibleItemWidth() ||
+           visibleItemsLayoutHeight != this->getHeight() ||
+           visibleItemsLayoutItemHeight != itemHeight ||
+           std::fabs(visibleItemsLayoutScrollOffset - scrollOffset) > 0.001f;
   }
 
   inline static float smoothStep(float value) {
@@ -491,6 +510,11 @@ private:
   }
 
   inline void updateVisibleItems() {
+    const int layoutX = this->getX();
+    const int layoutY = this->getY();
+    const int layoutWidth = visibleItemWidth();
+    const int layoutHeight = this->getHeight();
+
     // Determine the range of visible items
     int startIndex = getStartIndex();
     int endIndex = getEndIndex();
@@ -531,10 +555,10 @@ private:
 
       // Size before binding so row content is laid out against the recycler
       // width rather than the stale width of a created or recycled view.
-      view->setPositionNoLayout(this->getX(),
-                                this->getY() + (i * itemHeight) - scrollOffset,
+      view->setPositionNoLayout(layoutX,
+                                layoutY + (i * itemHeight) - scrollOffset,
                                 YGPositionType::YGPositionTypeAbsolute);
-      view->setSize(visibleItemWidth(), itemHeight);
+      view->setSize(layoutWidth, itemHeight);
       if (shouldBind && onBind) {
         onBind(view, item, i, selectedIndex == i);
       }
@@ -549,6 +573,13 @@ private:
 
     // Update the list of visible items
     viewEntries = std::move(newVisibleItems);
+    visibleItemsLayoutDirty = false;
+    visibleItemsLayoutX = layoutX;
+    visibleItemsLayoutY = layoutY;
+    visibleItemsLayoutWidth = layoutWidth;
+    visibleItemsLayoutHeight = layoutHeight;
+    visibleItemsLayoutItemHeight = itemHeight;
+    visibleItemsLayoutScrollOffset = scrollOffset;
   }
 
   inline int getStartIndex() {
@@ -583,6 +614,11 @@ protected:
   inline void onResize(int newWidth, int newHeight) override {
     View::onResize(newWidth, newHeight);
     updateVisibleItems();
+  }
+  void onMove(int newX, int newY) override {
+    (void)newX;
+    (void)newY;
+    visibleItemsLayoutDirty = true;
   }
   void onLayout() override {
     View::onLayout();
