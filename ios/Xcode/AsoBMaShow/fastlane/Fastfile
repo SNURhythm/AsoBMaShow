@@ -13,11 +13,7 @@
 # Uncomment the line if you want fastlane to automatically update itself
 # update_fastlane
 
-require "shellwords"
-
 default_platform(:ios)
-
-APP_INFO_PLIST_PATH = "AsoBMaShow/Info.plist"
 
 def github_pull_request_to_develop?
   ENV["GITHUB_ACTIONS"] == "true" &&
@@ -62,48 +58,6 @@ def firebase_build_number
   Time.now.utc.strftime("%Y%m%d%H%M")
 end
 
-def plist_value(path, key)
-  output = `/usr/libexec/PlistBuddy -c #{Shellwords.escape("Print :#{key}")} #{Shellwords.escape(path)} 2>/dev/null`
-  return nil unless $?.success?
-
-  output.chomp
-end
-
-def set_plist_value(path, key, value)
-  command = if plist_value(path, key).nil?
-              "Add :#{key} string #{value}"
-            else
-              "Set :#{key} #{value}"
-            end
-  return if system("/usr/libexec/PlistBuddy", "-c", command, path)
-
-  raise "Failed to set #{key} in #{path}"
-end
-
-def delete_plist_key(path, key)
-  return if system("/usr/libexec/PlistBuddy", "-c", "Delete :#{key}", path)
-
-  raise "Failed to delete #{key} from #{path}"
-end
-
-def with_app_build_number(build_number)
-  key = "CFBundleVersion"
-  original_value = plist_value(APP_INFO_PLIST_PATH, key)
-  changed = false
-
-  set_plist_value(APP_INFO_PLIST_PATH, key, build_number)
-  changed = true
-  yield
-ensure
-  if changed
-    if original_value.nil?
-      delete_plist_key(APP_INFO_PLIST_PATH, key)
-    else
-      set_plist_value(APP_INFO_PLIST_PATH, key, original_value)
-    end
-  end
-end
-
 platform :ios do
   desc "Push a new beta build to Firebase App Distribution or TestFlight"
   lane :beta do
@@ -127,14 +81,12 @@ platform :ios do
                    else
                      latest_testflight_build_number(initial_build_number: 0) + 1
                    end
-    with_app_build_number(build_number) do
-      build_app(
-        scheme: "AsoBMaShow",
-        export_method: export_method,
-        xcargs: "-allowProvisioningUpdates",
-        clean: !distribute_to_firebase
-      )
-    end
+    build_app(
+      scheme: "AsoBMaShow",
+      export_method: export_method,
+      xcargs: "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}",
+      clean: !distribute_to_firebase
+    )
     temporary_fix_ios_post_build
 
     if distribute_to_firebase
