@@ -16,6 +16,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -53,26 +54,16 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_notes,"
                                                 "cm.total_long_notes,"
                                                 "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes,"
-                                                "(SELECT group_concat(label, "
-                                                "'/') FROM ("
-                                                "SELECT dt.symbol || dte.level "
-                                                "AS label,"
-                                                "MIN(dt.id) AS table_order,"
-                                                "MIN(dte.sort_order) AS "
-                                                "entry_order "
-                                                "FROM "
-                                                "difficulty_table_entries dte "
-                                                "JOIN difficulty_tables dt ON "
-                                                "dt.id = dte.table_id "
-                                                "WHERE ((dte.sha256 != '' AND "
-                                                "lower(cm.sha256) = "
-                                                "dte.sha256) "
-                                                "OR (dte.md5 != '' AND "
-                                                "lower(cm.md5) = dte.md5)) "
-                                                "GROUP BY label "
-                                                "ORDER BY table_order, "
-                                                "entry_order, label))";
+                                                "cm.total_backspin_notes";
+
+struct DifficultyLabelCache {
+  bool loaded = false;
+  std::unordered_map<std::string, std::vector<std::string>> labelsBySha256;
+  std::unordered_map<std::string, std::vector<std::string>> labelsByMd5;
+};
+
+std::mutex gDifficultyLabelCacheMutex;
+DifficultyLabelCache gDifficultyLabelCache;
 
 std::string trimCopy(const std::string &value) {
   const auto begin =
@@ -614,6 +605,105 @@ std::string columnString(sqlite3_stmt *stmt, int idx) {
   }
   return reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
 }
+
+void appendUniqueLabel(
+    std::unordered_map<std::string, std::vector<std::string>> &labelsByHash,
+    const std::string &hash, const std::string &label) {
+  if (hash.empty() || label.empty()) {
+    return;
+  }
+  auto &labels = labelsByHash[hash];
+  if (std::find(labels.begin(), labels.end(), label) == labels.end()) {
+    labels.push_back(label);
+  }
+}
+
+void appendChartLabels(const std::vector<std::string> &source,
+                       std::vector<std::string> &destination,
+                       std::unordered_set<std::string> &seen) {
+  for (const auto &label : source) {
+    if (seen.insert(label).second) {
+      destination.push_back(label);
+    }
+  }
+}
+
+std::string joinLabels(const std::vector<std::string> &labels) {
+  std::string joined;
+  for (const auto &label : labels) {
+    if (!joined.empty()) {
+      joined += "/";
+    }
+    joined += label;
+  }
+  return joined;
+}
+
+void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
+  cache.loaded = false;
+  cache.labelsBySha256.clear();
+  cache.labelsByMd5.clear();
+  auto query = "SELECT dte.sha256, dte.md5, dt.symbol || dte.level AS label "
+               "FROM difficulty_table_entries dte "
+               "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+               "WHERE dte.sha256 != '' OR dte.md5 != '' "
+               "ORDER BY dt.id, dte.sort_order, label";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while loading difficulty labels: "
+              << sqlite3_errmsg(db) << "\n";
+    return;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const std::string sha256 = normalizedHash(columnString(stmt, 0));
+    const std::string md5 = normalizedHash(columnString(stmt, 1));
+    const std::string label = columnString(stmt, 2);
+    appendUniqueLabel(cache.labelsBySha256, sha256, label);
+    appendUniqueLabel(cache.labelsByMd5, md5, label);
+  }
+  sqlite3_finalize(stmt);
+  cache.loaded = true;
+}
+
+void invalidateDifficultyLabelCache() {
+  std::lock_guard<std::mutex> lock(gDifficultyLabelCacheMutex);
+  gDifficultyLabelCache.loaded = false;
+  gDifficultyLabelCache.labelsBySha256.clear();
+  gDifficultyLabelCache.labelsByMd5.clear();
+}
+
+void populateDifficultyTableLabels(
+    sqlite3 *db, std::vector<bms_parser::ChartMeta> &chartMetas) {
+  if (chartMetas.empty()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(gDifficultyLabelCacheMutex);
+  if (!gDifficultyLabelCache.loaded) {
+    loadDifficultyLabelCache(db, gDifficultyLabelCache);
+  }
+  if (!gDifficultyLabelCache.loaded) {
+    return;
+  }
+
+  for (auto &chartMeta : chartMetas) {
+    std::vector<std::string> labels;
+    std::unordered_set<std::string> seen;
+    const auto shaIt = gDifficultyLabelCache.labelsBySha256.find(
+        normalizedHash(chartMeta.SHA256));
+    if (shaIt != gDifficultyLabelCache.labelsBySha256.end()) {
+      appendChartLabels(shaIt->second, labels, seen);
+    }
+    const auto md5It =
+        gDifficultyLabelCache.labelsByMd5.find(normalizedHash(chartMeta.MD5));
+    if (md5It != gDifficultyLabelCache.labelsByMd5.end()) {
+      appendChartLabels(md5It->second, labels, seen);
+    }
+    chartMeta.DifficultyTableLabels = joinLabels(labels);
+  }
+}
 } // namespace
 
 sqlite3 *ChartDBHelper::Connect() {
@@ -684,6 +774,17 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
               << "\n";
     sqlite3_free(errMsg);
     return false;
+  }
+
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_title ON chart_meta(title)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256 ON chart_meta(sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_md5 ON chart_meta(md5)",
+  };
+  for (const auto *indexQuery : indexes) {
+    if (!execSql(db, indexQuery, "creating chart meta index")) {
+      return false;
+    }
   }
   return true;
 }
@@ -758,11 +859,13 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   }
   std::filesystem::path path = chartMeta.BmsPath;
   ToRelativePath(path);
+  const std::string md5 = normalizedHash(chartMeta.MD5);
+  const std::string sha256 = normalizedHash(chartMeta.SHA256);
 
   sqlite3_bind_text(stmt, 1, path_t_to_utf8(fspath_to_path_t(path)).c_str(), -1,
                     SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 2, (chartMeta.MD5).c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, (chartMeta.SHA256).c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, md5.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, sha256.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 4, (chartMeta.Title).c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 5, (chartMeta.SubTitle).c_str(), -1,
                     SQLITE_TRANSIENT);
@@ -812,7 +915,8 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
 }
 
 void ChartDBHelper::SelectAllChartMeta(
-    sqlite3 *db, std::vector<bms_parser::ChartMeta> &chartMetas) {
+    sqlite3 *db, std::vector<bms_parser::ChartMeta> &chartMetas,
+    bool includeDifficultyLabels) {
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm ORDER BY cm.title";
@@ -832,6 +936,27 @@ void ChartDBHelper::SelectAllChartMeta(
     chartMetas.push_back(std::move(ReadChartMeta(stmt)));
   }
   sqlite3_finalize(stmt);
+  if (includeDifficultyLabels) {
+    populateDifficultyTableLabels(db, chartMetas);
+  }
+}
+
+int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
+  auto query = "SELECT COUNT(*) FROM chart_meta";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
+              << "\n";
+    sqlite3_free(stmt);
+    return 0;
+  }
+  int count = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    count = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return count;
 }
 
 void ChartDBHelper::SearchChartMeta(
@@ -841,7 +966,7 @@ void ChartDBHelper::SearchChartMeta(
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm WHERE rtrim(cm.title || ' ' || cm.subtitle || "
            "' ' || cm.artist || ' ' || cm.sub_artist || ' ' || cm.genre) LIKE "
-           "@text GROUP BY cm.sha256 ORDER BY cm.title";
+           "@text ORDER BY cm.title";
   sqlite3_stmt *stmt;
   int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
@@ -860,6 +985,7 @@ void ChartDBHelper::SearchChartMeta(
     chartMetas.push_back(std::move(ReadChartMeta(stmt)));
   }
   sqlite3_finalize(stmt);
+  populateDifficultyTableLabels(db, chartMetas);
 }
 
 void ChartDBHelper::QueryChartMeta(
@@ -875,22 +1001,26 @@ void ChartDBHelper::QueryChartMeta(
   }
 
   if (chartQuery.tableId > 0) {
-    query += " AND EXISTS (SELECT 1 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id "
-             "AND ((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
-             "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5))";
+    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
+             "difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
     if (!chartQuery.tableLevel.empty()) {
       query += " AND dte.level = @table_level";
     }
-    query += ")";
+    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += "))";
   }
 
   if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
       !chartQuery.courseGroupName.empty()) {
-    query += " AND EXISTS (SELECT 1 FROM difficulty_course_entries dce "
+    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
+             "difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE ((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
-             "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5))";
+             "WHERE dce.sha256 != ''";
     if (chartQuery.courseId > 0) {
       query += " AND dce.course_id = @course_id";
     }
@@ -900,25 +1030,46 @@ void ChartDBHelper::QueryChartMeta(
     if (!chartQuery.courseGroupName.empty()) {
       query += " AND dc.group_name = @course_group_name";
     }
-    query += ")";
+    query +=
+        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
+        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+        "WHERE dce.md5 != ''";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += "))";
   }
 
   if (!chartQuery.difficultyText.empty()) {
-    query += " AND EXISTS (SELECT 1 FROM difficulty_table_entries dte_filter "
+    const char *difficultyClause =
+        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
+        "OR lower(dte_filter.level) = @difficulty "
+        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
+        "dte_filter.level) LIKE @difficulty_like "
+        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
+        "@difficulty_like)";
+    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
+             "difficulty_table_entries dte_filter "
              "JOIN difficulty_tables dt_filter ON dt_filter.id = "
              "dte_filter.table_id "
-             "WHERE ((dte_filter.sha256 != '' AND lower(cm.sha256) = "
-             "dte_filter.sha256) "
-             "OR (dte_filter.md5 != '' AND lower(cm.md5) = dte_filter.md5)) "
-             "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-             "OR lower(dte_filter.level) = @difficulty "
-             "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-             "dte_filter.level) LIKE @difficulty_like "
-             "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-             "@difficulty_like))";
+             "WHERE dte_filter.sha256 != '' ";
+    query += difficultyClause;
+    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE dte_filter.md5 != '' ";
+    query += difficultyClause;
+    query += "))";
   }
 
-  query += " GROUP BY cm.sha256 ORDER BY cm.title";
+  query += " ORDER BY cm.title";
 
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
@@ -962,6 +1113,7 @@ void ChartDBHelper::QueryChartMeta(
     chartMetas.push_back(std::move(ReadChartMeta(stmt)));
   }
   sqlite3_finalize(stmt);
+  populateDifficultyTableLabels(db, chartMetas);
 }
 
 bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
@@ -1220,6 +1372,10 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       ")",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_table_level "
       "ON difficulty_table_entries(table_id, level)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_table_sha256 "
+      "ON difficulty_table_entries(table_id, sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_table_md5 "
+      "ON difficulty_table_entries(table_id, md5)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_md5 "
       "ON difficulty_table_entries(md5)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_sha256 "
@@ -1228,6 +1384,10 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       "ON difficulty_courses(table_id, group_name)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course "
       "ON difficulty_course_entries(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course_sha256 "
+      "ON difficulty_course_entries(course_id, sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course_md5 "
+      "ON difficulty_course_entries(course_id, md5)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_md5 "
       "ON difficulty_course_entries(md5)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_sha256 "
@@ -1270,6 +1430,7 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
     return false;
   }
 
+  invalidateDifficultyLabelCache();
   BeginTransaction(db);
   const int tableId =
       upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
@@ -1521,8 +1682,8 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "FROM difficulty_tables dt "
                "LEFT JOIN difficulty_table_entries dte ON dte.table_id = dt.id "
                "LEFT JOIN chart_meta cm ON "
-               "((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
-               "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5)) "
+               "((dte.sha256 != '' AND cm.sha256 = dte.sha256) "
+               "OR (dte.md5 != '' AND cm.md5 = dte.md5)) "
                "GROUP BY dt.id "
                "ORDER BY dt.name COLLATE NOCASE";
 
@@ -1555,8 +1716,8 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "FROM difficulty_table_entries dte "
                "JOIN difficulty_tables dt ON dt.id = dte.table_id "
                "LEFT JOIN chart_meta cm ON "
-               "((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
-               "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5)) "
+               "((dte.sha256 != '' AND cm.sha256 = dte.sha256) "
+               "OR (dte.md5 != '' AND cm.md5 = dte.md5)) "
                "WHERE dte.table_id = @table_id "
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
@@ -1592,8 +1753,8 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "LEFT JOIN chart_meta cm ON "
-      "((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
-      "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5)) "
+      "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
+      "OR (dce.md5 != '' AND cm.md5 = dce.md5)) "
       "GROUP BY dc.table_id, dc.group_name "
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
@@ -1628,8 +1789,8 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "LEFT JOIN chart_meta cm ON "
-      "((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
-      "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5)) "
+      "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
+      "OR (dce.md5 != '' AND cm.md5 = dce.md5)) "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
       "GROUP BY dc.id "
       "ORDER BY dc.sort_order";

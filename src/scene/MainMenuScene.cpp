@@ -331,7 +331,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   });
   nav->addView(tableUrlInput);
 
-  auto *importButton = new Button(0, 0, 240, 44);
+  auto *importButton = new Button();
+  importButton->setAlignSelf(YGAlignStretch);
   auto *importButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   importButtonText->setText("Import table");
   importButtonText->setAlign(TextView::CENTER);
@@ -549,11 +550,7 @@ void MainMenuScene::reloadFolderItems() {
   std::vector<LibraryFolderItem> folders;
 
   int allSongCount = 0;
-  {
-    std::vector<bms_parser::ChartMeta> chartMetas;
-    dbHelper.SelectAllChartMeta(db, chartMetas);
-    allSongCount = static_cast<int>(chartMetas.size());
-  }
+  allSongCount = dbHelper.CountAllChartMeta(db);
 
   folders.push_back({
       .key = "all",
@@ -798,7 +795,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
   std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas);
+  dbHelper.SelectAllChartMeta(db, chartMetas, false);
   // sort by title
   std::sort(chartMetas.begin(), chartMetas.end(),
             [](bms_parser::ChartMeta &a, bms_parser::ChartMeta &b) {

@@ -78,8 +78,10 @@ public:
 
   // Insert ChartMeta
   bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);
+  int CountAllChartMeta(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
-                          std::vector<bms_parser::ChartMeta> &chartMetas);
+                          std::vector<bms_parser::ChartMeta> &chartMetas,
+                          bool includeDifficultyLabels = true);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
                        std::vector<bms_parser::ChartMeta> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
