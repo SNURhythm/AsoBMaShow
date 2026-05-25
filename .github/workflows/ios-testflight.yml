@@ -29,19 +29,11 @@ jobs:
         with:
           submodules: "recursive"
       # - run: security unlock-keychain -p '' ~/Library/Keychains/fastlane_tmp.keychain-db && /usr/bin/codesign --force --sign 34880200590025A82E9C5F3532E90943FF2C36D3 --generate-entitlement-der /Users/xf/Library/Developer/Xcode/DerivedData/AsoBMaShow-ctypzucmvdkvixehhworeabhoarv/Build/Intermediates.noindex/ArchiveIntermediates/AsoBMaShow/IntermediateBuildFilesPath/UninstalledProducts/iphoneos/SDL2.framework
-      - run: ./scripts/ios_init.sh
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
-          bundler-cache: true
           self-hosted: true
-      - uses: actions/cache@v3
-        with:
-          path: ios/Xcode/AsoBMaShow/Pods
-          key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-pods-
-      - run: cd ios/Xcode/AsoBMaShow && bundle install && bundle exec pod repo update && bundle exec pod install
+      - run: ./scripts/ios_init.sh
       # - uses: mikehardy/buildcache-action@v2.1.0
       - working-directory: ./ios/Xcode/AsoBMaShow
         run: bundle exec fastlane ios beta --verbose
