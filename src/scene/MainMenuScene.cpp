@@ -191,7 +191,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   recyclerView = new RecyclerView<bms_parser::ChartMeta>(
       [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
-        return a.BmsPath == b.BmsPath;
+        return a.SHA256 == b.SHA256;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {

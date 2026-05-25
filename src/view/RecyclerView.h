@@ -269,7 +269,6 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
-    destroyAllViews();
     updateVisibleItems();
   }
 
@@ -279,7 +278,6 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
-    destroyAllViews();
     updateVisibleItems();
   }
 
