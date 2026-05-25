@@ -5,10 +5,431 @@
 #include <SDL2/SDL.h>
 #include "path.h"
 
+#include <algorithm>
+#include <cctype>
 #include <codecvt>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <sstream>
+#include <unordered_set>
 #include "targets.h"
+
+namespace {
+using json = nlohmann::json;
+
+constexpr const char *kChartMetaSelectColumns = "cm.path,"
+                                                "cm.md5,"
+                                                "cm.sha256,"
+                                                "cm.title,"
+                                                "cm.subtitle,"
+                                                "cm.genre,"
+                                                "cm.artist,"
+                                                "cm.sub_artist,"
+                                                "cm.folder,"
+                                                "cm.stage_file,"
+                                                "cm.banner,"
+                                                "cm.back_bmp,"
+                                                "cm.preview,"
+                                                "cm.level,"
+                                                "cm.difficulty,"
+                                                "cm.total,"
+                                                "cm.bpm,"
+                                                "cm.max_bpm,"
+                                                "cm.min_bpm,"
+                                                "cm.length,"
+                                                "cm.rank,"
+                                                "cm.player,"
+                                                "cm.keys,"
+                                                "cm.total_notes,"
+                                                "cm.total_long_notes,"
+                                                "cm.total_scratch_notes,"
+                                                "cm.total_backspin_notes";
+
+std::string trimCopy(const std::string &value) {
+  const auto begin =
+      std::find_if_not(value.begin(), value.end(),
+                       [](unsigned char c) { return std::isspace(c) != 0; });
+  const auto end =
+      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+      }).base();
+  if (begin >= end) {
+    return "";
+  }
+  return std::string(begin, end);
+}
+
+std::string lowerCopy(std::string value) {
+  std::transform(
+      value.begin(), value.end(), value.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+std::string normalizedHash(const std::string &value) {
+  return lowerCopy(trimCopy(value));
+}
+
+std::string jsonValueToString(const json &value,
+                              const std::string &fallback = "") {
+  if (value.is_string()) {
+    return value.get<std::string>();
+  }
+  if (value.is_number_integer()) {
+    return std::to_string(value.get<long long>());
+  }
+  if (value.is_number_unsigned()) {
+    return std::to_string(value.get<unsigned long long>());
+  }
+  if (value.is_number_float()) {
+    std::ostringstream stream;
+    stream << value.get<double>();
+    return stream.str();
+  }
+  if (value.is_boolean()) {
+    return value.get<bool>() ? "true" : "false";
+  }
+  return fallback;
+}
+
+std::string jsonStringAt(const json &object, const char *key,
+                         const std::string &fallback = "") {
+  if (!object.is_object()) {
+    return fallback;
+  }
+  const auto it = object.find(key);
+  if (it == object.end() || it->is_null()) {
+    return fallback;
+  }
+  return jsonValueToString(*it, fallback);
+}
+
+std::optional<std::string> readTextFile(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return std::nullopt;
+  }
+  std::ostringstream stream;
+  stream << file.rdbuf();
+  return stream.str();
+}
+
+struct TableChartItem {
+  std::string level;
+  std::string md5;
+  std::string sha256;
+  std::string title;
+  std::string subtitle;
+  std::string artist;
+  std::string subartist;
+  std::string url;
+  std::string urlDiff;
+};
+
+TableChartItem readChartItem(const json &item,
+                             const std::string &defaultLevel) {
+  TableChartItem chart;
+  chart.level = jsonStringAt(item, "level", defaultLevel);
+  if (chart.level.empty()) {
+    chart.level = defaultLevel;
+  }
+  chart.md5 = normalizedHash(jsonStringAt(item, "md5"));
+  chart.sha256 = normalizedHash(jsonStringAt(item, "sha256"));
+  chart.title = jsonStringAt(item, "title");
+  chart.subtitle = jsonStringAt(item, "subtitle");
+  chart.artist = jsonStringAt(item, "artist");
+  chart.subartist = jsonStringAt(item, "subartist");
+  chart.url = jsonStringAt(item, "url");
+  chart.urlDiff = jsonStringAt(item, "url_diff");
+  return chart;
+}
+
+std::vector<TableChartItem> readCourseCharts(const json &course) {
+  std::vector<TableChartItem> charts;
+  if (!course.is_object()) {
+    return charts;
+  }
+
+  const auto chartIt = course.find("charts");
+  if (chartIt != course.end() && chartIt->is_array()) {
+    for (const auto &chartValue : *chartIt) {
+      if (chartValue.is_object()) {
+        charts.push_back(readChartItem(chartValue, "0"));
+      }
+    }
+  }
+
+  const auto md5It = course.find("md5");
+  if (md5It != course.end() && md5It->is_array()) {
+    for (const auto &md5Value : *md5It) {
+      const std::string md5 = normalizedHash(jsonValueToString(md5Value));
+      if (!md5.empty()) {
+        charts.push_back({.level = "0", .md5 = md5});
+      }
+    }
+  }
+
+  const auto sha256It = course.find("sha256");
+  if (sha256It != course.end() && sha256It->is_array()) {
+    for (const auto &sha256Value : *sha256It) {
+      const std::string sha256 = normalizedHash(jsonValueToString(sha256Value));
+      if (!sha256.empty()) {
+        charts.push_back({.level = "0", .sha256 = sha256});
+      }
+    }
+  }
+
+  return charts;
+}
+
+void collectCourses(const json &value, std::vector<const json *> &courses) {
+  if (value.is_object() && value.contains("name")) {
+    courses.push_back(&value);
+    return;
+  }
+  if (!value.is_array()) {
+    return;
+  }
+  for (const auto &child : value) {
+    collectCourses(child, courses);
+  }
+}
+
+std::pair<std::string, std::string>
+splitCourseFolderAndLevel(const std::string &courseName,
+                          const std::string &symbol) {
+  if (!symbol.empty()) {
+    const std::string needle = " " + symbol;
+    const auto pos = courseName.rfind(needle);
+    if (pos != std::string::npos && pos + 1 < courseName.size()) {
+      return {trimCopy(courseName.substr(0, pos)),
+              trimCopy(courseName.substr(pos + 1))};
+    }
+  }
+  return {courseName, ""};
+}
+
+bool execSql(sqlite3 *db, const char *query, const char *context) {
+  char *errMsg = nullptr;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, &errMsg);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while " << context << ": "
+              << (errMsg != nullptr ? errMsg : sqlite3_errmsg(db)) << "\n";
+    sqlite3_free(errMsg);
+    return false;
+  }
+  return true;
+}
+
+bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
+  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
+         SQLITE_OK;
+}
+
+int findDifficultyTable(sqlite3 *db, const std::string &name,
+                        const std::string &symbol,
+                        const std::string &sourceUrl) {
+  auto query =
+      "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
+      "@symbol AND source_url = @source_url";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while looking up difficulty table: "
+              << sqlite3_errmsg(db) << "\n";
+    return 0;
+  }
+  bindText(stmt, 1, name);
+  bindText(stmt, 2, symbol);
+  bindText(stmt, 3, sourceUrl);
+  int id = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    id = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return id;
+}
+
+bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
+  sqlite3_stmt *stmt = nullptr;
+  auto deleteCourseEntries =
+      "DELETE FROM difficulty_course_entries WHERE course_id IN "
+      "(SELECT id FROM difficulty_courses WHERE table_id = @table_id)";
+  int rc = sqlite3_prepare_v2(db, deleteCourseEntries, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    return false;
+  }
+
+  auto deleteCourses =
+      "DELETE FROM difficulty_courses WHERE table_id = @table_id";
+  rc = sqlite3_prepare_v2(db, deleteCourses, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    return false;
+  }
+
+  auto deleteEntries =
+      "DELETE FROM difficulty_table_entries WHERE table_id = @table_id";
+  rc = sqlite3_prepare_v2(db, deleteEntries, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE;
+}
+
+int upsertDifficultyTable(sqlite3 *db, const std::string &name,
+                          const std::string &symbol, const std::string &dataUrl,
+                          const std::string &sourceUrl) {
+  int tableId = findDifficultyTable(db, name, symbol, sourceUrl);
+  if (tableId > 0) {
+    auto updateQuery =
+        "UPDATE difficulty_tables SET data_url = @data_url, updated_at = "
+        "CURRENT_TIMESTAMP WHERE id = @id";
+    sqlite3_stmt *stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, updateQuery, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+      return 0;
+    }
+    bindText(stmt, 1, dataUrl);
+    sqlite3_bind_int(stmt, 2, tableId);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE || !clearDifficultyTableContent(db, tableId)) {
+      return 0;
+    }
+    return tableId;
+  }
+
+  auto insertQuery =
+      "INSERT INTO difficulty_tables "
+      "(name, symbol, data_url, source_url, updated_at) "
+      "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, insertQuery, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while inserting difficulty table: "
+              << sqlite3_errmsg(db) << "\n";
+    return 0;
+  }
+  bindText(stmt, 1, name);
+  bindText(stmt, 2, symbol);
+  bindText(stmt, 3, dataUrl);
+  bindText(stmt, 4, sourceUrl);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    return 0;
+  }
+  return static_cast<int>(sqlite3_last_insert_rowid(db));
+}
+
+bool insertDifficultyTableEntry(sqlite3 *db, int tableId,
+                                const TableChartItem &chart, int sortOrder) {
+  auto query =
+      "INSERT INTO difficulty_table_entries "
+      "(table_id, level, md5, sha256, title, subtitle, artist, subartist, "
+      "url, url_diff, sort_order) "
+      "VALUES (@table_id, @level, @md5, @sha256, @title, @subtitle, "
+      "@artist, @subartist, @url, @url_diff, @sort_order)";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  bindText(stmt, 2, chart.level);
+  bindText(stmt, 3, chart.md5);
+  bindText(stmt, 4, chart.sha256);
+  bindText(stmt, 5, chart.title);
+  bindText(stmt, 6, chart.subtitle);
+  bindText(stmt, 7, chart.artist);
+  bindText(stmt, 8, chart.subartist);
+  bindText(stmt, 9, chart.url);
+  bindText(stmt, 10, chart.urlDiff);
+  sqlite3_bind_int(stmt, 11, sortOrder);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE;
+}
+
+int insertDifficultyCourse(sqlite3 *db, int tableId, const std::string &name,
+                           const std::string &groupName,
+                           const std::string &level,
+                           const std::string &constraintJson, int sortOrder) {
+  auto query =
+      "INSERT INTO difficulty_courses "
+      "(table_id, name, group_name, level, constraint_json, sort_order) "
+      "VALUES (@table_id, @name, @group_name, @level, @constraint_json, "
+      "@sort_order)";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return 0;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  bindText(stmt, 2, name);
+  bindText(stmt, 3, groupName);
+  bindText(stmt, 4, level);
+  bindText(stmt, 5, constraintJson);
+  sqlite3_bind_int(stmt, 6, sortOrder);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    return 0;
+  }
+  return static_cast<int>(sqlite3_last_insert_rowid(db));
+}
+
+bool insertDifficultyCourseEntry(sqlite3 *db, int courseId,
+                                 const TableChartItem &chart, int sortOrder) {
+  auto query = "INSERT INTO difficulty_course_entries "
+               "(course_id, level, md5, sha256, sort_order) "
+               "VALUES (@course_id, @level, @md5, @sha256, @sort_order)";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, courseId);
+  bindText(stmt, 2, chart.level);
+  bindText(stmt, 3, chart.md5);
+  bindText(stmt, 4, chart.sha256);
+  sqlite3_bind_int(stmt, 5, sortOrder);
+  rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE;
+}
+
+int columnInt(sqlite3_stmt *stmt, int idx) {
+  return sqlite3_column_type(stmt, idx) == SQLITE_NULL
+             ? 0
+             : sqlite3_column_int(stmt, idx);
+}
+
+std::string columnString(sqlite3_stmt *stmt, int idx) {
+  if (sqlite3_column_type(stmt, idx) == SQLITE_NULL) {
+    return "";
+  }
+  return reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+}
+} // namespace
 
 sqlite3 *ChartDBHelper::Connect() {
   std::filesystem::path Directory = Utils::GetDocumentsPath("db");
@@ -309,6 +730,108 @@ void ChartDBHelper::SearchChartMeta(
   sqlite3_finalize(stmt);
 }
 
+void ChartDBHelper::QueryChartMeta(
+    sqlite3 *db, const ChartMetaQuery &chartQuery,
+    std::vector<bms_parser::ChartMeta> &chartMetas) {
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += " FROM chart_meta cm WHERE 1 = 1";
+
+  if (!chartQuery.keyword.empty()) {
+    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
+             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
+  }
+
+  if (chartQuery.tableId > 0) {
+    query += " AND EXISTS (SELECT 1 FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id "
+             "AND ((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
+             "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5))";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += ")";
+  }
+
+  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+      !chartQuery.courseGroupName.empty()) {
+    query += " AND EXISTS (SELECT 1 FROM difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE ((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
+             "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5))";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += ")";
+  }
+
+  if (!chartQuery.difficultyText.empty()) {
+    query += " AND EXISTS (SELECT 1 FROM difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE ((dte_filter.sha256 != '' AND lower(cm.sha256) = "
+             "dte_filter.sha256) "
+             "OR (dte_filter.md5 != '' AND lower(cm.md5) = dte_filter.md5)) "
+             "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
+             "OR lower(dte_filter.level) = @difficulty "
+             "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
+             "dte_filter.level) LIKE @difficulty_like "
+             "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
+             "@difficulty_like))";
+  }
+
+  query += " GROUP BY cm.sha256 ORDER BY cm.title";
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while querying charts: " << sqlite3_errmsg(db)
+              << "\n";
+    sqlite3_free(stmt);
+    return;
+  }
+
+  int bindIndex = 1;
+  if (!chartQuery.keyword.empty()) {
+    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (chartQuery.tableId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+    if (!chartQuery.tableLevel.empty()) {
+      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+    }
+  }
+  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+      !chartQuery.courseGroupName.empty()) {
+    if (chartQuery.courseId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
+    }
+    if (chartQuery.courseTableId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+    }
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    const std::string difficulty =
+        lowerCopy(trimCopy(chartQuery.difficultyText));
+    bindText(stmt, bindIndex++, difficulty);
+    bindText(stmt, bindIndex++, "%" + difficulty + "%");
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    chartMetas.push_back(std::move(ReadChartMeta(stmt)));
+  }
+  sqlite3_finalize(stmt);
+}
+
 bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   // std::cout << "Deleting chart: " << path.string() << std::endl;
   ToRelativePath(path);
@@ -321,9 +844,9 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
     sqlite3_free(stmt);
     return false;
   }
-  auto target = path_t_to_utf8(fspath_to_path_t(path)).c_str();
-  SDL_Log("Deleting chart: %s", target);
-  sqlite3_bind_text(stmt, 1, target, -1, SQLITE_TRANSIENT);
+  const auto target = path_t_to_utf8(fspath_to_path_t(path));
+  SDL_Log("Deleting chart: %s", target.c_str());
+  sqlite3_bind_text(stmt, 1, target.c_str(), -1, SQLITE_TRANSIENT);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cout << "SQL error while deleting a chart: " << sqlite3_errmsg(db)
@@ -516,6 +1039,403 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   }
   sqlite3_finalize(stmt);
   return true;
+}
+
+bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
+  const char *createTables[] = {
+      "CREATE TABLE IF NOT EXISTS difficulty_tables ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "name TEXT NOT NULL,"
+      "symbol TEXT NOT NULL,"
+      "data_url TEXT NOT NULL DEFAULT '',"
+      "source_url TEXT NOT NULL DEFAULT '',"
+      "updated_at TEXT,"
+      "UNIQUE(name, symbol, source_url)"
+      ")",
+      "CREATE TABLE IF NOT EXISTS difficulty_table_entries ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "table_id INTEGER NOT NULL,"
+      "level TEXT NOT NULL DEFAULT '',"
+      "md5 TEXT NOT NULL DEFAULT '',"
+      "sha256 TEXT NOT NULL DEFAULT '',"
+      "title TEXT,"
+      "subtitle TEXT,"
+      "artist TEXT,"
+      "subartist TEXT,"
+      "url TEXT,"
+      "url_diff TEXT,"
+      "sort_order INTEGER NOT NULL DEFAULT 0"
+      ")",
+      "CREATE TABLE IF NOT EXISTS difficulty_courses ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "table_id INTEGER NOT NULL,"
+      "name TEXT NOT NULL,"
+      "group_name TEXT NOT NULL DEFAULT '',"
+      "level TEXT NOT NULL DEFAULT '',"
+      "constraint_json TEXT NOT NULL DEFAULT '[]',"
+      "sort_order INTEGER NOT NULL DEFAULT 0"
+      ")",
+      "CREATE TABLE IF NOT EXISTS difficulty_course_entries ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "course_id INTEGER NOT NULL,"
+      "level TEXT NOT NULL DEFAULT '',"
+      "md5 TEXT NOT NULL DEFAULT '',"
+      "sha256 TEXT NOT NULL DEFAULT '',"
+      "sort_order INTEGER NOT NULL DEFAULT 0"
+      ")",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_table_level "
+      "ON difficulty_table_entries(table_id, level)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_md5 "
+      "ON difficulty_table_entries(md5)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_sha256 "
+      "ON difficulty_table_entries(sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_courses_group "
+      "ON difficulty_courses(table_id, group_name)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course "
+      "ON difficulty_course_entries(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_md5 "
+      "ON difficulty_course_entries(md5)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_sha256 "
+      "ON difficulty_course_entries(sha256)",
+  };
+
+  for (const auto *query : createTables) {
+    if (!execSql(db, query, "creating difficulty table schema")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
+                                          const std::string &headerJson,
+                                          const std::string &dataJson,
+                                          const std::string &sourceUrl) {
+  if (!CreateDifficultyTableTables(db)) {
+    return false;
+  }
+
+  json header;
+  json data;
+  try {
+    header = json::parse(headerJson);
+    data = dataJson.empty() ? json::array() : json::parse(dataJson);
+  } catch (const std::exception &e) {
+    SDL_Log("Failed to parse difficulty table JSON from %s: %s",
+            sourceUrl.c_str(), e.what());
+    return false;
+  }
+
+  const std::string name = jsonStringAt(header, "name");
+  const std::string symbol = jsonStringAt(header, "symbol");
+  const std::string dataUrl = jsonStringAt(header, "data_url");
+  if (name.empty() || symbol.empty()) {
+    SDL_Log("Skipping difficulty table with missing name or symbol: %s",
+            sourceUrl.c_str());
+    return false;
+  }
+
+  BeginTransaction(db);
+  const int tableId =
+      upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
+  if (tableId <= 0) {
+    CommitTransaction(db);
+    return false;
+  }
+
+  const json *charts = nullptr;
+  if (data.is_array()) {
+    charts = &data;
+  } else if (data.is_object()) {
+    const auto chartsIt = data.find("charts");
+    if (chartsIt != data.end() && chartsIt->is_array()) {
+      charts = &(*chartsIt);
+    }
+  }
+
+  int sortOrder = 0;
+  if (charts != nullptr) {
+    for (const auto &chartValue : *charts) {
+      if (!chartValue.is_object()) {
+        continue;
+      }
+      const auto chart = readChartItem(chartValue, "");
+      if (chart.md5.empty() && chart.sha256.empty()) {
+        continue;
+      }
+      insertDifficultyTableEntry(db, tableId, chart, sortOrder++);
+    }
+  }
+
+  std::vector<const json *> courses;
+  const auto courseIt = header.find("course");
+  if (courseIt != header.end()) {
+    collectCourses(*courseIt, courses);
+  }
+
+  int courseSortOrder = 0;
+  for (const auto *course : courses) {
+    const std::string courseName = jsonStringAt(*course, "name");
+    if (courseName.empty()) {
+      continue;
+    }
+
+    const auto [groupName, level] =
+        splitCourseFolderAndLevel(courseName, symbol);
+    std::string constraintJson = "[]";
+    const auto constraintIt = course->find("constraint");
+    if (constraintIt != course->end()) {
+      constraintJson = constraintIt->dump();
+    }
+
+    const int courseId =
+        insertDifficultyCourse(db, tableId, courseName, groupName, level,
+                               constraintJson, courseSortOrder++);
+    if (courseId <= 0) {
+      continue;
+    }
+
+    const auto courseCharts = readCourseCharts(*course);
+    int chartSortOrder = 0;
+    for (const auto &chart : courseCharts) {
+      if (chart.md5.empty() && chart.sha256.empty()) {
+        continue;
+      }
+      insertDifficultyCourseEntry(db, courseId, chart, chartSortOrder++);
+    }
+  }
+
+  CommitTransaction(db);
+  SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
+          symbol.c_str(), sourceUrl.c_str());
+  return true;
+}
+
+int ChartDBHelper::ImportDifficultyTablesFromDirectory(
+    sqlite3 *db, const std::filesystem::path &directory) {
+  std::error_code ec;
+  std::filesystem::create_directories(directory, ec);
+  if (ec) {
+    SDL_Log("Failed to create difficulty table directory %s: %s",
+            directory.string().c_str(), ec.message().c_str());
+    return 0;
+  }
+
+  int imported = 0;
+  std::unordered_set<std::string> importedHeaders;
+  for (std::filesystem::recursive_directory_iterator it(directory, ec), end;
+       !ec && it != end; it.increment(ec)) {
+    if (ec || !it->is_regular_file()) {
+      continue;
+    }
+    const auto &path = it->path();
+    if (path.extension() != ".json") {
+      continue;
+    }
+
+    const auto raw = readTextFile(path);
+    if (!raw) {
+      continue;
+    }
+
+    json document;
+    try {
+      document = json::parse(*raw);
+    } catch (...) {
+      continue;
+    }
+
+    if (document.is_object() && document.contains("header") &&
+        (document.contains("data") || document.contains("charts"))) {
+      json header = document["header"];
+      json data = document.contains("data")
+                      ? document["data"]
+                      : json{{"charts", document["charts"]}};
+      if (ImportDifficultyTable(db, header.dump(), data.dump(),
+                                path.string())) {
+        imported++;
+      }
+      continue;
+    }
+
+    if (!document.is_object() || !document.contains("name") ||
+        !document.contains("symbol") || !document.contains("data_url")) {
+      continue;
+    }
+
+    std::error_code canonicalEc;
+    const auto canonical =
+        std::filesystem::weakly_canonical(path, canonicalEc).string();
+    if (importedHeaders.find(canonical) != importedHeaders.end()) {
+      continue;
+    }
+    importedHeaders.insert(canonical);
+
+    const std::string dataUrl = jsonStringAt(document, "data_url");
+    std::filesystem::path dataPath = path.parent_path() / dataUrl;
+    if (!std::filesystem::exists(dataPath)) {
+      continue;
+    }
+    const auto dataRaw = readTextFile(dataPath);
+    if (!dataRaw) {
+      continue;
+    }
+    if (ImportDifficultyTable(db, *raw, *dataRaw, path.string())) {
+      imported++;
+    }
+  }
+
+  if (ec) {
+    SDL_Log("Failed while scanning difficulty table directory %s: %s",
+            directory.string().c_str(), ec.message().c_str());
+  }
+  return imported;
+}
+
+std::vector<DifficultyTableInfo>
+ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
+  auto query = "SELECT dt.id, dt.name, dt.symbol, dt.source_url, "
+               "COUNT(DISTINCT cm.sha256) "
+               "FROM difficulty_tables dt "
+               "LEFT JOIN difficulty_table_entries dte ON dte.table_id = dt.id "
+               "LEFT JOIN chart_meta cm ON "
+               "((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
+               "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5)) "
+               "GROUP BY dt.id "
+               "ORDER BY dt.name COLLATE NOCASE";
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting difficulty tables: "
+              << sqlite3_errmsg(db) << "\n";
+    return {};
+  }
+
+  std::vector<DifficultyTableInfo> tables;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    DifficultyTableInfo table;
+    table.id = columnInt(stmt, 0);
+    table.name = columnString(stmt, 1);
+    table.symbol = columnString(stmt, 2);
+    table.sourceUrl = columnString(stmt, 3);
+    table.matchedChartCount = columnInt(stmt, 4);
+    tables.push_back(std::move(table));
+  }
+  sqlite3_finalize(stmt);
+  return tables;
+}
+
+std::vector<DifficultyLevelInfo>
+ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
+  auto query = "SELECT dte.table_id, dt.name, dt.symbol, dte.level, "
+               "COUNT(DISTINCT cm.sha256), MIN(dte.sort_order) "
+               "FROM difficulty_table_entries dte "
+               "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+               "LEFT JOIN chart_meta cm ON "
+               "((dte.sha256 != '' AND lower(cm.sha256) = dte.sha256) "
+               "OR (dte.md5 != '' AND lower(cm.md5) = dte.md5)) "
+               "WHERE dte.table_id = @table_id "
+               "GROUP BY dte.table_id, dte.level "
+               "ORDER BY MIN(dte.sort_order), dte.level";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting difficulty levels: "
+              << sqlite3_errmsg(db) << "\n";
+    return {};
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+
+  std::vector<DifficultyLevelInfo> levels;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    DifficultyLevelInfo level;
+    level.tableId = columnInt(stmt, 0);
+    level.tableName = columnString(stmt, 1);
+    level.tableSymbol = columnString(stmt, 2);
+    level.level = columnString(stmt, 3);
+    level.matchedChartCount = columnInt(stmt, 4);
+    levels.push_back(std::move(level));
+  }
+  sqlite3_finalize(stmt);
+  return levels;
+}
+
+std::vector<DifficultyCourseGroupInfo>
+ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
+  auto query =
+      "SELECT dc.table_id, dt.name, dc.group_name, "
+      "COUNT(DISTINCT cm.sha256), MIN(dc.sort_order) "
+      "FROM difficulty_courses dc "
+      "JOIN difficulty_tables dt ON dt.id = dc.table_id "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "LEFT JOIN chart_meta cm ON "
+      "((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
+      "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5)) "
+      "GROUP BY dc.table_id, dc.group_name "
+      "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting difficulty course groups: "
+              << sqlite3_errmsg(db) << "\n";
+    return {};
+  }
+
+  std::vector<DifficultyCourseGroupInfo> groups;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    DifficultyCourseGroupInfo group;
+    group.tableId = columnInt(stmt, 0);
+    group.tableName = columnString(stmt, 1);
+    group.groupName = columnString(stmt, 2);
+    group.matchedChartCount = columnInt(stmt, 3);
+    groups.push_back(std::move(group));
+  }
+  sqlite3_finalize(stmt);
+  return groups;
+}
+
+std::vector<DifficultyCourseInfo>
+ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
+                                       const std::string &groupName) {
+  auto query =
+      "SELECT dc.id, dc.table_id, dt.name, dc.group_name, dc.level, dc.name, "
+      "COUNT(DISTINCT cm.sha256) "
+      "FROM difficulty_courses dc "
+      "JOIN difficulty_tables dt ON dt.id = dc.table_id "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "LEFT JOIN chart_meta cm ON "
+      "((dce.sha256 != '' AND lower(cm.sha256) = dce.sha256) "
+      "OR (dce.md5 != '' AND lower(cm.md5) = dce.md5)) "
+      "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
+      "GROUP BY dc.id "
+      "ORDER BY dc.sort_order";
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting difficulty courses: "
+              << sqlite3_errmsg(db) << "\n";
+    return {};
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  bindText(stmt, 2, groupName);
+
+  std::vector<DifficultyCourseInfo> courses;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    DifficultyCourseInfo course;
+    course.id = columnInt(stmt, 0);
+    course.tableId = columnInt(stmt, 1);
+    course.tableName = columnString(stmt, 2);
+    course.groupName = columnString(stmt, 3);
+    course.level = columnString(stmt, 4);
+    course.name = columnString(stmt, 5);
+    course.matchedChartCount = columnInt(stmt, 6);
+    courses.push_back(std::move(course));
+  }
+  sqlite3_finalize(stmt);
+  return courses;
 }
 
 void ChartDBHelper::ToRelativePath(

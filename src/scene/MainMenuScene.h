@@ -3,6 +3,8 @@
 #include "Scene.h"
 #include "../ChartDBHelper.h"
 #include "../path.h"
+#include "../view/ImageView.h"
+#include "../view/TextInputBox.h"
 #include <filesystem>
 #include <thread>
 #include <unordered_set>
@@ -30,10 +32,43 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  struct LibraryFolderItem {
+    enum class Type {
+      AllSongs,
+      DifficultyTable,
+      DifficultyLevel,
+      CoursesRoot,
+      CourseGroup,
+      Course
+    };
+
+    std::string key;
+    std::string label;
+    Type type = Type::AllSongs;
+    int depth = 0;
+    int count = -1;
+    int tableId = 0;
+    std::string tableLevel;
+    int courseId = 0;
+    int courseTableId = 0;
+    std::string courseGroupName;
+  };
+
   RecyclerView<bms_parser::ChartMeta> *recyclerView = nullptr;
+  RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   View *rootLayout = nullptr;
+  ImageView *jacketView = nullptr;
+  TextInputBox *searchBox = nullptr;
+  TextInputBox *difficultyFilterBox = nullptr;
+
+  LibraryFolderItem activeFolder;
+  std::string searchText;
+  std::string difficultyText;
 
   void initView(ApplicationContext &context);
+  void reloadFolderItems();
+  void reloadChartList();
+  void selectFolder(const LibraryFolderItem &item);
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 
