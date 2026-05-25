@@ -58,6 +58,7 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
 
 struct DifficultyLabelCache {
   bool loaded = false;
+  int dataVersion = -1;
   std::unordered_map<std::string, std::vector<std::string>> labelsBySha256;
   std::unordered_map<std::string, std::vector<std::string>> labelsByMd5;
 };
@@ -639,8 +640,24 @@ std::string joinLabels(const std::vector<std::string> &labels) {
   return joined;
 }
 
-void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
+int databaseDataVersion(sqlite3 *db) {
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, "PRAGMA data_version", -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    return -1;
+  }
+  int dataVersion = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    dataVersion = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return dataVersion;
+}
+
+void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache,
+                              int dataVersion) {
   cache.loaded = false;
+  cache.dataVersion = -1;
   cache.labelsBySha256.clear();
   cache.labelsByMd5.clear();
   auto query = "SELECT dte.sha256, dte.md5, dt.symbol || dte.level AS label "
@@ -665,11 +682,13 @@ void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
   }
   sqlite3_finalize(stmt);
   cache.loaded = true;
+  cache.dataVersion = dataVersion;
 }
 
 void invalidateDifficultyLabelCache() {
   std::lock_guard<std::mutex> lock(gDifficultyLabelCacheMutex);
   gDifficultyLabelCache.loaded = false;
+  gDifficultyLabelCache.dataVersion = -1;
   gDifficultyLabelCache.labelsBySha256.clear();
   gDifficultyLabelCache.labelsByMd5.clear();
 }
@@ -680,9 +699,11 @@ void populateDifficultyTableLabels(
     return;
   }
 
+  const int dataVersion = databaseDataVersion(db);
   std::lock_guard<std::mutex> lock(gDifficultyLabelCacheMutex);
-  if (!gDifficultyLabelCache.loaded) {
-    loadDifficultyLabelCache(db, gDifficultyLabelCache);
+  if (!gDifficultyLabelCache.loaded ||
+      (dataVersion >= 0 && gDifficultyLabelCache.dataVersion != dataVersion)) {
+    loadDifficultyLabelCache(db, gDifficultyLabelCache, dataVersion);
   }
   if (!gDifficultyLabelCache.loaded) {
     return;
@@ -1502,6 +1523,7 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   }
 
   CommitTransaction(db);
+  invalidateDifficultyLabelCache();
   SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
           symbol.c_str(), sourceUrl.c_str());
   return true;
