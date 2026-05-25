@@ -8,14 +8,20 @@
 #include <algorithm>
 #include <cctype>
 #include <codecvt>
+#include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include "../yoga/lib/nlohmann/json.hpp"
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <unordered_set>
 #include "targets.h"
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "iOSNatives.hpp"
+#endif
 
 namespace {
 using json = nlohmann::json;
@@ -115,6 +121,171 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   std::ostringstream stream;
   stream << file.rdbuf();
   return stream.str();
+}
+
+std::string shellQuote(const std::string &value) {
+#ifdef _WIN32
+  std::string quoted = "\"";
+  for (char c : value) {
+    if (c == '"' || c == '\\') {
+      quoted.push_back('\\');
+    }
+    quoted.push_back(c);
+  }
+  quoted.push_back('"');
+  return quoted;
+#else
+  std::string quoted = "'";
+  for (char c : value) {
+    if (c == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted.push_back(c);
+    }
+  }
+  quoted.push_back('\'');
+  return quoted;
+#endif
+}
+
+std::filesystem::path makeTempDownloadPath(const std::string &extension) {
+  const auto ticks =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() /
+         ("asobmashow_table_" + std::to_string(ticks) + extension);
+}
+
+std::optional<std::string> fetchUrlText(const std::string &url,
+                                        std::string *errorMessage) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  std::string body;
+  std::string iosError;
+  if (!DownloadURLTextIOS(url, body, iosError)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = iosError.empty() ? "Failed to download " + url : iosError;
+    }
+    return std::nullopt;
+  }
+  return body;
+#else
+  const auto outputPath = makeTempDownloadPath(".txt");
+  std::string command;
+#ifdef _WIN32
+  command = "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+            "\"$ProgressPreference='SilentlyContinue'; "
+            "Invoke-WebRequest -UseBasicParsing -MaximumRedirection 5 "
+            "-TimeoutSec 25 -Uri " +
+            shellQuote(url) + " -OutFile " + shellQuote(outputPath.string()) +
+            "\"";
+#else
+  command = "curl -L --fail --silent --show-error --max-time 25 "
+            "-A 'AsoBMaShow' -o " +
+            shellQuote(outputPath.string()) + " " + shellQuote(url);
+#endif
+
+  const int rc = std::system(command.c_str());
+  if (rc != 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Failed to download " + url;
+    }
+    std::filesystem::remove(outputPath);
+    return std::nullopt;
+  }
+
+  auto body = readTextFile(outputPath);
+  std::filesystem::remove(outputPath);
+  if (!body && errorMessage != nullptr) {
+    *errorMessage = "Downloaded file could not be read: " + url;
+  }
+  return body;
+#endif
+}
+
+std::string trimUrlForBase(std::string url) {
+  const auto fragment = url.find('#');
+  if (fragment != std::string::npos) {
+    url.erase(fragment);
+  }
+  const auto query = url.find('?');
+  if (query != std::string::npos) {
+    url.erase(query);
+  }
+  return url;
+}
+
+std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
+  if (link.starts_with("http://") || link.starts_with("https://")) {
+    return link;
+  }
+
+  const auto schemePos = baseUrl.find("://");
+  if (schemePos == std::string::npos) {
+    return link;
+  }
+
+  const auto originStart = schemePos + 3;
+  const auto pathStart = baseUrl.find('/', originStart);
+  const std::string origin =
+      pathStart == std::string::npos ? baseUrl : baseUrl.substr(0, pathStart);
+
+  if (link.starts_with("//")) {
+    return baseUrl.substr(0, schemePos) + ":" + link;
+  }
+  if (link.starts_with("/")) {
+    return origin + link;
+  }
+
+  const std::string cleanBase = trimUrlForBase(baseUrl);
+  const auto slash = cleanBase.rfind('/');
+  std::string directory = slash == std::string::npos
+                              ? origin + "/"
+                              : cleanBase.substr(0, slash + 1);
+  std::vector<std::string> parts;
+  std::stringstream stream(directory.substr(origin.size()) + link);
+  std::string part;
+  while (std::getline(stream, part, '/')) {
+    if (part.empty() || part == ".") {
+      continue;
+    }
+    if (part == "..") {
+      if (!parts.empty()) {
+        parts.pop_back();
+      }
+      continue;
+    }
+    parts.push_back(part);
+  }
+
+  std::string resolved = origin + "/";
+  for (size_t i = 0; i < parts.size(); i++) {
+    if (i > 0) {
+      resolved += "/";
+    }
+    resolved += parts[i];
+  }
+  return resolved;
+}
+
+std::optional<std::string> findBmstableHeaderUrl(const std::string &html,
+                                                 const std::string &pageUrl) {
+  const std::regex metaPattern("<meta\\b[^>]*>", std::regex::icase);
+  const std::regex namePattern("\\bname\\s*=\\s*(['\"])bmstable\\1",
+                               std::regex::icase);
+  const std::regex contentPattern("\\bcontent\\s*=\\s*(['\"])([^'\"]+)\\1",
+                                  std::regex::icase);
+  auto begin = std::sregex_iterator(html.begin(), html.end(), metaPattern);
+  auto end = std::sregex_iterator();
+  for (auto it = begin; it != end; ++it) {
+    const std::string tag = it->str();
+    if (!std::regex_search(tag, namePattern)) {
+      continue;
+    }
+    std::smatch match;
+    if (std::regex_search(tag, match, contentPattern) && match.size() >= 3) {
+      return resolveUrl(pageUrl, match[2].str());
+    }
+  }
+  return std::nullopt;
 }
 
 struct TableChartItem {
@@ -1208,6 +1379,93 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   CommitTransaction(db);
   SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
           symbol.c_str(), sourceUrl.c_str());
+  return true;
+}
+
+bool ChartDBHelper::ImportDifficultyTableFromUrl(sqlite3 *db,
+                                                 const std::string &pageUrl,
+                                                 std::string *errorMessage) {
+  const std::string trimmedUrl = trimCopy(pageUrl);
+  if (trimmedUrl.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Table URL is empty";
+    }
+    return false;
+  }
+  if (!trimmedUrl.starts_with("http://") &&
+      !trimmedUrl.starts_with("https://")) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Table URL must start with http:// or https://";
+    }
+    return false;
+  }
+
+  auto pageBody = fetchUrlText(trimmedUrl, errorMessage);
+  if (!pageBody) {
+    return false;
+  }
+
+  std::string headerUrl;
+  std::string headerJsonText;
+
+  try {
+    json maybeHeader = json::parse(*pageBody);
+    if (maybeHeader.is_object() && maybeHeader.contains("name") &&
+        maybeHeader.contains("symbol") && maybeHeader.contains("data_url")) {
+      headerUrl = trimmedUrl;
+      headerJsonText = *pageBody;
+    }
+  } catch (...) {
+  }
+
+  if (headerJsonText.empty()) {
+    auto discoveredHeaderUrl = findBmstableHeaderUrl(*pageBody, trimmedUrl);
+    if (!discoveredHeaderUrl) {
+      if (errorMessage != nullptr) {
+        *errorMessage =
+            "Could not find a bmstable header link in the table webpage";
+      }
+      return false;
+    }
+    headerUrl = *discoveredHeaderUrl;
+    auto headerBody = fetchUrlText(headerUrl, errorMessage);
+    if (!headerBody) {
+      return false;
+    }
+    headerJsonText = *headerBody;
+  }
+
+  json header;
+  try {
+    header = json::parse(headerJsonText);
+  } catch (const std::exception &e) {
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          std::string("Failed to parse table header JSON: ") + e.what();
+    }
+    return false;
+  }
+
+  const std::string dataUrl = jsonStringAt(header, "data_url");
+  if (dataUrl.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Table header does not contain data_url";
+    }
+    return false;
+  }
+
+  const std::string resolvedDataUrl = resolveUrl(headerUrl, dataUrl);
+  auto dataBody = fetchUrlText(resolvedDataUrl, errorMessage);
+  if (!dataBody) {
+    return false;
+  }
+
+  if (!ImportDifficultyTable(db, headerJsonText, *dataBody, trimmedUrl)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Downloaded table data could not be imported";
+    }
+    return false;
+  }
   return true;
 }
 

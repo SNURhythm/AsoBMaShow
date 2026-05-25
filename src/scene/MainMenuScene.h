@@ -5,6 +5,7 @@
 #include "../path.h"
 #include "../view/ImageView.h"
 #include "../view/TextInputBox.h"
+#include "../view/TextView.h"
 #include <filesystem>
 #include <thread>
 #include <unordered_set>
@@ -32,6 +33,8 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread tableImportThread;
+  std::atomic_bool tableImportRunning = false;
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
@@ -60,15 +63,19 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  TextInputBox *tableUrlInput = nullptr;
+  TextView *tableImportStatus = nullptr;
 
   LibraryFolderItem activeFolder;
   std::string searchText;
   std::string difficultyText;
+  std::string tableUrlText;
 
   void initView(ApplicationContext &context);
   void reloadFolderItems();
   void reloadChartList();
   void selectFolder(const LibraryFolderItem &item);
+  void importDifficultyTableFromUrl();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 

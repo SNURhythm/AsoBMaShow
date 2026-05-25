@@ -310,6 +310,50 @@ void MainMenuScene::initView(ApplicationContext &context) {
   navTitle->setColor({243, 247, 255, 255});
   nav->addView(navTitle);
 
+  auto *tableUrlLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  tableUrlLabel->setText("Difficulty table URL");
+  tableUrlLabel->setColor({157, 177, 200, 255});
+  nav->addView(tableUrlLabel);
+
+  tableUrlInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 18);
+  tableUrlInput->setHeight(44);
+  tableUrlInput->setText("");
+  tableUrlInput->setBackgroundColor(kSurfaceFill);
+  tableUrlInput->setBorderColor(Color(88, 115, 149, 255));
+  tableUrlInput->setBorderWidth(2);
+  tableUrlInput->setVAlign(TextView::MIDDLE);
+  tableUrlInput->setColor({239, 244, 251, 255});
+  tableUrlInput->onTextChanged(
+      [this](const std::string &text) { tableUrlText = text; });
+  tableUrlInput->onSubmit([this](const std::string &text) {
+    tableUrlText = text;
+    importDifficultyTableFromUrl();
+  });
+  nav->addView(tableUrlInput);
+
+  auto *importButton = new Button(0, 0, 240, 44);
+  auto *importButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  importButtonText->setText("Import table");
+  importButtonText->setAlign(TextView::CENTER);
+  importButtonText->setVAlign(TextView::MIDDLE);
+  importButton->setContentView(importButtonText);
+  importButton->setHeight(44);
+  importButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
+                                    kPrimaryButtonPressed);
+  importButton->setBorderColors(Color(105, 162, 222, 255),
+                                Color(133, 190, 244, 255),
+                                Color(162, 212, 255, 255));
+  importButton->setStyledBorderWidth(2);
+  importButton->setOnClickListener(
+      [this]() { importDifficultyTableFromUrl(); });
+  nav->addView(importButton);
+
+  tableImportStatus = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  tableImportStatus->setText("");
+  tableImportStatus->setWrap(true);
+  tableImportStatus->setColor({157, 177, 200, 255});
+  nav->addView(tableImportStatus);
+
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
   folderRecyclerView->setBorderColor(Color(63, 86, 113, 255));
@@ -661,6 +705,62 @@ void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
   reloadChartList();
 }
 
+void MainMenuScene::importDifficultyTableFromUrl() {
+  if (tableImportRunning) {
+    return;
+  }
+
+  const std::string url =
+      tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
+  if (url.empty()) {
+    if (tableImportStatus != nullptr) {
+      tableImportStatus->setText("Enter a table webpage URL first.");
+    }
+    return;
+  }
+
+  if (tableImportThread.joinable()) {
+    tableImportThread.join();
+  }
+
+  tableImportRunning = true;
+  if (tableImportStatus != nullptr) {
+    tableImportStatus->setText("Importing...");
+    tableImportStatus->setColor({239, 244, 251, 255});
+  }
+
+  tableImportThread = std::jthread([this, url](const std::stop_token &token) {
+    auto dbHelper = ChartDBHelper::GetInstance();
+    auto importDb = dbHelper.Connect();
+    dbHelper.CreateChartMetaTable(importDb);
+    dbHelper.CreateDifficultyTableTables(importDb);
+
+    std::string errorMessage;
+    const bool imported =
+        dbHelper.ImportDifficultyTableFromUrl(importDb, url, &errorMessage);
+    dbHelper.Close(importDb);
+
+    if (token.stop_requested()) {
+      tableImportRunning = false;
+      return;
+    }
+
+    if (imported) {
+      if (tableImportStatus != nullptr) {
+        tableImportStatus->setText("Imported.");
+        tableImportStatus->setColor({181, 228, 165, 255});
+      }
+      reloadFolderItems();
+      reloadChartList();
+    } else if (tableImportStatus != nullptr) {
+      tableImportStatus->setText(errorMessage.empty() ? "Import failed."
+                                                      : errorMessage);
+      tableImportStatus->setColor({255, 177, 170, 255});
+    }
+    tableImportRunning = false;
+  });
+}
+
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
@@ -674,17 +774,23 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
-  ChartDBHelper::GetInstance().Close(db);
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
     checkEntriesThread.join();
   }
 
+  if (tableImportThread.joinable()) {
+    SDL_Log("Joining tableImportThread");
+    tableImportThread.request_stop();
+    tableImportThread.join();
+  }
+
   if (loadThread.joinable()) {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+  ChartDBHelper::GetInstance().Close(db);
 }
 
 void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,

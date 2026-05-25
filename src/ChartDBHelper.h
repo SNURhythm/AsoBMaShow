@@ -99,6 +99,8 @@ public:
   bool ImportDifficultyTable(sqlite3 *db, const std::string &headerJson,
                              const std::string &dataJson,
                              const std::string &sourceUrl = "");
+  bool ImportDifficultyTableFromUrl(sqlite3 *db, const std::string &pageUrl,
+                                    std::string *errorMessage = nullptr);
   int ImportDifficultyTablesFromDirectory(
       sqlite3 *db, const std::filesystem::path &directory);
   std::vector<DifficultyTableInfo> SelectDifficultyTables(sqlite3 *db);
