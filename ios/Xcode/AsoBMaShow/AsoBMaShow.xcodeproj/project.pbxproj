@@ -742,6 +742,7 @@
 				view/Button.cpp,
 				view/ChartListItemView.cpp,
 				view/ImageView.cpp,
+				view/LibraryFolderItemView.cpp,
 				view/ScrollView.cpp,
 				view/TextInputBox.cpp,
 				view/TextView.cpp,

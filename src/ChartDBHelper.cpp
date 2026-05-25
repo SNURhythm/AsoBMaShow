@@ -8,12 +8,11 @@
 #include <algorithm>
 #include <cctype>
 #include <codecvt>
-#include <cstdlib>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include "../yoga/lib/nlohmann/json.hpp"
+#include <mutex>
 #include <optional>
 #include <regex>
 #include <sstream>
@@ -21,6 +20,8 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
+#else
+#include <curl/curl.h>
 #endif
 
 namespace {
@@ -123,37 +124,17 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   return stream.str();
 }
 
-std::string shellQuote(const std::string &value) {
-#ifdef _WIN32
-  std::string quoted = "\"";
-  for (char c : value) {
-    if (c == '"' || c == '\\') {
-      quoted.push_back('\\');
-    }
-    quoted.push_back(c);
-  }
-  quoted.push_back('"');
-  return quoted;
-#else
-  std::string quoted = "'";
-  for (char c : value) {
-    if (c == '\'') {
-      quoted += "'\\''";
-    } else {
-      quoted.push_back(c);
-    }
-  }
-  quoted.push_back('\'');
-  return quoted;
-#endif
-}
+#if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
+std::once_flag curlInitFlag;
 
-std::filesystem::path makeTempDownloadPath(const std::string &extension) {
-  const auto ticks =
-      std::chrono::steady_clock::now().time_since_epoch().count();
-  return std::filesystem::temp_directory_path() /
-         ("asobmashow_table_" + std::to_string(ticks) + extension);
+size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
+                          void *userdata) {
+  const size_t byteCount = size * nmemb;
+  auto *response = static_cast<std::string *>(userdata);
+  response->append(ptr, byteCount);
+  return byteCount;
 }
+#endif
 
 std::optional<std::string> fetchUrlText(const std::string &url,
                                         std::string *errorMessage) {
@@ -168,34 +149,48 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   }
   return body;
 #else
-  const auto outputPath = makeTempDownloadPath(".txt");
-  std::string command;
-#ifdef _WIN32
-  command = "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-            "\"$ProgressPreference='SilentlyContinue'; "
-            "Invoke-WebRequest -UseBasicParsing -MaximumRedirection 5 "
-            "-TimeoutSec 25 -Uri " +
-            shellQuote(url) + " -OutFile " + shellQuote(outputPath.string()) +
-            "\"";
-#else
-  command = "curl -L --fail --silent --show-error --max-time 25 "
-            "-A 'AsoBMaShow' -o " +
-            shellQuote(outputPath.string()) + " " + shellQuote(url);
-#endif
-
-  const int rc = std::system(command.c_str());
-  if (rc != 0) {
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CURL *curl = curl_easy_init();
+  if (curl == nullptr) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Failed to download " + url;
+      *errorMessage = "Failed to initialize HTTP client";
     }
-    std::filesystem::remove(outputPath);
     return std::nullopt;
   }
 
-  auto body = readTextFile(outputPath);
-  std::filesystem::remove(outputPath);
-  if (!body && errorMessage != nullptr) {
-    *errorMessage = "Downloaded file could not be read: " + url;
+  std::string body;
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+
+  const CURLcode result = curl_easy_perform(curl);
+  long statusCode = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
+  curl_easy_cleanup(curl);
+
+  if (result != CURLE_OK) {
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    }
+    return std::nullopt;
+  }
+
+  if (statusCode >= 400) {
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          "HTTP " + std::to_string(statusCode) + " while downloading " + url;
+    }
+    return std::nullopt;
   }
   return body;
 #endif

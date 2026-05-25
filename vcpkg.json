@@ -8,6 +8,10 @@
         "sdl2",
         "sdl2-ttf",
         "ffmpeg",
+        {
+            "name": "curl",
+            "platform": "!ios"
+        },
         "lua",
         "luajit",
         {
