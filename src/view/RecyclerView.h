@@ -559,7 +559,7 @@ private:
       view->setPositionNoLayout(layoutX,
                                 layoutY + (i * itemHeight) - scrollOffset,
                                 YGPositionType::YGPositionTypeAbsolute);
-      view->setSize(layoutWidth, itemHeight);
+      view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
       if (shouldBind && onBind) {
         onBind(view, item, i, selectedIndex == i);
       }

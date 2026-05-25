@@ -36,7 +36,6 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const bms_parser::ChartMeta &meta)
     : View(x, y, width, height) {
   (void)meta;
-  this->setFlex(1);
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
   textLayout = new View();
