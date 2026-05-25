@@ -217,6 +217,8 @@ void TextView::setColor(SDL_Color newColor) {
 
 void TextView::createTexture(bool markDirty, bool force,
                              int requestedWrapWidth) {
+  const int previousWidth = rect.w;
+  const int previousHeight = rect.h;
   const int effectiveWrapWidth =
       wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
                                                         : currentWrapWidth)
@@ -235,8 +237,9 @@ void TextView::createTexture(bool markDirty, bool force,
   if (text.empty() || font == nullptr) {
     rect.w = 0;
     rect.h = 0;
-    if (markDirty) {
+    if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
       YGNodeMarkDirty(getNode());
+      applyYogaLayout();
     }
     return;
   }
@@ -253,11 +256,12 @@ void TextView::createTexture(bool markDirty, bool force,
   }
   rect.w = surface->w;
   rect.h = surface->h;
-  if (markDirty) {
-    YGNodeMarkDirty(getNode());
-  }
   texture = rendering::sdlSurfaceToBgfxTexture(surface);
   SDL_FreeSurface(surface);
+  if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
+    YGNodeMarkDirty(getNode());
+    applyYogaLayout();
+  }
 }
 
 YGSize TextView::measureFunc(YGNodeConstRef node, float width,
@@ -292,6 +296,7 @@ void TextView::setOverflow(TextOverflow newOverflow) {
   overflow = newOverflow;
   marqueeStartedAt = SDL_GetTicks64();
   YGNodeMarkDirty(getNode());
+  applyYogaLayout();
 }
 
 void TextView::setWrap(bool enabled) {
