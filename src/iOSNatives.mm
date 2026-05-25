@@ -1,7 +1,8 @@
 #include "iOSNatives.hpp"
-#if TARGET_OS_IOS
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <Foundation/Foundation.h>
 #include <UIKit/UIKit.h>
+#include <dispatch/dispatch.h>
 #include <vector>
 #include <string>
 
@@ -13,7 +14,8 @@ UIWindow *FindActiveWindow() {
         continue;
       }
       UIWindowScene *windowScene = (UIWindowScene *)scene;
-      if (windowScene.activationState != UISceneActivationStateForegroundActive) {
+      if (windowScene.activationState !=
+          UISceneActivationStateForegroundActive) {
         continue;
       }
       for (UIWindow *window in windowScene.windows) {
@@ -60,6 +62,77 @@ std::vector<std::string> ListDocumentFilesRecursively() {
   }
   // return
   return filesVec;
+}
+
+bool DownloadURLTextIOS(const std::string &url, std::string &body,
+                        std::string &errorMessage) {
+  @autoreleasepool {
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest
+         requestWithURL:nsUrl
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:25.0];
+    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+
+    __block NSData *responseData = nil;
+    __block NSURLResponse *urlResponse = nil;
+    __block NSError *requestError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+        dataTaskWithRequest:request
+          completionHandler:^(NSData *data, NSURLResponse *response,
+                              NSError *error) {
+            responseData = data;
+            urlResponse = response;
+            requestError = error;
+            dispatch_semaphore_signal(semaphore);
+          }];
+    [task resume];
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      [task cancel];
+      errorMessage = "Timed out while downloading " + url;
+      return false;
+    }
+
+    if (requestError != nil) {
+      errorMessage =
+          std::string([[requestError localizedDescription] UTF8String]);
+      return false;
+    }
+
+    NSHTTPURLResponse *httpResponse =
+        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)urlResponse
+            : nil;
+    if (httpResponse != nil && httpResponse.statusCode >= 400) {
+      errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
+                     " while downloading " + url;
+      return false;
+    }
+
+    if (responseData == nil) {
+      errorMessage = "No response body while downloading " + url;
+      return false;
+    }
+
+    NSString *text = [[NSString alloc] initWithData:responseData
+                                           encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+      errorMessage = "Downloaded response is not UTF-8: " + url;
+      return false;
+    }
+
+    body = std::string([text UTF8String]);
+    return true;
+  }
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

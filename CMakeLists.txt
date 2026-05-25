@@ -143,6 +143,10 @@ else()
         list(APPEND COMMON_LIBS portaudio)
     endif()
 
+    # libcurl for desktop difficulty table downloads
+    find_package(CURL REQUIRED)
+    list(APPEND COMMON_LIBS CURL::libcurl)
+
     # # Fontconfig & LibASS (Required by FFmpeg[all-gpl] static build)
     # find_package(PkgConfig REQUIRED)
     

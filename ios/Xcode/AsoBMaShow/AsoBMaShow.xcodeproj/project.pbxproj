@@ -12,6 +12,7 @@
 		B71B9EDC2BFDA3A200D789A5 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDB2BFDA3A200D789A5 /* CoreAudio.framework */; };
 		B71B9EDE2BFDA3DA00D789A5 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDD2BFDA3DA00D789A5 /* AVFAudio.framework */; };
 		B71B9EE02BFDA40900D789A5 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDF2BFDA40900D789A5 /* AudioToolbox.framework */; };
+		B72F4A012F2A000100F00D01 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = B72F4A022F2A000100F00D01 /* GoogleService-Info.plist */; };
 		B76AB0582DA4A70300E8327C /* assets in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5AD2DA3F87D008F6FCD /* assets */; };
 		B76AB0592DA4A70600E8327C /* shaders in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5572DA3F857008F6FCD /* shaders */; };
 		B77B0DFD2BF7BD3900945F27 /* SDL2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL2.framework */; };
@@ -610,6 +611,7 @@
 		B71B9EDB2BFDA3A200D789A5 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
 		B71B9EDD2BFDA3DA00D789A5 /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
 		B71B9EDF2BFDA40900D789A5 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		B72F4A022F2A000100F00D01 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		B77B0DD82BF7BCDA00945F27 /* SDL.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = SDL.xcodeproj; path = ../../../SDL/Xcode/SDL/SDL.xcodeproj; sourceTree = "<group>"; };
 		B77B0DFF2BF7BD6000945F27 /* SDL_ttf.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = SDL_ttf.xcodeproj; path = ../../../SDL_ttf/Xcode/SDL_ttf.xcodeproj; sourceTree = "<group>"; };
 		B77B0E1E2BF7C46700945F27 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -691,7 +693,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		B76AAF692DA4A1C400E8327C /* Exceptions for "src" folder in "AsoBMaShow" target */ = {
+		B76AAF692DA4A1C400E8327C /* Exceptions for "../../../../src" folder in "AsoBMaShow" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppSettings.cpp,
@@ -742,6 +744,7 @@
 				view/Button.cpp,
 				view/ChartListItemView.cpp,
 				view/ImageView.cpp,
+				view/LibraryFolderItemView.cpp,
 				view/ScrollView.cpp,
 				view/TextInputBox.cpp,
 				view/TextView.cpp,
@@ -752,15 +755,14 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		B76AAF3F2DA4A1C400E8327C /* src */ = {
+		B76AAF3F2DA4A1C400E8327C /* ../../../../src */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				B76AAF692DA4A1C400E8327C /* Exceptions for "src" folder in "AsoBMaShow" target */,
+				B76AAF692DA4A1C400E8327C /* Exceptions for "../../../../src" folder in "AsoBMaShow" target */,
 			);
 			explicitFileTypes = {
 				audio/AudioWrapper.cpp = sourcecode.cpp.objcpp;
 			};
-			name = src;
 			path = ../../../../src;
 			sourceTree = "<group>";
 		};
@@ -839,8 +841,9 @@
 			children = (
 				B7BAA5572DA3F857008F6FCD /* shaders */,
 				B7BAA5AD2DA3F87D008F6FCD /* assets */,
-				B76AAF3F2DA4A1C400E8327C /* src */,
+				B76AAF3F2DA4A1C400E8327C /* ../../../../src */,
 				B799B7B52BFD224200115C26 /* Info.plist */,
+				B72F4A022F2A000100F00D01 /* GoogleService-Info.plist */,
 				B70027132BF7A8DA000DB8EC /* Assets.xcassets */,
 				B70027152BF7A8DA000DB8EC /* LaunchScreen.storyboard */,
 			);
@@ -1697,6 +1700,7 @@
 			files = (
 				B70027172BF7A8DA000DB8EC /* LaunchScreen.storyboard in Resources */,
 				B70027142BF7A8DA000DB8EC /* Assets.xcassets in Resources */,
+				B72F4A012F2A000100F00D01 /* GoogleService-Info.plist in Resources */,
 				B76AB0592DA4A70600E8327C /* shaders in Resources */,
 				B76AB0582DA4A70300E8327C /* assets in Resources */,
 			);

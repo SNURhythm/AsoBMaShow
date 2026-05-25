@@ -3,6 +3,9 @@
 #include "Scene.h"
 #include "../ChartDBHelper.h"
 #include "../path.h"
+#include "../view/ImageView.h"
+#include "../view/TextInputBox.h"
+#include "../view/TextView.h"
 #include <filesystem>
 #include <thread>
 #include <unordered_set>
@@ -11,6 +14,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include <atomic>
+#include <mutex>
 #include <stop_token>
 
 class MainMenuScene : public Scene {
@@ -30,10 +34,65 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread tableImportThread;
+  std::atomic_bool tableImportRunning = false;
+  std::atomic_bool folderItemsReloadRequested = false;
+  std::atomic_bool chartListReloadRequested = false;
+  std::mutex tableImportStatusMutex;
+  bool pendingTableImportStatus = false;
+  std::string pendingTableImportStatusText;
+  SDL_Color pendingTableImportStatusColor{157, 177, 200, 255};
+  struct LibraryFolderItem {
+    enum class Type {
+      AllSongs,
+      DifficultyTable,
+      DifficultyLevel,
+      CoursesRoot,
+      CourseGroup,
+      Course
+    };
+
+    std::string key;
+    std::string label;
+    Type type = Type::AllSongs;
+    int depth = 0;
+    int count = -1;
+    int tableId = 0;
+    std::string tableLevel;
+    int courseId = 0;
+    int courseTableId = 0;
+    std::string courseGroupName;
+  };
+
   RecyclerView<bms_parser::ChartMeta> *recyclerView = nullptr;
+  RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   View *rootLayout = nullptr;
+  ImageView *jacketView = nullptr;
+  TextInputBox *searchBox = nullptr;
+  TextInputBox *difficultyFilterBox = nullptr;
+  TextInputBox *tableUrlInput = nullptr;
+  TextView *tableImportStatus = nullptr;
+
+  LibraryFolderItem activeFolder;
+  std::string searchText;
+  std::string difficultyText;
+  std::string tableUrlText;
+  int lastLayoutWidth = -1;
+  int lastLayoutHeight = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
 
   void initView(ApplicationContext &context);
+  void reloadFolderItems();
+  void reloadChartList();
+  void requestLibraryReload(bool includeFolders);
+  void requestTableImportStatus(const std::string &text,
+                                const SDL_Color &color);
+  void applyPendingUiUpdates();
+  void selectFolder(const LibraryFolderItem &item);
+  void importDifficultyTableFromUrl();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 

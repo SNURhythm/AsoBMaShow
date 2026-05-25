@@ -253,6 +253,7 @@ public:
   View *setMinHeight(float minHeight);
   View *setFlex(float flex);
   View *setFlexGrow(float flexGrow);
+  View *setFlexBasis(float flexBasis);
   View *setFlexWrap(YGWrap flexWrap);
   View *setFlexShrink(float flexShrink);
   View *setMargin(Edge edge, float margin);

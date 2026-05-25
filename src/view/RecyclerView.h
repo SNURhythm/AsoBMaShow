@@ -38,103 +38,23 @@ private:
 
 private:
   void renderImpl(RenderContext &context) override {
+    if (visibleItemsNeedLayout()) {
+      updateVisibleItems();
+    }
     if (!touchDragging) {
       float momentumDelta = 0.0f;
       if (touchMomentum.step(momentumDelta) && !scrollBy(momentumDelta)) {
         touchMomentum.stop();
       }
     }
-    // clip the rendering area
-
-    ScissorScope scissor(context, this->getX(), this->getY(), this->getWidth(),
-                         this->getHeight());
-    for (const auto &entry : viewEntries) {
-      entry.first->render(context);
+    {
+      ScissorScope scissor(context, this->getX(), this->getY(),
+                           this->getWidth(), this->getHeight());
+      for (const auto &entry : viewEntries) {
+        entry.first->render(context);
+      }
+      renderScrollbar(context);
     }
-    if (items.size() * itemHeight < this->getHeight()) {
-      return;
-    }
-    rendering::PosColorVertex vertices[] = {
-        {-0.5f, -0.5f, 0.0f, 0xffffffff}, // Bottom-left
-        {0.5f, -0.5f, 0.0f, 0xffffffff},  // Bottom-right
-        {0.5f, 0.5f, 0.0f, 0xffffffff},   // Top-right
-        {-0.5f, 0.5f, 0.0f, 0xffffffff}   // Top-left
-    };
-    rendering::PosColorVertex thumbVertices[] = {
-        {-0.5f, -0.5f, 0.0f, 0xFF3333FF}, // Bottom-left
-        {0.5f, -0.5f, 0.0f, 0xFF3333FF},  // Bottom-right
-        {0.5f, 0.5f, 0.0f, 0xFF3333FF},   // Top-right
-        {-0.5f, 0.5f, 0.0f, 0xFF3333FF}   // Top-left
-    };
-    uint16_t indices[] = {0, 1, 2, 2, 3, 0};
-
-    // Create vertex and index buffers
-    bgfx::TransientVertexBuffer tvb;
-    bgfx::TransientVertexBuffer thumbVbh;
-    bgfx::TransientIndexBuffer ibh;
-    if (bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosColorVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientVertexBuffer(
-            4, rendering::PosColorVertex::ms_decl) < 4 ||
-        bgfx::getAvailTransientIndexBuffer(6) < 6) {
-      return;
-    }
-    bgfx::allocTransientVertexBuffer(&tvb, 4,
-                                     rendering::PosColorVertex::ms_decl);
-    bgfx::allocTransientVertexBuffer(&thumbVbh, 4,
-                                     rendering::PosColorVertex::ms_decl);
-    bgfx::allocTransientIndexBuffer(&ibh, 6);
-
-    // Copy data to the vertex buffer
-    bx::memCopy(tvb.data, vertices, sizeof(vertices));
-    bx::memCopy(thumbVbh.data, thumbVertices, sizeof(thumbVertices));
-    bx::memCopy(ibh.data, indices, sizeof(indices));
-
-    // scroll bar area
-    // scale
-    float mtx[16];
-    bx::mtxSRT(mtx, 10.0f, this->getHeight(), 1.0f, 0.0f, 0.0f, 0.0f,
-               this->getX() + this->getWidth() - 5,
-               this->getY() + this->getHeight() / 2, 0.0f);
-    bgfx::setTransform(mtx);
-    bgfx::setState(BGFX_STATE_WRITE_RGB);
-    bgfx::setVertexBuffer(0, &tvb);
-    bgfx::setIndexBuffer(&ibh);
-    static const bgfx::ProgramHandle kProgram =
-        rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-    rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                            context.scissor.width, context.scissor.height);
-    bgfx::submit(rendering::ui_view, kProgram);
-
-    // // scroll bar thumb
-    int itemsSize = std::max(1, static_cast<int>(items.size())) * itemHeight;
-    int thumbHeight = this->getHeight() * this->getHeight() / itemsSize;
-    int thumbY = this->getY() + scrollOffset * this->getHeight() / itemsSize +
-                 thumbHeight / 2;
-    bx::mtxSRT(mtx, 10.0f, thumbHeight, 1.0f, 0.0f, 0.0f, 0.0f,
-               this->getX() + this->getWidth() - 5, thumbY, 0.0f);
-    bgfx::setTransform(mtx);
-    bgfx::setState(BGFX_STATE_WRITE_RGB);
-    bgfx::setVertexBuffer(0, &thumbVbh);
-    bgfx::setIndexBuffer(&ibh);
-    rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                            context.scissor.width, context.scissor.height);
-    bgfx::submit(rendering::ui_view, kProgram);
-
-    // int itemsSize = std::max(6, static_cast<int>(items.size())) * itemHeight;
-    // int thumbHeight = this->getHeight() * this->getHeight() / itemsSize;
-    // int thumbY = this->getY() + scrollOffset * this->getHeight() / itemsSize;
-    // SDL_Rect scrollBarThumb = {this->getX() + this->getWidth() - 10, thumbY,
-    // 10,
-    //                            thumbHeight};
-    // SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
-    // SDL_RenderFillRect(renderer, &scrollBarThumb);
-
-    // SDL_RenderSetClipRect(renderer, nullptr);
-    // bgfx::setScissor();
-    // bgfx::setScissor(this->getX() + 100 + this->getWidth() - 10,
-    // this->getY(),
-    //                  10, this->getHeight());
   }
 
   inline bool handleEventsImpl(SDL_Event &event) override {
@@ -179,6 +99,7 @@ private:
       }
       // scroll to the selected item
       if (changed) {
+        const float previousOffset = scrollOffset;
         int itemsSize =
             std::max(1, static_cast<int>(items.size())) * itemHeight;
         int selectedY = selectedIndex * itemHeight;
@@ -187,6 +108,10 @@ private:
         }
         if (selectedY > scrollOffset + this->getHeight() - itemHeight) {
           scrollOffset = selectedY - this->getHeight() + itemHeight;
+        }
+        clampScrollOffset();
+        if (std::fabs(scrollOffset - previousOffset) > 0.001f) {
+          revealScrollbar();
         }
         updateVisibleItems();
       }
@@ -203,6 +128,7 @@ private:
         return true;
       }
       touchMomentum.stop();
+      revealScrollbar();
       scrollBy(-event.wheel.y * 15.0f);
       break;
     }
@@ -296,6 +222,7 @@ private:
         return true;
       }
       const float delta = touchLastY - touchY;
+      revealScrollbar();
       scrollBy(delta);
       touchMomentum.recordDragDelta(delta);
       touchLastY = touchY;
@@ -333,6 +260,9 @@ public:
   int itemHeight;
   int topMargin;    // Number of items to keep ready above the visible area
   int bottomMargin; // Number of items to keep ready below the visible area
+  // Keep false for overlay scrollbars; set true when item layout should avoid
+  // the scrollbar by shrinking content width.
+  bool reserveScrollbarGutter = false;
 
   inline void setItems(std::vector<T> &&items) {
     this->items = std::move(items);
@@ -373,6 +303,7 @@ public:
       recycleView(entry.first);
     }
     viewEntries.clear();
+    idxToView.clear();
   }
 
   inline const T &get(int index) const { return items[index]; }
@@ -408,6 +339,154 @@ private:
   ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
   bool touchDragging = false;
+  Uint64 scrollbarFadeInStartedAt = 0;
+  Uint64 scrollbarLastActivityAt = 0;
+  bool visibleItemsLayoutDirty = true;
+  int visibleItemsLayoutX = 0;
+  int visibleItemsLayoutY = 0;
+  int visibleItemsLayoutWidth = 0;
+  int visibleItemsLayoutHeight = 0;
+  int visibleItemsLayoutItemHeight = 0;
+  float visibleItemsLayoutScrollOffset = 0.0f;
+
+  static constexpr int kScrollbarContentInset = 14;
+  static constexpr int kScrollbarWidth = 4;
+  static constexpr int kScrollbarTrackWidth = 2;
+  static constexpr int kScrollbarRightInset = 5;
+  static constexpr int kScrollbarVerticalInset = 6;
+  static constexpr int kScrollbarMinThumbHeight = 28;
+  static constexpr Uint64 kScrollbarFadeInMs = 120;
+  static constexpr Uint64 kScrollbarHoldMs = 650;
+  static constexpr Uint64 kScrollbarFadeOutMs = 480;
+
+  inline bool canScroll() const {
+    return static_cast<int>(items.size()) * itemHeight > this->getHeight();
+  }
+
+  inline int visibleItemWidth() const {
+    const int reservedWidth =
+        reserveScrollbarGutter && canScroll() ? kScrollbarContentInset : 0;
+    return std::max(0, this->getWidth() - reservedWidth);
+  }
+
+  inline bool visibleItemsNeedLayout() const {
+    return visibleItemsLayoutDirty || visibleItemsLayoutX != this->getX() ||
+           visibleItemsLayoutY != this->getY() ||
+           visibleItemsLayoutWidth != visibleItemWidth() ||
+           visibleItemsLayoutHeight != this->getHeight() ||
+           visibleItemsLayoutItemHeight != itemHeight ||
+           std::fabs(visibleItemsLayoutScrollOffset - scrollOffset) > 0.001f;
+  }
+
+  inline static float smoothStep(float value) {
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value * value * (3.0f - 2.0f * value);
+  }
+
+  inline float currentScrollbarAlpha(Uint64 now) const {
+    if (!canScroll() || scrollbarLastActivityAt == 0) {
+      return 0.0f;
+    }
+    if (touchDragging) {
+      return 1.0f;
+    }
+
+    const float fadeIn =
+        scrollbarFadeInStartedAt == 0
+            ? 1.0f
+            : std::min(1.0f,
+                       static_cast<float>(now - scrollbarFadeInStartedAt) /
+                           static_cast<float>(kScrollbarFadeInMs));
+    const Uint64 inactiveFor =
+        now > scrollbarLastActivityAt ? now - scrollbarLastActivityAt : 0;
+    float fadeOut = 1.0f;
+    if (inactiveFor > kScrollbarHoldMs) {
+      fadeOut =
+          1.0f -
+          std::min(1.0f, static_cast<float>(inactiveFor - kScrollbarHoldMs) /
+                             static_cast<float>(kScrollbarFadeOutMs));
+    }
+    return smoothStep(std::min(fadeIn, fadeOut));
+  }
+
+  inline void revealScrollbar() {
+    if (!canScroll()) {
+      return;
+    }
+    const Uint64 now = SDL_GetTicks64();
+    if (currentScrollbarAlpha(now) <= 0.01f) {
+      scrollbarFadeInStartedAt = now;
+    }
+    scrollbarLastActivityAt = now;
+  }
+
+  inline static uint32_t scrollbarColor(uint8_t r, uint8_t g, uint8_t b,
+                                        float alpha) {
+    const auto a = static_cast<uint8_t>(
+        std::clamp(static_cast<int>(std::round(alpha * 255.0f)), 0, 255));
+    return Color(r, g, b, a).toABGR();
+  }
+
+  inline void drawScrollbarRect(RenderContext &context, int x, int y, int width,
+                                int height, uint32_t color) const {
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    if (bgfx::getAvailTransientVertexBuffer(
+            4, rendering::PosColorVertex::ms_decl) < 4 ||
+        bgfx::getAvailTransientIndexBuffer(6) < 6) {
+      return;
+    }
+
+    bgfx::TransientVertexBuffer tvb;
+    bgfx::TransientIndexBuffer tib;
+    rendering::createRect(tvb, tib, x, y, width, height, color);
+
+    bgfx::setVertexBuffer(0, &tvb);
+    bgfx::setIndexBuffer(&tib);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                            context.scissor.width, context.scissor.height);
+    static const bgfx::ProgramHandle kProgram =
+        rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+    bgfx::submit(rendering::ui_view, kProgram);
+  }
+
+  inline void renderScrollbar(RenderContext &context) const {
+    const float alpha = currentScrollbarAlpha(SDL_GetTicks64());
+    if (alpha <= 0.0f) {
+      return;
+    }
+
+    const int itemsSize =
+        std::max(1, static_cast<int>(items.size())) * itemHeight;
+    const int trackHeight =
+        std::max(0, this->getHeight() - (kScrollbarVerticalInset * 2));
+    if (trackHeight <= 0) {
+      return;
+    }
+
+    const int maxOffset = std::max(1, itemsSize - this->getHeight());
+    const int thumbHeight =
+        std::clamp(this->getHeight() * trackHeight / itemsSize,
+                   kScrollbarMinThumbHeight, trackHeight);
+    const float progress =
+        std::clamp(scrollOffset / static_cast<float>(maxOffset), 0.0f, 1.0f);
+    const int trackX = this->getX() + this->getWidth() - kScrollbarRightInset -
+                       kScrollbarWidth;
+    const int trackY = this->getY() + kScrollbarVerticalInset;
+    const int thumbY =
+        trackY +
+        static_cast<int>(std::round((trackHeight - thumbHeight) * progress));
+
+    const int trackCenterOffset = (kScrollbarWidth - kScrollbarTrackWidth) / 2;
+    drawScrollbarRect(context, trackX + trackCenterOffset, trackY,
+                      kScrollbarTrackWidth, trackHeight,
+                      scrollbarColor(215, 226, 240, 0.12f * alpha));
+    drawScrollbarRect(context, trackX, thumbY, kScrollbarWidth, thumbHeight,
+                      scrollbarColor(226, 236, 247, 0.72f * alpha));
+  }
+
   inline void clampScrollOffset() {
     const int itemsSize =
         std::max(1, static_cast<int>(items.size())) * itemHeight;
@@ -423,11 +502,17 @@ private:
     if (std::fabs(scrollOffset - previousOffset) <= 0.001f) {
       return false;
     }
+    revealScrollbar();
     updateVisibleItems();
     return true;
   }
 
   inline void updateVisibleItems() {
+    const int layoutX = this->getX();
+    const int layoutY = this->getY();
+    const int layoutWidth = visibleItemWidth();
+    const int layoutHeight = this->getHeight();
+
     // Determine the range of visible items
     int startIndex = getStartIndex();
     int endIndex = getEndIndex();
@@ -446,6 +531,7 @@ private:
     for (int i = startIndex; i <= endIndex; ++i) {
       const T &item = items[i];
       View *view = nullptr;
+      bool shouldBind = false;
 
       // Check if the item already has a corresponding view
       auto it = std::find_if(viewEntries.begin(), viewEntries.end(),
@@ -462,17 +548,18 @@ private:
         // Otherwise, get a recycled view or create a new one
         view = getViewForItem(item);
         idxToView[i] = view;
-        if (onBind) {
-          onBind(view, item, i,
-                 selectedIndex == i); // Bind the item to the view
-        }
+        shouldBind = true;
       }
-      // update the position of the view
 
-      view->setPositionNoLayout(this->getX(),
-                                this->getY() + (i * itemHeight) - scrollOffset,
+      // Size before binding so row content is laid out against the recycler
+      // width rather than the stale width of a created or recycled view.
+      view->setPositionNoLayout(layoutX,
+                                layoutY + (i * itemHeight) - scrollOffset,
                                 YGPositionType::YGPositionTypeAbsolute);
-      view->setSize(this->getWidth(), itemHeight);
+      view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
+      if (shouldBind && onBind) {
+        onBind(view, item, i, selectedIndex == i);
+      }
 
       newVisibleItems.emplace_back(view, item);
     }
@@ -484,6 +571,13 @@ private:
 
     // Update the list of visible items
     viewEntries = std::move(newVisibleItems);
+    visibleItemsLayoutDirty = false;
+    visibleItemsLayoutX = layoutX;
+    visibleItemsLayoutY = layoutY;
+    visibleItemsLayoutWidth = layoutWidth;
+    visibleItemsLayoutHeight = layoutHeight;
+    visibleItemsLayoutItemHeight = itemHeight;
+    visibleItemsLayoutScrollOffset = scrollOffset;
   }
 
   inline int getStartIndex() {
@@ -518,6 +612,11 @@ protected:
   inline void onResize(int newWidth, int newHeight) override {
     View::onResize(newWidth, newHeight);
     updateVisibleItems();
+  }
+  void onMove(int newX, int newY) override {
+    (void)newX;
+    (void)newY;
+    visibleItemsLayoutDirty = true;
   }
   void onLayout() override {
     View::onLayout();

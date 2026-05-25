@@ -17,4 +17,6 @@ void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
 std::vector<std::string> ListDocumentFilesRecursively();
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
+bool DownloadURLTextIOS(const std::string &url, std::string &body,
+                        std::string &errorMessage);
 #endif

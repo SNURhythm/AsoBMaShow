@@ -18,7 +18,7 @@ jobs:
     env:
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8
-    name: Deploy to TestFlight
+    name: Deploy iOS beta
     runs-on: [self-hosted, macOS]
     timeout-minutes: 30
     strategy:

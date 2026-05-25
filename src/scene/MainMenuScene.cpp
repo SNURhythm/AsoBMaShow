@@ -2,6 +2,7 @@
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include "../view/ChartListItemView.h"
+#include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
@@ -35,7 +36,50 @@
 #elif __posix
 // POSIX
 #endif
+#include <cmath>
 #include <iostream>
+
+namespace {
+constexpr int kRootPadding = 28;
+
+struct SafeAreaInsets {
+  int top = 0;
+  int left = 0;
+  int bottom = 0;
+  int right = 0;
+};
+
+SafeAreaInsets getSafeAreaInsetsUi() {
+  SafeAreaInsets insets;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const IOSNormalizedSafeAreaInsets normalized =
+      GetIOSSafeAreaInsetsNormalized();
+  insets.top = static_cast<int>(std::lround(
+      normalized.top * static_cast<float>(rendering::window_height)));
+  insets.left = static_cast<int>(std::lround(
+      normalized.left * static_cast<float>(rendering::window_width)));
+  insets.right = static_cast<int>(std::lround(
+      normalized.right * static_cast<float>(rendering::window_width)));
+#endif
+  return insets;
+}
+
+std::string folderKeyForTable(int tableId) {
+  return "table:" + std::to_string(tableId);
+}
+
+std::string folderKeyForLevel(int tableId, const std::string &level) {
+  return "level:" + std::to_string(tableId) + ":" + level;
+}
+
+std::string folderKeyForCourseGroup(int tableId, const std::string &groupName) {
+  return "course-group:" + std::to_string(tableId) + ":" + groupName;
+}
+
+std::string folderKeyForCourse(int courseId) {
+  return "course:" + std::to_string(courseId);
+}
+} // namespace
 
 void MainMenuScene::init() {
   // Initialize the scene
@@ -53,6 +97,12 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
   auto db = dbHelper.Connect();
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateEntriesTable(db);
+  dbHelper.CreateDifficultyTableTables(db);
+  const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
+      db, Utils::GetDocumentsPath("tables"));
+  if (importedTables > 0 && !stop_token.stop_requested()) {
+    scene.requestLibraryReload(true);
+  }
   auto entries = dbHelper.SelectAllEntries(db);
 
   // Check for stop request before proceeding
@@ -143,7 +193,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
       [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
         return a.SHA256 == b.SHA256;
       });
+  folderRecyclerView = new RecyclerView<LibraryFolderItem>(
+      [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
+        return a.key == b.key;
+      });
   auto dbHelper = ChartDBHelper::GetInstance();
+  dbHelper.CreateChartMetaTable(db);
+  dbHelper.CreateDifficultyTableTables(db);
 
   recyclerView->onCreateView = [this](const bms_parser::ChartMeta &item) {
     return new ChartListItemView(0, 0, rendering::window_width, 100, item);
@@ -160,9 +216,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
-  auto jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context, jacketView](
-                                 const bms_parser::ChartMeta &item, int idx) {
+  jacketView = new ImageView(0, 0, 0, 0);
+  recyclerView->onSelected = [this, &context](const bms_parser::ChartMeta &item,
+                                              int idx) {
     if (willStart)
       return;
     auto selectedView = recyclerView->getViewByIndex(idx);
@@ -177,10 +233,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
-    if (selectedChart) {
-      delete selectedChart;
-      selectedChart = nullptr;
-    }
+    delete selectedChart.exchange(nullptr);
     loadThread = std::thread([this, item, &context]() {
       SDL_Log("Previewing %s", path_t_to_utf8(item.BmsPath).c_str());
 
@@ -231,13 +284,118 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
+  folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
+    return new LibraryFolderItemView(0, 0, 260, 44);
+  };
+  folderRecyclerView->itemHeight = 44;
+  folderRecyclerView->onBind = [](View *view, const LibraryFolderItem &item,
+                                  int idx, bool isSelected) {
+    auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
+    if (folderView != nullptr) {
+      folderView->setItem(item.label, item.depth, item.count, isSelected);
+    }
+  };
+  folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
+                                          int idx) {
+    auto selectedView = folderRecyclerView->getViewByIndex(idx);
+    if (selectedView) {
+      selectedView->onSelected();
+    }
+    selectFolder(item);
+  };
+  folderRecyclerView->onUnselected = [this](const LibraryFolderItem &item,
+                                            int idx) {
+    auto unselectedView = folderRecyclerView->getViewByIndex(idx);
+    if (unselectedView) {
+      unselectedView->onUnselected();
+    }
+  };
+
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  lastLayoutWidth = rendering::window_width;
+  lastLayoutHeight = rendering::window_height;
+  lastSafeTop = safe.top;
+  lastSafeLeft = safe.left;
+  lastSafeBottom = safe.bottom;
+  lastSafeRight = safe.right;
   rootLayout->setFlexDirection(FlexDirection::Row);
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setGap(24);
-  rootLayout->setPadding(Edge::All, 28);
+  rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
+  rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
+  rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
+  rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setBackgroundColor(kBackdropTint);
+
+  auto nav = new View();
+  nav->setFlexDirection(FlexDirection::Column);
+  nav->setAlignItems(YGAlignStretch);
+  nav->setWidth(280);
+  nav->setGap(12);
+  nav->setPadding(Edge::All, 14);
+  nav->setBackgroundColor(kPanelFill);
+  nav->setBorderColor(Color(70, 95, 124, 255));
+  nav->setBorderWidth(2);
+
+  auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  navTitle->setText("Library");
+  navTitle->setColor({243, 247, 255, 255});
+  nav->addView(navTitle);
+
+  auto *tableUrlLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  tableUrlLabel->setText("Difficulty table URL");
+  tableUrlLabel->setColor({157, 177, 200, 255});
+  nav->addView(tableUrlLabel);
+
+  tableUrlInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 18);
+  tableUrlInput->setHeight(44);
+  tableUrlInput->setText("");
+  tableUrlInput->setBackgroundColor(kSurfaceFill);
+  tableUrlInput->setBorderColor(Color(88, 115, 149, 255));
+  tableUrlInput->setBorderWidth(2);
+  tableUrlInput->setVAlign(TextView::MIDDLE);
+  tableUrlInput->setColor({239, 244, 251, 255});
+  tableUrlInput->onTextChanged(
+      [this](const std::string &text) { tableUrlText = text; });
+  tableUrlInput->onSubmit([this](const std::string &text) {
+    tableUrlText = text;
+    importDifficultyTableFromUrl();
+  });
+  nav->addView(tableUrlInput);
+
+  auto *importButton = new Button();
+  importButton->setAlignSelf(YGAlignStretch);
+  auto *importButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  importButtonText->setText("Import table");
+  importButtonText->setAlign(TextView::CENTER);
+  importButtonText->setVAlign(TextView::MIDDLE);
+  importButton->setContentView(importButtonText);
+  importButton->setHeight(44);
+  importButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
+                                    kPrimaryButtonPressed);
+  importButton->setBorderColors(Color(105, 162, 222, 255),
+                                Color(133, 190, 244, 255),
+                                Color(162, 212, 255, 255));
+  importButton->setStyledBorderWidth(2);
+  importButton->setOnClickListener(
+      [this]() { importDifficultyTableFromUrl(); });
+  nav->addView(importButton);
+
+  tableImportStatus = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  tableImportStatus->setText("");
+  tableImportStatus->setWrap(true);
+  tableImportStatus->setColor({157, 177, 200, 255});
+  nav->addView(tableImportStatus);
+
+  folderRecyclerView->setFlex(1);
+  folderRecyclerView->clearBackgroundColor();
+  folderRecyclerView->setBorderColor(Color(63, 86, 113, 255));
+  folderRecyclerView->setBorderWidth(2);
+  nav->addView(folderRecyclerView);
+  rootLayout->addView(nav);
+
   auto left = new View();
   left->setFlexDirection(FlexDirection::Column);
   left->setAlignItems(YGAlignStretch);
@@ -254,32 +412,55 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->addView(libraryTitle);
 
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  librarySubtitle->setText("Search your library and preview charts before starting.");
+  librarySubtitle->setText(
+      "Search your library and preview charts before starting.");
   librarySubtitle->setColor({157, 177, 200, 255});
   left->addView(librarySubtitle);
 
-  auto *searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 32);
+  auto *filterRow = new View();
+  filterRow->setFlexDirection(FlexDirection::Row);
+  filterRow->setAlignItems(YGAlignStretch);
+  filterRow->setGap(10);
+
+  searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
   searchBox->setText("");
   searchBox->setHeight(56);
+  searchBox->setFlex(1);
   searchBox->setBackgroundColor(kSurfaceFill);
   searchBox->setBorderColor(Color(88, 115, 149, 255));
   searchBox->setBorderWidth(2);
   searchBox->setVAlign(TextView::MIDDLE);
   searchBox->setColor({239, 244, 251, 255});
-  searchBox->onSubmit([this, &context, searchBox](const std::string &text) {
-    auto dbHelper = ChartDBHelper::GetInstance();
-    if (text.empty()) {
-      // TODO: handle deleted files
-      std::vector<bms_parser::ChartMeta> chartMetas;
-      dbHelper.SelectAllChartMeta(db, chartMetas);
-      recyclerView->setItems(std::move(chartMetas));
-    } else {
-      std::vector<bms_parser::ChartMeta> chartMetas;
-      dbHelper.SearchChartMeta(db, text, chartMetas);
-      recyclerView->setItems(std::move(chartMetas));
-    }
-  });
-  left->addView(searchBox);
+  auto onSearchChanged = [this](const std::string &text) {
+    searchText = text;
+    reloadChartList();
+  };
+  searchBox->onTextChanged(onSearchChanged);
+  searchBox->onSubmit(onSearchChanged);
+  filterRow->addView(searchBox);
+
+  difficultyFilterBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
+  difficultyFilterBox->setText("");
+  difficultyFilterBox->setHeight(56);
+  difficultyFilterBox->setWidth(180);
+  difficultyFilterBox->setBackgroundColor(kSurfaceFill);
+  difficultyFilterBox->setBorderColor(Color(88, 115, 149, 255));
+  difficultyFilterBox->setBorderWidth(2);
+  difficultyFilterBox->setVAlign(TextView::MIDDLE);
+  difficultyFilterBox->setColor({239, 244, 251, 255});
+  auto onDifficultyChanged = [this](const std::string &text) {
+    difficultyText = text;
+    reloadChartList();
+  };
+  difficultyFilterBox->onTextChanged(onDifficultyChanged);
+  difficultyFilterBox->onSubmit(onDifficultyChanged);
+  filterRow->addView(difficultyFilterBox);
+
+  auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  filterLabel->setText("Search / Difficulty");
+  filterLabel->setColor({157, 177, 200, 255});
+  left->addView(filterLabel);
+  left->addView(filterRow);
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
@@ -326,7 +507,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     SDL_Log("Start button clicked");
     auto selected = recyclerView->selectedIndex;
     SDL_Log("Selected: %d", selected);
-    if (selected >= 0) {
+    if (selected >= 0 && selectedChart.load() != nullptr) {
       willStart = true;
       buttonText->setText("Loading...");
 
@@ -339,13 +520,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
             }
             context.jukebox.stop();
             context.sceneManager->changeScene(
-                new GamePlayScene(context, selectedChart,
-                                  {
-                                      .startPosition = 0,
-                                      .autoKeySound =
-                                          !context.settings.inputKeysoundEnabled,
-                                      .autoPlay = false,
-                                  }),
+                new GamePlayScene(
+                    context, selectedChart,
+                    {
+                        .startPosition = 0,
+                        .autoKeySound = !context.settings.inputKeysoundEnabled,
+                        .autoPlay = false,
+                    }),
                 true);
             willStart = false;
             buttonText->setText("Start");
@@ -374,9 +555,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
-  settingsButton->setBackgroundColors(kSecondaryButtonNormal,
-                                      kSecondaryButtonHover,
-                                      kSecondaryButtonPressed);
+  settingsButton->setBackgroundColors(
+      kSecondaryButtonNormal, kSecondaryButtonHover, kSecondaryButtonPressed);
   settingsButton->setBorderColors(Color(174, 124, 91, 255),
                                   Color(207, 146, 105, 255),
                                   Color(232, 169, 122, 255));
@@ -390,36 +570,318 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout->addView(right);
   addView(rootLayout);
-  std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas);
-  recyclerView->setItems(std::move(chartMetas));
+  reloadFolderItems();
+  reloadChartList();
   rootLayout->applyYogaLayout();
+}
+
+void MainMenuScene::reloadFolderItems() {
+  if (folderRecyclerView == nullptr) {
+    return;
+  }
+
+  auto dbHelper = ChartDBHelper::GetInstance();
+  std::vector<LibraryFolderItem> folders;
+
+  int allSongCount = 0;
+  allSongCount = dbHelper.CountAllChartMeta(db);
+
+  folders.push_back({
+      .key = "all",
+      .label = "All songs",
+      .type = LibraryFolderItem::Type::AllSongs,
+      .depth = 0,
+      .count = allSongCount,
+  });
+
+  const auto tables = dbHelper.SelectDifficultyTables(db);
+  for (const auto &table : tables) {
+    folders.push_back({
+        .key = folderKeyForTable(table.id),
+        .label = table.name,
+        .type = LibraryFolderItem::Type::DifficultyTable,
+        .depth = 0,
+        .count = table.matchedChartCount,
+        .tableId = table.id,
+    });
+
+    const auto levels = dbHelper.SelectDifficultyLevels(db, table.id);
+    for (const auto &level : levels) {
+      folders.push_back({
+          .key = folderKeyForLevel(level.tableId, level.level),
+          .label = level.tableSymbol + level.level,
+          .type = LibraryFolderItem::Type::DifficultyLevel,
+          .depth = 1,
+          .count = level.matchedChartCount,
+          .tableId = level.tableId,
+          .tableLevel = level.level,
+      });
+    }
+  }
+
+  const auto courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+  if (!courseGroups.empty()) {
+    int coursesCount = 0;
+    for (const auto &group : courseGroups) {
+      coursesCount += group.matchedChartCount;
+    }
+    folders.push_back({
+        .key = "courses",
+        .label = "Courses",
+        .type = LibraryFolderItem::Type::CoursesRoot,
+        .depth = 0,
+        .count = coursesCount,
+    });
+
+    for (const auto &group : courseGroups) {
+      const std::string label = group.groupName.empty()
+                                    ? group.tableName + " Courses"
+                                    : group.groupName;
+      folders.push_back({
+          .key = folderKeyForCourseGroup(group.tableId, group.groupName),
+          .label = label,
+          .type = LibraryFolderItem::Type::CourseGroup,
+          .depth = 1,
+          .count = group.matchedChartCount,
+          .courseTableId = group.tableId,
+          .courseGroupName = group.groupName,
+      });
+
+      const auto courses =
+          dbHelper.SelectDifficultyCourses(db, group.tableId, group.groupName);
+      for (const auto &course : courses) {
+        const std::string courseLabel =
+            course.level.empty() ? course.name : course.level;
+        folders.push_back({
+            .key = folderKeyForCourse(course.id),
+            .label = courseLabel,
+            .type = LibraryFolderItem::Type::Course,
+            .depth = 2,
+            .count = course.matchedChartCount,
+            .courseId = course.id,
+            .courseTableId = course.tableId,
+            .courseGroupName = course.groupName,
+        });
+      }
+    }
+  }
+
+  if (activeFolder.key.empty()) {
+    activeFolder = folders.front();
+  }
+
+  bool activeStillExists = false;
+  int activeIndex = 0;
+  for (int i = 0; i < folders.size(); i++) {
+    const auto &folder = folders[i];
+    if (folder.key == activeFolder.key) {
+      activeFolder = folder;
+      activeStillExists = true;
+      activeIndex = i;
+      break;
+    }
+  }
+  if (!activeStillExists) {
+    activeFolder = folders.front();
+    activeIndex = 0;
+  }
+
+  folderRecyclerView->setItems(std::move(folders));
+  folderRecyclerView->selectedIndex = activeIndex;
+  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+  if (selectedView != nullptr) {
+    selectedView->onSelected();
+  }
+}
+
+void MainMenuScene::reloadChartList() {
+  if (recyclerView == nullptr) {
+    return;
+  }
+
+  ChartMetaQuery query;
+  query.keyword = searchText;
+  query.difficultyText = difficultyText;
+
+  switch (activeFolder.type) {
+  case LibraryFolderItem::Type::DifficultyTable:
+    query.tableId = activeFolder.tableId;
+    break;
+  case LibraryFolderItem::Type::DifficultyLevel:
+    query.tableId = activeFolder.tableId;
+    query.tableLevel = activeFolder.tableLevel;
+    break;
+  case LibraryFolderItem::Type::CoursesRoot:
+    query.coursesOnly = true;
+    break;
+  case LibraryFolderItem::Type::CourseGroup:
+    query.courseTableId = activeFolder.courseTableId;
+    query.courseGroupName = activeFolder.courseGroupName;
+    break;
+  case LibraryFolderItem::Type::Course:
+    query.courseId = activeFolder.courseId;
+    break;
+  case LibraryFolderItem::Type::AllSongs:
+  default:
+    break;
+  }
+
+  std::vector<bms_parser::ChartMeta> chartMetas;
+  ChartDBHelper::GetInstance().QueryChartMeta(db, query, chartMetas);
+  recyclerView->setItems(std::move(chartMetas));
+}
+
+void MainMenuScene::requestLibraryReload(bool includeFolders) {
+  if (includeFolders) {
+    folderItemsReloadRequested = true;
+  }
+  chartListReloadRequested = true;
+}
+
+void MainMenuScene::requestTableImportStatus(const std::string &text,
+                                             const SDL_Color &color) {
+  std::lock_guard<std::mutex> lock(tableImportStatusMutex);
+  pendingTableImportStatus = true;
+  pendingTableImportStatusText = text;
+  pendingTableImportStatusColor = color;
+}
+
+void MainMenuScene::applyPendingUiUpdates() {
+  {
+    std::lock_guard<std::mutex> lock(tableImportStatusMutex);
+    if (pendingTableImportStatus && tableImportStatus != nullptr) {
+      tableImportStatus->setText(pendingTableImportStatusText);
+      tableImportStatus->setColor(pendingTableImportStatusColor);
+      pendingTableImportStatus = false;
+    }
+  }
+
+  const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
+  const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  if (shouldReloadFolders) {
+    reloadFolderItems();
+  }
+  if (shouldReloadFolders || shouldReloadCharts) {
+    reloadChartList();
+  }
+}
+
+void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
+  activeFolder = item;
+  reloadChartList();
+}
+
+void MainMenuScene::importDifficultyTableFromUrl() {
+  if (tableImportRunning) {
+    return;
+  }
+
+  const std::string url =
+      tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
+  if (url.empty()) {
+    if (tableImportStatus != nullptr) {
+      tableImportStatus->setText("Enter a table webpage URL first.");
+    }
+    return;
+  }
+
+  if (tableImportThread.joinable()) {
+    tableImportThread.join();
+  }
+
+  tableImportRunning = true;
+  if (tableImportStatus != nullptr) {
+    tableImportStatus->setText("Importing...");
+    tableImportStatus->setColor({239, 244, 251, 255});
+  }
+
+  tableImportThread = std::jthread([this, url](const std::stop_token &token) {
+    auto dbHelper = ChartDBHelper::GetInstance();
+    auto importDb = dbHelper.Connect();
+    dbHelper.CreateChartMetaTable(importDb);
+    dbHelper.CreateDifficultyTableTables(importDb);
+
+    std::string errorMessage;
+    const bool imported =
+        dbHelper.ImportDifficultyTableFromUrl(importDb, url, &errorMessage);
+    dbHelper.Close(importDb);
+
+    if (token.stop_requested()) {
+      tableImportRunning = false;
+      return;
+    }
+
+    if (imported) {
+      requestTableImportStatus("Imported.", {181, 228, 165, 255});
+      requestLibraryReload(true);
+    } else {
+      requestTableImportStatus(errorMessage.empty() ? "Import failed."
+                                                    : errorMessage,
+                               {255, 177, 170, 255});
+    }
+    tableImportRunning = false;
+  });
 }
 
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
+  applyPendingUiUpdates();
 }
 
 void MainMenuScene::renderScene() {
   // Render the scene
   // SDL_Log("Rendering Main Menu Scene");
+  if (rootLayout == nullptr) {
+    return;
+  }
+  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  const bool layoutChanged =
+      rendering::window_width != lastLayoutWidth ||
+      rendering::window_height != lastLayoutHeight || safe.top != lastSafeTop ||
+      safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
+      safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
+  if (layoutChanged) {
+    lastLayoutWidth = rendering::window_width;
+    lastLayoutHeight = rendering::window_height;
+    lastSafeTop = safe.top;
+    lastSafeLeft = safe.left;
+    lastSafeBottom = safe.bottom;
+    lastSafeRight = safe.right;
+    rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
+    rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
+    rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
+    rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
+    rootLayout->applyYogaLayout();
+  }
 }
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
-  ChartDBHelper::GetInstance().Close(db);
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
     checkEntriesThread.join();
   }
 
+  if (tableImportThread.joinable()) {
+    SDL_Log("Joining tableImportThread");
+    tableImportThread.request_stop();
+    tableImportThread.join();
+  }
+
   if (loadThread.joinable()) {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+  ChartDBHelper::GetInstance().Close(db);
+  lastLayoutWidth = -1;
+  lastLayoutHeight = -1;
+  lastSafeTop = -1;
+  lastSafeLeft = -1;
+  lastSafeBottom = -1;
+  lastSafeRight = -1;
 }
 
 void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
@@ -427,7 +889,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
   std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas);
+  dbHelper.SelectAllChartMeta(db, chartMetas, false);
   // sort by title
   std::sort(chartMetas.begin(), chartMetas.end(),
             [](bms_parser::ChartMeta &a, bms_parser::ChartMeta &b) {
@@ -503,11 +965,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
   });
   dbHelper.CommitTransaction(db);
   SDL_Log("Inserted %d new charts", success_count.load());
-  // set items
-  chartMetas.clear();
-  dbHelper.SelectAllChartMeta(db, chartMetas);
-
-  scene.recyclerView->setItems(std::move(chartMetas));
+  scene.requestLibraryReload(true);
 }
 
 #ifdef _WIN32
