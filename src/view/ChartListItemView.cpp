@@ -70,12 +70,11 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   // Main text
   textLayout->setFlexDirection(FlexDirection::Column)
       ->setJustifyContent(YGJustifyCenter)
-      ->setFlex(1)
+      ->setFlexGrow(1)
       ->setFlexBasis(0)
       ->setFlexShrink(1)
       ->setMinWidth(0)
       ->setGap(4);
-  textLayout->setBackgroundColor(Color(255, 64, 64, 96));
   this->addView(textLayout);
 
   titleView->setHeight(36);
