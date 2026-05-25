@@ -1,52 +1,106 @@
 #include "ChartListItemView.h"
 
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+
+namespace {
+std::string formatPlayLevel(double level) {
+  const double rounded = std::round(level);
+  if (std::fabs(level - rounded) < 0.001) {
+    return std::to_string(static_cast<int>(rounded));
+  }
+
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(1) << level;
+  return stream.str();
+}
+
+std::string keyModeDescription(int keyMode) {
+  switch (keyMode) {
+  case 5:
+    return "5K";
+  case 7:
+    return "7K";
+  case 10:
+    return "5KDP";
+  case 14:
+    return "7KDP";
+  default:
+    return std::to_string(keyMode) + "K";
+  }
+}
+} // namespace
+
 ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const bms_parser::ChartMeta &meta)
     : View(x, y, width, height) {
+  (void)meta;
   this->setFlex(1);
+  artworkFrame = new View();
+  jacketImage = new ImageView(0, 0, 0, 0);
   textLayout = new View();
-  bannerImage = new ImageView(0, 0, 0, 0);
-  titleView = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  titleView->setVAlign(TextView::TextVAlign::BOTTOM);
-  artistView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  artistView->setVAlign(TextView::TextVAlign::TOP);
+  detailsLayout = new View();
+  titleView = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  artistView = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
 
   // Configure root layout
-  this->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
+  this->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setPadding(Edge::All, 8)
+      ->setGap(12);
 
-  // Configure text layout
-  textLayout->setFlexDirection(FlexDirection::Column);
+  // Stage file jacket
+  artworkFrame->setWidth(84)
+      ->setHeight(84)
+      ->setPadding(Edge::All, 3)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setBackgroundColor(Color(8, 14, 23, 224))
+      ->setBorderColor(Color(42, 58, 78, 255))
+      ->setBorderWidth(1);
+  jacketImage->setWidth(78)->setHeight(78);
+  artworkFrame->addView(jacketImage);
+  this->addView(artworkFrame);
 
-  // Add banner image with configuration
-  bannerImage->setWidth(static_cast<float>(height) / 80.0f * 300.0f)
-      ->setHeight(static_cast<float>(height))
-      ->setMargin(Edge::End, 8);
-  this->addView(bannerImage);
-
-  // Add text layout with configuration
-  textLayout->setFlex(1);
-  textLayout->setFlexGrow(1.5);
+  // Main text
+  textLayout->setFlexDirection(FlexDirection::Column)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setFlex(1)
+      ->setFlexShrink(1)
+      ->setGap(4);
   this->addView(textLayout);
 
-  // Add title and artist views to text layout
-  titleView->setFlex(1);
-  titleView->setFlexGrow(1.5f);
+  titleView->setHeight(36);
+  titleView->setVAlign(TextView::TextVAlign::BOTTOM);
   textLayout->addView(titleView);
 
-  artistView->setFlexGrow(1);
+  artistView->setHeight(24);
+  artistView->setVAlign(TextView::TextVAlign::TOP);
   textLayout->addView(artistView);
 
-  // Add level view
-  levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  // Difficulty and key mode
+  detailsLayout->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignFlexEnd)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setWidth(210)
+      ->setHeight(84)
+      ->setGap(6);
+  this->addView(detailsLayout);
+
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
-  levelView->setWidth(160)->setHeight(20);
-  this->addView(levelView);
+  levelView->setWidth(210)->setHeight(28);
+  detailsLayout->addView(levelView);
 
-  keyModeOverlay = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  keyModeOverlay->setColor({255, 0, 0, 255});
-  keyModeOverlay->setAlign(TextView::TextAlign::LEFT);
-  keyModeOverlay->setVAlign(TextView::TextVAlign::MIDDLE);
+  keyModeView->setAlign(TextView::TextAlign::RIGHT);
+  keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
+  keyModeView->setWidth(210)->setHeight(20);
+  detailsLayout->addView(keyModeView);
+
+  onUnselected();
   this->applyYogaLayout();
 }
 
@@ -58,50 +112,36 @@ void ChartListItemView::setMeta(const bms_parser::ChartMeta &meta) {
   titleView->setText(title);
   artistView->setText(meta.Artist);
   levelView->setText(meta.DifficultyTableLabels.empty()
-                         ? std::to_string(meta.PlayLevel)
+                         ? formatPlayLevel(meta.PlayLevel)
                          : meta.DifficultyTableLabels);
-  std::string keyModeDesc;
-  switch (meta.KeyMode) {
-  case 5:
-    keyModeDesc = "5K";
-    break;
-  case 7:
-    keyModeDesc = "7K";
-    break;
-  case 10:
-    keyModeDesc = "5KDP";
-    break;
-  case 14:
-    keyModeDesc = "7KDP";
-    break;
+  keyModeView->setText(keyModeDescription(meta.KeyMode));
+  if (!meta.StageFile.empty()) {
+    jacketImage->setImage(meta.Folder / meta.StageFile);
+  } else {
+    jacketImage->freeImage();
   }
-  keyModeOverlay->setText(keyModeDesc);
-  if (!meta.Banner.empty())
-    bannerImage->setImage(meta.Folder / meta.Banner);
-  else
-    bannerImage->freeImage();
-}
-
-void ChartListItemView::renderImpl(RenderContext &context) {
-  // print view size/position
-  // SDL_Log("view size: %d, %d", getWidth(), getHeight());
-  // SDL_Log("view position: %d, %d", getX(), getY());
-  // print textlayout size/position
-  // SDL_Log("textlayout size: %d, %d", textLayout->getWidth(),
-  //         textLayout->getHeight());
-  // SDL_Log("textLayout position: %d, %d", textLayout->getX(),
-  //         textLayout->getY());
-  keyModeOverlay->render(context);
-  // SDL_Log("textLayout size: %d, %d", textLayout->getWidth(),
-  //         textLayout->getHeight());
 }
 
 void ChartListItemView::onSelected() {
-  titleView->setColor({255, 0, 0, 255});
-  artistView->setColor({255, 0, 0, 255});
+  setBackgroundColor(Color(32, 55, 82, 214));
+  setBorderColor(Color(93, 149, 208, 255));
+  setBorderWidth(1);
+  artworkFrame->setBackgroundColor(Color(13, 25, 39, 240));
+  artworkFrame->setBorderColor(Color(126, 185, 238, 255));
+  titleView->setColor({255, 255, 255, 255});
+  artistView->setColor({219, 232, 247, 255});
+  levelView->setColor({245, 250, 255, 255});
+  keyModeView->setColor({180, 210, 239, 255});
 }
 
 void ChartListItemView::onUnselected() {
-  titleView->setColor({255, 255, 255, 255});
-  artistView->setColor({255, 255, 255, 255});
+  setBackgroundColor(Color(7, 12, 20, 112));
+  setBorderColor(Color(27, 39, 55, 128));
+  setBorderWidth(1);
+  artworkFrame->setBackgroundColor(Color(8, 14, 23, 224));
+  artworkFrame->setBorderColor(Color(42, 58, 78, 255));
+  titleView->setColor({235, 242, 250, 255});
+  artistView->setColor({152, 174, 198, 255});
+  levelView->setColor({178, 224, 248, 255});
+  keyModeView->setColor({113, 141, 169, 255});
 }
