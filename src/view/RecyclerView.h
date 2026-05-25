@@ -269,7 +269,7 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
-    forceBindVisibleItems = true;
+    destroyAllViews();
     updateVisibleItems();
   }
 
@@ -279,7 +279,7 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
-    forceBindVisibleItems = true;
+    destroyAllViews();
     updateVisibleItems();
   }
 
@@ -304,6 +304,7 @@ public:
       recycleView(entry.first);
     }
     viewEntries.clear();
+    idxToView.clear();
   }
 
   inline const T &get(int index) const { return items[index]; }
@@ -339,7 +340,6 @@ private:
   ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
   bool touchDragging = false;
-  bool forceBindVisibleItems = false;
   Uint64 scrollbarFadeInStartedAt = 0;
   Uint64 scrollbarLastActivityAt = 0;
 
@@ -511,7 +511,6 @@ private:
     for (int i = startIndex; i <= endIndex; ++i) {
       const T &item = items[i];
       View *view = nullptr;
-      bool shouldBind = forceBindVisibleItems;
 
       // Check if the item already has a corresponding view
       auto it = std::find_if(viewEntries.begin(), viewEntries.end(),
@@ -528,10 +527,9 @@ private:
         // Otherwise, get a recycled view or create a new one
         view = getViewForItem(item);
         idxToView[i] = view;
-        shouldBind = true;
-      }
-      if (shouldBind && onBind) {
-        onBind(view, item, i, selectedIndex == i);
+        if (onBind) {
+          onBind(view, item, i, selectedIndex == i);
+        }
       }
       // update the position of the view
 
@@ -550,7 +548,6 @@ private:
 
     // Update the list of visible items
     viewEntries = std::move(newVisibleItems);
-    forceBindVisibleItems = false;
   }
 
   inline int getStartIndex() {
