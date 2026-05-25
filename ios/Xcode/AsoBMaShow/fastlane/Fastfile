@@ -81,15 +81,11 @@ platform :ios do
                    else
                      latest_testflight_build_number(initial_build_number: 0) + 1
                    end
-    increment_build_number(
-      build_number: build_number,
-      xcodeproj: "AsoBMaShow.xcodeproj"
-    )
     build_app(
       scheme: "AsoBMaShow",
       export_method: export_method,
-      xcargs: "-allowProvisioningUpdates",
-      clean: true
+      xcargs: "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}",
+      clean: !distribute_to_firebase
     )
     temporary_fix_ios_post_build
 
