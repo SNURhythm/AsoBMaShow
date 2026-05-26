@@ -1,6 +1,8 @@
 assets/video/sample.mp4
 CMakeUserPresets.json
 .DS_Store
+.env
+.env.local
 /build*
 .metals/
 cmake-build-*/
