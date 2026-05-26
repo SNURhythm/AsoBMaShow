@@ -15,7 +15,7 @@ on:
 
 jobs:
   appstore:
-    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip deploy]') }}
+    if: ${{ github.event_name != 'push' || github.event.head_commit.message != 'Register iOS workflow without deploy' }}
     env:
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8
