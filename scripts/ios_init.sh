@@ -86,6 +86,71 @@ prepare_bgfx_project() {
     -DCMAKE_OSX_SYSROOT=iphoneos
 }
 
+build_bgfx_libraries() {
+  local build_dir="${ROOT_DIR}/bgfx/build"
+  local expected_libraries=(
+    "${build_dir}/cmake/bgfx/Release-iphoneos/libbgfx.a"
+    "${build_dir}/cmake/bimg/Release-iphoneos/libbimg.a"
+    "${build_dir}/cmake/bimg/Release-iphoneos/libbimg_decode.a"
+    "${build_dir}/cmake/bimg/Release-iphoneos/libbimg_encode.a"
+    "${build_dir}/cmake/bx/Release-iphoneos/libbx.a"
+  )
+  local library
+  local missing=0
+
+  for library in "${expected_libraries[@]}"; do
+    if [ ! -f "${library}" ] || [ -L "${library}" ]; then
+      missing=1
+    fi
+  done
+
+  if [ "${missing}" -eq 0 ] && [ "${BGFX_FORCE_BUILD:-0}" != "1" ]; then
+    echo "Using cached bgfx iOS static libraries"
+    return
+  fi
+
+  echo "Building bgfx iOS static libraries"
+  for library in "${expected_libraries[@]}"; do
+    [ ! -L "${library}" ] || rm "${library}"
+  done
+
+  xcodebuild \
+    -project "${build_dir}/bgfx.xcodeproj" \
+    -configuration Release \
+    -sdk iphoneos \
+    -destination 'generic/platform=iOS' \
+    -target bgfx \
+    -target bimg \
+    -target bimg_decode \
+    -target bimg_encode \
+    -target bx \
+    build
+}
+
+setup_project_ruby() {
+  local ruby_version=""
+
+  if [ -f "${IOS_DIR}/.ruby-version" ]; then
+    ruby_version="$(tr -d '[:space:]' < "${IOS_DIR}/.ruby-version")"
+  elif [ -f "${IOS_DIR}/.tool-versions" ]; then
+    ruby_version="$(awk '$1 == "ruby" { print $2; exit }' "${IOS_DIR}/.tool-versions")"
+  fi
+
+  [ -n "${ruby_version}" ] || return 0
+
+  if command -v ruby >/dev/null 2>&1 &&
+     ruby -e 'exit RUBY_VERSION == ARGV.fetch(0) ? 0 : 1' "${ruby_version}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -x "${HOME}/.asdf/installs/ruby/${ruby_version}/bin/ruby" ]; then
+    export PATH="${HOME}/.asdf/installs/ruby/${ruby_version}/bin:${PATH}"
+  elif command -v rbenv >/dev/null 2>&1; then
+    export RBENV_VERSION="${ruby_version}"
+    eval "$(rbenv init - bash)"
+  fi
+}
+
 install_gems() {
   local ruby_version
   local bundle_cache
@@ -131,5 +196,7 @@ if [ "${CLEAN_PROJECT_ONLY}" -eq 1 ]; then
 fi
 
 prepare_bgfx_project
+build_bgfx_libraries
+setup_project_ruby
 install_gems
 install_pods
