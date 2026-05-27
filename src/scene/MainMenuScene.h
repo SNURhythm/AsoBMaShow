@@ -71,7 +71,7 @@ private:
     int clearRank = kNoClearTypeRank;
   };
 
-  RecyclerView<bms_parser::ChartMeta> *recyclerView = nullptr;
+  RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   View *rootLayout = nullptr;
   ImageView *jacketView = nullptr;
@@ -108,7 +108,7 @@ private:
   void reloadChartList();
   void reloadScoreClearRanks();
   void refreshScoreClearRanksIfNeeded();
-  int clearRankForChart(const bms_parser::ChartMeta &chartMeta) const;
+  int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);
   void requestTableImportStatus(const std::string &text,

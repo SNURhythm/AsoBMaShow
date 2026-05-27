@@ -146,7 +146,8 @@ std::string normalizedHashKey(std::string value) {
 }
 
 std::string chartIdentity(const std::string &sha256, const std::string &md5,
-                          const std::string &path) {
+                          const std::string &path,
+                          const std::string &fallback = "") {
   const std::string normalizedSha = normalizedHashKey(sha256);
   if (!normalizedSha.empty()) {
     return "sha256:" + normalizedSha;
@@ -155,7 +156,10 @@ std::string chartIdentity(const std::string &sha256, const std::string &md5,
   if (!normalizedMd5.empty()) {
     return "md5:" + normalizedMd5;
   }
-  return "path:" + path;
+  if (!path.empty()) {
+    return "path:" + path;
+  }
+  return fallback;
 }
 
 struct FolderClearAggregate {
@@ -187,9 +191,9 @@ void addFolderChart(
     std::unordered_map<std::string, FolderClearAggregate> &aggregates,
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
     const std::string &sha256, const std::string &md5,
-    const std::string &path) {
+    const std::string &path, const std::string &fallbackIdentity = "") {
   aggregates[folderKey].addChart(
-      chartIdentity(sha256, md5, path),
+      chartIdentity(sha256, md5, path, fallbackIdentity),
       scoreRanks.bestRankForHashes(sha256, md5, path));
 }
 } // namespace
@@ -313,9 +317,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   const Color kSecondaryButtonHover(101, 65, 47, 220);
   const Color kSecondaryButtonPressed(133, 87, 63, 232);
 
-  recyclerView = new RecyclerView<bms_parser::ChartMeta>(
-      [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
-        return a.SHA256 == b.SHA256;
+  recyclerView = new RecyclerView<ChartMetaRecord>(
+      [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
+        return a.meta.SHA256 == b.meta.SHA256 && a.meta.MD5 == b.meta.MD5 &&
+               a.meta.BmsPath == b.meta.BmsPath &&
+               a.difficultyTableLabels == b.difficultyTableLabels &&
+               a.unavailable == b.unavailable;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
@@ -325,11 +332,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateDifficultyTableTables(db);
 
-  recyclerView->onCreateView = [this](const bms_parser::ChartMeta &item) {
+  recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
     return new ChartListItemView(0, 0, rendering::window_width, 100, item);
   };
   recyclerView->itemHeight = 100;
-  recyclerView->onBind = [this](View *view, const bms_parser::ChartMeta &item,
+  recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item);
@@ -342,25 +349,35 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context](const bms_parser::ChartMeta &item,
+  recyclerView->onSelected = [this, &context](const ChartMetaRecord &item,
                                               int idx) {
     if (willStart)
       return;
+    const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
-    SDL_Log("Selected: %s; path: %s", item.Title.c_str(),
-            path_t_to_utf8(item.Folder / item.BmsPath).c_str());
+    SDL_Log("Selected: %s; path: %s", meta.Title.c_str(),
+            path_t_to_utf8(meta.Folder / meta.BmsPath).c_str());
     if (selectedView) {
       selectedView->onSelected();
     }
-    jacketView->setImage(item.Folder / item.StageFile);
     previewLoadCancelled = true;
     if (loadThread.joinable()) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
     delete selectedChart.exchange(nullptr);
-    loadThread = std::thread([this, item, &context]() {
-      SDL_Log("Previewing %s", path_t_to_utf8(item.BmsPath).c_str());
+    if (item.unavailable || meta.BmsPath.empty()) {
+      jacketView->freeImage();
+      context.jukebox.stop();
+      return;
+    }
+    if (!meta.StageFile.empty()) {
+      jacketView->setImage(meta.Folder / meta.StageFile);
+    } else {
+      jacketView->freeImage();
+    }
+    loadThread = std::thread([this, meta, &context]() {
+      SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
       previewLoadCancelled = false;
       // dumb implementation of debounce
@@ -377,12 +394,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
       bms_parser::Chart *chart = nullptr;
 
       try {
-        SDL_Log("Parsing %s", path_t_to_utf8(item.BmsPath).c_str());
-        parser.Parse(item.BmsPath, &chart, false, false, previewLoadCancelled);
-        SDL_Log("Parsed %s", path_t_to_utf8(item.BmsPath).c_str());
+        SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+        parser.Parse(meta.BmsPath, &chart, false, false, previewLoadCancelled);
+        SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       } catch (std::exception &e) {
         delete chart;
-        SDL_Log("Error parsing %s: %s", path_t_to_utf8(item.BmsPath).c_str(),
+        SDL_Log("Error parsing %s: %s", path_t_to_utf8(meta.BmsPath).c_str(),
                 e.what());
         return;
       }
@@ -401,8 +418,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
     });
   };
-  recyclerView->onUnselected = [this](const bms_parser::ChartMeta &item,
-                                      int idx) {
+  recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);
     if (unselectedView) {
       unselectedView->onUnselected();
@@ -689,7 +705,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     auto selected = recyclerView->selectedIndex;
     SDL_Log("Selected: %d", selected);
-    if (selected >= 0) {
+    if (selected >= 0 && selected < recyclerView->size()) {
+      const auto &selectedMeta = recyclerView->get(selected);
+      if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+        return;
+      }
       willStart = true;
       buttonText->setText("Loading...");
 
@@ -791,7 +811,7 @@ void MainMenuScene::reloadFolderItems() {
         .label = table.name,
         .type = LibraryFolderItem::Type::DifficultyTable,
         .depth = 0,
-        .count = table.matchedChartCount,
+        .count = table.chartCount,
         .tableId = table.id,
     });
 
@@ -802,7 +822,7 @@ void MainMenuScene::reloadFolderItems() {
           .label = level.tableSymbol + level.level,
           .type = LibraryFolderItem::Type::DifficultyLevel,
           .depth = 1,
-          .count = level.matchedChartCount,
+          .count = level.chartCount,
           .tableId = level.tableId,
           .tableLevel = level.level,
       });
@@ -920,7 +940,7 @@ void MainMenuScene::reloadChartList() {
     break;
   }
 
-  std::vector<bms_parser::ChartMeta> chartMetas;
+  std::vector<ChartMetaRecord> chartMetas;
   ChartDBHelper::GetInstance().QueryChartMeta(db, query, chartMetas);
   recyclerView->setItems(std::move(chartMetas));
 }
@@ -957,21 +977,22 @@ void MainMenuScene::reloadScoreClearRanks() {
            });
 
   runQuery(
-      "SELECT dte.table_id, dte.level, cm.sha256, cm.md5, cm.path "
-      "FROM difficulty_table_entries dte "
-      "JOIN chart_meta cm ON "
-      "((dte.sha256 != '' AND cm.sha256 = dte.sha256) "
-      "OR (dte.md5 != '' AND cm.md5 = dte.md5))",
+      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5, '', dte.id "
+      "FROM difficulty_table_entries dte",
       [&](sqlite3_stmt *row) {
         const int tableId = sqlite3_column_int(row, 0);
         const std::string level = columnText(row, 1);
         const std::string sha256 = columnText(row, 2);
         const std::string md5 = columnText(row, 3);
         const std::string path = columnText(row, 4);
+        const std::string fallbackIdentity =
+            "difficulty-entry:" + std::to_string(sqlite3_column_int(row, 5));
         addFolderChart(aggregates, scoreClearRanks,
-                       folderKeyForTable(tableId), sha256, md5, path);
+                       folderKeyForTable(tableId), sha256, md5, path,
+                       fallbackIdentity);
         addFolderChart(aggregates, scoreClearRanks,
-                       folderKeyForLevel(tableId, level), sha256, md5, path);
+                       folderKeyForLevel(tableId, level), sha256, md5, path,
+                       fallbackIdentity);
       });
 
   runQuery(
@@ -1014,9 +1035,8 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   requestLibraryReload(true);
 }
 
-int MainMenuScene::clearRankForChart(
-    const bms_parser::ChartMeta &chartMeta) const {
-  return scoreClearRanks.bestRankFor(chartMeta);
+int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
+  return scoreClearRanks.bestRankFor(record.meta);
 }
 
 int MainMenuScene::clearRankForFolder(const std::string &key) const {
@@ -1237,7 +1257,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
   std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas, false);
+  dbHelper.SelectAllChartMeta(db, chartMetas);
   // sort by title
   std::sort(chartMetas.begin(), chartMetas.end(),
             [](bms_parser::ChartMeta &a, bms_parser::ChartMeta &b) {

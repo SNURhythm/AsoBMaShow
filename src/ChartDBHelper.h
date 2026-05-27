@@ -20,12 +20,18 @@ struct ChartMetaQuery {
   std::string difficultyText;
 };
 
+struct ChartMetaRecord {
+  bms_parser::ChartMeta meta;
+  std::string difficultyTableLabels;
+  bool unavailable = false;
+};
+
 struct DifficultyTableInfo {
   int id = 0;
   std::string name;
   std::string symbol;
   std::string sourceUrl;
-  int matchedChartCount = 0;
+  int chartCount = 0;
 };
 
 struct DifficultyLevelInfo {
@@ -33,7 +39,7 @@ struct DifficultyLevelInfo {
   std::string tableName;
   std::string tableSymbol;
   std::string level;
-  int matchedChartCount = 0;
+  int chartCount = 0;
 };
 
 struct DifficultyCourseGroupInfo {
@@ -80,12 +86,11 @@ public:
   bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);
   int CountAllChartMeta(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
-                          std::vector<bms_parser::ChartMeta> &chartMetas,
-                          bool includeDifficultyLabels = true);
+                          std::vector<bms_parser::ChartMeta> &chartMetas);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
-                       std::vector<bms_parser::ChartMeta> &chartMetas);
+                       std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
-                      std::vector<bms_parser::ChartMeta> &chartMetas);
+                      std::vector<ChartMetaRecord> &chartMetas);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
@@ -119,15 +124,20 @@ public:
 
 private:
   bms_parser::ChartMeta ReadChartMeta(sqlite3_stmt *stmt);
+  ChartMetaRecord ReadChartMetaRecord(sqlite3_stmt *stmt);
   path_t ReadPath(sqlite3_stmt *stmt, int idx) {
 #ifdef _WIN32
+    if (sqlite3_column_type(stmt, idx) == SQLITE_NULL) {
+      return {};
+    }
     int n = sqlite3_column_bytes(stmt, idx);
     const auto utf8 = std::string(
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx)), n);
     const path_t t = utf8_to_path_t(utf8);
 #else
-    const path_t t =
+    const auto *text =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+    const path_t t = text != nullptr ? path_t(text) : path_t();
 #endif
     return t;
   }

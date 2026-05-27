@@ -4,19 +4,22 @@
 #include "ImageView.h"
 #include <SDL2/SDL.h>
 #include <string>
-#include "../bms_parser.hpp"
+#include "../ChartDBHelper.h"
 
 class ChartListItemView : public View {
 public:
   ChartListItemView(int x, int y, int width, int height,
-                    const bms_parser::ChartMeta &meta);
+                    const ChartMetaRecord &record);
 
-  void setMeta(const bms_parser::ChartMeta &meta);
+  void setMeta(const ChartMetaRecord &record);
   void setClearRank(int clearRank);
   void onSelected() override;
   void onUnselected() override;
 
 private:
+  void applyTextColors(bool selected);
+
+  bool unavailable = false;
   View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;
