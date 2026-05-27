@@ -4,9 +4,8 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
-#include <cctype>
 #include <limits>
-#include <unordered_set>
+#include <string_view>
 
 namespace main_menu_library {
 
@@ -28,55 +27,22 @@ std::string folderKeyForCourse(int courseId) {
 }
 
 namespace {
-std::string columnText(sqlite3_stmt *stmt, int column) {
+std::string_view columnText(sqlite3_stmt *stmt, int column) {
   const auto *text =
       reinterpret_cast<const char *>(sqlite3_column_text(stmt, column));
-  return text != nullptr ? std::string(text) : "";
-}
-
-std::string normalizedHashKey(std::string value) {
-  value.erase(value.begin(), std::find_if(value.begin(), value.end(),
-                                          [](unsigned char c) {
-                                            return std::isspace(c) == 0;
-                                          }));
-  value.erase(std::find_if(value.rbegin(), value.rend(),
-                           [](unsigned char c) {
-                             return std::isspace(c) == 0;
-                           }).base(),
-              value.end());
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) {
-                   return static_cast<char>(std::tolower(c));
-                 });
-  return value;
-}
-
-std::string chartIdentity(const std::string &sha256, const std::string &md5,
-                          const std::string &path,
-                          const std::string &fallback = "") {
-  const std::string normalizedSha = normalizedHashKey(sha256);
-  if (!normalizedSha.empty()) {
-    return "sha256:" + normalizedSha;
+  if (text == nullptr) {
+    return {};
   }
-  const std::string normalizedMd5 = normalizedHashKey(md5);
-  if (!normalizedMd5.empty()) {
-    return "md5:" + normalizedMd5;
-  }
-  if (!path.empty()) {
-    return "path:" + path;
-  }
-  return fallback;
+  return {text, static_cast<size_t>(sqlite3_column_bytes(stmt, column))};
 }
 
 struct FolderClearAggregate {
-  std::unordered_set<std::string> chartIds;
+  bool hasChart = false;
   int minimumClearRank = std::numeric_limits<int>::max();
   bool hasUnclearedChart = false;
 
-  void addChart(const std::string &identity, int clearRank) {
-    if (identity.empty() || !chartIds.insert(identity).second) {
-      return;
-    }
+  void addChart(int clearRank) {
+    hasChart = true;
     if (clearRank < kClearTypeAssistedEasyClearRank) {
       hasUnclearedChart = true;
       return;
@@ -85,7 +51,7 @@ struct FolderClearAggregate {
   }
 
   [[nodiscard]] int clearRank() const {
-    if (chartIds.empty() || hasUnclearedChart ||
+    if (!hasChart || hasUnclearedChart ||
         minimumClearRank == std::numeric_limits<int>::max()) {
       return kNoClearTypeRank;
     }
@@ -96,11 +62,12 @@ struct FolderClearAggregate {
 void addFolderChart(
     std::unordered_map<std::string, FolderClearAggregate> &aggregates,
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
-    const std::string &sha256, const std::string &md5,
-    const std::string &path, const std::string &fallbackIdentity = "") {
-  aggregates[folderKey].addChart(
-      chartIdentity(sha256, md5, path, fallbackIdentity),
-      scoreRanks.bestRankForHashes(sha256, md5, path));
+    std::string_view sha256, std::string_view md5, std::string_view path) {
+  auto &aggregate = aggregates[folderKey];
+  if (aggregate.hasUnclearedChart) {
+    return;
+  }
+  aggregate.addChart(scoreRanks.bestRankForStoredKeys(sha256, md5, path));
 }
 } // namespace
 
@@ -129,24 +96,42 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
                    columnText(row, 1), columnText(row, 2));
   });
 
+  int currentTableId = 0;
+  std::string currentTableKey;
+  std::string currentLevel;
+  std::string currentLevelKey;
   runQuery(
-      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5, '', dte.id "
-      "FROM difficulty_table_entries dte",
+      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5, '' "
+      "FROM difficulty_table_entries dte "
+      "ORDER BY dte.table_id, dte.level",
       [&](sqlite3_stmt *row) {
         const int tableId = sqlite3_column_int(row, 0);
-        const std::string level = columnText(row, 1);
-        const std::string sha256 = columnText(row, 2);
-        const std::string md5 = columnText(row, 3);
-        const std::string path = columnText(row, 4);
-        const std::string fallbackIdentity =
-            "difficulty-entry:" + std::to_string(sqlite3_column_int(row, 5));
-        addFolderChart(aggregates, scoreRanks, folderKeyForTable(tableId),
-                       sha256, md5, path, fallbackIdentity);
-        addFolderChart(aggregates, scoreRanks,
-                       folderKeyForLevel(tableId, level), sha256, md5, path,
-                       fallbackIdentity);
+        const std::string_view level = columnText(row, 1);
+        if (tableId != currentTableId) {
+          currentTableId = tableId;
+          currentTableKey = folderKeyForTable(tableId);
+          currentLevel.clear();
+          currentLevelKey.clear();
+        }
+        if (level != std::string_view(currentLevel)) {
+          currentLevel = std::string(level);
+          currentLevelKey = folderKeyForLevel(tableId, currentLevel);
+        }
+
+        const std::string_view sha256 = columnText(row, 2);
+        const std::string_view md5 = columnText(row, 3);
+        const std::string_view path = columnText(row, 4);
+        addFolderChart(aggregates, scoreRanks, currentTableKey, sha256, md5,
+                       path);
+        addFolderChart(aggregates, scoreRanks, currentLevelKey, sha256, md5,
+                       path);
       });
 
+  int currentCourseId = 0;
+  int currentCourseGroupTableId = 0;
+  std::string currentCourseGroupName;
+  std::string currentCourseGroupKey;
+  std::string currentCourseKey;
   runQuery(
       "SELECT dc.id, dc.table_id, dc.group_name, cm.sha256, cm.md5, cm.path "
       "FROM difficulty_courses dc "
@@ -157,16 +142,27 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
-        const std::string groupName = columnText(row, 2);
-        const std::string sha256 = columnText(row, 3);
-        const std::string md5 = columnText(row, 4);
-        const std::string path = columnText(row, 5);
+        const std::string_view groupName = columnText(row, 2);
+        if (tableId != currentCourseGroupTableId ||
+            groupName != std::string_view(currentCourseGroupName)) {
+          currentCourseGroupTableId = tableId;
+          currentCourseGroupName = std::string(groupName);
+          currentCourseGroupKey =
+              folderKeyForCourseGroup(tableId, currentCourseGroupName);
+        }
+        if (courseId != currentCourseId) {
+          currentCourseId = courseId;
+          currentCourseKey = folderKeyForCourse(courseId);
+        }
+
+        const std::string_view sha256 = columnText(row, 3);
+        const std::string_view md5 = columnText(row, 4);
+        const std::string_view path = columnText(row, 5);
         addFolderChart(aggregates, scoreRanks, "courses", sha256, md5, path);
-        addFolderChart(aggregates, scoreRanks,
-                       folderKeyForCourseGroup(tableId, groupName), sha256,
+        addFolderChart(aggregates, scoreRanks, currentCourseGroupKey, sha256,
                        md5, path);
-        addFolderChart(aggregates, scoreRanks, folderKeyForCourse(courseId),
-                       sha256, md5, path);
+        addFolderChart(aggregates, scoreRanks, currentCourseKey, sha256, md5,
+                       path);
       });
 
   std::unordered_map<std::string, int> folderClearRanks;

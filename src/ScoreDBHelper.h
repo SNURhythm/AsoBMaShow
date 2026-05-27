@@ -5,18 +5,32 @@
 #include "sqlite3.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
+struct TransparentStringHash {
+  using is_transparent = void;
+
+  [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept;
+};
+
+using ScoreRankMap =
+    std::unordered_map<std::string, int, TransparentStringHash, std::equal_to<>>;
+
 struct ScoreClearRankCache {
-  std::unordered_map<std::string, int> rankBySha256;
-  std::unordered_map<std::string, int> rankByMd5;
-  std::unordered_map<std::string, int> rankByPath;
+  ScoreRankMap rankBySha256;
+  ScoreRankMap rankByMd5;
+  ScoreRankMap rankByPath;
 
   [[nodiscard]] int bestRankFor(const bms_parser::ChartMeta &chartMeta) const;
   [[nodiscard]] int bestRankForHashes(const std::string &sha256,
                                       const std::string &md5,
                                       const std::string &path = "") const;
+  [[nodiscard]] int bestRankForStoredKeys(std::string_view sha256,
+                                          std::string_view md5,
+                                          std::string_view path = "") const;
 };
 
 class ScoreDBHelper {

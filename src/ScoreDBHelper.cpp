@@ -10,7 +10,9 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
@@ -78,8 +80,7 @@ int judgeCount(const RhythmState &state, Judgement judgement) {
   return it == state.judgeCount.end() ? 0 : it->second;
 }
 
-void storeBestRank(std::unordered_map<std::string, int> &ranks,
-                   const std::string &key, int rank) {
+void storeBestRank(ScoreRankMap &ranks, const std::string &key, int rank) {
   if (key.empty()) {
     return;
   }
@@ -90,8 +91,7 @@ void storeBestRank(std::unordered_map<std::string, int> &ranks,
 }
 
 void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
-                            std::unordered_map<std::string, int> &ranks,
-                            bool hashColumn) {
+                            ScoreRankMap &ranks, bool hashColumn) {
   const std::string query =
       std::string("SELECT ") + columnName + ", MAX(clear_type) FROM scores "
       "WHERE " + columnName + " IS NOT NULL AND " + columnName +
@@ -117,6 +117,11 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
 }
 } // namespace
 
+std::size_t TransparentStringHash::operator()(std::string_view value) const
+    noexcept {
+  return std::hash<std::string_view>{}(value);
+}
+
 int ScoreClearRankCache::bestRankFor(
     const bms_parser::ChartMeta &chartMeta) const {
   const auto chartPath =
@@ -127,17 +132,41 @@ int ScoreClearRankCache::bestRankFor(
 int ScoreClearRankCache::bestRankForHashes(const std::string &sha256,
                                            const std::string &md5,
                                            const std::string &path) const {
-  const auto shaIt = rankBySha256.find(normalizedHash(sha256));
+  const std::string normalizedSha = normalizedHash(sha256);
+  const auto shaIt = rankBySha256.find(normalizedSha);
   if (shaIt != rankBySha256.end()) {
     return shaIt->second;
   }
 
-  const auto md5It = rankByMd5.find(normalizedHash(md5));
+  const std::string normalizedMd5 = normalizedHash(md5);
+  const auto md5It = rankByMd5.find(normalizedMd5);
   if (md5It != rankByMd5.end()) {
     return md5It->second;
   }
 
-  const auto pathIt = rankByPath.find(normalizedPath(path));
+  const std::string normalizedChartPath = normalizedPath(path);
+  const auto pathIt = rankByPath.find(normalizedChartPath);
+  if (pathIt != rankByPath.end()) {
+    return pathIt->second;
+  }
+
+  return kNoClearTypeRank;
+}
+
+int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
+                                               std::string_view md5,
+                                               std::string_view path) const {
+  const auto shaIt = rankBySha256.find(sha256);
+  if (shaIt != rankBySha256.end()) {
+    return shaIt->second;
+  }
+
+  const auto md5It = rankByMd5.find(md5);
+  if (md5It != rankByMd5.end()) {
+    return md5It->second;
+  }
+
+  const auto pathIt = rankByPath.find(path);
   if (pathIt != rankByPath.end()) {
     return pathIt->second;
   }
