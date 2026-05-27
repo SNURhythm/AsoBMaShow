@@ -93,7 +93,7 @@ platform :ios do
                      latest_testflight_build_number(initial_build_number: 0) + 1
                    end
 
-    xcargs = "-allowProvisioningUpdates"
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}"
     build_options = {
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",
@@ -103,14 +103,7 @@ platform :ios do
     }
 
     if distribute_to_firebase
-      increment_build_number(
-        build_number: build_number,
-        xcodeproj: "AsoBMaShow.xcodeproj",
-        skip_info_plist: true
-      )
       build_options[:derived_data_path] = firebase_derived_data_path
-    else
-      build_options[:xcargs] = "#{xcargs} CURRENT_PROJECT_VERSION=#{build_number}"
     end
 
     build_app(**build_options)
