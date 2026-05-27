@@ -38,6 +38,7 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
+  inputHandler->discardPendingTouchEvents();
   inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
   inputHandler->startListenTouch();
@@ -229,6 +230,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (context.jukebox.isPaused()) {
     return nullptr;
   }
+  if (isGamePaused || state == nullptr || !state->isPlaying ||
+      state->isEnding) {
+    return nullptr;
+  }
   auto mainLaneIt = lanePressed.find(mainLane);
   std::array<int, 2> candidates{};
   size_t candidateCount = 0;
@@ -241,25 +246,6 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     candidates[candidateCount++] = compensateLane;
   }
   if (candidateCount == 0) {
-    return nullptr;
-  }
-
-  if (isGamePaused) {
-    return nullptr;
-  }
-
-  if (state == nullptr) {
-    if (mainLaneIt != lanePressed.end()) {
-      mainLaneIt->second = true;
-    }
-    renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
-    return nullptr;
-  }
-  if (!state->isPlaying) {
-    if (mainLaneIt != lanePressed.end()) {
-      mainLaneIt->second = true;
-    }
-    updateLaneStateText();
     return nullptr;
   }
 
@@ -313,6 +299,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   return nullptr;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
+  if (isGamePaused || state == nullptr || !state->isPlaying ||
+      state->isEnding) {
+    return nullptr;
+  }
   auto laneIt = lanePressed.find(lane);
   if (laneIt == lanePressed.end() || !laneIt->second) {
     return nullptr;
@@ -322,13 +312,6 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   renderer->onLaneReleased(lane, nowMicros());
   const auto releasedTime =
       getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
-
-  if (state == nullptr) {
-    return nullptr;
-  }
-  if (!state->isPlaying) {
-    return nullptr;
-  }
 
   const auto &Measures = chart->Measures;
 

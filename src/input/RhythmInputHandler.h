@@ -45,6 +45,7 @@ public:
   bool startListenSDL();
   bool startListenTouch();
   void stopListen();
+  void discardPendingTouchEvents();
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
   std::map<SDL_Keycode, int> keyMap;
