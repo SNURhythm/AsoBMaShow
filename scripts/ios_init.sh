@@ -71,11 +71,7 @@ install_pods() {
   link_cache_dir "${IOS_DIR}/Pods" "${pods_cache}"
 
   cd "${IOS_DIR}"
-  if [ -f "Pods/Manifest.lock" ] && cmp -s "Podfile.lock" "Pods/Manifest.lock"; then
-    echo "Using cached CocoaPods install: ${pods_cache}"
-  else
-    bundle exec pod install --deployment
-  fi
+  bundle exec pod install --deployment
 }
 
 prepare_bgfx_project
