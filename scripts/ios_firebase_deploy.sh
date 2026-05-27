@@ -4,6 +4,7 @@ export LANG=en_US.UTF-8
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="${ROOT_DIR}/ios/Xcode/AsoBMaShow"
 SKIP_INIT=0
+BUILD_ONLY=0
 ENV_FILES=(
   "${ROOT_DIR}/.env"
   "${ROOT_DIR}/.env.local"
@@ -15,19 +16,21 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/ios_firebase_deploy.sh [options]
 
-Runs the iOS Fastlane beta lane in its Firebase App Distribution mode.
+Deploys through the iOS Fastlane beta lane in its Firebase App Distribution mode.
+With --build-only, runs a plain xcodebuild build and skips archive/sign/upload.
 Secrets are read from the current environment or optional shell-compatible .env files.
 
 Options:
   --env-file PATH       Load an additional env file before running fastlane.
   --skip-init           Skip scripts/ios_init.sh.
+  --build-only          Build only; do not archive, sign, or upload.
   --build-number N      Set GITHUB_RUN_NUMBER for the Firebase build number.
   --groups CSV          Set FIREBASE_APP_DISTRIBUTION_GROUPS.
   --testers CSV         Set FIREBASE_APP_DISTRIBUTION_TESTERS.
   --release-notes TEXT  Set FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES.
   -h, --help            Show this help.
 
-Required signing env:
+Required signing env for deployment:
   APP_STORE_KEY
   KEYCHAIN_PASSWORD
   MATCH_PASSWORD
@@ -36,7 +39,7 @@ Required signing env:
 Optional App Store Connect env:
   APP_STORE_KEY_ID defaults to 7459U6UPUW.
 
-Firebase auth must be available through one of:
+Firebase auth for deployment must be available through one of:
   FIREBASE_SERVICE_CREDENTIALS_JSON, FIREBASE_CLI_TOKEN, FIREBASE_TOKEN,
   GOOGLE_APPLICATION_CREDENTIALS, cached Firebase CLI login, or gcloud ADC.
 USAGE
@@ -51,6 +54,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-init)
       SKIP_INIT=1
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=1
       shift
       ;;
     --build-number)
@@ -168,6 +175,22 @@ has_firebase_auth() {
   return 1
 }
 
+run_build_only() {
+  local derived_data_path="${IOS_DERIVED_DATA_PATH:-${HOME}/Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI}"
+
+  cd "${IOS_DIR}"
+  echo "Building iOS app only from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"
+  xcodebuild \
+    -workspace AsoBMaShow.xcworkspace \
+    -scheme AsoBMaShow \
+    -derivedDataPath "${derived_data_path}" \
+    -destination 'generic/platform=iOS' \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_IDENTITY= \
+    build
+}
+
 for env_file in "${ENV_FILES[@]}"; do
   load_env_file "${env_file}"
 done
@@ -194,6 +217,23 @@ if [ -z "${FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES:-}" ]; then
   )
 fi
 
+if ! git -C "${ROOT_DIR}" diff --quiet || ! git -C "${ROOT_DIR}" diff --cached --quiet; then
+  if [ "${BUILD_ONLY}" -eq 1 ]; then
+    echo "Warning: building with uncommitted local changes." >&2
+  else
+    echo "Warning: deploying with uncommitted local changes." >&2
+  fi
+fi
+
+if [ "${SKIP_INIT}" -eq 0 ]; then
+  "${ROOT_DIR}/scripts/ios_init.sh"
+fi
+
+if [ "${BUILD_ONLY}" -eq 1 ]; then
+  run_build_only
+  exit 0
+fi
+
 require_env \
   APP_STORE_KEY \
   KEYCHAIN_PASSWORD \
@@ -205,14 +245,6 @@ if ! has_firebase_auth; then
   echo "Set FIREBASE_SERVICE_CREDENTIALS_JSON, FIREBASE_CLI_TOKEN, FIREBASE_TOKEN, GOOGLE_APPLICATION_CREDENTIALS," >&2
   echo "or login with firebase-tools/gcloud before running this script." >&2
   exit 1
-fi
-
-if ! git -C "${ROOT_DIR}" diff --quiet || ! git -C "${ROOT_DIR}" diff --cached --quiet; then
-  echo "Warning: deploying with uncommitted local changes." >&2
-fi
-
-if [ "${SKIP_INIT}" -eq 0 ]; then
-  "${ROOT_DIR}/scripts/ios_init.sh"
 fi
 
 cd "${IOS_DIR}"
