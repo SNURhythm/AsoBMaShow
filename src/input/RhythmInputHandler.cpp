@@ -194,6 +194,16 @@ void RhythmInputHandler::stopListen() {
     }
   }
 }
+void RhythmInputHandler::discardPendingTouchEvents() {
+  fingerToLane.clear();
+  flickStates.clear();
+  cancelGraceExpiry.clear();
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::array<IOSRawTouchEvent, 64> pendingEvents{};
+  while (IOSPopRawTouchEvents(pendingEvents.data(), pendingEvents.size()) != 0) {
+  }
+#endif
+}
 void RhythmInputHandler::pumpPendingTouchEvents() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::array<IOSRawTouchEvent, 64> pendingEvents{};

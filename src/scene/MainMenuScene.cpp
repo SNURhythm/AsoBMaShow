@@ -505,9 +505,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setStyledBorderWidth(2);
   startButton->setOnClickListener([this, &context, buttonText]() {
     SDL_Log("Start button clicked");
+    if (willStart) {
+      return;
+    }
     auto selected = recyclerView->selectedIndex;
     SDL_Log("Selected: %d", selected);
-    if (selected >= 0 && selectedChart.load() != nullptr) {
+    if (selected >= 0) {
       willStart = true;
       buttonText->setText("Loading...");
 
@@ -517,6 +520,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
             ImageView::dropAllCache();
             if (loadThread.joinable()) {
               loadThread.join();
+            }
+            if (selectedChart.load() == nullptr) {
+              willStart = false;
+              buttonText->setText("Start");
+              return true;
             }
             context.jukebox.stop();
             context.sceneManager->changeScene(

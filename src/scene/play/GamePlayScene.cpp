@@ -38,6 +38,7 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   inputHandler = new RhythmInputHandler(this, chart->Meta);
+  inputHandler->discardPendingTouchEvents();
   inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
   inputHandler->startListenTouch();
@@ -229,6 +230,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (context.jukebox.isPaused()) {
     return nullptr;
   }
+  if (isGamePaused || state == nullptr || !state->isPlaying ||
+      state->isEnding) {
+    return nullptr;
+  }
   auto mainLaneIt = lanePressed.find(mainLane);
   std::array<int, 2> candidates{};
   size_t candidateCount = 0;
@@ -241,25 +246,6 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     candidates[candidateCount++] = compensateLane;
   }
   if (candidateCount == 0) {
-    return nullptr;
-  }
-
-  if (isGamePaused) {
-    return nullptr;
-  }
-
-  if (state == nullptr) {
-    if (mainLaneIt != lanePressed.end()) {
-      mainLaneIt->second = true;
-    }
-    renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
-    return nullptr;
-  }
-  if (!state->isPlaying) {
-    if (mainLaneIt != lanePressed.end()) {
-      mainLaneIt->second = true;
-    }
-    updateLaneStateText();
     return nullptr;
   }
 
@@ -313,6 +299,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   return nullptr;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
+  if (isGamePaused || state == nullptr || !state->isPlaying ||
+      state->isEnding) {
+    return nullptr;
+  }
   auto laneIt = lanePressed.find(lane);
   if (laneIt == lanePressed.end() || !laneIt->second) {
     return nullptr;
@@ -322,13 +312,6 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   renderer->onLaneReleased(lane, nowMicros());
   const auto releasedTime =
       getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
-
-  if (state == nullptr) {
-    return nullptr;
-  }
-  if (!state->isPlaying) {
-    return nullptr;
-  }
 
   const auto &Measures = chart->Measures;
 
@@ -392,7 +375,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           const auto poorResult = JudgeResult(Poor, judgedTime - timeline->Timing);
           onJudge(poorResult);
         }
-      } else if (timeline->Timing <= time) {
+      } else if (timeline->Timing <= judgedTime) {
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
           if (note == nullptr) {
@@ -411,7 +394,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (!longNote->IsHolding) {
                 continue;
               }
-              longNote->Release(time);
+              longNote->Release(judgedTime);
               const auto judgeResult =
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
               onJudge(judgeResult);
@@ -423,8 +406,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           if (options.autoPlay) // NormalNote or LongNote's head
           {
-            const JudgeResult judgeResult = pressNote(note, time);
-            renderer->onLanePressed(note->Lane, judgeResult, time);
+            const JudgeResult judgeResult = pressNote(note, judgedTime);
+            renderer->onLanePressed(note->Lane, judgeResult, visualNow);
             if (!note->IsLongNote()) {
               renderer->onLaneReleased(note->Lane, visualNow);
             }
