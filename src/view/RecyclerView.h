@@ -68,14 +68,14 @@ private:
         if (selectedIndex > 0) {
           selectedIndex--;
         } else {
-          selectedIndex = items.size() - 1;
+          selectedIndex = itemCount() - 1;
         }
-        if (!items.empty()) {
+        if (itemCount() > 0) {
           if (onUnselected && !isInitialSelection) {
-            onUnselected(items[prevIndex], prevIndex);
+            onUnselected(itemAt(prevIndex), prevIndex);
           }
           if (onSelected) {
-            onSelected(items[selectedIndex], selectedIndex);
+            onSelected(itemAt(selectedIndex), selectedIndex);
           }
         }
 
@@ -83,25 +83,24 @@ private:
         changed = true;
         bool isInitialSelection = selectedIndex == -1;
         int prevIndex = selectedIndex;
-        if (selectedIndex < items.size() - 1) {
+        if (selectedIndex < itemCount() - 1) {
           selectedIndex++;
         } else {
           selectedIndex = 0;
         }
-        if (!items.empty()) {
+        if (itemCount() > 0) {
           if (onUnselected && !isInitialSelection) {
-            onUnselected(items[prevIndex], prevIndex);
+            onUnselected(itemAt(prevIndex), prevIndex);
           }
           if (onSelected) {
-            onSelected(items[selectedIndex], selectedIndex);
+            onSelected(itemAt(selectedIndex), selectedIndex);
           }
         }
       }
       // scroll to the selected item
       if (changed) {
         const float previousOffset = scrollOffset;
-        int itemsSize =
-            std::max(1, static_cast<int>(items.size())) * itemHeight;
+        int itemsSize = std::max(1, itemCount()) * itemHeight;
         int selectedY = selectedIndex * itemHeight;
         if (selectedY < scrollOffset) {
           scrollOffset = selectedY;
@@ -169,13 +168,13 @@ private:
       }
       touchMomentum.stop();
       int index = (uiY - this->getY() + scrollOffset) / itemHeight;
-      if (index >= 0 && index < items.size()) {
+      if (index >= 0 && index < itemCount()) {
         if (selectedIndex != -1 && onUnselected) {
-          onUnselected(items[selectedIndex], selectedIndex);
+          onUnselected(itemAt(selectedIndex), selectedIndex);
         }
         selectedIndex = index;
         if (onSelected) {
-          onSelected(items[selectedIndex], selectedIndex);
+          onSelected(itemAt(selectedIndex), selectedIndex);
         }
       }
       break;
@@ -265,6 +264,8 @@ public:
   bool reserveScrollbarGutter = false;
 
   inline void setItems(std::vector<T> &&items) {
+    itemProvider = nullptr;
+    externalItemCount = 0;
     this->items = std::move(items);
     // reset selected index
     selectedIndex = -1;
@@ -275,6 +276,8 @@ public:
   }
 
   inline void setItems(const std::vector<T> &items) {
+    itemProvider = nullptr;
+    externalItemCount = 0;
     this->items = items;
     // reset selected index
     selectedIndex = -1;
@@ -284,23 +287,42 @@ public:
     updateVisibleItems();
   }
 
+  inline void setItemProvider(int count,
+                              std::function<const T &(int)> provider) {
+    items.clear();
+    externalItemCount = std::max(0, count);
+    itemProvider = std::move(provider);
+    selectedIndex = -1;
+    scrollOffset = 0;
+    visibleItemsNeedRebind = true;
+    updateVisibleItems();
+  }
+
   inline void push(T item) {
+    itemProvider = nullptr;
+    externalItemCount = 0;
     items.push_back(item);
     updateVisibleItems();
   }
 
   inline void pop() {
+    itemProvider = nullptr;
+    externalItemCount = 0;
     items.pop_back();
     updateVisibleItems();
   }
 
   inline void remove(int index) {
+    itemProvider = nullptr;
+    externalItemCount = 0;
     items.erase(items.begin() + index);
     updateVisibleItems();
   }
 
   inline void clear() {
     items.clear();
+    itemProvider = nullptr;
+    externalItemCount = 0;
     for (auto &entry : viewEntries) {
       recycleView(entry.first);
     }
@@ -308,9 +330,9 @@ public:
     idxToView.clear();
   }
 
-  inline const T &get(int index) const { return items[index]; }
+  inline const T &get(int index) const { return itemAt(index); }
 
-  inline int size() { return items.size(); }
+  inline int size() const { return itemCount(); }
 
   inline const std::vector<T> &getItems() const { return items; }
 
@@ -333,6 +355,8 @@ public:
 
 private:
   std::vector<T> items;
+  int externalItemCount = 0;
+  std::function<const T &(int)> itemProvider;
   std::deque<std::pair<View *, T>> viewEntries; // Pair of view and item
 
   std::deque<View *> recycledViewEntries; // Pool of recycled views
@@ -363,7 +387,15 @@ private:
   static constexpr Uint64 kScrollbarFadeOutMs = 480;
 
   inline bool canScroll() const {
-    return static_cast<int>(items.size()) * itemHeight > this->getHeight();
+    return itemCount() * itemHeight > this->getHeight();
+  }
+
+  inline int itemCount() const {
+    return itemProvider ? externalItemCount : static_cast<int>(items.size());
+  }
+
+  inline const T &itemAt(int index) const {
+    return itemProvider ? itemProvider(index) : items[index];
   }
 
   inline int visibleItemWidth() const {
@@ -462,7 +494,7 @@ private:
     }
 
     const int itemsSize =
-        std::max(1, static_cast<int>(items.size())) * itemHeight;
+        std::max(1, itemCount()) * itemHeight;
     const int trackHeight =
         std::max(0, this->getHeight() - (kScrollbarVerticalInset * 2));
     if (trackHeight <= 0) {
@@ -492,7 +524,7 @@ private:
 
   inline void clampScrollOffset() {
     const int itemsSize =
-        std::max(1, static_cast<int>(items.size())) * itemHeight;
+        std::max(1, itemCount()) * itemHeight;
     const float maxOffset =
         std::max(0.0f, static_cast<float>(itemsSize - this->getHeight()));
     scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
@@ -520,9 +552,9 @@ private:
     int startIndex = getStartIndex();
     int endIndex = getEndIndex();
     // if all items are visible
-    if (items.size() * itemHeight < this->getHeight()) {
+    if (itemCount() * itemHeight < this->getHeight()) {
       startIndex = 0;
-      endIndex = items.size() - 1;
+      endIndex = itemCount() - 1;
       scrollOffset = 0;
     }
 
@@ -532,7 +564,7 @@ private:
     LayoutBatchScope layoutBatch;
     // Iterate over the range of visible items
     for (int i = startIndex; i <= endIndex; ++i) {
-      const T &item = items[i];
+      const T &item = itemAt(i);
       View *view = nullptr;
       bool shouldBind = false;
 
@@ -594,7 +626,7 @@ private:
         this->getHeight(); // Assuming RecyclerView has a getHeight method
     int lastPossibleIndex =
         (scrollOffset + viewportHeight) / itemHeight + bottomMargin;
-    return std::min(static_cast<int>(items.size()) - 1, lastPossibleIndex);
+    return std::min(itemCount() - 1, lastPossibleIndex);
   }
 
   inline View *getViewForItem(const T &item) {

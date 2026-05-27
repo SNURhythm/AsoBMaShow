@@ -110,6 +110,65 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
 }
 } // namespace
 
+void MainMenuScene::ChartListPageCache::reset(
+    sqlite3 *database, const ChartMetaQuery &chartQuery, int count) {
+  db = database;
+  query = chartQuery;
+  query.limit = 0;
+  query.offset = 0;
+  totalCount = std::max(0, count);
+  clear();
+}
+
+void MainMenuScene::ChartListPageCache::clear() {
+  pages.clear();
+  pageOrder.clear();
+}
+
+const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(
+    int index) const {
+  if (db == nullptr || index < 0 || index >= totalCount) {
+    return fallbackRecord;
+  }
+
+  const int pageIndex = index / pageSize;
+  auto pageIt = pages.find(pageIndex);
+  if (pageIt == pages.end()) {
+    ChartMetaQuery pageQuery = query;
+    pageQuery.limit = pageSize;
+    pageQuery.offset = pageIndex * pageSize;
+
+    std::vector<ChartMetaRecord> records;
+    records.reserve(pageSize);
+    ChartDBHelper::GetInstance().QueryChartMeta(db, pageQuery, records);
+    pageIt = pages.emplace(pageIndex, std::move(records)).first;
+  }
+  touchPage(pageIndex);
+
+  const int localIndex = index - (pageIndex * pageSize);
+  if (localIndex < 0 ||
+      localIndex >= static_cast<int>(pageIt->second.size())) {
+    return fallbackRecord;
+  }
+  return pageIt->second[localIndex];
+}
+
+void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
+  pageOrder.erase(std::remove(pageOrder.begin(), pageOrder.end(), pageIndex),
+                  pageOrder.end());
+  pageOrder.push_back(pageIndex);
+
+  while (static_cast<int>(pages.size()) > maxPages && !pageOrder.empty()) {
+    const int victim = pageOrder.front();
+    pageOrder.pop_front();
+    if (victim == pageIndex && pages.size() == 1) {
+      pageOrder.push_back(victim);
+      break;
+    }
+    pages.erase(victim);
+  }
+}
+
 void MainMenuScene::init() {
   // Initialize the scene
   db = ChartDBHelper::GetInstance().Connect();
@@ -852,9 +911,12 @@ void MainMenuScene::reloadChartList() {
     break;
   }
 
-  std::vector<ChartMetaRecord> chartMetas;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, chartMetas);
-  recyclerView->setItems(std::move(chartMetas));
+  const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
+  chartListCache.reset(db, query, count);
+  recyclerView->setItemProvider(
+      count, [this](int index) -> const ChartMetaRecord & {
+        return chartListCache.get(index);
+      });
 }
 
 void MainMenuScene::reloadScoreClearRanks() {

@@ -8,6 +8,7 @@
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include <filesystem>
+#include <deque>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -73,6 +74,24 @@ private:
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
+  struct ChartListPageCache {
+    sqlite3 *db = nullptr;
+    ChartMetaQuery query;
+    int totalCount = 0;
+    int pageSize = 128;
+    int maxPages = 6;
+    mutable std::unordered_map<int, std::vector<ChartMetaRecord>> pages;
+    mutable std::deque<int> pageOrder;
+    mutable ChartMetaRecord fallbackRecord;
+
+    void reset(sqlite3 *database, const ChartMetaQuery &chartQuery, int count);
+    void clear();
+    [[nodiscard]] const ChartMetaRecord &get(int index) const;
+
+  private:
+    void touchPage(int pageIndex) const;
+  };
+  ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;

@@ -1063,7 +1063,10 @@ void ChartDBHelper::QueryChartMeta(
 
     query += " ORDER BY CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END, "
              "dte.sort_order, COALESCE(NULLIF(cm.title, ''), dte.title, '') "
-             "COLLATE NOCASE";
+             "COLLATE NOCASE, dte.id";
+    if (chartQuery.limit > 0) {
+      query += " LIMIT @limit OFFSET @offset";
+    }
 
     sqlite3_stmt *stmt = nullptr;
     int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
@@ -1087,6 +1090,10 @@ void ChartDBHelper::QueryChartMeta(
           lowerCopy(trimCopy(chartQuery.difficultyText));
       bindText(stmt, bindIndex++, difficulty);
       bindText(stmt, bindIndex++, "%" + difficulty + "%");
+    }
+    if (chartQuery.limit > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
+      sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
     }
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1174,7 +1181,10 @@ void ChartDBHelper::QueryChartMeta(
     query += "))";
   }
 
-  query += " ORDER BY cm.title";
+  query += " ORDER BY cm.title, cm.path";
+  if (chartQuery.limit > 0) {
+    query += " LIMIT @limit OFFSET @offset";
+  }
 
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
@@ -1213,12 +1223,206 @@ void ChartDBHelper::QueryChartMeta(
     bindText(stmt, bindIndex++, difficulty);
     bindText(stmt, bindIndex++, "%" + difficulty + "%");
   }
+  if (chartQuery.limit > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
+    sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
+  }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     chartMetas.push_back(std::move(ReadChartMetaRecord(stmt)));
   }
   sqlite3_finalize(stmt);
   populateDifficultyTableLabels(db, chartMetas);
+}
+
+int ChartDBHelper::CountChartMeta(sqlite3 *db,
+                                  const ChartMetaQuery &chartQuery) {
+  const bool queryDifficultyEntries =
+      chartQuery.tableId > 0 && !chartQuery.coursesOnly &&
+      chartQuery.courseId <= 0 && chartQuery.courseTableId <= 0 &&
+      chartQuery.courseGroupName.empty();
+  if (queryDifficultyEntries) {
+    std::string query = "SELECT COUNT(*) FROM difficulty_table_entries dte "
+                        "JOIN difficulty_tables dt ON dt.id = dte.table_id ";
+    if (!chartQuery.keyword.empty()) {
+      query +=
+          "LEFT JOIN chart_meta cm ON cm.path = ("
+          "SELECT cm_match.path FROM chart_meta cm_match "
+          "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
+          "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) "
+          "ORDER BY cm_match.title COLLATE NOCASE, cm_match.path LIMIT 1) ";
+    }
+    query += "WHERE dte.table_id = @table_id";
+
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    if (!chartQuery.keyword.empty()) {
+      query += " AND ";
+      query += kDifficultyEntrySearchText;
+      query += " LIKE @text";
+    }
+    if (!chartQuery.difficultyText.empty()) {
+      query +=
+          " AND (lower(dt.symbol || dte.level) = @difficulty "
+          "OR lower(dte.level) = @difficulty "
+          "OR lower(dt.name || ' ' || dt.symbol || dte.level) LIKE "
+          "@difficulty_like "
+          "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
+    }
+
+    sqlite3_stmt *stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+      std::cerr << "SQL error while counting difficulty entries: "
+                << sqlite3_errmsg(db) << "\n";
+      sqlite3_free(stmt);
+      return 0;
+    }
+
+    int bindIndex = 1;
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+    if (!chartQuery.tableLevel.empty()) {
+      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+    }
+    if (!chartQuery.keyword.empty()) {
+      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+    }
+    if (!chartQuery.difficultyText.empty()) {
+      const std::string difficulty =
+          lowerCopy(trimCopy(chartQuery.difficultyText));
+      bindText(stmt, bindIndex++, difficulty);
+      bindText(stmt, bindIndex++, "%" + difficulty + "%");
+    }
+
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return count;
+  }
+
+  std::string query = "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1";
+
+  if (!chartQuery.keyword.empty()) {
+    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
+             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
+  }
+
+  if (chartQuery.tableId > 0) {
+    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
+             "difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += "))";
+  }
+
+  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+      !chartQuery.courseGroupName.empty()) {
+    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
+             "difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE dce.sha256 != ''";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query +=
+        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
+        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+        "WHERE dce.md5 != ''";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += "))";
+  }
+
+  if (!chartQuery.difficultyText.empty()) {
+    const char *difficultyClause =
+        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
+        "OR lower(dte_filter.level) = @difficulty "
+        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
+        "dte_filter.level) LIKE @difficulty_like "
+        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
+        "@difficulty_like)";
+    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE dte_filter.sha256 != '' ";
+    query += difficultyClause;
+    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE dte_filter.md5 != '' ";
+    query += difficultyClause;
+    query += "))";
+  }
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
+              << "\n";
+    sqlite3_free(stmt);
+    return 0;
+  }
+
+  int bindIndex = 1;
+  if (!chartQuery.keyword.empty()) {
+    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (chartQuery.tableId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+    if (!chartQuery.tableLevel.empty()) {
+      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+    }
+  }
+  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+      !chartQuery.courseGroupName.empty()) {
+    if (chartQuery.courseId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
+    }
+    if (chartQuery.courseTableId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+    }
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    const std::string difficulty =
+        lowerCopy(trimCopy(chartQuery.difficultyText));
+    bindText(stmt, bindIndex++, difficulty);
+    bindText(stmt, bindIndex++, "%" + difficulty + "%");
+  }
+
+  int count = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    count = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return count;
 }
 
 bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
