@@ -18,9 +18,12 @@ public:
   void cleanupScene() override;
 
 private:
+  void saveScore();
+
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
   ISkin* skin = nullptr;
+  bool scoreSaved = false;
 };

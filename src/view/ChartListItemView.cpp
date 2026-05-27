@@ -1,4 +1,5 @@
 #include "ChartListItemView.h"
+#include "ClearLampColors.h"
 
 #include <cmath>
 #include <iomanip>
@@ -36,6 +37,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const bms_parser::ChartMeta &meta)
     : View(x, y, width, height) {
   (void)meta;
+  clearLamp = new View();
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
   textLayout = new View();
@@ -51,6 +53,9 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setPadding(Edge::All, 8)
       ->setPadding(Edge::End, 24)
       ->setGap(12);
+
+  clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
+  this->addView(clearLamp);
 
   // Stage file jacket
   artworkFrame->setWidth(84)
@@ -133,6 +138,14 @@ void ChartListItemView::setMeta(const bms_parser::ChartMeta &meta) {
     jacketImage->setImage(meta.Folder / meta.StageFile);
   } else {
     jacketImage->freeImage();
+  }
+}
+
+void ChartListItemView::setClearRank(int clearRank) {
+  if (hasClearLampColor(clearRank)) {
+    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+  } else {
+    clearLamp->clearBackgroundColor();
   }
 }
 

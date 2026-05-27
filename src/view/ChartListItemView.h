@@ -12,10 +12,12 @@ public:
                     const bms_parser::ChartMeta &meta);
 
   void setMeta(const bms_parser::ChartMeta &meta);
+  void setClearRank(int clearRank);
   void onSelected() override;
   void onUnselected() override;
 
 private:
+  View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;
   View *textLayout;

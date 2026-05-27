@@ -1,4 +1,5 @@
 #include "LibraryFolderItemView.h"
+#include "ClearLampColors.h"
 #include <algorithm>
 
 namespace {
@@ -15,6 +16,10 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   setPadding(Edge::All, 8);
   setPadding(Edge::End, 24);
   setGap(8);
+
+  clearLamp = new View();
+  clearLamp->setWidth(5)->setHeight(26)->setFlexShrink(0);
+  addView(clearLamp);
 
   labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   labelView->setVAlign(TextView::MIDDLE);
@@ -33,10 +38,15 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
 }
 
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
-                                    int count, bool selected) {
+                                    int count, bool selected, int clearRank) {
   itemDepth = depth;
   labelView->setText(indentLabel(label, itemDepth));
   countView->setText(count >= 0 ? std::to_string(count) : "");
+  if (hasClearLampColor(clearRank)) {
+    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+  } else {
+    clearLamp->clearBackgroundColor();
+  }
   if (selected) {
     onSelected();
   } else {

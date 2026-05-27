@@ -155,6 +155,7 @@ void GamePlayScene::reset() {
   context.jukebox.schedule(*chart, options.autoKeySound, isCancelled);
   context.jukebox.play();
   state = new RhythmState(chart, false);
+  state->gaugeType = options.gaugeType;
   state->isPlaying = true;
 }
 

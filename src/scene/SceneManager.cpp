@@ -48,6 +48,7 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     // Scene is in background, bring it to foreground
     currentScene = newScene;
     backgroundScenes.erase(it);
+    currentScene->onResume();
     // Don't call init() again since the scene is already initialized
   } else {
     // Normal scene change for new or registered scenes

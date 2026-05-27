@@ -16,6 +16,7 @@ public:
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>>
       deferred;
   virtual void init() = 0; // Initialize the scene
+  virtual void onResume() {}
   virtual EventHandleResult handleEvents(SDL_Event &event) {
     for (auto view : views) {
       if (!view->handleEvents(event)) {

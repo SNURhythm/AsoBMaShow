@@ -2,6 +2,7 @@
 #include "../view/RecyclerView.h"
 #include "Scene.h"
 #include "../ChartDBHelper.h"
+#include "../ScoreDBHelper.h"
 #include "../path.h"
 #include "../view/ImageView.h"
 #include "../view/TextInputBox.h"
@@ -14,13 +15,16 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <stop_token>
+#include <unordered_map>
 
 class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
   void init() override;
+  void onResume() override;
 
   void update(float dt) override;
   void renderScene() override;
@@ -62,6 +66,7 @@ private:
     int courseId = 0;
     int courseTableId = 0;
     std::string courseGroupName;
+    int clearRank = kNoClearTypeRank;
   };
 
   RecyclerView<bms_parser::ChartMeta> *recyclerView = nullptr;
@@ -74,6 +79,9 @@ private:
   TextView *tableImportStatus = nullptr;
 
   LibraryFolderItem activeFolder;
+  ScoreClearRankCache scoreClearRanks;
+  std::uint64_t scoreClearRanksRevision = 0;
+  std::unordered_map<std::string, int> folderClearRanks;
   std::string searchText;
   std::string difficultyText;
   std::string tableUrlText;
@@ -87,6 +95,10 @@ private:
   void initView(ApplicationContext &context);
   void reloadFolderItems();
   void reloadChartList();
+  void reloadScoreClearRanks();
+  void refreshScoreClearRanksIfNeeded();
+  int clearRankForChart(const bms_parser::ChartMeta &chartMeta) const;
+  int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);
   void requestTableImportStatus(const std::string &text,
                                 const SDL_Color &color);

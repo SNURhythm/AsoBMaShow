@@ -1,6 +1,8 @@
 #include "MainMenuScene.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
+#include <algorithm>
+#include <cctype>
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -10,6 +12,9 @@
 #include "../video/transcode.h"
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
 #ifdef _WIN32
 #include <windows.h>
 
@@ -79,6 +84,77 @@ std::string folderKeyForCourseGroup(int tableId, const std::string &groupName) {
 std::string folderKeyForCourse(int courseId) {
   return "course:" + std::to_string(courseId);
 }
+
+std::string columnText(sqlite3_stmt *stmt, int column) {
+  const auto *text =
+      reinterpret_cast<const char *>(sqlite3_column_text(stmt, column));
+  return text != nullptr ? std::string(text) : "";
+}
+
+std::string normalizedHashKey(std::string value) {
+  value.erase(value.begin(), std::find_if(value.begin(), value.end(),
+                                          [](unsigned char c) {
+                                            return std::isspace(c) == 0;
+                                          }));
+  value.erase(std::find_if(value.rbegin(), value.rend(),
+                           [](unsigned char c) {
+                             return std::isspace(c) == 0;
+                           }).base(),
+              value.end());
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  return value;
+}
+
+std::string chartIdentity(const std::string &sha256, const std::string &md5,
+                          const std::string &path) {
+  const std::string normalizedSha = normalizedHashKey(sha256);
+  if (!normalizedSha.empty()) {
+    return "sha256:" + normalizedSha;
+  }
+  const std::string normalizedMd5 = normalizedHashKey(md5);
+  if (!normalizedMd5.empty()) {
+    return "md5:" + normalizedMd5;
+  }
+  return "path:" + path;
+}
+
+struct FolderClearAggregate {
+  std::unordered_set<std::string> chartIds;
+  int minimumClearRank = std::numeric_limits<int>::max();
+  bool hasUnclearedChart = false;
+
+  void addChart(const std::string &identity, int clearRank) {
+    if (identity.empty() || !chartIds.insert(identity).second) {
+      return;
+    }
+    if (clearRank < kClearTypeAssistedEasyClearRank) {
+      hasUnclearedChart = true;
+      return;
+    }
+    minimumClearRank = std::min(minimumClearRank, clearRank);
+  }
+
+  [[nodiscard]] int clearRank() const {
+    if (chartIds.empty() || hasUnclearedChart ||
+        minimumClearRank == std::numeric_limits<int>::max()) {
+      return kNoClearTypeRank;
+    }
+    return minimumClearRank;
+  }
+};
+
+void addFolderChart(
+    std::unordered_map<std::string, FolderClearAggregate> &aggregates,
+    const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
+    const std::string &sha256, const std::string &md5,
+    const std::string &path) {
+  aggregates[folderKey].addChart(
+      chartIdentity(sha256, md5, path),
+      scoreRanks.bestRankForHashes(sha256, md5, path));
+}
 } // namespace
 
 void MainMenuScene::init() {
@@ -89,6 +165,8 @@ void MainMenuScene::init() {
   checkEntriesThread =
       std::jthread(CheckEntries, std::ref(context), std::ref(*this));
 }
+
+void MainMenuScene::onResume() { requestLibraryReload(true); }
 
 void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
                                  ApplicationContext &context,
@@ -209,6 +287,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item);
+    chartListItemView->setClearRank(clearRankForChart(item));
     if (isSelected) {
       chartListItemView->onSelected();
     } else {
@@ -292,7 +371,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                   int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
-      folderView->setItem(item.label, item.depth, item.count, isSelected);
+      folderView->setItem(item.label, item.depth, item.count, isSelected,
+                          item.clearRank);
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -578,6 +658,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout->addView(right);
   addView(rootLayout);
+  reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
   rootLayout->applyYogaLayout();
@@ -674,6 +755,10 @@ void MainMenuScene::reloadFolderItems() {
     }
   }
 
+  for (auto &folder : folders) {
+    folder.clearRank = clearRankForFolder(folder.key);
+  }
+
   if (activeFolder.key.empty()) {
     activeFolder = folders.front();
   }
@@ -739,6 +824,105 @@ void MainMenuScene::reloadChartList() {
   recyclerView->setItems(std::move(chartMetas));
 }
 
+void MainMenuScene::reloadScoreClearRanks() {
+  scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
+  scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
+  folderClearRanks.clear();
+
+  std::unordered_map<std::string, FolderClearAggregate> aggregates;
+  sqlite3_stmt *stmt = nullptr;
+
+  auto runQuery = [&](const std::string &query,
+                      const auto &handleRow) {
+    stmt = nullptr;
+    const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+      SDL_Log("SQL error while loading folder clear ranks: %s",
+              sqlite3_errmsg(db));
+      return;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      handleRow(stmt);
+    }
+    sqlite3_finalize(stmt);
+    stmt = nullptr;
+  };
+
+  runQuery("SELECT sha256, md5, path FROM chart_meta",
+           [&](sqlite3_stmt *row) {
+             addFolderChart(aggregates, scoreClearRanks, "all",
+                            columnText(row, 0), columnText(row, 1),
+                            columnText(row, 2));
+           });
+
+  runQuery(
+      "SELECT dte.table_id, dte.level, cm.sha256, cm.md5, cm.path "
+      "FROM difficulty_table_entries dte "
+      "JOIN chart_meta cm ON "
+      "((dte.sha256 != '' AND cm.sha256 = dte.sha256) "
+      "OR (dte.md5 != '' AND cm.md5 = dte.md5))",
+      [&](sqlite3_stmt *row) {
+        const int tableId = sqlite3_column_int(row, 0);
+        const std::string level = columnText(row, 1);
+        const std::string sha256 = columnText(row, 2);
+        const std::string md5 = columnText(row, 3);
+        const std::string path = columnText(row, 4);
+        addFolderChart(aggregates, scoreClearRanks,
+                       folderKeyForTable(tableId), sha256, md5, path);
+        addFolderChart(aggregates, scoreClearRanks,
+                       folderKeyForLevel(tableId, level), sha256, md5, path);
+      });
+
+  runQuery(
+      "SELECT dc.id, dc.table_id, dc.group_name, cm.sha256, cm.md5, cm.path "
+      "FROM difficulty_courses dc "
+      "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "JOIN chart_meta cm ON "
+      "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
+      "OR (dce.md5 != '' AND cm.md5 = dce.md5))",
+      [&](sqlite3_stmt *row) {
+        const int courseId = sqlite3_column_int(row, 0);
+        const int tableId = sqlite3_column_int(row, 1);
+        const std::string groupName = columnText(row, 2);
+        const std::string sha256 = columnText(row, 3);
+        const std::string md5 = columnText(row, 4);
+        const std::string path = columnText(row, 5);
+        addFolderChart(aggregates, scoreClearRanks, "courses", sha256, md5,
+                       path);
+        addFolderChart(aggregates, scoreClearRanks,
+                       folderKeyForCourseGroup(tableId, groupName), sha256,
+                       md5, path);
+        addFolderChart(aggregates, scoreClearRanks,
+                       folderKeyForCourse(courseId), sha256, md5, path);
+      });
+
+  for (const auto &[key, aggregate] : aggregates) {
+    const int clearRank = aggregate.clearRank();
+    if (clearRank >= kClearTypeAssistedEasyClearRank) {
+      folderClearRanks[key] = clearRank;
+    }
+  }
+}
+
+void MainMenuScene::refreshScoreClearRanksIfNeeded() {
+  const std::uint64_t revision = ScoreDBHelper::GetInstance().GetRevision();
+  if (scoreClearRanksRevision == 0 || revision == scoreClearRanksRevision) {
+    return;
+  }
+
+  requestLibraryReload(true);
+}
+
+int MainMenuScene::clearRankForChart(
+    const bms_parser::ChartMeta &chartMeta) const {
+  return scoreClearRanks.bestRankFor(chartMeta);
+}
+
+int MainMenuScene::clearRankForFolder(const std::string &key) const {
+  const auto it = folderClearRanks.find(key);
+  return it == folderClearRanks.end() ? kNoClearTypeRank : it->second;
+}
+
 void MainMenuScene::requestLibraryReload(bool includeFolders) {
   if (includeFolders) {
     folderItemsReloadRequested = true;
@@ -767,6 +951,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
   if (shouldReloadFolders) {
+    reloadScoreClearRanks();
     reloadFolderItems();
   }
   if (shouldReloadFolders || shouldReloadCharts) {
@@ -834,6 +1019,7 @@ void MainMenuScene::importDifficultyTableFromUrl() {
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
+  refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
 }
 

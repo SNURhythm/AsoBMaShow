@@ -14,6 +14,7 @@ struct StartOptions {
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
   bool autoPlay = false;
+  GaugeType gaugeType = GaugeType::Normal;
 };
 class RhythmInputHandler;
 class BMSRenderer;
