@@ -111,6 +111,9 @@ public:
                              const std::string &sourceUrl = "");
   bool ImportDifficultyTableFromUrl(sqlite3 *db, const std::string &pageUrl,
                                     std::string *errorMessage = nullptr);
+  bool UpdateDifficultyTableFromSourceUrl(sqlite3 *db, int tableId,
+                                          std::string *errorMessage = nullptr);
+  bool DeleteDifficultyTable(sqlite3 *db, int tableId);
   int ImportDifficultyTablesFromDirectory(
       sqlite3 *db, const std::filesystem::path &directory);
   std::vector<DifficultyTableInfo> SelectDifficultyTables(sqlite3 *db);

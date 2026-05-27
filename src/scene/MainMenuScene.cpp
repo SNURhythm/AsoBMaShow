@@ -274,8 +274,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
-  tableUrlInput = nullptr;
-  tableImportStatus = nullptr;
   gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
@@ -456,51 +454,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   navTitle->setText("Library");
   navTitle->setColor({243, 247, 255, 255});
   nav->addView(navTitle);
-
-  auto *tableUrlLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  tableUrlLabel->setText("Difficulty table URL");
-  tableUrlLabel->setColor({157, 177, 200, 255});
-  nav->addView(tableUrlLabel);
-
-  tableUrlInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 18);
-  tableUrlInput->setHeight(44);
-  tableUrlInput->setText("");
-  tableUrlInput->setBackgroundColor(kSurfaceFill);
-  tableUrlInput->setBorderColor(Color(88, 115, 149, 255));
-  tableUrlInput->setBorderWidth(2);
-  tableUrlInput->setVAlign(TextView::MIDDLE);
-  tableUrlInput->setColor({239, 244, 251, 255});
-  tableUrlInput->onTextChanged(
-      [this](const std::string &text) { tableUrlText = text; });
-  tableUrlInput->onSubmit([this](const std::string &text) {
-    tableUrlText = text;
-    importDifficultyTableFromUrl();
-  });
-  nav->addView(tableUrlInput);
-
-  auto *importButton = new Button();
-  importButton->setAlignSelf(YGAlignStretch);
-  auto *importButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  importButtonText->setText("Import table");
-  importButtonText->setAlign(TextView::CENTER);
-  importButtonText->setVAlign(TextView::MIDDLE);
-  importButton->setContentView(importButtonText);
-  importButton->setHeight(44);
-  importButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
-                                    kPrimaryButtonPressed);
-  importButton->setBorderColors(Color(105, 162, 222, 255),
-                                Color(133, 190, 244, 255),
-                                Color(162, 212, 255, 255));
-  importButton->setStyledBorderWidth(2);
-  importButton->setOnClickListener(
-      [this]() { importDifficultyTableFromUrl(); });
-  nav->addView(importButton);
-
-  tableImportStatus = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  tableImportStatus->setText("");
-  tableImportStatus->setWrap(true);
-  tableImportStatus->setColor({157, 177, 200, 255});
-  nav->addView(tableImportStatus);
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
@@ -951,24 +904,7 @@ void MainMenuScene::requestLibraryReload(bool includeFolders) {
   chartListReloadRequested = true;
 }
 
-void MainMenuScene::requestTableImportStatus(const std::string &text,
-                                             const SDL_Color &color) {
-  std::lock_guard<std::mutex> lock(tableImportStatusMutex);
-  pendingTableImportStatus = true;
-  pendingTableImportStatusText = text;
-  pendingTableImportStatusColor = color;
-}
-
 void MainMenuScene::applyPendingUiUpdates() {
-  {
-    std::lock_guard<std::mutex> lock(tableImportStatusMutex);
-    if (pendingTableImportStatus && tableImportStatus != nullptr) {
-      tableImportStatus->setText(pendingTableImportStatusText);
-      tableImportStatus->setColor(pendingTableImportStatusColor);
-      pendingTableImportStatus = false;
-    }
-  }
-
   const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
   if (shouldReloadFolders) {
@@ -983,58 +919,6 @@ void MainMenuScene::applyPendingUiUpdates() {
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
   activeFolder = item;
   reloadChartList();
-}
-
-void MainMenuScene::importDifficultyTableFromUrl() {
-  if (tableImportRunning) {
-    return;
-  }
-
-  const std::string url =
-      tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
-  if (url.empty()) {
-    if (tableImportStatus != nullptr) {
-      tableImportStatus->setText("Enter a table webpage URL first.");
-    }
-    return;
-  }
-
-  if (tableImportThread.joinable()) {
-    tableImportThread.join();
-  }
-
-  tableImportRunning = true;
-  if (tableImportStatus != nullptr) {
-    tableImportStatus->setText("Importing...");
-    tableImportStatus->setColor({239, 244, 251, 255});
-  }
-
-  tableImportThread = std::jthread([this, url](const std::stop_token &token) {
-    auto dbHelper = ChartDBHelper::GetInstance();
-    auto importDb = dbHelper.Connect();
-    dbHelper.CreateChartMetaTable(importDb);
-    dbHelper.CreateDifficultyTableTables(importDb);
-
-    std::string errorMessage;
-    const bool imported =
-        dbHelper.ImportDifficultyTableFromUrl(importDb, url, &errorMessage);
-    dbHelper.Close(importDb);
-
-    if (token.stop_requested()) {
-      tableImportRunning = false;
-      return;
-    }
-
-    if (imported) {
-      requestTableImportStatus("Imported.", {181, 228, 165, 255});
-      requestLibraryReload(true);
-    } else {
-      requestTableImportStatus(errorMessage.empty() ? "Import failed."
-                                                    : errorMessage,
-                               {255, 177, 170, 255});
-    }
-    tableImportRunning = false;
-  });
 }
 
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
@@ -1122,12 +1006,6 @@ void MainMenuScene::cleanupScene() {
     checkEntriesThread.join();
   }
 
-  if (tableImportThread.joinable()) {
-    SDL_Log("Joining tableImportThread");
-    tableImportThread.request_stop();
-    tableImportThread.join();
-  }
-
   if (loadThread.joinable()) {
     SDL_Log("Joining loadThread");
     loadThread.join();
@@ -1141,8 +1019,6 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
-  tableUrlInput = nullptr;
-  tableImportStatus = nullptr;
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

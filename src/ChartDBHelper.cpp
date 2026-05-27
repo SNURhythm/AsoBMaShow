@@ -499,6 +499,60 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
   return id;
 }
 
+int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
+  if (sourceUrl.empty()) {
+    return 0;
+  }
+
+  auto query = "SELECT id FROM difficulty_tables WHERE source_url = "
+               "@source_url ORDER BY id LIMIT 1";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while looking up difficulty table source URL: "
+              << sqlite3_errmsg(db) << "\n";
+    return 0;
+  }
+  bindText(stmt, 1, sourceUrl);
+  int id = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    id = sqlite3_column_int(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  return id;
+}
+
+bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
+                                  std::string &sourceUrl,
+                                  std::string *errorMessage) {
+  auto query = "SELECT source_url FROM difficulty_tables WHERE id = @id";
+  sqlite3_stmt *stmt = nullptr;
+  const int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    if (errorMessage != nullptr) {
+      *errorMessage = std::string("Could not read table source URL: ") +
+                      sqlite3_errmsg(db);
+    }
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+
+  const int step = sqlite3_step(stmt);
+  if (step == SQLITE_ROW) {
+    const auto *text =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+    sourceUrl = text != nullptr ? text : "";
+    sqlite3_finalize(stmt);
+    return true;
+  }
+
+  sqlite3_finalize(stmt);
+  if (errorMessage != nullptr) {
+    *errorMessage = "Difficulty table was not found";
+  }
+  return false;
+}
+
 bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
   sqlite3_stmt *stmt = nullptr;
   auto deleteCourseEntries =
@@ -543,18 +597,23 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
 int upsertDifficultyTable(sqlite3 *db, const std::string &name,
                           const std::string &symbol, const std::string &dataUrl,
                           const std::string &sourceUrl) {
-  int tableId = findDifficultyTable(db, name, symbol, sourceUrl);
+  int tableId = findDifficultyTableBySourceUrl(db, sourceUrl);
+  if (tableId <= 0) {
+    tableId = findDifficultyTable(db, name, symbol, sourceUrl);
+  }
   if (tableId > 0) {
     auto updateQuery =
-        "UPDATE difficulty_tables SET data_url = @data_url, updated_at = "
-        "CURRENT_TIMESTAMP WHERE id = @id";
+        "UPDATE difficulty_tables SET name = @name, symbol = @symbol, "
+        "data_url = @data_url, updated_at = CURRENT_TIMESTAMP WHERE id = @id";
     sqlite3_stmt *stmt = nullptr;
     int rc = sqlite3_prepare_v2(db, updateQuery, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
       return 0;
     }
-    bindText(stmt, 1, dataUrl);
-    sqlite3_bind_int(stmt, 2, tableId);
+    bindText(stmt, 1, name);
+    bindText(stmt, 2, symbol);
+    bindText(stmt, 3, dataUrl);
+    sqlite3_bind_int(stmt, 4, tableId);
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE || !clearDifficultyTableContent(db, tableId)) {
@@ -1792,7 +1851,7 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   const int tableId =
       upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
   if (tableId <= 0) {
-    CommitTransaction(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
@@ -1963,6 +2022,64 @@ bool ChartDBHelper::ImportDifficultyTableFromUrl(sqlite3 *db,
     }
     return false;
   }
+  return true;
+}
+
+bool ChartDBHelper::UpdateDifficultyTableFromSourceUrl(
+    sqlite3 *db, int tableId, std::string *errorMessage) {
+  if (!CreateDifficultyTableTables(db)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not prepare difficulty table database";
+    }
+    return false;
+  }
+
+  std::string sourceUrl;
+  if (!readDifficultyTableSourceUrl(db, tableId, sourceUrl, errorMessage)) {
+    return false;
+  }
+
+  const std::string trimmedUrl = trimCopy(sourceUrl);
+  if (!trimmedUrl.starts_with("http://") &&
+      !trimmedUrl.starts_with("https://")) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Difficulty table does not have an updateable source URL";
+    }
+    return false;
+  }
+
+  return ImportDifficultyTableFromUrl(db, trimmedUrl, errorMessage);
+}
+
+bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
+  if (tableId <= 0 || !CreateDifficultyTableTables(db)) {
+    return false;
+  }
+
+  invalidateDifficultyLabelCache();
+  BeginTransaction(db);
+  if (!clearDifficultyTableContent(db, tableId)) {
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  auto query = "DELETE FROM difficulty_tables WHERE id = @id";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, tableId);
+  rc = sqlite3_step(stmt);
+  const bool deleted = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
+  sqlite3_finalize(stmt);
+  if (!deleted) {
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  CommitTransaction(db);
   return true;
 }
 

@@ -230,6 +230,18 @@ TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   return input;
 }
 
+TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
+  auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
+  input->setText("");
+  input->setSize(minWidth, metrics.actionButtonHeight);
+  input->setBackgroundColor(Color(10, 17, 28, 255));
+  input->setBorderColor(Color(78, 105, 140, 255));
+  input->setBorderWidth(2);
+  input->setVAlign(TextView::MIDDLE);
+  input->setColor({244, 248, 255, 255});
+  return input;
+}
+
 View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
@@ -411,6 +423,18 @@ std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   return "Fit";
 }
 
+std::string formatTableCount(int chartCount) {
+  return std::to_string(chartCount) +
+         (chartCount == 1 ? " chart" : " charts");
+}
+
+std::string formatTableSource(const std::string &sourceUrl) {
+  if (sourceUrl.empty()) {
+    return "No source URL";
+  }
+  return sourceUrl;
+}
+
 AppSettings::BgaDisplayMode
 nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
@@ -561,6 +585,236 @@ void SettingsScene::resetPreviewSimulation() {
   }
 }
 
+void SettingsScene::loadDifficultyTables() {
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *settingsDb = dbHelper.Connect();
+  if (settingsDb == nullptr) {
+    difficultyTables.clear();
+    difficultyTableStatusMessage = "Could not open chart database.";
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    return;
+  }
+
+  dbHelper.CreateDifficultyTableTables(settingsDb);
+  difficultyTables = dbHelper.SelectDifficultyTables(settingsDb);
+  dbHelper.Close(settingsDb);
+
+  if (pendingDeleteDifficultyTableId != 0) {
+    const auto it =
+        std::find_if(difficultyTables.begin(), difficultyTables.end(),
+                     [this](const DifficultyTableInfo &table) {
+                       return table.id == pendingDeleteDifficultyTableId;
+                     });
+    if (it == difficultyTables.end()) {
+      pendingDeleteDifficultyTableId = 0;
+    }
+  }
+}
+
+void SettingsScene::requestDifficultyTableStatus(const std::string &text,
+                                                 const SDL_Color &color,
+                                                 bool reloadTables) {
+  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
+  pendingDifficultyTableStatus = true;
+  pendingDifficultyTableStatusText = text;
+  pendingDifficultyTableStatusColor = color;
+  pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
+}
+
+void SettingsScene::applyPendingDifficultyTableUpdates() {
+  bool shouldReload = false;
+  {
+    std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
+    if (pendingDifficultyTableStatus) {
+      difficultyTableStatusMessage = pendingDifficultyTableStatusText;
+      difficultyTableStatusColor = pendingDifficultyTableStatusColor;
+      if (difficultyTableStatusText != nullptr) {
+        difficultyTableStatusText->setText(difficultyTableStatusMessage);
+        difficultyTableStatusText->setColor(difficultyTableStatusColor);
+      }
+      pendingDifficultyTableStatus = false;
+    }
+    shouldReload = pendingDifficultyTableReload;
+    pendingDifficultyTableReload = false;
+  }
+
+  if (shouldReload) {
+    loadDifficultyTables();
+    lastLayoutWidth = -1;
+  }
+}
+
+void SettingsScene::addDifficultyTableFromUrl() {
+  if (difficultyTableJobRunning) {
+    return;
+  }
+
+  const std::string url =
+      tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
+  if (url.empty()) {
+    difficultyTableStatusMessage = "Enter a table webpage URL first.";
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    if (difficultyTableStatusText != nullptr) {
+      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setColor(difficultyTableStatusColor);
+    }
+    return;
+  }
+
+  if (difficultyTableJobThread.joinable()) {
+    difficultyTableJobThread.join();
+  }
+
+  difficultyTableJobRunning = true;
+  pendingDeleteDifficultyTableId = 0;
+  difficultyTableStatusMessage = "Adding table...";
+  difficultyTableStatusColor = {239, 244, 251, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+
+  difficultyTableJobThread =
+      std::jthread([this, url](const std::stop_token &token) {
+        auto &dbHelper = ChartDBHelper::GetInstance();
+        sqlite3 *settingsDb = dbHelper.Connect();
+        if (settingsDb == nullptr) {
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Could not open chart database.",
+                                         {255, 177, 170, 255});
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        dbHelper.CreateDifficultyTableTables(settingsDb);
+        std::string errorMessage;
+        const bool imported = dbHelper.ImportDifficultyTableFromUrl(
+            settingsDb, url, &errorMessage);
+        dbHelper.Close(settingsDb);
+
+        if (token.stop_requested()) {
+          difficultyTableJobRunning = false;
+          return;
+        }
+
+        requestDifficultyTableStatus(
+            imported ? "Table added." : (errorMessage.empty() ? "Add failed."
+                                                              : errorMessage),
+            imported ? SDL_Color{181, 228, 165, 255}
+                     : SDL_Color{255, 177, 170, 255},
+            imported);
+        difficultyTableJobRunning = false;
+      });
+}
+
+void SettingsScene::updateDifficultyTableFromSource(int tableId) {
+  if (difficultyTableJobRunning || tableId <= 0) {
+    return;
+  }
+
+  if (difficultyTableJobThread.joinable()) {
+    difficultyTableJobThread.join();
+  }
+
+  difficultyTableJobRunning = true;
+  pendingDeleteDifficultyTableId = 0;
+  difficultyTableStatusMessage = "Updating table...";
+  difficultyTableStatusColor = {239, 244, 251, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+
+  difficultyTableJobThread =
+      std::jthread([this, tableId](const std::stop_token &token) {
+        auto &dbHelper = ChartDBHelper::GetInstance();
+        sqlite3 *settingsDb = dbHelper.Connect();
+        if (settingsDb == nullptr) {
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Could not open chart database.",
+                                         {255, 177, 170, 255});
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        std::string errorMessage;
+        const bool updated = dbHelper.UpdateDifficultyTableFromSourceUrl(
+            settingsDb, tableId, &errorMessage);
+        dbHelper.Close(settingsDb);
+
+        if (token.stop_requested()) {
+          difficultyTableJobRunning = false;
+          return;
+        }
+
+        requestDifficultyTableStatus(
+            updated ? "Table updated."
+                    : (errorMessage.empty() ? "Update failed." : errorMessage),
+            updated ? SDL_Color{181, 228, 165, 255}
+                    : SDL_Color{255, 177, 170, 255},
+            updated);
+        difficultyTableJobRunning = false;
+      });
+}
+
+void SettingsScene::deleteDifficultyTable(int tableId) {
+  if (difficultyTableJobRunning || tableId <= 0) {
+    return;
+  }
+
+  if (pendingDeleteDifficultyTableId != tableId) {
+    pendingDeleteDifficultyTableId = tableId;
+    difficultyTableStatusMessage = "Tap Confirm on that table to delete it.";
+    difficultyTableStatusColor = {255, 213, 151, 255};
+    lastLayoutWidth = -1;
+    return;
+  }
+
+  if (difficultyTableJobThread.joinable()) {
+    difficultyTableJobThread.join();
+  }
+
+  difficultyTableJobRunning = true;
+  pendingDeleteDifficultyTableId = 0;
+  difficultyTableStatusMessage = "Deleting table...";
+  difficultyTableStatusColor = {239, 244, 251, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+
+  difficultyTableJobThread =
+      std::jthread([this, tableId](const std::stop_token &token) {
+        auto &dbHelper = ChartDBHelper::GetInstance();
+        sqlite3 *settingsDb = dbHelper.Connect();
+        if (settingsDb == nullptr) {
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Could not open chart database.",
+                                         {255, 177, 170, 255});
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        const bool deleted = dbHelper.DeleteDifficultyTable(settingsDb, tableId);
+        dbHelper.Close(settingsDb);
+
+        if (token.stop_requested()) {
+          difficultyTableJobRunning = false;
+          return;
+        }
+
+        requestDifficultyTableStatus(
+            deleted ? "Table deleted." : "Delete failed.",
+            deleted ? SDL_Color{181, 228, 165, 255}
+                    : SDL_Color{255, 177, 170, 255},
+            deleted);
+        difficultyTableJobRunning = false;
+      });
+}
+
 void SettingsScene::resetViewState() {
   for (auto *view : views) {
     delete view;
@@ -592,10 +846,13 @@ void SettingsScene::resetViewState() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  tablesTabButton = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
+  tableUrlInput = nullptr;
+  difficultyTableStatusText = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -980,9 +1237,11 @@ void SettingsScene::initView() {
   timingTabButton = makeTabButton(SettingsTab::Timing, "Timing");
   visualTabButton = makeTabButton(SettingsTab::Visual, "Visual");
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane");
+  tablesTabButton = makeTabButton(SettingsTab::Tables, "Tables");
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
+  tabControls->addView(tablesTabButton);
   content->addView(tabControls);
 
   scrollView = new ScrollView();
@@ -1536,6 +1795,152 @@ void SettingsScene::initView() {
                           "entering a chart.",
         previewControls, metrics.modeCardHeight, metrics.cardsWidth));
   }
+
+  if (activeTab == SettingsTab::Tables) {
+    loadDifficultyTables();
+
+    auto *addControls = new View();
+    addControls->setFlexDirection(FlexDirection::Column);
+    addControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    addControls->setAlignItems(YGAlignFlexStart);
+
+    const int addRowGap = metrics.compact ? 8 : 12;
+    const int addButtonWidth = metrics.compact ? 150 : 170;
+    const int minInputWidth = 180;
+    auto *urlRow = new View();
+    urlRow->setFlexDirection(FlexDirection::Row);
+    urlRow->setFlexWrap(YGWrapWrap);
+    urlRow->setGap(static_cast<float>(addRowGap));
+    urlRow->setAlignItems(YGAlignFlexStart);
+    urlRow->setAlignSelf(YGAlignStretch);
+
+    tableUrlInput = makeTextInput(metrics, minInputWidth);
+    tableUrlInput->setMinWidth(static_cast<float>(minInputWidth));
+    tableUrlInput->setFlexGrow(1.0f);
+    tableUrlInput->setFlexShrink(1.0f);
+    tableUrlInput->setEditingText(tableUrlText);
+    tableUrlInput->onTextChanged(
+        [this](const std::string &text) { tableUrlText = text; });
+    tableUrlInput->onSubmit([this](const std::string &text) {
+      tableUrlText = text;
+      addDifficultyTableFromUrl();
+    });
+    urlRow->addView(tableUrlInput);
+
+    auto *addButton = makeButton(
+        addButtonWidth, metrics.actionButtonHeight,
+        makeText("Add Table", metrics.bodyTextSize + 4,
+                 Color(239, 244, 251), TextView::CENTER, TextView::MIDDLE),
+        Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+        Color(63, 118, 107, 255), Color(97, 157, 142, 255),
+        Color(120, 187, 169, 255), Color(145, 214, 195, 255));
+    addButton->setOnClickListener([this]() { addDifficultyTableFromUrl(); });
+    urlRow->addView(addButton);
+    addControls->addView(urlRow);
+
+    difficultyTableStatusText =
+        makeWrappedText(difficultyTableStatusMessage, metrics.bodyTextSize,
+                        Color(difficultyTableStatusColor.r,
+                              difficultyTableStatusColor.g,
+                              difficultyTableStatusColor.b,
+                              difficultyTableStatusColor.a));
+    addControls->addView(difficultyTableStatusText);
+
+    cardsColumn->addView(makeCard(
+        metrics, "Add Difficulty Table",
+        metrics.compact ? "Import a bmstable page or header JSON URL."
+                        : "Import a bmstable page URL or a direct header JSON "
+                          "URL. The stored source URL is used for updates.",
+        addControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+    auto *tableList = new View();
+    tableList->setFlexDirection(FlexDirection::Column);
+    tableList->setGap(metrics.compact ? 10.0f : 12.0f);
+
+    if (difficultyTables.empty()) {
+      tableList->addView(makeWrappedText(
+          "No difficulty tables are installed.", metrics.bodyTextSize,
+          Color(165, 185, 205)));
+    } else {
+      for (const auto &table : difficultyTables) {
+        auto *row = new View();
+        row->setFlexDirection(FlexDirection::Column);
+        row->setGap(metrics.compact ? 8.0f : 10.0f);
+        row->setPadding(Edge::All,
+                        static_cast<float>(metrics.compact ? 14 : 16));
+        row->setBackgroundColor(Color(12, 21, 34, 230));
+        row->setBorderColor(Color(63, 86, 113, 255));
+        row->setBorderWidth(2);
+
+        auto *titleRow = new View();
+        titleRow->setFlexDirection(FlexDirection::Row);
+        titleRow->setFlexWrap(YGWrapWrap);
+        titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
+        titleRow->setAlignItems(YGAlignCenter);
+        titleRow->addView(makeWrappedText(
+            table.name, metrics.bodyTextSize + 6, Color(244, 248, 255)));
+        titleRow->addView(makeText(table.symbol, metrics.bodyTextSize,
+                                   Color(181, 207, 236)));
+        titleRow->addView(makeText(formatTableCount(table.chartCount),
+                                   metrics.bodyTextSize,
+                                   Color(165, 185, 205)));
+        row->addView(titleRow);
+
+        row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
+                                     metrics.smallTextSize,
+                                     Color(142, 164, 189)));
+
+        auto *actions = new View();
+        actions->setFlexDirection(FlexDirection::Row);
+        actions->setFlexWrap(YGWrapWrap);
+        actions->setGap(metrics.compact ? 8.0f : 10.0f);
+
+        const int smallActionWidth = metrics.compact ? 136 : 156;
+        auto *updateButton = makeButton(
+            smallActionWidth, metrics.actionButtonHeight,
+            makeText("Update", metrics.bodyTextSize + 2,
+                     Color(239, 244, 251), TextView::CENTER,
+                     TextView::MIDDLE),
+            Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+            Color(59, 98, 147, 255), Color(92, 131, 177, 255),
+            Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+        updateButton->setOnClickListener(
+            [this, tableId = table.id]() {
+              updateDifficultyTableFromSource(tableId);
+            });
+        actions->addView(updateButton);
+
+        const bool confirmingDelete =
+            pendingDeleteDifficultyTableId == table.id;
+        auto *deleteButton = makeButton(
+            smallActionWidth, metrics.actionButtonHeight,
+            makeText(confirmingDelete ? "Confirm" : "Delete",
+                     metrics.bodyTextSize + 2, Color(248, 241, 236),
+                     TextView::CENTER, TextView::MIDDLE),
+            confirmingDelete ? Color(130, 58, 45, 255)
+                             : Color(96, 57, 44, 255),
+            confirmingDelete ? Color(153, 75, 58, 255)
+                             : Color(117, 72, 55, 255),
+            confirmingDelete ? Color(184, 96, 74, 255)
+                             : Color(153, 96, 74, 255),
+            Color(165, 105, 79, 255), Color(193, 124, 93, 255),
+            Color(219, 145, 108, 255));
+        deleteButton->setOnClickListener(
+            [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
+        actions->addView(deleteButton);
+
+        row->addView(actions);
+        tableList->addView(row);
+      }
+    }
+
+    cardsColumn->addView(makeCard(
+        metrics, "Installed Tables",
+        metrics.compact ? "Update from source URL or remove a table."
+                        : "Update a table from its stored source URL or remove "
+                          "it from the chart database.",
+        tableList, metrics.modeCardHeight, metrics.cardsWidth));
+  }
   scrollContent->addView(cardsColumn);
 
   auto *footer = new View();
@@ -1711,6 +2116,7 @@ void SettingsScene::refreshSettingsText() {
   applyTabStyle(timingTabButton, SettingsTab::Timing);
   applyTabStyle(visualTabButton, SettingsTab::Visual);
   applyTabStyle(laneTabButton, SettingsTab::Lane);
+  applyTabStyle(tablesTabButton, SettingsTab::Tables);
 
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -1969,6 +2375,7 @@ void SettingsScene::update(float dt) {
       resetPreviewSimulation();
     }
   }
+  applyPendingDifficultyTableUpdates();
   ensureLayoutUpToDate();
 }
 
@@ -1986,6 +2393,11 @@ void SettingsScene::renderScene() {
 }
 
 void SettingsScene::cleanupScene() {
+  if (difficultyTableJobThread.joinable()) {
+    SDL_Log("Joining difficultyTableJobThread");
+    difficultyTableJobThread.request_stop();
+    difficultyTableJobThread.join();
+  }
   destroyPreviewRenderer();
   rootLayout = nullptr;
   scrollView = nullptr;
@@ -2013,10 +2425,13 @@ void SettingsScene::cleanupScene() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  tablesTabButton = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
+  tableUrlInput = nullptr;
+  difficultyTableStatusText = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;
