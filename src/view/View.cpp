@@ -171,6 +171,18 @@ void View::applyYogaLayout() {
   applyYogaLayoutImmediate();
 }
 
+void View::applyYogaLayoutFromRoot() {
+  if (layoutBatchDepth > 0) {
+    markLayoutDirty();
+    return;
+  }
+  View *root = this;
+  while (root->parent != nullptr) {
+    root = root->parent;
+  }
+  root->applyYogaLayoutImmediate();
+}
+
 void View::renderBoxDecoration(RenderContext &context) const {
   if ((!hasBackground && (!hasBorder || borderWidth <= 0)) || getWidth() <= 0 ||
       getHeight() <= 0) {
@@ -227,7 +239,7 @@ void View::applyYogaLayoutImmediate() {
 
   // Recursively update children positions
   for (auto child : children) {
-    child->applyYogaLayout();
+    child->applyYogaLayoutImmediate();
   }
 
   // Call onLayout to notify derived classes

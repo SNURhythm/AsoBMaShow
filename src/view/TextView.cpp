@@ -239,7 +239,7 @@ void TextView::createTexture(bool markDirty, bool force,
     rect.h = 0;
     if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
       YGNodeMarkDirty(getNode());
-      applyYogaLayout();
+      applyYogaLayoutFromRoot();
     }
     return;
   }
@@ -260,7 +260,7 @@ void TextView::createTexture(bool markDirty, bool force,
   SDL_FreeSurface(surface);
   if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
     YGNodeMarkDirty(getNode());
-    applyYogaLayout();
+    applyYogaLayoutFromRoot();
   }
 }
 
@@ -296,7 +296,7 @@ void TextView::setOverflow(TextOverflow newOverflow) {
   overflow = newOverflow;
   marqueeStartedAt = SDL_GetTicks64();
   YGNodeMarkDirty(getNode());
-  applyYogaLayout();
+  applyYogaLayoutFromRoot();
 }
 
 void TextView::setWrap(bool enabled) {

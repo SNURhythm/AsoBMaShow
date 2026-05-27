@@ -1,6 +1,12 @@
 #pragma once
 
+#include "../ChartDBHelper.h"
 #include "Scene.h"
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 class View;
 class TextView;
@@ -27,6 +33,7 @@ private:
     Timing,
     Visual,
     Lane,
+    Tables,
   };
 
   View *rootLayout = nullptr;
@@ -54,10 +61,13 @@ private:
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
+  Button *tablesTabButton = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
   TextInputBox *laneLengthInput = nullptr;
+  TextInputBox *tableUrlInput = nullptr;
+  TextView *difficultyTableStatusText = nullptr;
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;
@@ -65,6 +75,18 @@ private:
   BMSRenderer *previewRenderer = nullptr;
   long long previewElapsedMicros = 0;
   SettingsTab activeTab = SettingsTab::Timing;
+  std::vector<DifficultyTableInfo> difficultyTables;
+  std::jthread difficultyTableJobThread;
+  std::atomic_bool difficultyTableJobRunning = false;
+  std::mutex difficultyTableStatusMutex;
+  bool pendingDifficultyTableStatus = false;
+  bool pendingDifficultyTableReload = false;
+  std::string pendingDifficultyTableStatusText;
+  SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
+  std::string difficultyTableStatusMessage;
+  SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
+  std::string tableUrlText;
+  int pendingDeleteDifficultyTableId = 0;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -80,6 +102,14 @@ private:
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
   void resetPreviewSimulation();
+  void loadDifficultyTables();
+  void requestDifficultyTableStatus(const std::string &text,
+                                    const SDL_Color &color,
+                                    bool reloadTables = false);
+  void applyPendingDifficultyTableUpdates();
+  void addDifficultyTableFromUrl();
+  void updateDifficultyTableFromSource(int tableId);
+  void deleteDifficultyTable(int tableId);
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

@@ -4,6 +4,7 @@
 #include <yoga/Yoga.h>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <unordered_set>
 #include "../rendering/common.h"
@@ -182,15 +183,18 @@ public:
   virtual inline void onLayout() {};
 
   inline void setSize(int newWidth, int newHeight) {
-    auto width = YGNodeLayoutGetWidth(node);
-    auto height = YGNodeLayoutGetHeight(node);
-    bool isResized = std::abs(width - newWidth) > 0.1f ||
-                     std::abs(height - newHeight) > 0.1f;
+    const float width = YGNodeLayoutGetWidth(node);
+    const float height = YGNodeLayoutGetHeight(node);
+    const bool isResized =
+        !std::isfinite(width) || !std::isfinite(height) ||
+        std::abs(width - static_cast<float>(newWidth)) > 0.1f ||
+        std::abs(height - static_cast<float>(newHeight)) > 0.1f;
+
+    YGNodeStyleSetWidth(node, newWidth);
+    YGNodeStyleSetHeight(node, newHeight);
 
     if (isResized) {
       onResize(newWidth, newHeight);
-      YGNodeStyleSetWidth(node, newWidth);
-      YGNodeStyleSetHeight(node, newHeight);
       applyYogaLayout();
     }
   }
@@ -282,6 +286,7 @@ public:
 
   bool drawBoundingBox = false;
   void applyYogaLayout();
+  void applyYogaLayoutFromRoot();
   static void beginLayoutBatch() { ++layoutBatchDepth; }
   static void endLayoutBatch() {
     if (layoutBatchDepth == 0) {
