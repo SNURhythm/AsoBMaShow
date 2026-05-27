@@ -229,7 +229,6 @@ public:
   int TotalScratchNotes = 0;
   int TotalBackSpinNotes = 0;
   int TotalLandmineNotes = 0;
-  std::string DifficultyTableLabels;
   int LnMode = 0; // 0: user decides, 1: LN, 2: CN, 3: HCN
 
   [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }

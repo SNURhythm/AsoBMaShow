@@ -1,4 +1,5 @@
 #include "ResultScene.h"
+#include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 
@@ -63,7 +64,20 @@ ResultScene::~ResultScene() {
     delete skin;
 }
 
+void ResultScene::saveScore() {
+  if (scoreSaved) {
+    return;
+  }
+  scoreSaved = true;
+
+  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
+    SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
+  }
+}
+
 void ResultScene::init() {
+  saveScore();
+
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   

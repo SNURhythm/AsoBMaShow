@@ -4,6 +4,7 @@
 
 #include "GamePlayScene.h"
 #include "../../view/TextView.h"
+#include "../../view/ClearLampColors.h"
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../targets.h"
@@ -13,6 +14,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 
 namespace {
 long long nowMicros() {
@@ -33,6 +35,9 @@ void GamePlayScene::init() {
   chartNameText->setText(chart->Meta.Title);
   chartNameText->setPosition(10, 10);
   addView(chartNameText);
+  gaugeStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  gaugeStatusText->setPosition(10, 50);
+  gaugeStatusText->setText("Gauge: NORMAL 20.0%");
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
                              context.settings.visibleTimeGreenNumber);
   context.jukebox.stop();
@@ -155,7 +160,9 @@ void GamePlayScene::reset() {
   context.jukebox.schedule(*chart, options.autoKeySound, isCancelled);
   context.jukebox.play();
   state = new RhythmState(chart, false);
+  state->configureGauge(options.gaugeType, options.gaugeAutoShift);
   state->isPlaying = true;
+  updateGaugeStatusText();
 }
 
 long long GamePlayScene::getJudgementOffsetMicros() const {
@@ -205,6 +212,9 @@ void GamePlayScene::renderScene() {
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext,
                    getVisualTimeMicros(context.jukebox.getTimeMicros()));
+  if (gaugeStatusText != nullptr) {
+    gaugeStatusText->render(renderContext);
+  }
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
@@ -218,6 +228,8 @@ void GamePlayScene::cleanupScene() {
   inputHandler = nullptr;
   delete renderer;
   renderer = nullptr;
+  delete gaugeStatusText;
+  gaugeStatusText = nullptr;
   delete laneStateText;
   laneStateText = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
@@ -451,16 +463,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
       state->slowCount++;
   }
 
-  // TODO: implement standard groove gauge system
-
-  if (judgeResult.judgement == PGreat || judgeResult.judgement == Great) {
-    state->currentGauge = std::min(100.0f, state->currentGauge + 0.1f);
-  } else if (judgeResult.judgement == Good) {
-    state->currentGauge = std::max(0.0f, state->currentGauge - 0.5f);
-  } else {
-    state->currentGauge = std::max(0.0f, state->currentGauge - 2.0f);
-  }
-  state->gaugeHistory.push_back(state->currentGauge);
+  state->applyGaugeJudgement(judgeResult.judgement);
+  updateGaugeStatusText();
 }
 
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
@@ -539,4 +543,20 @@ void GamePlayScene::updateLaneStateText() {
     str += std::to_string(pressed) + "\n";
   }
   laneStateText->setText(str);
+}
+
+void GamePlayScene::updateGaugeStatusText() {
+  if (gaugeStatusText == nullptr || state == nullptr) {
+    return;
+  }
+
+  char text[96];
+  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
+                state->gaugeAutoShift ? "GAS" : "Gauge",
+                gaugeTypeToShortLabel(state->gaugeType), state->currentGauge);
+  gaugeStatusText->setText(text);
+
+  const Color color =
+      clearLampColorForRank(gaugeTypeToClearRank(state->gaugeType));
+  gaugeStatusText->setColor({color.r, color.g, color.b, 255});
 }

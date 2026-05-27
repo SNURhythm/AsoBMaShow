@@ -1,4 +1,5 @@
 #include "ChartListItemView.h"
+#include "ClearLampColors.h"
 
 #include <cmath>
 #include <iomanip>
@@ -33,9 +34,10 @@ std::string keyModeDescription(int keyMode) {
 } // namespace
 
 ChartListItemView::ChartListItemView(int x, int y, int width, int height,
-                                     const bms_parser::ChartMeta &meta)
+                                     const ChartMetaRecord &record)
     : View(x, y, width, height) {
-  (void)meta;
+  (void)record;
+  clearLamp = new View();
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
   textLayout = new View();
@@ -51,6 +53,9 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setPadding(Edge::All, 8)
       ->setPadding(Edge::End, 24)
       ->setGap(12);
+
+  clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
+  this->addView(clearLamp);
 
   // Stage file jacket
   artworkFrame->setWidth(84)
@@ -118,21 +123,32 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   this->applyYogaLayout();
 }
 
-void ChartListItemView::setMeta(const bms_parser::ChartMeta &meta) {
+void ChartListItemView::setMeta(const ChartMetaRecord &record) {
+  const auto &meta = record.meta;
+  unavailable = record.unavailable;
   std::string title = meta.Title;
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
   }
   titleView->setText(title);
   artistView->setText(meta.Artist);
-  levelView->setText(meta.DifficultyTableLabels.empty()
+  levelView->setText(record.difficultyTableLabels.empty()
                          ? formatPlayLevel(meta.PlayLevel)
-                         : meta.DifficultyTableLabels);
-  keyModeView->setText(keyModeDescription(meta.KeyMode));
-  if (!meta.StageFile.empty()) {
+                         : record.difficultyTableLabels);
+  keyModeView->setText(unavailable ? "MISSING"
+                                   : keyModeDescription(meta.KeyMode));
+  if (!unavailable && !meta.StageFile.empty()) {
     jacketImage->setImage(meta.Folder / meta.StageFile);
   } else {
     jacketImage->freeImage();
+  }
+}
+
+void ChartListItemView::setClearRank(int clearRank) {
+  if (hasClearLampColor(clearRank)) {
+    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+  } else {
+    clearLamp->clearBackgroundColor();
   }
 }
 
@@ -142,10 +158,7 @@ void ChartListItemView::onSelected() {
   setBorderWidth(1);
   artworkFrame->setBackgroundColor(Color(13, 25, 39, 240));
   artworkFrame->setBorderColor(Color(126, 185, 238, 255));
-  titleView->setColor({255, 255, 255, 255});
-  artistView->setColor({219, 232, 247, 255});
-  levelView->setColor({245, 250, 255, 255});
-  keyModeView->setColor({180, 210, 239, 255});
+  applyTextColors(true);
 }
 
 void ChartListItemView::onUnselected() {
@@ -154,8 +167,28 @@ void ChartListItemView::onUnselected() {
   setBorderWidth(1);
   artworkFrame->setBackgroundColor(Color(8, 14, 23, 224));
   artworkFrame->setBorderColor(Color(42, 58, 78, 255));
-  titleView->setColor({235, 242, 250, 255});
-  artistView->setColor({152, 174, 198, 255});
-  levelView->setColor({178, 224, 248, 255});
-  keyModeView->setColor({113, 141, 169, 255});
+  applyTextColors(false);
+}
+
+void ChartListItemView::applyTextColors(bool selected) {
+  if (unavailable) {
+    titleView->setColor(selected ? SDL_Color{255, 192, 192, 255}
+                                 : SDL_Color{241, 96, 96, 255});
+    artistView->setColor(selected ? SDL_Color{247, 153, 153, 255}
+                                  : SDL_Color{204, 82, 82, 255});
+    levelView->setColor(selected ? SDL_Color{255, 216, 216, 255}
+                                 : SDL_Color{232, 118, 118, 255});
+    keyModeView->setColor(selected ? SDL_Color{244, 154, 154, 255}
+                                  : SDL_Color{190, 70, 70, 255});
+    return;
+  }
+
+  titleView->setColor(selected ? SDL_Color{255, 255, 255, 255}
+                               : SDL_Color{235, 242, 250, 255});
+  artistView->setColor(selected ? SDL_Color{219, 232, 247, 255}
+                                : SDL_Color{152, 174, 198, 255});
+  levelView->setColor(selected ? SDL_Color{245, 250, 255, 255}
+                               : SDL_Color{178, 224, 248, 255});
+  keyModeView->setColor(selected ? SDL_Color{180, 210, 239, 255}
+                                 : SDL_Color{113, 141, 169, 255});
 }

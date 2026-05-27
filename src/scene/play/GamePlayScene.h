@@ -14,6 +14,8 @@ struct StartOptions {
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
   bool autoPlay = false;
+  GaugeType gaugeType = GaugeType::Normal;
+  bool gaugeAutoShift = false;
 };
 class RhythmInputHandler;
 class BMSRenderer;
@@ -63,7 +65,9 @@ private:
   BMSRenderer *renderer = nullptr;
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
+  TextView *gaugeStatusText = nullptr;
   TextView *laneStateText = nullptr;
+  void updateGaugeStatusText();
   void updateLaneStateText();
   std::mutex judgeMutex;
 };

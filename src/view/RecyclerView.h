@@ -270,6 +270,7 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
+    visibleItemsNeedRebind = true;
     updateVisibleItems();
   }
 
@@ -279,6 +280,7 @@ public:
     selectedIndex = -1;
     // reset scroll offset
     scrollOffset = 0;
+    visibleItemsNeedRebind = true;
     updateVisibleItems();
   }
 
@@ -342,6 +344,7 @@ private:
   Uint64 scrollbarFadeInStartedAt = 0;
   Uint64 scrollbarLastActivityAt = 0;
   bool visibleItemsLayoutDirty = true;
+  bool visibleItemsNeedRebind = false;
   int visibleItemsLayoutX = 0;
   int visibleItemsLayoutY = 0;
   int visibleItemsLayoutWidth = 0;
@@ -544,6 +547,7 @@ private:
         view = it->first;
         idxToView[i] = view;
         viewEntries.erase(it); // Remove from current visible items
+        shouldBind = visibleItemsNeedRebind;
       } else {
         // Otherwise, get a recycled view or create a new one
         view = getViewForItem(item);
@@ -572,6 +576,7 @@ private:
     // Update the list of visible items
     viewEntries = std::move(newVisibleItems);
     visibleItemsLayoutDirty = false;
+    visibleItemsNeedRebind = false;
     visibleItemsLayoutX = layoutX;
     visibleItemsLayoutY = layoutY;
     visibleItemsLayoutWidth = layoutWidth;

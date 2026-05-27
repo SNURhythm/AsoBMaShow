@@ -2,6 +2,7 @@
 #include "../view/RecyclerView.h"
 #include "Scene.h"
 #include "../ChartDBHelper.h"
+#include "../ScoreDBHelper.h"
 #include "../path.h"
 #include "../view/ImageView.h"
 #include "../view/TextInputBox.h"
@@ -14,13 +15,18 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <stop_token>
+#include <unordered_map>
+
+class Button;
 
 class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
   void init() override;
+  void onResume() override;
 
   void update(float dt) override;
   void renderScene() override;
@@ -62,9 +68,10 @@ private:
     int courseId = 0;
     int courseTableId = 0;
     std::string courseGroupName;
+    int clearRank = kNoClearTypeRank;
   };
 
-  RecyclerView<bms_parser::ChartMeta> *recyclerView = nullptr;
+  RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   View *rootLayout = nullptr;
   ImageView *jacketView = nullptr;
@@ -74,9 +81,21 @@ private:
   TextView *tableImportStatus = nullptr;
 
   LibraryFolderItem activeFolder;
+  ScoreClearRankCache scoreClearRanks;
+  std::uint64_t scoreClearRanksRevision = 0;
+  std::unordered_map<std::string, int> folderClearRanks;
   std::string searchText;
   std::string difficultyText;
   std::string tableUrlText;
+  struct GaugeSelectionButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    GaugeType type = GaugeType::Normal;
+    bool autoShift = false;
+  };
+  std::vector<GaugeSelectionButton> gaugeSelectionButtons;
+  GaugeType selectedGaugeType = GaugeType::Normal;
+  bool selectedGaugeAutoShift = false;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -87,12 +106,18 @@ private:
   void initView(ApplicationContext &context);
   void reloadFolderItems();
   void reloadChartList();
+  void reloadScoreClearRanks();
+  void refreshScoreClearRanksIfNeeded();
+  int clearRankForChart(const ChartMetaRecord &record) const;
+  int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);
   void requestTableImportStatus(const std::string &text,
                                 const SDL_Color &color);
   void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);
   void importDifficultyTableFromUrl();
+  void setGaugeSelection(GaugeType gaugeType, bool autoShift);
+  void refreshGaugeSelectionButtons();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 

@@ -81,6 +81,11 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   comboText->setText("Max Combo: " + std::to_string(resultState.maxCombo));
   comboText->setName("maxCombo");
   scoreDetailView->addView(comboText);
+
+  auto clearTypeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  clearTypeText->setText(resultState.getClearTypeLabel());
+  clearTypeText->setName("clearType");
+  scoreDetailView->addView(clearTypeText);
   scoreContainer->addView(scoreDetailView);
 
   rootLayout->addView(scoreContainer);
@@ -109,7 +114,7 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   addJudgeText("GOOD", resultState.judgeCount.at(Good), {200, 200, 255, 255}, "good");
   addJudgeText("BAD", resultState.judgeCount.at(Bad), {255, 200, 200, 255}, "bad");
   addJudgeText("POOR", resultState.judgeCount.at(Poor), {255, 100, 100, 255}, "poor");
-  addJudgeText("MISS", resultState.judgeCount.at(Kpoor), {255, 50, 50, 255}, "miss");
+  addJudgeText("KPOOR", resultState.judgeCount.at(Kpoor), {255, 50, 50, 255}, "kpoor");
   addJudgeText("BREAK", resultState.comboBreak, {255, 50, 50, 255}, "break");
   
   detailsGrid->addView(leftCol);

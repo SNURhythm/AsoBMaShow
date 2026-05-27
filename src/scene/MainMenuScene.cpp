@@ -1,6 +1,8 @@
 #include "MainMenuScene.h"
+#include "MainMenuLibrary.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
+#include <algorithm>
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -10,6 +12,8 @@
 #include "../video/transcode.h"
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
+#include "../view/ClearLampColors.h"
+#include <unordered_set>
 #ifdef _WIN32
 #include <windows.h>
 
@@ -64,20 +68,45 @@ SafeAreaInsets getSafeAreaInsetsUi() {
   return insets;
 }
 
-std::string folderKeyForTable(int tableId) {
-  return "table:" + std::to_string(tableId);
+using main_menu_library::folderKeyForCourse;
+using main_menu_library::folderKeyForCourseGroup;
+using main_menu_library::folderKeyForLevel;
+using main_menu_library::folderKeyForTable;
+
+int clearRankForGaugeType(GaugeType gaugeType) {
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return kClearTypeAssistedEasyClearRank;
+  case GaugeType::Easy:
+    return kClearTypeEasyClearRank;
+  case GaugeType::Hard:
+    return kClearTypeHardClearRank;
+  case GaugeType::ExHard:
+    return kClearTypeExHardClearRank;
+  case GaugeType::Normal:
+  default:
+    return kClearTypeNormalClearRank;
+  }
 }
 
-std::string folderKeyForLevel(int tableId, const std::string &level) {
-  return "level:" + std::to_string(tableId) + ":" + level;
-}
-
-std::string folderKeyForCourseGroup(int tableId, const std::string &groupName) {
-  return "course-group:" + std::to_string(tableId) + ":" + groupName;
-}
-
-std::string folderKeyForCourse(int courseId) {
-  return "course:" + std::to_string(courseId);
+std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
+  if (autoShift) {
+    return "GAS";
+  }
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return "A-EASY";
+  case GaugeType::Easy:
+    return "EASY";
+  case GaugeType::Normal:
+    return "NORMAL";
+  case GaugeType::Hard:
+    return "HARD";
+  case GaugeType::ExHard:
+    return "EX-HARD";
+  default:
+    return "NORMAL";
+  }
 }
 } // namespace
 
@@ -89,6 +118,8 @@ void MainMenuScene::init() {
   checkEntriesThread =
       std::jthread(CheckEntries, std::ref(context), std::ref(*this));
 }
+
+void MainMenuScene::onResume() { requestLibraryReload(true); }
 
 void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
                                  ApplicationContext &context,
@@ -178,6 +209,15 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
+  recyclerView = nullptr;
+  folderRecyclerView = nullptr;
+  rootLayout = nullptr;
+  jacketView = nullptr;
+  searchBox = nullptr;
+  difficultyFilterBox = nullptr;
+  tableUrlInput = nullptr;
+  tableImportStatus = nullptr;
+  gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
   const Color kPanelFill(17, 27, 42, 196);
@@ -189,9 +229,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   const Color kSecondaryButtonHover(101, 65, 47, 220);
   const Color kSecondaryButtonPressed(133, 87, 63, 232);
 
-  recyclerView = new RecyclerView<bms_parser::ChartMeta>(
-      [](const bms_parser::ChartMeta &a, const bms_parser::ChartMeta &b) {
-        return a.SHA256 == b.SHA256;
+  recyclerView = new RecyclerView<ChartMetaRecord>(
+      [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
+        return a.meta.SHA256 == b.meta.SHA256 && a.meta.MD5 == b.meta.MD5 &&
+               a.meta.BmsPath == b.meta.BmsPath &&
+               a.difficultyTableLabels == b.difficultyTableLabels &&
+               a.unavailable == b.unavailable;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
@@ -201,14 +244,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateDifficultyTableTables(db);
 
-  recyclerView->onCreateView = [this](const bms_parser::ChartMeta &item) {
+  recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
     return new ChartListItemView(0, 0, rendering::window_width, 100, item);
   };
   recyclerView->itemHeight = 100;
-  recyclerView->onBind = [this](View *view, const bms_parser::ChartMeta &item,
+  recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item);
+    chartListItemView->setClearRank(clearRankForChart(item));
     if (isSelected) {
       chartListItemView->onSelected();
     } else {
@@ -217,25 +261,35 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context](const bms_parser::ChartMeta &item,
+  recyclerView->onSelected = [this, &context](const ChartMetaRecord &item,
                                               int idx) {
     if (willStart)
       return;
+    const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
-    SDL_Log("Selected: %s; path: %s", item.Title.c_str(),
-            path_t_to_utf8(item.Folder / item.BmsPath).c_str());
+    SDL_Log("Selected: %s; path: %s", meta.Title.c_str(),
+            path_t_to_utf8(meta.Folder / meta.BmsPath).c_str());
     if (selectedView) {
       selectedView->onSelected();
     }
-    jacketView->setImage(item.Folder / item.StageFile);
     previewLoadCancelled = true;
     if (loadThread.joinable()) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
     delete selectedChart.exchange(nullptr);
-    loadThread = std::thread([this, item, &context]() {
-      SDL_Log("Previewing %s", path_t_to_utf8(item.BmsPath).c_str());
+    if (item.unavailable || meta.BmsPath.empty()) {
+      jacketView->freeImage();
+      context.jukebox.stop();
+      return;
+    }
+    if (!meta.StageFile.empty()) {
+      jacketView->setImage(meta.Folder / meta.StageFile);
+    } else {
+      jacketView->freeImage();
+    }
+    loadThread = std::thread([this, meta, &context]() {
+      SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
       previewLoadCancelled = false;
       // dumb implementation of debounce
@@ -252,12 +306,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
       bms_parser::Chart *chart = nullptr;
 
       try {
-        SDL_Log("Parsing %s", path_t_to_utf8(item.BmsPath).c_str());
-        parser.Parse(item.BmsPath, &chart, false, false, previewLoadCancelled);
-        SDL_Log("Parsed %s", path_t_to_utf8(item.BmsPath).c_str());
+        SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+        parser.Parse(meta.BmsPath, &chart, false, false, previewLoadCancelled);
+        SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       } catch (std::exception &e) {
         delete chart;
-        SDL_Log("Error parsing %s: %s", path_t_to_utf8(item.BmsPath).c_str(),
+        SDL_Log("Error parsing %s: %s", path_t_to_utf8(meta.BmsPath).c_str(),
                 e.what());
         return;
       }
@@ -276,8 +330,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
     });
   };
-  recyclerView->onUnselected = [this](const bms_parser::ChartMeta &item,
-                                      int idx) {
+  recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);
     if (unselectedView) {
       unselectedView->onUnselected();
@@ -292,7 +345,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                   int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
-      folderView->setItem(item.label, item.depth, item.count, isSelected);
+      folderView->setItem(item.label, item.depth, item.count, isSelected,
+                          item.clearRank);
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -491,6 +545,59 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightSubtitle->setAlign(TextView::CENTER);
   right->addView(rightSubtitle);
 
+  auto *gaugePanel = new View();
+  gaugePanel->setFlexDirection(FlexDirection::Column);
+  gaugePanel->setAlignItems(YGAlignStretch);
+  gaugePanel->setWidth(252);
+  gaugePanel->setGap(7);
+
+  auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  gaugeLabel->setText("Gauge");
+  gaugeLabel->setColor({157, 177, 200, 255});
+  gaugePanel->addView(gaugeLabel);
+
+  auto makeGaugeRow = []() {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setAlignItems(YGAlignStretch);
+    row->setGap(6);
+    return row;
+  };
+
+  auto *gaugeRowA = makeGaugeRow();
+  auto *gaugeRowB = makeGaugeRow();
+  auto makeGaugeButton = [this](GaugeType type, bool autoShift) {
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    text->setText(gaugeButtonLabel(type, autoShift));
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    button->setContentView(text);
+    button->setHeight(40);
+    button->setFlex(1);
+    button->setStyledBorderWidth(2);
+    button->setOnClickListener(
+        [this, type, autoShift]() { setGaugeSelection(type, autoShift); });
+    gaugeSelectionButtons.push_back({
+        .button = button,
+        .text = text,
+        .type = type,
+        .autoShift = autoShift,
+    });
+    return button;
+  };
+
+  gaugeRowA->addView(makeGaugeButton(GaugeType::AssistedEasy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Easy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Normal, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::Hard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, true));
+  gaugePanel->addView(gaugeRowA);
+  gaugePanel->addView(gaugeRowB);
+  right->addView(gaugePanel);
+  refreshGaugeSelectionButtons();
+
   auto startButton = new Button(0, 0, 200, 100);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   buttonText->setText("Start");
@@ -510,7 +617,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     auto selected = recyclerView->selectedIndex;
     SDL_Log("Selected: %d", selected);
-    if (selected >= 0) {
+    if (selected >= 0 && selected < recyclerView->size()) {
+      const auto &selectedMeta = recyclerView->get(selected);
+      if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+        return;
+      }
       willStart = true;
       buttonText->setText("Loading...");
 
@@ -534,6 +645,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                         .startPosition = 0,
                         .autoKeySound = !context.settings.inputKeysoundEnabled,
                         .autoPlay = false,
+                        .gaugeType = selectedGaugeType,
+                        .gaugeAutoShift = selectedGaugeAutoShift,
                     }),
                 true);
             willStart = false;
@@ -578,6 +691,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout->addView(right);
   addView(rootLayout);
+  reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
   rootLayout->applyYogaLayout();
@@ -609,7 +723,7 @@ void MainMenuScene::reloadFolderItems() {
         .label = table.name,
         .type = LibraryFolderItem::Type::DifficultyTable,
         .depth = 0,
-        .count = table.matchedChartCount,
+        .count = table.chartCount,
         .tableId = table.id,
     });
 
@@ -620,7 +734,7 @@ void MainMenuScene::reloadFolderItems() {
           .label = level.tableSymbol + level.level,
           .type = LibraryFolderItem::Type::DifficultyLevel,
           .depth = 1,
-          .count = level.matchedChartCount,
+          .count = level.chartCount,
           .tableId = level.tableId,
           .tableLevel = level.level,
       });
@@ -672,6 +786,10 @@ void MainMenuScene::reloadFolderItems() {
         });
       }
     }
+  }
+
+  for (auto &folder : folders) {
+    folder.clearRank = clearRankForFolder(folder.key);
   }
 
   if (activeFolder.key.empty()) {
@@ -734,9 +852,34 @@ void MainMenuScene::reloadChartList() {
     break;
   }
 
-  std::vector<bms_parser::ChartMeta> chartMetas;
+  std::vector<ChartMetaRecord> chartMetas;
   ChartDBHelper::GetInstance().QueryChartMeta(db, query, chartMetas);
   recyclerView->setItems(std::move(chartMetas));
+}
+
+void MainMenuScene::reloadScoreClearRanks() {
+  scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
+  scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
+  folderClearRanks =
+      main_menu_library::LoadFolderClearRanks(db, scoreClearRanks);
+}
+
+void MainMenuScene::refreshScoreClearRanksIfNeeded() {
+  const std::uint64_t revision = ScoreDBHelper::GetInstance().GetRevision();
+  if (scoreClearRanksRevision == 0 || revision == scoreClearRanksRevision) {
+    return;
+  }
+
+  requestLibraryReload(true);
+}
+
+int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
+  return scoreClearRanks.bestRankFor(record.meta);
+}
+
+int MainMenuScene::clearRankForFolder(const std::string &key) const {
+  const auto it = folderClearRanks.find(key);
+  return it == folderClearRanks.end() ? kNoClearTypeRank : it->second;
 }
 
 void MainMenuScene::requestLibraryReload(bool includeFolders) {
@@ -767,6 +910,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
   if (shouldReloadFolders) {
+    reloadScoreClearRanks();
     reloadFolderItems();
   }
   if (shouldReloadFolders || shouldReloadCharts) {
@@ -831,9 +975,51 @@ void MainMenuScene::importDifficultyTableFromUrl() {
   });
 }
 
+void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
+  selectedGaugeType = gaugeType;
+  selectedGaugeAutoShift = autoShift;
+  refreshGaugeSelectionButtons();
+}
+
+void MainMenuScene::refreshGaugeSelectionButtons() {
+  for (auto &item : gaugeSelectionButtons) {
+    if (item.button == nullptr || item.text == nullptr) {
+      continue;
+    }
+
+    const bool selected =
+        item.autoShift == selectedGaugeAutoShift &&
+        (item.autoShift || item.type == selectedGaugeType);
+    if (selected) {
+      const Color accent =
+          item.autoShift
+              ? Color(255, 205, 37, 242)
+              : clearLampColorForRank(clearRankForGaugeType(item.type));
+      item.button->setBackgroundColors(accent, accent,
+                                       Color(accent.r, accent.g, accent.b, 255));
+      item.button->setBorderColors(Color(255, 255, 255, 220),
+                                   Color(255, 255, 255, 240),
+                                   Color(255, 255, 255, 255));
+      const bool darkText = item.autoShift || item.type == GaugeType::Hard ||
+                            item.type == GaugeType::ExHard;
+      item.text->setColor(darkText ? SDL_Color{14, 20, 28, 255}
+                                   : SDL_Color{255, 255, 255, 255});
+    } else {
+      item.button->setBackgroundColors(Color(20, 31, 47, 214),
+                                       Color(31, 48, 72, 226),
+                                       Color(44, 67, 99, 236));
+      item.button->setBorderColors(Color(76, 101, 130, 190),
+                                   Color(106, 134, 166, 220),
+                                   Color(134, 164, 198, 240));
+      item.text->setColor({216, 227, 241, 255});
+    }
+  }
+}
+
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
+  refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
 }
 
@@ -867,6 +1053,7 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
+  previewLoadCancelled = true;
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
@@ -883,7 +1070,18 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+  delete selectedChart.exchange(nullptr);
   ChartDBHelper::GetInstance().Close(db);
+  db = nullptr;
+  recyclerView = nullptr;
+  folderRecyclerView = nullptr;
+  rootLayout = nullptr;
+  jacketView = nullptr;
+  searchBox = nullptr;
+  difficultyFilterBox = nullptr;
+  tableUrlInput = nullptr;
+  tableImportStatus = nullptr;
+  gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;
@@ -897,7 +1095,7 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
   std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas, false);
+  dbHelper.SelectAllChartMeta(db, chartMetas);
   // sort by title
   std::sort(chartMetas.begin(), chartMetas.end(),
             [](bms_parser::ChartMeta &a, bms_parser::ChartMeta &b) {
