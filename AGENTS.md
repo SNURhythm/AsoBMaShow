@@ -19,3 +19,8 @@
 - TestFlight clean builds are intentional. Do not remove the TestFlight clean behavior without the user asking.
 - Firebase PR builds should keep the fixed DerivedData path so Xcode can reuse `ArchiveIntermediates`.
 - When adding a new source file under `src`, add its path to `membershipExceptions` in `ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj` so the app target builds it.
+
+## Local Build Verification
+
+- For desktop local compile checks, use the existing `cmake-build-debug` folder:
+  `cmake --build cmake-build-debug --target main -j 6`
