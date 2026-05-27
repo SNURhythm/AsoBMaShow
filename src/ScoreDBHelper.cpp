@@ -10,7 +10,6 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
-#include <sstream>
 #include <string>
 
 namespace {
@@ -72,137 +71,6 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
   return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
          SQLITE_OK;
-}
-
-struct TableColumnInfo {
-  bool exists = false;
-  std::string type;
-};
-
-TableColumnInfo tableColumnInfo(sqlite3 *db, const char *tableName,
-                                const char *columnName) {
-  const std::string query = std::string("PRAGMA table_info(") + tableName + ")";
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while checking score table schema: %s",
-            sqlite3_errmsg(db));
-    return {};
-  }
-
-  TableColumnInfo info;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    const auto *name =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    if (name != nullptr && std::string(columnName) == name) {
-      info.exists = true;
-      const auto *type =
-          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-      if (type != nullptr) {
-        info.type = type;
-      }
-      break;
-    }
-  }
-  sqlite3_finalize(stmt);
-  return info;
-}
-
-bool tableHasColumn(sqlite3 *db, const char *tableName,
-                    const char *columnName) {
-  return tableColumnInfo(db, tableName, columnName).exists;
-}
-
-bool isTextColumnType(std::string type) {
-  type = lowerCopy(trimCopy(type));
-  return type.find("text") != std::string::npos;
-}
-
-std::string clearTypeRankCaseExpression(const char *columnName) {
-  std::ostringstream stream;
-  stream << "CASE "
-         << "WHEN " << columnName << " IN ('assisted_easy_clear', "
-         << "'assist_clear') THEN " << kClearTypeAssistedEasyClearRank << " "
-         << "WHEN " << columnName << " = 'easy_clear' THEN "
-         << kClearTypeEasyClearRank << " "
-         << "WHEN " << columnName << " IN ('normal_clear', 'clear', "
-         << "'cleared') THEN " << kClearTypeNormalClearRank << " "
-         << "WHEN " << columnName << " = 'hard_clear' THEN "
-         << kClearTypeHardClearRank << " "
-         << "WHEN " << columnName << " IN ('ex_hard_clear', 'exhard_clear', "
-         << "'ex-hard_clear') THEN " << kClearTypeExHardClearRank << " "
-         << "WHEN CAST(" << columnName << " AS INTEGER) BETWEEN 1 AND 5 "
-         << "THEN CAST(" << columnName << " AS INTEGER) * 100 "
-         << "WHEN CAST(" << columnName << " AS INTEGER) >= "
-         << kClearTypeAssistedEasyClearRank << " THEN CAST(" << columnName
-         << " AS INTEGER) "
-         << "ELSE " << kClearTypeFailedRank << " END";
-  return stream.str();
-}
-
-bool migrateScoreTable(sqlite3 *db) {
-  const bool hasMiss = tableHasColumn(db, "scores", "miss");
-  const bool hasKpoor = tableHasColumn(db, "scores", "kpoor");
-  if (hasMiss && !hasKpoor) {
-    if (!execSql(db, "ALTER TABLE scores RENAME COLUMN miss TO kpoor",
-                 "renaming score kpoor column")) {
-      return false;
-    }
-  }
-
-  const TableColumnInfo clearTypeColumn =
-      tableColumnInfo(db, "scores", "clear_type");
-  if (!clearTypeColumn.exists) {
-    if (!execSql(db,
-                 "ALTER TABLE scores ADD COLUMN clear_type INTEGER NOT NULL "
-                 "DEFAULT 0",
-                 "adding score clear type column")) {
-      return false;
-    }
-    const std::string backfill =
-        "UPDATE scores SET clear_type = CASE "
-        "WHEN final_gauge >= 80.0 THEN " +
-        std::to_string(kClearTypeNormalClearRank) + " ELSE " +
-        std::to_string(kClearTypeFailedRank) + " END";
-    if (!execSql(db, backfill.c_str(),
-                 "backfilling score clear type")) {
-      return false;
-    }
-  } else if (isTextColumnType(clearTypeColumn.type)) {
-    if (tableHasColumn(db, "scores", "clear_type_text")) {
-      SDL_Log("Cannot migrate score clear_type: clear_type_text already exists");
-      return false;
-    }
-    if (!execSql(db, "ALTER TABLE scores RENAME COLUMN clear_type TO "
-                    "clear_type_text",
-                 "renaming legacy score clear type column")) {
-      return false;
-    }
-    if (!execSql(db,
-                 "ALTER TABLE scores ADD COLUMN clear_type INTEGER NOT NULL "
-                 "DEFAULT 0",
-                 "adding integer score clear type column")) {
-      return false;
-    }
-    const std::string update =
-        "UPDATE scores SET clear_type = " +
-        clearTypeRankCaseExpression("clear_type_text");
-    if (!execSql(db, update.c_str(), "migrating score clear type ranks")) {
-      return false;
-    }
-  } else {
-    const std::string normalize =
-        "UPDATE scores SET clear_type = CASE "
-        "WHEN clear_type BETWEEN 1 AND 5 THEN clear_type * 100 "
-        "WHEN clear_type < 0 THEN 0 "
-        "ELSE clear_type END "
-        "WHERE clear_type BETWEEN 1 AND 5 OR clear_type < 0";
-    if (!execSql(db, normalize.c_str(), "normalizing score clear type ranks")) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 int judgeCount(const RhythmState &state, Judgement judgement) {
@@ -339,9 +207,6 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
       "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating score table")) {
-    return false;
-  }
-  if (!migrateScoreTable(db)) {
     return false;
   }
 
