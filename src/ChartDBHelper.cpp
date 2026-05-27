@@ -18,6 +18,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
@@ -361,6 +362,35 @@ TableChartItem readChartItem(const json &item,
   chart.url = jsonStringAt(item, "url");
   chart.urlDiff = jsonStringAt(item, "url_diff");
   return chart;
+}
+
+std::unordered_map<std::string, int> readLevelOrder(const json &header) {
+  std::unordered_map<std::string, int> orderByLevel;
+  if (!header.is_object()) {
+    return orderByLevel;
+  }
+
+  const auto it = header.find("level_order");
+  if (it == header.end() || !it->is_array()) {
+    return orderByLevel;
+  }
+
+  int order = 0;
+  for (const auto &levelValue : *it) {
+    const std::string level = trimCopy(jsonValueToString(levelValue));
+    if (level.empty() || orderByLevel.contains(level)) {
+      continue;
+    }
+    orderByLevel[level] = order++;
+  }
+  return orderByLevel;
+}
+
+int levelOrderFor(const std::unordered_map<std::string, int> &orderByLevel,
+                  const std::string &level) {
+  const auto it = orderByLevel.find(trimCopy(level));
+  return it == orderByLevel.end() ? static_cast<int>(orderByLevel.size())
+                                  : it->second;
 }
 
 std::vector<TableChartItem> readCourseCharts(const json &course) {
@@ -1776,18 +1806,33 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
     }
   }
 
-  int sortOrder = 0;
+  std::vector<TableChartItem> chartItems;
   if (charts != nullptr) {
     for (const auto &chartValue : *charts) {
       if (!chartValue.is_object()) {
         continue;
       }
-      const auto chart = readChartItem(chartValue, "");
+      auto chart = readChartItem(chartValue, "");
       if (chart.md5.empty() && chart.sha256.empty()) {
         continue;
       }
-      insertDifficultyTableEntry(db, tableId, chart, sortOrder++);
+      chartItems.push_back(std::move(chart));
     }
+  }
+
+  const auto levelOrder = readLevelOrder(header);
+  if (!levelOrder.empty()) {
+    std::stable_sort(chartItems.begin(), chartItems.end(),
+                     [&levelOrder](const TableChartItem &a,
+                                   const TableChartItem &b) {
+                       return levelOrderFor(levelOrder, a.level) <
+                              levelOrderFor(levelOrder, b.level);
+                     });
+  }
+
+  int sortOrder = 0;
+  for (const auto &chart : chartItems) {
+    insertDifficultyTableEntry(db, tableId, chart, sortOrder++);
   }
 
   std::vector<const json *> courses;
