@@ -18,6 +18,8 @@ struct ChartMetaQuery {
   int courseTableId = 0;
   std::string courseGroupName;
   std::string difficultyText;
+  int limit = 0;
+  int offset = 0;
 };
 
 struct ChartMetaRecord {
@@ -91,6 +93,7 @@ public:
                        std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
                       std::vector<ChartMetaRecord> &chartMetas);
+  int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
