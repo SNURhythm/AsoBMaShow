@@ -20,6 +20,8 @@
 #include <stop_token>
 #include <unordered_map>
 
+class Button;
+
 class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
@@ -85,6 +87,15 @@ private:
   std::string searchText;
   std::string difficultyText;
   std::string tableUrlText;
+  struct GaugeSelectionButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    GaugeType type = GaugeType::Normal;
+    bool autoShift = false;
+  };
+  std::vector<GaugeSelectionButton> gaugeSelectionButtons;
+  GaugeType selectedGaugeType = GaugeType::Normal;
+  bool selectedGaugeAutoShift = false;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -105,6 +116,8 @@ private:
   void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);
   void importDifficultyTableFromUrl();
+  void setGaugeSelection(GaugeType gaugeType, bool autoShift);
+  void refreshGaugeSelectionButtons();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 

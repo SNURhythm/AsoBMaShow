@@ -12,6 +12,7 @@
 #include "../video/transcode.h"
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
+#include "../view/ClearLampColors.h"
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -83,6 +84,42 @@ std::string folderKeyForCourseGroup(int tableId, const std::string &groupName) {
 
 std::string folderKeyForCourse(int courseId) {
   return "course:" + std::to_string(courseId);
+}
+
+int clearRankForGaugeType(GaugeType gaugeType) {
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return kClearTypeAssistedEasyClearRank;
+  case GaugeType::Easy:
+    return kClearTypeEasyClearRank;
+  case GaugeType::Hard:
+    return kClearTypeHardClearRank;
+  case GaugeType::ExHard:
+    return kClearTypeExHardClearRank;
+  case GaugeType::Normal:
+  default:
+    return kClearTypeNormalClearRank;
+  }
+}
+
+std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
+  if (autoShift) {
+    return "GAS";
+  }
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return "A-EASY";
+  case GaugeType::Easy:
+    return "EASY";
+  case GaugeType::Normal:
+    return "NORMAL";
+  case GaugeType::Hard:
+    return "HARD";
+  case GaugeType::ExHard:
+    return "EX-HARD";
+  default:
+    return "NORMAL";
+  }
 }
 
 std::string columnText(sqlite3_stmt *stmt, int column) {
@@ -256,6 +293,15 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
+  recyclerView = nullptr;
+  folderRecyclerView = nullptr;
+  rootLayout = nullptr;
+  jacketView = nullptr;
+  searchBox = nullptr;
+  difficultyFilterBox = nullptr;
+  tableUrlInput = nullptr;
+  tableImportStatus = nullptr;
+  gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
   const Color kPanelFill(17, 27, 42, 196);
@@ -571,6 +617,59 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightSubtitle->setAlign(TextView::CENTER);
   right->addView(rightSubtitle);
 
+  auto *gaugePanel = new View();
+  gaugePanel->setFlexDirection(FlexDirection::Column);
+  gaugePanel->setAlignItems(YGAlignStretch);
+  gaugePanel->setWidth(252);
+  gaugePanel->setGap(7);
+
+  auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  gaugeLabel->setText("Gauge");
+  gaugeLabel->setColor({157, 177, 200, 255});
+  gaugePanel->addView(gaugeLabel);
+
+  auto makeGaugeRow = []() {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setAlignItems(YGAlignStretch);
+    row->setGap(6);
+    return row;
+  };
+
+  auto *gaugeRowA = makeGaugeRow();
+  auto *gaugeRowB = makeGaugeRow();
+  auto makeGaugeButton = [this](GaugeType type, bool autoShift) {
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    text->setText(gaugeButtonLabel(type, autoShift));
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    button->setContentView(text);
+    button->setHeight(40);
+    button->setFlex(1);
+    button->setStyledBorderWidth(2);
+    button->setOnClickListener(
+        [this, type, autoShift]() { setGaugeSelection(type, autoShift); });
+    gaugeSelectionButtons.push_back({
+        .button = button,
+        .text = text,
+        .type = type,
+        .autoShift = autoShift,
+    });
+    return button;
+  };
+
+  gaugeRowA->addView(makeGaugeButton(GaugeType::AssistedEasy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Easy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Normal, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::Hard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, true));
+  gaugePanel->addView(gaugeRowA);
+  gaugePanel->addView(gaugeRowB);
+  right->addView(gaugePanel);
+  refreshGaugeSelectionButtons();
+
   auto startButton = new Button(0, 0, 200, 100);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   buttonText->setText("Start");
@@ -614,6 +713,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                         .startPosition = 0,
                         .autoKeySound = !context.settings.inputKeysoundEnabled,
                         .autoPlay = false,
+                        .gaugeType = selectedGaugeType,
+                        .gaugeAutoShift = selectedGaugeAutoShift,
                     }),
                 true);
             willStart = false;
@@ -1016,6 +1117,47 @@ void MainMenuScene::importDifficultyTableFromUrl() {
   });
 }
 
+void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
+  selectedGaugeType = gaugeType;
+  selectedGaugeAutoShift = autoShift;
+  refreshGaugeSelectionButtons();
+}
+
+void MainMenuScene::refreshGaugeSelectionButtons() {
+  for (auto &item : gaugeSelectionButtons) {
+    if (item.button == nullptr || item.text == nullptr) {
+      continue;
+    }
+
+    const bool selected =
+        item.autoShift == selectedGaugeAutoShift &&
+        (item.autoShift || item.type == selectedGaugeType);
+    if (selected) {
+      const Color accent =
+          item.autoShift
+              ? Color(255, 205, 37, 242)
+              : clearLampColorForRank(clearRankForGaugeType(item.type));
+      item.button->setBackgroundColors(accent, accent,
+                                       Color(accent.r, accent.g, accent.b, 255));
+      item.button->setBorderColors(Color(255, 255, 255, 220),
+                                   Color(255, 255, 255, 240),
+                                   Color(255, 255, 255, 255));
+      const bool darkText = item.autoShift || item.type == GaugeType::Hard ||
+                            item.type == GaugeType::ExHard;
+      item.text->setColor(darkText ? SDL_Color{14, 20, 28, 255}
+                                   : SDL_Color{255, 255, 255, 255});
+    } else {
+      item.button->setBackgroundColors(Color(20, 31, 47, 214),
+                                       Color(31, 48, 72, 226),
+                                       Color(44, 67, 99, 236));
+      item.button->setBorderColors(Color(76, 101, 130, 190),
+                                   Color(106, 134, 166, 220),
+                                   Color(134, 164, 198, 240));
+      item.text->setColor({216, 227, 241, 255});
+    }
+  }
+}
+
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
@@ -1053,6 +1195,7 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
+  previewLoadCancelled = true;
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
@@ -1069,7 +1212,18 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+  delete selectedChart.exchange(nullptr);
   ChartDBHelper::GetInstance().Close(db);
+  db = nullptr;
+  recyclerView = nullptr;
+  folderRecyclerView = nullptr;
+  rootLayout = nullptr;
+  jacketView = nullptr;
+  searchBox = nullptr;
+  difficultyFilterBox = nullptr;
+  tableUrlInput = nullptr;
+  tableImportStatus = nullptr;
+  gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;
