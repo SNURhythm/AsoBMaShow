@@ -4,23 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="${ROOT_DIR}/ios/Xcode/AsoBMaShow"
 CACHE_ROOT="${IOS_DEPLOY_CACHE_ROOT:-${HOME}/Library/Caches/AsoBMaShow/ios-deploy}"
-CLEAN_PROJECT_ONLY=0
-
-for arg in "$@"; do
-  case "${arg}" in
-    --clean-project-only)
-      CLEAN_PROJECT_ONLY=1
-      ;;
-    *)
-      echo "Unknown argument: ${arg}" >&2
-      exit 2
-      ;;
-  esac
-done
-
-hash_stdin() {
-  shasum | awk '{ print $1 }'
-}
 
 link_cache_dir() {
   local link_path="$1"
@@ -41,46 +24,16 @@ link_cache_dir() {
   fi
 }
 
-clean_project() {
-  echo "Cleaning iOS generated project and Xcode build state"
-  rm -rf "${ROOT_DIR}/bgfx/build"
-  rm -rf "${CACHE_ROOT}/bgfx-build"
-  rm -rf "${IOS_DIR}/build"
-  rm -f "${IOS_DIR}"/*.ipa "${IOS_DIR}"/*.dSYM.zip
-
-  if [ -d "${HOME}/Library/Developer/Xcode/DerivedData" ]; then
-    find "${HOME}/Library/Developer/Xcode/DerivedData" \
-      -maxdepth 1 \
-      -name 'AsoBMaShow-*' \
-      -exec rm -rf {} +
-  fi
-}
-
-bgfx_cache_key() {
-  {
-    printf 'root=%s\n' "${ROOT_DIR}"
-    git -C "${ROOT_DIR}" submodule status --recursive bgfx
-    cmake --version | head -n 1
-    xcodebuild -version
-    printf 'iphoneos=%s\n' "$(xcrun --sdk iphoneos --show-sdk-path)"
-  } | hash_stdin
-}
-
 prepare_bgfx_project() {
-  local build_link="${ROOT_DIR}/bgfx/build"
-  local cache_dir="${CACHE_ROOT}/bgfx-build/$(bgfx_cache_key)"
+  local build_dir="${ROOT_DIR}/bgfx/build"
 
-  link_cache_dir "${build_link}" "${cache_dir}"
-
-  if [ -f "${build_link}/bgfx.xcodeproj/project.pbxproj" ]; then
-    echo "Using cached bgfx Xcode project: ${cache_dir}"
-    return
+  if [ -L "${build_dir}" ]; then
+    rm "${build_dir}"
   fi
 
-  echo "Configuring bgfx Xcode project: ${cache_dir}"
   cmake \
     -S "${ROOT_DIR}/bgfx" \
-    -B "${build_link}" \
+    -B "${build_dir}" \
     -GXcode \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT=iphoneos
@@ -118,17 +71,8 @@ install_pods() {
   link_cache_dir "${IOS_DIR}/Pods" "${pods_cache}"
 
   cd "${IOS_DIR}"
-  if [ -f "Pods/Manifest.lock" ] && cmp -s "Podfile.lock" "Pods/Manifest.lock"; then
-    echo "Using cached CocoaPods install: ${pods_cache}"
-  else
-    bundle exec pod install --deployment
-  fi
+  bundle exec pod install --deployment
 }
-
-if [ "${CLEAN_PROJECT_ONLY}" -eq 1 ]; then
-  clean_project
-  exit 0
-fi
 
 prepare_bgfx_project
 install_gems

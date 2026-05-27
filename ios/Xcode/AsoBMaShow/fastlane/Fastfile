@@ -58,6 +58,17 @@ def firebase_build_number
   Time.now.utc.strftime("%Y%m%d%H%M")
 end
 
+def firebase_derived_data_path
+  path = ENV["IOS_DERIVED_DATA_PATH"].to_s.strip
+  path = "~/Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI" if path.empty?
+  File.expand_path(path)
+end
+
+def app_store_key_id
+  key_id = ENV["APP_STORE_KEY_ID"].to_s.strip
+  key_id.empty? ? "7459U6UPUW" : key_id
+end
+
 platform :ios do
   desc "Push a new beta build to Firebase App Distribution or TestFlight"
   lane :beta do
@@ -69,7 +80,7 @@ platform :ios do
       password: ENV["KEYCHAIN_PASSWORD"]
     )
     api_key = app_store_connect_api_key(
-      key_id: "7459U6UPUW",
+      key_id: app_store_key_id,
       issuer_id: "5e03957a-e681-458f-8011-a8f608b71a70",
       key_content: ENV["APP_STORE_KEY"],
       duration: 1200,
@@ -81,12 +92,21 @@ platform :ios do
                    else
                      latest_testflight_build_number(initial_build_number: 0) + 1
                    end
-    build_app(
+
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}"
+    build_options = {
       scheme: "AsoBMaShow",
+      workspace: "AsoBMaShow.xcworkspace",
       export_method: export_method,
-      xcargs: "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}",
+      xcargs: xcargs,
       clean: !distribute_to_firebase
-    )
+    }
+
+    if distribute_to_firebase
+      build_options[:derived_data_path] = firebase_derived_data_path
+    end
+
+    build_app(**build_options)
     temporary_fix_ios_post_build
 
     if distribute_to_firebase
