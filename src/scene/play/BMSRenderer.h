@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "../../ReplayData.h"
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -53,6 +54,13 @@ struct NoteSheet {
   NoteUvRegion longTail;
 };
 
+struct ReplayGhostEvent {
+  int lane = -1;
+  long long noteTimeMicros = 0;
+  long long judgeTimeMicros = 0;
+  Judgement judgement = None;
+};
+
 class BMSRendererState {
 public:
   ~BMSRendererState() = default;
@@ -91,6 +99,7 @@ private:
   float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
+  std::vector<std::vector<ReplayGhostEvent>> groupedReplayGhostEvents;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int keyLaneCount;
@@ -107,6 +116,7 @@ private:
   bool renderHud = true;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
+  rendering::SimpleBatchRenderer ghostBatchRenderer;
   rendering::TexBatchRenderer texBatchRenderer;
 
   void drawRect(float width, float height, float x, float y, Color color);
@@ -116,6 +126,9 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
+  void drawReplayGhosts(size_t timelineIndex, float noteY, float microsToY);
+  void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
+  float estimateMicrosToY(size_t timelineIndex, float rxhs) const;
   void applyPendingHudText();
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
@@ -144,4 +157,5 @@ public:
   void reset();
   void refreshGeometry();
   void setVisibleTimeGreenNumber(int greenNumber);
+  void setReplayData(const ReplayData *replayData);
 };

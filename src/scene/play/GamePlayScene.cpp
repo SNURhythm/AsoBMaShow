@@ -45,6 +45,7 @@ void GamePlayScene::init() {
   gaugeStatusText->setText("Gauge: NORMAL 20.0%");
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
                              context.settings.visibleTimeGreenNumber);
+  renderer->setReplayData(options.replayData.get());
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback()) {

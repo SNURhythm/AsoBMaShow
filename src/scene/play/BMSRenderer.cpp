@@ -69,6 +69,7 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
       appendLaneGroup(scratchLaneIndices);
     }
   }
+  groupedReplayGhostEvents.resize(timelines.size());
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -317,6 +318,71 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
                              sheet.note.u1, sheet.note.v1, sheet.texture);
 }
 
+float BMSRenderer::estimateMicrosToY(size_t timelineIndex, float rxhs) const {
+  if (timelineIndex >= timelines.size()) {
+    return 0.0f;
+  }
+
+  if (timelineIndex > 0) {
+    const auto *timeline = timelines[timelineIndex];
+    const auto *prevTimeline = timelines[timelineIndex - 1];
+    const long long duration =
+        timeline->Timing - prevTimeline->Timing -
+        static_cast<long long>(prevTimeline->GetStopDuration());
+    if (duration != 0) {
+      const double beatDelta =
+          timeline->BeatPosition - prevTimeline->BeatPosition;
+      return static_cast<float>(beatDelta * prevTimeline->Scroll * rxhs /
+                                static_cast<double>(duration));
+    }
+  }
+
+  const auto *timeline = timelines[timelineIndex];
+  if (timeline->Timing != 0) {
+    return static_cast<float>(timeline->BeatPosition * timeline->Scroll * rxhs /
+                              static_cast<double>(timeline->Timing));
+  }
+  return 0.0f;
+}
+
+void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float noteY,
+                                   float microsToY) {
+  if (timelineIndex >= groupedReplayGhostEvents.size()) {
+    return;
+  }
+
+  for (const auto &event : groupedReplayGhostEvents[timelineIndex]) {
+    const float ghostY =
+        noteY + static_cast<float>(event.judgeTimeMicros -
+                                   event.noteTimeMicros) *
+                    microsToY;
+    drawGhostNoteOutline(ghostY, event);
+  }
+}
+
+void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
+
+  Color color(255, 255, 255, 220);
+  if (event.judgement != PGreat) {
+    color = event.judgeTimeMicros < event.noteTimeMicros
+                ? Color(0, 96, 255, 220)
+                : Color(255, 40, 40, 220);
+  }
+
+  const float x = laneToX(event.lane);
+  const float thickness = std::max(0.015f, noteRenderHeight * 0.12f);
+  const uint32_t abgr = color.toABGR();
+  ghostBatchRenderer.addRect(x, y, noteRenderWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y + noteRenderHeight - thickness,
+                             noteRenderWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y, thickness, noteRenderHeight, abgr);
+  ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
+                             noteRenderHeight, abgr);
+}
+
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
   Camera &camera = rendering::game_camera;
   constexpr float kFallbackLaneTop = 8.5f;
@@ -352,11 +418,14 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthNotes = 200;
+  constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
 
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
+  ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   texBatchRenderer.setSubmitDepth(kDepthNotes);
   simpleBatchRenderer.begin();
+  ghostBatchRenderer.begin();
   texBatchRenderer.begin();
   // background
   drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
@@ -474,6 +543,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
+    drawReplayGhosts(i, y, estimateMicrosToY(i, rxhs));
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
@@ -490,6 +560,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
   texBatchRenderer.flush();
+  ghostBatchRenderer.flush();
 
   // render lane beams
   simpleBatchRenderer.setSubmitDepth(kDepthBeams);
@@ -539,6 +610,41 @@ void BMSRenderer::refreshGeometry() {
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
+}
+
+void BMSRenderer::setReplayData(const ReplayData *replayData) {
+  groupedReplayGhostEvents.clear();
+  groupedReplayGhostEvents.resize(timelines.size());
+  if (replayData == nullptr) {
+    return;
+  }
+
+  for (const auto &event : replayData->events) {
+    if ((event.action != ReplayEventAction::Press &&
+         event.action != ReplayEventAction::Release) ||
+        event.judgement == None || event.noteTimeMicros < 0) {
+      continue;
+    }
+
+    const auto timelineIt = std::lower_bound(
+        timelines.begin(), timelines.end(), event.noteTimeMicros,
+        [](const bms_parser::TimeLine *timeline, long long timing) {
+          return timeline->Timing < timing;
+        });
+    if (timelineIt == timelines.end() ||
+        (*timelineIt)->Timing != event.noteTimeMicros) {
+      continue;
+    }
+
+    const size_t timelineIndex =
+        static_cast<size_t>(std::distance(timelines.begin(), timelineIt));
+    groupedReplayGhostEvents[timelineIndex].push_back({
+        .lane = event.lane,
+        .noteTimeMicros = event.noteTimeMicros,
+        .judgeTimeMicros = event.judgeTimeMicros,
+        .judgement = event.judgement,
+    });
+  }
 }
 
 void BMSRenderer::drawRect(float width, float height, float x, float y,
