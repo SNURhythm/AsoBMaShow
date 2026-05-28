@@ -54,6 +54,11 @@ private:
   [[nodiscard]] bool shouldRecordReplay() const;
   void beginReplayRecording();
   void finishReplayRecording();
+  void buildReplayNoteLookup();
+  void processReplayEvents(long long songTimeMicros);
+  void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
+  void applyReplayGauge(const ReplayEvent &event);
+  bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
   [[nodiscard]] long long getJudgementOffsetMicros() const;
   [[nodiscard]] long long getInputSongTimeMicros(long long songTimeMicros,
                                                  double inputDelay = 0.0) const;
@@ -84,6 +89,8 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
+  std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
+  size_t replayEventCursor = 0;
   TextView *gaugeStatusText = nullptr;
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();

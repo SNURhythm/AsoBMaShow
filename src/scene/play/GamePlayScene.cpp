@@ -15,12 +15,17 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <string>
 
 namespace {
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+std::string replayNoteKey(int lane, long long noteTimeMicros) {
+  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
 }
 
 #if defined(DEBUG) || defined(_DEBUG)
@@ -42,12 +47,14 @@ void GamePlayScene::init() {
                              context.settings.visibleTimeGreenNumber);
   context.jukebox.stop();
   reset();
-  inputHandler = new RhythmInputHandler(this, chart->Meta);
-  inputHandler->discardPendingTouchEvents();
-  inputHandler->startListenSDL();
+  if (!isReplayPlayback()) {
+    inputHandler = new RhythmInputHandler(this, chart->Meta);
+    inputHandler->discardPendingTouchEvents();
+    inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
-  inputHandler->startListenTouch();
+    inputHandler->startListenTouch();
 #endif
+  }
 
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
@@ -157,11 +164,20 @@ void GamePlayScene::reset() {
     }
   }
   context.jukebox.stop();
-  context.jukebox.schedule(*chart, options.autoKeySound, isCancelled);
+  context.jukebox.schedule(*chart, options.autoKeySound && !isReplayPlayback(),
+                           isCancelled);
   context.jukebox.play();
   state = new RhythmState(chart, false);
-  state->configureGauge(options.gaugeType, options.gaugeAutoShift);
+  const GaugeType initialGaugeType =
+      isReplayPlayback() ? options.replayData->initialGaugeType
+                         : options.gaugeType;
+  const bool gaugeAutoShift =
+      isReplayPlayback() ? options.replayData->gaugeAutoShift
+                         : options.gaugeAutoShift;
+  state->configureGauge(initialGaugeType, gaugeAutoShift);
   state->isPlaying = true;
+  replayEventCursor = 0;
+  buildReplayNoteLookup();
   beginReplayRecording();
   updateGaugeStatusText();
 }
@@ -202,6 +218,9 @@ void GamePlayScene::finishReplayRecording() {
 }
 
 long long GamePlayScene::getJudgementOffsetMicros() const {
+  if (isReplayPlayback()) {
+    return 0;
+  }
   return static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
 }
 
@@ -226,12 +245,18 @@ long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
 
 void GamePlayScene::update(float dt) {
   (void)dt;
-  inputHandler->pumpPendingTouchEvents();
+  if (inputHandler != nullptr) {
+    inputHandler->pumpPendingTouchEvents();
+  }
   if (state == nullptr || !state->isPlaying || state->isEnding) {
     return;
   }
 
-  checkPassedTimeline(context.jukebox.getTimeMicros());
+  const long long songTimeMicros = context.jukebox.getTimeMicros();
+  if (isReplayPlayback()) {
+    processReplayEvents(songTimeMicros);
+  }
+  checkPassedTimeline(songTimeMicros);
   if (state->passedMeasureCount != chart->Measures.size()) {
     return;
   }
@@ -267,9 +292,11 @@ void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
   context.jukebox.removeOnTick();
   SDL_Log("Stopping input handler");
-  inputHandler->stopListen();
-  delete inputHandler;
-  inputHandler = nullptr;
+  if (inputHandler != nullptr) {
+    inputHandler->stopListen();
+    delete inputHandler;
+    inputHandler = nullptr;
+  }
   delete renderer;
   renderer = nullptr;
   delete gaugeStatusText;
@@ -414,6 +441,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   const long long visualNow = nowMicros();
   const long long judgedTime = getJudgementTimeMicros(time);
   const long long poorCutoff = judgedTime - latePoorTiming;
+  const bool replayPlayback = isReplayPlayback();
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -423,6 +451,9 @@ void GamePlayScene::checkPassedTimeline(long long time) {
       if (timeline->Timing < poorCutoff) {
         if (isFirstMeasure) {
           state->passedTimelineCount++;
+        }
+        if (replayPlayback) {
+          continue;
         }
         // make remaining notes POOR
         for (const auto &note : timeline->Notes) {
@@ -447,6 +478,9 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                             judgedTime, poorResult);
         }
       } else if (timeline->Timing <= judgedTime) {
+        if (replayPlayback) {
+          continue;
+        }
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
           if (note == nullptr) {
@@ -495,6 +529,114 @@ void GamePlayScene::checkPassedTimeline(long long time) {
       state->passedTimelineCount = 0;
     }
   }
+}
+
+void GamePlayScene::buildReplayNoteLookup() {
+  replayNoteLookup.clear();
+  if (!isReplayPlayback()) {
+    return;
+  }
+
+  for (const auto &measure : chart->Measures) {
+    for (const auto &timeline : measure->TimeLines) {
+      for (const auto &note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        replayNoteLookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+      }
+    }
+  }
+}
+
+bms_parser::Note *
+GamePlayScene::findReplayNote(const ReplayEvent &event) const {
+  if (event.noteTimeMicros < 0) {
+    return nullptr;
+  }
+  const auto it =
+      replayNoteLookup.find(replayNoteKey(event.lane, event.noteTimeMicros));
+  return it == replayNoteLookup.end() ? nullptr : it->second;
+}
+
+void GamePlayScene::processReplayEvents(long long songTimeMicros) {
+  if (!isReplayPlayback() || options.replayData == nullptr) {
+    return;
+  }
+
+  const auto &events = options.replayData->events;
+  const long long visualNow = nowMicros();
+  while (replayEventCursor < events.size() &&
+         events[replayEventCursor].songTimeMicros <= songTimeMicros) {
+    applyReplayEvent(events[replayEventCursor], visualNow);
+    replayEventCursor++;
+  }
+}
+
+void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
+                                     long long visualTimeMicros) {
+  if (state == nullptr || !state->isPlaying || state->isEnding) {
+    return;
+  }
+
+  const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  switch (event.action) {
+  case ReplayEventAction::Press: {
+    if (auto pressedIt = lanePressed.find(event.lane);
+        pressedIt != lanePressed.end()) {
+      pressedIt->second = true;
+    }
+    updateLaneStateText();
+
+    if (auto *note = findReplayNote(event);
+        note != nullptr && event.judgement != None) {
+      pressNote(note, event.judgeTimeMicros, &recordedJudge,
+                event.songTimeMicros, false);
+      applyReplayGauge(event);
+    }
+    renderer->onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+    break;
+  }
+  case ReplayEventAction::Release: {
+    if (auto pressedIt = lanePressed.find(event.lane);
+        pressedIt != lanePressed.end()) {
+      pressedIt->second = false;
+    }
+    updateLaneStateText();
+    renderer->onLaneReleased(event.lane, visualTimeMicros);
+
+    if (auto *note = findReplayNote(event);
+        note != nullptr && event.judgement != None) {
+      releaseNote(note, event.judgeTimeMicros, &recordedJudge,
+                  event.songTimeMicros, false);
+      applyReplayGauge(event);
+    }
+    break;
+  }
+  case ReplayEventAction::Miss:
+    if (event.judgement != None) {
+      onJudge(recordedJudge);
+      applyReplayGauge(event);
+    }
+    break;
+  }
+}
+
+void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
+  if (!isReplayPlayback() || state == nullptr || event.judgement == None) {
+    return;
+  }
+
+  state->gaugeType = event.gaugeType;
+  state->currentGauge = event.gauge;
+  const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
+  if (gaugeIndex >= 0 && gaugeIndex < static_cast<int>(state->gaugeValues.size())) {
+    state->gaugeValues[gaugeIndex] = event.gauge;
+  }
+  if (!state->gaugeHistory.empty()) {
+    state->gaugeHistory.back() = event.gauge;
+  }
+  updateGaugeStatusText();
 }
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
