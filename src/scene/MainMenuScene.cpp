@@ -3,6 +3,7 @@
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
+#include "../ReplayDBHelper.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -13,6 +14,7 @@
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
+#include <memory>
 #include <unordered_set>
 #ifdef _WIN32
 #include <windows.h>
@@ -668,6 +670,82 @@ void MainMenuScene::initView(ApplicationContext &context) {
           0, true);
     }
   });
+  auto replayButton = new Button(0, 0, 220, 64);
+  auto replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  replayButtonText->setText("Replay");
+  replayButtonText->setAlign(TextView::CENTER);
+  replayButtonText->setVAlign(TextView::MIDDLE);
+  replayButton->setContentView(replayButtonText);
+  replayButton->setBackgroundColors(Color(25, 58, 65, 216),
+                                    Color(35, 82, 92, 228),
+                                    Color(48, 111, 124, 236));
+  replayButton->setBorderColors(Color(91, 174, 184, 255),
+                                Color(116, 204, 214, 255),
+                                Color(145, 232, 241, 255));
+  replayButton->setStyledBorderWidth(2);
+  replayButton->setOnClickListener([this, &context, replayButtonText]() {
+    SDL_Log("Replay button clicked");
+    if (willStart) {
+      return;
+    }
+    auto selected = recyclerView->selectedIndex;
+    if (selected < 0 || selected >= recyclerView->size()) {
+      return;
+    }
+    const auto &selectedMeta = recyclerView->get(selected);
+    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+      return;
+    }
+
+    willStart = true;
+    replayButtonText->setText("Loading...");
+    defer(
+        [this, &context, replayButtonText, selectedMeta]() {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
+          if (!replay.has_value()) {
+            willStart = false;
+            replayButtonText->setText("No Replay");
+            defer(
+                [replayButtonText]() {
+                  replayButtonText->setText("Replay");
+                  return false;
+                },
+                1200, true);
+            return true;
+          }
+
+          if (selectedChart.load() == nullptr) {
+            willStart = false;
+            replayButtonText->setText("Replay");
+            return true;
+          }
+
+          auto replayData =
+              std::make_shared<ReplayData>(std::move(replay.value()));
+          context.jukebox.stop();
+          context.sceneManager->changeScene(
+              new GamePlayScene(
+                  context, selectedChart,
+                  {
+                      .startPosition = 0,
+                      .autoKeySound = false,
+                      .autoPlay = false,
+                      .gaugeType = replayData->initialGaugeType,
+                      .gaugeAutoShift = replayData->gaugeAutoShift,
+                      .replayData = replayData,
+                  }),
+              true);
+          willStart = false;
+          replayButtonText->setText("Replay");
+          return true;
+        },
+        0, true);
+  });
   auto *jacketCard = new View();
   jacketCard->setWidth(220);
   jacketCard->setHeight(220);
@@ -681,6 +759,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setHeight(100);
   right->addView(jacketCard);
   right->addView(startButton);
+  right->addView(replayButton);
 
   auto *settingsButton = new Button(0, 0, 220, 78);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
