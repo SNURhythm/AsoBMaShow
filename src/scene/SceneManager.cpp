@@ -70,6 +70,7 @@ void SceneManager::changeScene(const std::string& sceneName, bool keepBackground
 
 EventHandleResult SceneManager::handleEvents(SDL_Event &event) {
   EventHandleResult result;
+  View::dispatchTemporaryEventListeners(event);
   if (currentScene) {
     result = currentScene->handleEvents(event);
   }

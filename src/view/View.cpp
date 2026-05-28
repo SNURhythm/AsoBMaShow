@@ -1,5 +1,7 @@
 #include "View.h"
 
+#include <utility>
+
 namespace {
 void submitColoredRect(const RenderContext &context, int x, int y, int width,
                        int height, const Color &color) {
@@ -20,6 +22,53 @@ void submitColoredRect(const RenderContext &context, int x, int y, int width,
   bgfx::submit(rendering::ui_view, kSimpleProgram);
 }
 } // namespace
+
+void View::eraseInactiveTemporaryEventListeners() {
+  temporaryEventListeners.erase(
+      std::remove_if(temporaryEventListeners.begin(),
+                     temporaryEventListeners.end(),
+                     [](const auto &entry) { return !entry.active; }),
+      temporaryEventListeners.end());
+}
+
+uint64_t
+View::addTemporaryEventListener(TemporaryEventListener listener) {
+  if (!listener) {
+    return 0;
+  }
+  const uint64_t listenerId = nextTemporaryEventListenerId++;
+  temporaryEventListeners.push_back({listenerId, std::move(listener), true});
+  return listenerId;
+}
+
+void View::removeTemporaryEventListener(uint64_t listenerId) {
+  if (listenerId == 0) {
+    return;
+  }
+  for (auto &entry : temporaryEventListeners) {
+    if (entry.id == listenerId) {
+      entry.active = false;
+      break;
+    }
+  }
+  if (!dispatchingTemporaryEventListeners) {
+    eraseInactiveTemporaryEventListeners();
+  }
+}
+
+void View::dispatchTemporaryEventListeners(SDL_Event &event) {
+  dispatchingTemporaryEventListeners = true;
+  const size_t listenerCount = temporaryEventListeners.size();
+  for (size_t i = 0; i < listenerCount && i < temporaryEventListeners.size();
+       ++i) {
+    auto &entry = temporaryEventListeners[i];
+    if (entry.active) {
+      entry.listener(event);
+    }
+  }
+  dispatchingTemporaryEventListeners = false;
+  eraseInactiveTemporaryEventListeners();
+}
 
 View *View::setWidth(float width) {
   YGNodeStyleSetWidth(node, width);

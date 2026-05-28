@@ -47,6 +47,7 @@ private:
   bool isSelected = false;
   bool isDraggingSelection = false;
   SDL_FingerID activeTouchId = -1;
+  uint64_t pointerDownListenerId = 0;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
   Uint32 lastBlink = 0;
@@ -83,6 +84,10 @@ private:
   void refreshDisplay(bool notifyTextChanged, bool notifySubmit = false);
   void updateCompositionGeometry(const std::string &display);
   void renderSelection(RenderContext &context, bgfx::ProgramHandle program);
+  void registerPointerDownListener();
+  void unregisterPointerDownListener();
+  void handlePointerDownOutside(const SDL_Event &event);
+  void finishEditing();
   void notifyEditingFinished();
   void syncTextInputRect(int cursorX, int cursorY);
 };

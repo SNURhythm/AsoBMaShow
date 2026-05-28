@@ -103,7 +103,12 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
   viewRect = {getX(), getY(), getWidth(), getHeight()};
 }
 
-TextInputBox::~TextInputBox() {}
+TextInputBox::~TextInputBox() {
+  unregisterPointerDownListener();
+  if (isSelected) {
+    SDL_StopTextInput();
+  }
+}
 
 std::string TextInputBox::getText() const { return displayedText(); }
 
@@ -366,13 +371,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       break;
     }
 
-    isDraggingSelection = false;
-    if (isSelected) {
-      commitComposition();
-      notifyEditingFinished();
-      onUnselected();
-      SDL_StopTextInput();
-    }
+    finishEditing();
     break;
   }
   case SDL_MOUSEBUTTONUP:
@@ -425,14 +424,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       break;
     }
 
-    activeTouchId = -1;
-    isDraggingSelection = false;
-    if (isSelected) {
-      commitComposition();
-      notifyEditingFinished();
-      onUnselected();
-      SDL_StopTextInput();
-    }
+    finishEditing();
     break;
   }
   case SDL_FINGERMOTION: {
@@ -763,15 +755,78 @@ void TextInputBox::renderSelection(RenderContext &context,
              selectionHeight, sdlColorToAbgr(selectionColor));
 }
 
-void TextInputBox::onSelected() { isSelected = true; }
+void TextInputBox::onSelected() {
+  isSelected = true;
+  registerPointerDownListener();
+}
 
 void TextInputBox::onUnselected() {
+  unregisterPointerDownListener();
   isSelected = false;
   isDraggingSelection = false;
   activeTouchId = -1;
   commitComposition();
   clearSelection();
   TextView::setText(editingText);
+}
+
+void TextInputBox::registerPointerDownListener() {
+  if (pointerDownListenerId != 0) {
+    return;
+  }
+  pointerDownListenerId = View::addTemporaryEventListener(
+      [this](SDL_Event &event) { handlePointerDownOutside(event); });
+}
+
+void TextInputBox::unregisterPointerDownListener() {
+  View::removeTemporaryEventListener(pointerDownListenerId);
+  pointerDownListenerId = 0;
+}
+
+void TextInputBox::handlePointerDownOutside(const SDL_Event &event) {
+  if (!isSelected) {
+    return;
+  }
+
+  float uiX = 0.0f;
+  float uiY = 0.0f;
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return;
+    }
+    int x = 0;
+    int y = 0;
+    const int screenX =
+        static_cast<int>(event.button.x * rendering::widthScale);
+    const int screenY =
+        static_cast<int>(event.button.y * rendering::heightScale);
+    rendering::screenToUi(screenX, screenY, x, y);
+    uiX = static_cast<float>(x);
+    uiY = static_cast<float>(y);
+    break;
+  }
+  case SDL_FINGERDOWN:
+    fingerEventToUi(event.tfinger, uiX, uiY);
+    break;
+  default:
+    return;
+  }
+
+  if (!isInsideTextInput(*this, uiX, uiY)) {
+    finishEditing();
+  }
+}
+
+void TextInputBox::finishEditing() {
+  if (!isSelected) {
+    return;
+  }
+  commitComposition();
+  notifyEditingFinished();
+  onUnselected();
+  SDL_StopTextInput();
 }
 
 void TextInputBox::notifyEditingFinished() {

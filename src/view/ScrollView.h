@@ -25,12 +25,14 @@ private:
   float scrollOffset = 0.0f;
   bool mousePressedInside = false;
   bool mouseDragging = false;
+  bool mouseCapturedByContent = false;
   bool cancelMouseClick = false;
   int pressedMouseUiX = 0;
   int pressedMouseUiY = 0;
   int lastMouseUiY = 0;
   bool touchPressedInside = false;
   bool touchDragging = false;
+  bool touchCapturedByContent = false;
   bool cancelTouchClick = false;
   float pressedTouchUiX = 0.0f;
   float pressedTouchUiY = 0.0f;
