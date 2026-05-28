@@ -29,7 +29,7 @@ public:
   void removeOnEditingFinished(
       std::function<void(const std::string &)> callback);
 
-  [[nodiscard]] inline std::string getText() const { return editingText; }
+  [[nodiscard]] std::string getText() const;
 
   [[nodiscard]] inline bool getSelected() const { return isSelected; }
 
@@ -71,6 +71,8 @@ private:
   void setCursor(size_t newCursorPos, bool extendSelection);
   bool deleteSelection();
   bool insertTextAtCursor(const std::string &insertedText);
+  void clearComposition();
+  bool commitComposition();
   void selectAll();
   void copySelectionToClipboard() const;
   std::string displayedText() const;

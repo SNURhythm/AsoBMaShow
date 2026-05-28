@@ -100,6 +100,8 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 
 TextInputBox::~TextInputBox() {}
 
+std::string TextInputBox::getText() const { return displayedText(); }
+
 void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
   const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
@@ -137,9 +139,7 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
 
 void TextInputBox::setEditingText(const std::string &newText) {
   editingText = newText;
-  composition.clear();
-  compositionCursor = 0;
-  compositionSelectionLength = 0;
+  clearComposition();
   cursorPos = editingText.size();
   selectionAnchor = cursorPos;
   isDraggingSelection = false;
@@ -182,9 +182,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (!isSelected) {
       return true;
     }
-    composition.clear();
-    compositionCursor = 0;
-    compositionSelectionLength = 0;
+    clearComposition();
     textChanged = insertTextAtCursor(event.text.text);
     displayChanged = true;
     break;
@@ -200,10 +198,10 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
 
     if (!composition.empty()) {
       if (key == SDLK_ESCAPE) {
-        composition.clear();
-        compositionCursor = 0;
-        compositionSelectionLength = 0;
+        const std::string previousText = displayedText();
+        clearComposition();
         displayChanged = true;
+        textChanged = displayedText() != previousText;
       }
       break;
     }
@@ -310,18 +308,26 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (!isSelected) {
       return true;
     }
-    composition = event.edit.text;
-    compositionCursor = event.edit.start;
-    compositionSelectionLength = event.edit.length;
+    {
+      const std::string previousText = displayedText();
+      composition = event.edit.text;
+      compositionCursor = event.edit.start;
+      compositionSelectionLength = event.edit.length;
+      textChanged = displayedText() != previousText;
+    }
     displayChanged = true;
     break;
   case SDL_TEXTEDITING_EXT:
     if (!isSelected) {
       return true;
     }
-    composition = event.editExt.text != nullptr ? event.editExt.text : "";
-    compositionCursor = event.editExt.start;
-    compositionSelectionLength = event.editExt.length;
+    {
+      const std::string previousText = displayedText();
+      composition = event.editExt.text != nullptr ? event.editExt.text : "";
+      compositionCursor = event.editExt.start;
+      compositionSelectionLength = event.editExt.length;
+      textChanged = displayedText() != previousText;
+    }
     displayChanged = true;
     break;
   case SDL_MOUSEBUTTONDOWN: {
@@ -333,10 +339,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (event.button.button == SDL_BUTTON_LEFT &&
         isInsideTextInput(*this, static_cast<float>(x),
                           static_cast<float>(y))) {
-      composition.clear();
-      compositionCursor = 0;
-      compositionSelectionLength = 0;
-      TextView::setText(editingText);
+      commitComposition();
       onSelected();
       SDL_StartTextInput();
       setCursor(posToCursor(x - getX(), y - getY()),
@@ -349,6 +352,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     if (event.button.button == SDL_BUTTON_LEFT) {
       isDraggingSelection = false;
       if (isSelected) {
+        commitComposition();
         notifyEditingFinished();
       }
       onUnselected();
@@ -548,6 +552,27 @@ void TextInputBox::copySelectionToClipboard() const {
   SDL_SetClipboardText(selectedText.c_str());
 }
 
+void TextInputBox::clearComposition() {
+  composition.clear();
+  compositionCursor = 0;
+  compositionSelectionLength = 0;
+  lastRenderedCaretCursor = static_cast<size_t>(-1);
+}
+
+bool TextInputBox::commitComposition() {
+  if (composition.empty()) {
+    return false;
+  }
+
+  const size_t start = compositionDisplayStart();
+  const size_t end = hasSelection() ? selectionEnd() : cursorPos;
+  editingText.replace(start, end - start, composition);
+  cursorPos = start + composition.size();
+  selectionAnchor = cursorPos;
+  clearComposition();
+  return true;
+}
+
 std::string TextInputBox::displayedText() const {
   std::string display = editingText;
   if (!composition.empty()) {
@@ -581,12 +606,12 @@ void TextInputBox::refreshDisplay(bool notifyTextChanged, bool notifySubmit) {
 
   if (notifyTextChanged) {
     for (auto &callback : onTextChangedCallbacks) {
-      callback(editingText);
+      callback(display);
     }
   }
   if (notifySubmit) {
     for (auto &callback : onSubmitCallbacks) {
-      callback(editingText);
+      callback(display);
     }
     notifyEditingFinished();
   }
@@ -665,16 +690,14 @@ void TextInputBox::onSelected() { isSelected = true; }
 void TextInputBox::onUnselected() {
   isSelected = false;
   isDraggingSelection = false;
-  composition.clear();
-  compositionCursor = 0;
-  compositionSelectionLength = 0;
+  commitComposition();
   clearSelection();
   TextView::setText(editingText);
 }
 
 void TextInputBox::notifyEditingFinished() {
   for (auto &callback : onEditingFinishedCallbacks) {
-    callback(editingText);
+    callback(getText());
   }
 }
 
