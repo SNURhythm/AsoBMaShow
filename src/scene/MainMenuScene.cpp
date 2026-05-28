@@ -4,6 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include "../ReplayDBHelper.h"
+#include "../ReplayVideoExporter.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -746,6 +747,83 @@ void MainMenuScene::initView(ApplicationContext &context) {
         },
         0, true);
   });
+
+  auto exportButton = new Button(0, 0, 220, 64);
+  auto exportButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  exportButtonText->setText("Export MP4");
+  exportButtonText->setAlign(TextView::CENTER);
+  exportButtonText->setVAlign(TextView::MIDDLE);
+  exportButton->setContentView(exportButtonText);
+  exportButton->setBackgroundColors(Color(47, 54, 88, 216),
+                                    Color(65, 75, 119, 228),
+                                    Color(82, 94, 148, 236));
+  exportButton->setBorderColors(Color(126, 141, 219, 255),
+                                Color(151, 165, 239, 255),
+                                Color(180, 191, 255, 255));
+  exportButton->setStyledBorderWidth(2);
+  exportButton->setOnClickListener([this, &context, exportButtonText]() {
+    SDL_Log("Replay export button clicked");
+    if (willStart) {
+      return;
+    }
+    auto selected = recyclerView->selectedIndex;
+    if (selected < 0 || selected >= recyclerView->size()) {
+      return;
+    }
+    const auto &selectedMeta = recyclerView->get(selected);
+    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+      return;
+    }
+
+    willStart = true;
+    exportButtonText->setText("Exporting...");
+    defer(
+        [this, &context, exportButtonText, selectedMeta]() {
+          auto resetExportText = [exportButtonText]() {
+            exportButtonText->setText("Export MP4");
+            return false;
+          };
+
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
+          if (!replay.has_value()) {
+            willStart = false;
+            exportButtonText->setText("No Replay");
+            defer(resetExportText, 1200, true);
+            return true;
+          }
+
+          if (selectedChart.load() == nullptr) {
+            willStart = false;
+            exportButtonText->setText("No Chart");
+            defer(resetExportText, 1200, true);
+            return true;
+          }
+
+          context.jukebox.stop();
+          const auto result =
+              ReplayVideoExporter::Export(context, selectedChart, replay.value());
+          willStart = false;
+          if (result.success) {
+            SDL_Log("Replay video exported: %s",
+                    result.outputPath.string().c_str());
+            exportButtonText->setText("Exported");
+            defer(resetExportText, 1800, true);
+            return true;
+          }
+
+          SDL_Log("Replay video export failed: %s (%s)",
+                  result.message.c_str(), result.outputPath.string().c_str());
+          exportButtonText->setText("Export Failed");
+          defer(resetExportText, 1800, true);
+          return true;
+        },
+        0, true);
+  });
   auto *jacketCard = new View();
   jacketCard->setWidth(220);
   jacketCard->setHeight(220);
@@ -760,6 +838,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(jacketCard);
   right->addView(startButton);
   right->addView(replayButton);
+  right->addView(exportButton);
 
   auto *settingsButton = new Button(0, 0, 220, 78);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
