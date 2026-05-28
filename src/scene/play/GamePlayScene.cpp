@@ -177,6 +177,7 @@ void GamePlayScene::reset() {
                          : options.gaugeAutoShift;
   state->configureGauge(initialGaugeType, gaugeAutoShift);
   state->isPlaying = true;
+  replayKeySoundCursor = 0;
   replayEventCursor = 0;
   buildReplayNoteLookup();
   beginReplayRecording();
@@ -255,6 +256,7 @@ void GamePlayScene::update(float dt) {
 
   const long long songTimeMicros = context.jukebox.getTimeMicros();
   if (isReplayPlayback()) {
+    processReplayKeySounds(songTimeMicros);
     processReplayEvents(songTimeMicros);
   }
   checkPassedTimeline(songTimeMicros);
@@ -560,6 +562,30 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
   return it == replayNoteLookup.end() ? nullptr : it->second;
 }
 
+void GamePlayScene::processReplayKeySounds(long long songTimeMicros) {
+  if (!isReplayPlayback() || options.replayData == nullptr ||
+      options.autoKeySound) {
+    return;
+  }
+
+  const auto &events = options.replayData->events;
+  const long long audioDelayMicros = getVisualOffsetMicros();
+  while (replayKeySoundCursor < events.size()) {
+    const auto &event = events[replayKeySoundCursor];
+    if (event.songTimeMicros - audioDelayMicros > songTimeMicros) {
+      break;
+    }
+
+    if (event.action == ReplayEventAction::Press) {
+      if (auto *note = findReplayNote(event);
+          note != nullptr && note->Wav != bms_parser::Parser::NoWav) {
+        context.jukebox.playKeySound(note->Wav);
+      }
+    }
+    replayKeySoundCursor++;
+  }
+}
+
 void GamePlayScene::processReplayEvents(long long songTimeMicros) {
   if (!isReplayPlayback() || options.replayData == nullptr) {
     return;
@@ -701,7 +727,8 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      const JudgeResult *precomputedJudge,
                                      long long songTimeMicros,
                                      bool recordEvent) {
-  if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound) {
+  if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
+      !isReplayPlayback()) {
     context.jukebox.playKeySound(note->Wav);
   }
   const JudgeResult judgeResult =

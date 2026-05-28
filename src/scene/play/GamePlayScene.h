@@ -55,6 +55,7 @@ private:
   void beginReplayRecording();
   void finishReplayRecording();
   void buildReplayNoteLookup();
+  void processReplayKeySounds(long long songTimeMicros);
   void processReplayEvents(long long songTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
   void applyReplayGauge(const ReplayEvent &event);
@@ -90,6 +91,7 @@ private:
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
+  size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   TextView *gaugeStatusText = nullptr;
   TextView *laneStateText = nullptr;
