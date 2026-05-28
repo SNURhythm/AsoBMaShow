@@ -69,6 +69,7 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
       appendLaneGroup(scratchLaneIndices);
     }
   }
+  buildTimelineScrollPositions();
   groupedReplayGhostEvents.resize(timelines.size());
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
@@ -318,35 +319,86 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
                              sheet.note.u1, sheet.note.v1, sheet.texture);
 }
 
-float BMSRenderer::estimateMicrosToY(size_t timelineIndex, float rxhs) const {
-  if (timelineIndex >= timelines.size()) {
-    return 0.0f;
+void BMSRenderer::buildTimelineScrollPositions() {
+  timelineScrollPositions.clear();
+  timelineScrollPositions.reserve(timelines.size());
+  if (timelines.empty()) {
+    return;
   }
 
-  if (timelineIndex > 0) {
-    const auto *timeline = timelines[timelineIndex];
-    const auto *prevTimeline = timelines[timelineIndex - 1];
-    const long long duration =
-        timeline->Timing - prevTimeline->Timing -
-        static_cast<long long>(prevTimeline->GetStopDuration());
-    if (duration != 0) {
-      const double beatDelta =
-          timeline->BeatPosition - prevTimeline->BeatPosition;
-      return static_cast<float>(beatDelta * prevTimeline->Scroll * rxhs /
-                                static_cast<double>(duration));
-    }
+  double position = timelines.front()->BeatPosition;
+  timelineScrollPositions.push_back(position);
+  for (size_t i = 1; i < timelines.size(); ++i) {
+    const auto *prevTimeline = timelines[i - 1];
+    const auto *timeline = timelines[i];
+    position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
+                prevTimeline->Scroll;
+    timelineScrollPositions.push_back(position);
   }
-
-  const auto *timeline = timelines[timelineIndex];
-  if (timeline->Timing != 0) {
-    return static_cast<float>(timeline->BeatPosition * timeline->Scroll * rxhs /
-                              static_cast<double>(timeline->Timing));
-  }
-  return 0.0f;
 }
 
-void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float microsToY,
-                                   long long currentTimeMicros) {
+double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
+  if (timelines.empty()) {
+    return 0.0;
+  }
+
+  const auto timelineIt = std::lower_bound(
+      timelines.begin(), timelines.end(), timeMicros,
+      [](const bms_parser::TimeLine *timeline, long long timing) {
+        return timeline->Timing < timing;
+      });
+
+  if (timelineIt == timelines.begin()) {
+    const auto *timeline = timelines.front();
+    if (timeline->Timing <= 0) {
+      return timelineScrollPositions.front();
+    }
+    const double progress =
+        std::clamp(static_cast<double>(timeMicros) /
+                       static_cast<double>(timeline->Timing),
+                   0.0, 1.0);
+    return timelineScrollPositions.front() * progress;
+  }
+
+  if (timelineIt == timelines.end()) {
+    return timelineScrollPositions.back();
+  }
+
+  const size_t timelineIndex =
+      static_cast<size_t>(std::distance(timelines.begin(), timelineIt));
+  const auto *timeline = timelines[timelineIndex];
+  if (timeline->Timing == timeMicros) {
+    return timelineScrollPositions[timelineIndex];
+  }
+
+  const size_t prevTimelineIndex = timelineIndex - 1;
+  const auto *prevTimeline = timelines[prevTimelineIndex];
+  const long long stopDuration =
+      static_cast<long long>(prevTimeline->GetStopDuration());
+  const long long stopEnd = prevTimeline->Timing + stopDuration;
+  if (timeMicros <= stopEnd) {
+    return timelineScrollPositions[prevTimelineIndex];
+  }
+
+  const long long scrollDuration =
+      timeline->Timing - prevTimeline->Timing - stopDuration;
+  if (scrollDuration <= 0) {
+    return timelineScrollPositions[timelineIndex];
+  }
+
+  const double progress =
+      std::clamp(static_cast<double>(timeMicros - stopEnd) /
+                     static_cast<double>(scrollDuration),
+                 0.0, 1.0);
+  return timelineScrollPositions[prevTimelineIndex] +
+         (timelineScrollPositions[timelineIndex] -
+          timelineScrollPositions[prevTimelineIndex]) *
+             progress;
+}
+
+void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float rxhs,
+                                   long long currentTimeMicros,
+                                   double currentScrollPosition) {
   if (timelineIndex >= groupedReplayGhostEvents.size()) {
     return;
   }
@@ -355,10 +407,11 @@ void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float microsToY,
     if (event.judgeTimeMicros < currentTimeMicros) {
       continue;
     }
+    const double eventScrollPosition =
+        scrollPositionAtTime(event.judgeTimeMicros);
     const float ghostY =
-        judgeY + static_cast<float>(event.judgeTimeMicros -
-                                    currentTimeMicros) *
-                     microsToY;
+        judgeY +
+        static_cast<float>(eventScrollPosition - currentScrollPosition) * rxhs;
     drawGhostNoteOutline(ghostY, event);
   }
 }
@@ -441,6 +494,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
+  const double currentScrollPosition = scrollPositionAtTime(micro);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
@@ -546,7 +600,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
-    drawReplayGhosts(i, estimateMicrosToY(i, rxhs), micro);
+    drawReplayGhosts(i, rxhs, micro, currentScrollPosition);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {

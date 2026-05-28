@@ -100,6 +100,7 @@ private:
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<std::vector<ReplayGhostEvent>> groupedReplayGhostEvents;
+  std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int keyLaneCount;
@@ -126,10 +127,12 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
-  void drawReplayGhosts(size_t timelineIndex, float microsToY,
-                        long long currentTimeMicros);
+  void drawReplayGhosts(size_t timelineIndex, float rxhs,
+                        long long currentTimeMicros,
+                        double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
-  float estimateMicrosToY(size_t timelineIndex, float rxhs) const;
+  void buildTimelineScrollPositions();
+  double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText();
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
