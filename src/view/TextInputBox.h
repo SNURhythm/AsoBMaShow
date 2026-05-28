@@ -46,6 +46,7 @@ private:
   int compositionHeight = 0;
   bool isSelected = false;
   bool isDraggingSelection = false;
+  SDL_FingerID activeTouchId = -1;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
   Uint32 lastBlink = 0;
