@@ -9,8 +9,8 @@ namespace {
 SDL_Cursor *getCachedCursor(SDL_SystemCursor cursorType) {
   static SDL_Cursor *s_ibeamCursor = nullptr;
   static SDL_Cursor *s_arrowCursor = nullptr;
-  SDL_Cursor **slot = cursorType == SDL_SYSTEM_CURSOR_IBEAM ? &s_ibeamCursor
-                                                             : &s_arrowCursor;
+  SDL_Cursor **slot =
+      cursorType == SDL_SYSTEM_CURSOR_IBEAM ? &s_ibeamCursor : &s_arrowCursor;
   if (*slot == nullptr) {
     *slot = SDL_CreateSystemCursor(cursorType);
   }
@@ -39,8 +39,7 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 TextInputBox::~TextInputBox() {}
 
 void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
-  const int lineHeight =
-      std::max(1, rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 1));
+  const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
   SDL_Rect nextRect = {cursorX, cursorY, lineWidth, lineHeight};
 
@@ -57,14 +56,15 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
 
   if (logicalW > 0 && logicalH > 0 && rendering::window_width > 0 &&
       rendering::window_height > 0) {
-    const float scaleX =
-        static_cast<float>(logicalW) / static_cast<float>(rendering::window_width);
+    const float scaleX = static_cast<float>(logicalW) /
+                         static_cast<float>(rendering::window_width);
     const float scaleY = static_cast<float>(logicalH) /
                          static_cast<float>(rendering::window_height);
-    nextRect.x = static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
-    nextRect.y = static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
-    nextRect.w =
-        std::max(1, static_cast<int>(std::lround(lineWidth * scaleX)));
+    nextRect.x =
+        static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
+    nextRect.y =
+        static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
+    nextRect.w = std::max(1, static_cast<int>(std::lround(lineWidth * scaleX)));
     nextRect.h =
         std::max(1, static_cast<int>(std::lround(lineHeight * scaleY)));
   }
@@ -186,7 +186,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     rendering::screenToUi(screenX, screenY, x, y);
     // check if the mouse is inside the text box
     if (event.button.button == SDL_BUTTON_LEFT &&
-        isInsideTextInput(*this, static_cast<float>(x), static_cast<float>(y))) {
+        isInsideTextInput(*this, static_cast<float>(x),
+                          static_cast<float>(y))) {
 
       cursorPos = posToCursor(x - getX(), y - getY());
       int cursorX = 0;
@@ -233,9 +234,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
                   compositionHeight);
       compositionWidth -= compositionX;
       const int underlineHeight = 2;
-      const int contentHeight = std::max(
-          underlineHeight,
-          rect.h > 0 ? rect.h : (font != nullptr ? TTF_FontHeight(font) : 0));
+      const int contentHeight =
+          std::max(underlineHeight, rect.h > 0 ? rect.h : textLineHeight());
       compositionHeight = contentHeight;
       compositionY += std::max(0, contentHeight - underlineHeight);
     }
@@ -292,7 +292,7 @@ void TextInputBox::renderImpl(RenderContext &context) {
       cursorToPos(cursorPos, editingText, caretX, caretY);
       int height = rect.h;
       if (height == 0) {
-        height = TTF_FontHeight(font);
+        height = textLineHeight();
       }
 
       if (!composition.empty()) {
@@ -342,9 +342,8 @@ void TextInputBox::cursorToPos(size_t cursorPos, const std::string &text,
   utf8.resize(cursorPos);
 
   int textWidth = 0;
-  int textHeight = 0;
-  if (font != nullptr && !utf8.empty()) {
-    TTF_SizeUTF8(font, utf8.c_str(), &textWidth, &textHeight);
+  if (!utf8.empty()) {
+    textWidth = measureTextWidth(utf8);
   }
 
   const SDL_Rect contentRect = resolvedTextRect();
@@ -356,9 +355,8 @@ size_t TextInputBox::posToCursor(int x, int y) {
   // TODO: this will not work for multi-line text
   (void)y;
   size_t cursorPos = 0;
-  int w = 0, h = 0;
+  int w = 0;
   int dw = 0;
-  int dh = 0;
   size_t glyphs = 0;
   const SDL_Rect contentRect = resolvedTextRect();
   const int localX = std::max(0, x - (contentRect.x - getX()));
@@ -366,16 +364,11 @@ size_t TextInputBox::posToCursor(int x, int y) {
   for (cursorPos = 0; cursorPos < editingText.size();) {
 
     int prevW = w;
-    int prevH = h;
-    TTF_SizeUTF8(font, editingText.substr(0, cursorPos).c_str(), &w, &h);
+    w = measureTextWidth(editingText.substr(0, cursorPos));
     if (prevW != 0)
       dw = w - prevW;
     else
       dw = w;
-    if (prevH != 0)
-      dh = h - prevH;
-    else
-      dh = h;
     if (glyphs == 1 && dw / 2 > localX)
       return 0;
     if (w + dw / 2 > localX) {

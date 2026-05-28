@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
 #include <string>
+#include <vector>
 
 class TextView : public View {
 public:
@@ -22,13 +23,28 @@ public:
   void setWrap(bool enabled);
 
 protected:
+  struct FontFace {
+    TTF_Font *font = nullptr;
+    std::string path;
+  };
+
   void renderImpl(RenderContext &context) override;
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
+  [[nodiscard]] int textLineHeight() const;
+  [[nodiscard]] int measureTextWidth(const std::string &utf8) const;
+  [[nodiscard]] TTF_Font *selectFont(Uint32 codepoint) const;
+  [[nodiscard]] bool primaryFontSupportsText(const std::string &utf8) const;
+  [[nodiscard]] std::vector<std::string> wrappedTextLines(int wrapWidth) const;
+  [[nodiscard]] SDL_Surface *
+  renderFallbackTextSurface(int wrapWidth, int &surfaceWidth,
+                            int &surfaceHeight) const;
   TextAlign align = TextAlign::LEFT;
   TextVAlign valign = TextVAlign::TOP;
   TextOverflow overflow = TextOverflow::Visible;
   TTF_Font *font = nullptr;
+  std::vector<FontFace> fontFaces;
+  int fontSize = 0;
   bool ttfInitialized = false;
 
   SDL_Color color{};
