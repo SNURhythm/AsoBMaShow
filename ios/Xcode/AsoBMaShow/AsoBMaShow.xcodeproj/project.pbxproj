@@ -735,6 +735,7 @@
 				scene/SceneManager.cpp,
 				SDL_uikit_main.c,
 				ReplayDBHelper.cpp,
+				ReplayVideoExporter.cpp,
 				ScoreDBHelper.cpp,
 				skin/DefaultSkin.cpp,
 				sqlite3.c,
