@@ -126,7 +126,8 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
-  void drawReplayGhosts(size_t timelineIndex, float noteY, float microsToY);
+  void drawReplayGhosts(size_t timelineIndex, float microsToY,
+                        long long currentTimeMicros);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
   float estimateMicrosToY(size_t timelineIndex, float rxhs) const;
   void applyPendingHudText();

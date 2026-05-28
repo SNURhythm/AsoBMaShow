@@ -345,17 +345,20 @@ float BMSRenderer::estimateMicrosToY(size_t timelineIndex, float rxhs) const {
   return 0.0f;
 }
 
-void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float noteY,
-                                   float microsToY) {
+void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float microsToY,
+                                   long long currentTimeMicros) {
   if (timelineIndex >= groupedReplayGhostEvents.size()) {
     return;
   }
 
   for (const auto &event : groupedReplayGhostEvents[timelineIndex]) {
+    if (event.judgeTimeMicros < currentTimeMicros) {
+      continue;
+    }
     const float ghostY =
-        noteY + static_cast<float>(event.judgeTimeMicros -
-                                   event.noteTimeMicros) *
-                    microsToY;
+        judgeY + static_cast<float>(event.judgeTimeMicros -
+                                    currentTimeMicros) *
+                     microsToY;
     drawGhostNoteOutline(ghostY, event);
   }
 }
@@ -543,7 +546,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
-    drawReplayGhosts(i, y, estimateMicrosToY(i, rxhs));
+    drawReplayGhosts(i, estimateMicrosToY(i, rxhs), micro);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
