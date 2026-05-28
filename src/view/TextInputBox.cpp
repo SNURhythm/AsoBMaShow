@@ -201,6 +201,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     const SDL_Keymod mods = static_cast<SDL_Keymod>(event.key.keysym.mod);
     const bool shortcutHeld = hasShortcutModifier(mods);
     const bool shiftHeld = hasShiftModifier(mods);
+    const bool navigationKey = key == SDLK_RIGHT || key == SDLK_LEFT ||
+                               key == SDLK_HOME || key == SDLK_END;
 
     if (!composition.empty()) {
       if (key == SDLK_ESCAPE) {
@@ -208,8 +210,13 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
         clearComposition();
         displayChanged = true;
         textChanged = displayedText() != previousText;
+        break;
       }
-      break;
+      if (navigationKey) {
+        commitComposition();
+      } else {
+        break;
+      }
     }
 
     if (shortcutHeld && key == SDLK_a) {
