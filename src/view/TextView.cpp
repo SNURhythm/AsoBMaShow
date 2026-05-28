@@ -8,6 +8,10 @@
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
+#include "../targets.h"
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 #include "bgfx/defines.h"
 #include "bx/math.h"
 #include <algorithm>
@@ -33,11 +37,6 @@ std::map<std::string, CachedFont> g_fontCache;
 struct Utf8Token {
   Uint32 codepoint = 0;
   std::string bytes;
-};
-
-struct FontRun {
-  TTF_Font *font = nullptr;
-  std::string text;
 };
 
 struct TextLineMetrics {
@@ -87,7 +86,7 @@ bool canReadFile(const std::string &path) {
 
 std::vector<std::string> systemFontFallbackPaths() {
   std::vector<std::string> paths;
-#if defined(__APPLE__)
+#if TARGET_OS_OSX
   addUniquePath(paths, "/System/Library/Fonts/SFNS.ttf");
   addUniquePath(paths, "/System/Library/Fonts/Core/SFNS.ttf");
   addUniquePath(paths, "/System/Library/Fonts/CoreUI/SFUI.ttf");
@@ -98,6 +97,9 @@ std::vector<std::string> systemFontFallbackPaths() {
   addUniquePath(paths, "/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
   addUniquePath(paths, "/System/Library/Fonts/Apple Color Emoji.ttc");
   addUniquePath(paths, "/System/Library/Fonts/LastResort.otf");
+#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  // iOS system font files are not app-readable; CoreText fallback is used
+  // instead when bundled SDL_ttf fonts cannot render a glyph.
 #elif defined(_WIN32)
   addUniquePath(paths, "C:/Windows/Fonts/segoeui.ttf");
   addUniquePath(paths, "C:/Windows/Fonts/malgun.ttf");
@@ -427,6 +429,23 @@ void TextView::includeFontMetrics(TTF_Font *loadedFont) {
   fontDescent = std::max(fontDescent, -TTF_FontDescent(loadedFont));
 }
 
+void TextView::includeIOSSystemFontMetrics() {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (iosSystemFontMetricsIncluded) {
+    return;
+  }
+
+  const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontSize);
+  iosSystemFontLineHeight = metrics.height;
+  iosSystemFontAscent = metrics.ascent;
+  iosSystemFontDescent = metrics.descent;
+  fontLineHeight = std::max(fontLineHeight, metrics.height);
+  fontAscent = std::max(fontAscent, metrics.ascent);
+  fontDescent = std::max(fontDescent, metrics.descent);
+  iosSystemFontMetricsIncluded = true;
+#endif
+}
+
 TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
   if (pathIndex >= fallbackFontPaths.size()) {
     return nullptr;
@@ -446,9 +465,60 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
   return opened;
 }
 
-TTF_Font *TextView::selectFont(Uint32 codepoint) {
-  if (fontFaces.empty()) {
+bool TextView::hasFontSource(const SelectedFont &source) const {
+  return source.font != nullptr || source.iosSystemFont;
+}
+
+bool TextView::sameFontSource(const SelectedFont &lhs,
+                              const SelectedFont &rhs) const {
+  return lhs.font == rhs.font && lhs.iosSystemFont == rhs.iosSystemFont;
+}
+
+int TextView::measureFontSourceTextWidth(const SelectedFont &source,
+                                         const std::string &utf8) {
+  if (utf8.empty()) {
+    return 0;
+  }
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (source.iosSystemFont) {
+    includeIOSSystemFontMetrics();
+    return MeasureIOSSystemTextWidth(utf8, fontSize);
+  }
+#endif
+
+  return sizeUtf8Width(source.font, utf8);
+}
+
+int TextView::fontSourceAscent(const SelectedFont &source) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (source.iosSystemFont) {
+    includeIOSSystemFontMetrics();
+    return iosSystemFontAscent;
+  }
+#endif
+
+  return source.font == nullptr ? 0 : TTF_FontAscent(source.font);
+}
+
+SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
+                                                   const std::string &utf8) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (source.iosSystemFont) {
+    includeIOSSystemFontMetrics();
+    return RenderIOSSystemTextSurface(utf8, fontSize, color);
+  }
+#endif
+
+  if (source.font == nullptr || utf8.empty()) {
     return nullptr;
+  }
+  return TTF_RenderUTF8_Blended(source.font, utf8.c_str(), color);
+}
+
+TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
+  if (fontFaces.empty()) {
+    return {};
   }
 
   auto cached = fontSelectionCache.find(codepoint);
@@ -458,28 +528,38 @@ TTF_Font *TextView::selectFont(Uint32 codepoint) {
 
   for (const auto &face : fontFaces) {
     if (face.font != nullptr && TTF_GlyphIsProvided32(face.font, codepoint)) {
-      fontSelectionCache[codepoint] = face.font;
-      return face.font;
+      SelectedFont source = {face.font, false};
+      fontSelectionCache[codepoint] = source;
+      return source;
     }
   }
 
   if (isIgnorableUnsupportedCodepoint(codepoint)) {
-    fontSelectionCache[codepoint] = nullptr;
-    return nullptr;
+    fontSelectionCache[codepoint] = {};
+    return {};
   }
 
   while (nextFallbackFontPath < fallbackFontPaths.size()) {
     TTF_Font *opened = loadFallbackFontAt(nextFallbackFontPath, false);
     ++nextFallbackFontPath;
     if (opened != nullptr && TTF_GlyphIsProvided32(opened, codepoint)) {
-      fontSelectionCache[codepoint] = opened;
-      return opened;
+      SelectedFont source = {opened, false};
+      fontSelectionCache[codepoint] = source;
+      return source;
     }
   }
 
-  TTF_Font *fallbackFont = fontFaces.empty() ? nullptr : fontFaces.back().font;
-  fontSelectionCache[codepoint] = fallbackFont;
-  return fallbackFont;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  SelectedFont source = {nullptr, true};
+  includeIOSSystemFontMetrics();
+  fontSelectionCache[codepoint] = source;
+  return source;
+#else
+  SelectedFont source = {fontFaces.empty() ? nullptr : fontFaces.back().font,
+                         false};
+  fontSelectionCache[codepoint] = source;
+  return source;
+#endif
 }
 
 bool TextView::primaryFontSupportsText(const std::string &utf8) const {
@@ -506,7 +586,7 @@ int TextView::measureTextWidth(const std::string &utf8) {
   }
 
   int totalWidth = 0;
-  TTF_Font *runFont = nullptr;
+  SelectedFont runSource;
   std::string runText;
   size_t index = 0;
   Utf8Token token;
@@ -515,20 +595,20 @@ int TextView::measureTextWidth(const std::string &utf8) {
       break;
     }
 
-    TTF_Font *tokenFont = selectFont(token.codepoint);
-    if (tokenFont == nullptr) {
+    SelectedFont tokenSource = selectFont(token.codepoint);
+    if (!hasFontSource(tokenSource)) {
       continue;
     }
-    if (runFont != nullptr && tokenFont != runFont) {
-      totalWidth += sizeUtf8Width(runFont, runText);
+    if (hasFontSource(runSource) && !sameFontSource(tokenSource, runSource)) {
+      totalWidth += measureFontSourceTextWidth(runSource, runText);
       runText.clear();
     }
-    runFont = tokenFont;
+    runSource = tokenSource;
     runText += token.bytes;
   }
 
   if (!runText.empty()) {
-    totalWidth += sizeUtf8Width(runFont, runText);
+    totalWidth += measureFontSourceTextWidth(runSource, runText);
   }
   return totalWidth;
 }
@@ -637,16 +717,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
 
   ensureFontsForText(text);
 
-  TextLineMetrics metrics;
-  for (const auto &face : fontFaces) {
-    if (face.font == nullptr) {
-      continue;
-    }
-    metrics.ascent = std::max(metrics.ascent, TTF_FontAscent(face.font));
-    metrics.descent = std::max(metrics.descent, -TTF_FontDescent(face.font));
-    metrics.height = std::max(metrics.height, TTF_FontHeight(face.font));
-  }
-  metrics.height = std::max(metrics.height, metrics.ascent + metrics.descent);
+  TextLineMetrics metrics = {fontAscent, fontDescent, textLineHeight()};
   if (metrics.height <= 0) {
     return nullptr;
   }
@@ -673,17 +744,17 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     const std::string &line = lines[lineIndex];
     std::vector<FontRun> runs;
-    TTF_Font *runFont = nullptr;
+    SelectedFont runSource;
     size_t tokenIndex = 0;
     Utf8Token token;
     while (decodeNextUtf8(line, tokenIndex, token)) {
-      TTF_Font *tokenFont = selectFont(token.codepoint);
-      if (tokenFont == nullptr) {
+      SelectedFont tokenSource = selectFont(token.codepoint);
+      if (!hasFontSource(tokenSource)) {
         continue;
       }
-      if (runs.empty() || runFont != tokenFont) {
-        runs.push_back({tokenFont, ""});
-        runFont = tokenFont;
+      if (runs.empty() || !sameFontSource(runSource, tokenSource)) {
+        runs.push_back({tokenSource, ""});
+        runSource = tokenSource;
       }
       runs.back().text += token.bytes;
     }
@@ -691,22 +762,23 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
     int x = 0;
     const int lineTop = metrics.height * static_cast<int>(lineIndex);
     for (const auto &run : runs) {
-      if (run.font == nullptr || run.text.empty()) {
+      if (!hasFontSource(run.source) || run.text.empty()) {
         continue;
       }
 
       SDL_Surface *runSurface =
-          TTF_RenderUTF8_Blended(run.font, run.text.c_str(), color);
+          renderFontSourceTextSurface(run.source, run.text);
       if (runSurface == nullptr) {
         SDL_Log("Failed to render fallback text run: %s", TTF_GetError());
         continue;
       }
 
       SDL_SetSurfaceBlendMode(runSurface, SDL_BLENDMODE_NONE);
-      SDL_Rect dst = {x, lineTop + metrics.ascent - TTF_FontAscent(run.font),
+      SDL_Rect dst = {x,
+                      lineTop + metrics.ascent - fontSourceAscent(run.source),
                       runSurface->w, runSurface->h};
       SDL_BlitSurface(runSurface, nullptr, surface, &dst);
-      x += sizeUtf8Width(run.font, run.text);
+      x += measureFontSourceTextWidth(run.source, run.text);
       SDL_FreeSurface(runSurface);
     }
   }
