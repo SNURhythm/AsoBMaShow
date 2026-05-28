@@ -278,19 +278,17 @@ int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
 TextView::TextView(const std::string &fontPath, int fontSize)
     : View(), texture(BGFX_INVALID_HANDLE) {
   this->fontSize = fontSize;
+  fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = acquireTtf();
   if (ttfInitialized) {
-    bool firstCandidate = true;
-    for (const auto &path : fontFallbackPaths(fontPath)) {
-      TTF_Font *opened = acquireFontCandidate(path, fontSize, firstCandidate);
-      firstCandidate = false;
+    while (nextFallbackFontPath < fallbackFontPaths.size()) {
+      const bool required = nextFallbackFontPath == 0;
+      TTF_Font *opened = loadFallbackFontAt(nextFallbackFontPath, required);
+      ++nextFallbackFontPath;
       if (opened == nullptr) {
         continue;
       }
-      if (font == nullptr) {
-        font = opened;
-      }
-      fontFaces.push_back({opened, path});
+      break;
     }
 
     if (font == nullptr) {
@@ -416,36 +414,72 @@ SDL_Rect TextView::resolvedTextRect() const {
 }
 
 int TextView::textLineHeight() const {
-  int height = 0;
-  int ascent = 0;
-  int descent = 0;
-  for (const auto &face : fontFaces) {
-    if (face.font == nullptr) {
-      continue;
-    }
-    height = std::max(height, TTF_FontHeight(face.font));
-    ascent = std::max(ascent, TTF_FontAscent(face.font));
-    descent = std::max(descent, -TTF_FontDescent(face.font));
-  }
-  return std::max(height, ascent + descent);
+  return std::max(fontLineHeight, fontAscent + fontDescent);
 }
 
-TTF_Font *TextView::selectFont(Uint32 codepoint) const {
+void TextView::includeFontMetrics(TTF_Font *loadedFont) {
+  if (loadedFont == nullptr) {
+    return;
+  }
+
+  fontLineHeight = std::max(fontLineHeight, TTF_FontHeight(loadedFont));
+  fontAscent = std::max(fontAscent, TTF_FontAscent(loadedFont));
+  fontDescent = std::max(fontDescent, -TTF_FontDescent(loadedFont));
+}
+
+TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
+  if (pathIndex >= fallbackFontPaths.size()) {
+    return nullptr;
+  }
+
+  const std::string &path = fallbackFontPaths[pathIndex];
+  TTF_Font *opened = acquireFontCandidate(path, fontSize, required);
+  if (opened == nullptr) {
+    return nullptr;
+  }
+
+  if (font == nullptr) {
+    font = opened;
+  }
+  fontFaces.push_back({opened, path});
+  includeFontMetrics(opened);
+  return opened;
+}
+
+TTF_Font *TextView::selectFont(Uint32 codepoint) {
   if (fontFaces.empty()) {
     return nullptr;
   }
 
+  auto cached = fontSelectionCache.find(codepoint);
+  if (cached != fontSelectionCache.end()) {
+    return cached->second;
+  }
+
   for (const auto &face : fontFaces) {
     if (face.font != nullptr && TTF_GlyphIsProvided32(face.font, codepoint)) {
+      fontSelectionCache[codepoint] = face.font;
       return face.font;
     }
   }
 
   if (isIgnorableUnsupportedCodepoint(codepoint)) {
+    fontSelectionCache[codepoint] = nullptr;
     return nullptr;
   }
 
-  return fontFaces.back().font;
+  while (nextFallbackFontPath < fallbackFontPaths.size()) {
+    TTF_Font *opened = loadFallbackFontAt(nextFallbackFontPath, false);
+    ++nextFallbackFontPath;
+    if (opened != nullptr && TTF_GlyphIsProvided32(opened, codepoint)) {
+      fontSelectionCache[codepoint] = opened;
+      return opened;
+    }
+  }
+
+  TTF_Font *fallbackFont = fontFaces.empty() ? nullptr : fontFaces.back().font;
+  fontSelectionCache[codepoint] = fallbackFont;
+  return fallbackFont;
 }
 
 bool TextView::primaryFontSupportsText(const std::string &utf8) const {
@@ -466,7 +500,7 @@ bool TextView::primaryFontSupportsText(const std::string &utf8) const {
   return true;
 }
 
-int TextView::measureTextWidth(const std::string &utf8) const {
+int TextView::measureTextWidth(const std::string &utf8) {
   if (utf8.empty() || fontFaces.empty()) {
     return 0;
   }
@@ -499,7 +533,18 @@ int TextView::measureTextWidth(const std::string &utf8) const {
   return totalWidth;
 }
 
-std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) const {
+void TextView::ensureFontsForText(const std::string &utf8) {
+  size_t index = 0;
+  Utf8Token token;
+  while (decodeNextUtf8(utf8, index, token)) {
+    if (isExplicitLineBreak(token.codepoint)) {
+      continue;
+    }
+    selectFont(token.codepoint);
+  }
+}
+
+std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) {
   std::vector<std::string> lines;
   std::string currentLine;
   size_t lastBreak = std::string::npos;
@@ -523,11 +568,15 @@ std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) const {
     }
 
     currentLine += token.bytes;
-    const int currentWidth = measureTextWidth(currentLine);
     if (isBreakableSpace(token.codepoint)) {
       lastBreak = currentLine.size();
     }
 
+    if (wrapWidth <= 0) {
+      continue;
+    }
+
+    const int currentWidth = measureTextWidth(currentLine);
     if (wrapWidth > 0 && currentWidth > wrapWidth && currentLine.size() > 0) {
       if (lastBreak != std::string::npos && lastBreak > 0) {
         std::string nextLine = currentLine.substr(lastBreak);
@@ -579,12 +628,14 @@ std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) const {
 
 SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
                                                  int &surfaceWidth,
-                                                 int &surfaceHeight) const {
+                                                 int &surfaceHeight) {
   surfaceWidth = 0;
   surfaceHeight = 0;
   if (fontFaces.empty() || text.empty()) {
     return nullptr;
   }
+
+  ensureFontsForText(text);
 
   TextLineMetrics metrics;
   for (const auto &face : fontFaces) {

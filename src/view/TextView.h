@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class TextView : public View {
@@ -32,19 +33,28 @@ protected:
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
-  [[nodiscard]] int measureTextWidth(const std::string &utf8) const;
-  [[nodiscard]] TTF_Font *selectFont(Uint32 codepoint) const;
+  [[nodiscard]] int measureTextWidth(const std::string &utf8);
+  TTF_Font *selectFont(Uint32 codepoint);
   [[nodiscard]] bool primaryFontSupportsText(const std::string &utf8) const;
-  [[nodiscard]] std::vector<std::string> wrappedTextLines(int wrapWidth) const;
-  [[nodiscard]] SDL_Surface *
-  renderFallbackTextSurface(int wrapWidth, int &surfaceWidth,
-                            int &surfaceHeight) const;
+  void ensureFontsForText(const std::string &utf8);
+  void includeFontMetrics(TTF_Font *loadedFont);
+  [[nodiscard]] TTF_Font *loadFallbackFontAt(size_t pathIndex, bool required);
+  [[nodiscard]] std::vector<std::string> wrappedTextLines(int wrapWidth);
+  [[nodiscard]] SDL_Surface *renderFallbackTextSurface(int wrapWidth,
+                                                       int &surfaceWidth,
+                                                       int &surfaceHeight);
   TextAlign align = TextAlign::LEFT;
   TextVAlign valign = TextVAlign::TOP;
   TextOverflow overflow = TextOverflow::Visible;
   TTF_Font *font = nullptr;
+  std::vector<std::string> fallbackFontPaths;
   std::vector<FontFace> fontFaces;
+  size_t nextFallbackFontPath = 0;
+  std::unordered_map<Uint32, TTF_Font *> fontSelectionCache;
   int fontSize = 0;
+  int fontLineHeight = 0;
+  int fontAscent = 0;
+  int fontDescent = 0;
   bool ttfInitialized = false;
 
   SDL_Color color{};
