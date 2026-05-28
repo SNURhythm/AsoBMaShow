@@ -640,6 +640,7 @@ bool TextInputBox::commitComposition() {
   cursorPos = start + composition.size();
   selectionAnchor = cursorPos;
   clearComposition();
+  SDL_ClearComposition();
   return true;
 }
 
