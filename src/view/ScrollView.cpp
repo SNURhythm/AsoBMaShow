@@ -95,6 +95,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     touchMomentum.stop();
     mousePressedInside = true;
     mouseDragging = false;
+    mouseCapturedByContent = false;
     cancelMouseClick = false;
     pressedMouseUiX = uiX;
     pressedMouseUiY = uiY;
@@ -108,6 +109,18 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     if (!eventToUi(event.motion, uiX, uiY)) {
       return true;
     }
+    if (mouseCapturedByContent) {
+      contentView->handleEvents(event);
+      return false;
+    }
+    bool forwardedToContent = false;
+    if (mousePressedInside) {
+      forwardedToContent = true;
+      if (!contentView->handleEvents(event)) {
+        mouseCapturedByContent = true;
+        return false;
+      }
+    }
     if (mousePressedInside && !mouseDragging &&
         (std::abs(uiX - pressedMouseUiX) >= kDragThresholdUi ||
          std::abs(uiY - pressedMouseUiY) >= kDragThresholdUi)) {
@@ -119,7 +132,9 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       lastMouseUiY = uiY;
       return false;
     }
-    contentView->handleEvents(event);
+    if (!forwardedToContent) {
+      contentView->handleEvents(event);
+    }
     return isInside(static_cast<float>(uiX), static_cast<float>(uiY)) ? false
                                                                       : true;
   }
@@ -134,8 +149,10 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     int uiY = 0;
     const bool hadPress = mousePressedInside;
     const bool shouldCancelClick = cancelMouseClick;
+    const bool wasCapturedByContent = mouseCapturedByContent;
     mousePressedInside = false;
     mouseDragging = false;
+    mouseCapturedByContent = false;
     cancelMouseClick = false;
     if (!eventToUi(event.button, uiX, uiY)) {
       return false;
@@ -144,6 +161,10 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
         isInside(static_cast<float>(uiX), static_cast<float>(uiY));
     if (!hadPress && !inside) {
       return true;
+    }
+    if (wasCapturedByContent) {
+      contentView->handleEvents(event);
+      return false;
     }
     if (hadPress) {
       SDL_Event forwarded =
@@ -167,6 +188,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     activeTouchId = event.tfinger.fingerId;
     touchPressedInside = true;
     touchDragging = false;
+    touchCapturedByContent = false;
     cancelTouchClick = false;
     pressedTouchUiX = uiX;
     pressedTouchUiY = uiY;
@@ -177,6 +199,14 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
   case SDL_FINGERMOTION: {
     if (event.tfinger.fingerId != activeTouchId) {
       return true;
+    }
+    if (touchCapturedByContent) {
+      contentView->handleEvents(event);
+      return false;
+    }
+    if (!contentView->handleEvents(event)) {
+      touchCapturedByContent = true;
+      return false;
     }
     float uiX = 0.0f;
     float uiY = 0.0f;
@@ -202,10 +232,17 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
     }
     const bool shouldCancelClick = cancelTouchClick;
     const bool hadDrag = touchDragging;
+    const bool wasCapturedByContent = touchCapturedByContent;
     activeTouchId = -1;
     touchPressedInside = false;
     touchDragging = false;
+    touchCapturedByContent = false;
     cancelTouchClick = false;
+    if (wasCapturedByContent) {
+      touchMomentum.stop();
+      contentView->handleEvents(event);
+      return false;
+    }
     if (hadDrag) {
       touchMomentum.release();
     } else {

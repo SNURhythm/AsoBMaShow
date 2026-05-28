@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <unordered_set>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
@@ -180,6 +181,11 @@ public:
     return handleEventsImpl(event);
   }
 
+  using TemporaryEventListener = std::function<void(SDL_Event &)>;
+  static uint64_t addTemporaryEventListener(TemporaryEventListener listener);
+  static void removeTemporaryEventListener(uint64_t listenerId);
+  static void dispatchTemporaryEventListeners(SDL_Event &event);
+
   virtual inline void onLayout() {};
 
   inline void setSize(int newWidth, int newHeight) {
@@ -352,6 +358,12 @@ private:
               });
     childrenOrderDirty = false;
   }
+  struct TemporaryEventListenerEntry {
+    uint64_t id = 0;
+    TemporaryEventListener listener;
+    bool active = false;
+  };
+  static void eraseInactiveTemporaryEventListeners();
 
   Color dbgColor;
   Color backgroundColor;
@@ -372,5 +384,9 @@ private:
   inline static uint64_t nextInsertionOrder = 1;
   inline static int layoutBatchDepth = 0;
   inline static std::unordered_set<View *> dirtyRoots;
+  inline static std::vector<TemporaryEventListenerEntry>
+      temporaryEventListeners;
+  inline static uint64_t nextTemporaryEventListenerId = 1;
+  inline static bool dispatchingTemporaryEventListeners = false;
   std::string name;
 };

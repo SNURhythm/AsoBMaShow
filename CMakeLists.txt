@@ -108,7 +108,10 @@ if (IOS)
     
     find_library(UIKIT UIKit)
     find_library(FOUNDATION Foundation)
-    list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${SDL2_LIB} ${SDL2_TFF_LIB})
+    find_library(CORE_GRAPHICS CoreGraphics)
+    find_library(CORE_TEXT CoreText)
+    list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
+        ${CORE_TEXT} ${SDL2_LIB} ${SDL2_TFF_LIB})
 
 else()
     # --- Desktop: Use Vcpkg ---

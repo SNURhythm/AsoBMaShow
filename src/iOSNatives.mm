@@ -1,12 +1,56 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include <CoreGraphics/CoreGraphics.h>
+#include <CoreText/CoreText.h>
 #include <Foundation/Foundation.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
-#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
+NSString *NSStringFromUtf8(const std::string &utf8) {
+  if (utf8.empty()) {
+    return @"";
+  }
+  return [[NSString alloc] initWithBytes:utf8.data()
+                                  length:utf8.size()
+                                encoding:NSUTF8StringEncoding];
+}
+
+CTFontRef CreateIOSSystemFont(int fontSize) {
+  const CGFloat pointSize = std::max(1, fontSize);
+  UIFont *font = [UIFont systemFontOfSize:pointSize];
+  return CTFontCreateWithName((__bridge CFStringRef)font.fontName, pointSize,
+                              nullptr);
+}
+
+CTLineRef CreateIOSSystemTextLine(const std::string &utf8, int fontSize) {
+  NSString *text = NSStringFromUtf8(utf8);
+  if (text == nil) {
+    return nullptr;
+  }
+
+  CTFontRef font = CreateIOSSystemFont(fontSize);
+  if (font == nullptr) {
+    return nullptr;
+  }
+
+  NSDictionary *attributes = @{
+    (__bridge id)kCTFontAttributeName : (__bridge id)font,
+    (__bridge id)kCTForegroundColorFromContextAttributeName : @YES,
+  };
+  NSAttributedString *attributedText =
+      [[NSAttributedString alloc] initWithString:text attributes:attributes];
+  CTLineRef line = CTLineCreateWithAttributedString(
+      (__bridge CFAttributedStringRef)attributedText);
+  CFRelease(font);
+  return line;
+}
+
 UIWindow *FindActiveWindow() {
   if (@available(iOS 13.0, *)) {
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -153,6 +197,121 @@ IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
   insets.bottom = safeInsets.bottom / bounds.size.height;
   insets.right = safeInsets.right / bounds.size.width;
   return insets;
+}
+
+IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize) {
+  @autoreleasepool {
+    IOSSystemTextMetrics metrics;
+    CTFontRef font = CreateIOSSystemFont(fontSize);
+    if (font == nullptr) {
+      metrics.height = std::max(1, fontSize);
+      metrics.ascent = metrics.height;
+      return metrics;
+    }
+
+    const CGFloat ascent = CTFontGetAscent(font);
+    const CGFloat descent = CTFontGetDescent(font);
+    const CGFloat leading = CTFontGetLeading(font);
+    metrics.ascent = static_cast<int>(std::ceil(ascent));
+    metrics.descent = static_cast<int>(std::ceil(descent));
+    metrics.height = static_cast<int>(std::ceil(ascent + descent + leading));
+    metrics.height = std::max(metrics.height, metrics.ascent + metrics.descent);
+    metrics.height = std::max(1, metrics.height);
+    CFRelease(font);
+    return metrics;
+  }
+  return {};
+}
+
+int MeasureIOSSystemTextWidth(const std::string &utf8, int fontSize) {
+  @autoreleasepool {
+    if (utf8.empty()) {
+      return 0;
+    }
+
+    CTLineRef line = CreateIOSSystemTextLine(utf8, fontSize);
+    if (line == nullptr) {
+      return 0;
+    }
+
+    const double width =
+        CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr);
+    CFRelease(line);
+    return std::max(0, static_cast<int>(std::ceil(width)));
+  }
+  return 0;
+}
+
+SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
+                                        SDL_Color color) {
+  @autoreleasepool {
+    if (utf8.empty()) {
+      return nullptr;
+    }
+
+    CTLineRef line = CreateIOSSystemTextLine(utf8, fontSize);
+    if (line == nullptr) {
+      return nullptr;
+    }
+
+    CGFloat ascent = 0.0;
+    CGFloat descent = 0.0;
+    CGFloat leading = 0.0;
+    const double textWidth =
+        CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+    const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontSize);
+    const int width = std::max(1, static_cast<int>(std::ceil(textWidth)));
+    const int height = std::max(1, metrics.height);
+
+    std::vector<Uint8> alpha(
+        static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    CGContextRef context = CGBitmapContextCreate(
+        alpha.data(), width, height, 8, width, nullptr, kCGImageAlphaOnly);
+    if (context == nullptr) {
+      CFRelease(line);
+      return nullptr;
+    }
+
+    CGContextSetShouldAntialias(context, true);
+    CGContextSetAllowsAntialiasing(context, true);
+    CGContextSetGrayFillColor(context, 1.0, 1.0);
+    CGContextSetTextMatrix(context, CGAffineTransformIdentity);
+    const CGFloat baseline =
+        static_cast<CGFloat>(std::max(0, height - metrics.ascent));
+    CGContextSetTextPosition(context, 0.0, baseline);
+    CTLineDraw(line, context);
+    CGContextRelease(context);
+    CFRelease(line);
+
+    SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(
+        0, width, height, 32, SDL_PIXELFORMAT_BGRA32);
+    if (surface == nullptr) {
+      return nullptr;
+    }
+
+    SDL_FillRect(surface, nullptr, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+    if (SDL_MUSTLOCK(surface)) {
+      SDL_LockSurface(surface);
+    }
+
+    for (int y = 0; y < height; ++y) {
+      auto *row = static_cast<Uint8 *>(surface->pixels) + y * surface->pitch;
+      for (int x = 0; x < width; ++x) {
+        const Uint8 coverage = alpha[static_cast<size_t>(y) * width + x];
+        const Uint8 alphaValue =
+            static_cast<Uint8>((static_cast<int>(coverage) * color.a) / 255);
+        Uint32 pixel =
+            SDL_MapRGBA(surface->format, color.r, color.g, color.b, alphaValue);
+        std::memcpy(row + x * sizeof(Uint32), &pixel, sizeof(pixel));
+      }
+    }
+
+    if (SDL_MUSTLOCK(surface)) {
+      SDL_UnlockSurface(surface);
+    }
+    return surface;
+  }
+  return nullptr;
 }
 
 // register touch event

@@ -5,6 +5,8 @@
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 class TextView : public View {
 public:
@@ -22,13 +24,59 @@ public:
   void setWrap(bool enabled);
 
 protected:
+  struct FontFace {
+    TTF_Font *font = nullptr;
+    std::string path;
+  };
+  struct SelectedFont {
+    TTF_Font *font = nullptr;
+    bool iosSystemFont = false;
+  };
+  struct FontRun {
+    SelectedFont source;
+    std::string text;
+  };
+
   void renderImpl(RenderContext &context) override;
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
+  [[nodiscard]] int textLineHeight() const;
+  [[nodiscard]] int measureTextWidth(const std::string &utf8);
+  SelectedFont selectFont(Uint32 codepoint);
+  [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
+  [[nodiscard]] bool sameFontSource(const SelectedFont &lhs,
+                                    const SelectedFont &rhs) const;
+  [[nodiscard]] int measureFontSourceTextWidth(const SelectedFont &source,
+                                               const std::string &utf8);
+  [[nodiscard]] int fontSourceAscent(const SelectedFont &source);
+  [[nodiscard]] SDL_Surface *
+  renderFontSourceTextSurface(const SelectedFont &source,
+                              const std::string &utf8);
+  [[nodiscard]] bool primaryFontSupportsText(const std::string &utf8) const;
+  void ensureFontsForText(const std::string &utf8);
+  void includeFontMetrics(TTF_Font *loadedFont);
+  void includeIOSSystemFontMetrics();
+  [[nodiscard]] TTF_Font *loadFallbackFontAt(size_t pathIndex, bool required);
+  [[nodiscard]] std::vector<std::string> wrappedTextLines(int wrapWidth);
+  [[nodiscard]] SDL_Surface *renderFallbackTextSurface(int wrapWidth,
+                                                       int &surfaceWidth,
+                                                       int &surfaceHeight);
   TextAlign align = TextAlign::LEFT;
   TextVAlign valign = TextVAlign::TOP;
   TextOverflow overflow = TextOverflow::Visible;
   TTF_Font *font = nullptr;
+  std::vector<std::string> fallbackFontPaths;
+  std::vector<FontFace> fontFaces;
+  size_t nextFallbackFontPath = 0;
+  std::unordered_map<Uint32, SelectedFont> fontSelectionCache;
+  int fontSize = 0;
+  int fontLineHeight = 0;
+  int fontAscent = 0;
+  int fontDescent = 0;
+  int iosSystemFontLineHeight = 0;
+  int iosSystemFontAscent = 0;
+  int iosSystemFontDescent = 0;
+  bool iosSystemFontMetricsIncluded = false;
   bool ttfInitialized = false;
 
   SDL_Color color{};

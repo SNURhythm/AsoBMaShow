@@ -613,6 +613,11 @@ void run() {
                                   s_blurPass->blurViewV(),
                                   s_blurPass->finalView());
       }
+
+      if (event.type == SDL_TEXTEDITING_EXT) {
+        SDL_free(event.editExt.text);
+        event.editExt.text = nullptr;
+      }
     };
 
     while (SDL_PollEvent(&e)) {

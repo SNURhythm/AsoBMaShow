@@ -29,7 +29,7 @@ public:
   void removeOnEditingFinished(
       std::function<void(const std::string &)> callback);
 
-  [[nodiscard]] inline std::string getText() const { return editingText; }
+  [[nodiscard]] std::string getText() const;
 
   [[nodiscard]] inline bool getSelected() const { return isSelected; }
 
@@ -38,12 +38,21 @@ private:
   void renderImpl(RenderContext &context) override;
   std::string editingText;
   std::string composition;
+  int compositionCursor = 0;
+  int compositionSelectionLength = 0;
   int compositionX = 0;
   int compositionY = 0;
   int compositionWidth = 0;
   int compositionHeight = 0;
   bool isSelected = false;
-  int lastRenderedCaretCursor = -1;
+  bool isDraggingSelection = false;
+  SDL_FingerID activeTouchId = -1;
+  SDL_FingerID pendingFocusTouchId = -1;
+  float pendingFocusUiX = 0.0f;
+  float pendingFocusUiY = 0.0f;
+  uint64_t pointerDownListenerId = 0;
+  size_t selectionAnchor = 0;
+  size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
   Uint32 lastBlink = 0;
   SDL_Rect viewRect;
   size_t cursorPos = 0;
@@ -60,6 +69,28 @@ private:
 
   size_t getNextUnicodePos(size_t pos);
   size_t getPrevUnicodePos(size_t pos);
+  bool hasSelection() const;
+  size_t selectionStart() const;
+  size_t selectionEnd() const;
+  void clearSelection();
+  void setCursor(size_t newCursorPos, bool extendSelection);
+  bool deleteSelection();
+  bool insertTextAtCursor(const std::string &insertedText);
+  void clearComposition();
+  bool commitComposition();
+  void selectAll();
+  void copySelectionToClipboard() const;
+  std::string displayedText() const;
+  size_t compositionDisplayStart() const;
+  size_t compositionDisplayEnd() const;
+  size_t compositionCursorDisplayPos() const;
+  void refreshDisplay(bool notifyTextChanged, bool notifySubmit = false);
+  void updateCompositionGeometry(const std::string &display);
+  void renderSelection(RenderContext &context, bgfx::ProgramHandle program);
+  void registerPointerDownListener();
+  void unregisterPointerDownListener();
+  void handlePointerDownOutside(const SDL_Event &event);
+  void finishEditing();
   void notifyEditingFinished();
   void syncTextInputRect(int cursorX, int cursorY);
 };
