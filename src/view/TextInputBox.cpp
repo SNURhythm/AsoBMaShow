@@ -37,6 +37,8 @@ void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX,
   rendering::normalizedToUi(event.x, event.y, uiX, uiY);
 }
 
+constexpr float kTouchFocusSlopUi = 12.0f;
+
 bool isUtf8ContinuationByte(unsigned char value) {
   return (value & 0b11000000) == 0b10000000;
 }
@@ -154,6 +156,7 @@ void TextInputBox::setEditingText(const std::string &newText) {
   selectionAnchor = cursorPos;
   isDraggingSelection = false;
   activeTouchId = -1;
+  pendingFocusTouchId = -1;
   lastRenderedCaretCursor = static_cast<size_t>(-1);
   refreshDisplay(false);
 }
@@ -404,6 +407,7 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     break;
   }
   case SDL_FINGERDOWN: {
+    pendingFocusTouchId = -1;
     if (activeTouchId != -1) {
       return true;
     }
@@ -412,6 +416,12 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     float y = 0.0f;
     fingerEventToUi(event.tfinger, x, y);
     if (isInsideTextInput(*this, x, y)) {
+      if (!isSelected) {
+        pendingFocusTouchId = event.tfinger.fingerId;
+        pendingFocusUiX = x;
+        pendingFocusUiY = y;
+        return false;
+      }
       commitComposition();
       onSelected();
       SDL_StartTextInput();
@@ -428,6 +438,16 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     break;
   }
   case SDL_FINGERMOTION: {
+    if (event.tfinger.fingerId == pendingFocusTouchId) {
+      float x = 0.0f;
+      float y = 0.0f;
+      fingerEventToUi(event.tfinger, x, y);
+      if (std::fabs(x - pendingFocusUiX) >= kTouchFocusSlopUi ||
+          std::fabs(y - pendingFocusUiY) >= kTouchFocusSlopUi) {
+        pendingFocusTouchId = -1;
+      }
+      return true;
+    }
     if (event.tfinger.fingerId != activeTouchId) {
       return true;
     }
@@ -444,13 +464,31 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     }
     return false;
   }
-  case SDL_FINGERUP:
+  case SDL_FINGERUP: {
+    if (event.tfinger.fingerId == pendingFocusTouchId) {
+      pendingFocusTouchId = -1;
+      float x = 0.0f;
+      float y = 0.0f;
+      fingerEventToUi(event.tfinger, x, y);
+      if (!isInsideTextInput(*this, x, y)) {
+        return true;
+      }
+      commitComposition();
+      onSelected();
+      SDL_StartTextInput();
+      setCursor(posToCursor(static_cast<int>(x) - getX(),
+                            static_cast<int>(y) - getY()),
+                false);
+      refreshDisplay(false);
+      return false;
+    }
     if (event.tfinger.fingerId == activeTouchId) {
       activeTouchId = -1;
       isDraggingSelection = false;
       return false;
     }
     break;
+  }
   }
   if (displayChanged || textChanged || isSubmit) {
     refreshDisplay(textChanged, isSubmit);
@@ -765,6 +803,7 @@ void TextInputBox::onUnselected() {
   isSelected = false;
   isDraggingSelection = false;
   activeTouchId = -1;
+  pendingFocusTouchId = -1;
   commitComposition();
   clearSelection();
   TextView::setText(editingText);

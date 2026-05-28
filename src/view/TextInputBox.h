@@ -47,6 +47,9 @@ private:
   bool isSelected = false;
   bool isDraggingSelection = false;
   SDL_FingerID activeTouchId = -1;
+  SDL_FingerID pendingFocusTouchId = -1;
+  float pendingFocusUiX = 0.0f;
+  float pendingFocusUiY = 0.0f;
   uint64_t pointerDownListenerId = 0;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
