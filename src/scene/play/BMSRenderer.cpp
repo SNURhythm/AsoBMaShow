@@ -619,23 +619,24 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   texBatchRenderer.flush();
   ghostBatchRenderer.flush();
 
-  // render lane beams
-  simpleBatchRenderer.setSubmitDepth(kDepthBeams);
-  const long long nowMicros =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count();
-  laneStateSnapshot.clear();
-  {
-    std::lock_guard<std::mutex> lock(laneMutex);
-    for (size_t i = 0; i < laneOrder.size(); ++i) {
-      laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
+  if (renderLaneBeams) {
+    simpleBatchRenderer.setSubmitDepth(kDepthBeams);
+    const long long nowMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    laneStateSnapshot.clear();
+    {
+      std::lock_guard<std::mutex> lock(laneMutex);
+      for (size_t i = 0; i < laneOrder.size(); ++i) {
+        laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
+      }
     }
+    for (const auto &entry : laneStateSnapshot) {
+      drawLaneBeam(entry.first, entry.second, nowMicros);
+    }
+    simpleBatchRenderer.flush();
   }
-  for (const auto &entry : laneStateSnapshot) {
-    drawLaneBeam(entry.first, entry.second, nowMicros);
-  }
-  simpleBatchRenderer.flush();
 
   if (renderHud) {
     drawJudgement(context);
@@ -667,6 +668,10 @@ void BMSRenderer::refreshGeometry() {
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
+}
+
+void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
+  renderLaneBeams = enabled;
 }
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {
