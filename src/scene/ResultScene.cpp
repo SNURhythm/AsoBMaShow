@@ -1,4 +1,5 @@
 #include "ResultScene.h"
+#include "../ReplayDBHelper.h"
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -55,8 +56,12 @@ static void drawRect(float x, float y, float width, float height, Color color) {
 
 ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
-                         const RhythmState &state)
-    : Scene(context), meta(meta), resultState(state) {
+                         const RhythmState &state, const ReplayData *replay,
+                         bool shouldSaveScore)
+    : Scene(context), meta(meta), resultState(state),
+      replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
+                                     : std::nullopt),
+      shouldSaveScore(shouldSaveScore) {
         skin = new DefaultSkin();
     }
 
@@ -65,7 +70,7 @@ ResultScene::~ResultScene() {
 }
 
 void ResultScene::saveScore() {
-  if (scoreSaved) {
+  if (scoreSaved || !shouldSaveScore) {
     return;
   }
   scoreSaved = true;
@@ -75,8 +80,20 @@ void ResultScene::saveScore() {
   }
 }
 
+void ResultScene::saveReplay() {
+  if (replaySaved || !replayToSave.has_value() || replayToSave->events.empty()) {
+    return;
+  }
+  replaySaved = true;
+
+  if (!ReplayDBHelper::GetInstance().SaveReplay(*replayToSave).has_value()) {
+    SDL_Log("Failed to save replay for chart: %s", meta.Title.c_str());
+  }
+}
+
 void ResultScene::init() {
   saveScore();
+  saveReplay();
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);

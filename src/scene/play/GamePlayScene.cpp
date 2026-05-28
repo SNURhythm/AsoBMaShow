@@ -162,16 +162,57 @@ void GamePlayScene::reset() {
   state = new RhythmState(chart, false);
   state->configureGauge(options.gaugeType, options.gaugeAutoShift);
   state->isPlaying = true;
+  beginReplayRecording();
   updateGaugeStatusText();
+}
+
+bool GamePlayScene::isReplayPlayback() const {
+  return options.replayData != nullptr;
+}
+
+bool GamePlayScene::shouldRecordReplay() const {
+  return !options.autoPlay && !isReplayPlayback();
+}
+
+void GamePlayScene::beginReplayRecording() {
+  if (!shouldRecordReplay()) {
+    recordedReplay = {};
+    return;
+  }
+
+  recordedReplay = {};
+  recordedReplay.chartMeta = chart->Meta;
+  recordedReplay.initialGaugeType = options.gaugeType;
+  recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
+  recordedReplay.finalScore = 0;
+  recordedReplay.finalGauge = state != nullptr ? state->currentGauge : 0.0f;
+  recordedReplay.clearType = kClearTypeFailedRank;
+  recordedReplay.events.reserve(
+      static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
+}
+
+void GamePlayScene::finishReplayRecording() {
+  if (!shouldRecordReplay() || state == nullptr) {
+    return;
+  }
+
+  recordedReplay.finalScore = state->getScore();
+  recordedReplay.finalGauge = state->currentGauge;
+  recordedReplay.clearType = state->getClearTypeRank();
 }
 
 long long GamePlayScene::getJudgementOffsetMicros() const {
   return static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
 }
 
+long long GamePlayScene::getInputSongTimeMicros(long long songTimeMicros,
+                                                double inputDelay) const {
+  return songTimeMicros - static_cast<long long>(inputDelay * 1000000);
+}
+
 long long GamePlayScene::getJudgementTimeMicros(long long songTimeMicros,
                                                 double inputDelay) const {
-  return songTimeMicros - static_cast<long long>(inputDelay * 1000000) +
+  return getInputSongTimeMicros(songTimeMicros, inputDelay) +
          getJudgementOffsetMicros();
 }
 
@@ -197,10 +238,13 @@ void GamePlayScene::update(float dt) {
 
   SDL_Log("All measures passed");
   state->isEnding = true;
+  finishReplayRecording();
   defer(
       [this]() {
-        context.sceneManager->changeScene(
-            new ResultScene(context, chart->Meta, *state));
+        context.sceneManager->changeScene(new ResultScene(
+            context, chart->Meta, *state,
+            shouldRecordReplay() ? &recordedReplay : nullptr,
+            !isReplayPlayback()));
         return false;
       },
       2000, true);
@@ -262,8 +306,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
 
   const auto &measures = chart->Measures;
-  const auto pressedTime =
-      getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
+  const long long rawSongTime = context.jukebox.getTimeMicros();
+  const long long inputSongTime =
+      getInputSongTimeMicros(rawSongTime, inputDelay);
+  const long long pressedTime = inputSongTime + getJudgementOffsetMicros();
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -292,7 +338,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
           continue;
         }
         const JudgeResult judgement =
-            pressNote(note, pressedTime, &noteJudge);
+            pressNote(note, pressedTime, &noteJudge, inputSongTime);
         if (const auto pressedIt = lanePressed.find(lane);
             pressedIt != lanePressed.end()) {
           pressedIt->second = true;
@@ -308,6 +354,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
   updateLaneStateText();
   renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
+  appendReplayEvent(ReplayEventAction::Press, mainLane, nullptr, inputSongTime,
+                    pressedTime, JudgeResult(None, 0));
   return nullptr;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
@@ -322,8 +370,10 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   laneIt->second = false;
   updateLaneStateText();
   renderer->onLaneReleased(lane, nowMicros());
-  const auto releasedTime =
-      getJudgementTimeMicros(context.jukebox.getTimeMicros(), inputDelay);
+  const long long rawSongTime = context.jukebox.getTimeMicros();
+  const long long inputSongTime =
+      getInputSongTimeMicros(rawSongTime, inputDelay);
+  const long long releasedTime = inputSongTime + getJudgementOffsetMicros();
 
   const auto &Measures = chart->Measures;
 
@@ -343,10 +393,17 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
       if (note->IsPlayed) {
         continue;
       }
-      releaseNote(note, releasedTime);
+      const JudgeResult releaseJudge =
+          releaseNote(note, releasedTime, nullptr, inputSongTime);
+      if (releaseJudge.judgement == None) {
+        appendReplayEvent(ReplayEventAction::Release, lane, nullptr,
+                          inputSongTime, releasedTime, releaseJudge);
+      }
       return note;
     }
   }
+  appendReplayEvent(ReplayEventAction::Release, lane, nullptr, inputSongTime,
+                    releasedTime, JudgeResult(None, 0));
   return nullptr;
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
@@ -386,6 +443,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           const auto poorResult = JudgeResult(Poor, judgedTime - timeline->Timing);
           onJudge(poorResult);
+          appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
+                            judgedTime, poorResult);
         }
       } else if (timeline->Timing <= judgedTime) {
         // auto-release long notes
@@ -418,7 +477,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           if (options.autoPlay) // NormalNote or LongNote's head
           {
-            const JudgeResult judgeResult = pressNote(note, judgedTime);
+            const JudgeResult judgeResult =
+                pressNote(note, judgedTime, nullptr, time);
             renderer->onLanePressed(note->Lane, judgeResult, visualNow);
             if (!note->IsLongNote()) {
               renderer->onLaneReleased(note->Lane, visualNow);
@@ -467,9 +527,37 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
   updateGaugeStatusText();
 }
 
+void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
+                                      const bms_parser::Note *note,
+                                      long long songTimeMicros,
+                                      long long judgeTimeMicros,
+                                      const JudgeResult &judgeResult) {
+  if (!shouldRecordReplay() || state == nullptr) {
+    return;
+  }
+
+  ReplayEvent event;
+  event.action = action;
+  event.lane = lane;
+  event.noteTimeMicros = note != nullptr && note->Timeline != nullptr
+                             ? note->Timeline->Timing
+                             : -1;
+  event.songTimeMicros = songTimeMicros;
+  event.judgeTimeMicros = judgeTimeMicros;
+  event.judgement = judgeResult.judgement;
+  event.diffMicros = judgeResult.Diff;
+  event.gauge = state->currentGauge;
+  event.gaugeType = state->gaugeType;
+  event.combo = state->combo;
+  event.score = state->getScore();
+  recordedReplay.events.push_back(event);
+}
+
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      long long pressedTime,
-                                     const JudgeResult *precomputedJudge) {
+                                     const JudgeResult *precomputedJudge,
+                                     long long songTimeMicros,
+                                     bool recordEvent) {
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound) {
     context.jukebox.playKeySound(note->Wav);
   }
@@ -483,40 +571,64 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
+          if (recordEvent) {
+            appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
+                              songTimeMicros >= 0 ? songTimeMicros
+                                                  : pressedTime,
+                              pressedTime, judgeResult);
+          }
         }
         return judgeResult;
       }
       note->Press(pressedTime);
     }
     onJudge(judgeResult);
+    if (recordEvent) {
+      appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
+                        songTimeMicros >= 0 ? songTimeMicros : pressedTime,
+                        pressedTime, judgeResult);
+    }
   }
   return judgeResult;
 }
 
-void GamePlayScene::releaseNote(bms_parser::Note *Note,
-                                long long ReleasedTime) {
+JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
+                                       long long ReleasedTime,
+                                       const JudgeResult *precomputedJudge,
+                                       long long songTimeMicros,
+                                       bool recordEvent) {
   if (!Note->IsLongNote()) {
-    return;
+    return JudgeResult(None, 0);
   }
   const auto &LongNote = static_cast<bms_parser::LongNote *>(Note);
   if (!LongNote->IsTail()) {
-    return;
+    return JudgeResult(None, 0);
   }
   if (!LongNote->IsHolding) {
-    return;
+    return JudgeResult(None, 0);
   }
   LongNote->Release(ReleasedTime);
-  const auto judgeResult = judge.judgeNow(LongNote, ReleasedTime);
+  const auto judgeResult =
+      precomputedJudge != nullptr ? *precomputedJudge
+                                  : judge.judgeNow(LongNote, ReleasedTime);
   // if tail judgement is not good/great/pgreat, make it bad
+  JudgeResult appliedJudge(None, 0);
   if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
       judgeResult.judgement == Poor) {
-    onJudge(JudgeResult(Bad, judgeResult.Diff));
-    return;
+    appliedJudge = JudgeResult(Bad, judgeResult.Diff);
+  } else if (precomputedJudge != nullptr) {
+    appliedJudge = *precomputedJudge;
+  } else {
+    // otherwise, follow the head's judgement
+    appliedJudge = judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
   }
-  // otherwise, follow the head's judgement
-  const auto HeadJudgeResult =
-      judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
-  onJudge(HeadJudgeResult);
+  onJudge(appliedJudge);
+  if (recordEvent) {
+    appendReplayEvent(ReplayEventAction::Release, Note->Lane, Note,
+                      songTimeMicros >= 0 ? songTimeMicros : ReleasedTime,
+                      ReleasedTime, appliedJudge);
+  }
+  return appliedJudge;
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
