@@ -40,6 +40,7 @@ private:
   std::atomic_bool previewLoadCancelled = false;
   bool willStart = false;
   std::atomic<bms_parser::Chart *> selectedChart{nullptr};
+  std::atomic_bool selectedChartMediaReady = false;
 
   std::thread loadThread;
   std::jthread checkEntriesThread;

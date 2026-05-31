@@ -340,6 +340,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
+    selectedChartMediaReady = false;
     delete selectedChart.exchange(nullptr);
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
@@ -366,28 +367,32 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       context.jukebox.stop();
       bms_parser::Parser parser;
-      bms_parser::Chart *chart = nullptr;
+      bms_parser::Chart *parsedChart = nullptr;
 
       try {
         SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
-        parser.Parse(meta.BmsPath, &chart, false, false, previewLoadCancelled);
+        parser.Parse(meta.BmsPath, &parsedChart, false, false,
+                     previewLoadCancelled);
         SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       } catch (std::exception &e) {
-        delete chart;
+        delete parsedChart;
         SDL_Log("Error parsing %s: %s", path_t_to_utf8(meta.BmsPath).c_str(),
                 e.what());
         return;
       }
+      std::unique_ptr<bms_parser::Chart> chart(parsedChart);
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         return;
       }
-      selectedChart = chart;
 
       context.jukebox.loadChart(*chart, true, previewLoadCancelled);
       if (previewLoadCancelled) {
         return;
       }
+      auto *loadedChart = chart.release();
+      delete selectedChart.exchange(loadedChart);
+      selectedChartMediaReady = true;
       if (!willStart) {
         context.jukebox.play();
       }
@@ -650,7 +655,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
             if (loadThread.joinable()) {
               loadThread.join();
             }
-            if (selectedChart.load() == nullptr) {
+            auto *chart = selectedChart.load();
+            if (chart == nullptr || !selectedChartMediaReady.load()) {
               willStart = false;
               buttonText->setText("Start");
               return true;
@@ -658,7 +664,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
             context.jukebox.stop();
             context.sceneManager->changeScene(
                 new GamePlayScene(
-                    context, selectedChart,
+                    context, chart,
                     {
                         .startPosition = 0,
                         .autoKeySound = !context.settings.inputKeysoundEnabled,
@@ -723,7 +729,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
             return true;
           }
 
-          if (selectedChart.load() == nullptr) {
+          auto *chart = selectedChart.load();
+          if (chart == nullptr || !selectedChartMediaReady.load()) {
             willStart = false;
             replayButtonText->setText("Replay");
             return true;
@@ -734,7 +741,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           context.jukebox.stop();
           context.sceneManager->changeScene(
               new GamePlayScene(
-                  context, selectedChart,
+                  context, chart,
                   {
                       .startPosition = 0,
                       .autoKeySound = false,
@@ -1090,6 +1097,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
 
   willStart = true;
   previewLoadCancelled = true;
+  selectedChartMediaReady = false;
   if (replayExportButtonText != nullptr) {
     replayExportButtonText->setText("Exporting...");
   }
@@ -1164,6 +1172,17 @@ void MainMenuScene::applyReplayVideoExportResult() {
   }
   replayExportInProgress = false;
   willStart = false;
+
+  if (recyclerView != nullptr) {
+    const int selected = recyclerView->selectedIndex;
+    if (selected >= 0 && selected < recyclerView->size()) {
+      const auto &selectedMeta = recyclerView->get(selected);
+      if (!selectedMeta.unavailable && !selectedMeta.meta.BmsPath.empty() &&
+          recyclerView->onSelected) {
+        recyclerView->onSelected(selectedMeta, selected);
+      }
+    }
+  }
 
   if (replayExportButtonText != nullptr) {
     if (result->success) {
@@ -1264,6 +1283,7 @@ void MainMenuScene::cleanupScene() {
   replayExportButtonText = nullptr;
   pendingReplayExportResult.reset();
   replayExportInProgress = false;
+  selectedChartMediaReady = false;
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
