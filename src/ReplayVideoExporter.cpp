@@ -54,7 +54,7 @@ namespace {
 constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
 constexpr int kDefaultExportFps = 120;
-constexpr int kVideoTicksPerFrame = 1000;
+constexpr int kH264HighProfile = 100;
 constexpr long long kAudioTailMicros = 3000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -127,6 +127,32 @@ int replayVideoEncoderThreadCount() {
 bool replayVideoEncoderSupportsFrameThreads(const AVCodec *codec) {
   return codec != nullptr &&
          (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0;
+}
+
+int replayVideoH264Level(int width, int height, int fps) {
+  const int64_t macroblocksPerFrame =
+      static_cast<int64_t>((width + 15) / 16) *
+      static_cast<int64_t>((height + 15) / 16);
+  const int64_t macroblocksPerSecond =
+      macroblocksPerFrame * static_cast<int64_t>(fps);
+
+  if (macroblocksPerFrame > 22080 || macroblocksPerSecond > 983040) {
+    return 52;
+  }
+  if (macroblocksPerFrame > 8704 || macroblocksPerSecond > 589824) {
+    return 51;
+  }
+  if (macroblocksPerSecond > 522240) {
+    return 50;
+  }
+  if (macroblocksPerSecond > 245760) {
+    return 42;
+  }
+  return 41;
+}
+
+std::string replayVideoH264LevelString(int level) {
+  return std::to_string(level / 10) + "." + std::to_string(level % 10);
 }
 
 size_t replayVideoFrameBufferCount() {
@@ -755,8 +781,7 @@ std::optional<AVSampleFormat> chooseAudioSampleFormat(const AVCodec *codec) {
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
                  std::string &errorMessage,
-                 int64_t forcedPacketDuration = 0,
-                 int64_t *forcedPacketPts = nullptr) {
+                 int64_t forcedPacketDuration = 0) {
   int ret = avcodec_send_frame(encoderContext, frame);
   if (ret < 0) {
     errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
@@ -774,13 +799,11 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
       return false;
     }
 
-    if (forcedPacketPts != nullptr) {
-      packet->pts = *forcedPacketPts;
-      packet->dts = *forcedPacketPts;
-      *forcedPacketPts += forcedPacketDuration;
-    }
     if (forcedPacketDuration > 0) {
       packet->duration = forcedPacketDuration;
+    }
+    if (packet->pts != AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) {
+      packet->dts = packet->pts;
     }
     av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
     packet->stream_index = stream->index;
@@ -940,12 +963,15 @@ public:
     videoContext->width = width;
     videoContext->height = height;
     videoContext->pix_fmt = videoPixelFormat.value();
-    videoContext->time_base = AVRational{1, fps * kVideoTicksPerFrame};
+    videoContext->time_base = AVRational{1, fps};
     videoContext->framerate = AVRational{fps, 1};
     videoContext->sample_aspect_ratio = AVRational{1, 1};
     videoContext->gop_size = fps * 2;
     videoContext->max_b_frames = 0;
     videoContext->bit_rate = replayVideoBitRate(width, height, fps);
+    const int h264Level = replayVideoH264Level(width, height, fps);
+    videoContext->profile = kH264HighProfile;
+    videoContext->level = h264Level;
     if (replayVideoEncoderSupportsFrameThreads(videoCodec)) {
       videoContext->thread_count = replayVideoEncoderThreadCount();
       videoContext->thread_type = FF_THREAD_FRAME;
@@ -957,28 +983,35 @@ public:
     }
 
     AVDictionary *videoOptions = nullptr;
-    if (std::string(videoCodec->name) == "libx264") {
+    const std::string videoCodecName =
+        videoCodec->name != nullptr ? videoCodec->name : "";
+    if (videoCodecName == "libx264") {
       av_dict_set(&videoOptions, "preset", "veryfast", 0);
       av_dict_set(&videoOptions, "crf", "22", 0);
+      av_dict_set(&videoOptions, "profile", "high", 0);
+      const std::string levelString = replayVideoH264LevelString(h264Level);
+      av_dict_set(&videoOptions, "level", levelString.c_str(), 0);
       const std::string threadCount =
           std::to_string(videoContext->thread_count);
       av_dict_set(&videoOptions, "threads", threadCount.c_str(), 0);
+    } else if (videoCodecName.find("videotoolbox") != std::string::npos) {
+      av_dict_set(&videoOptions, "realtime", "0", 0);
+      av_dict_set(&videoOptions, "allow_sw", "1", 0);
     }
     ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
     av_dict_free(&videoOptions);
     if (ret < 0) {
       return failOpen("Failed to open H.264 encoder: " + ffmpegError(ret));
     }
-    videoFrameDuration =
-        std::max<int64_t>(1, av_rescale_q(1, AVRational{1, fps},
-                                          videoContext->time_base));
+    videoFrameDuration = 1;
     const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
     SDL_Log("Replay video export encoder: %s, pixel format: %s, time base: "
-            "%d/%d, frame duration: %lld",
+            "%d/%d, frame duration: %lld, H.264 level: %s",
             videoCodec->name, pixelFormatName != nullptr ? pixelFormatName
                                                          : "unknown",
             videoContext->time_base.num, videoContext->time_base.den,
-            static_cast<long long>(videoFrameDuration));
+            static_cast<long long>(videoFrameDuration),
+            replayVideoH264LevelString(h264Level).c_str());
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
     if (ret < 0) {
       return failOpen("Failed to configure MP4 video stream: " +
@@ -1109,11 +1142,16 @@ public:
 
     AVDictionary *formatOptions = nullptr;
     av_dict_set(&formatOptions, "movflags", "+faststart", 0);
+    const std::string videoTrackTimescale = std::to_string(fps);
+    av_dict_set(&formatOptions, "video_track_timescale",
+                videoTrackTimescale.c_str(), 0);
     ret = avformat_write_header(formatContext, &formatOptions);
     av_dict_free(&formatOptions);
     if (ret < 0) {
       return failOpen("Failed to write MP4 header: " + ffmpegError(ret));
     }
+    SDL_Log("Replay video export MP4 stream time base: %d/%d",
+            videoStream->time_base.num, videoStream->time_base.den);
 
     return true;
   }
@@ -1150,13 +1188,10 @@ public:
       sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
                 videoFrame->data, videoFrame->linesize);
     }
-    videoFrame->pts =
-        av_rescale_q(static_cast<int64_t>(frameIndex), AVRational{1, fps},
-                     videoContext->time_base);
+    videoFrame->pts = static_cast<int64_t>(frameIndex);
     videoFrame->duration = videoFrameDuration;
     return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                       videoPacket, errorMessage, videoFrameDuration,
-                       &nextVideoPacketPts);
+                       videoPacket, errorMessage, videoFrameDuration);
   }
 
   ReplayVideoExportResult finish() {
@@ -1176,8 +1211,7 @@ public:
       }
     }
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
-                     videoPacket, errorMessage, videoFrameDuration,
-                     &nextVideoPacketPts)) {
+                     videoPacket, errorMessage, videoFrameDuration)) {
       return fail(errorMessage);
     }
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
@@ -1226,8 +1260,7 @@ private:
   int width = 0;
   int height = 0;
   int fps = 0;
-  int64_t videoFrameDuration = kVideoTicksPerFrame;
-  int64_t nextVideoPacketPts = 0;
+  int64_t videoFrameDuration = 1;
   AVFormatContext *formatContext = nullptr;
   AVCodecContext *videoContext = nullptr;
   AVCodecContext *audioContext = nullptr;
