@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "path.h"
+#include "rendering/BlurPass.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
@@ -35,6 +36,7 @@ extern "C" {
 #include <cstdint>
 #include <ctime>
 #include <iomanip>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -147,6 +149,38 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
   rendering::game_camera.render(true);
+}
+
+void configureReplayExportRenderViews(
+    int width, int height, bgfx::FrameBufferHandle outputFrameBuffer,
+    const rendering::BlurPass &bgaBlurPass) {
+  const auto exportWidth = static_cast<uint16_t>(width);
+  const auto exportHeight = static_cast<uint16_t>(height);
+
+  bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::final_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+
+  bgfx::setViewRect(rendering::clear_view, 0, 0, exportWidth, exportHeight);
+  bgfx::setViewRect(rendering::final_view, 0, 0, exportWidth, exportHeight);
+  bgfx::setViewRect(rendering::main_view, 0, 0, exportWidth, exportHeight);
+  bgfx::setViewRect(rendering::bga_view, 0, 0, bgaBlurPass.sceneWidth(),
+                    bgaBlurPass.sceneHeight());
+  bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
+                    bgaBlurPass.sceneWidth(), bgaBlurPass.sceneHeight());
+
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
+               rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
+               bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
+
+  rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
+                            rendering::final_view);
 }
 
 class ScopedReplayVideoBgfxAccess {
@@ -1135,10 +1169,15 @@ ReplayVideoExportResult renderReplayVideoToMp4(
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
+  std::unique_ptr<rendering::BlurPass> bgaBlurPass;
   auto cleanupBgfx = [&]() {
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
     restorePrimaryRenderViews(&context);
+    if (bgaBlurPass != nullptr) {
+      bgaBlurPass->shutdown();
+      bgaBlurPass.reset();
+    }
     if (bgfx::isValid(readbackTexture)) {
       bgfx::destroy(readbackTexture);
       readbackTexture = BGFX_INVALID_HANDLE;
@@ -1171,6 +1210,14 @@ ReplayVideoExportResult renderReplayVideoToMp4(
             .message = "Failed to create replay export readback texture"};
   }
 
+  bgaBlurPass = std::make_unique<rendering::BlurPass>(2, 0.6f);
+  bgaBlurPass->init(static_cast<uint16_t>(width),
+                    static_cast<uint16_t>(height));
+  bgaBlurPass->setInputViews({rendering::bga_view,
+                              rendering::bga_layer_view});
+  bgaBlurPass->setCompositeEnabled(false);
+  bgaBlurPass->setBlurStrength(settings.bgaBlurStrength);
+
   ScopedChartNoteReset chartReset(chart);
   Judge judge(chart.Meta.Rank);
   BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
@@ -1191,19 +1238,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   size_t replayCursor = 0;
   uint32_t currentFrame = bgfx::frame();
 
-  bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::bga_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::bga_layer_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
-  bgfx::setViewRect(rendering::clear_view, 0, 0, static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
-  bgfx::setViewRect(rendering::bga_view, 0, 0, static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
-  bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
-                    static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
-  bgfx::setViewRect(rendering::main_view, 0, 0, static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
+  configureReplayExportRenderViews(width, height, outputFrameBuffer,
+                                   *bgaBlurPass);
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     const long long songTimeMicros = static_cast<long long>(
@@ -1222,6 +1258,10 @@ ReplayVideoExportResult renderReplayVideoToMp4(
     bgfx::touch(rendering::bga_view);
     bgfx::touch(rendering::bga_layer_view);
     context.jukebox.renderVisualsAt(songTimeMicros);
+    bgaBlurPass->execute();
+    rendering::renderFullscreenTextureTint(
+        bgaBlurPass->outputTexture(), rendering::final_view,
+        static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
     renderer.render(renderContext, visualTimeMicros);
     bgfx::blit(rendering::ui_view, readbackTexture, 0, 0, outputTexture);
     currentFrame = bgfx::frame();
