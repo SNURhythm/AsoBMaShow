@@ -44,7 +44,9 @@
 // POSIX
 #endif
 #include <cmath>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 
 namespace {
 constexpr int kRootPadding = 28;
@@ -111,6 +113,155 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
     return "NORMAL";
   }
 }
+
+std::string formatReplayGauge(float gauge) {
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(1) << gauge << "%";
+  return stream.str();
+}
+
+std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
+  return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
+}
+
+void styleActionButton(Button *button, TextView *text, bool enabled,
+                       const Color &normal, const Color &hover,
+                       const Color &pressed, const Color &border) {
+  if (button == nullptr || text == nullptr) {
+    return;
+  }
+
+  if (enabled) {
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
+                            Color(235, 246, 255, 255));
+    text->setColor({242, 247, 255, 255});
+  } else {
+    button->setBackgroundColors(Color(25, 31, 39, 154),
+                                Color(25, 31, 39, 154),
+                                Color(25, 31, 39, 154));
+    button->setBorderColors(Color(76, 88, 102, 120),
+                            Color(76, 88, 102, 120),
+                            Color(76, 88, 102, 120));
+    text->setColor({129, 143, 160, 255});
+  }
+}
+
+void styleOptionButton(Button *button, TextView *text, bool selected) {
+  if (selected) {
+    styleActionButton(button, text, true, Color(38, 97, 87, 232),
+                      Color(50, 121, 109, 242), Color(65, 146, 130, 250),
+                      Color(112, 212, 191, 255));
+  } else {
+    styleActionButton(button, text, true, Color(22, 34, 51, 220),
+                      Color(32, 48, 70, 232), Color(44, 65, 94, 242),
+                      Color(83, 109, 140, 220));
+  }
+}
+
+class ModalRootView : public View {
+public:
+  using View::View;
+
+private:
+  bool handleEventsImpl(SDL_Event &event) override {
+    switch (event.type) {
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONUP:
+    case SDL_MOUSEMOTION:
+    case SDL_MOUSEWHEEL:
+    case SDL_FINGERDOWN:
+    case SDL_FINGERUP:
+    case SDL_FINGERMOTION:
+    case SDL_KEYDOWN:
+    case SDL_KEYUP:
+      return false;
+    default:
+      return true;
+    }
+  }
+};
+
+class ReplayListItemView : public View {
+public:
+  ReplayListItemView() {
+    clearLamp = new View();
+    textColumn = new View();
+    titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+
+    setFlexDirection(FlexDirection::Row)
+        ->setAlignItems(YGAlignCenter)
+        ->setPadding(Edge::All, 8)
+        ->setGap(12);
+
+    clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
+    addView(clearLamp);
+
+    textColumn->setFlexDirection(FlexDirection::Column)
+        ->setJustifyContent(YGJustifyCenter)
+        ->setFlexGrow(1)
+        ->setFlexBasis(0)
+        ->setMinWidth(0)
+        ->setGap(4);
+    titleText->setHeight(28);
+    titleText->setOverflow(TextView::TextOverflow::Marquee);
+    detailText->setHeight(22);
+    detailText->setOverflow(TextView::TextOverflow::Hidden);
+    textColumn->addView(titleText);
+    textColumn->addView(detailText);
+    addView(textColumn);
+
+    scoreText->setWidth(140)->setHeight(32);
+    scoreText->setAlign(TextView::TextAlign::RIGHT);
+    scoreText->setVAlign(TextView::TextVAlign::MIDDLE);
+    addView(scoreText);
+    onUnselected();
+  }
+
+  void setSummary(const ReplaySummary &summary) {
+    titleText->setText(summary.createdAt.empty()
+                           ? "Replay #" + std::to_string(summary.id)
+                           : summary.createdAt);
+    detailText->setText(replayGaugeLabel(summary.initialGaugeType,
+                                         summary.gaugeAutoShift) +
+                        "  Gauge " + formatReplayGauge(summary.finalGauge) +
+                        "  Events " + std::to_string(summary.eventCount));
+    scoreText->setText(std::to_string(summary.finalScore));
+
+    if (hasClearLampColor(summary.clearType)) {
+      clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
+    } else {
+      clearLamp->clearBackgroundColor();
+    }
+  }
+
+  void onSelected() override {
+    setBackgroundColor(Color(32, 55, 82, 224));
+    setBorderColor(Color(112, 177, 238, 255));
+    setBorderWidth(1);
+    titleText->setColor({255, 255, 255, 255});
+    detailText->setColor({203, 220, 239, 255});
+    scoreText->setColor({245, 250, 255, 255});
+  }
+
+  void onUnselected() override {
+    setBackgroundColor(Color(7, 12, 20, 138));
+    setBorderColor(Color(38, 52, 70, 160));
+    setBorderWidth(1);
+    titleText->setColor({235, 242, 250, 255});
+    detailText->setColor({151, 171, 194, 255});
+    scoreText->setColor({197, 216, 238, 255});
+  }
+
+private:
+  View *clearLamp = nullptr;
+  View *textColumn = nullptr;
+  TextView *titleText = nullptr;
+  TextView *detailText = nullptr;
+  TextView *scoreText = nullptr;
+};
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(
@@ -277,9 +428,36 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
-  replayExportButtonText = nullptr;
+  replayButtonSlot = nullptr;
+  replayButton = nullptr;
+  replayButtonText = nullptr;
+  replayStatusText = nullptr;
+  replayModalRoot = nullptr;
+  replayModalContentFrame = nullptr;
+  replayListContent = nullptr;
+  replayExportOptionsContent = nullptr;
+  replayModalTitleText = nullptr;
+  replayListView = nullptr;
+  replayWatchButton = nullptr;
+  replayModalExportButton = nullptr;
+  replayModalCloseButton = nullptr;
+  replayFps60Button = nullptr;
+  replayFps120Button = nullptr;
+  replayResolution1080Button = nullptr;
+  replayResolutionFullButton = nullptr;
+  replayWatchButtonText = nullptr;
+  replayModalExportButtonText = nullptr;
+  replayModalCloseButtonText = nullptr;
+  replayFps60ButtonText = nullptr;
+  replayFps120ButtonText = nullptr;
+  replayResolution1080ButtonText = nullptr;
+  replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   replayExportInProgress = false;
+  replaySummaries.clear();
+  selectedReplayIndex = -1;
+  selectedExportFps = 120;
+  selectedExportFullResolution = true;
   gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
@@ -333,6 +511,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (selectedView) {
       selectedView->onSelected();
     }
+    refreshReplayAvailability(&item);
     previewLoadCancelled = true;
     if (loadThread.joinable()) {
       SDL_Log("Joining preview thread");
@@ -675,8 +854,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
           0, true);
     }
   });
-  auto replayButton = new Button(0, 0, 220, 64);
-  auto replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  replayButtonSlot = new View();
+  replayButtonSlot->setWidth(220)->setHeight(0);
+  replayButtonSlot->setVisible(false);
+  replayButtonSlot->setAlignItems(YGAlignStretch);
+
+  replayButton = new Button(0, 0, 220, 64);
+  replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
   replayButtonText->setText("Replay");
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
@@ -688,85 +872,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 Color(116, 204, 214, 255),
                                 Color(145, 232, 241, 255));
   replayButton->setStyledBorderWidth(2);
-  replayButton->setOnClickListener([this, &context, replayButtonText]() {
-    if (willStart.load()) {
-      return;
-    }
-    auto selected = recyclerView->selectedIndex;
-    if (selected < 0 || selected >= recyclerView->size()) {
-      return;
-    }
-    const auto &selectedMeta = recyclerView->get(selected);
-    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
-      return;
-    }
-
-    willStart.store(true);
-    replayButtonText->setText("Loading...");
-    defer(
-        [this, &context, replayButtonText, selectedMeta]() {
-          if (loadThread.joinable()) {
-            loadThread.join();
-          }
-
-          auto replay =
-              ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
-          if (!replay.has_value()) {
-            willStart.store(false);
-            replayButtonText->setText("No Replay");
-            defer(
-                [replayButtonText]() {
-                  replayButtonText->setText("Replay");
-                  return false;
-                },
-                1200, true);
-            return true;
-          }
-
-          auto *chart = loadedSelectedChart();
-          if (chart == nullptr) {
-            willStart.store(false);
-            replayButtonText->setText("Replay");
-            return true;
-          }
-
-          auto replayData =
-              std::make_shared<ReplayData>(std::move(replay.value()));
-          context.jukebox.stop();
-          context.sceneManager->changeScene(
-              new GamePlayScene(
-                  context, chart,
-                  {
-                      .startPosition = 0,
-                      .autoKeySound = false,
-                      .autoPlay = false,
-                      .gaugeType = replayData->initialGaugeType,
-                      .gaugeAutoShift = replayData->gaugeAutoShift,
-                      .replayData = replayData,
-                  }),
-              true);
-          willStart.store(false);
-          replayButtonText->setText("Replay");
-          return true;
-        },
-        0, true);
-  });
-
-  auto exportButton = new Button(0, 0, 220, 64);
-  auto exportButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  replayExportButtonText = exportButtonText;
-  exportButtonText->setText("Export MP4");
-  exportButtonText->setAlign(TextView::CENTER);
-  exportButtonText->setVAlign(TextView::MIDDLE);
-  exportButton->setContentView(exportButtonText);
-  exportButton->setBackgroundColors(Color(47, 54, 88, 216),
-                                    Color(65, 75, 119, 228),
-                                    Color(82, 94, 148, 236));
-  exportButton->setBorderColors(Color(126, 141, 219, 255),
-                                Color(151, 165, 239, 255),
-                                Color(180, 191, 255, 255));
-  exportButton->setStyledBorderWidth(2);
-  exportButton->setOnClickListener([this]() {
+  replayButton->setOnClickListener([this]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
@@ -779,8 +885,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
 
-    startReplayVideoExport(selectedMeta);
+    showReplayListModal(selectedMeta);
   });
+  replayButtonSlot->addView(replayButton);
+
+  replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  replayStatusText->setText("");
+  replayStatusText->setColor({157, 177, 200, 255});
+  replayStatusText->setAlign(TextView::CENTER);
+  replayStatusText->setHeight(24);
+
   auto *jacketCard = new View();
   jacketCard->setWidth(220);
   jacketCard->setHeight(220);
@@ -794,8 +908,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setHeight(100);
   right->addView(jacketCard);
   right->addView(startButton);
-  right->addView(replayButton);
-  right->addView(exportButton);
+  right->addView(replayButtonSlot);
+  right->addView(replayStatusText);
 
   auto *settingsButton = new Button(0, 0, 220, 78);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
@@ -820,6 +934,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(settingsButton);
 
   rootLayout->addView(right);
+  buildReplayModal();
   addView(rootLayout);
   reloadScoreClearRanks();
   reloadFolderItems();
@@ -984,6 +1099,7 @@ void MainMenuScene::reloadChartList() {
 
   const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   chartListCache.reset(db, query, count);
+  refreshReplayAvailability(nullptr);
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
@@ -1080,6 +1196,448 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
   }
 }
 
+void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
+  replaySummaries.clear();
+  selectedReplayIndex = -1;
+  if (record == nullptr || record->unavailable || record->meta.BmsPath.empty()) {
+    setReplayButtonVisible(false);
+    return;
+  }
+
+  replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record->meta);
+  setReplayButtonVisible(!replaySummaries.empty());
+}
+
+void MainMenuScene::setReplayButtonVisible(bool visible) {
+  if (replayButtonSlot == nullptr) {
+    return;
+  }
+
+  replayButtonSlot->setVisible(visible);
+  replayButtonSlot->setHeight(visible ? 64.0f : 0.0f);
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::buildReplayModal() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  constexpr float kModalPanelWidth = 760.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalContentWidth =
+      kModalPanelWidth - kModalPanelPadding * 2.0f;
+  constexpr float kModalContentHeight = 418.0f;
+
+  replayModalRoot =
+      new ModalRootView(0, 0, rendering::window_width, rendering::window_height);
+  replayModalRoot->setPositionType(YGPositionTypeAbsolute);
+  replayModalRoot->setPosition(Edge::Left, 0);
+  replayModalRoot->setPosition(Edge::Top, 0);
+  replayModalRoot->setZIndex(1000);
+  replayModalRoot->setVisible(false);
+  replayModalRoot->setFlexDirection(FlexDirection::Column);
+  replayModalRoot->setAlignItems(YGAlignCenter);
+  replayModalRoot->setJustifyContent(YGJustifyCenter);
+  replayModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setHeight(620)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, 22)
+      ->setBackgroundColor(Color(13, 22, 35, 242))
+      ->setBorderColor(Color(86, 118, 153, 255))
+      ->setBorderWidth(2);
+
+  replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  replayModalTitleText->setText("Replay");
+  replayModalTitleText->setColor({245, 249, 255, 255});
+  replayModalTitleText->setHeight(42);
+  panel->addView(replayModalTitleText);
+
+  replayModalContentFrame = new View();
+  replayModalContentFrame->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setFlexShrink(0);
+  panel->addView(replayModalContentFrame);
+
+  replayListContent = new View();
+  replayListContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setGap(10);
+  replayListView = new RecyclerView<ReplaySummary>(
+      [](const ReplaySummary &a, const ReplaySummary &b) {
+        return a.id == b.id;
+      });
+  replayListView->itemHeight = 74;
+  replayListView->onCreateView = [](const ReplaySummary &) {
+    return new ReplayListItemView();
+  };
+  replayListView->onBind = [](View *view, const ReplaySummary &item, int,
+                              bool isSelected) {
+    auto *itemView = dynamic_cast<ReplayListItemView *>(view);
+    if (itemView == nullptr) {
+      return;
+    }
+    itemView->setSummary(item);
+    if (isSelected) {
+      itemView->onSelected();
+    } else {
+      itemView->onUnselected();
+    }
+  };
+  replayListView->onSelected = [this](const ReplaySummary &, int idx) {
+    if (selectedReplayIndex >= 0 && replayListView != nullptr &&
+        selectedReplayIndex < replayListView->size()) {
+      if (auto *oldView = replayListView->getViewByIndex(selectedReplayIndex)) {
+        oldView->onUnselected();
+      }
+    }
+    selectedReplayIndex = idx;
+    if (auto *newView = replayListView->getViewByIndex(idx)) {
+      newView->onSelected();
+    }
+    refreshReplayModalActions();
+  };
+  replayListView->onUnselected = [this](const ReplaySummary &, int idx) {
+    if (auto *view = replayListView->getViewByIndex(idx)) {
+      view->onUnselected();
+    }
+  };
+  replayListView->setFlex(1);
+  replayListView->clearBackgroundColor();
+  replayListView->setBorderColor(Color(55, 76, 102, 255));
+  replayListView->setBorderWidth(2);
+  replayListContent->addView(replayListView);
+  replayModalContentFrame->addView(replayListContent);
+
+  replayExportOptionsContent = new View();
+  replayExportOptionsContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setGap(18);
+  replayExportOptionsContent->setVisible(false);
+
+  auto makeOptionLabel = [](const std::string &text) {
+    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    label->setText(text);
+    label->setColor({173, 193, 216, 255});
+    label->setHeight(28);
+    return label;
+  };
+  auto makeOptionRow = []() {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setAlignItems(YGAlignStretch);
+    row->setGap(12);
+    row->setHeight(58);
+    return row;
+  };
+  auto makeModalButton = [](const std::string &label, int fontSize,
+                            TextView **textOut) {
+    auto *button = new Button(0, 0, 160, 58);
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    button->setContentView(text);
+    button->setStyledBorderWidth(2);
+    if (textOut != nullptr) {
+      *textOut = text;
+    }
+    return button;
+  };
+
+  replayExportOptionsContent->addView(makeOptionLabel("Frame Rate"));
+  auto *fpsRow = makeOptionRow();
+  replayFps60Button = makeModalButton("60 fps", 20, &replayFps60ButtonText);
+  replayFps120Button = makeModalButton("120 fps", 20, &replayFps120ButtonText);
+  replayFps60Button->setFlex(1);
+  replayFps120Button->setFlex(1);
+  replayFps60Button->setOnClickListener([this]() {
+    selectedExportFps = 60;
+    refreshReplayExportOptionButtons();
+  });
+  replayFps120Button->setOnClickListener([this]() {
+    selectedExportFps = 120;
+    refreshReplayExportOptionButtons();
+  });
+  fpsRow->addView(replayFps60Button);
+  fpsRow->addView(replayFps120Button);
+  replayExportOptionsContent->addView(fpsRow);
+
+  replayExportOptionsContent->addView(makeOptionLabel("Resolution"));
+  auto *resolutionRow = makeOptionRow();
+  replayResolution1080Button =
+      makeModalButton("1080p", 20, &replayResolution1080ButtonText);
+  replayResolutionFullButton =
+      makeModalButton("Full Resolution", 20, &replayResolutionFullButtonText);
+  replayResolution1080Button->setFlex(1);
+  replayResolutionFullButton->setFlex(1);
+  replayResolution1080Button->setOnClickListener([this]() {
+    selectedExportFullResolution = false;
+    refreshReplayExportOptionButtons();
+  });
+  replayResolutionFullButton->setOnClickListener([this]() {
+    selectedExportFullResolution = true;
+    refreshReplayExportOptionButtons();
+  });
+  resolutionRow->addView(replayResolution1080Button);
+  resolutionRow->addView(replayResolutionFullButton);
+  replayExportOptionsContent->addView(resolutionRow);
+  replayModalContentFrame->addView(replayExportOptionsContent);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(58);
+
+  replayModalCloseButton =
+      makeModalButton("Close", 20, &replayModalCloseButtonText);
+  replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
+  replayModalExportButton =
+      makeModalButton("Export", 20, &replayModalExportButtonText);
+  replayModalCloseButton->setOnClickListener([this]() {
+    if (replayExportOptionsContent != nullptr &&
+        replayExportOptionsContent->getVisible()) {
+      replayModalTitleText->setText("Replay");
+      replayExportOptionsContent->setVisible(false);
+      replayListContent->setVisible(true);
+      const int previousSelection = selectedReplayIndex;
+      const float previousScrollOffset = replayListView->scrollOffset;
+      replayListView->setItems(replaySummaries);
+      replayListView->scrollOffset = previousScrollOffset;
+      selectedReplayIndex =
+          previousSelection >= 0 &&
+                  previousSelection < static_cast<int>(replaySummaries.size())
+              ? previousSelection
+              : -1;
+      replayListView->selectedIndex = selectedReplayIndex;
+      if (selectedReplayIndex >= 0) {
+        if (auto *selectedView =
+                replayListView->getViewByIndex(selectedReplayIndex)) {
+          selectedView->onSelected();
+        }
+      }
+      refreshReplayModalActions();
+      return;
+    }
+    hideReplayModal();
+  });
+  replayWatchButton->setOnClickListener([this]() {
+    if (selectedReplayIndex < 0 ||
+        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+      return;
+    }
+    startReplayPlayback(replayModalChart,
+                        replaySummaries[selectedReplayIndex].id);
+  });
+  replayModalExportButton->setOnClickListener([this]() {
+    if (selectedReplayIndex < 0 ||
+        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+      return;
+    }
+    if (replayExportOptionsContent != nullptr &&
+        replayExportOptionsContent->getVisible()) {
+      ReplayVideoExportOptions options;
+      options.fps = selectedExportFps;
+      if (!selectedExportFullResolution) {
+        options.height = 1080;
+      }
+      startReplayVideoExport(replayModalChart,
+                             replaySummaries[selectedReplayIndex].id, options);
+      return;
+    }
+    showReplayExportOptions();
+  });
+  footer->addView(replayModalCloseButton);
+  footer->addView(replayWatchButton);
+  footer->addView(replayModalExportButton);
+  panel->addView(footer);
+
+  replayModalRoot->addView(panel);
+  rootLayout->addView(replayModalRoot);
+  refreshReplayExportOptionButtons();
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
+  if (replayModalRoot == nullptr || replayListView == nullptr) {
+    return;
+  }
+
+  replayModalChart = record;
+  replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta);
+  setReplayButtonVisible(!replaySummaries.empty());
+  if (replaySummaries.empty()) {
+    return;
+  }
+
+  selectedReplayIndex = -1;
+  replayModalTitleText->setText("Replay");
+  replayListContent->setVisible(true);
+  replayExportOptionsContent->setVisible(false);
+  replayListView->setItems(replaySummaries);
+  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
+  replayModalRoot->setVisible(true);
+  refreshReplayModalActions();
+  replayModalRoot->applyYogaLayout();
+}
+
+void MainMenuScene::showReplayExportOptions() {
+  if (replayModalRoot == nullptr || selectedReplayIndex < 0 ||
+      selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+    return;
+  }
+
+  replayModalTitleText->setText("Export Options");
+  replayListContent->setVisible(false);
+  replayExportOptionsContent->setVisible(true);
+  selectedExportFps = 120;
+  selectedExportFullResolution = true;
+  refreshReplayExportOptionButtons();
+  refreshReplayModalActions();
+  replayModalRoot->applyYogaLayout();
+}
+
+void MainMenuScene::hideReplayModal() {
+  if (replayModalRoot == nullptr) {
+    return;
+  }
+  replayModalRoot->setVisible(false);
+  selectedReplayIndex = -1;
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Watch");
+  }
+  if (replayModalExportButtonText != nullptr) {
+    replayModalExportButtonText->setText("Export");
+  }
+}
+
+void MainMenuScene::refreshReplayModalActions() {
+  const bool hasSelection =
+      selectedReplayIndex >= 0 &&
+      selectedReplayIndex < static_cast<int>(replaySummaries.size());
+  const bool optionsMode =
+      replayExportOptionsContent != nullptr && replayExportOptionsContent->getVisible();
+
+  if (replayModalCloseButtonText != nullptr) {
+    replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
+  }
+  if (replayModalExportButtonText != nullptr) {
+    replayModalExportButtonText->setText(optionsMode ? "Start Export"
+                                                     : "Export");
+  }
+
+  if (replayWatchButton != nullptr) {
+    replayWatchButton->setVisible(!optionsMode);
+    replayWatchButton->setWidth(optionsMode ? 0.0f : 160.0f);
+  }
+
+  styleActionButton(replayModalCloseButton, replayModalCloseButtonText, true,
+                    Color(47, 54, 70, 220), Color(62, 72, 92, 232),
+                    Color(78, 90, 114, 242), Color(118, 137, 160, 220));
+  styleActionButton(replayWatchButton, replayWatchButtonText,
+                    hasSelection && !optionsMode, Color(29, 73, 120, 224),
+                    Color(40, 96, 156, 236), Color(58, 129, 204, 246),
+                    Color(105, 162, 222, 255));
+  styleActionButton(replayModalExportButton, replayModalExportButtonText,
+                    hasSelection, Color(47, 54, 88, 224),
+                    Color(65, 75, 119, 236), Color(82, 94, 148, 246),
+                    Color(126, 141, 219, 255));
+
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::refreshReplayExportOptionButtons() {
+  styleOptionButton(replayFps60Button, replayFps60ButtonText,
+                    selectedExportFps == 60);
+  styleOptionButton(replayFps120Button, replayFps120ButtonText,
+                    selectedExportFps == 120);
+  styleOptionButton(replayResolution1080Button, replayResolution1080ButtonText,
+                    !selectedExportFullResolution);
+  styleOptionButton(replayResolutionFullButton, replayResolutionFullButtonText,
+                    selectedExportFullResolution);
+}
+
+void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
+                                        int replayId) {
+  if (willStart.load()) {
+    return;
+  }
+
+  willStart.store(true);
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Loading...");
+  }
+
+  defer(
+      [this, record, replayId]() {
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+
+        auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId,
+                                                               record.meta);
+        if (!replay.has_value()) {
+          willStart.store(false);
+          if (replayWatchButtonText != nullptr) {
+            replayWatchButtonText->setText("Watch");
+          }
+          refreshReplayAvailability(&record);
+          return true;
+        }
+
+        auto *chart = loadedSelectedChart();
+        if (chart == nullptr) {
+          willStart.store(false);
+          if (replayWatchButtonText != nullptr) {
+            replayWatchButtonText->setText("Watch");
+          }
+          return true;
+        }
+
+        auto replayData =
+            std::make_shared<ReplayData>(std::move(replay.value()));
+        context.jukebox.stop();
+        hideReplayModal();
+        context.sceneManager->changeScene(
+            new GamePlayScene(
+                context, chart,
+                {
+                    .startPosition = 0,
+                    .autoKeySound = false,
+                    .autoPlay = false,
+                    .gaugeType = replayData->initialGaugeType,
+                    .gaugeAutoShift = replayData->gaugeAutoShift,
+                    .replayData = replayData,
+                }),
+            true);
+        willStart.store(false);
+        return true;
+      },
+      0, true);
+}
+
 bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
   if (!selectedChartMediaReady.load()) {
     return nullptr;
@@ -1087,7 +1645,9 @@ bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
   return selectedChart.load();
 }
 
-void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
+void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
+                                           int replayId,
+                                           ReplayVideoExportOptions options) {
   if (replayExportInProgress.exchange(true)) {
     return;
   }
@@ -1098,12 +1658,13 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
   willStart.store(true);
   previewLoadCancelled = true;
   selectedChartMediaReady.store(false);
-  if (replayExportButtonText != nullptr) {
-    replayExportButtonText->setText("Exporting...");
+  hideReplayModal();
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText("Exporting...");
   }
 
   replayExportThread = std::jthread(
-      [this, record](const std::stop_token &stopToken) {
+      [this, record, replayId, options](const std::stop_token &stopToken) {
         auto complete = [this](const ReplayVideoExportResult &result) {
           std::lock_guard<std::mutex> lock(replayExportResultMutex);
           pendingReplayExportResult = PendingReplayExportResult{
@@ -1124,7 +1685,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
           }
 
           auto replay =
-              ReplayDBHelper::GetInstance().LoadLatestReplay(record.meta);
+              ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
           if (!replay.has_value()) {
             complete({.success = false, .message = "No Replay"});
             return;
@@ -1146,7 +1707,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
           }
 
           complete(ReplayVideoExporter::Export(context, chart.get(),
-                                               replay.value()));
+                                               replay.value(), options));
         } catch (const std::exception &e) {
           complete({.success = false, .message = e.what()});
         } catch (...) {
@@ -1184,17 +1745,17 @@ void MainMenuScene::applyReplayVideoExportResult() {
     }
   }
 
-  if (replayExportButtonText != nullptr) {
+  if (replayStatusText != nullptr) {
     if (result->success) {
-      replayExportButtonText->setText(result->message == "Saved to Photos"
-                                          ? "Saved"
-                                          : "Exported");
+      replayStatusText->setText(result->message == "Saved to Photos"
+                                    ? "Saved"
+                                    : "Exported");
     } else if (result->message == "No Replay") {
-      replayExportButtonText->setText("No Replay");
+      replayStatusText->setText("No Replay");
     } else if (result->message == "No Chart") {
-      replayExportButtonText->setText("No Chart");
+      replayStatusText->setText("No Chart");
     } else {
-      replayExportButtonText->setText("Export Failed");
+      replayStatusText->setText("Export Failed");
     }
   }
 
@@ -1208,9 +1769,8 @@ void MainMenuScene::applyReplayVideoExportResult() {
 
   defer(
       [this]() {
-        if (!replayExportInProgress.load() &&
-            replayExportButtonText != nullptr) {
-          replayExportButtonText->setText("Export MP4");
+        if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+          replayStatusText->setText("");
         }
         return false;
       },
@@ -1238,6 +1798,9 @@ void MainMenuScene::renderScene() {
       safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
       safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->setSize(rendering::window_width, rendering::window_height);
+  }
   if (layoutChanged) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
@@ -1280,10 +1843,37 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
-  replayExportButtonText = nullptr;
+  replayButtonSlot = nullptr;
+  replayButton = nullptr;
+  replayButtonText = nullptr;
+  replayStatusText = nullptr;
+  replayModalRoot = nullptr;
+  replayModalContentFrame = nullptr;
+  replayListContent = nullptr;
+  replayExportOptionsContent = nullptr;
+  replayModalTitleText = nullptr;
+  replayListView = nullptr;
+  replayWatchButton = nullptr;
+  replayModalExportButton = nullptr;
+  replayModalCloseButton = nullptr;
+  replayFps60Button = nullptr;
+  replayFps120Button = nullptr;
+  replayResolution1080Button = nullptr;
+  replayResolutionFullButton = nullptr;
+  replayWatchButtonText = nullptr;
+  replayModalExportButtonText = nullptr;
+  replayModalCloseButtonText = nullptr;
+  replayFps60ButtonText = nullptr;
+  replayFps120ButtonText = nullptr;
+  replayResolution1080ButtonText = nullptr;
+  replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   replayExportInProgress = false;
   selectedChartMediaReady.store(false);
+  replaySummaries.clear();
+  selectedReplayIndex = -1;
+  selectedExportFps = 120;
+  selectedExportFullResolution = true;
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

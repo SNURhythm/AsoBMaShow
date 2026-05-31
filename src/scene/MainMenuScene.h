@@ -2,6 +2,8 @@
 #include "../view/RecyclerView.h"
 #include "Scene.h"
 #include "../ChartDBHelper.h"
+#include "../ReplayDBHelper.h"
+#include "../ReplayVideoExporter.h"
 #include "../ScoreDBHelper.h"
 #include "../path.h"
 #include "../view/ImageView.h"
@@ -95,7 +97,30 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
-  TextView *replayExportButtonText = nullptr;
+  View *replayButtonSlot = nullptr;
+  Button *replayButton = nullptr;
+  TextView *replayButtonText = nullptr;
+  TextView *replayStatusText = nullptr;
+  View *replayModalRoot = nullptr;
+  View *replayModalContentFrame = nullptr;
+  View *replayListContent = nullptr;
+  View *replayExportOptionsContent = nullptr;
+  TextView *replayModalTitleText = nullptr;
+  RecyclerView<ReplaySummary> *replayListView = nullptr;
+  Button *replayWatchButton = nullptr;
+  Button *replayModalExportButton = nullptr;
+  Button *replayModalCloseButton = nullptr;
+  Button *replayFps60Button = nullptr;
+  Button *replayFps120Button = nullptr;
+  Button *replayResolution1080Button = nullptr;
+  Button *replayResolutionFullButton = nullptr;
+  TextView *replayWatchButtonText = nullptr;
+  TextView *replayModalExportButtonText = nullptr;
+  TextView *replayModalCloseButtonText = nullptr;
+  TextView *replayFps60ButtonText = nullptr;
+  TextView *replayFps120ButtonText = nullptr;
+  TextView *replayResolution1080ButtonText = nullptr;
+  TextView *replayResolutionFullButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
     std::filesystem::path outputPath;
@@ -110,6 +135,11 @@ private:
   std::unordered_map<std::string, int> folderClearRanks;
   std::string searchText;
   std::string difficultyText;
+  std::vector<ReplaySummary> replaySummaries;
+  ChartMetaRecord replayModalChart;
+  int selectedReplayIndex = -1;
+  int selectedExportFps = 120;
+  bool selectedExportFullResolution = true;
   struct GaugeSelectionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
@@ -139,7 +169,17 @@ private:
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
   bms_parser::Chart *loadedSelectedChart() const;
-  void startReplayVideoExport(const ChartMetaRecord &record);
+  void refreshReplayAvailability(const ChartMetaRecord *record);
+  void setReplayButtonVisible(bool visible);
+  void buildReplayModal();
+  void showReplayListModal(const ChartMetaRecord &record);
+  void showReplayExportOptions();
+  void hideReplayModal();
+  void refreshReplayModalActions();
+  void refreshReplayExportOptionButtons();
+  void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
+                              ReplayVideoExportOptions options);
   void applyReplayVideoExportResult();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);

@@ -24,6 +24,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
@@ -32,24 +33,31 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
+#include <deque>
+#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace {
 constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
-constexpr int kDefaultExportFps = 30;
-constexpr int kMaxDefaultExportWidth = 1280;
-constexpr int kMaxDefaultExportHeight = 720;
+constexpr int kDefaultExportFps = 120;
+constexpr int kH264HighProfile = 100;
 constexpr long long kAudioTailMicros = 3000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -66,10 +74,18 @@ struct DecodedSound {
 
 int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
 
+int replayVideoSourceWidth() {
+  return std::max({2, rendering::render_width, rendering::window_width});
+}
+
+int replayVideoSourceHeight() {
+  return std::max({2, rendering::render_height, rendering::window_height});
+}
+
 ReplayVideoExportOptions
 resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
-  const int sourceWidth = std::max(2, rendering::render_width);
-  const int sourceHeight = std::max(2, rendering::render_height);
+  const int sourceWidth = replayVideoSourceWidth();
+  const int sourceHeight = replayVideoSourceHeight();
   const double aspectRatio =
       static_cast<double>(sourceWidth) / static_cast<double>(sourceHeight);
   const bool hasWidth = options.width > 0;
@@ -88,14 +104,6 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
     height = options.height;
     width = static_cast<int>(
         std::lround(static_cast<double>(height) * aspectRatio));
-  } else {
-    const double scale = std::min(
-        1.0, std::min(static_cast<double>(kMaxDefaultExportWidth) /
-                          static_cast<double>(sourceWidth),
-                      static_cast<double>(kMaxDefaultExportHeight) /
-                          static_cast<double>(sourceHeight)));
-    width = static_cast<int>(std::lround(static_cast<double>(width) * scale));
-    height = static_cast<int>(std::lround(static_cast<double>(height) * scale));
   }
 
   return {.width = makeEvenExportDimension(width),
@@ -108,7 +116,137 @@ int64_t replayVideoBitRate(int width, int height, int fps) {
   const int64_t pixelsPerSecond =
       static_cast<int64_t>(width) * static_cast<int64_t>(height) *
       static_cast<int64_t>(fps);
-  return std::clamp<int64_t>(pixelsPerSecond / 8, 2500000, 16000000);
+  return std::clamp<int64_t>(pixelsPerSecond / 6, 8000000, 80000000);
+}
+
+int replayVideoEncoderThreadCount() {
+  const auto hardwareThreads = std::thread::hardware_concurrency();
+  if (hardwareThreads <= 1) {
+    return 1;
+  }
+  return std::clamp(static_cast<int>(hardwareThreads) - 1, 1, 16);
+}
+
+int replayVideoPixelConvertThreadCount() {
+  const auto hardwareThreads = std::thread::hardware_concurrency();
+  if (hardwareThreads <= 1) {
+    return 1;
+  }
+  return std::clamp(static_cast<int>(hardwareThreads) - 1, 1, 8);
+}
+
+bool replayVideoEncoderSupportsFrameThreads(const AVCodec *codec) {
+  return codec != nullptr &&
+         (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0;
+}
+
+int replayVideoH264Level(int width, int height, int fps) {
+  const int64_t macroblocksPerFrame =
+      static_cast<int64_t>((width + 15) / 16) *
+      static_cast<int64_t>((height + 15) / 16);
+  const int64_t macroblocksPerSecond =
+      macroblocksPerFrame * static_cast<int64_t>(fps);
+
+  if (macroblocksPerFrame > 22080 || macroblocksPerSecond > 983040) {
+    return 52;
+  }
+  if (macroblocksPerFrame > 8704 || macroblocksPerSecond > 589824) {
+    return 51;
+  }
+  if (macroblocksPerSecond > 522240) {
+    return 50;
+  }
+  if (macroblocksPerSecond > 245760) {
+    return 42;
+  }
+  return 41;
+}
+
+std::string replayVideoH264LevelString(int level) {
+  return std::to_string(level / 10) + "." + std::to_string(level % 10);
+}
+
+size_t replayVideoFrameBufferCount(int width, int height) {
+  constexpr size_t kMaxFrameBufferMemoryBytes = 128ULL * 1024ULL * 1024ULL;
+  const size_t frameBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+  const size_t memoryLimitedBuffers =
+      frameBytes == 0 ? 3 : kMaxFrameBufferMemoryBytes / frameBytes;
+  const auto hardwareThreads = std::thread::hardware_concurrency();
+  if (hardwareThreads <= 2) {
+    return std::clamp(memoryLimitedBuffers, static_cast<size_t>(3),
+                      static_cast<size_t>(4));
+  }
+  const size_t hardwareLimitedBuffers =
+      std::clamp(static_cast<size_t>(hardwareThreads), static_cast<size_t>(4),
+                 static_cast<size_t>(8));
+  return std::clamp(std::min(memoryLimitedBuffers, hardwareLimitedBuffers),
+                    static_cast<size_t>(3), static_cast<size_t>(8));
+}
+
+long long elapsedMicros(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+std::string formatString(const char *format, va_list args) {
+  va_list sizeArgs;
+  va_copy(sizeArgs, args);
+  const int length = std::vsnprintf(nullptr, 0, format, sizeArgs);
+  va_end(sizeArgs);
+  if (length < 0) {
+    return format != nullptr ? std::string(format) : std::string();
+  }
+  if (length == 0) {
+    return {};
+  }
+
+  std::vector<char> buffer(static_cast<size_t>(length) + 1);
+  std::vsnprintf(buffer.data(), buffer.size(), format, args);
+  return std::string(buffer.data(), static_cast<size_t>(length));
+}
+
+class ReplayVideoExportLog {
+public:
+  explicit ReplayVideoExportLog(const std::filesystem::path &path)
+      : startedAt(std::chrono::steady_clock::now()), path(path) {
+    file.open(path, std::ios::out | std::ios::trunc);
+    if (!file.is_open()) {
+      SDL_Log("Replay export could not open log file: %s",
+              path.string().c_str());
+    }
+  }
+
+  void write(const std::string &message) {
+    SDL_Log("%s", message.c_str());
+    if (!file.is_open()) {
+      return;
+    }
+    const double elapsedSeconds =
+        static_cast<double>(elapsedMicros(startedAt)) / 1000000.0;
+    file << std::fixed << std::setprecision(3) << elapsedSeconds << "s "
+         << message << '\n';
+    file.flush();
+  }
+
+private:
+  std::chrono::steady_clock::time_point startedAt;
+  std::filesystem::path path;
+  std::ofstream file;
+};
+
+void replayExportLog(ReplayVideoExportLog *log, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  const std::string message = formatString(format, args);
+  va_end(args);
+
+  if (log != nullptr) {
+    log->write(message);
+  } else {
+    SDL_Log("%s", message.c_str());
+  }
 }
 
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
@@ -672,8 +810,17 @@ bool codecSupportsPixelFormat(const AVCodec *codec, AVPixelFormat format) {
 }
 
 std::optional<AVPixelFormat> chooseVideoPixelFormat(const AVCodec *codec) {
-  const std::array<AVPixelFormat, 3> preferredFormats = {
+  const std::string codecName = codec != nullptr && codec->name != nullptr
+                                    ? codec->name
+                                    : "";
+  const std::array<AVPixelFormat, 3> hardwarePreferredFormats = {
+      AV_PIX_FMT_BGRA, AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P};
+  const std::array<AVPixelFormat, 3> softwarePreferredFormats = {
       AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12, AV_PIX_FMT_BGRA};
+  const auto &preferredFormats =
+      codecName.find("videotoolbox") != std::string::npos
+          ? hardwarePreferredFormats
+          : softwarePreferredFormats;
   for (const AVPixelFormat format : preferredFormats) {
     if (codecSupportsPixelFormat(codec, format)) {
       return format;
@@ -713,7 +860,8 @@ std::optional<AVSampleFormat> chooseAudioSampleFormat(const AVCodec *codec) {
 
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
-                 std::string &errorMessage) {
+                 std::string &errorMessage,
+                 int64_t forcedPacketDuration = 0) {
   int ret = avcodec_send_frame(encoderContext, frame);
   if (ret < 0) {
     errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
@@ -731,6 +879,12 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
       return false;
     }
 
+    if (forcedPacketDuration > 0) {
+      packet->duration = forcedPacketDuration;
+    }
+    if (packet->pts != AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) {
+      packet->dts = packet->pts;
+    }
     av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
     packet->stream_index = stream->index;
     ret = av_interleaved_write_frame(formatContext, packet);
@@ -847,7 +1001,7 @@ public:
 
   bool open(const std::filesystem::path &wavPath,
             const std::filesystem::path &outputPath, int width, int height,
-            int fps, std::string &errorMessage) {
+            int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
     this->outputPath = outputPath;
     this->width = width;
     this->height = height;
@@ -895,26 +1049,66 @@ public:
     videoContext->gop_size = fps * 2;
     videoContext->max_b_frames = 0;
     videoContext->bit_rate = replayVideoBitRate(width, height, fps);
+    const int h264Level = replayVideoH264Level(width, height, fps);
+    videoContext->profile = kH264HighProfile;
+    videoContext->level = h264Level;
+    if (replayVideoEncoderSupportsFrameThreads(videoCodec)) {
+      videoContext->thread_count = replayVideoEncoderThreadCount();
+      videoContext->thread_type = FF_THREAD_FRAME;
+    } else {
+      videoContext->thread_count = 1;
+    }
     if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
       videoContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
     AVDictionary *videoOptions = nullptr;
-    if (std::string(videoCodec->name) == "libx264") {
-      av_dict_set(&videoOptions, "preset", "veryfast", 0);
+    const std::string videoCodecName =
+        videoCodec->name != nullptr ? videoCodec->name : "";
+    if (videoCodecName == "libx264") {
+      av_dict_set(&videoOptions, "preset", "ultrafast", 0);
       av_dict_set(&videoOptions, "crf", "22", 0);
+      av_dict_set(&videoOptions, "profile", "high", 0);
+      const std::string levelString = replayVideoH264LevelString(h264Level);
+      av_dict_set(&videoOptions, "level", levelString.c_str(), 0);
+      const std::string threadCount =
+          std::to_string(videoContext->thread_count);
+      av_dict_set(&videoOptions, "threads", threadCount.c_str(), 0);
+    } else if (videoCodecName.find("videotoolbox") != std::string::npos) {
+      av_dict_set(&videoOptions, "realtime", "1", 0);
+      av_dict_set(&videoOptions, "prio_speed", "1", 0);
+      av_dict_set(&videoOptions, "power_efficient", "0", 0);
+      av_dict_set(&videoOptions, "spatial_aq", "0", 0);
+      av_dict_set(&videoOptions, "max_ref_frames", "1", 0);
+      av_dict_set(&videoOptions, "allow_sw", "1", 0);
+      replayExportLog(log,
+                      "Replay video export VideoToolbox speed hints: "
+                      "realtime=1, prio_speed=1, power_efficient=0, "
+                      "spatial_aq=0, max_ref_frames=1, allow_sw=1");
     }
     ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
     av_dict_free(&videoOptions);
     if (ret < 0) {
       return failOpen("Failed to open H.264 encoder: " + ffmpegError(ret));
     }
+    videoFrameDuration = 1;
+    const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
+    replayExportLog(log,
+                    "Replay video export encoder: %s, pixel format: %s, time "
+                    "base: %d/%d, frame duration: %lld, H.264 level: %s",
+                    videoCodec->name,
+                    pixelFormatName != nullptr ? pixelFormatName : "unknown",
+                    videoContext->time_base.num, videoContext->time_base.den,
+                    static_cast<long long>(videoFrameDuration),
+                    replayVideoH264LevelString(h264Level).c_str());
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
     if (ret < 0) {
       return failOpen("Failed to configure MP4 video stream: " +
                       ffmpegError(ret));
     }
     videoStream->time_base = videoContext->time_base;
+    videoStream->avg_frame_rate = videoContext->framerate;
+    videoStream->r_frame_rate = videoContext->framerate;
 
     const AVCodec *audioCodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
     if (audioCodec == nullptr) {
@@ -1009,12 +1203,30 @@ public:
                       ffmpegError(ret));
     }
 
-    swsContext = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height,
-                                videoContext->pix_fmt, SWS_BILINEAR, nullptr,
-                                nullptr, nullptr);
-    if (swsContext == nullptr) {
-      return failOpen("Failed to create video pixel converter");
+    pixelConvertThreadCount = replayVideoPixelConvertThreadCount();
+    if (videoContext->pix_fmt != AV_PIX_FMT_BGRA) {
+      swsContext = sws_alloc_context();
+      if (swsContext == nullptr) {
+        return failOpen("Failed to create video pixel converter");
+      }
+      swsContext->flags = SWS_FAST_BILINEAR;
+      swsContext->threads = pixelConvertThreadCount;
+      swsContext->src_w = width;
+      swsContext->src_h = height;
+      swsContext->src_format = AV_PIX_FMT_BGRA;
+      swsContext->dst_w = width;
+      swsContext->dst_h = height;
+      swsContext->dst_format = videoContext->pix_fmt;
+      ret = sws_init_context(swsContext, nullptr, nullptr);
+      if (ret < 0) {
+        return failOpen("Failed to initialize video pixel converter: " +
+                        ffmpegError(ret));
+      }
     }
+    replayExportLog(log, "Replay video export pixel converter threads: %d",
+                    videoContext->pix_fmt == AV_PIX_FMT_BGRA
+                        ? 1
+                        : pixelConvertThreadCount);
 
     videoPacket = av_packet_alloc();
     audioPacket = av_packet_alloc();
@@ -1035,11 +1247,16 @@ public:
 
     AVDictionary *formatOptions = nullptr;
     av_dict_set(&formatOptions, "movflags", "+faststart", 0);
+    const std::string videoTrackTimescale = std::to_string(fps);
+    av_dict_set(&formatOptions, "video_track_timescale",
+                videoTrackTimescale.c_str(), 0);
     ret = avformat_write_header(formatContext, &formatOptions);
     av_dict_free(&formatOptions);
     if (ret < 0) {
       return failOpen("Failed to write MP4 header: " + ffmpegError(ret));
     }
+    replayExportLog(log, "Replay video export MP4 stream time base: %d/%d",
+                    videoStream->time_base.num, videoStream->time_base.den);
 
     return true;
   }
@@ -1047,6 +1264,7 @@ public:
   bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
                         long long videoTimeMicros,
                         std::string &errorMessage) {
+    const auto audioEncodeStart = std::chrono::steady_clock::now();
     while (!audioFinished &&
            (nextAudioPts * 1000000LL) / kExportSampleRate <=
                videoTimeMicros) {
@@ -1057,19 +1275,40 @@ public:
         return false;
       }
     }
+    audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
 
+    const auto framePrepareStart = std::chrono::steady_clock::now();
     int ret = av_frame_make_writable(videoFrame);
+    framePrepareMicrosTotal += elapsedMicros(framePrepareStart);
     if (ret < 0) {
       errorMessage = "Failed to prepare video frame: " + ffmpegError(ret);
       return false;
     }
-    const uint8_t *sourceData[4] = {bgraFrame, nullptr, nullptr, nullptr};
-    const int sourceLinesize[4] = {width * 4, 0, 0, 0};
-    sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
-              videoFrame->data, videoFrame->linesize);
+
+    const auto pixelConvertStart = std::chrono::steady_clock::now();
+    if (videoContext->pix_fmt == AV_PIX_FMT_BGRA) {
+      const int sourceLinesize = width * 4;
+      for (int y = 0; y < height; ++y) {
+        std::memcpy(videoFrame->data[0] + y * videoFrame->linesize[0],
+                    bgraFrame + y * sourceLinesize,
+                    static_cast<size_t>(sourceLinesize));
+      }
+    } else {
+      const uint8_t *sourceData[4] = {bgraFrame, nullptr, nullptr, nullptr};
+      const int sourceLinesize[4] = {width * 4, 0, 0, 0};
+      sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
+                videoFrame->data, videoFrame->linesize);
+    }
+    pixelConvertMicrosTotal += elapsedMicros(pixelConvertStart);
+
     videoFrame->pts = static_cast<int64_t>(frameIndex);
-    return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                       videoPacket, errorMessage);
+    videoFrame->duration = videoFrameDuration;
+    const auto videoEncodeStart = std::chrono::steady_clock::now();
+    const bool success =
+        encodeFrame(videoContext, formatContext, videoStream, videoFrame,
+                    videoPacket, errorMessage, videoFrameDuration);
+    videoEncodeMicrosTotal += elapsedMicros(videoEncodeStart);
+    return success;
   }
 
   ReplayVideoExportResult finish() {
@@ -1081,21 +1320,30 @@ public:
     };
 
     while (!audioFinished) {
+      const auto audioEncodeStart = std::chrono::steady_clock::now();
       if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
                                 audioStream, audioFrame, audioPacket,
                                 audioBuffer, nextAudioPts, audioFinished,
                                 errorMessage)) {
+        audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
         return fail(errorMessage);
       }
+      audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
     }
+    const auto videoEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
-                     videoPacket, errorMessage)) {
+                     videoPacket, errorMessage, videoFrameDuration)) {
+      videoEncodeMicrosTotal += elapsedMicros(videoEncodeFlushStart);
       return fail(errorMessage);
     }
+    videoEncodeMicrosTotal += elapsedMicros(videoEncodeFlushStart);
+    const auto audioEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
                      audioPacket, errorMessage)) {
+      audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
       return fail(errorMessage);
     }
+    audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
 
     const int ret = av_write_trailer(formatContext);
     if (ret < 0) {
@@ -1107,6 +1355,11 @@ public:
             .outputPath = outputPath,
             .message = "MP4 exported"};
   }
+
+  long long audioEncodeMicros() const { return audioEncodeMicrosTotal; }
+  long long framePrepareMicros() const { return framePrepareMicrosTotal; }
+  long long pixelConvertMicros() const { return pixelConvertMicrosTotal; }
+  long long videoEncodeMicros() const { return videoEncodeMicrosTotal; }
 
 private:
   void cleanup() {
@@ -1138,6 +1391,7 @@ private:
   int width = 0;
   int height = 0;
   int fps = 0;
+  int64_t videoFrameDuration = 1;
   AVFormatContext *formatContext = nullptr;
   AVCodecContext *videoContext = nullptr;
   AVCodecContext *audioContext = nullptr;
@@ -1150,15 +1404,300 @@ private:
   SwsContext *swsContext = nullptr;
   SNDFILE *audioFile = nullptr;
   std::vector<float> audioBuffer;
+  long long audioEncodeMicrosTotal = 0;
+  long long framePrepareMicrosTotal = 0;
+  long long pixelConvertMicrosTotal = 0;
+  long long videoEncodeMicrosTotal = 0;
   int64_t nextAudioPts = 0;
+  int pixelConvertThreadCount = 1;
   bool audioFinished = false;
+};
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+// FIXME: Re-enable this native AVAssetWriter path after the iOS export stall is
+// resolved. Large 120fps exports currently stop making progress while the
+// writer stays in AVAssetWriterStatusWriting, so iOS uses ReplayMp4StreamWriter
+// for now.
+class ReplayIOSMp4StreamWriter {
+public:
+  ~ReplayIOSMp4StreamWriter() { cleanup(); }
+
+  bool open(const std::filesystem::path &wavPath,
+            const std::filesystem::path &outputPath, int width, int height,
+            int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
+    this->outputPath = outputPath;
+    this->log = log;
+    const int64_t bitRate = replayVideoBitRate(width, height, fps);
+    replayExportLog(log,
+                    "Replay video native writer setup started: %dx%d @ "
+                    "%dfps, bitrate %lld",
+                    width, height, fps, static_cast<long long>(bitRate));
+    std::string nativeErrorMessage;
+    writer = CreateIOSReplayVideoWriter(wavPath.string(), outputPath.string(),
+                                        width, height, fps, bitRate,
+                                        nativeErrorMessage);
+    if (writer != nullptr) {
+      replayExportLog(log,
+                      "Replay video export encoder: avassetwriter_hevc, pixel "
+                      "format: bgra, time base: 1/%d, frame duration: 1, HEVC "
+                      "profile: auto, bitrate: %lld",
+                      fps, static_cast<long long>(bitRate));
+      replayExportLog(log,
+                      "Replay video export native writer: BGRA pixel buffers, "
+                      "no CPU pixel conversion");
+      replayExportLog(log,
+                      "Replay video export native writer: audio interleaved "
+                      "during video append");
+      return true;
+    }
+
+    errorMessage = nativeErrorMessage;
+    replayExportLog(log, "Replay video native writer setup failed: %s",
+                    errorMessage.c_str());
+    return false;
+  }
+
+  bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
+                        long long /*videoTimeMicros*/,
+                        std::string &errorMessage) {
+    const bool success = AppendIOSReplayVideoFrame(writer, bgraFrame,
+                                                   frameIndex, errorMessage);
+    if (!success) {
+      replayExportLog(log, "Replay video native writer append failed: %s",
+                      errorMessage.c_str());
+    }
+    return success;
+  }
+
+  ReplayVideoExportResult finish() {
+    std::string errorMessage;
+    IOSReplayVideoWriterProfile profile{};
+    if (!FinishIOSReplayVideoWriter(writer, profile, errorMessage)) {
+      writer = nullptr;
+      replayExportLog(log, "Replay video native writer finish failed: %s",
+                      errorMessage.c_str());
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
+    }
+    writer = nullptr;
+    audioEncodeMicrosTotal = profile.audioAppendMicros;
+    framePrepareMicrosTotal = profile.videoPixelBufferCopyMicros;
+    videoEncodeMicrosTotal =
+        profile.videoAppendMicros + profile.finishMicros;
+    replayExportLog(log,
+                    "Replay video native writer profile: %.2fs BGRA copy, "
+                    "%.2fs video append, %.2fs audio append, %.2fs finish",
+                    static_cast<double>(profile.videoPixelBufferCopyMicros) /
+                        1000000.0,
+                    static_cast<double>(profile.videoAppendMicros) / 1000000.0,
+                    static_cast<double>(profile.audioAppendMicros) / 1000000.0,
+                    static_cast<double>(profile.finishMicros) / 1000000.0);
+    return {.success = true,
+            .outputPath = outputPath,
+            .message = "MP4 exported"};
+  }
+
+  long long audioEncodeMicros() const { return audioEncodeMicrosTotal; }
+  long long framePrepareMicros() const { return framePrepareMicrosTotal; }
+  long long pixelConvertMicros() const { return 0; }
+  long long videoEncodeMicros() const { return videoEncodeMicrosTotal; }
+
+private:
+  void cleanup() {
+    if (writer != nullptr) {
+      CancelIOSReplayVideoWriter(writer);
+      writer = nullptr;
+    }
+  }
+
+  std::filesystem::path outputPath;
+  ReplayVideoExportLog *log = nullptr;
+  void *writer = nullptr;
+  long long audioEncodeMicrosTotal = 0;
+  long long framePrepareMicrosTotal = 0;
+  long long videoEncodeMicrosTotal = 0;
+};
+
+using ReplayPlatformMp4StreamWriter = ReplayMp4StreamWriter;
+#else
+using ReplayPlatformMp4StreamWriter = ReplayMp4StreamWriter;
+#endif
+
+class ReplayAsyncFrameEncoder {
+public:
+  ~ReplayAsyncFrameEncoder() { cancel(); }
+
+  bool start(const std::filesystem::path &wavPath,
+             const std::filesystem::path &outputPath, int width, int height,
+             int fps, size_t frameBytes, size_t bufferCount,
+             ReplayVideoExportLog *log, std::string &errorMessage) {
+    if (!writer.open(wavPath, outputPath, width, height, fps, log,
+                     errorMessage)) {
+      return false;
+    }
+
+    frameBuffers.assign(bufferCount, std::vector<uint8_t>(frameBytes));
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      acceptingFrames = true;
+      failed = false;
+      cancelled = false;
+      for (size_t i = 0; i < frameBuffers.size(); ++i) {
+        freeBuffers.push_back(i);
+      }
+    }
+
+    worker = std::thread([this]() { encodeLoop(); });
+    return true;
+  }
+
+  int acquireFrameBuffer(std::string &errorMessage) {
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [this]() {
+      return failed || !freeBuffers.empty() || !acceptingFrames;
+    });
+    if (failed) {
+      errorMessage = failureMessage;
+      return -1;
+    }
+    if (freeBuffers.empty()) {
+      errorMessage = "Replay video encoder stopped unexpectedly";
+      return -1;
+    }
+    const size_t index = freeBuffers.front();
+    freeBuffers.pop_front();
+    return static_cast<int>(index);
+  }
+
+  uint8_t *frameData(size_t index) { return frameBuffers[index].data(); }
+
+  bool submitFrame(size_t bufferIndex, size_t frameIndex,
+                   long long videoTimeMicros, std::string &errorMessage) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (failed) {
+        errorMessage = failureMessage;
+        return false;
+      }
+      if (!acceptingFrames) {
+        errorMessage = "Replay video encoder is not accepting frames";
+        return false;
+      }
+      pendingFrames.push_back({bufferIndex, frameIndex, videoTimeMicros});
+    }
+    condition.notify_one();
+    return true;
+  }
+
+  ReplayVideoExportResult finish() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      acceptingFrames = false;
+    }
+    condition.notify_all();
+    joinWorker();
+
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (failed) {
+        return {.success = false, .message = failureMessage};
+      }
+    }
+    return writer.finish();
+  }
+
+  void cancel() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      acceptingFrames = false;
+      cancelled = true;
+      pendingFrames.clear();
+    }
+    condition.notify_all();
+    joinWorker();
+  }
+
+  long long encodedMicros() const {
+    return encodedMicrosTotal.load(std::memory_order_relaxed);
+  }
+
+  long long audioEncodeMicros() const { return writer.audioEncodeMicros(); }
+  long long framePrepareMicros() const { return writer.framePrepareMicros(); }
+  long long pixelConvertMicros() const { return writer.pixelConvertMicros(); }
+  long long videoEncodeMicros() const { return writer.videoEncodeMicros(); }
+
+private:
+  struct PendingFrame {
+    size_t bufferIndex = 0;
+    size_t frameIndex = 0;
+    long long videoTimeMicros = 0;
+  };
+
+  void joinWorker() {
+    if (worker.joinable()) {
+      worker.join();
+    }
+  }
+
+  void encodeLoop() {
+    while (true) {
+      PendingFrame frame{};
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait(lock, [this]() {
+          return cancelled || failed || !pendingFrames.empty() ||
+                 !acceptingFrames;
+        });
+        if (cancelled || failed ||
+            (pendingFrames.empty() && !acceptingFrames)) {
+          return;
+        }
+        frame = pendingFrames.front();
+        pendingFrames.pop_front();
+      }
+
+      std::string errorMessage;
+      const auto encodeStart = std::chrono::steady_clock::now();
+      const bool success = writer.encodeVideoFrame(
+          frameBuffers[frame.bufferIndex].data(), frame.frameIndex,
+          frame.videoTimeMicros, errorMessage);
+      encodedMicrosTotal.fetch_add(elapsedMicros(encodeStart),
+                                   std::memory_order_relaxed);
+
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        freeBuffers.push_back(frame.bufferIndex);
+        if (!success && !failed) {
+          failed = true;
+          failureMessage = errorMessage;
+          acceptingFrames = false;
+          pendingFrames.clear();
+        }
+      }
+      condition.notify_all();
+    }
+  }
+
+  ReplayPlatformMp4StreamWriter writer;
+  std::vector<std::vector<uint8_t>> frameBuffers;
+  std::deque<size_t> freeBuffers;
+  std::deque<PendingFrame> pendingFrames;
+  mutable std::mutex mutex;
+  std::condition_variable condition;
+  std::thread worker;
+  std::atomic_llong encodedMicrosTotal{0};
+  bool acceptingFrames = false;
+  bool failed = false;
+  bool cancelled = false;
+  std::string failureMessage;
 };
 
 ReplayVideoExportResult renderReplayVideoToMp4(
     ApplicationContext &context, bms_parser::Chart &chart,
     const ReplayData &replay, const AppSettings &settings,
     const ReplayVideoExportOptions &options, const std::filesystem::path &wavPath,
-    const std::filesystem::path &outputPath) {
+    const std::filesystem::path &outputPath, ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
@@ -1168,12 +1707,6 @@ ReplayVideoExportResult renderReplayVideoToMp4(
     return {.success = false,
             .outputPath = outputPath,
             .message = "Replay export size is too large"};
-  }
-
-  ReplayMp4StreamWriter writer;
-  std::string errorMessage;
-  if (!writer.open(wavPath, outputPath, width, height, fps, errorMessage)) {
-    return {.success = false, .outputPath = outputPath, .message = errorMessage};
   }
 
   ScopedReplayVideoBgfxAccess bgfxAccess(context);
@@ -1210,7 +1743,11 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
+  const size_t frameBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
+  std::vector<bgfx::TextureHandle> readbackTextures(
+      frameBufferCount, BGFX_INVALID_HANDLE);
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
   auto cleanupBgfx = [&]() {
     context.jukebox.stop();
@@ -1220,9 +1757,11 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       bgaBlurPass->shutdown();
       bgaBlurPass.reset();
     }
-    if (bgfx::isValid(readbackTexture)) {
-      bgfx::destroy(readbackTexture);
-      readbackTexture = BGFX_INVALID_HANDLE;
+    for (auto &readbackTexture : readbackTextures) {
+      if (bgfx::isValid(readbackTexture)) {
+        bgfx::destroy(readbackTexture);
+        readbackTexture = BGFX_INVALID_HANDLE;
+      }
     }
     if (bgfx::isValid(outputFrameBuffer)) {
       bgfx::destroy(outputFrameBuffer);
@@ -1241,15 +1780,17 @@ ReplayVideoExportResult renderReplayVideoToMp4(
             .message = "Failed to create replay export framebuffer"};
   }
 
-  readbackTexture = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
-                                      BGFX_TEXTURE_READ_BACK);
-  if (!bgfx::isValid(readbackTexture)) {
-    cleanupBgfx();
-    return {.success = false,
-            .outputPath = outputPath,
-            .message = "Failed to create replay export readback texture"};
+  for (auto &readbackTexture : readbackTextures) {
+    readbackTexture = bgfx::createTexture2D(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+        bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
+                                        BGFX_TEXTURE_READ_BACK);
+    if (!bgfx::isValid(readbackTexture)) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = "Failed to create replay export readback texture"};
+    }
   }
 
   bgaBlurPass = std::make_unique<rendering::BlurPass>(2, 0.6f);
@@ -1279,14 +1820,108 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       static_cast<long long>(settings.visualOffsetMs) * 1000LL;
   const size_t frameCount = static_cast<size_t>(std::ceil(
       static_cast<long double>(durationMicros) * fps / 1000000.0L));
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-  std::vector<uint8_t> frameBuffer(frameBytes);
+  ReplayAsyncFrameEncoder encoder;
+  std::string errorMessage;
+  if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
+                     frameBufferCount, log, errorMessage)) {
+    cleanupBgfx();
+    return {.success = false, .outputPath = outputPath, .message = errorMessage};
+  }
+  const double durationSeconds =
+      static_cast<double>(durationMicros) / 1000000.0;
+  const double rawFrameGiB =
+      (static_cast<double>(frameBytes) * static_cast<double>(frameCount)) /
+      static_cast<double>(1024ULL * 1024ULL * 1024ULL);
+  replayExportLog(log,
+                  "Replay video export workload: %zu frames, %.2fs, %.2f GiB "
+                  "BGRA readback",
+                  frameCount, durationSeconds, rawFrameGiB);
+  replayExportLog(log,
+                  "Replay video export frame buffers/readbacks: %zu, encoder "
+                  "threads: %d",
+                  frameBufferCount, replayVideoEncoderThreadCount());
+
   RenderContext renderContext;
   size_t replayCursor = 0;
   uint32_t currentFrame = bgfx::frame();
+  const auto exportStart = std::chrono::steady_clock::now();
+  long long bufferWaitMicros = 0;
+  long long renderSubmitMicros = 0;
+  long long readbackWaitMicros = 0;
+
+  struct PendingReadback {
+    size_t frameIndex = 0;
+    size_t frameBufferIndex = 0;
+    size_t readbackTextureIndex = 0;
+    long long songTimeMicros = 0;
+    uint32_t expectedFrame = 0;
+  };
+  std::deque<size_t> freeReadbackTextures;
+  for (size_t i = 0; i < readbackTextures.size(); ++i) {
+    freeReadbackTextures.push_back(i);
+  }
+  std::deque<PendingReadback> pendingReadbacks;
+
+  auto drainOldestReadback = [&]() -> bool {
+    if (pendingReadbacks.empty()) {
+      return true;
+    }
+
+    PendingReadback pending = pendingReadbacks.front();
+    pendingReadbacks.pop_front();
+
+    const auto readbackWaitStart = std::chrono::steady_clock::now();
+    while (currentFrame < pending.expectedFrame) {
+      currentFrame = bgfx::frame();
+    }
+    readbackWaitMicros += elapsedMicros(readbackWaitStart);
+
+    if (!encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
+                             pending.songTimeMicros, errorMessage)) {
+      return false;
+    }
+    freeReadbackTextures.push_back(pending.readbackTextureIndex);
+    return true;
+  };
+
+  auto drainReadyReadbacks = [&]() -> bool {
+    while (!pendingReadbacks.empty() &&
+           currentFrame >= pendingReadbacks.front().expectedFrame) {
+      if (!drainOldestReadback()) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+    if (!drainReadyReadbacks()) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
+    }
+    while (freeReadbackTextures.empty()) {
+      if (!drainOldestReadback()) {
+        cleanupBgfx();
+        return {.success = false,
+                .outputPath = outputPath,
+                .message = errorMessage};
+      }
+    }
+
+    const auto bufferWaitStart = std::chrono::steady_clock::now();
+    const int frameBufferIndex = encoder.acquireFrameBuffer(errorMessage);
+    bufferWaitMicros += elapsedMicros(bufferWaitStart);
+    if (frameBufferIndex < 0) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
+    }
+    const size_t readbackTextureIndex = freeReadbackTextures.front();
+    freeReadbackTextures.pop_front();
+
     const long long songTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
     const long long visualTimeMicros =
@@ -1299,6 +1934,7 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       ++replayCursor;
     }
 
+    const auto renderStart = std::chrono::steady_clock::now();
     bgfx::touch(rendering::clear_view);
     bgfx::touch(rendering::bga_view);
     bgfx::touch(rendering::bga_layer_view);
@@ -1308,32 +1944,62 @@ ReplayVideoExportResult renderReplayVideoToMp4(
         bgaBlurPass->outputTexture(), rendering::final_view,
         static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
     renderer.render(renderContext, visualTimeMicros);
-    bgfx::blit(rendering::readback_view, readbackTexture, 0, 0,
-               outputTexture);
+    bgfx::blit(rendering::readback_view,
+               readbackTextures[readbackTextureIndex], 0, 0, outputTexture);
     currentFrame = bgfx::frame();
     const uint32_t expectedFrame =
-        bgfx::readTexture(readbackTexture, frameBuffer.data());
-    while (currentFrame < expectedFrame) {
-      currentFrame = bgfx::frame();
-    }
+        bgfx::readTexture(readbackTextures[readbackTextureIndex],
+                          encoder.frameData(static_cast<size_t>(
+                              frameBufferIndex)));
+    renderSubmitMicros += elapsedMicros(renderStart);
+    pendingReadbacks.push_back(
+        {.frameIndex = frameIndex,
+         .frameBufferIndex = static_cast<size_t>(frameBufferIndex),
+         .readbackTextureIndex = readbackTextureIndex,
+         .songTimeMicros = songTimeMicros,
+         .expectedFrame = expectedFrame});
 
-    if (!writer.encodeVideoFrame(frameBuffer.data(), frameIndex,
-                                 songTimeMicros, errorMessage)) {
+    if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
+        frameIndex + 1 == frameCount) {
+      replayExportLog(log, "Replay video export encoded frame %zu/%zu",
+                      frameIndex + 1, frameCount);
+    }
+  }
+
+  while (!pendingReadbacks.empty()) {
+    if (!drainOldestReadback()) {
       cleanupBgfx();
       return {.success = false,
               .outputPath = outputPath,
               .message = errorMessage};
     }
-
-    if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
-        frameIndex + 1 == frameCount) {
-      SDL_Log("Replay video export encoded frame %zu/%zu", frameIndex + 1,
-              frameCount);
-    }
   }
 
   cleanupBgfx();
-  return writer.finish();
+  auto result = encoder.finish();
+  if (!result.success && result.outputPath.empty()) {
+    result.outputPath = outputPath;
+  }
+  replayExportLog(log,
+                  "Replay video export profile: %.2fs total, %.2fs render "
+                  "submit, %.2fs readback wait, %.2fs encode worker, %.2fs "
+                  "waiting for frame buffers",
+                  static_cast<double>(elapsedMicros(exportStart)) / 1000000.0,
+                  static_cast<double>(renderSubmitMicros) / 1000000.0,
+                  static_cast<double>(readbackWaitMicros) / 1000000.0,
+                  static_cast<double>(encoder.encodedMicros()) / 1000000.0,
+                  static_cast<double>(bufferWaitMicros) / 1000000.0);
+  replayExportLog(log,
+                  "Replay video encoder profile: %.2fs audio, %.2fs frame "
+                  "prepare, %.2fs pixel convert, %.2fs video encode/write",
+                  static_cast<double>(encoder.audioEncodeMicros()) / 1000000.0,
+                  static_cast<double>(encoder.framePrepareMicros()) /
+                      1000000.0,
+                  static_cast<double>(encoder.pixelConvertMicros()) /
+                      1000000.0,
+                  static_cast<double>(encoder.videoEncodeMicros()) /
+                      1000000.0);
+  return result;
 }
 
 ReplayVideoExportResult saveReplayVideoToPlatformLibrary(
@@ -1374,8 +2040,19 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   const std::string baseName =
       sanitizeFileNamePart(chart->Meta.Title) + "_" + makeTimestamp();
   const auto tempDir = outputDir / (baseName + "_tmp");
+  const auto logPath = outputDir / (baseName + ".log");
+  ReplayVideoExportLog exportLog(logPath);
+  replayExportLog(&exportLog, "Replay export log: %s",
+                  logPath.string().c_str());
+  replayExportLog(&exportLog, "Replay export chart: %s",
+                  chart->Meta.Title.c_str());
+  const auto totalStart = std::chrono::steady_clock::now();
+
   std::filesystem::create_directories(tempDir, ec);
   if (ec) {
+    replayExportLog(&exportLog,
+                    "Replay export failed to create work directory: %s",
+                    tempDir.string().c_str());
     return {.success = false,
             .message = "Failed to create replay export work directory"};
   }
@@ -1385,35 +2062,52 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   const auto wavPath = tempDir / "audio.wav";
   const auto outputPath = outputDir / (baseName + ".mp4");
 
-  SDL_Log("Replay export audio: %s", wavPath.string().c_str());
+  replayExportLog(&exportLog, "Replay export audio: %s",
+                  wavPath.string().c_str());
+  const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult =
       writeReplayAudioTrack(*chart, replay, context.settings, wavPath);
   if (!audioResult.success) {
+    replayExportLog(&exportLog, "Replay export audio failed: %s",
+                    audioResult.message.c_str());
     std::filesystem::remove_all(tempDir, ec);
     return audioResult;
   }
+  replayExportLog(&exportLog, "Replay export audio finished in %.2fs",
+                  static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
 
-  SDL_Log("Replay export MP4: %s (%dx%d @ %dfps)",
-          outputPath.string().c_str(), resolvedOptions.width,
-          resolvedOptions.height, resolvedOptions.fps);
+  replayExportLog(&exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
+                  outputPath.string().c_str(), resolvedOptions.width,
+                  resolvedOptions.height, resolvedOptions.fps);
+  const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult = renderReplayVideoToMp4(
       context, *chart, replay, context.settings, resolvedOptions, wavPath,
-      outputPath);
+      outputPath, &exportLog);
   if (!muxResult.success) {
+    replayExportLog(&exportLog, "Replay export MP4 failed: %s",
+                    muxResult.message.c_str());
     std::filesystem::remove(outputPath, ec);
     std::filesystem::remove_all(tempDir, ec);
     return muxResult;
   }
+  replayExportLog(&exportLog, "Replay export MP4 finished in %.2fs",
+                  static_cast<double>(elapsedMicros(videoStart)) / 1000000.0);
 
   std::filesystem::remove_all(tempDir, ec);
   if (ec) {
-    SDL_Log("Replay export could not clean work directory: %s",
-            tempDir.string().c_str());
+    replayExportLog(&exportLog,
+                    "Replay export could not clean work directory: %s",
+                    tempDir.string().c_str());
   }
 
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
   if (!platformSaveResult.success) {
+    replayExportLog(&exportLog, "Replay export platform save failed: %s",
+                    platformSaveResult.message.c_str());
     return platformSaveResult;
   }
+  replayExportLog(&exportLog, "Replay export finished in %.2fs: %s",
+                  static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
+                  platformSaveResult.message.c_str());
   return platformSaveResult;
 }

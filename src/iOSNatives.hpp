@@ -2,6 +2,7 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <SDL2/SDL.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,13 @@ struct IOSSystemTextMetrics {
   int height = 0;
 };
 
+struct IOSReplayVideoWriterProfile {
+  long long videoPixelBufferCopyMicros = 0;
+  long long videoAppendMicros = 0;
+  long long audioAppendMicros = 0;
+  long long finishMicros = 0;
+};
+
 // get Documents path
 std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
@@ -28,6 +36,16 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
+void *CreateIOSReplayVideoWriter(const std::string &wavPath,
+                                 const std::string &outputPath, int width,
+                                 int height, int fps, int64_t bitRate,
+                                 std::string &errorMessage);
+bool AppendIOSReplayVideoFrame(void *writer, const uint8_t *bgraFrame,
+                               size_t frameIndex, std::string &errorMessage);
+bool FinishIOSReplayVideoWriter(void *writer,
+                                IOSReplayVideoWriterProfile &profile,
+                                std::string &errorMessage);
+void CancelIOSReplayVideoWriter(void *writer);
 IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize);
 int MeasureIOSSystemTextWidth(const std::string &utf8, int fontSize);
 SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,

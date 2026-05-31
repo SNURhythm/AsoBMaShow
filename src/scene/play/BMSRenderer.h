@@ -78,6 +78,7 @@ public:
   ~BMSRenderer();
 
 private:
+  TextView *titleText = nullptr;
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
   TextView *gaugeText = nullptr;
@@ -125,6 +126,7 @@ private:
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
+  void drawTitle(RenderContext &context) const;
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
   void drawGauge(RenderContext &context) const;

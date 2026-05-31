@@ -160,6 +160,10 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   configureSheet(scratchSheet, spriteLoader3.getWidth(),
                  spriteLoader3.getHeight());
 
+  titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  titleText->setText(chart->Meta.Title);
+  titleText->setPosition(10, 10);
+  titleText->setAlign(TextView::LEFT);
   judgeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   judgeText->setPosition(rendering::window_width / 2,
                          rendering::window_height / 2);
@@ -224,6 +228,9 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
                              " texture");
   }
   return handle;
+}
+void BMSRenderer::drawTitle(RenderContext &context) const {
+  titleText->render(context);
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
   judgeText->render(context);
@@ -649,6 +656,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
 
   if (renderHud) {
+    drawTitle(context);
     drawJudgement(context);
     drawScore(context);
     drawGauge(context);
@@ -857,6 +865,7 @@ BMSRenderer::~BMSRenderer() {
   if (bgfx::isValid(scratchSheet.longBodyOnTexture)) {
     bgfx::destroy(scratchSheet.longBodyOnTexture);
   }
+  delete titleText;
   delete judgeText;
   delete scoreText;
   delete gaugeText;

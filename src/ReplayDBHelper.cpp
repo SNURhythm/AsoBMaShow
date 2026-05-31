@@ -65,6 +65,32 @@ bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
          SQLITE_OK;
 }
 
+struct ReplayChartMatch {
+  std::string chartPath;
+  std::string sha256;
+  std::string md5;
+};
+
+ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
+  return {
+      .chartPath = path_t_to_utf8(
+          fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath))),
+      .sha256 = normalizedHash(chartMeta.SHA256),
+      .md5 = normalizedHash(chartMeta.MD5),
+  };
+}
+
+int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
+                         const ReplayChartMatch &match) {
+  bindText(stmt, bindIndex++, match.sha256);
+  bindText(stmt, bindIndex++, match.sha256);
+  bindText(stmt, bindIndex++, match.md5);
+  bindText(stmt, bindIndex++, match.md5);
+  bindText(stmt, bindIndex++, match.chartPath);
+  bindText(stmt, bindIndex++, match.chartPath);
+  return bindIndex;
+}
+
 std::string readText(sqlite3_stmt *stmt, int idx) {
   const auto *text =
       reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
@@ -118,6 +144,19 @@ bool insertReplayEvent(sqlite3_stmt *stmt, int replayId, int eventIndex,
   sqlite3_bind_int(stmt, bindIndex++, event.score);
 
   return sqlite3_step(stmt) == SQLITE_DONE;
+}
+
+ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn) {
+  ReplaySummary summary;
+  summary.id = sqlite3_column_int(stmt, 0);
+  summary.initialGaugeType = gaugeTypeFromInt(sqlite3_column_int(stmt, 6));
+  summary.gaugeAutoShift = sqlite3_column_int(stmt, 7) != 0;
+  summary.finalScore = sqlite3_column_int(stmt, 8);
+  summary.finalGauge = static_cast<float>(sqlite3_column_double(stmt, 9));
+  summary.clearType = sqlite3_column_int(stmt, 10);
+  summary.createdAt = readText(stmt, 11);
+  summary.eventCount = sqlite3_column_int(stmt, eventCountColumn);
+  return summary;
 }
 } // namespace
 
@@ -311,8 +350,58 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   return replayId;
 }
 
+std::vector<ReplaySummary>
+ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta,
+                            int limit) {
+  std::vector<ReplaySummary> replays;
+  sqlite3 *db = Connect();
+  if (db == nullptr) {
+    return replays;
+  }
+
+  if (!CreateReplayTables(db)) {
+    Close(db);
+    return replays;
+  }
+
+  const auto match = replayChartMatchFor(chartMeta);
+  limit = std::max(1, limit);
+
+  const char *query =
+      "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
+      "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
+      "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
+      "COUNT(e.id) "
+      "FROM replays r "
+      "LEFT JOIN replay_events e ON e.replay_id = r.id "
+      "WHERE ((? != '' AND r.chart_sha256 = ?) OR "
+      "(? != '' AND r.chart_md5 = ?) OR "
+      "(? != '' AND r.chart_path = ?)) "
+      "GROUP BY r.id "
+      "ORDER BY r.id DESC LIMIT ?";
+
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing replay list: %s", sqlite3_errmsg(db));
+    Close(db);
+    return replays;
+  }
+
+  int bindIndex = bindReplayChartMatch(stmt, 1, match);
+  sqlite3_bind_int(stmt, bindIndex++, limit);
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    replays.push_back(readReplaySummary(stmt, 12));
+  }
+  sqlite3_finalize(stmt);
+  Close(db);
+  return replays;
+}
+
 std::optional<ReplayData>
-ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
+ReplayDBHelper::LoadReplay(int replayId,
+                           const bms_parser::ChartMeta &chartMeta) {
   sqlite3 *db = Connect();
   if (db == nullptr) {
     return std::nullopt;
@@ -323,20 +412,15 @@ ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
     return std::nullopt;
   }
 
-  const std::string chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
-  const std::string sha256 = normalizedHash(chartMeta.SHA256);
-  const std::string md5 = normalizedHash(chartMeta.MD5);
-
+  const auto match = replayChartMatchFor(chartMeta);
   const char *query =
       "SELECT id, chart_path, chart_md5, chart_sha256, chart_title,"
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
       "clear_type, created_at "
-      "FROM replays WHERE "
+      "FROM replays WHERE id = ? AND "
       "((? != '' AND chart_sha256 = ?) OR "
       "(? != '' AND chart_md5 = ?) OR "
-      "(? != '' AND chart_path = ?)) "
-      "ORDER BY id DESC LIMIT 1";
+      "(? != '' AND chart_path = ?))";
 
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
@@ -346,14 +430,8 @@ ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
     return std::nullopt;
   }
 
-  int bindIndex = 1;
-  bindText(stmt, bindIndex++, sha256);
-  bindText(stmt, bindIndex++, sha256);
-  bindText(stmt, bindIndex++, md5);
-  bindText(stmt, bindIndex++, md5);
-  bindText(stmt, bindIndex++, chartPath);
-  bindText(stmt, bindIndex++, chartPath);
-
+  sqlite3_bind_int(stmt, 1, replayId);
+  bindReplayChartMatch(stmt, 2, match);
   std::optional<ReplayData> replay;
   if (sqlite3_step(stmt) == SQLITE_ROW) {
     ReplayData loaded;
@@ -412,4 +490,13 @@ ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
 
   Close(db);
   return replay;
+}
+
+std::optional<ReplayData>
+ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
+  const auto replays = ListReplays(chartMeta, 1);
+  if (replays.empty()) {
+    return std::nullopt;
+  }
+  return LoadReplay(replays.front().id, chartMeta);
 }

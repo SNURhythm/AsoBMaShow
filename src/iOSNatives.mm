@@ -1,18 +1,30 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include <AudioToolbox/AudioToolbox.h>
+#include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
+#include <CoreVideo/CoreVideo.h>
 #include <Foundation/Foundation.h>
 #include <Photos/Photos.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
 namespace {
+constexpr int kIOSReplaySampleRate = 44100;
+constexpr int kIOSReplayChannels = 2;
+constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
+constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
+constexpr double kIOSReplayAudioLeadSeconds = 0.5;
+
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
     return @"";
@@ -20,6 +32,14 @@ NSString *NSStringFromUtf8(const std::string &utf8) {
   return [[NSString alloc] initWithBytes:utf8.data()
                                   length:utf8.size()
                                 encoding:NSUTF8StringEncoding];
+}
+
+std::string NSStringToString(NSString *value) {
+  if (value == nil) {
+    return {};
+  }
+  const char *utf8 = [value UTF8String];
+  return utf8 != nullptr ? std::string(utf8) : std::string();
 }
 
 CTFontRef CreateIOSSystemFont(int fontSize) {
@@ -106,6 +126,85 @@ std::string PhotoAuthorizationStatusMessage(PHAuthorizationStatus status) {
   }
 }
 
+bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
+                                               NSString **preparedPath,
+                                               std::string &errorMessage) {
+  *preparedPath = nil;
+
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) &&                                \
+    __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000
+  if (@available(iOS 18.0, *)) {
+    // Photos needs this as typed QuickTime metadata, not FFmpeg string mdta.
+    NSURL *sourceURL = [NSURL fileURLWithPath:sourcePath];
+    NSString *fileName =
+        [NSString stringWithFormat:@"AsoBMaShowReplay-%@.mov",
+                                   [[NSUUID UUID] UUIDString]];
+    NSString *outputPath =
+        [NSTemporaryDirectory() stringByAppendingPathComponent:fileName];
+    NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
+    [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:sourceURL options:nil];
+    AVAssetExportSession *session =
+        [[AVAssetExportSession alloc]
+            initWithAsset:asset
+               presetName:AVAssetExportPresetPassthrough];
+    if (session == nil) {
+      errorMessage = "Failed to prepare replay video for Photos";
+      return false;
+    }
+    if (![session.supportedFileTypes
+            containsObject:AVFileTypeQuickTimeMovie]) {
+      errorMessage = "Photos replay video export does not support MOV output";
+      return false;
+    }
+
+    AVMutableMetadataItem *playbackIntent =
+        [AVMutableMetadataItem metadataItem];
+    playbackIntent.identifier =
+        AVMetadataIdentifierQuickTimeMetadataFullFrameRatePlaybackIntent;
+    playbackIntent.value = @1;
+    playbackIntent.dataType = (__bridge NSString *)kCMMetadataBaseDataType_UInt8;
+    session.metadata = @[ playbackIntent ];
+    session.outputURL = outputURL;
+    session.outputFileType = AVFileTypeQuickTimeMovie;
+
+    __block AVAssetExportSessionStatus exportStatus =
+        AVAssetExportSessionStatusUnknown;
+    __block NSError *exportError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [session exportAsynchronouslyWithCompletionHandler:^{
+      exportStatus = session.status;
+      exportError = session.error;
+      dispatch_semaphore_signal(semaphore);
+    }];
+
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      [session cancelExport];
+      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      errorMessage = "Timed out preparing replay video for Photos";
+      return false;
+    }
+    if (exportStatus != AVAssetExportSessionStatusCompleted) {
+      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      if (exportError != nil) {
+        errorMessage =
+            std::string([[exportError localizedDescription] UTF8String]);
+      } else {
+        errorMessage = "Failed to prepare replay video for Photos";
+      }
+      return false;
+    }
+
+    *preparedPath = outputPath;
+  }
+#endif
+
+  return true;
+}
+
 bool RequestPhotoAddAuthorization(std::string &errorMessage) {
   __block PHAuthorizationStatus status = PHAuthorizationStatusNotDetermined;
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
@@ -158,6 +257,552 @@ bool RequestPhotoAddAuthorization(std::string &errorMessage) {
   }
   return true;
 }
+
+long long ElapsedMicros(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+std::string NSErrorMessage(NSError *error, const char *fallback) {
+  if (error == nil) {
+    return fallback != nullptr ? std::string(fallback) : std::string();
+  }
+  NSString *description = [error localizedDescription];
+  const std::string message = NSStringToString(description);
+  if (!message.empty()) {
+    return message;
+  }
+  return fallback != nullptr ? std::string(fallback) : std::string();
+}
+
+std::string NSExceptionMessage(NSException *exception, const char *fallback) {
+  if (exception == nil) {
+    return fallback != nullptr ? std::string(fallback) : std::string();
+  }
+  std::string message = NSStringToString(exception.name);
+  const std::string reason = NSStringToString(exception.reason);
+  if (!reason.empty()) {
+    if (!message.empty()) {
+      message += ": ";
+    }
+    message += reason;
+  }
+  if (!message.empty()) {
+    return message;
+  }
+  return fallback != nullptr ? std::string(fallback) : std::string();
+}
+
+std::string AVWriterErrorMessage(AVAssetWriter *writer,
+                                 const char *fallback) {
+  if (writer != nil && writer.error != nil) {
+    return NSErrorMessage(writer.error, fallback);
+  }
+  return fallback != nullptr ? std::string(fallback) : std::string();
+}
+
+std::string AVWriterStatusName(AVAssetWriterStatus status) {
+  switch (status) {
+  case AVAssetWriterStatusUnknown:
+    return "unknown";
+  case AVAssetWriterStatusWriting:
+    return "writing";
+  case AVAssetWriterStatusCompleted:
+    return "completed";
+  case AVAssetWriterStatusFailed:
+    return "failed";
+  case AVAssetWriterStatusCancelled:
+    return "cancelled";
+  }
+  return "invalid";
+}
+
+bool WaitForWriterInput(AVAssetWriter *writer, AVAssetWriterInput *input,
+                        const char *inputName, NSTimeInterval timeoutSeconds,
+                        std::string &errorMessage) {
+  const std::string inputLabel =
+      inputName != nullptr ? std::string(inputName) : std::string("unknown");
+  if (writer == nil) {
+    errorMessage = "Replay video writer is unavailable while waiting for " +
+                   inputLabel + " input";
+    return false;
+  }
+  if (input == nil) {
+    errorMessage = "Replay video writer " + inputLabel +
+                   " input is unavailable";
+    return false;
+  }
+  NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
+  while (![input isReadyForMoreMediaData]) {
+    if (writer.status == AVAssetWriterStatusFailed) {
+      const std::string fallback =
+          "Replay video writer failed while waiting for " + inputLabel +
+          " input";
+      errorMessage = AVWriterErrorMessage(writer, fallback.c_str());
+      return false;
+    }
+    if (writer.status == AVAssetWriterStatusCancelled) {
+      errorMessage =
+          "Replay video writer was cancelled while waiting for " +
+          inputLabel + " input";
+      return false;
+    }
+    if (writer.status == AVAssetWriterStatusCompleted) {
+      errorMessage =
+          "Replay video writer already finished while waiting for " +
+          inputLabel + " input";
+      return false;
+    }
+    if ([deadline timeIntervalSinceNow] <= 0.0) {
+      errorMessage =
+          "Timed out waiting for replay video writer " + inputLabel +
+          " input; status=" + AVWriterStatusName(writer.status);
+      return false;
+    }
+    [NSThread sleepForTimeInterval:0.001];
+  }
+  return true;
+}
+
+void AppendReplayFrameContext(std::string &errorMessage, size_t frameIndex) {
+  errorMessage += " at frame " + std::to_string(frameIndex);
+}
+
+class IOSReplayVideoWriter {
+public:
+  ~IOSReplayVideoWriter() { releasePendingAudioSample(); }
+
+  bool open(const std::string &wavPath, const std::string &outputPath,
+            int width, int height, int fps, int64_t bitRate,
+            std::string &errorMessage) {
+    @autoreleasepool {
+      this->wavPath = wavPath;
+      this->width = width;
+      this->height = height;
+      this->fps = fps;
+
+      NSString *outputPathString = NSStringFromUtf8(outputPath);
+      if (outputPathString == nil || outputPathString.length == 0) {
+        errorMessage = "Replay video output path is empty";
+        return false;
+      }
+      outputURL = [NSURL fileURLWithPath:outputPathString];
+      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+
+      NSError *error = nil;
+      writer = [AVAssetWriter assetWriterWithURL:outputURL
+                                        fileType:AVFileTypeMPEG4
+                                           error:&error];
+      if (writer == nil) {
+        errorMessage =
+            NSErrorMessage(error, "Failed to create replay video writer");
+        return false;
+      }
+
+      NSDictionary *compressionProperties = @{
+        AVVideoAverageBitRateKey : @(std::max<int64_t>(bitRate, 1)),
+        AVVideoExpectedSourceFrameRateKey : @(std::max(fps, 1)),
+        AVVideoMaxKeyFrameIntervalKey : @(std::max(fps * 2, 1)),
+        AVVideoAllowFrameReorderingKey : @NO,
+      };
+      NSDictionary *videoSettings = @{
+        AVVideoCodecKey : AVVideoCodecTypeHEVC,
+        AVVideoWidthKey : @(width),
+        AVVideoHeightKey : @(height),
+        AVVideoCompressionPropertiesKey : compressionProperties,
+      };
+      videoInput = [AVAssetWriterInput
+          assetWriterInputWithMediaType:AVMediaTypeVideo
+                         outputSettings:videoSettings];
+      if (videoInput == nil) {
+        errorMessage = "Replay video writer could not create video input";
+        return false;
+      }
+      videoInput.expectsMediaDataInRealTime = NO;
+      videoInput.mediaTimeScale = std::max(fps, 1);
+      if (![writer canAddInput:videoInput]) {
+        errorMessage =
+            "Replay video writer could not add video input (" +
+            std::to_string(width) + "x" + std::to_string(height) + " @ " +
+            std::to_string(fps) + "fps, bitrate " + std::to_string(bitRate) +
+            ")";
+        return false;
+      }
+      [writer addInput:videoInput];
+
+      NSDictionary *pixelBufferAttributes = @{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey :
+            @(kCVPixelFormatType_32BGRA),
+        (__bridge NSString *)kCVPixelBufferWidthKey : @(width),
+        (__bridge NSString *)kCVPixelBufferHeightKey : @(height),
+        (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{},
+      };
+      adaptor = [AVAssetWriterInputPixelBufferAdaptor
+          assetWriterInputPixelBufferAdaptorWithAssetWriterInput:videoInput
+                                     sourcePixelBufferAttributes:
+                                         pixelBufferAttributes];
+      if (adaptor == nil) {
+        errorMessage = "Replay video writer could not create pixel adaptor";
+        return false;
+      }
+
+      if (!openAudioReader(errorMessage)) {
+        return false;
+      }
+      if (audioReaderOutput != nil) {
+        NSDictionary *audioSettings = @{
+          AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+          AVSampleRateKey : @(kIOSReplaySampleRate),
+          AVNumberOfChannelsKey : @(kIOSReplayChannels),
+          AVEncoderBitRateKey : @(192000),
+        };
+        audioInput = [AVAssetWriterInput
+            assetWriterInputWithMediaType:AVMediaTypeAudio
+                           outputSettings:audioSettings];
+        if (audioInput == nil) {
+          errorMessage = "Replay video writer could not create audio input";
+          return false;
+        }
+        audioInput.expectsMediaDataInRealTime = NO;
+        if (![writer canAddInput:audioInput]) {
+          errorMessage = "Replay video writer could not add audio input";
+          return false;
+        }
+        [writer addInput:audioInput];
+      }
+
+      if (![writer startWriting]) {
+        errorMessage =
+            AVWriterErrorMessage(writer, "Failed to start replay video writer");
+        return false;
+      }
+      [writer startSessionAtSourceTime:kCMTimeZero];
+      return true;
+    }
+  }
+
+  bool appendFrame(const uint8_t *bgraFrame, size_t frameIndex,
+                   std::string &errorMessage) {
+    @autoreleasepool {
+      if (bgraFrame == nullptr) {
+        errorMessage = "Replay video frame is empty";
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+      if (!WaitForWriterInput(writer, videoInput, "video",
+                              kIOSReplayInputWaitTimeoutSeconds,
+                              errorMessage)) {
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+      if (adaptor.pixelBufferPool == nullptr) {
+        errorMessage = "Replay video writer pixel buffer pool is unavailable";
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+
+      CVPixelBufferRef pixelBuffer = nullptr;
+      CVReturn ret = CVPixelBufferPoolCreatePixelBuffer(
+          kCFAllocatorDefault, adaptor.pixelBufferPool, &pixelBuffer);
+      if (ret != kCVReturnSuccess || pixelBuffer == nullptr) {
+        errorMessage = "Failed to allocate replay video pixel buffer";
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+
+      const auto copyStart = std::chrono::steady_clock::now();
+      CVPixelBufferLockBaseAddress(pixelBuffer, 0);
+      auto *destination =
+          static_cast<uint8_t *>(CVPixelBufferGetBaseAddress(pixelBuffer));
+      const size_t destinationStride = CVPixelBufferGetBytesPerRow(pixelBuffer);
+      const size_t sourceStride = static_cast<size_t>(width) * 4ULL;
+      for (int y = 0; y < height; ++y) {
+        std::memcpy(destination + static_cast<size_t>(y) * destinationStride,
+                    bgraFrame + static_cast<size_t>(y) * sourceStride,
+                    sourceStride);
+      }
+      CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
+      profile.videoPixelBufferCopyMicros += ElapsedMicros(copyStart);
+
+      const auto appendStart = std::chrono::steady_clock::now();
+      const CMTime presentationTime =
+          CMTimeMake(static_cast<int64_t>(frameIndex), std::max(fps, 1));
+      const BOOL appended =
+          [adaptor appendPixelBuffer:pixelBuffer
+                 withPresentationTime:presentationTime];
+      CVPixelBufferRelease(pixelBuffer);
+      profile.videoAppendMicros += ElapsedMicros(appendStart);
+      if (!appended) {
+        errorMessage =
+            AVWriterErrorMessage(writer, "Failed to append replay video frame");
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+
+      const CMTime audioLeadTarget = CMTimeAdd(
+          presentationTime,
+          CMTimeMakeWithSeconds(kIOSReplayAudioLeadSeconds, std::max(fps, 1)));
+      if (!appendAudioThrough(audioLeadTarget, errorMessage)) {
+        errorMessage += " while interleaving replay audio";
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
+      return true;
+    }
+  }
+
+  bool finish(std::string &errorMessage) {
+    @autoreleasepool {
+      if (!videoFinished) {
+        [videoInput markAsFinished];
+        videoFinished = true;
+      }
+      if (!appendRemainingAudio(errorMessage)) {
+        [writer cancelWriting];
+        return false;
+      }
+      if (audioInput != nil && !audioFinished) {
+        [audioInput markAsFinished];
+        audioFinished = true;
+      }
+
+      __block BOOL finished = NO;
+      __block AVAssetWriterStatus finishStatus = AVAssetWriterStatusUnknown;
+      __block NSError *finishError = nil;
+      dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+      const auto finishStart = std::chrono::steady_clock::now();
+      [writer finishWritingWithCompletionHandler:^{
+        finishStatus = writer.status;
+        finishError = writer.error;
+        finished = YES;
+        dispatch_semaphore_signal(semaphore);
+      }];
+      const long waitResult = dispatch_semaphore_wait(
+          semaphore,
+          dispatch_time(DISPATCH_TIME_NOW,
+                        static_cast<int64_t>(
+                            kIOSReplayFinishWaitTimeoutSeconds * NSEC_PER_SEC)));
+      profile.finishMicros += ElapsedMicros(finishStart);
+      if (waitResult != 0) {
+        [writer cancelWriting];
+        errorMessage = "Timed out finishing replay video writer; status=" +
+                       AVWriterStatusName(writer.status);
+        return false;
+      }
+      if (!finished || finishStatus != AVAssetWriterStatusCompleted) {
+        errorMessage =
+            NSErrorMessage(finishError, "Failed to finish replay video writer");
+        return false;
+      }
+      return true;
+    }
+  }
+
+  void cancel() {
+    if (writer != nil && writer.status == AVAssetWriterStatusWriting) {
+      [writer cancelWriting];
+    }
+    releasePendingAudioSample();
+  }
+
+  IOSReplayVideoWriterProfile profile;
+
+private:
+  bool openAudioReader(std::string &errorMessage) {
+    NSString *path = NSStringFromUtf8(wavPath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "Replay audio path is empty";
+      return false;
+    }
+    NSURL *url = [NSURL fileURLWithPath:path];
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+    NSArray<AVAssetTrack *> *tracks =
+        [asset tracksWithMediaType:AVMediaTypeAudio];
+    if (tracks.count == 0) {
+      return true;
+    }
+
+    NSError *error = nil;
+    audioReader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
+    if (audioReader == nil) {
+      errorMessage = NSErrorMessage(error, "Failed to read replay audio");
+      return false;
+    }
+
+    NSDictionary *readerSettings = @{
+      AVFormatIDKey : @(kAudioFormatLinearPCM),
+      AVLinearPCMBitDepthKey : @(16),
+      AVLinearPCMIsBigEndianKey : @NO,
+      AVLinearPCMIsFloatKey : @NO,
+      AVLinearPCMIsNonInterleaved : @NO,
+    };
+    audioReaderOutput =
+        [[AVAssetReaderTrackOutput alloc] initWithTrack:tracks.firstObject
+                                         outputSettings:readerSettings];
+    audioReaderOutput.alwaysCopiesSampleData = NO;
+    if (![audioReader canAddOutput:audioReaderOutput]) {
+      errorMessage = "Replay audio reader could not add output";
+      return false;
+    }
+    [audioReader addOutput:audioReaderOutput];
+    if (![audioReader startReading]) {
+      errorMessage = NSErrorMessage(audioReader.error,
+                                    "Failed to start replay audio reader");
+      return false;
+    }
+    return true;
+  }
+
+  bool appendAudioThrough(CMTime targetTime, std::string &errorMessage) {
+    if (audioInput == nil || audioReaderOutput == nil || audioFinished) {
+      return true;
+    }
+    if (!CMTIME_IS_VALID(targetTime)) {
+      errorMessage = "Replay audio target time is invalid";
+      return false;
+    }
+    if (CMTIME_IS_VALID(audioQueuedThroughTime) &&
+        CMTimeCompare(audioQueuedThroughTime, targetTime) >= 0) {
+      return true;
+    }
+
+    const auto audioStart = std::chrono::steady_clock::now();
+    while (!CMTIME_IS_VALID(audioQueuedThroughTime) ||
+           CMTimeCompare(audioQueuedThroughTime, targetTime) < 0) {
+      CMSampleBufferRef sampleBuffer = pendingAudioSample;
+      pendingAudioSample = nullptr;
+      if (sampleBuffer == nullptr) {
+        sampleBuffer = [audioReaderOutput copyNextSampleBuffer];
+      }
+      if (sampleBuffer == nullptr) {
+        profile.audioAppendMicros += ElapsedMicros(audioStart);
+        return handleAudioReaderEnd(errorMessage);
+      }
+
+      if (!appendAudioSample(sampleBuffer, errorMessage)) {
+        CFRelease(sampleBuffer);
+        return false;
+      }
+      updateAudioQueuedThroughTime(sampleBuffer);
+      CFRelease(sampleBuffer);
+    }
+
+    profile.audioAppendMicros += ElapsedMicros(audioStart);
+    return true;
+  }
+
+  bool appendRemainingAudio(std::string &errorMessage) {
+    if (audioInput == nil || audioReaderOutput == nil || audioFinished) {
+      return true;
+    }
+
+    const auto audioStart = std::chrono::steady_clock::now();
+    while (!audioFinished) {
+      CMSampleBufferRef sampleBuffer = pendingAudioSample;
+      pendingAudioSample = nullptr;
+      if (sampleBuffer == nullptr) {
+        sampleBuffer = [audioReaderOutput copyNextSampleBuffer];
+      }
+      if (sampleBuffer == nullptr) {
+        profile.audioAppendMicros += ElapsedMicros(audioStart);
+        return handleAudioReaderEnd(errorMessage);
+      }
+
+      if (!appendAudioSample(sampleBuffer, errorMessage)) {
+        CFRelease(sampleBuffer);
+        return false;
+      }
+      updateAudioQueuedThroughTime(sampleBuffer);
+      CFRelease(sampleBuffer);
+    }
+
+    profile.audioAppendMicros += ElapsedMicros(audioStart);
+    return true;
+  }
+
+  bool appendAudioSample(CMSampleBufferRef sampleBuffer,
+                         std::string &errorMessage) {
+    const bool ready =
+        WaitForWriterInput(writer, audioInput, "audio",
+                           kIOSReplayInputWaitTimeoutSeconds, errorMessage);
+    BOOL appended = NO;
+    if (ready) {
+      appended = [audioInput appendSampleBuffer:sampleBuffer];
+    }
+    if (!ready) {
+      return false;
+    }
+    if (!appended) {
+      errorMessage =
+          AVWriterErrorMessage(writer, "Failed to append replay audio");
+      return false;
+    }
+    return true;
+  }
+
+  bool handleAudioReaderEnd(std::string &errorMessage) {
+    if (audioReader.status == AVAssetReaderStatusFailed) {
+      errorMessage = NSErrorMessage(audioReader.error,
+                                    "Failed to finish replay audio reader");
+      return false;
+    }
+    if (audioReader.status == AVAssetReaderStatusCancelled) {
+      errorMessage = "Replay audio reader was cancelled";
+      return false;
+    }
+    if (audioInput != nil && !audioFinished) {
+      [audioInput markAsFinished];
+    }
+    audioFinished = true;
+    return true;
+  }
+
+  void updateAudioQueuedThroughTime(CMSampleBufferRef sampleBuffer) {
+    const CMItemCount sampleCount = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (sampleCount > 0) {
+      audioQueuedSampleCount += static_cast<int64_t>(sampleCount);
+      audioQueuedThroughTime =
+          CMTimeMake(audioQueuedSampleCount, kIOSReplaySampleRate);
+      return;
+    }
+
+    CMTime sampleEnd = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    const CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
+    if (CMTIME_IS_VALID(sampleEnd) && CMTIME_IS_VALID(duration)) {
+      sampleEnd = CMTimeAdd(sampleEnd, duration);
+    }
+    if (CMTIME_IS_VALID(sampleEnd) &&
+        (!CMTIME_IS_VALID(audioQueuedThroughTime) ||
+         CMTimeCompare(sampleEnd, audioQueuedThroughTime) > 0)) {
+      audioQueuedThroughTime = sampleEnd;
+    }
+  }
+
+  void releasePendingAudioSample() {
+    if (pendingAudioSample != nullptr) {
+      CFRelease(pendingAudioSample);
+      pendingAudioSample = nullptr;
+    }
+  }
+
+  std::string wavPath;
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+  NSURL *outputURL = nil;
+  AVAssetWriter *writer = nil;
+  AVAssetWriterInput *videoInput = nil;
+  AVAssetWriterInput *audioInput = nil;
+  AVAssetWriterInputPixelBufferAdaptor *adaptor = nil;
+  AVAssetReader *audioReader = nil;
+  AVAssetReaderTrackOutput *audioReaderOutput = nil;
+  CMSampleBufferRef pendingAudioSample = nullptr;
+  CMTime audioQueuedThroughTime = kCMTimeInvalid;
+  int64_t audioQueuedSampleCount = 0;
+  bool videoFinished = false;
+  bool audioFinished = false;
+};
 } // namespace
 
 std::string GetIOSDocumentsPath() {
@@ -280,7 +925,14 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       return false;
     }
 
-    NSURL *fileUrl = [NSURL fileURLWithPath:path];
+    NSString *preparedPath = nil;
+    if (!CreateFullFrameRatePlaybackVideoForPhotos(path, &preparedPath,
+                                                   errorMessage)) {
+      return false;
+    }
+
+    NSString *savePath = preparedPath != nil ? preparedPath : path;
+    NSURL *fileUrl = [NSURL fileURLWithPath:savePath];
     __block BOOL saveSucceeded = NO;
     __block BOOL requestCreated = NO;
     __block NSError *saveError = nil;
@@ -301,6 +953,9 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    if (preparedPath != nil) {
+      [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+    }
     if (waitResult != 0) {
       errorMessage = "Timed out saving video to Photos";
       return false;
@@ -319,6 +974,82 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
     return true;
   }
   return false;
+}
+
+void *CreateIOSReplayVideoWriter(const std::string &wavPath,
+                                 const std::string &outputPath, int width,
+                                 int height, int fps, int64_t bitRate,
+                                 std::string &errorMessage) {
+  IOSReplayVideoWriter *writer = nullptr;
+  try {
+    @try {
+      writer = new IOSReplayVideoWriter();
+      if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
+                        errorMessage)) {
+        delete writer;
+        return nullptr;
+      }
+      return writer;
+    } @catch (NSException *exception) {
+      if (writer != nullptr) {
+        writer->cancel();
+        delete writer;
+      }
+      errorMessage =
+          "Replay video writer setup exception: " +
+          NSExceptionMessage(exception, "Objective-C exception");
+      return nullptr;
+    }
+  } catch (const std::exception &exception) {
+    if (writer != nullptr) {
+      writer->cancel();
+      delete writer;
+    }
+    errorMessage =
+        std::string("Replay video writer setup exception: ") +
+        exception.what();
+    return nullptr;
+  } catch (...) {
+    if (writer != nullptr) {
+      writer->cancel();
+      delete writer;
+    }
+    errorMessage = "Replay video writer setup exception";
+    return nullptr;
+  }
+}
+
+bool AppendIOSReplayVideoFrame(void *writer, const uint8_t *bgraFrame,
+                               size_t frameIndex, std::string &errorMessage) {
+  if (writer == nullptr) {
+    errorMessage = "Replay video writer is unavailable";
+    return false;
+  }
+  return static_cast<IOSReplayVideoWriter *>(writer)->appendFrame(
+      bgraFrame, frameIndex, errorMessage);
+}
+
+bool FinishIOSReplayVideoWriter(void *writer,
+                                IOSReplayVideoWriterProfile &profile,
+                                std::string &errorMessage) {
+  if (writer == nullptr) {
+    errorMessage = "Replay video writer is unavailable";
+    return false;
+  }
+  auto *iosWriter = static_cast<IOSReplayVideoWriter *>(writer);
+  const bool success = iosWriter->finish(errorMessage);
+  profile = iosWriter->profile;
+  delete iosWriter;
+  return success;
+}
+
+void CancelIOSReplayVideoWriter(void *writer) {
+  if (writer == nullptr) {
+    return;
+  }
+  auto *iosWriter = static_cast<IOSReplayVideoWriter *>(writer);
+  iosWriter->cancel();
+  delete iosWriter;
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
