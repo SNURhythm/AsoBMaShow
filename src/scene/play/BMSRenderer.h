@@ -116,6 +116,7 @@ private:
   int visibleTimeGreenNumber = 400;
   bool renderHud = true;
   bool renderLaneBeams = true;
+  bool useRenderTimeForLaneBeams = false;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
@@ -163,5 +164,6 @@ public:
   void refreshGeometry();
   void setVisibleTimeGreenNumber(int greenNumber);
   void setLaneBeamsEnabled(bool enabled);
+  void setLaneBeamClockUsesRenderTime(bool enabled);
   void setReplayData(const ReplayData *replayData);
 };

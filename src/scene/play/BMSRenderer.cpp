@@ -622,9 +622,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   if (renderLaneBeams) {
     simpleBatchRenderer.setSubmitDepth(kDepthBeams);
     const long long nowMicros =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count();
+        useRenderTimeForLaneBeams
+            ? micro
+            : std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count();
     laneStateSnapshot.clear();
     {
       std::lock_guard<std::mutex> lock(laneMutex);
@@ -672,6 +674,10 @@ void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
 
 void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
   renderLaneBeams = enabled;
+}
+
+void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
+  useRenderTimeForLaneBeams = enabled;
 }
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {

@@ -111,8 +111,16 @@ int64_t replayVideoBitRate(int width, int height, int fps) {
 
 void restorePrimaryRenderViews() {
   bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewFrameBuffer(rendering::bga_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewFrameBuffer(rendering::bga_layer_view, BGFX_INVALID_HANDLE);
   bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
   bgfx::setViewRect(rendering::clear_view, 0, 0,
+                    static_cast<uint16_t>(rendering::render_width),
+                    static_cast<uint16_t>(rendering::render_height));
+  bgfx::setViewRect(rendering::bga_view, 0, 0,
+                    static_cast<uint16_t>(rendering::render_width),
+                    static_cast<uint16_t>(rendering::render_height));
+  bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
                     static_cast<uint16_t>(rendering::render_width),
                     static_cast<uint16_t>(rendering::render_height));
   bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
@@ -129,6 +137,9 @@ void restorePrimaryRenderViews() {
                rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
                bgfx::getCaps()->homogeneousDepth);
   bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
   rendering::game_camera.render(true);
 }
 
@@ -264,6 +275,7 @@ long long calculateExportDurationMicros(bms_parser::Chart &chart,
 
 std::vector<AudioEvent> collectAudioEvents(bms_parser::Chart &chart,
                                            const ReplayData &replay,
+                                           long long keySoundOffsetMicros,
                                            long long &durationMicros) {
   std::vector<AudioEvent> events;
   durationMicros = calculateExportDurationMicros(chart, replay);
@@ -290,7 +302,8 @@ std::vector<AudioEvent> collectAudioEvents(bms_parser::Chart &chart,
         noteIt->second->Wav == bms_parser::Parser::NoWav) {
       continue;
     }
-    events.push_back({event.songTimeMicros, noteIt->second->Wav});
+    events.push_back({event.songTimeMicros - keySoundOffsetMicros,
+                      noteIt->second->Wav});
   }
 
   std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
@@ -427,9 +440,13 @@ bool writeWavFile(const std::filesystem::path &path,
 
 ReplayVideoExportResult writeReplayAudioTrack(bms_parser::Chart &chart,
                                               const ReplayData &replay,
+                                              const AppSettings &settings,
                                               const std::filesystem::path &path) {
   long long durationMicros = 0;
-  const auto audioEvents = collectAudioEvents(chart, replay, durationMicros);
+  const long long keySoundOffsetMicros =
+      static_cast<long long>(settings.visualOffsetMs) * 1000LL;
+  const auto audioEvents =
+      collectAudioEvents(chart, replay, keySoundOffsetMicros, durationMicros);
   const size_t initialFrames = static_cast<size_t>(
       (static_cast<long double>(std::max(0LL, durationMicros)) *
        kExportSampleRate) /
@@ -1086,10 +1103,25 @@ ReplayVideoExportResult renderReplayVideoToMp4(
             .message = "Renderer does not support texture readback"};
   }
 
+  context.jukebox.setVisualOffsetMs(settings.visualOffsetMs);
+  context.jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
+  context.jukebox.setVisualsEnabled(settings.bgaEnabled);
+  std::atomic_bool visualLoadCancelled = false;
+  context.jukebox.loadVisuals(chart, visualLoadCancelled);
+  if (visualLoadCancelled) {
+    context.jukebox.stop();
+    context.jukebox.unloadVisuals();
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Replay export visual loading was cancelled"};
+  }
+
   const auto outputTexture = bgfx::createTexture2D(
       static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
       bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
   if (!bgfx::isValid(outputTexture)) {
+    context.jukebox.stop();
+    context.jukebox.unloadVisuals();
     return {.success = false,
             .outputPath = outputPath,
             .message = "Failed to create replay export render target"};
@@ -1098,6 +1130,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
   auto cleanupBgfx = [&]() {
+    context.jukebox.stop();
+    context.jukebox.unloadVisuals();
     restorePrimaryRenderViews();
     if (bgfx::isValid(readbackTexture)) {
       bgfx::destroy(readbackTexture);
@@ -1135,11 +1169,13 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   Judge judge(chart.Meta.Rank);
   BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
                        settings.visibleTimeGreenNumber, false);
-  renderer.setLaneBeamsEnabled(false);
+  renderer.setLaneBeamClockUsesRenderTime(true);
   renderer.setReplayData(&replay);
 
   const auto replayNotes = buildReplayNoteLookup(chart);
   const long long durationMicros = calculateExportDurationMicros(chart, replay);
+  const long long visualOffsetMicros =
+      static_cast<long long>(settings.visualOffsetMs) * 1000LL;
   const size_t frameCount = static_cast<size_t>(std::ceil(
       static_cast<long double>(durationMicros) * fps / 1000000.0L));
   const size_t frameBytes =
@@ -1150,8 +1186,15 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   uint32_t currentFrame = bgfx::frame();
 
   bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::bga_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::bga_layer_view, outputFrameBuffer);
   bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
   bgfx::setViewRect(rendering::clear_view, 0, 0, static_cast<uint16_t>(width),
+                    static_cast<uint16_t>(height));
+  bgfx::setViewRect(rendering::bga_view, 0, 0, static_cast<uint16_t>(width),
+                    static_cast<uint16_t>(height));
+  bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
+                    static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height));
   bgfx::setViewRect(rendering::main_view, 0, 0, static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height));
@@ -1159,15 +1202,21 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     const long long songTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
+    const long long visualTimeMicros =
+        std::max(0LL, songTimeMicros - visualOffsetMicros);
     while (replayCursor < replay.events.size() &&
            replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
       applyReplayEventForVideo(renderer, replayNotes,
-                               replay.events[replayCursor], songTimeMicros);
+                               replay.events[replayCursor],
+                               visualTimeMicros);
       ++replayCursor;
     }
 
     bgfx::touch(rendering::clear_view);
-    renderer.render(renderContext, songTimeMicros);
+    bgfx::touch(rendering::bga_view);
+    bgfx::touch(rendering::bga_layer_view);
+    context.jukebox.renderVisualsAt(songTimeMicros);
+    renderer.render(renderContext, visualTimeMicros);
     bgfx::blit(rendering::ui_view, readbackTexture, 0, 0, outputTexture);
     currentFrame = bgfx::frame();
     const uint32_t expectedFrame =
@@ -1245,7 +1294,8 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   const auto outputPath = outputDir / (baseName + ".mp4");
 
   SDL_Log("Replay export audio: %s", wavPath.string().c_str());
-  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath);
+  auto audioResult =
+      writeReplayAudioTrack(*chart, replay, context.settings, wavPath);
   if (!audioResult.success) {
     std::filesystem::remove_all(tempDir, ec);
     return audioResult;
