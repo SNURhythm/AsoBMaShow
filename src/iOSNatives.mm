@@ -331,7 +331,6 @@ public:
         AVVideoExpectedSourceFrameRateKey : @(std::max(fps, 1)),
         AVVideoMaxKeyFrameIntervalKey : @(std::max(fps * 2, 1)),
         AVVideoAllowFrameReorderingKey : @NO,
-        AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
       };
       NSDictionary *videoSettings = @{
         AVVideoCodecKey : AVVideoCodecTypeH264,
@@ -342,10 +341,18 @@ public:
       videoInput = [AVAssetWriterInput
           assetWriterInputWithMediaType:AVMediaTypeVideo
                          outputSettings:videoSettings];
+      if (videoInput == nil) {
+        errorMessage = "Replay video writer could not create video input";
+        return false;
+      }
       videoInput.expectsMediaDataInRealTime = NO;
       videoInput.mediaTimeScale = std::max(fps, 1);
       if (![writer canAddInput:videoInput]) {
-        errorMessage = "Replay video writer could not add video input";
+        errorMessage =
+            "Replay video writer could not add video input (" +
+            std::to_string(width) + "x" + std::to_string(height) + " @ " +
+            std::to_string(fps) + "fps, bitrate " + std::to_string(bitRate) +
+            ")";
         return false;
       }
       [writer addInput:videoInput];
@@ -375,6 +382,10 @@ public:
       audioInput = [AVAssetWriterInput
           assetWriterInputWithMediaType:AVMediaTypeAudio
                          outputSettings:audioSettings];
+      if (audioInput == nil) {
+        errorMessage = "Replay video writer could not create audio input";
+        return false;
+      }
       audioInput.expectsMediaDataInRealTime = NO;
       audioInput.mediaTimeScale = kIOSReplaySampleRate;
       if (![writer canAddInput:audioInput]) {

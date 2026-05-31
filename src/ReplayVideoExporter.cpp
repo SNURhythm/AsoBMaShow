@@ -1424,29 +1424,38 @@ public:
     this->outputPath = outputPath;
     this->log = log;
     const int64_t bitRate = replayVideoBitRate(width, height, fps);
+    std::string nativeErrorMessage;
     writer = CreateIOSReplayVideoWriter(wavPath.string(), outputPath.string(),
                                         width, height, fps, bitRate,
-                                        errorMessage);
-    if (writer == nullptr) {
-      return false;
+                                        nativeErrorMessage);
+    if (writer != nullptr) {
+      replayExportLog(log,
+                      "Replay video export encoder: avassetwriter_h264, pixel "
+                      "format: bgra, time base: 1/%d, frame duration: 1, H.264 "
+                      "level: auto, bitrate: %lld",
+                      fps, static_cast<long long>(bitRate));
+      replayExportLog(log,
+                      "Replay video export native writer: BGRA pixel buffers, "
+                      "no CPU pixel conversion");
+      return true;
     }
 
-    replayExportLog(log,
-                    "Replay video export encoder: avassetwriter_h264, pixel "
-                    "format: bgra, time base: 1/%d, frame duration: 1, H.264 "
-                    "level: auto, bitrate: %lld",
-                    fps, static_cast<long long>(bitRate));
-    replayExportLog(log,
-                    "Replay video export native writer: BGRA pixel buffers, no "
-                    "CPU pixel conversion");
-    return true;
+    errorMessage = nativeErrorMessage;
+    replayExportLog(log, "Replay video native writer setup failed: %s",
+                    errorMessage.c_str());
+    return false;
   }
 
   bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
                         long long /*videoTimeMicros*/,
                         std::string &errorMessage) {
-    return AppendIOSReplayVideoFrame(writer, bgraFrame, frameIndex,
-                                     errorMessage);
+    const bool success = AppendIOSReplayVideoFrame(writer, bgraFrame,
+                                                   frameIndex, errorMessage);
+    if (!success) {
+      replayExportLog(log, "Replay video native writer append failed: %s",
+                      errorMessage.c_str());
+    }
+    return success;
   }
 
   ReplayVideoExportResult finish() {
@@ -1454,7 +1463,11 @@ public:
     IOSReplayVideoWriterProfile profile{};
     if (!FinishIOSReplayVideoWriter(writer, profile, errorMessage)) {
       writer = nullptr;
-      return {.success = false, .outputPath = outputPath, .message = errorMessage};
+      replayExportLog(log, "Replay video native writer finish failed: %s",
+                      errorMessage.c_str());
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
     }
     writer = nullptr;
     audioEncodeMicrosTotal = profile.audioAppendMicros;
