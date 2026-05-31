@@ -759,6 +759,14 @@ private:
   }
 
   void updateAudioQueuedThroughTime(CMSampleBufferRef sampleBuffer) {
+    const CMItemCount sampleCount = CMSampleBufferGetNumSamples(sampleBuffer);
+    if (sampleCount > 0) {
+      audioQueuedSampleCount += static_cast<int64_t>(sampleCount);
+      audioQueuedThroughTime =
+          CMTimeMake(audioQueuedSampleCount, kIOSReplaySampleRate);
+      return;
+    }
+
     CMTime sampleEnd = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
     const CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
     if (CMTIME_IS_VALID(sampleEnd) && CMTIME_IS_VALID(duration)) {
@@ -791,6 +799,7 @@ private:
   AVAssetReaderTrackOutput *audioReaderOutput = nil;
   CMSampleBufferRef pendingAudioSample = nullptr;
   CMTime audioQueuedThroughTime = kCMTimeInvalid;
+  int64_t audioQueuedSampleCount = 0;
   bool videoFinished = false;
   bool audioFinished = false;
 };
