@@ -54,6 +54,7 @@ namespace {
 constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
 constexpr int kDefaultExportFps = 120;
+constexpr int kVideoTicksPerFrame = 1000;
 constexpr long long kAudioTailMicros = 3000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -121,6 +122,11 @@ int replayVideoEncoderThreadCount() {
     return 1;
   }
   return std::clamp(static_cast<int>(hardwareThreads) - 1, 1, 16);
+}
+
+bool replayVideoEncoderSupportsFrameThreads(const AVCodec *codec) {
+  return codec != nullptr &&
+         (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0;
 }
 
 size_t replayVideoFrameBufferCount() {
@@ -748,7 +754,8 @@ std::optional<AVSampleFormat> chooseAudioSampleFormat(const AVCodec *codec) {
 
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
-                 std::string &errorMessage) {
+                 std::string &errorMessage,
+                 int64_t forcedPacketDuration = 0) {
   int ret = avcodec_send_frame(encoderContext, frame);
   if (ret < 0) {
     errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
@@ -766,6 +773,9 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
       return false;
     }
 
+    if (forcedPacketDuration > 0) {
+      packet->duration = forcedPacketDuration;
+    }
     av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
     packet->stream_index = stream->index;
     ret = av_interleaved_write_frame(formatContext, packet);
@@ -924,14 +934,18 @@ public:
     videoContext->width = width;
     videoContext->height = height;
     videoContext->pix_fmt = videoPixelFormat.value();
-    videoContext->time_base = AVRational{1, fps};
+    videoContext->time_base = AVRational{1, fps * kVideoTicksPerFrame};
     videoContext->framerate = AVRational{fps, 1};
     videoContext->sample_aspect_ratio = AVRational{1, 1};
     videoContext->gop_size = fps * 2;
     videoContext->max_b_frames = 0;
     videoContext->bit_rate = replayVideoBitRate(width, height, fps);
-    videoContext->thread_count = replayVideoEncoderThreadCount();
-    videoContext->thread_type = FF_THREAD_FRAME;
+    if (replayVideoEncoderSupportsFrameThreads(videoCodec)) {
+      videoContext->thread_count = replayVideoEncoderThreadCount();
+      videoContext->thread_type = FF_THREAD_FRAME;
+    } else {
+      videoContext->thread_count = 1;
+    }
     if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
       videoContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
@@ -949,17 +963,24 @@ public:
     if (ret < 0) {
       return failOpen("Failed to open H.264 encoder: " + ffmpegError(ret));
     }
-    SDL_Log("Replay video export encoder: %s, pixel format: %s",
-            videoCodec->name,
-            av_get_pix_fmt_name(videoContext->pix_fmt) != nullptr
-                ? av_get_pix_fmt_name(videoContext->pix_fmt)
-                : "unknown");
+    videoFrameDuration =
+        std::max<int64_t>(1, av_rescale_q(1, AVRational{1, fps},
+                                          videoContext->time_base));
+    const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
+    SDL_Log("Replay video export encoder: %s, pixel format: %s, time base: "
+            "%d/%d, frame duration: %lld",
+            videoCodec->name, pixelFormatName != nullptr ? pixelFormatName
+                                                         : "unknown",
+            videoContext->time_base.num, videoContext->time_base.den,
+            static_cast<long long>(videoFrameDuration));
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
     if (ret < 0) {
       return failOpen("Failed to configure MP4 video stream: " +
                       ffmpegError(ret));
     }
     videoStream->time_base = videoContext->time_base;
+    videoStream->avg_frame_rate = videoContext->framerate;
+    videoStream->r_frame_rate = videoContext->framerate;
 
     const AVCodec *audioCodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
     if (audioCodec == nullptr) {
@@ -1123,9 +1144,12 @@ public:
       sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
                 videoFrame->data, videoFrame->linesize);
     }
-    videoFrame->pts = static_cast<int64_t>(frameIndex);
+    videoFrame->pts =
+        av_rescale_q(static_cast<int64_t>(frameIndex), AVRational{1, fps},
+                     videoContext->time_base);
+    videoFrame->duration = videoFrameDuration;
     return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                       videoPacket, errorMessage);
+                       videoPacket, errorMessage, videoFrameDuration);
   }
 
   ReplayVideoExportResult finish() {
@@ -1145,7 +1169,7 @@ public:
       }
     }
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
-                     videoPacket, errorMessage)) {
+                     videoPacket, errorMessage, videoFrameDuration)) {
       return fail(errorMessage);
     }
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
@@ -1194,6 +1218,7 @@ private:
   int width = 0;
   int height = 0;
   int fps = 0;
+  int64_t videoFrameDuration = kVideoTicksPerFrame;
   AVFormatContext *formatContext = nullptr;
   AVCodecContext *videoContext = nullptr;
   AVCodecContext *audioContext = nullptr;
