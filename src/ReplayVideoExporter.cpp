@@ -1608,6 +1608,8 @@ public:
       acceptingFrames = true;
       failed = false;
       cancelled = false;
+      encodedFrameCount.store(0, std::memory_order_relaxed);
+      workerFinished.store(false, std::memory_order_release);
       for (size_t i = 0; i < frameBuffers.size(); ++i) {
         freeBuffers.push_back(i);
       }
@@ -1655,12 +1657,27 @@ public:
     return true;
   }
 
-  ReplayVideoExportResult finish() {
+  ReplayVideoExportResult
+  finish(const std::function<void(size_t)> &progressCallback = {}) {
     {
       std::lock_guard<std::mutex> lock(mutex);
       acceptingFrames = false;
     }
     condition.notify_all();
+    auto lastProgress = std::chrono::steady_clock::now() -
+                        std::chrono::milliseconds(500);
+    while (!workerFinished.load(std::memory_order_acquire)) {
+      const auto now = std::chrono::steady_clock::now();
+      if (progressCallback &&
+          now - lastProgress >= std::chrono::milliseconds(250)) {
+        lastProgress = now;
+        progressCallback(encodedFrameCount.load(std::memory_order_relaxed));
+      }
+      SDL_Delay(10);
+    }
+    if (progressCallback) {
+      progressCallback(encodedFrameCount.load(std::memory_order_relaxed));
+    }
     joinWorker();
 
     {
@@ -1686,6 +1703,9 @@ public:
   long long encodedMicros() const {
     return encodedMicrosTotal.load(std::memory_order_relaxed);
   }
+  size_t encodedFrames() const {
+    return encodedFrameCount.load(std::memory_order_relaxed);
+  }
 
   long long audioEncodeMicros() const { return writer.audioEncodeMicros(); }
   long long framePrepareMicros() const { return writer.framePrepareMicros(); }
@@ -1706,6 +1726,13 @@ private:
   }
 
   void encodeLoop() {
+    struct WorkerFinishedMarker {
+      std::atomic_bool &finished;
+      ~WorkerFinishedMarker() {
+        finished.store(true, std::memory_order_release);
+      }
+    } marker{workerFinished};
+
     while (true) {
       PendingFrame frame{};
       {
@@ -1729,6 +1756,9 @@ private:
           frame.videoTimeMicros, errorMessage);
       encodedMicrosTotal.fetch_add(elapsedMicros(encodeStart),
                                    std::memory_order_relaxed);
+      if (success) {
+        encodedFrameCount.fetch_add(1, std::memory_order_relaxed);
+      }
 
       {
         std::lock_guard<std::mutex> lock(mutex);
@@ -1752,6 +1782,8 @@ private:
   std::condition_variable condition;
   std::thread worker;
   std::atomic_llong encodedMicrosTotal{0};
+  std::atomic_size_t encodedFrameCount{0};
+  std::atomic_bool workerFinished{true};
   bool acceptingFrames = false;
   bool failed = false;
   bool cancelled = false;
@@ -1909,9 +1941,6 @@ ReplayVideoExportResult renderReplayVideoToMp4(
                   "Replay video export frame buffers/readbacks: %zu, encoder "
                   "threads: %d",
                   frameBufferCount, replayVideoEncoderThreadCount());
-  reportReplayExportProgress(options, 0.05, "Rendering video", 0,
-                             frameCount);
-
   RenderContext renderContext;
   size_t replayCursor = 0;
   uint32_t currentFrame = bgfx::frame();
@@ -1967,20 +1996,38 @@ ReplayVideoExportResult renderReplayVideoToMp4(
     return true;
   };
 
-  auto maybeReportFrameProgress = [&](size_t completedFrames, bool force) {
+  auto videoPipelineProgress = [&](size_t renderedFrames,
+                                   size_t encodedFrames) {
+    if (frameCount == 0) {
+      return 1.0;
+    }
+    const double completedUnits =
+        static_cast<double>(std::min(renderedFrames, frameCount)) +
+        static_cast<double>(std::min(encodedFrames, frameCount));
+    return completedUnits / (static_cast<double>(frameCount) * 2.0);
+  };
+
+  auto reportVideoPipelineProgress = [&](size_t renderedFrames,
+                                         size_t encodedFrames,
+                                         const std::string &message) {
+    const double progress =
+        videoPipelineProgress(renderedFrames, encodedFrames);
+    reportReplayExportProgress(options, 0.05 + 0.90 * progress, message,
+                               std::min(renderedFrames, frameCount),
+                               frameCount);
+  };
+
+  reportVideoPipelineProgress(0, 0, "Rendering / encoding video");
+
+  auto maybeReportFrameProgress = [&](size_t renderedFrames, bool force) {
     const auto now = std::chrono::steady_clock::now();
     if (!force && now - lastUiProgress < std::chrono::milliseconds(250)) {
       return;
     }
 
     lastUiProgress = now;
-    const double frameProgress =
-        frameCount == 0 ? 1.0
-                        : static_cast<double>(completedFrames) /
-                              static_cast<double>(frameCount);
-    reportReplayExportProgress(options, 0.05 + 0.90 * frameProgress,
-                               "Rendering video", completedFrames,
-                               frameCount);
+    reportVideoPipelineProgress(renderedFrames, encoder.encodedFrames(),
+                                "Rendering / encoding video");
     bgfxAccess.allowUiFrame(restoreExportRenderViews);
   };
 
@@ -2068,9 +2115,13 @@ ReplayVideoExportResult renderReplayVideoToMp4(
 
   cleanupBgfx();
   bgfxAccess.release();
-  reportReplayExportProgress(options, 0.97, "Finalizing video", frameCount,
-                             frameCount);
-  auto result = encoder.finish();
+  auto result = encoder.finish([&](size_t encodedFrames) {
+    reportVideoPipelineProgress(frameCount, encodedFrames, "Encoding video");
+  });
+  if (result.success) {
+    reportReplayExportProgress(options, 0.97, "Finalizing video", frameCount,
+                               frameCount);
+  }
   if (!result.success && result.outputPath.empty()) {
     result.outputPath = outputPath;
   }
