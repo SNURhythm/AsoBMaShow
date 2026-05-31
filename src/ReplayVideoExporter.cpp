@@ -155,12 +155,22 @@ std::string replayVideoH264LevelString(int level) {
   return std::to_string(level / 10) + "." + std::to_string(level % 10);
 }
 
-size_t replayVideoFrameBufferCount() {
+size_t replayVideoFrameBufferCount(int width, int height) {
+  constexpr size_t kMaxFrameBufferMemoryBytes = 128ULL * 1024ULL * 1024ULL;
+  const size_t frameBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+  const size_t memoryLimitedBuffers =
+      frameBytes == 0 ? 3 : kMaxFrameBufferMemoryBytes / frameBytes;
   const auto hardwareThreads = std::thread::hardware_concurrency();
   if (hardwareThreads <= 2) {
-    return 2;
+    return std::clamp(memoryLimitedBuffers, static_cast<size_t>(3),
+                      static_cast<size_t>(4));
   }
-  return std::clamp<size_t>(static_cast<size_t>(hardwareThreads / 2), 2, 4);
+  const size_t hardwareLimitedBuffers =
+      std::clamp(static_cast<size_t>(hardwareThreads), static_cast<size_t>(4),
+                 static_cast<size_t>(8));
+  return std::clamp(std::min(memoryLimitedBuffers, hardwareLimitedBuffers),
+                    static_cast<size_t>(3), static_cast<size_t>(8));
 }
 
 long long elapsedMicros(std::chrono::steady_clock::time_point start) {
@@ -1490,7 +1500,11 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
+  const size_t frameBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
+  std::vector<bgfx::TextureHandle> readbackTextures(
+      frameBufferCount, BGFX_INVALID_HANDLE);
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
   auto cleanupBgfx = [&]() {
     context.jukebox.stop();
@@ -1500,9 +1514,11 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       bgaBlurPass->shutdown();
       bgaBlurPass.reset();
     }
-    if (bgfx::isValid(readbackTexture)) {
-      bgfx::destroy(readbackTexture);
-      readbackTexture = BGFX_INVALID_HANDLE;
+    for (auto &readbackTexture : readbackTextures) {
+      if (bgfx::isValid(readbackTexture)) {
+        bgfx::destroy(readbackTexture);
+        readbackTexture = BGFX_INVALID_HANDLE;
+      }
     }
     if (bgfx::isValid(outputFrameBuffer)) {
       bgfx::destroy(outputFrameBuffer);
@@ -1521,15 +1537,17 @@ ReplayVideoExportResult renderReplayVideoToMp4(
             .message = "Failed to create replay export framebuffer"};
   }
 
-  readbackTexture = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
-                                      BGFX_TEXTURE_READ_BACK);
-  if (!bgfx::isValid(readbackTexture)) {
-    cleanupBgfx();
-    return {.success = false,
-            .outputPath = outputPath,
-            .message = "Failed to create replay export readback texture"};
+  for (auto &readbackTexture : readbackTextures) {
+    readbackTexture = bgfx::createTexture2D(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+        bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
+                                        BGFX_TEXTURE_READ_BACK);
+    if (!bgfx::isValid(readbackTexture)) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = "Failed to create replay export readback texture"};
+    }
   }
 
   bgaBlurPass = std::make_unique<rendering::BlurPass>(2, 0.6f);
@@ -1559,17 +1577,15 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       static_cast<long long>(settings.visualOffsetMs) * 1000LL;
   const size_t frameCount = static_cast<size_t>(std::ceil(
       static_cast<long double>(durationMicros) * fps / 1000000.0L));
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
   ReplayAsyncFrameEncoder encoder;
   std::string errorMessage;
-  const size_t frameBufferCount = replayVideoFrameBufferCount();
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
                      frameBufferCount, errorMessage)) {
     cleanupBgfx();
     return {.success = false, .outputPath = outputPath, .message = errorMessage};
   }
-  SDL_Log("Replay video export frame buffers: %zu, encoder threads: %d",
+  SDL_Log("Replay video export frame buffers/readbacks: %zu, encoder threads: "
+          "%d",
           frameBufferCount, replayVideoEncoderThreadCount());
 
   RenderContext renderContext;
@@ -1577,9 +1593,70 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   long long bufferWaitMicros = 0;
-  long long renderReadbackMicros = 0;
+  long long renderSubmitMicros = 0;
+  long long readbackWaitMicros = 0;
+
+  struct PendingReadback {
+    size_t frameIndex = 0;
+    size_t frameBufferIndex = 0;
+    size_t readbackTextureIndex = 0;
+    long long songTimeMicros = 0;
+    uint32_t expectedFrame = 0;
+  };
+  std::deque<size_t> freeReadbackTextures;
+  for (size_t i = 0; i < readbackTextures.size(); ++i) {
+    freeReadbackTextures.push_back(i);
+  }
+  std::deque<PendingReadback> pendingReadbacks;
+
+  auto drainOldestReadback = [&]() -> bool {
+    if (pendingReadbacks.empty()) {
+      return true;
+    }
+
+    PendingReadback pending = pendingReadbacks.front();
+    pendingReadbacks.pop_front();
+
+    const auto readbackWaitStart = std::chrono::steady_clock::now();
+    while (currentFrame < pending.expectedFrame) {
+      currentFrame = bgfx::frame();
+    }
+    readbackWaitMicros += elapsedMicros(readbackWaitStart);
+
+    if (!encoder.submitFrame(pending.frameBufferIndex, pending.frameIndex,
+                             pending.songTimeMicros, errorMessage)) {
+      return false;
+    }
+    freeReadbackTextures.push_back(pending.readbackTextureIndex);
+    return true;
+  };
+
+  auto drainReadyReadbacks = [&]() -> bool {
+    while (!pendingReadbacks.empty() &&
+           currentFrame >= pendingReadbacks.front().expectedFrame) {
+      if (!drainOldestReadback()) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+    if (!drainReadyReadbacks()) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
+    }
+    while (freeReadbackTextures.empty()) {
+      if (!drainOldestReadback()) {
+        cleanupBgfx();
+        return {.success = false,
+                .outputPath = outputPath,
+                .message = errorMessage};
+      }
+    }
+
     const auto bufferWaitStart = std::chrono::steady_clock::now();
     const int frameBufferIndex = encoder.acquireFrameBuffer(errorMessage);
     bufferWaitMicros += elapsedMicros(bufferWaitStart);
@@ -1589,6 +1666,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
               .outputPath = outputPath,
               .message = errorMessage};
     }
+    const size_t readbackTextureIndex = freeReadbackTextures.front();
+    freeReadbackTextures.pop_front();
 
     const long long songTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
@@ -1612,25 +1691,20 @@ ReplayVideoExportResult renderReplayVideoToMp4(
         bgaBlurPass->outputTexture(), rendering::final_view,
         static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
     renderer.render(renderContext, visualTimeMicros);
-    bgfx::blit(rendering::readback_view, readbackTexture, 0, 0,
-               outputTexture);
+    bgfx::blit(rendering::readback_view,
+               readbackTextures[readbackTextureIndex], 0, 0, outputTexture);
     currentFrame = bgfx::frame();
     const uint32_t expectedFrame =
-        bgfx::readTexture(readbackTexture,
+        bgfx::readTexture(readbackTextures[readbackTextureIndex],
                           encoder.frameData(static_cast<size_t>(
                               frameBufferIndex)));
-    while (currentFrame < expectedFrame) {
-      currentFrame = bgfx::frame();
-    }
-    renderReadbackMicros += elapsedMicros(renderStart);
-
-    if (!encoder.submitFrame(static_cast<size_t>(frameBufferIndex), frameIndex,
-                             songTimeMicros, errorMessage)) {
-      cleanupBgfx();
-      return {.success = false,
-              .outputPath = outputPath,
-              .message = errorMessage};
-    }
+    renderSubmitMicros += elapsedMicros(renderStart);
+    pendingReadbacks.push_back(
+        {.frameIndex = frameIndex,
+         .frameBufferIndex = static_cast<size_t>(frameBufferIndex),
+         .readbackTextureIndex = readbackTextureIndex,
+         .songTimeMicros = songTimeMicros,
+         .expectedFrame = expectedFrame});
 
     if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
         frameIndex + 1 == frameCount) {
@@ -1639,15 +1713,26 @@ ReplayVideoExportResult renderReplayVideoToMp4(
     }
   }
 
+  while (!pendingReadbacks.empty()) {
+    if (!drainOldestReadback()) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
+    }
+  }
+
   cleanupBgfx();
   auto result = encoder.finish();
   if (!result.success && result.outputPath.empty()) {
     result.outputPath = outputPath;
   }
-  SDL_Log("Replay video export profile: %.2fs total, %.2fs render/readback, "
-          "%.2fs encode worker, %.2fs waiting for frame buffers",
+  SDL_Log("Replay video export profile: %.2fs total, %.2fs render submit, "
+          "%.2fs readback wait, %.2fs encode worker, %.2fs waiting for frame "
+          "buffers",
           static_cast<double>(elapsedMicros(exportStart)) / 1000000.0,
-          static_cast<double>(renderReadbackMicros) / 1000000.0,
+          static_cast<double>(renderSubmitMicros) / 1000000.0,
+          static_cast<double>(readbackWaitMicros) / 1000000.0,
           static_cast<double>(encoder.encodedMicros()) / 1000000.0,
           static_cast<double>(bufferWaitMicros) / 1000000.0);
   return result;
