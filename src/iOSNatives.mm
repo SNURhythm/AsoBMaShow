@@ -1,5 +1,6 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 #include <Foundation/Foundation.h>
@@ -104,6 +105,84 @@ std::string PhotoAuthorizationStatusMessage(PHAuthorizationStatus status) {
     }
     return "Photos permission was not granted";
   }
+}
+
+bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
+                                               NSString **preparedPath,
+                                               std::string &errorMessage) {
+  *preparedPath = nil;
+
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) &&                                \
+    __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000
+  if (@available(iOS 18.0, *)) {
+    NSURL *sourceURL = [NSURL fileURLWithPath:sourcePath];
+    NSString *fileName =
+        [NSString stringWithFormat:@"AsoBMaShowReplay-%@.mov",
+                                   [[NSUUID UUID] UUIDString]];
+    NSString *outputPath =
+        [NSTemporaryDirectory() stringByAppendingPathComponent:fileName];
+    NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
+    [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:sourceURL options:nil];
+    AVAssetExportSession *session =
+        [[AVAssetExportSession alloc]
+            initWithAsset:asset
+               presetName:AVAssetExportPresetPassthrough];
+    if (session == nil) {
+      errorMessage = "Failed to prepare replay video for Photos";
+      return false;
+    }
+    if (![session.supportedFileTypes
+            containsObject:AVFileTypeQuickTimeMovie]) {
+      errorMessage = "Photos replay video export does not support MOV output";
+      return false;
+    }
+
+    AVMutableMetadataItem *playbackIntent =
+        [AVMutableMetadataItem metadataItem];
+    playbackIntent.identifier =
+        AVMetadataIdentifierQuickTimeMetadataFullFrameRatePlaybackIntent;
+    playbackIntent.value = @1;
+    playbackIntent.dataType = (__bridge NSString *)kCMMetadataBaseDataType_UInt8;
+    session.metadata = @[ playbackIntent ];
+    session.outputURL = outputURL;
+    session.outputFileType = AVFileTypeQuickTimeMovie;
+
+    __block AVAssetExportSessionStatus exportStatus =
+        AVAssetExportSessionStatusUnknown;
+    __block NSError *exportError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [session exportAsynchronouslyWithCompletionHandler:^{
+      exportStatus = session.status;
+      exportError = session.error;
+      dispatch_semaphore_signal(semaphore);
+    }];
+
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      [session cancelExport];
+      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      errorMessage = "Timed out preparing replay video for Photos";
+      return false;
+    }
+    if (exportStatus != AVAssetExportSessionStatusCompleted) {
+      [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
+      if (exportError != nil) {
+        errorMessage =
+            std::string([[exportError localizedDescription] UTF8String]);
+      } else {
+        errorMessage = "Failed to prepare replay video for Photos";
+      }
+      return false;
+    }
+
+    *preparedPath = outputPath;
+  }
+#endif
+
+  return true;
 }
 
 bool RequestPhotoAddAuthorization(std::string &errorMessage) {
@@ -280,7 +359,14 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       return false;
     }
 
-    NSURL *fileUrl = [NSURL fileURLWithPath:path];
+    NSString *preparedPath = nil;
+    if (!CreateFullFrameRatePlaybackVideoForPhotos(path, &preparedPath,
+                                                   errorMessage)) {
+      return false;
+    }
+
+    NSString *savePath = preparedPath != nil ? preparedPath : path;
+    NSURL *fileUrl = [NSURL fileURLWithPath:savePath];
     __block BOOL saveSucceeded = NO;
     __block BOOL requestCreated = NO;
     __block NSError *saveError = nil;
@@ -301,6 +387,9 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    if (preparedPath != nil) {
+      [[NSFileManager defaultManager] removeItemAtPath:preparedPath error:nil];
+    }
     if (waitResult != 0) {
       errorMessage = "Timed out saving video to Photos";
       return false;
