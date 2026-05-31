@@ -115,6 +115,7 @@ bool CreateFullFrameRatePlaybackVideoForPhotos(NSString *sourcePath,
 #if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) &&                                \
     __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000
   if (@available(iOS 18.0, *)) {
+    // Photos needs this as typed QuickTime metadata, not FFmpeg string mdta.
     NSURL *sourceURL = [NSURL fileURLWithPath:sourcePath];
     NSString *fileName =
         [NSString stringWithFormat:@"AsoBMaShowReplay-%@.mov",
