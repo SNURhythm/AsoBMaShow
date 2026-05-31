@@ -93,7 +93,6 @@ private:
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
-  TextView *gaugeStatusText = nullptr;
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();
   void updateLaneStateText();

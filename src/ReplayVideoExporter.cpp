@@ -112,9 +112,9 @@ int64_t replayVideoBitRate(int width, int height, int fps) {
 }
 
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
-  bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
-  bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
-  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  for (const auto view : rendering::kGameplayOutputViews) {
+    bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+  }
   if (context != nullptr && context->restoreGameplayRenderViews) {
     context->restoreGameplayRenderViews();
     return;
@@ -139,6 +139,10 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
                     rendering::ui_offset_y,
                     static_cast<uint16_t>(rendering::ui_view_width),
                     static_cast<uint16_t>(rendering::ui_view_height));
+  bgfx::setViewRect(rendering::final_view, rendering::ui_offset_x,
+                    rendering::ui_offset_y,
+                    static_cast<uint16_t>(rendering::ui_view_width),
+                    static_cast<uint16_t>(rendering::ui_view_height));
 
   float ortho[16];
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
@@ -148,6 +152,7 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
+  bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
   rendering::game_camera.render(true);
 }
 
@@ -157,14 +162,10 @@ void configureReplayExportRenderViews(
   const auto exportWidth = static_cast<uint16_t>(width);
   const auto exportHeight = static_cast<uint16_t>(height);
 
-  bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::final_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
-
-  bgfx::setViewRect(rendering::clear_view, 0, 0, exportWidth, exportHeight);
-  bgfx::setViewRect(rendering::final_view, 0, 0, exportWidth, exportHeight);
-  bgfx::setViewRect(rendering::main_view, 0, 0, exportWidth, exportHeight);
+  for (const auto view : rendering::kGameplayOutputViews) {
+    bgfx::setViewFrameBuffer(view, outputFrameBuffer);
+    bgfx::setViewRect(view, 0, 0, exportWidth, exportHeight);
+  }
   bgfx::setViewRect(rendering::bga_view, 0, 0, bgaBlurPass.sceneWidth(),
                     bgaBlurPass.sceneHeight());
   bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
@@ -174,10 +175,11 @@ void configureReplayExportRenderViews(
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
                rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
                bgfx::getCaps()->homogeneousDepth);
-  bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
+  for (const auto view : rendering::kGameplayOutputViews) {
+    bgfx::setViewTransform(view, nullptr, ortho);
+  }
   bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
-  bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
 
   rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
                             rendering::final_view);
@@ -550,20 +552,35 @@ findReplayNote(const std::unordered_map<std::string, bms_parser::Note *> &lookup
 void applyReplayEventForVideo(
     BMSRenderer &renderer,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event, long long visualTimeMicros) {
+    const ReplayEvent &event, long long visualTimeMicros,
+    bool gaugeAutoShift) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  auto applyHud = [&]() {
+    if (event.judgement == None) {
+      return;
+    }
+    renderer.onJudge(recordedJudge, event.combo, event.score);
+    renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
+  };
+
   switch (event.action) {
   case ReplayEventAction::Press: {
+    bool suppressHudForLongNoteHead = false;
     if (auto *note = findReplayNote(lookup, event);
-        note != nullptr && recordedJudge.isNotePlayed()) {
+        note != nullptr) {
       if (note->IsLongNote()) {
         auto *longNote = static_cast<bms_parser::LongNote *>(note);
-        if (!longNote->IsTail()) {
+        suppressHudForLongNoteHead =
+            !longNote->IsTail() && recordedJudge.isNotePlayed();
+        if (recordedJudge.isNotePlayed() && !longNote->IsTail()) {
           longNote->Press(event.judgeTimeMicros);
         }
-      } else {
+      } else if (recordedJudge.isNotePlayed()) {
         note->Press(event.judgeTimeMicros);
       }
+    }
+    if (!suppressHudForLongNoteHead) {
+      applyHud();
     }
     renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
     break;
@@ -576,10 +593,12 @@ void applyReplayEventForVideo(
         longNote->Release(event.judgeTimeMicros);
       }
     }
+    applyHud();
     renderer.onLaneReleased(event.lane, visualTimeMicros);
     break;
   }
   case ReplayEventAction::Miss:
+    applyHud();
     break;
   }
 }
@@ -1213,16 +1232,19 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   bgaBlurPass = std::make_unique<rendering::BlurPass>(2, 0.6f);
   bgaBlurPass->init(static_cast<uint16_t>(width),
                     static_cast<uint16_t>(height));
-  bgaBlurPass->setInputViews({rendering::bga_view,
-                              rendering::bga_layer_view});
+  bgaBlurPass->setInputViews(
+      std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                rendering::kGameplayBgaInputViews.end()));
   bgaBlurPass->setCompositeEnabled(false);
   bgaBlurPass->setBlurStrength(settings.bgaBlurStrength);
 
   ScopedChartNoteReset chartReset(chart);
   Judge judge(chart.Meta.Rank);
   BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
-                       settings.visibleTimeGreenNumber, false);
+                       settings.visibleTimeGreenNumber);
   renderer.setLaneBeamClockUsesRenderTime(true);
+  renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
+                          gaugeInitialValue(replay.initialGaugeType));
   renderer.setReplayData(&replay);
 
   const auto replayNotes = buildReplayNoteLookup(chart);
@@ -1250,7 +1272,7 @@ ReplayVideoExportResult renderReplayVideoToMp4(
            replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
       applyReplayEventForVideo(renderer, replayNotes,
                                replay.events[replayCursor],
-                               visualTimeMicros);
+                               visualTimeMicros, replay.gaugeAutoShift);
       ++replayCursor;
     }
 

@@ -80,6 +80,7 @@ public:
 private:
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
+  TextView *gaugeText = nullptr;
   std::mutex hudMutex;
   bool hudDirty = false;
   std::string pendingJudgeText;
@@ -126,6 +127,7 @@ private:
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
+  void drawGauge(RenderContext &context) const;
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
@@ -165,5 +167,7 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamClockUsesRenderTime(bool enabled);
+  void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+                      float currentGauge);
   void setReplayData(const ReplayData *replayData);
 };

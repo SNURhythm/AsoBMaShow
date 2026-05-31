@@ -476,7 +476,9 @@ void run() {
   rendering::PosTexCoord0Vertex::init();
   s_postProcess.init(rendering::render_width, rendering::render_height);
   s_blurPass = s_postProcess.addBlurPass();
-  s_blurPass->setInputViews({rendering::bga_view, rendering::bga_layer_view});
+  s_blurPass->setInputViews(
+      std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                rendering::kGameplayBgaInputViews.end()));
   s_blurPass->setCompositeEnabled(false);
   s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
   // Example: s_blurPass->setCompositeEnabled(true);
@@ -503,10 +505,12 @@ void run() {
     if (s_blurPass == nullptr) {
       return;
     }
-    bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
-    bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
-    bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
-    s_blurPass->setInputViews({rendering::bga_view, rendering::bga_layer_view});
+    for (const auto view : rendering::kGameplayOutputViews) {
+      bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+    }
+    s_blurPass->setInputViews(
+        std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                  rendering::kGameplayBgaInputViews.end()));
     resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
                        s_blurPass->blurViewH(), s_blurPass->blurViewV(),
                        s_blurPass->finalView(), context.settings);

@@ -8,10 +8,12 @@
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
+#include "../../view/ClearLampColors.h"
 
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
@@ -166,6 +168,9 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   scoreText->setPosition(0, rendering::window_height - 50);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setText("Score: 0");
+  gaugeText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  gaugeText->setPosition(10, 50);
+  setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
 
   refreshGeometry();
 }
@@ -225,6 +230,9 @@ void BMSRenderer::drawJudgement(RenderContext context) const {
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
+}
+void BMSRenderer::drawGauge(RenderContext &context) const {
+  gaugeText->render(context);
 }
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
@@ -643,6 +651,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   if (renderHud) {
     drawJudgement(context);
     drawScore(context);
+    drawGauge(context);
   }
 }
 
@@ -678,6 +687,22 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
   useRenderTimeForLaneBeams = enabled;
+}
+
+void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+                                 float currentGauge) {
+  if (gaugeText == nullptr) {
+    return;
+  }
+
+  char text[96];
+  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
+                gaugeAutoShift ? "GAS" : "Gauge",
+                gaugeTypeToShortLabel(gaugeType), currentGauge);
+  gaugeText->setText(text);
+
+  const Color color = clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+  gaugeText->setColor({color.r, color.g, color.b, 255});
 }
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {
@@ -834,4 +859,5 @@ BMSRenderer::~BMSRenderer() {
   }
   delete judgeText;
   delete scoreText;
+  delete gaugeText;
 }

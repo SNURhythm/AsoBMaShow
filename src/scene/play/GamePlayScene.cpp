@@ -4,7 +4,6 @@
 
 #include "GamePlayScene.h"
 #include "../../view/TextView.h"
-#include "../../view/ClearLampColors.h"
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../targets.h"
@@ -14,7 +13,6 @@
 
 #include <array>
 #include <chrono>
-#include <cstdio>
 #include <string>
 
 namespace {
@@ -40,9 +38,6 @@ void GamePlayScene::init() {
   chartNameText->setText(chart->Meta.Title);
   chartNameText->setPosition(10, 10);
   addView(chartNameText);
-  gaugeStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  gaugeStatusText->setPosition(10, 50);
-  gaugeStatusText->setText("Gauge: NORMAL 20.0%");
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
                              context.settings.visibleTimeGreenNumber);
   renderer->setReplayData(options.replayData.get());
@@ -284,9 +279,6 @@ void GamePlayScene::renderScene() {
   // pauseButton->setPosition(rendering::window_width - 40, 10);
   renderer->render(renderContext,
                    getVisualTimeMicros(context.jukebox.getTimeMicros()));
-  if (gaugeStatusText != nullptr) {
-    gaugeStatusText->render(renderContext);
-  }
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
@@ -302,8 +294,6 @@ void GamePlayScene::cleanupScene() {
   }
   delete renderer;
   renderer = nullptr;
-  delete gaugeStatusText;
-  gaugeStatusText = nullptr;
   delete laneStateText;
   laneStateText = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
@@ -828,17 +818,10 @@ void GamePlayScene::updateLaneStateText() {
 }
 
 void GamePlayScene::updateGaugeStatusText() {
-  if (gaugeStatusText == nullptr || state == nullptr) {
+  if (renderer == nullptr || state == nullptr) {
     return;
   }
 
-  char text[96];
-  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
-                state->gaugeAutoShift ? "GAS" : "Gauge",
-                gaugeTypeToShortLabel(state->gaugeType), state->currentGauge);
-  gaugeStatusText->setText(text);
-
-  const Color color =
-      clearLampColorForRank(gaugeTypeToClearRank(state->gaugeType));
-  gaugeStatusText->setColor({color.r, color.g, color.b, 255});
+  renderer->setGaugeStatus(state->gaugeType, state->gaugeAutoShift,
+                           state->currentGauge);
 }

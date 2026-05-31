@@ -3,12 +3,10 @@
 namespace rendering {
 void applyViewOrder(bgfx::ViewId blurViewH, bgfx::ViewId blurViewV,
                     bgfx::ViewId finalView) {
-  const bgfx::ViewId order[] = {
-      rendering::clear_view, rendering::bga_view,  rendering::bga_layer_view,
-      blurViewH,             blurViewV,           finalView,
-      rendering::main_view,  rendering::ui_view,
+  const std::array<bgfx::ViewId, 8> order = {
+      clear_view, bga_view, bga_layer_view, blurViewH,
+      blurViewV, finalView, main_view,      ui_view,
   };
-  bgfx::setViewOrder(
-      0, static_cast<uint16_t>(sizeof(order) / sizeof(order[0])), order);
+  bgfx::setViewOrder(0, static_cast<uint16_t>(order.size()), order.data());
 }
 } // namespace rendering
