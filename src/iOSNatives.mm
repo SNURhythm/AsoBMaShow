@@ -21,6 +21,8 @@
 namespace {
 constexpr int kIOSReplaySampleRate = 44100;
 constexpr int kIOSReplayChannels = 2;
+constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
+constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -299,30 +301,71 @@ std::string AVWriterErrorMessage(AVAssetWriter *writer,
   return fallback != nullptr ? std::string(fallback) : std::string();
 }
 
+std::string AVWriterStatusName(AVAssetWriterStatus status) {
+  switch (status) {
+  case AVAssetWriterStatusUnknown:
+    return "unknown";
+  case AVAssetWriterStatusWriting:
+    return "writing";
+  case AVAssetWriterStatusCompleted:
+    return "completed";
+  case AVAssetWriterStatusFailed:
+    return "failed";
+  case AVAssetWriterStatusCancelled:
+    return "cancelled";
+  }
+  return "invalid";
+}
+
 bool WaitForWriterInput(AVAssetWriter *writer, AVAssetWriterInput *input,
-                        NSTimeInterval timeoutSeconds,
+                        const char *inputName, NSTimeInterval timeoutSeconds,
                         std::string &errorMessage) {
+  const std::string inputLabel =
+      inputName != nullptr ? std::string(inputName) : std::string("unknown");
+  if (writer == nil) {
+    errorMessage = "Replay video writer is unavailable while waiting for " +
+                   inputLabel + " input";
+    return false;
+  }
+  if (input == nil) {
+    errorMessage = "Replay video writer " + inputLabel +
+                   " input is unavailable";
+    return false;
+  }
   NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSeconds];
   while (![input isReadyForMoreMediaData]) {
     if (writer.status == AVAssetWriterStatusFailed) {
-      errorMessage = AVWriterErrorMessage(writer, "Replay video writer failed");
+      const std::string fallback =
+          "Replay video writer failed while waiting for " + inputLabel +
+          " input";
+      errorMessage = AVWriterErrorMessage(writer, fallback.c_str());
       return false;
     }
     if (writer.status == AVAssetWriterStatusCancelled) {
-      errorMessage = "Replay video writer was cancelled";
+      errorMessage =
+          "Replay video writer was cancelled while waiting for " +
+          inputLabel + " input";
       return false;
     }
     if (writer.status == AVAssetWriterStatusCompleted) {
-      errorMessage = "Replay video writer already finished";
+      errorMessage =
+          "Replay video writer already finished while waiting for " +
+          inputLabel + " input";
       return false;
     }
     if ([deadline timeIntervalSinceNow] <= 0.0) {
-      errorMessage = "Timed out waiting for replay video writer";
+      errorMessage =
+          "Timed out waiting for replay video writer " + inputLabel +
+          " input; status=" + AVWriterStatusName(writer.status);
       return false;
     }
     [NSThread sleepForTimeInterval:0.001];
   }
   return true;
+}
+
+void AppendReplayFrameContext(std::string &errorMessage, size_t frameIndex) {
+  errorMessage += " at frame " + std::to_string(frameIndex);
 }
 
 class IOSReplayVideoWriter {
@@ -436,13 +479,18 @@ public:
     @autoreleasepool {
       if (bgraFrame == nullptr) {
         errorMessage = "Replay video frame is empty";
+        AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
-      if (!WaitForWriterInput(writer, videoInput, 300.0, errorMessage)) {
+      if (!WaitForWriterInput(writer, videoInput, "video",
+                              kIOSReplayInputWaitTimeoutSeconds,
+                              errorMessage)) {
+        AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
       if (adaptor.pixelBufferPool == nullptr) {
         errorMessage = "Replay video writer pixel buffer pool is unavailable";
+        AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
 
@@ -451,6 +499,7 @@ public:
           kCFAllocatorDefault, adaptor.pixelBufferPool, &pixelBuffer);
       if (ret != kCVReturnSuccess || pixelBuffer == nullptr) {
         errorMessage = "Failed to allocate replay video pixel buffer";
+        AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
 
@@ -479,6 +528,7 @@ public:
       if (!appended) {
         errorMessage =
             AVWriterErrorMessage(writer, "Failed to append replay video frame");
+        AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
       return true;
@@ -509,11 +559,15 @@ public:
         dispatch_semaphore_signal(semaphore);
       }];
       const long waitResult = dispatch_semaphore_wait(
-          semaphore, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_SEC));
+          semaphore,
+          dispatch_time(DISPATCH_TIME_NOW,
+                        static_cast<int64_t>(
+                            kIOSReplayFinishWaitTimeoutSeconds * NSEC_PER_SEC)));
       profile.finishMicros += ElapsedMicros(finishStart);
       if (waitResult != 0) {
         [writer cancelWriting];
-        errorMessage = "Timed out finishing replay video writer";
+        errorMessage = "Timed out finishing replay video writer; status=" +
+                       AVWriterStatusName(writer.status);
         return false;
       }
       if (!finished || finishStatus != AVAssetWriterStatusCompleted) {
@@ -585,8 +639,9 @@ private:
       if (sampleBuffer == nullptr) {
         break;
       }
-      const bool ready =
-          WaitForWriterInput(writer, audioInput, 120.0, errorMessage);
+      const bool ready = WaitForWriterInput(
+          writer, audioInput, "audio", kIOSReplayInputWaitTimeoutSeconds,
+          errorMessage);
       BOOL appended = NO;
       if (ready) {
         appended = [audioInput appendSampleBuffer:sampleBuffer];
