@@ -1515,7 +1515,7 @@ private:
   long long videoEncodeMicrosTotal = 0;
 };
 
-using ReplayPlatformMp4StreamWriter = ReplayIOSMp4StreamWriter;
+using ReplayPlatformMp4StreamWriter = ReplayMp4StreamWriter;
 #else
 using ReplayPlatformMp4StreamWriter = ReplayMp4StreamWriter;
 #endif
