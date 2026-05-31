@@ -1420,6 +1420,22 @@ void MainMenuScene::buildReplayModal() {
       replayModalTitleText->setText("Replay");
       replayExportOptionsContent->setVisible(false);
       replayListContent->setVisible(true);
+      const int previousSelection = selectedReplayIndex;
+      const float previousScrollOffset = replayListView->scrollOffset;
+      replayListView->setItems(replaySummaries);
+      replayListView->scrollOffset = previousScrollOffset;
+      selectedReplayIndex =
+          previousSelection >= 0 &&
+                  previousSelection < static_cast<int>(replaySummaries.size())
+              ? previousSelection
+              : -1;
+      replayListView->selectedIndex = selectedReplayIndex;
+      if (selectedReplayIndex >= 0) {
+        if (auto *selectedView =
+                replayListView->getViewByIndex(selectedReplayIndex)) {
+          selectedView->onSelected();
+        }
+      }
       refreshReplayModalActions();
       return;
     }
