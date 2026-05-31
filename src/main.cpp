@@ -456,6 +456,7 @@ void run() {
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+  bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
@@ -508,6 +509,7 @@ void run() {
     for (const auto view : rendering::kGameplayOutputViews) {
       bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
     }
+    bgfx::setViewFrameBuffer(rendering::readback_view, BGFX_INVALID_HANDLE);
     s_blurPass->setInputViews(
         std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
                                   rendering::kGameplayBgaInputViews.end()));

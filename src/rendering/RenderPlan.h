@@ -14,6 +14,7 @@ inline constexpr bgfx::ViewId blur_view_v = 4;
 inline constexpr bgfx::ViewId final_view = 5;
 inline constexpr bgfx::ViewId main_view = 128;
 inline constexpr bgfx::ViewId ui_view = 254;
+inline constexpr bgfx::ViewId readback_view = 255;
 
 inline constexpr std::array<bgfx::ViewId, 4> kGameplayOutputViews = {
     clear_view, final_view, main_view, ui_view};

@@ -115,6 +115,7 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   for (const auto view : rendering::kGameplayOutputViews) {
     bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
   }
+  bgfx::setViewFrameBuffer(rendering::readback_view, BGFX_INVALID_HANDLE);
   if (context != nullptr && context->restoreGameplayRenderViews) {
     context->restoreGameplayRenderViews();
     return;
@@ -143,6 +144,9 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
                     rendering::ui_offset_y,
                     static_cast<uint16_t>(rendering::ui_view_width),
                     static_cast<uint16_t>(rendering::ui_view_height));
+  bgfx::setViewRect(rendering::readback_view, 0, 0,
+                    static_cast<uint16_t>(rendering::render_width),
+                    static_cast<uint16_t>(rendering::render_height));
 
   float ortho[16];
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
@@ -166,6 +170,9 @@ void configureReplayExportRenderViews(
     bgfx::setViewFrameBuffer(view, outputFrameBuffer);
     bgfx::setViewRect(view, 0, 0, exportWidth, exportHeight);
   }
+  bgfx::setViewFrameBuffer(rendering::readback_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewRect(rendering::readback_view, 0, 0, exportWidth,
+                    exportHeight);
   bgfx::setViewRect(rendering::bga_view, 0, 0, bgaBlurPass.sceneWidth(),
                     bgaBlurPass.sceneHeight());
   bgfx::setViewRect(rendering::bga_layer_view, 0, 0,
@@ -1301,7 +1308,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
         bgaBlurPass->outputTexture(), rendering::final_view,
         static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
     renderer.render(renderContext, visualTimeMicros);
-    bgfx::blit(rendering::ui_view, readbackTexture, 0, 0, outputTexture);
+    bgfx::blit(rendering::readback_view, readbackTexture, 0, 0,
+               outputTexture);
     currentFrame = bgfx::frame();
     const uint32_t expectedFrame =
         bgfx::readTexture(readbackTexture, frameBuffer.data());
