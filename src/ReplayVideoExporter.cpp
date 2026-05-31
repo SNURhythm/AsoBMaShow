@@ -1413,6 +1413,93 @@ private:
   bool audioFinished = false;
 };
 
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+class ReplayIOSMp4StreamWriter {
+public:
+  ~ReplayIOSMp4StreamWriter() { cleanup(); }
+
+  bool open(const std::filesystem::path &wavPath,
+            const std::filesystem::path &outputPath, int width, int height,
+            int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
+    this->outputPath = outputPath;
+    this->log = log;
+    const int64_t bitRate = replayVideoBitRate(width, height, fps);
+    writer = CreateIOSReplayVideoWriter(wavPath.string(), outputPath.string(),
+                                        width, height, fps, bitRate,
+                                        errorMessage);
+    if (writer == nullptr) {
+      return false;
+    }
+
+    replayExportLog(log,
+                    "Replay video export encoder: avassetwriter_h264, pixel "
+                    "format: bgra, time base: 1/%d, frame duration: 1, H.264 "
+                    "level: auto, bitrate: %lld",
+                    fps, static_cast<long long>(bitRate));
+    replayExportLog(log,
+                    "Replay video export native writer: BGRA pixel buffers, no "
+                    "CPU pixel conversion");
+    return true;
+  }
+
+  bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
+                        long long /*videoTimeMicros*/,
+                        std::string &errorMessage) {
+    return AppendIOSReplayVideoFrame(writer, bgraFrame, frameIndex,
+                                     errorMessage);
+  }
+
+  ReplayVideoExportResult finish() {
+    std::string errorMessage;
+    IOSReplayVideoWriterProfile profile{};
+    if (!FinishIOSReplayVideoWriter(writer, profile, errorMessage)) {
+      writer = nullptr;
+      return {.success = false, .outputPath = outputPath, .message = errorMessage};
+    }
+    writer = nullptr;
+    audioEncodeMicrosTotal = profile.audioAppendMicros;
+    framePrepareMicrosTotal = profile.videoPixelBufferCopyMicros;
+    videoEncodeMicrosTotal =
+        profile.videoAppendMicros + profile.finishMicros;
+    replayExportLog(log,
+                    "Replay video native writer profile: %.2fs BGRA copy, "
+                    "%.2fs video append, %.2fs audio append, %.2fs finish",
+                    static_cast<double>(profile.videoPixelBufferCopyMicros) /
+                        1000000.0,
+                    static_cast<double>(profile.videoAppendMicros) / 1000000.0,
+                    static_cast<double>(profile.audioAppendMicros) / 1000000.0,
+                    static_cast<double>(profile.finishMicros) / 1000000.0);
+    return {.success = true,
+            .outputPath = outputPath,
+            .message = "MP4 exported"};
+  }
+
+  long long audioEncodeMicros() const { return audioEncodeMicrosTotal; }
+  long long framePrepareMicros() const { return framePrepareMicrosTotal; }
+  long long pixelConvertMicros() const { return 0; }
+  long long videoEncodeMicros() const { return videoEncodeMicrosTotal; }
+
+private:
+  void cleanup() {
+    if (writer != nullptr) {
+      CancelIOSReplayVideoWriter(writer);
+      writer = nullptr;
+    }
+  }
+
+  std::filesystem::path outputPath;
+  ReplayVideoExportLog *log = nullptr;
+  void *writer = nullptr;
+  long long audioEncodeMicrosTotal = 0;
+  long long framePrepareMicrosTotal = 0;
+  long long videoEncodeMicrosTotal = 0;
+};
+
+using ReplayPlatformMp4StreamWriter = ReplayIOSMp4StreamWriter;
+#else
+using ReplayPlatformMp4StreamWriter = ReplayMp4StreamWriter;
+#endif
+
 class ReplayAsyncFrameEncoder {
 public:
   ~ReplayAsyncFrameEncoder() { cancel(); }
@@ -1568,7 +1655,7 @@ private:
     }
   }
 
-  ReplayMp4StreamWriter writer;
+  ReplayPlatformMp4StreamWriter writer;
   std::vector<std::vector<uint8_t>> frameBuffers;
   std::deque<size_t> freeBuffers;
   std::deque<PendingFrame> pendingFrames;
