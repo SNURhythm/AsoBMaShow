@@ -996,7 +996,7 @@ public:
     const std::string videoCodecName =
         videoCodec->name != nullptr ? videoCodec->name : "";
     if (videoCodecName == "libx264") {
-      av_dict_set(&videoOptions, "preset", "veryfast", 0);
+      av_dict_set(&videoOptions, "preset", "ultrafast", 0);
       av_dict_set(&videoOptions, "crf", "22", 0);
       av_dict_set(&videoOptions, "profile", "high", 0);
       const std::string levelString = replayVideoH264LevelString(h264Level);
@@ -1005,7 +1005,8 @@ public:
           std::to_string(videoContext->thread_count);
       av_dict_set(&videoOptions, "threads", threadCount.c_str(), 0);
     } else if (videoCodecName.find("videotoolbox") != std::string::npos) {
-      av_dict_set(&videoOptions, "realtime", "0", 0);
+      av_dict_set(&videoOptions, "realtime", "1", 0);
+      av_dict_set(&videoOptions, "prio_speed", "1", 0);
       av_dict_set(&videoOptions, "allow_sw", "1", 0);
     }
     ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
