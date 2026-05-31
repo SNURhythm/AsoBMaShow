@@ -1414,6 +1414,10 @@ private:
 };
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+// FIXME: Re-enable this native AVAssetWriter path after the iOS export stall is
+// resolved. Large 120fps exports currently stop making progress while the
+// writer stays in AVAssetWriterStatusWriting, so iOS uses ReplayMp4StreamWriter
+// for now.
 class ReplayIOSMp4StreamWriter {
 public:
   ~ReplayIOSMp4StreamWriter() { cleanup(); }
