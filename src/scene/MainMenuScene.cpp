@@ -3,6 +3,8 @@
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
+#include "../ReplayDBHelper.h"
+#include "../ReplayVideoExporter.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -13,6 +15,7 @@
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
+#include <memory>
 #include <unordered_set>
 #ifdef _WIN32
 #include <windows.h>
@@ -274,6 +277,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  replayExportButtonText = nullptr;
+  pendingReplayExportResult.reset();
+  replayExportInProgress = false;
   gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
@@ -320,12 +326,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = new ImageView(0, 0, 0, 0);
   recyclerView->onSelected = [this, &context](const ChartMetaRecord &item,
                                               int idx) {
-    if (willStart)
+    if (willStart.load())
       return;
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
-    SDL_Log("Selected: %s; path: %s", meta.Title.c_str(),
-            path_t_to_utf8(meta.Folder / meta.BmsPath).c_str());
     if (selectedView) {
       selectedView->onSelected();
     }
@@ -334,6 +338,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
+    selectedChartMediaReady.store(false);
     delete selectedChart.exchange(nullptr);
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
@@ -349,40 +354,44 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
       previewLoadCancelled = false;
-      // dumb implementation of debounce
+      // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
         if (previewLoadCancelled) {
           return;
         }
-        if (willStart)
+        if (willStart.load())
           break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       context.jukebox.stop();
       bms_parser::Parser parser;
-      bms_parser::Chart *chart = nullptr;
+      bms_parser::Chart *parsedChart = nullptr;
 
       try {
         SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
-        parser.Parse(meta.BmsPath, &chart, false, false, previewLoadCancelled);
+        parser.Parse(meta.BmsPath, &parsedChart, false, false,
+                     previewLoadCancelled);
         SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       } catch (std::exception &e) {
-        delete chart;
+        delete parsedChart;
         SDL_Log("Error parsing %s: %s", path_t_to_utf8(meta.BmsPath).c_str(),
                 e.what());
         return;
       }
+      std::unique_ptr<bms_parser::Chart> chart(parsedChart);
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         return;
       }
-      selectedChart = chart;
 
       context.jukebox.loadChart(*chart, true, previewLoadCancelled);
       if (previewLoadCancelled) {
         return;
       }
-      if (!willStart) {
+      auto *loadedChart = chart.release();
+      delete selectedChart.exchange(loadedChart);
+      selectedChartMediaReady.store(true);
+      if (!willStart.load()) {
         context.jukebox.play();
       }
     });
@@ -623,36 +632,34 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                Color(162, 212, 255, 255));
   startButton->setStyledBorderWidth(2);
   startButton->setOnClickListener([this, &context, buttonText]() {
-    SDL_Log("Start button clicked");
-    if (willStart) {
+    if (willStart.load()) {
       return;
     }
     auto selected = recyclerView->selectedIndex;
-    SDL_Log("Selected: %d", selected);
     if (selected >= 0 && selected < recyclerView->size()) {
       const auto &selectedMeta = recyclerView->get(selected);
       if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
         return;
       }
-      willStart = true;
+      willStart.store(true);
       buttonText->setText("Loading...");
 
       defer(
           [this, &context, buttonText]() {
-            SDL_Log("Starting game play scene");
             ImageView::dropAllCache();
             if (loadThread.joinable()) {
               loadThread.join();
             }
-            if (selectedChart.load() == nullptr) {
-              willStart = false;
+            auto *chart = loadedSelectedChart();
+            if (chart == nullptr) {
+              willStart.store(false);
               buttonText->setText("Start");
               return true;
             }
             context.jukebox.stop();
             context.sceneManager->changeScene(
                 new GamePlayScene(
-                    context, selectedChart,
+                    context, chart,
                     {
                         .startPosition = 0,
                         .autoKeySound = !context.settings.inputKeysoundEnabled,
@@ -661,12 +668,118 @@ void MainMenuScene::initView(ApplicationContext &context) {
                         .gaugeAutoShift = selectedGaugeAutoShift,
                     }),
                 true);
-            willStart = false;
+            willStart.store(false);
             buttonText->setText("Start");
             return true;
           },
           0, true);
     }
+  });
+  auto replayButton = new Button(0, 0, 220, 64);
+  auto replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  replayButtonText->setText("Replay");
+  replayButtonText->setAlign(TextView::CENTER);
+  replayButtonText->setVAlign(TextView::MIDDLE);
+  replayButton->setContentView(replayButtonText);
+  replayButton->setBackgroundColors(Color(25, 58, 65, 216),
+                                    Color(35, 82, 92, 228),
+                                    Color(48, 111, 124, 236));
+  replayButton->setBorderColors(Color(91, 174, 184, 255),
+                                Color(116, 204, 214, 255),
+                                Color(145, 232, 241, 255));
+  replayButton->setStyledBorderWidth(2);
+  replayButton->setOnClickListener([this, &context, replayButtonText]() {
+    if (willStart.load()) {
+      return;
+    }
+    auto selected = recyclerView->selectedIndex;
+    if (selected < 0 || selected >= recyclerView->size()) {
+      return;
+    }
+    const auto &selectedMeta = recyclerView->get(selected);
+    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+      return;
+    }
+
+    willStart.store(true);
+    replayButtonText->setText("Loading...");
+    defer(
+        [this, &context, replayButtonText, selectedMeta]() {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
+          if (!replay.has_value()) {
+            willStart.store(false);
+            replayButtonText->setText("No Replay");
+            defer(
+                [replayButtonText]() {
+                  replayButtonText->setText("Replay");
+                  return false;
+                },
+                1200, true);
+            return true;
+          }
+
+          auto *chart = loadedSelectedChart();
+          if (chart == nullptr) {
+            willStart.store(false);
+            replayButtonText->setText("Replay");
+            return true;
+          }
+
+          auto replayData =
+              std::make_shared<ReplayData>(std::move(replay.value()));
+          context.jukebox.stop();
+          context.sceneManager->changeScene(
+              new GamePlayScene(
+                  context, chart,
+                  {
+                      .startPosition = 0,
+                      .autoKeySound = false,
+                      .autoPlay = false,
+                      .gaugeType = replayData->initialGaugeType,
+                      .gaugeAutoShift = replayData->gaugeAutoShift,
+                      .replayData = replayData,
+                  }),
+              true);
+          willStart.store(false);
+          replayButtonText->setText("Replay");
+          return true;
+        },
+        0, true);
+  });
+
+  auto exportButton = new Button(0, 0, 220, 64);
+  auto exportButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  replayExportButtonText = exportButtonText;
+  exportButtonText->setText("Export MP4");
+  exportButtonText->setAlign(TextView::CENTER);
+  exportButtonText->setVAlign(TextView::MIDDLE);
+  exportButton->setContentView(exportButtonText);
+  exportButton->setBackgroundColors(Color(47, 54, 88, 216),
+                                    Color(65, 75, 119, 228),
+                                    Color(82, 94, 148, 236));
+  exportButton->setBorderColors(Color(126, 141, 219, 255),
+                                Color(151, 165, 239, 255),
+                                Color(180, 191, 255, 255));
+  exportButton->setStyledBorderWidth(2);
+  exportButton->setOnClickListener([this]() {
+    if (willStart.load() || replayExportInProgress.load()) {
+      return;
+    }
+    auto selected = recyclerView->selectedIndex;
+    if (selected < 0 || selected >= recyclerView->size()) {
+      return;
+    }
+    const auto &selectedMeta = recyclerView->get(selected);
+    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+      return;
+    }
+
+    startReplayVideoExport(selectedMeta);
   });
   auto *jacketCard = new View();
   jacketCard->setWidth(220);
@@ -681,6 +794,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setHeight(100);
   right->addView(jacketCard);
   right->addView(startButton);
+  right->addView(replayButton);
+  right->addView(exportButton);
 
   auto *settingsButton = new Button(0, 0, 220, 78);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
@@ -695,6 +810,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                   Color(232, 169, 122, 255));
   settingsButton->setStyledBorderWidth(2);
   settingsButton->setOnClickListener([this, &context]() {
+    if (willStart.load() || replayExportInProgress.load()) {
+      return;
+    }
     previewLoadCancelled = true;
     context.jukebox.stop();
     context.sceneManager->changeScene("Settings");
@@ -962,11 +1080,149 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
   }
 }
 
+bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
+  if (!selectedChartMediaReady.load()) {
+    return nullptr;
+  }
+  return selectedChart.load();
+}
+
+void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
+  if (replayExportInProgress.exchange(true)) {
+    return;
+  }
+  if (replayExportThread.joinable()) {
+    replayExportThread.join();
+  }
+
+  willStart.store(true);
+  previewLoadCancelled = true;
+  selectedChartMediaReady.store(false);
+  if (replayExportButtonText != nullptr) {
+    replayExportButtonText->setText("Exporting...");
+  }
+
+  replayExportThread = std::jthread(
+      [this, record](const std::stop_token &stopToken) {
+        auto complete = [this](const ReplayVideoExportResult &result) {
+          std::lock_guard<std::mutex> lock(replayExportResultMutex);
+          pendingReplayExportResult = PendingReplayExportResult{
+              .success = result.success,
+              .outputPath = result.outputPath,
+              .message = result.message,
+          };
+        };
+
+        try {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+          context.jukebox.stop();
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Replay export cancelled"});
+            return;
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadLatestReplay(record.meta);
+          if (!replay.has_value()) {
+            complete({.success = false, .message = "No Replay"});
+            return;
+          }
+
+          bms_parser::Parser parser;
+          bms_parser::Chart *parsedChart = nullptr;
+          std::atomic_bool parseCancelled = false;
+          parser.Parse(record.meta.BmsPath, &parsedChart, false, false,
+                       parseCancelled);
+          std::unique_ptr<bms_parser::Chart> chart(parsedChart);
+          if (chart == nullptr) {
+            complete({.success = false, .message = "No Chart"});
+            return;
+          }
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Replay export cancelled"});
+            return;
+          }
+
+          complete(ReplayVideoExporter::Export(context, chart.get(),
+                                               replay.value()));
+        } catch (const std::exception &e) {
+          complete({.success = false, .message = e.what()});
+        } catch (...) {
+          complete({.success = false,
+                    .message = "Unexpected replay export failure"});
+        }
+      });
+}
+
+void MainMenuScene::applyReplayVideoExportResult() {
+  std::optional<PendingReplayExportResult> result;
+  {
+    std::lock_guard<std::mutex> lock(replayExportResultMutex);
+    if (!pendingReplayExportResult.has_value()) {
+      return;
+    }
+    result = std::move(pendingReplayExportResult);
+    pendingReplayExportResult.reset();
+  }
+
+  if (replayExportThread.joinable()) {
+    replayExportThread.join();
+  }
+  replayExportInProgress = false;
+  willStart.store(false);
+
+  if (recyclerView != nullptr) {
+    const int selected = recyclerView->selectedIndex;
+    if (selected >= 0 && selected < recyclerView->size()) {
+      const auto &selectedMeta = recyclerView->get(selected);
+      if (!selectedMeta.unavailable && !selectedMeta.meta.BmsPath.empty() &&
+          recyclerView->onSelected) {
+        recyclerView->onSelected(selectedMeta, selected);
+      }
+    }
+  }
+
+  if (replayExportButtonText != nullptr) {
+    if (result->success) {
+      replayExportButtonText->setText(result->message == "Saved to Photos"
+                                          ? "Saved"
+                                          : "Exported");
+    } else if (result->message == "No Replay") {
+      replayExportButtonText->setText("No Replay");
+    } else if (result->message == "No Chart") {
+      replayExportButtonText->setText("No Chart");
+    } else {
+      replayExportButtonText->setText("Export Failed");
+    }
+  }
+
+  if (result->success) {
+    SDL_Log("Replay video exported: %s (%s)",
+            result->outputPath.string().c_str(), result->message.c_str());
+  } else {
+    SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
+            result->outputPath.string().c_str());
+  }
+
+  defer(
+      [this]() {
+        if (!replayExportInProgress.load() &&
+            replayExportButtonText != nullptr) {
+          replayExportButtonText->setText("Export MP4");
+        }
+        return false;
+      },
+      result->success ? 1800 : 1400, true);
+}
+
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
+  applyReplayVideoExportResult();
 }
 
 void MainMenuScene::renderScene() {
@@ -1000,6 +1256,11 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
+  if (replayExportThread.joinable()) {
+    SDL_Log("Joining replayExportThread");
+    replayExportThread.request_stop();
+    replayExportThread.join();
+  }
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
@@ -1019,6 +1280,10 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  replayExportButtonText = nullptr;
+  pendingReplayExportResult.reset();
+  replayExportInProgress = false;
+  selectedChartMediaReady.store(false);
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

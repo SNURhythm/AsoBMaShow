@@ -42,8 +42,11 @@ public:
 
   void loadChart(bms_parser::Chart &chart, bool scheduleNotes,
                  std::atomic_bool &isCancelled);
+  void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void unloadVisuals();
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
                 std::atomic_bool &isCancelled);
+  void renderVisualsAt(long long micro);
   void playKeySound(int wav);
   void play();
   void stop();
@@ -74,6 +77,10 @@ private:
   std::mutex playThreadLock;
   void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void clearVisualResources();
+  void scheduleVisuals(bms_parser::Chart &chart,
+                       std::atomic_bool &isCancelled);
+  bool activateVisual(int visualId, bgfx::ViewId viewId);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {
     float x = 0.0f;

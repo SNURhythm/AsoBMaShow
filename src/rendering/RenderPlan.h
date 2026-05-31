@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <bgfx/bgfx.h>
 #include <cstdint>
 
@@ -13,6 +14,14 @@ inline constexpr bgfx::ViewId blur_view_v = 4;
 inline constexpr bgfx::ViewId final_view = 5;
 inline constexpr bgfx::ViewId main_view = 128;
 inline constexpr bgfx::ViewId ui_view = 254;
+inline constexpr bgfx::ViewId readback_view = 255;
+
+inline constexpr std::array<bgfx::ViewId, 4> kGameplayOutputViews = {
+    clear_view, final_view, main_view, ui_view};
+inline constexpr std::array<bgfx::ViewId, 3> kGameplayOrthographicOutputViews =
+    {clear_view, final_view, ui_view};
+inline constexpr std::array<bgfx::ViewId, 2> kGameplayBgaInputViews = {
+    bga_view, bga_layer_view};
 
 void applyViewOrder(bgfx::ViewId blurViewH, bgfx::ViewId blurViewV,
                     bgfx::ViewId finalView);

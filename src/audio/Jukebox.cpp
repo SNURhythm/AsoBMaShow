@@ -28,20 +28,7 @@ Jukebox::~Jukebox() {
     playThread.join();
   audio.stopSounds();
   audio.unloadSounds();
-  {
-    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-    for (auto &videoPlayer : videoPlayerTable) {
-      delete videoPlayer.second;
-    }
-    videoPlayerTable.clear();
-  }
-  {
-    std::lock_guard<std::mutex> lock(imageTableMutex);
-    for (auto &image : imageTable) {
-      bgfx::destroy(image.second.texture);
-    }
-    imageTable.clear();
-  }
+  clearVisualResources();
 }
 void Jukebox::render() {
   if (!visualsEnabled.load(std::memory_order_relaxed)) {
@@ -329,17 +316,8 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
     }
   });
 }
-void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
-                        std::atomic_bool &isCancelled) {
-  isPlaying = false;
-  if (playThread.joinable()) {
-    SDL_Log("Joining playThread");
-    playThread.join();
-  }
 
-  audio.stopSounds();
-  audio.unloadSounds();
-
+void Jukebox::clearVisualResources() {
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   {
@@ -356,6 +334,58 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
     }
     imageTable.clear();
   }
+}
+
+void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
+                              std::atomic_bool &isCancelled) {
+  bmpCursor = 0;
+  bmpLayerCursor = 0;
+  bmpList.clear();
+  bmpLayerList.clear();
+  for (auto &measure : chart.Measures) {
+    if (isCancelled)
+      return;
+    for (auto &timeline : measure->TimeLines) {
+      if (isCancelled)
+        return;
+      if (timeline->BgaBase != -1) {
+        bmpList.emplace_back(timeline->Timing, timeline->BgaBase);
+      }
+      if (timeline->BgaLayer != -1) {
+        bmpLayerList.emplace_back(timeline->Timing, timeline->BgaLayer);
+      }
+    }
+  }
+}
+
+void Jukebox::loadVisuals(bms_parser::Chart &chart,
+                          std::atomic_bool &isCancelled) {
+  isPlaying = false;
+  if (playThread.joinable()) {
+    playThread.join();
+  }
+  clearVisualResources();
+  scheduleVisuals(chart, isCancelled);
+  if (isCancelled || !visualsEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+  loadBMPs(chart, isCancelled);
+}
+
+void Jukebox::unloadVisuals() { clearVisualResources(); }
+
+void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
+                        std::atomic_bool &isCancelled) {
+  isPlaying = false;
+  if (playThread.joinable()) {
+    SDL_Log("Joining playThread");
+    playThread.join();
+  }
+
+  audio.stopSounds();
+  audio.unloadSounds();
+
+  clearVisualResources();
   if (isCancelled)
     return;
   SDL_Log("Loading sounds");
@@ -376,23 +406,14 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
 void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
                        std::atomic_bool &isCancelled) {
   audioCursor = 0;
-  bmpCursor = 0;
-  bmpLayerCursor = 0;
   audioList.clear();
-  bmpList.clear();
-  bmpLayerList.clear();
+  scheduleVisuals(chart, isCancelled);
   for (auto &measure : chart.Measures) {
     if (isCancelled)
       return;
     for (auto &timeline : measure->TimeLines) {
       if (isCancelled)
         return;
-      if (timeline->BgaBase != -1) {
-        bmpList.emplace_back(timeline->Timing, timeline->BgaBase);
-      }
-      if (timeline->BgaLayer != -1) {
-        bmpLayerList.emplace_back(timeline->Timing, timeline->BgaLayer);
-      }
       std::vector<std::pair<long long, int>> notes;
       if (scheduleNotes) {
         for (auto &note : timeline->Notes) {
@@ -432,6 +453,60 @@ void Jukebox::playKeySound(int wav) {
   if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
     audio.playSound(it->second.c_str());
   }
+}
+
+bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    auto videoIt = videoPlayerTable.find(visualId);
+    if (videoIt != videoPlayerTable.end()) {
+      auto *videoPlayer = videoIt->second;
+      videoPlayer->seek(0);
+      videoPlayer->play();
+      videoPlayer->viewWidth = rendering::window_width;
+      videoPlayer->viewHeight = rendering::window_height;
+      videoPlayer->viewId = viewId;
+      return true;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (imageTable.find(visualId) != imageTable.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void Jukebox::renderVisualsAt(long long micro) {
+  if (!visualsEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(seekLock);
+  stopwatch->seek(micro);
+  const long long visualDelayMicros = getVisualOffsetMicros();
+  while (bmpCursor < bmpList.size()) {
+    const auto &target = bmpList[bmpCursor];
+    if (micro < target.first + visualDelayMicros) {
+      break;
+    }
+    if (activateVisual(target.second, rendering::bga_view)) {
+      currentBga.store(target.second, std::memory_order_relaxed);
+    }
+    bmpCursor++;
+  }
+  while (bmpLayerCursor < bmpLayerList.size()) {
+    const auto &target = bmpLayerList[bmpLayerCursor];
+    if (micro < target.first + visualDelayMicros) {
+      break;
+    }
+    if (activateVisual(target.second, rendering::bga_layer_view)) {
+      currentBmpLayer.store(target.second, std::memory_order_relaxed);
+    }
+    bmpLayerCursor++;
+  }
+  render();
 }
 
 void Jukebox::play() {

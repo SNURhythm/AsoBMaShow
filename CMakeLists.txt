@@ -110,8 +110,9 @@ if (IOS)
     find_library(FOUNDATION Foundation)
     find_library(CORE_GRAPHICS CoreGraphics)
     find_library(CORE_TEXT CoreText)
+    find_library(PHOTOS Photos)
     list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
-        ${CORE_TEXT} ${SDL2_LIB} ${SDL2_TFF_LIB})
+        ${CORE_TEXT} ${PHOTOS} ${SDL2_LIB} ${SDL2_TFF_LIB})
 
 else()
     # --- Desktop: Use Vcpkg ---

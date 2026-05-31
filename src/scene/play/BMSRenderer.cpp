@@ -8,10 +8,12 @@
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
+#include "../../view/ClearLampColors.h"
 
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
@@ -69,6 +71,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
       appendLaneGroup(scratchLaneIndices);
     }
   }
+  buildTimelineScrollPositions();
+  groupedReplayGhostEvents.resize(timelines.size());
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -164,6 +168,9 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   scoreText->setPosition(0, rendering::window_height - 50);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setText("Score: 0");
+  gaugeText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  gaugeText->setPosition(10, 50);
+  setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
 
   refreshGeometry();
 }
@@ -223,6 +230,9 @@ void BMSRenderer::drawJudgement(RenderContext context) const {
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
+}
+void BMSRenderer::drawGauge(RenderContext &context) const {
+  gaugeText->render(context);
 }
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
@@ -317,6 +327,126 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
                              sheet.note.u1, sheet.note.v1, sheet.texture);
 }
 
+void BMSRenderer::buildTimelineScrollPositions() {
+  timelineScrollPositions.clear();
+  timelineScrollPositions.reserve(timelines.size());
+  if (timelines.empty()) {
+    return;
+  }
+
+  double position = timelines.front()->BeatPosition;
+  timelineScrollPositions.push_back(position);
+  for (size_t i = 1; i < timelines.size(); ++i) {
+    const auto *prevTimeline = timelines[i - 1];
+    const auto *timeline = timelines[i];
+    position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
+                prevTimeline->Scroll;
+    timelineScrollPositions.push_back(position);
+  }
+}
+
+double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
+  if (timelines.empty()) {
+    return 0.0;
+  }
+
+  const auto timelineIt = std::lower_bound(
+      timelines.begin(), timelines.end(), timeMicros,
+      [](const bms_parser::TimeLine *timeline, long long timing) {
+        return timeline->Timing < timing;
+      });
+
+  if (timelineIt == timelines.begin()) {
+    const auto *timeline = timelines.front();
+    if (timeline->Timing <= 0) {
+      return timelineScrollPositions.front();
+    }
+    const double progress =
+        std::clamp(static_cast<double>(timeMicros) /
+                       static_cast<double>(timeline->Timing),
+                   0.0, 1.0);
+    return timelineScrollPositions.front() * progress;
+  }
+
+  if (timelineIt == timelines.end()) {
+    return timelineScrollPositions.back();
+  }
+
+  const size_t timelineIndex =
+      static_cast<size_t>(std::distance(timelines.begin(), timelineIt));
+  const auto *timeline = timelines[timelineIndex];
+  if (timeline->Timing == timeMicros) {
+    return timelineScrollPositions[timelineIndex];
+  }
+
+  const size_t prevTimelineIndex = timelineIndex - 1;
+  const auto *prevTimeline = timelines[prevTimelineIndex];
+  const long long stopDuration =
+      static_cast<long long>(prevTimeline->GetStopDuration());
+  const long long stopEnd = prevTimeline->Timing + stopDuration;
+  if (timeMicros <= stopEnd) {
+    return timelineScrollPositions[prevTimelineIndex];
+  }
+
+  const long long scrollDuration =
+      timeline->Timing - prevTimeline->Timing - stopDuration;
+  if (scrollDuration <= 0) {
+    return timelineScrollPositions[timelineIndex];
+  }
+
+  const double progress =
+      std::clamp(static_cast<double>(timeMicros - stopEnd) /
+                     static_cast<double>(scrollDuration),
+                 0.0, 1.0);
+  return timelineScrollPositions[prevTimelineIndex] +
+         (timelineScrollPositions[timelineIndex] -
+          timelineScrollPositions[prevTimelineIndex]) *
+             progress;
+}
+
+void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float rxhs,
+                                   long long currentTimeMicros,
+                                   double currentScrollPosition) {
+  if (timelineIndex >= groupedReplayGhostEvents.size()) {
+    return;
+  }
+
+  for (const auto &event : groupedReplayGhostEvents[timelineIndex]) {
+    if (event.judgeTimeMicros < currentTimeMicros) {
+      continue;
+    }
+    const double eventScrollPosition =
+        scrollPositionAtTime(event.judgeTimeMicros);
+    const float ghostY =
+        judgeY +
+        static_cast<float>(eventScrollPosition - currentScrollPosition) * rxhs;
+    drawGhostNoteOutline(ghostY, event);
+  }
+}
+
+void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
+
+  Color color(255, 255, 255, 220);
+  if (event.judgement != PGreat) {
+    color = event.judgeTimeMicros < event.noteTimeMicros
+                ? Color(0, 96, 255, 220)
+                : Color(255, 40, 40, 220);
+  }
+
+  const float x = laneToX(event.lane);
+  const float thickness = std::max(0.015f, noteRenderHeight * 0.12f);
+  const uint32_t abgr = color.toABGR();
+  ghostBatchRenderer.addRect(x, y, noteRenderWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y + noteRenderHeight - thickness,
+                             noteRenderWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y, thickness, noteRenderHeight, abgr);
+  ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
+                             noteRenderHeight, abgr);
+}
+
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
   Camera &camera = rendering::game_camera;
   constexpr float kFallbackLaneTop = 8.5f;
@@ -352,11 +482,14 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthNotes = 200;
+  constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
 
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
+  ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   texBatchRenderer.setSubmitDepth(kDepthNotes);
   simpleBatchRenderer.begin();
+  ghostBatchRenderer.begin();
   texBatchRenderer.begin();
   // background
   drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
@@ -369,6 +502,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
+  const double currentScrollPosition = scrollPositionAtTime(micro);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
@@ -474,6 +608,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
+    drawReplayGhosts(i, rxhs, micro, currentScrollPosition);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
@@ -490,28 +625,33 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
   texBatchRenderer.flush();
+  ghostBatchRenderer.flush();
 
-  // render lane beams
-  simpleBatchRenderer.setSubmitDepth(kDepthBeams);
-  const long long nowMicros =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count();
-  laneStateSnapshot.clear();
-  {
-    std::lock_guard<std::mutex> lock(laneMutex);
-    for (size_t i = 0; i < laneOrder.size(); ++i) {
-      laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
+  if (renderLaneBeams) {
+    simpleBatchRenderer.setSubmitDepth(kDepthBeams);
+    const long long nowMicros =
+        useRenderTimeForLaneBeams
+            ? micro
+            : std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count();
+    laneStateSnapshot.clear();
+    {
+      std::lock_guard<std::mutex> lock(laneMutex);
+      for (size_t i = 0; i < laneOrder.size(); ++i) {
+        laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
+      }
     }
+    for (const auto &entry : laneStateSnapshot) {
+      drawLaneBeam(entry.first, entry.second, nowMicros);
+    }
+    simpleBatchRenderer.flush();
   }
-  for (const auto &entry : laneStateSnapshot) {
-    drawLaneBeam(entry.first, entry.second, nowMicros);
-  }
-  simpleBatchRenderer.flush();
 
   if (renderHud) {
     drawJudgement(context);
     drawScore(context);
+    drawGauge(context);
   }
 }
 
@@ -539,6 +679,65 @@ void BMSRenderer::refreshGeometry() {
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
+}
+
+void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
+  renderLaneBeams = enabled;
+}
+
+void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
+  useRenderTimeForLaneBeams = enabled;
+}
+
+void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+                                 float currentGauge) {
+  if (gaugeText == nullptr) {
+    return;
+  }
+
+  char text[96];
+  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
+                gaugeAutoShift ? "GAS" : "Gauge",
+                gaugeTypeToShortLabel(gaugeType), currentGauge);
+  gaugeText->setText(text);
+
+  const Color color = clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+  gaugeText->setColor({color.r, color.g, color.b, 255});
+}
+
+void BMSRenderer::setReplayData(const ReplayData *replayData) {
+  groupedReplayGhostEvents.clear();
+  groupedReplayGhostEvents.resize(timelines.size());
+  if (replayData == nullptr) {
+    return;
+  }
+
+  for (const auto &event : replayData->events) {
+    if ((event.action != ReplayEventAction::Press &&
+         event.action != ReplayEventAction::Release) ||
+        event.judgement == None || event.noteTimeMicros < 0) {
+      continue;
+    }
+
+    const auto timelineIt = std::lower_bound(
+        timelines.begin(), timelines.end(), event.noteTimeMicros,
+        [](const bms_parser::TimeLine *timeline, long long timing) {
+          return timeline->Timing < timing;
+        });
+    if (timelineIt == timelines.end() ||
+        (*timelineIt)->Timing != event.noteTimeMicros) {
+      continue;
+    }
+
+    const size_t timelineIndex =
+        static_cast<size_t>(std::distance(timelines.begin(), timelineIt));
+    groupedReplayGhostEvents[timelineIndex].push_back({
+        .lane = event.lane,
+        .noteTimeMicros = event.noteTimeMicros,
+        .judgeTimeMicros = event.judgeTimeMicros,
+        .judgement = event.judgement,
+    });
+  }
 }
 
 void BMSRenderer::drawRect(float width, float height, float x, float y,
@@ -574,7 +773,11 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
-  drawRect(noteRenderWidth, 10.0f, laneToX(lane), 0.0f, color);
+  const float beamHeight = std::max(0.0f, upperBound - judgeY);
+  if (beamHeight <= 0.0f) {
+    return;
+  }
+  drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const { return lane == 7; }
@@ -656,4 +859,5 @@ BMSRenderer::~BMSRenderer() {
   }
   delete judgeText;
   delete scoreText;
+  delete gaugeText;
 }

@@ -57,6 +57,7 @@
 #endif
 #include "rendering/Camera.h"
 #include <filesystem>
+#include <mutex>
 #include <vector>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -451,9 +452,11 @@ int main(int argv, char **args) {
 
 void run() {
   ApplicationContext context;
+  context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+  bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
@@ -474,7 +477,9 @@ void run() {
   rendering::PosTexCoord0Vertex::init();
   s_postProcess.init(rendering::render_width, rendering::render_height);
   s_blurPass = s_postProcess.addBlurPass();
-  s_blurPass->setInputViews({rendering::bga_view, rendering::bga_layer_view});
+  s_blurPass->setInputViews(
+      std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                rendering::kGameplayBgaInputViews.end()));
   s_blurPass->setCompositeEnabled(false);
   s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
   // Example: s_blurPass->setCompositeEnabled(true);
@@ -497,15 +502,24 @@ void run() {
   bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000,
                      1.0f, 0);
 
-  // This is set to determine the size of the drawable surface
-  bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
-                    rendering::ui_offset_y, rendering::ui_view_width,
-                    rendering::ui_view_height);
-  resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                     s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                     s_blurPass->finalView(), context.settings);
-  rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                            s_blurPass->finalView());
+  context.restoreGameplayRenderViews = [&context]() {
+    if (s_blurPass == nullptr) {
+      return;
+    }
+    for (const auto view : rendering::kGameplayOutputViews) {
+      bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+    }
+    bgfx::setViewFrameBuffer(rendering::readback_view, BGFX_INVALID_HANDLE);
+    s_blurPass->setInputViews(
+        std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                  rendering::kGameplayBgaInputViews.end()));
+    resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
+                       s_blurPass->blurViewH(), s_blurPass->blurViewV(),
+                       s_blurPass->finalView(), context.settings);
+    rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
+                              s_blurPass->finalView());
+  };
+  context.restoreGameplayRenderViews();
 
   constexpr bool kEnablePerfTelemetry = true;
   uint64_t rawEventsInWindow = 0;
@@ -515,6 +529,9 @@ void run() {
   uint64_t coalescedResizeInWindow = 0;
   float appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
   float appliedLaneLength = context.settings.laneLength;
+  bool hasDeferredRenderResize = false;
+  int deferredRenderResizeW = 0;
+  int deferredRenderResizeH = 0;
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -556,6 +573,58 @@ void run() {
       }
     };
 
+    auto deferWindowResize = [&](int logicalW, int logicalH) {
+      deferredRenderResizeW = logicalW;
+      deferredRenderResizeH = logicalH;
+      hasDeferredRenderResize = true;
+    };
+
+    auto applyWindowResize = [&](int logicalW, int logicalH) {
+      if (logicalW <= 0 || logicalH <= 0) {
+        return true;
+      }
+#if TARGET_OS_IPHONE
+      int targetRenderW = 0;
+      int targetRenderH = 0;
+      SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
+#else
+      int targetRenderW = scaledDimension(logicalW);
+      int targetRenderH = scaledDimension(logicalH);
+#endif
+      if (targetRenderW <= 0 || targetRenderH <= 0) {
+        return true;
+      }
+      if (targetRenderW == rendering::render_width &&
+          targetRenderH == rendering::render_height) {
+        return true;
+      }
+
+      if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
+        return false;
+      }
+      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
+                                           std::try_to_lock);
+      if (!bgfxLock.owns_lock()) {
+        return false;
+      }
+
+      rendering::widthScale =
+          static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
+      rendering::heightScale =
+          static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
+      rendering::updateUIScale(targetRenderW, targetRenderH);
+
+      // set bgfx resolution
+      bgfx::reset(rendering::render_width, rendering::render_height,
+                  s_bgfxResetFlags);
+      APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
+                    rendering::render_width, rendering::render_height,
+                    logicalW, logicalH, s_renderScale);
+      s_postProcess.resize(rendering::render_width, rendering::render_height);
+      context.restoreGameplayRenderViews();
+      return true;
+    };
+
     auto processEvent = [&](SDL_Event event) {
       ++processedEventsInWindow;
       if (event.type == SDL_QUIT) {
@@ -573,45 +642,11 @@ void run() {
       if (event.type == SDL_WINDOWEVENT &&
           (event.window.event == SDL_WINDOWEVENT_RESIZED ||
            event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
-        int logicalW = event.window.data1;
-        int logicalH = event.window.data2;
-        if (logicalW <= 0 || logicalH <= 0) {
-          return;
+        const int logicalW = event.window.data1;
+        const int logicalH = event.window.data2;
+        if (!applyWindowResize(logicalW, logicalH)) {
+          deferWindowResize(logicalW, logicalH);
         }
-#if TARGET_OS_IPHONE
-        int targetRenderW = 0;
-        int targetRenderH = 0;
-        SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
-#else
-        int targetRenderW = scaledDimension(logicalW);
-        int targetRenderH = scaledDimension(logicalH);
-#endif
-        if (targetRenderW <= 0 || targetRenderH <= 0) {
-          return;
-        }
-        if (targetRenderW == rendering::render_width &&
-            targetRenderH == rendering::render_height) {
-          return;
-        }
-        rendering::widthScale =
-            static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
-        rendering::heightScale =
-            static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
-        rendering::updateUIScale(targetRenderW, targetRenderH);
-
-        // set bgfx resolution
-        bgfx::reset(rendering::render_width, rendering::render_height,
-                    s_bgfxResetFlags);
-        APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
-                      rendering::render_width, rendering::render_height,
-                      logicalW, logicalH, s_renderScale);
-        s_postProcess.resize(rendering::render_width, rendering::render_height);
-        resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                           s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                           s_blurPass->finalView(), context.settings);
-        rendering::applyViewOrder(s_blurPass->blurViewH(),
-                                  s_blurPass->blurViewV(),
-                                  s_blurPass->finalView());
       }
 
       if (event.type == SDL_TEXTEDITING_EXT) {
@@ -665,17 +700,26 @@ void run() {
         coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
       }
     }
+    if (hasDeferredRenderResize &&
+        applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
+      hasDeferredRenderResize = false;
+    }
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
-    if (std::abs(appliedLaneAngleDegrees - context.settings.laneAngleDegrees) >
+    const bool laneTransformChanged =
+        std::abs(appliedLaneAngleDegrees - context.settings.laneAngleDegrees) >
             0.001f ||
-        std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f) {
-      appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
-      appliedLaneLength = context.settings.laneLength;
-      resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                         s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                         s_blurPass->finalView(), context.settings);
+        std::abs(appliedLaneLength - context.settings.laneLength) > 0.001f;
+    if (laneTransformChanged &&
+        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
+                                           std::try_to_lock);
+      if (bgfxLock.owns_lock()) {
+        appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
+        appliedLaneLength = context.settings.laneLength;
+        context.restoreGameplayRenderViews();
+      }
     }
 
     //    bgfx::reset(rendering::window_width, rendering::window_height);
@@ -683,25 +727,36 @@ void run() {
     //         rendering::window_height);
     // clear color
 
-    const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
+    bool renderedFrame = false;
+    if (!context.replayVideoExportActive.load(std::memory_order_acquire)) {
+      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
+                                           std::try_to_lock);
+      if (bgfxLock.owns_lock() &&
+          !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+        const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
-    bgfx::touch(rendering::clear_view);
-    bgfx::touch(rendering::ui_view);
-    if (hasActiveVisuals) {
-      bgfx::touch(rendering::bga_view);
-      bgfx::touch(rendering::bga_layer_view);
-      bgfx::touch(s_blurPass->finalView());
-      bgfx::touch(s_blurPass->blurViewH());
-      bgfx::touch(s_blurPass->blurViewV());
-    }
+        bgfx::touch(rendering::clear_view);
+        bgfx::touch(rendering::ui_view);
+        if (hasActiveVisuals) {
+          bgfx::touch(rendering::bga_view);
+          bgfx::touch(rendering::bga_layer_view);
+          bgfx::touch(s_blurPass->finalView());
+          bgfx::touch(s_blurPass->blurViewH());
+          bgfx::touch(s_blurPass->blurViewV());
+        }
 
-    sceneManager.render();
-    if (hasActiveVisuals) {
-      context.jukebox.render();
-      s_postProcess.apply();
-      rendering::renderFullscreenTextureTint(
-          s_blurPass->outputTexture(), s_blurPass->finalView(),
-          static_cast<float>(context.settings.bgaBrightnessPercent) / 100.0f);
+        sceneManager.render();
+        if (hasActiveVisuals) {
+          context.jukebox.render();
+          s_postProcess.apply();
+          rendering::renderFullscreenTextureTint(
+              s_blurPass->outputTexture(), s_blurPass->finalView(),
+              static_cast<float>(context.settings.bgaBrightnessPercent) /
+                  100.0f);
+        }
+        bgfx::frame();
+        renderedFrame = true;
+      }
     }
 
     if constexpr (kEnablePerfTelemetry) {
@@ -767,7 +822,9 @@ void run() {
     //    bgfx::setState(BGFX_STATE_DEFAULT);
     //    bgfx::submit(rendering::main_view, program);
 
-    bgfx::frame();
+    if (!renderedFrame) {
+      SDL_Delay(1);
+    }
     sceneManager.handleDeferred();
     context.currentFrame++;
     //

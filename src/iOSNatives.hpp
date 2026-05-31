@@ -26,6 +26,8 @@ std::vector<std::string> ListDocumentFilesRecursively();
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
+bool SaveVideoToIOSPhotos(const std::string &filePath,
+                          std::string &errorMessage);
 IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize);
 int MeasureIOSSystemTextWidth(const std::string &utf8, int fontSize);
 SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,

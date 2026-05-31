@@ -17,7 +17,10 @@
 #include "../video/VideoPlayer.h"
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <stop_token>
+#include <string>
 #include <unordered_map>
 
 class Button;
@@ -35,13 +38,16 @@ public:
 private:
   sqlite3 *db;
   std::atomic_bool previewLoadCancelled = false;
-  bool willStart = false;
+  std::atomic_bool willStart = false;
   std::atomic<bms_parser::Chart *> selectedChart{nullptr};
+  std::atomic_bool selectedChartMediaReady = false;
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread replayExportThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
+  std::atomic_bool replayExportInProgress = false;
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
@@ -89,6 +95,14 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  TextView *replayExportButtonText = nullptr;
+  struct PendingReplayExportResult {
+    bool success = false;
+    std::filesystem::path outputPath;
+    std::string message;
+  };
+  std::mutex replayExportResultMutex;
+  std::optional<PendingReplayExportResult> pendingReplayExportResult;
 
   LibraryFolderItem activeFolder;
   ScoreClearRankCache scoreClearRanks;
@@ -124,6 +138,9 @@ private:
   void selectFolder(const LibraryFolderItem &item);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
+  bms_parser::Chart *loadedSelectedChart() const;
+  void startReplayVideoExport(const ChartMetaRecord &record);
+  void applyReplayVideoExportResult();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 
