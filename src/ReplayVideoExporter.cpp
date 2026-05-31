@@ -1424,6 +1424,10 @@ public:
     this->outputPath = outputPath;
     this->log = log;
     const int64_t bitRate = replayVideoBitRate(width, height, fps);
+    replayExportLog(log,
+                    "Replay video native writer setup started: %dx%d @ "
+                    "%dfps, bitrate %lld",
+                    width, height, fps, static_cast<long long>(bitRate));
     std::string nativeErrorMessage;
     writer = CreateIOSReplayVideoWriter(wavPath.string(), outputPath.string(),
                                         width, height, fps, bitRate,

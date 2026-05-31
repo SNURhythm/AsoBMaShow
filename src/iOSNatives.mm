@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,14 @@ NSString *NSStringFromUtf8(const std::string &utf8) {
   return [[NSString alloc] initWithBytes:utf8.data()
                                   length:utf8.size()
                                 encoding:NSUTF8StringEncoding];
+}
+
+std::string NSStringToString(NSString *value) {
+  if (value == nil) {
+    return {};
+  }
+  const char *utf8 = [value UTF8String];
+  return utf8 != nullptr ? std::string(utf8) : std::string();
 }
 
 CTFontRef CreateIOSSystemFont(int fontSize) {
@@ -257,10 +266,29 @@ std::string NSErrorMessage(NSError *error, const char *fallback) {
     return fallback != nullptr ? std::string(fallback) : std::string();
   }
   NSString *description = [error localizedDescription];
-  if (description == nil) {
+  const std::string message = NSStringToString(description);
+  if (!message.empty()) {
+    return message;
+  }
+  return fallback != nullptr ? std::string(fallback) : std::string();
+}
+
+std::string NSExceptionMessage(NSException *exception, const char *fallback) {
+  if (exception == nil) {
     return fallback != nullptr ? std::string(fallback) : std::string();
   }
-  return std::string([description UTF8String]);
+  std::string message = NSStringToString(exception.name);
+  const std::string reason = NSStringToString(exception.reason);
+  if (!reason.empty()) {
+    if (!message.empty()) {
+      message += ": ";
+    }
+    message += reason;
+  }
+  if (!message.empty()) {
+    return message;
+  }
+  return fallback != nullptr ? std::string(fallback) : std::string();
 }
 
 std::string AVWriterErrorMessage(AVAssetWriter *writer,
@@ -776,13 +804,43 @@ void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,
                                  std::string &errorMessage) {
-  auto *writer = new IOSReplayVideoWriter();
-  if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
-                    errorMessage)) {
-    delete writer;
+  IOSReplayVideoWriter *writer = nullptr;
+  try {
+    @try {
+      writer = new IOSReplayVideoWriter();
+      if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
+                        errorMessage)) {
+        delete writer;
+        return nullptr;
+      }
+      return writer;
+    } @catch (NSException *exception) {
+      if (writer != nullptr) {
+        writer->cancel();
+        delete writer;
+      }
+      errorMessage =
+          "Replay video writer setup exception: " +
+          NSExceptionMessage(exception, "Objective-C exception");
+      return nullptr;
+    }
+  } catch (const std::exception &exception) {
+    if (writer != nullptr) {
+      writer->cancel();
+      delete writer;
+    }
+    errorMessage =
+        std::string("Replay video writer setup exception: ") +
+        exception.what();
+    return nullptr;
+  } catch (...) {
+    if (writer != nullptr) {
+      writer->cancel();
+      delete writer;
+    }
+    errorMessage = "Replay video writer setup exception";
     return nullptr;
   }
-  return writer;
 }
 
 bool AppendIOSReplayVideoFrame(void *writer, const uint8_t *bgraFrame,
