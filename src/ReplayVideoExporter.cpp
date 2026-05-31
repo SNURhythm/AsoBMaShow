@@ -34,7 +34,6 @@ extern "C" {
 #include <cmath>
 #include <cstdint>
 #include <ctime>
-#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <optional>
@@ -46,6 +45,9 @@ extern "C" {
 namespace {
 constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
+constexpr int kDefaultExportFps = 30;
+constexpr int kMaxDefaultExportWidth = 1280;
+constexpr int kMaxDefaultExportHeight = 720;
 constexpr long long kAudioTailMicros = 3000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -59,6 +61,53 @@ struct DecodedSound {
   std::vector<short> pcm;
   SF_INFO info{};
 };
+
+int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
+
+ReplayVideoExportOptions
+resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
+  const int sourceWidth = std::max(2, rendering::render_width);
+  const int sourceHeight = std::max(2, rendering::render_height);
+  const double aspectRatio =
+      static_cast<double>(sourceWidth) / static_cast<double>(sourceHeight);
+  const bool hasWidth = options.width > 0;
+  const bool hasHeight = options.height > 0;
+
+  int width = sourceWidth;
+  int height = sourceHeight;
+  if (hasWidth && hasHeight) {
+    width = options.width;
+    height = options.height;
+  } else if (hasWidth) {
+    width = options.width;
+    height = static_cast<int>(
+        std::lround(static_cast<double>(width) / aspectRatio));
+  } else if (hasHeight) {
+    height = options.height;
+    width = static_cast<int>(
+        std::lround(static_cast<double>(height) * aspectRatio));
+  } else {
+    const double scale = std::min(
+        1.0, std::min(static_cast<double>(kMaxDefaultExportWidth) /
+                          static_cast<double>(sourceWidth),
+                      static_cast<double>(kMaxDefaultExportHeight) /
+                          static_cast<double>(sourceHeight)));
+    width = static_cast<int>(std::lround(static_cast<double>(width) * scale));
+    height = static_cast<int>(std::lround(static_cast<double>(height) * scale));
+  }
+
+  return {.width = makeEvenExportDimension(width),
+          .height = makeEvenExportDimension(height),
+          .fps = std::clamp(options.fps > 0 ? options.fps : kDefaultExportFps,
+                            1, 120)};
+}
+
+int64_t replayVideoBitRate(int width, int height, int fps) {
+  const int64_t pixelsPerSecond =
+      static_cast<int64_t>(width) * static_cast<int64_t>(height) *
+      static_cast<int64_t>(fps);
+  return std::clamp<int64_t>(pixelsPerSecond / 8, 2500000, 16000000);
+}
 
 void restorePrimaryRenderViews() {
   bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
@@ -478,150 +527,6 @@ void applyReplayEventForVideo(
   }
 }
 
-ReplayVideoExportResult captureReplayFrames(ApplicationContext &context,
-                                            bms_parser::Chart &chart,
-                                            const ReplayData &replay,
-                                            const AppSettings &settings,
-                                            const ReplayVideoExportOptions &options,
-                                            const std::filesystem::path &rawPath) {
-  ScopedReplayVideoBgfxAccess bgfxAccess(context);
-  const uint64_t requiredCaps =
-      BGFX_CAPS_TEXTURE_BLIT | BGFX_CAPS_TEXTURE_READ_BACK;
-  if ((bgfx::getCaps()->supported & requiredCaps) != requiredCaps) {
-    return {.success = false,
-            .message = "Renderer does not support texture readback"};
-  }
-
-  int width = options.width > 0 ? options.width : rendering::render_width;
-  int height = options.height > 0 ? options.height : rendering::render_height;
-  int fps = options.fps > 0 ? options.fps : 60;
-  width = std::max(2, width & ~1);
-  height = std::max(2, height & ~1);
-
-  if (width > UINT16_MAX || height > UINT16_MAX) {
-    return {.success = false, .message = "Replay export size is too large"};
-  }
-
-  const auto outputTexture = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
-  if (!bgfx::isValid(outputTexture)) {
-    return {.success = false,
-            .message = "Failed to create replay export render target"};
-  }
-
-  bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
-  auto cleanupBgfx = [&]() {
-    bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
-    bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
-    bgfx::setViewRect(rendering::clear_view, 0, 0,
-                      static_cast<uint16_t>(rendering::render_width),
-                      static_cast<uint16_t>(rendering::render_height));
-    bgfx::setViewRect(rendering::main_view, rendering::ui_offset_x,
-                      rendering::ui_offset_y,
-                      static_cast<uint16_t>(rendering::ui_view_width),
-                      static_cast<uint16_t>(rendering::ui_view_height));
-    rendering::game_camera.render(true);
-    if (bgfx::isValid(readbackTexture)) {
-      bgfx::destroy(readbackTexture);
-    }
-    if (bgfx::isValid(outputFrameBuffer)) {
-      bgfx::destroy(outputFrameBuffer);
-    }
-    if (bgfx::isValid(outputTexture)) {
-      bgfx::destroy(outputTexture);
-    }
-  };
-
-  outputFrameBuffer = bgfx::createFrameBuffer(1, &outputTexture, false);
-  if (!bgfx::isValid(outputFrameBuffer)) {
-    cleanupBgfx();
-    return {.success = false,
-            .message = "Failed to create replay export framebuffer"};
-  }
-
-  readbackTexture = bgfx::createTexture2D(
-      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
-      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
-                                      BGFX_TEXTURE_READ_BACK);
-  if (!bgfx::isValid(readbackTexture)) {
-    cleanupBgfx();
-    return {.success = false,
-            .message = "Failed to create replay export readback texture"};
-  }
-
-  std::ofstream rawOutput(rawPath, std::ios::binary);
-  if (!rawOutput) {
-    cleanupBgfx();
-    return {.success = false,
-            .message = "Failed to open replay export frame file"};
-  }
-
-  ScopedChartNoteReset chartReset(chart);
-  Judge judge(chart.Meta.Rank);
-  BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
-                       settings.visibleTimeGreenNumber, false);
-  renderer.setLaneBeamsEnabled(false);
-  renderer.setReplayData(&replay);
-
-  const auto replayNotes = buildReplayNoteLookup(chart);
-  const long long durationMicros = calculateExportDurationMicros(chart, replay);
-  const size_t frameCount = static_cast<size_t>(std::ceil(
-      static_cast<long double>(durationMicros) * fps / 1000000.0L));
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-  std::vector<uint8_t> frameBuffer(frameBytes);
-  RenderContext renderContext;
-  size_t replayCursor = 0;
-  uint32_t currentFrame = bgfx::frame();
-
-  bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
-  bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
-  bgfx::setViewRect(rendering::clear_view, 0, 0, static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
-  bgfx::setViewRect(rendering::main_view, 0, 0, static_cast<uint16_t>(width),
-                    static_cast<uint16_t>(height));
-
-  for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
-    const long long songTimeMicros = static_cast<long long>(
-        (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
-    while (replayCursor < replay.events.size() &&
-           replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
-      applyReplayEventForVideo(renderer, replayNotes, replay.events[replayCursor],
-                               songTimeMicros);
-      ++replayCursor;
-    }
-
-    bgfx::touch(rendering::clear_view);
-    renderer.render(renderContext, songTimeMicros);
-    bgfx::blit(rendering::ui_view, readbackTexture, 0, 0, outputTexture);
-    currentFrame = bgfx::frame();
-    const uint32_t expectedFrame =
-        bgfx::readTexture(readbackTexture, frameBuffer.data());
-    while (currentFrame < expectedFrame) {
-      currentFrame = bgfx::frame();
-    }
-    rawOutput.write(reinterpret_cast<const char *>(frameBuffer.data()),
-                    static_cast<std::streamsize>(frameBuffer.size()));
-    if (!rawOutput) {
-      cleanupBgfx();
-      return {.success = false,
-              .message = "Failed while writing replay export frames"};
-    }
-
-    if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
-        frameIndex + 1 == frameCount) {
-      SDL_Log("Replay video export frame %zu/%zu", frameIndex + 1,
-              frameCount);
-    }
-  }
-
-  rawOutput.close();
-  cleanupBgfx();
-  return {.success = true, .outputPath = rawPath, .message = "Frames exported"};
-}
-
 std::string ffmpegError(int errorCode) {
   std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
   if (av_strerror(errorCode, buffer.data(), buffer.size()) < 0) {
@@ -631,14 +536,22 @@ std::string ffmpegError(int errorCode) {
 }
 
 const AVCodec *findReplayVideoEncoder() {
-  if (const AVCodec *codec = avcodec_find_encoder_by_name("libx264");
-      codec != nullptr) {
-    return codec;
-  }
+#if __APPLE__
   if (const AVCodec *codec = avcodec_find_encoder_by_name("h264_videotoolbox");
       codec != nullptr) {
     return codec;
   }
+#endif
+  if (const AVCodec *codec = avcodec_find_encoder_by_name("libx264");
+      codec != nullptr) {
+    return codec;
+  }
+#if !__APPLE__
+  if (const AVCodec *codec = avcodec_find_encoder_by_name("h264_videotoolbox");
+      codec != nullptr) {
+    return codec;
+  }
+#endif
   return avcodec_find_encoder(AV_CODEC_ID_H264);
 }
 
@@ -829,52 +742,282 @@ bool encodeNextAudioFrame(SNDFILE *audioFile, AVCodecContext *audioContext,
                      packet, errorMessage);
 }
 
-ReplayVideoExportResult muxReplayVideo(const std::filesystem::path &rawPath,
-                                        const std::filesystem::path &wavPath,
-                                        const std::filesystem::path &outputPath,
-                                        int width, int height, int fps) {
-  std::error_code ec;
-  const auto rawSize = std::filesystem::file_size(rawPath, ec);
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-  if (ec || frameBytes == 0 || rawSize % frameBytes != 0) {
-    return {.success = false,
-            .outputPath = rawPath,
-            .message = "Replay export frame file is invalid"};
-  }
-  const size_t frameCount = static_cast<size_t>(rawSize / frameBytes);
-  if (frameCount == 0) {
-    return {.success = false,
-            .outputPath = rawPath,
-            .message = "Replay export has no video frames"};
+class ReplayMp4StreamWriter {
+public:
+  ~ReplayMp4StreamWriter() { cleanup(); }
+
+  bool open(const std::filesystem::path &wavPath,
+            const std::filesystem::path &outputPath, int width, int height,
+            int fps, std::string &errorMessage) {
+    this->outputPath = outputPath;
+    this->width = width;
+    this->height = height;
+    this->fps = fps;
+
+    auto failOpen = [&](const std::string &message) {
+      cleanup();
+      errorMessage = message;
+      return false;
+    };
+
+    const std::string outputPathString = outputPath.string();
+    int ret = avformat_alloc_output_context2(&formatContext, nullptr, "mp4",
+                                             outputPathString.c_str());
+    if (ret < 0 || formatContext == nullptr) {
+      return failOpen("Failed to create MP4 muxer: " + ffmpegError(ret));
+    }
+
+    const AVCodec *videoCodec = findReplayVideoEncoder();
+    if (videoCodec == nullptr) {
+      return failOpen("H.264 encoder was not found");
+    }
+    const auto videoPixelFormat = chooseVideoPixelFormat(videoCodec);
+    if (!videoPixelFormat.has_value()) {
+      return failOpen("H.264 encoder does not support a BGRA-convertible "
+                      "format");
+    }
+
+    videoStream = avformat_new_stream(formatContext, nullptr);
+    if (videoStream == nullptr) {
+      return failOpen("Failed to create MP4 video stream");
+    }
+    videoContext = avcodec_alloc_context3(videoCodec);
+    if (videoContext == nullptr) {
+      return failOpen("Failed to allocate H.264 encoder");
+    }
+    videoContext->codec_id = AV_CODEC_ID_H264;
+    videoContext->codec_type = AVMEDIA_TYPE_VIDEO;
+    videoContext->width = width;
+    videoContext->height = height;
+    videoContext->pix_fmt = videoPixelFormat.value();
+    videoContext->time_base = AVRational{1, fps};
+    videoContext->framerate = AVRational{fps, 1};
+    videoContext->sample_aspect_ratio = AVRational{1, 1};
+    videoContext->gop_size = fps * 2;
+    videoContext->max_b_frames = 0;
+    videoContext->bit_rate = replayVideoBitRate(width, height, fps);
+    if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
+      videoContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    AVDictionary *videoOptions = nullptr;
+    if (std::string(videoCodec->name) == "libx264") {
+      av_dict_set(&videoOptions, "preset", "veryfast", 0);
+      av_dict_set(&videoOptions, "crf", "22", 0);
+    }
+    ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
+    av_dict_free(&videoOptions);
+    if (ret < 0) {
+      return failOpen("Failed to open H.264 encoder: " + ffmpegError(ret));
+    }
+    ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
+    if (ret < 0) {
+      return failOpen("Failed to configure MP4 video stream: " +
+                      ffmpegError(ret));
+    }
+    videoStream->time_base = videoContext->time_base;
+
+    const AVCodec *audioCodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+    if (audioCodec == nullptr) {
+      return failOpen("AAC encoder was not found");
+    }
+    const auto audioSampleFormat = chooseAudioSampleFormat(audioCodec);
+    if (!audioSampleFormat.has_value()) {
+      return failOpen("AAC encoder does not support replay export sample "
+                      "formats");
+    }
+
+    audioStream = avformat_new_stream(formatContext, nullptr);
+    if (audioStream == nullptr) {
+      return failOpen("Failed to create MP4 audio stream");
+    }
+    audioContext = avcodec_alloc_context3(audioCodec);
+    if (audioContext == nullptr) {
+      return failOpen("Failed to allocate AAC encoder");
+    }
+    audioContext->codec_id = AV_CODEC_ID_AAC;
+    audioContext->codec_type = AVMEDIA_TYPE_AUDIO;
+    audioContext->sample_rate = kExportSampleRate;
+    audioContext->sample_fmt = audioSampleFormat.value();
+    audioContext->time_base = AVRational{1, kExportSampleRate};
+    audioContext->bit_rate = 192000;
+    AVChannelLayout stereoLayout = AV_CHANNEL_LAYOUT_STEREO;
+    ret = av_channel_layout_copy(&audioContext->ch_layout, &stereoLayout);
+    if (ret < 0) {
+      return failOpen("Failed to configure AAC channel layout: " +
+                      ffmpegError(ret));
+    }
+    if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
+      audioContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+    ret = avcodec_open2(audioContext, audioCodec, nullptr);
+    if (ret < 0) {
+      return failOpen("Failed to open AAC encoder: " + ffmpegError(ret));
+    }
+    ret = avcodec_parameters_from_context(audioStream->codecpar, audioContext);
+    if (ret < 0) {
+      return failOpen("Failed to configure MP4 audio stream: " +
+                      ffmpegError(ret));
+    }
+    audioStream->time_base = audioContext->time_base;
+
+    SF_INFO audioInfo{};
+#ifdef _WIN32
+    audioFile = sf_wchar_open(wavPath.wstring().c_str(), SFM_READ, &audioInfo);
+#else
+    audioFile = sf_open(wavPath.string().c_str(), SFM_READ, &audioInfo);
+#endif
+    if (audioFile == nullptr) {
+      return failOpen(std::string("Failed to open replay audio track: ") +
+                      sf_strerror(nullptr));
+    }
+    if (audioInfo.channels != kExportChannels ||
+        audioInfo.samplerate != kExportSampleRate) {
+      return failOpen("Replay audio track format is invalid");
+    }
+
+    videoFrame = av_frame_alloc();
+    if (videoFrame == nullptr) {
+      return failOpen("Failed to allocate video frame");
+    }
+    videoFrame->format = videoContext->pix_fmt;
+    videoFrame->width = width;
+    videoFrame->height = height;
+    ret = av_frame_get_buffer(videoFrame, 32);
+    if (ret < 0) {
+      return failOpen("Failed to allocate video frame buffer: " +
+                      ffmpegError(ret));
+    }
+
+    const int audioFrameSize =
+        audioContext->frame_size > 0 ? audioContext->frame_size : 1024;
+    audioFrame = av_frame_alloc();
+    if (audioFrame == nullptr) {
+      return failOpen("Failed to allocate audio frame");
+    }
+    audioFrame->format = audioContext->sample_fmt;
+    audioFrame->sample_rate = audioContext->sample_rate;
+    audioFrame->nb_samples = audioFrameSize;
+    ret =
+        av_channel_layout_copy(&audioFrame->ch_layout, &audioContext->ch_layout);
+    if (ret < 0) {
+      return failOpen("Failed to configure audio frame layout: " +
+                      ffmpegError(ret));
+    }
+    ret = av_frame_get_buffer(audioFrame, 0);
+    if (ret < 0) {
+      return failOpen("Failed to allocate audio frame buffer: " +
+                      ffmpegError(ret));
+    }
+
+    swsContext = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height,
+                                videoContext->pix_fmt, SWS_BILINEAR, nullptr,
+                                nullptr, nullptr);
+    if (swsContext == nullptr) {
+      return failOpen("Failed to create video pixel converter");
+    }
+
+    videoPacket = av_packet_alloc();
+    audioPacket = av_packet_alloc();
+    if (videoPacket == nullptr || audioPacket == nullptr) {
+      return failOpen("Failed to allocate encoder packet");
+    }
+
+    audioBuffer.assign(static_cast<size_t>(audioFrameSize) * kExportChannels,
+                       0.0f);
+
+    if (!(formatContext->oformat->flags & AVFMT_NOFILE)) {
+      ret = avio_open(&formatContext->pb, outputPathString.c_str(),
+                      AVIO_FLAG_WRITE);
+      if (ret < 0) {
+        return failOpen("Failed to open MP4 output: " + ffmpegError(ret));
+      }
+    }
+
+    AVDictionary *formatOptions = nullptr;
+    av_dict_set(&formatOptions, "movflags", "+faststart", 0);
+    ret = avformat_write_header(formatContext, &formatOptions);
+    av_dict_free(&formatOptions);
+    if (ret < 0) {
+      return failOpen("Failed to write MP4 header: " + ffmpegError(ret));
+    }
+
+    return true;
   }
 
-  const std::string outputPathString = outputPath.string();
-  AVFormatContext *formatContext = nullptr;
-  int ret = avformat_alloc_output_context2(&formatContext, nullptr, "mp4",
-                                           outputPathString.c_str());
-  if (ret < 0 || formatContext == nullptr) {
-    return {.success = false,
+  bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
+                        long long videoTimeMicros,
+                        std::string &errorMessage) {
+    while (!audioFinished &&
+           (nextAudioPts * 1000000LL) / kExportSampleRate <=
+               videoTimeMicros) {
+      if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
+                                audioStream, audioFrame, audioPacket,
+                                audioBuffer, nextAudioPts, audioFinished,
+                                errorMessage)) {
+        return false;
+      }
+    }
+
+    int ret = av_frame_make_writable(videoFrame);
+    if (ret < 0) {
+      errorMessage = "Failed to prepare video frame: " + ffmpegError(ret);
+      return false;
+    }
+    const uint8_t *sourceData[4] = {bgraFrame, nullptr, nullptr, nullptr};
+    const int sourceLinesize[4] = {width * 4, 0, 0, 0};
+    sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
+              videoFrame->data, videoFrame->linesize);
+    videoFrame->pts = static_cast<int64_t>(frameIndex);
+    return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
+                       videoPacket, errorMessage);
+  }
+
+  ReplayVideoExportResult finish() {
+    std::string errorMessage;
+    auto fail = [&](const std::string &message) {
+      cleanup();
+      return ReplayVideoExportResult{
+          .success = false, .outputPath = outputPath, .message = message};
+    };
+
+    while (!audioFinished) {
+      if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
+                                audioStream, audioFrame, audioPacket,
+                                audioBuffer, nextAudioPts, audioFinished,
+                                errorMessage)) {
+        return fail(errorMessage);
+      }
+    }
+    if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
+                     videoPacket, errorMessage)) {
+      return fail(errorMessage);
+    }
+    if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
+                     audioPacket, errorMessage)) {
+      return fail(errorMessage);
+    }
+
+    const int ret = av_write_trailer(formatContext);
+    if (ret < 0) {
+      return fail("Failed to write MP4 trailer: " + ffmpegError(ret));
+    }
+
+    cleanup();
+    return {.success = true,
             .outputPath = outputPath,
-            .message = "Failed to create MP4 muxer: " + ffmpegError(ret)};
+            .message = "MP4 exported"};
   }
 
-  AVCodecContext *videoContext = nullptr;
-  AVCodecContext *audioContext = nullptr;
-  AVFrame *videoFrame = nullptr;
-  AVFrame *audioFrame = nullptr;
-  AVPacket *videoPacket = nullptr;
-  AVPacket *audioPacket = nullptr;
-  SwsContext *swsContext = nullptr;
-  SNDFILE *audioFile = nullptr;
-  std::ifstream rawInput;
-
-  auto cleanup = [&]() {
+private:
+  void cleanup() {
     if (audioFile != nullptr) {
       sf_close(audioFile);
+      audioFile = nullptr;
     }
     if (swsContext != nullptr) {
       sws_freeContext(swsContext);
+      swsContext = nullptr;
     }
     av_packet_free(&audioPacket);
     av_packet_free(&videoPacket);
@@ -887,247 +1030,169 @@ ReplayVideoExportResult muxReplayVideo(const std::filesystem::path &rawPath,
       avio_closep(&formatContext->pb);
     }
     avformat_free_context(formatContext);
-  };
-
-  std::string errorMessage;
-  auto fail = [&](const std::string &message) {
-    cleanup();
-    return ReplayVideoExportResult{
-        .success = false, .outputPath = outputPath, .message = message};
-  };
-
-  const AVCodec *videoCodec = findReplayVideoEncoder();
-  if (videoCodec == nullptr) {
-    return fail("H.264 encoder was not found");
-  }
-  const auto videoPixelFormat = chooseVideoPixelFormat(videoCodec);
-  if (!videoPixelFormat.has_value()) {
-    return fail("H.264 encoder does not support a BGRA-convertible format");
+    formatContext = nullptr;
+    videoStream = nullptr;
+    audioStream = nullptr;
   }
 
-  AVStream *videoStream = avformat_new_stream(formatContext, nullptr);
-  if (videoStream == nullptr) {
-    return fail("Failed to create MP4 video stream");
-  }
-  videoContext = avcodec_alloc_context3(videoCodec);
-  if (videoContext == nullptr) {
-    return fail("Failed to allocate H.264 encoder");
-  }
-  videoContext->codec_id = AV_CODEC_ID_H264;
-  videoContext->codec_type = AVMEDIA_TYPE_VIDEO;
-  videoContext->width = width;
-  videoContext->height = height;
-  videoContext->pix_fmt = videoPixelFormat.value();
-  videoContext->time_base = AVRational{1, fps};
-  videoContext->framerate = AVRational{fps, 1};
-  videoContext->sample_aspect_ratio = AVRational{1, 1};
-  videoContext->gop_size = fps * 2;
-  videoContext->max_b_frames = 0;
-  videoContext->bit_rate = 8000000;
-  if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
-    videoContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-  }
-
-  AVDictionary *videoOptions = nullptr;
-  if (std::string(videoCodec->name) == "libx264") {
-    av_dict_set(&videoOptions, "preset", "veryfast", 0);
-    av_dict_set(&videoOptions, "crf", "18", 0);
-  }
-  ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
-  av_dict_free(&videoOptions);
-  if (ret < 0) {
-    return fail("Failed to open H.264 encoder: " + ffmpegError(ret));
-  }
-  ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
-  if (ret < 0) {
-    return fail("Failed to configure MP4 video stream: " + ffmpegError(ret));
-  }
-  videoStream->time_base = videoContext->time_base;
-
-  const AVCodec *audioCodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
-  if (audioCodec == nullptr) {
-    return fail("AAC encoder was not found");
-  }
-  const auto audioSampleFormat = chooseAudioSampleFormat(audioCodec);
-  if (!audioSampleFormat.has_value()) {
-    return fail("AAC encoder does not support replay export sample formats");
-  }
-
-  AVStream *audioStream = avformat_new_stream(formatContext, nullptr);
-  if (audioStream == nullptr) {
-    return fail("Failed to create MP4 audio stream");
-  }
-  audioContext = avcodec_alloc_context3(audioCodec);
-  if (audioContext == nullptr) {
-    return fail("Failed to allocate AAC encoder");
-  }
-  audioContext->codec_id = AV_CODEC_ID_AAC;
-  audioContext->codec_type = AVMEDIA_TYPE_AUDIO;
-  audioContext->sample_rate = kExportSampleRate;
-  audioContext->sample_fmt = audioSampleFormat.value();
-  audioContext->time_base = AVRational{1, kExportSampleRate};
-  audioContext->bit_rate = 192000;
-  AVChannelLayout stereoLayout = AV_CHANNEL_LAYOUT_STEREO;
-  ret = av_channel_layout_copy(&audioContext->ch_layout, &stereoLayout);
-  if (ret < 0) {
-    return fail("Failed to configure AAC channel layout: " + ffmpegError(ret));
-  }
-  if (formatContext->oformat->flags & AVFMT_GLOBALHEADER) {
-    audioContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-  }
-  ret = avcodec_open2(audioContext, audioCodec, nullptr);
-  if (ret < 0) {
-    return fail("Failed to open AAC encoder: " + ffmpegError(ret));
-  }
-  ret = avcodec_parameters_from_context(audioStream->codecpar, audioContext);
-  if (ret < 0) {
-    return fail("Failed to configure MP4 audio stream: " + ffmpegError(ret));
-  }
-  audioStream->time_base = audioContext->time_base;
-
-  if (!(formatContext->oformat->flags & AVFMT_NOFILE)) {
-    ret = avio_open(&formatContext->pb, outputPathString.c_str(),
-                   AVIO_FLAG_WRITE);
-    if (ret < 0) {
-      return fail("Failed to open MP4 output: " + ffmpegError(ret));
-    }
-  }
-
-  AVDictionary *formatOptions = nullptr;
-  av_dict_set(&formatOptions, "movflags", "+faststart", 0);
-  ret = avformat_write_header(formatContext, &formatOptions);
-  av_dict_free(&formatOptions);
-  if (ret < 0) {
-    return fail("Failed to write MP4 header: " + ffmpegError(ret));
-  }
-
-  rawInput.open(rawPath, std::ios::binary);
-  if (!rawInput) {
-    return fail("Failed to open replay export frame file");
-  }
-  SF_INFO audioInfo{};
-#ifdef _WIN32
-  audioFile = sf_wchar_open(wavPath.wstring().c_str(), SFM_READ, &audioInfo);
-#else
-  audioFile = sf_open(wavPath.string().c_str(), SFM_READ, &audioInfo);
-#endif
-  if (audioFile == nullptr) {
-    return fail(std::string("Failed to open replay audio track: ") +
-                sf_strerror(nullptr));
-  }
-  if (audioInfo.channels != kExportChannels ||
-      audioInfo.samplerate != kExportSampleRate) {
-    return fail("Replay audio track format is invalid");
-  }
-
-  videoFrame = av_frame_alloc();
-  if (videoFrame == nullptr) {
-    return fail("Failed to allocate video frame");
-  }
-  videoFrame->format = videoContext->pix_fmt;
-  videoFrame->width = width;
-  videoFrame->height = height;
-  ret = av_frame_get_buffer(videoFrame, 32);
-  if (ret < 0) {
-    return fail("Failed to allocate video frame buffer: " + ffmpegError(ret));
-  }
-
-  const int audioFrameSize =
-      audioContext->frame_size > 0 ? audioContext->frame_size : 1024;
-  audioFrame = av_frame_alloc();
-  if (audioFrame == nullptr) {
-    return fail("Failed to allocate audio frame");
-  }
-  audioFrame->format = audioContext->sample_fmt;
-  audioFrame->sample_rate = audioContext->sample_rate;
-  audioFrame->nb_samples = audioFrameSize;
-  ret = av_channel_layout_copy(&audioFrame->ch_layout, &audioContext->ch_layout);
-  if (ret < 0) {
-    return fail("Failed to configure audio frame layout: " + ffmpegError(ret));
-  }
-  ret = av_frame_get_buffer(audioFrame, 0);
-  if (ret < 0) {
-    return fail("Failed to allocate audio frame buffer: " + ffmpegError(ret));
-  }
-
-  swsContext = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height,
-                              videoContext->pix_fmt, SWS_BILINEAR, nullptr,
-                              nullptr, nullptr);
-  if (swsContext == nullptr) {
-    return fail("Failed to create video pixel converter");
-  }
-
-  videoPacket = av_packet_alloc();
-  audioPacket = av_packet_alloc();
-  if (videoPacket == nullptr || audioPacket == nullptr) {
-    return fail("Failed to allocate encoder packet");
-  }
-
-  std::vector<uint8_t> rawFrame(frameBytes);
-  std::vector<float> audioBuffer(
-      static_cast<size_t>(audioFrameSize) * kExportChannels, 0.0f);
+  std::filesystem::path outputPath;
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+  AVFormatContext *formatContext = nullptr;
+  AVCodecContext *videoContext = nullptr;
+  AVCodecContext *audioContext = nullptr;
+  AVStream *videoStream = nullptr;
+  AVStream *audioStream = nullptr;
+  AVFrame *videoFrame = nullptr;
+  AVFrame *audioFrame = nullptr;
+  AVPacket *videoPacket = nullptr;
+  AVPacket *audioPacket = nullptr;
+  SwsContext *swsContext = nullptr;
+  SNDFILE *audioFile = nullptr;
+  std::vector<float> audioBuffer;
   int64_t nextAudioPts = 0;
   bool audioFinished = false;
+};
+
+ReplayVideoExportResult renderReplayVideoToMp4(
+    ApplicationContext &context, bms_parser::Chart &chart,
+    const ReplayData &replay, const AppSettings &settings,
+    const ReplayVideoExportOptions &options, const std::filesystem::path &wavPath,
+    const std::filesystem::path &outputPath) {
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
+  const int width = resolvedOptions.width;
+  const int height = resolvedOptions.height;
+  const int fps = resolvedOptions.fps;
+
+  if (width > UINT16_MAX || height > UINT16_MAX) {
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Replay export size is too large"};
+  }
+
+  ReplayMp4StreamWriter writer;
+  std::string errorMessage;
+  if (!writer.open(wavPath, outputPath, width, height, fps, errorMessage)) {
+    return {.success = false, .outputPath = outputPath, .message = errorMessage};
+  }
+
+  ScopedReplayVideoBgfxAccess bgfxAccess(context);
+  const uint64_t requiredCaps =
+      BGFX_CAPS_TEXTURE_BLIT | BGFX_CAPS_TEXTURE_READ_BACK;
+  if ((bgfx::getCaps()->supported & requiredCaps) != requiredCaps) {
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Renderer does not support texture readback"};
+  }
+
+  const auto outputTexture = bgfx::createTexture2D(
+      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+  if (!bgfx::isValid(outputTexture)) {
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Failed to create replay export render target"};
+  }
+
+  bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle readbackTexture = BGFX_INVALID_HANDLE;
+  auto cleanupBgfx = [&]() {
+    restorePrimaryRenderViews();
+    if (bgfx::isValid(readbackTexture)) {
+      bgfx::destroy(readbackTexture);
+      readbackTexture = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(outputFrameBuffer)) {
+      bgfx::destroy(outputFrameBuffer);
+      outputFrameBuffer = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(outputTexture)) {
+      bgfx::destroy(outputTexture);
+    }
+  };
+
+  outputFrameBuffer = bgfx::createFrameBuffer(1, &outputTexture, false);
+  if (!bgfx::isValid(outputFrameBuffer)) {
+    cleanupBgfx();
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Failed to create replay export framebuffer"};
+  }
+
+  readbackTexture = bgfx::createTexture2D(
+      static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
+      bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST |
+                                      BGFX_TEXTURE_READ_BACK);
+  if (!bgfx::isValid(readbackTexture)) {
+    cleanupBgfx();
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Failed to create replay export readback texture"};
+  }
+
+  ScopedChartNoteReset chartReset(chart);
+  Judge judge(chart.Meta.Rank);
+  BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
+                       settings.visibleTimeGreenNumber, false);
+  renderer.setLaneBeamsEnabled(false);
+  renderer.setReplayData(&replay);
+
+  const auto replayNotes = buildReplayNoteLookup(chart);
+  const long long durationMicros = calculateExportDurationMicros(chart, replay);
+  const size_t frameCount = static_cast<size_t>(std::ceil(
+      static_cast<long double>(durationMicros) * fps / 1000000.0L));
+  const size_t frameBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  std::vector<uint8_t> frameBuffer(frameBytes);
+  RenderContext renderContext;
+  size_t replayCursor = 0;
+  uint32_t currentFrame = bgfx::frame();
+
+  bgfx::setViewFrameBuffer(rendering::clear_view, outputFrameBuffer);
+  bgfx::setViewFrameBuffer(rendering::main_view, outputFrameBuffer);
+  bgfx::setViewRect(rendering::clear_view, 0, 0, static_cast<uint16_t>(width),
+                    static_cast<uint16_t>(height));
+  bgfx::setViewRect(rendering::main_view, 0, 0, static_cast<uint16_t>(width),
+                    static_cast<uint16_t>(height));
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
-    const long long videoTimeMicros = static_cast<long long>(
+    const long long songTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
-    while (!audioFinished &&
-           (nextAudioPts * 1000000LL) / kExportSampleRate <=
-               videoTimeMicros) {
-      if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
-                                audioStream, audioFrame, audioPacket,
-                                audioBuffer, nextAudioPts, audioFinished,
-                                errorMessage)) {
-        return fail(errorMessage);
-      }
+    while (replayCursor < replay.events.size() &&
+           replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
+      applyReplayEventForVideo(renderer, replayNotes,
+                               replay.events[replayCursor], songTimeMicros);
+      ++replayCursor;
     }
 
-    rawInput.read(reinterpret_cast<char *>(rawFrame.data()),
-                  static_cast<std::streamsize>(rawFrame.size()));
-    if (rawInput.gcount() != static_cast<std::streamsize>(rawFrame.size())) {
-      return fail("Replay export frame file ended unexpectedly");
+    bgfx::touch(rendering::clear_view);
+    renderer.render(renderContext, songTimeMicros);
+    bgfx::blit(rendering::ui_view, readbackTexture, 0, 0, outputTexture);
+    currentFrame = bgfx::frame();
+    const uint32_t expectedFrame =
+        bgfx::readTexture(readbackTexture, frameBuffer.data());
+    while (currentFrame < expectedFrame) {
+      currentFrame = bgfx::frame();
     }
 
-    ret = av_frame_make_writable(videoFrame);
-    if (ret < 0) {
-      return fail("Failed to prepare video frame: " + ffmpegError(ret));
+    if (!writer.encodeVideoFrame(frameBuffer.data(), frameIndex,
+                                 songTimeMicros, errorMessage)) {
+      cleanupBgfx();
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = errorMessage};
     }
-    const uint8_t *sourceData[4] = {rawFrame.data(), nullptr, nullptr, nullptr};
-    const int sourceLinesize[4] = {width * 4, 0, 0, 0};
-    sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
-              videoFrame->data, videoFrame->linesize);
-    videoFrame->pts = static_cast<int64_t>(frameIndex);
-    if (!encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                     videoPacket, errorMessage)) {
-      return fail(errorMessage);
+
+    if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
+        frameIndex + 1 == frameCount) {
+      SDL_Log("Replay video export encoded frame %zu/%zu", frameIndex + 1,
+              frameCount);
     }
   }
 
-  while (!audioFinished) {
-    if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
-                              audioStream, audioFrame, audioPacket,
-                              audioBuffer, nextAudioPts, audioFinished,
-                              errorMessage)) {
-      return fail(errorMessage);
-    }
-  }
-  if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
-                   videoPacket, errorMessage)) {
-    return fail(errorMessage);
-  }
-  if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
-                   audioPacket, errorMessage)) {
-    return fail(errorMessage);
-  }
-
-  ret = av_write_trailer(formatContext);
-  if (ret < 0) {
-    return fail("Failed to write MP4 trailer: " + ffmpegError(ret));
-  }
-
-  cleanup();
-  return {.success = true, .outputPath = outputPath, .message = "MP4 exported"};
+  cleanupBgfx();
+  return writer.finish();
 }
 
 ReplayVideoExportResult saveReplayVideoToPlatformLibrary(
@@ -1174,48 +1239,39 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
             .message = "Failed to create replay export work directory"};
   }
 
-  int width = options.width > 0 ? options.width : rendering::render_width;
-  int height = options.height > 0 ? options.height : rendering::render_height;
-  int fps = options.fps > 0 ? options.fps : 60;
-  width = std::max(2, width & ~1);
-  height = std::max(2, height & ~1);
+  const auto resolvedOptions = resolveReplayVideoExportOptions(options);
 
   const auto wavPath = tempDir / "audio.wav";
-  const auto rawPath = tempDir / "video.bgra";
   const auto outputPath = outputDir / (baseName + ".mp4");
 
   SDL_Log("Replay export audio: %s", wavPath.string().c_str());
   auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath);
   if (!audioResult.success) {
+    std::filesystem::remove_all(tempDir, ec);
     return audioResult;
   }
 
-  SDL_Log("Replay export video frames: %s", rawPath.string().c_str());
-  auto frameResult =
-      captureReplayFrames(context, *chart, replay, context.settings,
-                          {.width = width, .height = height, .fps = fps},
-                          rawPath);
-  if (!frameResult.success) {
-    frameResult.outputPath = tempDir;
-    return frameResult;
-  }
-
-  SDL_Log("Replay export mux: %s", outputPath.string().c_str());
-  auto muxResult = muxReplayVideo(rawPath, wavPath, outputPath, width, height, fps);
+  SDL_Log("Replay export MP4: %s (%dx%d @ %dfps)",
+          outputPath.string().c_str(), resolvedOptions.width,
+          resolvedOptions.height, resolvedOptions.fps);
+  auto muxResult = renderReplayVideoToMp4(
+      context, *chart, replay, context.settings, resolvedOptions, wavPath,
+      outputPath);
   if (!muxResult.success) {
-    muxResult.outputPath = tempDir;
+    std::filesystem::remove(outputPath, ec);
+    std::filesystem::remove_all(tempDir, ec);
     return muxResult;
-  }
-
-  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
-  if (!platformSaveResult.success) {
-    return platformSaveResult;
   }
 
   std::filesystem::remove_all(tempDir, ec);
   if (ec) {
     SDL_Log("Replay export could not clean work directory: %s",
             tempDir.string().c_str());
+  }
+
+  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
+  if (!platformSaveResult.success) {
+    return platformSaveResult;
   }
   return platformSaveResult;
 }

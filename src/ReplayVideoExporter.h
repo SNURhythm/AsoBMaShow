@@ -9,7 +9,7 @@
 struct ReplayVideoExportOptions {
   int width = 0;
   int height = 0;
-  int fps = 60;
+  int fps = 0;
 };
 
 struct ReplayVideoExportResult {
