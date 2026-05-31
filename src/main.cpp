@@ -76,6 +76,7 @@ bgfx::VertexLayout rendering::PosColorVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 
+static SDL_Window *s_window = nullptr;
 static SDL_Renderer *s_renderer = nullptr;
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
@@ -123,6 +124,21 @@ int scaledDimension(int logicalSize) {
   return std::max(
       1, static_cast<int>(std::lround(static_cast<double>(logicalSize) *
                                       static_cast<double>(s_renderScale))));
+}
+
+void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
+                           int &renderW, int &renderH) {
+  renderW = 0;
+  renderH = 0;
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+  if (window != nullptr) {
+    SDL_GetWindowSizeInPixels(window, &renderW, &renderH);
+  }
+#endif
+  if (renderW <= 0 || renderH <= 0) {
+    renderW = scaledDimension(logicalW);
+    renderH = scaledDimension(logicalH);
+  }
 }
 
 } // namespace
@@ -371,6 +387,7 @@ int main(int argv, char **args) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
+  s_window = win;
   int windowLogicalWidth = 0;
   int windowLogicalHeight = 0;
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
@@ -399,8 +416,10 @@ int main(int argv, char **args) {
   SDL_RenderSetScale(s_renderer, rendering::widthScale, rendering::heightScale);
   rendering::updateUIScale(rw, rh);
 #else
-  const int initialRenderW = scaledDimension(windowLogicalWidth);
-  const int initialRenderH = scaledDimension(windowLogicalHeight);
+  int initialRenderW = 0;
+  int initialRenderH = 0;
+  getWindowDrawableSize(win, windowLogicalWidth, windowLogicalHeight,
+                        initialRenderW, initialRenderH);
   rendering::widthScale = static_cast<float>(initialRenderW) /
                           static_cast<float>(windowLogicalWidth);
   rendering::heightScale = static_cast<float>(initialRenderH) /
@@ -444,6 +463,7 @@ int main(int argv, char **args) {
     s_renderer = nullptr;
   }
   SDL_DestroyWindow(win);
+  s_window = nullptr;
   SDL_Quit();
   APP_DEBUG_LOG("SDL quit");
 
@@ -588,8 +608,10 @@ void run() {
       int targetRenderH = 0;
       SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
 #else
-      int targetRenderW = scaledDimension(logicalW);
-      int targetRenderH = scaledDimension(logicalH);
+      int targetRenderW = 0;
+      int targetRenderH = 0;
+      getWindowDrawableSize(s_window, logicalW, logicalH, targetRenderW,
+                            targetRenderH);
 #endif
       if (targetRenderW <= 0 || targetRenderH <= 0) {
         return true;

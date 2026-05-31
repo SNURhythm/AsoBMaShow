@@ -34,10 +34,6 @@ constexpr bool kShowLaneStateOverlay = false;
 } // namespace
 
 void GamePlayScene::init() {
-  auto chartNameText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  chartNameText->setText(chart->Meta.Title);
-  chartNameText->setPosition(10, 10);
-  addView(chartNameText);
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
                              context.settings.visibleTimeGreenNumber);
   renderer->setReplayData(options.replayData.get());

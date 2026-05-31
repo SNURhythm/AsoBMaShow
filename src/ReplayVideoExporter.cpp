@@ -47,9 +47,7 @@ extern "C" {
 namespace {
 constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
-constexpr int kDefaultExportFps = 30;
-constexpr int kMaxDefaultExportWidth = 1280;
-constexpr int kMaxDefaultExportHeight = 720;
+constexpr int kDefaultExportFps = 120;
 constexpr long long kAudioTailMicros = 3000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -66,10 +64,18 @@ struct DecodedSound {
 
 int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
 
+int replayVideoSourceWidth() {
+  return std::max({2, rendering::render_width, rendering::window_width});
+}
+
+int replayVideoSourceHeight() {
+  return std::max({2, rendering::render_height, rendering::window_height});
+}
+
 ReplayVideoExportOptions
 resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
-  const int sourceWidth = std::max(2, rendering::render_width);
-  const int sourceHeight = std::max(2, rendering::render_height);
+  const int sourceWidth = replayVideoSourceWidth();
+  const int sourceHeight = replayVideoSourceHeight();
   const double aspectRatio =
       static_cast<double>(sourceWidth) / static_cast<double>(sourceHeight);
   const bool hasWidth = options.width > 0;
@@ -88,14 +94,6 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
     height = options.height;
     width = static_cast<int>(
         std::lround(static_cast<double>(height) * aspectRatio));
-  } else {
-    const double scale = std::min(
-        1.0, std::min(static_cast<double>(kMaxDefaultExportWidth) /
-                          static_cast<double>(sourceWidth),
-                      static_cast<double>(kMaxDefaultExportHeight) /
-                          static_cast<double>(sourceHeight)));
-    width = static_cast<int>(std::lround(static_cast<double>(width) * scale));
-    height = static_cast<int>(std::lround(static_cast<double>(height) * scale));
   }
 
   return {.width = makeEvenExportDimension(width),
@@ -108,7 +106,7 @@ int64_t replayVideoBitRate(int width, int height, int fps) {
   const int64_t pixelsPerSecond =
       static_cast<int64_t>(width) * static_cast<int64_t>(height) *
       static_cast<int64_t>(fps);
-  return std::clamp<int64_t>(pixelsPerSecond / 8, 2500000, 16000000);
+  return std::clamp<int64_t>(pixelsPerSecond / 6, 8000000, 80000000);
 }
 
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
