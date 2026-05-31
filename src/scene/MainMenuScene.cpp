@@ -124,12 +124,6 @@ std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
   return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
 }
 
-std::string formatReplayExportPercent(double fraction) {
-  const int percent =
-      static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0) * 100.0));
-  return std::to_string(percent) + "%";
-}
-
 void styleActionButton(Button *button, TextView *text, bool enabled,
                        const Color &normal, const Color &hover,
                        const Color &pressed, const Color &border) {
@@ -1690,22 +1684,18 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
 void MainMenuScene::updateReplayExportProgressUi(
     double fraction, const std::string &message) {
   replayExportProgressFraction = std::clamp(fraction, 0.0, 1.0);
+  const int displayedPercent =
+      static_cast<int>(std::lround(replayExportProgressFraction * 100.0));
   if (replayExportProgressMessageText != nullptr) {
     replayExportProgressMessageText->setText(message);
   }
   if (replayExportProgressPercentText != nullptr) {
-    replayExportProgressPercentText->setText(
-        formatReplayExportPercent(replayExportProgressFraction));
+    replayExportProgressPercentText->setText(std::to_string(displayedPercent) +
+                                             "%");
   }
   if (replayExportProgressFill != nullptr) {
-    const int trackWidth = replayExportProgressTrack != nullptr
-                               ? replayExportProgressTrack->getWidth()
-                               : 0;
-    const float fallbackWidth = 640.0f;
-    const float fillWidth =
-        (trackWidth > 0 ? static_cast<float>(trackWidth) : fallbackWidth) *
-        static_cast<float>(replayExportProgressFraction);
-    replayExportProgressFill->setWidth(fillWidth);
+    replayExportProgressFill->setWidthPercent(
+        static_cast<float>(displayedPercent));
   }
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayout();
