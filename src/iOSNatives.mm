@@ -404,7 +404,7 @@ public:
         AVVideoAllowFrameReorderingKey : @NO,
       };
       NSDictionary *videoSettings = @{
-        AVVideoCodecKey : AVVideoCodecTypeH264,
+        AVVideoCodecKey : AVVideoCodecTypeHEVC,
         AVVideoWidthKey : @(width),
         AVVideoHeightKey : @(height),
         AVVideoCompressionPropertiesKey : compressionProperties,

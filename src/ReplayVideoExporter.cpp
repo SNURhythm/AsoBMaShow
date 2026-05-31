@@ -1434,9 +1434,9 @@ public:
                                         nativeErrorMessage);
     if (writer != nullptr) {
       replayExportLog(log,
-                      "Replay video export encoder: avassetwriter_h264, pixel "
-                      "format: bgra, time base: 1/%d, frame duration: 1, H.264 "
-                      "level: auto, bitrate: %lld",
+                      "Replay video export encoder: avassetwriter_hevc, pixel "
+                      "format: bgra, time base: 1/%d, frame duration: 1, HEVC "
+                      "profile: auto, bitrate: %lld",
                       fps, static_cast<long long>(bitRate));
       replayExportLog(log,
                       "Replay video export native writer: BGRA pixel buffers, "
