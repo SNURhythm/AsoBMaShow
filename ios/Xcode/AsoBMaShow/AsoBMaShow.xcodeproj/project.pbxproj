@@ -12,6 +12,7 @@
 		B71B9EDC2BFDA3A200D789A5 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDB2BFDA3A200D789A5 /* CoreAudio.framework */; };
 		B71B9EDE2BFDA3DA00D789A5 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDD2BFDA3DA00D789A5 /* AVFAudio.framework */; };
 		B71B9EE02BFDA40900D789A5 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDF2BFDA40900D789A5 /* AudioToolbox.framework */; };
+		B7A11F002F30000100F00D01 /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7A11EFF2F30000100F00D01 /* Photos.framework */; };
 		B72F4A012F2A000100F00D01 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = B72F4A022F2A000100F00D01 /* GoogleService-Info.plist */; };
 		B76AB0582DA4A70300E8327C /* assets in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5AD2DA3F87D008F6FCD /* assets */; };
 		B76AB0592DA4A70600E8327C /* shaders in Resources */ = {isa = PBXBuildFile; fileRef = B7BAA5572DA3F857008F6FCD /* shaders */; };
@@ -621,6 +622,7 @@
 		B79B1BCD2BFAC1E700FAD60F /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		B79B1BCF2BFAC20100FAD60F /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		B79B1BD12BFAC23200FAD60F /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		B7A11EFF2F30000100F00D01 /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
 		B7BAA5572DA3F857008F6FCD /* shaders */ = {isa = PBXFileReference; lastKnownFileType = folder; name = shaders; path = ../../../../shaders; sourceTree = "<group>"; };
 		B7BAA5AD2DA3F87D008F6FCD /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = ../../../../assets; sourceTree = "<group>"; };
 		B7CA77CA2F28E3AC0016BA21 /* libvorbisfile.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvorbisfile.a; path = "../../../../../../vcpkg/packages/libvorbis_arm64-ios/lib/libvorbisfile.a"; sourceTree = "<group>"; };
@@ -782,6 +784,7 @@
 				B7FA8B092C7D06B400B7EAAF /* CoreText.framework in Frameworks */,
 				B7FA8B072C7D069D00B7EAAF /* CoreGraphics.framework in Frameworks */,
 				B7FA8B052C7D068600B7EAAF /* AVFoundation.framework in Frameworks */,
+				B7A11F002F30000100F00D01 /* Photos.framework in Frameworks */,
 				B7D27AEF2C7CD4EC00189ED7 /* Security.framework in Frameworks */,
 				B7D27AED2C7CD4D700189ED7 /* CoreVideo.framework in Frameworks */,
 				B7D27AEB2C7CD4B400189ED7 /* Accelerate.framework in Frameworks */,
@@ -885,6 +888,7 @@
 				B7FA8B082C7D06B400B7EAAF /* CoreText.framework */,
 				B7FA8B062C7D069D00B7EAAF /* CoreGraphics.framework */,
 				B7FA8B042C7D068600B7EAAF /* AVFoundation.framework */,
+				B7A11EFF2F30000100F00D01 /* Photos.framework */,
 				B7FA8B022C7D065C00B7EAAF /* libvlc-full-static.a */,
 				B7D27AF12C7CE2FA00189ED7 /* libcompat.a */,
 				B7D27AF02C7CE2F900189ED7 /* libvlc.a */,

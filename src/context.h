@@ -1,6 +1,8 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <thread>
+#include <mutex>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -16,6 +18,9 @@ public:
   Uint64 currentFrame = 0;
   AppSettings settings;
   Jukebox jukebox;
+  std::mutex bgfxRenderMutex;
+  std::atomic<bool> replayVideoExportActive{false};
+  std::atomic<std::uint32_t> bgfxResetFlags{0};
 
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;

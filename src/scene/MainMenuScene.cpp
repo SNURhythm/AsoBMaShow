@@ -277,6 +277,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  replayExportButtonText = nullptr;
+  pendingReplayExportResult.reset();
+  replayExportInProgress = false;
   gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
@@ -750,6 +753,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto exportButton = new Button(0, 0, 220, 64);
   auto exportButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  replayExportButtonText = exportButtonText;
   exportButtonText->setText("Export MP4");
   exportButtonText->setAlign(TextView::CENTER);
   exportButtonText->setVAlign(TextView::MIDDLE);
@@ -761,9 +765,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 Color(151, 165, 239, 255),
                                 Color(180, 191, 255, 255));
   exportButton->setStyledBorderWidth(2);
-  exportButton->setOnClickListener([this, &context, exportButtonText]() {
+  exportButton->setOnClickListener([this]() {
     SDL_Log("Replay export button clicked");
-    if (willStart) {
+    if (willStart || replayExportInProgress.load()) {
       return;
     }
     auto selected = recyclerView->selectedIndex;
@@ -775,54 +779,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
 
-    willStart = true;
-    exportButtonText->setText("Exporting...");
-    defer(
-        [this, &context, exportButtonText, selectedMeta]() {
-          auto resetExportText = [exportButtonText]() {
-            exportButtonText->setText("Export MP4");
-            return false;
-          };
-
-          if (loadThread.joinable()) {
-            loadThread.join();
-          }
-
-          auto replay =
-              ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
-          if (!replay.has_value()) {
-            willStart = false;
-            exportButtonText->setText("No Replay");
-            defer(resetExportText, 1200, true);
-            return true;
-          }
-
-          if (selectedChart.load() == nullptr) {
-            willStart = false;
-            exportButtonText->setText("No Chart");
-            defer(resetExportText, 1200, true);
-            return true;
-          }
-
-          context.jukebox.stop();
-          const auto result =
-              ReplayVideoExporter::Export(context, selectedChart, replay.value());
-          willStart = false;
-          if (result.success) {
-            SDL_Log("Replay video exported: %s",
-                    result.outputPath.string().c_str());
-            exportButtonText->setText("Exported");
-            defer(resetExportText, 1800, true);
-            return true;
-          }
-
-          SDL_Log("Replay video export failed: %s (%s)",
-                  result.message.c_str(), result.outputPath.string().c_str());
-          exportButtonText->setText("Export Failed");
-          defer(resetExportText, 1800, true);
-          return true;
-        },
-        0, true);
+    startReplayVideoExport(selectedMeta);
   });
   auto *jacketCard = new View();
   jacketCard->setWidth(220);
@@ -853,6 +810,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                   Color(232, 169, 122, 255));
   settingsButton->setStyledBorderWidth(2);
   settingsButton->setOnClickListener([this, &context]() {
+    if (willStart || replayExportInProgress.load()) {
+      return;
+    }
     previewLoadCancelled = true;
     context.jukebox.stop();
     context.sceneManager->changeScene("Settings");
@@ -1120,11 +1080,130 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
   }
 }
 
+void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
+  if (replayExportInProgress.exchange(true)) {
+    return;
+  }
+  if (replayExportThread.joinable()) {
+    replayExportThread.join();
+  }
+
+  willStart = true;
+  previewLoadCancelled = true;
+  if (replayExportButtonText != nullptr) {
+    replayExportButtonText->setText("Exporting...");
+  }
+
+  replayExportThread = std::jthread(
+      [this, record](const std::stop_token &stopToken) {
+        auto complete = [this](const ReplayVideoExportResult &result) {
+          std::lock_guard<std::mutex> lock(replayExportResultMutex);
+          pendingReplayExportResult = PendingReplayExportResult{
+              .success = result.success,
+              .outputPath = result.outputPath,
+              .message = result.message,
+          };
+        };
+
+        try {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+          context.jukebox.stop();
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Replay export cancelled"});
+            return;
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadLatestReplay(record.meta);
+          if (!replay.has_value()) {
+            complete({.success = false, .message = "No Replay"});
+            return;
+          }
+
+          bms_parser::Parser parser;
+          bms_parser::Chart *parsedChart = nullptr;
+          std::atomic_bool parseCancelled = false;
+          parser.Parse(record.meta.BmsPath, &parsedChart, false, false,
+                       parseCancelled);
+          std::unique_ptr<bms_parser::Chart> chart(parsedChart);
+          if (chart == nullptr) {
+            complete({.success = false, .message = "No Chart"});
+            return;
+          }
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Replay export cancelled"});
+            return;
+          }
+
+          complete(ReplayVideoExporter::Export(context, chart.get(),
+                                               replay.value()));
+        } catch (const std::exception &e) {
+          complete({.success = false, .message = e.what()});
+        } catch (...) {
+          complete({.success = false,
+                    .message = "Unexpected replay export failure"});
+        }
+      });
+}
+
+void MainMenuScene::applyReplayVideoExportResult() {
+  std::optional<PendingReplayExportResult> result;
+  {
+    std::lock_guard<std::mutex> lock(replayExportResultMutex);
+    if (!pendingReplayExportResult.has_value()) {
+      return;
+    }
+    result = std::move(pendingReplayExportResult);
+    pendingReplayExportResult.reset();
+  }
+
+  if (replayExportThread.joinable()) {
+    replayExportThread.join();
+  }
+  replayExportInProgress = false;
+  willStart = false;
+
+  if (replayExportButtonText != nullptr) {
+    if (result->success) {
+      replayExportButtonText->setText(result->message == "Saved to Photos"
+                                          ? "Saved"
+                                          : "Exported");
+    } else if (result->message == "No Replay") {
+      replayExportButtonText->setText("No Replay");
+    } else if (result->message == "No Chart") {
+      replayExportButtonText->setText("No Chart");
+    } else {
+      replayExportButtonText->setText("Export Failed");
+    }
+  }
+
+  if (result->success) {
+    SDL_Log("Replay video exported: %s (%s)",
+            result->outputPath.string().c_str(), result->message.c_str());
+  } else {
+    SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
+            result->outputPath.string().c_str());
+  }
+
+  defer(
+      [this]() {
+        if (!replayExportInProgress.load() &&
+            replayExportButtonText != nullptr) {
+          replayExportButtonText->setText("Export MP4");
+        }
+        return false;
+      },
+      result->success ? 1800 : 1400, true);
+}
+
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
+  applyReplayVideoExportResult();
 }
 
 void MainMenuScene::renderScene() {
@@ -1158,6 +1237,11 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
+  if (replayExportThread.joinable()) {
+    SDL_Log("Joining replayExportThread");
+    replayExportThread.request_stop();
+    replayExportThread.join();
+  }
   if (checkEntriesThread.joinable()) {
     SDL_Log("Joining checkEntriesThread");
     checkEntriesThread.request_stop();
@@ -1177,6 +1261,9 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  replayExportButtonText = nullptr;
+  pendingReplayExportResult.reset();
+  replayExportInProgress = false;
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

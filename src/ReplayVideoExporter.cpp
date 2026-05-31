@@ -8,9 +8,13 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/Judge.h"
 #include "targets.h"
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include "iOSNatives.hpp"
+#endif
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
+#include <bx/math.h>
 #include <sndfile.h>
 
 extern "C" {
@@ -32,6 +36,7 @@ extern "C" {
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -53,6 +58,67 @@ struct AudioEvent {
 struct DecodedSound {
   std::vector<short> pcm;
   SF_INFO info{};
+};
+
+void restorePrimaryRenderViews() {
+  bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewRect(rendering::clear_view, 0, 0,
+                    static_cast<uint16_t>(rendering::render_width),
+                    static_cast<uint16_t>(rendering::render_height));
+  bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
+                    rendering::ui_offset_y,
+                    static_cast<uint16_t>(rendering::ui_view_width),
+                    static_cast<uint16_t>(rendering::ui_view_height));
+  bgfx::setViewRect(rendering::main_view, rendering::ui_offset_x,
+                    rendering::ui_offset_y,
+                    static_cast<uint16_t>(rendering::ui_view_width),
+                    static_cast<uint16_t>(rendering::ui_view_height));
+
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
+               rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
+               bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  rendering::game_camera.render(true);
+}
+
+class ScopedReplayVideoBgfxAccess {
+public:
+  explicit ScopedReplayVideoBgfxAccess(ApplicationContext &context)
+      : context(context), lock(context.bgfxRenderMutex, std::defer_lock) {
+    context.replayVideoExportActive.store(true, std::memory_order_release);
+    lock.lock();
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+    originalResetFlags = context.bgfxResetFlags.load(std::memory_order_relaxed);
+    if ((originalResetFlags & BGFX_RESET_VSYNC) != 0) {
+      bgfx::reset(rendering::render_width, rendering::render_height,
+                  originalResetFlags & ~BGFX_RESET_VSYNC);
+      restoreResetFlags = true;
+    }
+#endif
+  }
+
+  ~ScopedReplayVideoBgfxAccess() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+    if (restoreResetFlags) {
+      bgfx::reset(rendering::render_width, rendering::render_height,
+                  originalResetFlags);
+      restorePrimaryRenderViews();
+    }
+#endif
+    context.replayVideoExportActive.store(false, std::memory_order_release);
+  }
+
+  ScopedReplayVideoBgfxAccess(const ScopedReplayVideoBgfxAccess &) = delete;
+  ScopedReplayVideoBgfxAccess &
+  operator=(const ScopedReplayVideoBgfxAccess &) = delete;
+
+private:
+  ApplicationContext &context;
+  std::unique_lock<std::mutex> lock;
+  uint32_t originalResetFlags = 0;
+  bool restoreResetFlags = false;
 };
 
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
@@ -412,11 +478,13 @@ void applyReplayEventForVideo(
   }
 }
 
-ReplayVideoExportResult captureReplayFrames(bms_parser::Chart &chart,
+ReplayVideoExportResult captureReplayFrames(ApplicationContext &context,
+                                            bms_parser::Chart &chart,
                                             const ReplayData &replay,
                                             const AppSettings &settings,
                                             const ReplayVideoExportOptions &options,
                                             const std::filesystem::path &rawPath) {
+  ScopedReplayVideoBgfxAccess bgfxAccess(context);
   const uint64_t requiredCaps =
       BGFX_CAPS_TEXTURE_BLIT | BGFX_CAPS_TEXTURE_READ_BACK;
   if ((bgfx::getCaps()->supported & requiredCaps) != requiredCaps) {
@@ -1061,6 +1129,24 @@ ReplayVideoExportResult muxReplayVideo(const std::filesystem::path &rawPath,
   cleanup();
   return {.success = true, .outputPath = outputPath, .message = "MP4 exported"};
 }
+
+ReplayVideoExportResult saveReplayVideoToPlatformLibrary(
+    const ReplayVideoExportResult &muxResult) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string errorMessage;
+  if (!SaveVideoToIOSPhotos(muxResult.outputPath.string(), errorMessage)) {
+    return {.success = false,
+            .outputPath = muxResult.outputPath,
+            .message = errorMessage.empty() ? "Failed to save video to Photos"
+                                            : errorMessage};
+  }
+  return {.success = true,
+          .outputPath = muxResult.outputPath,
+          .message = "Saved to Photos"};
+#else
+  return muxResult;
+#endif
+}
 } // namespace
 
 ReplayVideoExportResult
@@ -1106,7 +1192,7 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
 
   SDL_Log("Replay export video frames: %s", rawPath.string().c_str());
   auto frameResult =
-      captureReplayFrames(*chart, replay, context.settings,
+      captureReplayFrames(context, *chart, replay, context.settings,
                           {.width = width, .height = height, .fps = fps},
                           rawPath);
   if (!frameResult.success) {
@@ -1121,10 +1207,15 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
     return muxResult;
   }
 
+  auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
+  if (!platformSaveResult.success) {
+    return platformSaveResult;
+  }
+
   std::filesystem::remove_all(tempDir, ec);
   if (ec) {
     SDL_Log("Replay export could not clean work directory: %s",
             tempDir.string().c_str());
   }
-  return muxResult;
+  return platformSaveResult;
 }

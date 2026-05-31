@@ -17,7 +17,10 @@
 #include "../video/VideoPlayer.h"
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <stop_token>
+#include <string>
 #include <unordered_map>
 
 class Button;
@@ -40,8 +43,10 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread replayExportThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
+  std::atomic_bool replayExportInProgress = false;
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
@@ -89,6 +94,14 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  TextView *replayExportButtonText = nullptr;
+  struct PendingReplayExportResult {
+    bool success = false;
+    std::filesystem::path outputPath;
+    std::string message;
+  };
+  std::mutex replayExportResultMutex;
+  std::optional<PendingReplayExportResult> pendingReplayExportResult;
 
   LibraryFolderItem activeFolder;
   ScoreClearRankCache scoreClearRanks;
@@ -124,6 +137,8 @@ private:
   void selectFolder(const LibraryFolderItem &item);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
+  void startReplayVideoExport(const ChartMetaRecord &record);
+  void applyReplayVideoExportResult();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 

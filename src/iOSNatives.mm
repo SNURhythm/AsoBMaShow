@@ -3,6 +3,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 #include <Foundation/Foundation.h>
+#include <Photos/Photos.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
@@ -73,6 +74,89 @@ UIWindow *FindActiveWindow() {
     }
   }
   return UIApplication.sharedApplication.keyWindow;
+}
+
+bool IsPhotoAuthorizationAllowed(PHAuthorizationStatus status) {
+  if (status == PHAuthorizationStatusAuthorized) {
+    return true;
+  }
+  if (@available(iOS 14.0, *)) {
+    return status == PHAuthorizationStatusLimited;
+  }
+  return false;
+}
+
+std::string PhotoAuthorizationStatusMessage(PHAuthorizationStatus status) {
+  switch (status) {
+  case PHAuthorizationStatusDenied:
+    return "Photos permission was denied";
+  case PHAuthorizationStatusRestricted:
+    return "Photos access is restricted";
+  case PHAuthorizationStatusNotDetermined:
+    return "Photos permission was not granted";
+  case PHAuthorizationStatusAuthorized:
+    return "";
+  default:
+    if (@available(iOS 14.0, *)) {
+      if (status == PHAuthorizationStatusLimited) {
+        return "";
+      }
+    }
+    return "Photos permission was not granted";
+  }
+}
+
+bool RequestPhotoAddAuthorization(std::string &errorMessage) {
+  __block PHAuthorizationStatus status = PHAuthorizationStatusNotDetermined;
+  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+
+  void (^requestBlock)(void) = ^{
+    if (@available(iOS 14.0, *)) {
+      status = [PHPhotoLibrary authorizationStatusForAccessLevel:
+                                   PHAccessLevelAddOnly];
+      if (status == PHAuthorizationStatusNotDetermined) {
+        [PHPhotoLibrary
+            requestAuthorizationForAccessLevel:PHAccessLevelAddOnly
+                                       handler:^(
+                                           PHAuthorizationStatus newStatus) {
+                                         status = newStatus;
+                                         dispatch_semaphore_signal(semaphore);
+                                       }];
+        return;
+      }
+      dispatch_semaphore_signal(semaphore);
+      return;
+    }
+
+    status = [PHPhotoLibrary authorizationStatus];
+    if (status == PHAuthorizationStatusNotDetermined) {
+      [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus newStatus) {
+        status = newStatus;
+        dispatch_semaphore_signal(semaphore);
+      }];
+      return;
+    }
+    dispatch_semaphore_signal(semaphore);
+  };
+
+  if ([NSThread isMainThread]) {
+    requestBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), requestBlock);
+  }
+
+  const long waitResult = dispatch_semaphore_wait(
+      semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+  if (waitResult != 0) {
+    errorMessage = "Timed out waiting for Photos permission";
+    return false;
+  }
+
+  if (!IsPhotoAuthorizationAllowed(status)) {
+    errorMessage = PhotoAuthorizationStatusMessage(status);
+    return false;
+  }
+  return true;
 }
 } // namespace
 
@@ -177,6 +261,64 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     body = std::string([text UTF8String]);
     return true;
   }
+}
+
+bool SaveVideoToIOSPhotos(const std::string &filePath,
+                          std::string &errorMessage) {
+  @autoreleasepool {
+    if (!RequestPhotoAddAuthorization(errorMessage)) {
+      return false;
+    }
+
+    NSString *path = NSStringFromUtf8(filePath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "Video export path is empty";
+      return false;
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+      errorMessage = "Video export file does not exist";
+      return false;
+    }
+
+    NSURL *fileUrl = [NSURL fileURLWithPath:path];
+    __block BOOL saveSucceeded = NO;
+    __block BOOL requestCreated = NO;
+    __block NSError *saveError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+
+    [[PHPhotoLibrary sharedPhotoLibrary]
+        performChanges:^{
+          PHAssetCreationRequest *request =
+              [PHAssetCreationRequest creationRequestForAssetFromVideoAtFileURL:
+                                          fileUrl];
+          requestCreated = request != nil;
+        }
+        completionHandler:^(BOOL success, NSError *error) {
+          saveSucceeded = success;
+          saveError = error;
+          dispatch_semaphore_signal(semaphore);
+        }];
+
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      errorMessage = "Timed out saving video to Photos";
+      return false;
+    }
+
+    if (!saveSucceeded || !requestCreated) {
+      if (saveError != nil) {
+        errorMessage =
+            std::string([[saveError localizedDescription] UTF8String]);
+      } else {
+        errorMessage = "Failed to save video to Photos";
+      }
+      return false;
+    }
+
+    return true;
+  }
+  return false;
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
