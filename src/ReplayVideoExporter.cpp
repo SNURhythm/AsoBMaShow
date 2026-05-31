@@ -127,6 +127,14 @@ int replayVideoEncoderThreadCount() {
   return std::clamp(static_cast<int>(hardwareThreads) - 1, 1, 16);
 }
 
+int replayVideoPixelConvertThreadCount() {
+  const auto hardwareThreads = std::thread::hardware_concurrency();
+  if (hardwareThreads <= 1) {
+    return 1;
+  }
+  return std::clamp(static_cast<int>(hardwareThreads) - 1, 1, 8);
+}
+
 bool replayVideoEncoderSupportsFrameThreads(const AVCodec *codec) {
   return codec != nullptr &&
          (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0;
@@ -1195,14 +1203,30 @@ public:
                       ffmpegError(ret));
     }
 
+    pixelConvertThreadCount = replayVideoPixelConvertThreadCount();
     if (videoContext->pix_fmt != AV_PIX_FMT_BGRA) {
-      swsContext = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height,
-                                  videoContext->pix_fmt, SWS_FAST_BILINEAR,
-                                  nullptr, nullptr, nullptr);
+      swsContext = sws_alloc_context();
       if (swsContext == nullptr) {
         return failOpen("Failed to create video pixel converter");
       }
+      swsContext->flags = SWS_FAST_BILINEAR;
+      swsContext->threads = pixelConvertThreadCount;
+      swsContext->src_w = width;
+      swsContext->src_h = height;
+      swsContext->src_format = AV_PIX_FMT_BGRA;
+      swsContext->dst_w = width;
+      swsContext->dst_h = height;
+      swsContext->dst_format = videoContext->pix_fmt;
+      ret = sws_init_context(swsContext, nullptr, nullptr);
+      if (ret < 0) {
+        return failOpen("Failed to initialize video pixel converter: " +
+                        ffmpegError(ret));
+      }
     }
+    replayExportLog(log, "Replay video export pixel converter threads: %d",
+                    videoContext->pix_fmt == AV_PIX_FMT_BGRA
+                        ? 1
+                        : pixelConvertThreadCount);
 
     videoPacket = av_packet_alloc();
     audioPacket = av_packet_alloc();
@@ -1385,6 +1409,7 @@ private:
   long long pixelConvertMicrosTotal = 0;
   long long videoEncodeMicrosTotal = 0;
   int64_t nextAudioPts = 0;
+  int pixelConvertThreadCount = 1;
   bool audioFinished = false;
 };
 
