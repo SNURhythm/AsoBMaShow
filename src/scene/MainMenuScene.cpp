@@ -326,12 +326,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = new ImageView(0, 0, 0, 0);
   recyclerView->onSelected = [this, &context](const ChartMetaRecord &item,
                                               int idx) {
-    if (willStart)
+    if (willStart.load())
       return;
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
-    SDL_Log("Selected: %s; path: %s", meta.Title.c_str(),
-            path_t_to_utf8(meta.Folder / meta.BmsPath).c_str());
     if (selectedView) {
       selectedView->onSelected();
     }
@@ -340,7 +338,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
-    selectedChartMediaReady = false;
+    selectedChartMediaReady.store(false);
     delete selectedChart.exchange(nullptr);
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
@@ -356,12 +354,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
       previewLoadCancelled = false;
-      // dumb implementation of debounce
+      // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
         if (previewLoadCancelled) {
           return;
         }
-        if (willStart)
+        if (willStart.load())
           break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
@@ -392,8 +390,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       auto *loadedChart = chart.release();
       delete selectedChart.exchange(loadedChart);
-      selectedChartMediaReady = true;
-      if (!willStart) {
+      selectedChartMediaReady.store(true);
+      if (!willStart.load()) {
         context.jukebox.play();
       }
     });
@@ -634,30 +632,27 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                Color(162, 212, 255, 255));
   startButton->setStyledBorderWidth(2);
   startButton->setOnClickListener([this, &context, buttonText]() {
-    SDL_Log("Start button clicked");
-    if (willStart) {
+    if (willStart.load()) {
       return;
     }
     auto selected = recyclerView->selectedIndex;
-    SDL_Log("Selected: %d", selected);
     if (selected >= 0 && selected < recyclerView->size()) {
       const auto &selectedMeta = recyclerView->get(selected);
       if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
         return;
       }
-      willStart = true;
+      willStart.store(true);
       buttonText->setText("Loading...");
 
       defer(
           [this, &context, buttonText]() {
-            SDL_Log("Starting game play scene");
             ImageView::dropAllCache();
             if (loadThread.joinable()) {
               loadThread.join();
             }
-            auto *chart = selectedChart.load();
-            if (chart == nullptr || !selectedChartMediaReady.load()) {
-              willStart = false;
+            auto *chart = loadedSelectedChart();
+            if (chart == nullptr) {
+              willStart.store(false);
               buttonText->setText("Start");
               return true;
             }
@@ -673,7 +668,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                         .gaugeAutoShift = selectedGaugeAutoShift,
                     }),
                 true);
-            willStart = false;
+            willStart.store(false);
             buttonText->setText("Start");
             return true;
           },
@@ -694,8 +689,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 Color(145, 232, 241, 255));
   replayButton->setStyledBorderWidth(2);
   replayButton->setOnClickListener([this, &context, replayButtonText]() {
-    SDL_Log("Replay button clicked");
-    if (willStart) {
+    if (willStart.load()) {
       return;
     }
     auto selected = recyclerView->selectedIndex;
@@ -707,7 +701,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
 
-    willStart = true;
+    willStart.store(true);
     replayButtonText->setText("Loading...");
     defer(
         [this, &context, replayButtonText, selectedMeta]() {
@@ -718,7 +712,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           auto replay =
               ReplayDBHelper::GetInstance().LoadLatestReplay(selectedMeta.meta);
           if (!replay.has_value()) {
-            willStart = false;
+            willStart.store(false);
             replayButtonText->setText("No Replay");
             defer(
                 [replayButtonText]() {
@@ -729,9 +723,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
             return true;
           }
 
-          auto *chart = selectedChart.load();
-          if (chart == nullptr || !selectedChartMediaReady.load()) {
-            willStart = false;
+          auto *chart = loadedSelectedChart();
+          if (chart == nullptr) {
+            willStart.store(false);
             replayButtonText->setText("Replay");
             return true;
           }
@@ -751,7 +745,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                       .replayData = replayData,
                   }),
               true);
-          willStart = false;
+          willStart.store(false);
           replayButtonText->setText("Replay");
           return true;
         },
@@ -773,8 +767,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                 Color(180, 191, 255, 255));
   exportButton->setStyledBorderWidth(2);
   exportButton->setOnClickListener([this]() {
-    SDL_Log("Replay export button clicked");
-    if (willStart || replayExportInProgress.load()) {
+    if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
     auto selected = recyclerView->selectedIndex;
@@ -817,7 +810,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                   Color(232, 169, 122, 255));
   settingsButton->setStyledBorderWidth(2);
   settingsButton->setOnClickListener([this, &context]() {
-    if (willStart || replayExportInProgress.load()) {
+    if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
     previewLoadCancelled = true;
@@ -1087,6 +1080,13 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
   }
 }
 
+bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
+  if (!selectedChartMediaReady.load()) {
+    return nullptr;
+  }
+  return selectedChart.load();
+}
+
 void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
   if (replayExportInProgress.exchange(true)) {
     return;
@@ -1095,9 +1095,9 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record) {
     replayExportThread.join();
   }
 
-  willStart = true;
+  willStart.store(true);
   previewLoadCancelled = true;
-  selectedChartMediaReady = false;
+  selectedChartMediaReady.store(false);
   if (replayExportButtonText != nullptr) {
     replayExportButtonText->setText("Exporting...");
   }
@@ -1171,7 +1171,7 @@ void MainMenuScene::applyReplayVideoExportResult() {
     replayExportThread.join();
   }
   replayExportInProgress = false;
-  willStart = false;
+  willStart.store(false);
 
   if (recyclerView != nullptr) {
     const int selected = recyclerView->selectedIndex;
@@ -1283,7 +1283,7 @@ void MainMenuScene::cleanupScene() {
   replayExportButtonText = nullptr;
   pendingReplayExportResult.reset();
   replayExportInProgress = false;
-  selectedChartMediaReady = false;
+  selectedChartMediaReady.store(false);
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;

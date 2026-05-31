@@ -38,7 +38,7 @@ public:
 private:
   sqlite3 *db;
   std::atomic_bool previewLoadCancelled = false;
-  bool willStart = false;
+  std::atomic_bool willStart = false;
   std::atomic<bms_parser::Chart *> selectedChart{nullptr};
   std::atomic_bool selectedChartMediaReady = false;
 
@@ -138,6 +138,7 @@ private:
   void selectFolder(const LibraryFolderItem &item);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
+  bms_parser::Chart *loadedSelectedChart() const;
   void startReplayVideoExport(const ChartMetaRecord &record);
   void applyReplayVideoExportResult();
   static void CheckEntries(const std::stop_token &stop_token,
