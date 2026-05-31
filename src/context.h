@@ -21,6 +21,8 @@ public:
   Jukebox jukebox;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
+  std::atomic<bool> replayVideoExportUiFrameRequested{false};
+  std::atomic<std::uint64_t> replayVideoExportUiFrameSerial{0};
   std::atomic<std::uint32_t> bgfxResetFlags{0};
   std::function<void()> restoreGameplayRenderViews;
 

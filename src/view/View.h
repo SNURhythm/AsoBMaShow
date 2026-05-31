@@ -258,6 +258,7 @@ public:
   virtual void onUnselected() {}
 
   View *setWidth(float width);
+  View *setWidthPercent(float widthPercent);
   View *setHeight(float height);
   View *setMinWidth(float minWidth);
   View *setMinHeight(float minHeight);

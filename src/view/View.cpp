@@ -75,6 +75,11 @@ View *View::setWidth(float width) {
   return this;
 }
 
+View *View::setWidthPercent(float widthPercent) {
+  YGNodeStyleSetWidthPercent(node, widthPercent);
+  return this;
+}
+
 View *View::setHeight(float height) {
   YGNodeStyleSetHeight(node, height);
   return this;
