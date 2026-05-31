@@ -1069,7 +1069,14 @@ public:
     } else if (videoCodecName.find("videotoolbox") != std::string::npos) {
       av_dict_set(&videoOptions, "realtime", "1", 0);
       av_dict_set(&videoOptions, "prio_speed", "1", 0);
+      av_dict_set(&videoOptions, "power_efficient", "0", 0);
+      av_dict_set(&videoOptions, "spatial_aq", "0", 0);
+      av_dict_set(&videoOptions, "max_ref_frames", "1", 0);
       av_dict_set(&videoOptions, "allow_sw", "1", 0);
+      replayExportLog(log,
+                      "Replay video export VideoToolbox speed hints: "
+                      "realtime=1, prio_speed=1, power_efficient=0, "
+                      "spatial_aq=0, max_ref_frames=1, allow_sw=1");
     }
     ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
     av_dict_free(&videoOptions);
@@ -1233,6 +1240,7 @@ public:
   bool encodeVideoFrame(const uint8_t *bgraFrame, size_t frameIndex,
                         long long videoTimeMicros,
                         std::string &errorMessage) {
+    const auto audioEncodeStart = std::chrono::steady_clock::now();
     while (!audioFinished &&
            (nextAudioPts * 1000000LL) / kExportSampleRate <=
                videoTimeMicros) {
@@ -1243,12 +1251,17 @@ public:
         return false;
       }
     }
+    audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
 
+    const auto framePrepareStart = std::chrono::steady_clock::now();
     int ret = av_frame_make_writable(videoFrame);
+    framePrepareMicrosTotal += elapsedMicros(framePrepareStart);
     if (ret < 0) {
       errorMessage = "Failed to prepare video frame: " + ffmpegError(ret);
       return false;
     }
+
+    const auto pixelConvertStart = std::chrono::steady_clock::now();
     if (videoContext->pix_fmt == AV_PIX_FMT_BGRA) {
       const int sourceLinesize = width * 4;
       for (int y = 0; y < height; ++y) {
@@ -1262,10 +1275,16 @@ public:
       sws_scale(swsContext, sourceData, sourceLinesize, 0, height,
                 videoFrame->data, videoFrame->linesize);
     }
+    pixelConvertMicrosTotal += elapsedMicros(pixelConvertStart);
+
     videoFrame->pts = static_cast<int64_t>(frameIndex);
     videoFrame->duration = videoFrameDuration;
-    return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                       videoPacket, errorMessage, videoFrameDuration);
+    const auto videoEncodeStart = std::chrono::steady_clock::now();
+    const bool success =
+        encodeFrame(videoContext, formatContext, videoStream, videoFrame,
+                    videoPacket, errorMessage, videoFrameDuration);
+    videoEncodeMicrosTotal += elapsedMicros(videoEncodeStart);
+    return success;
   }
 
   ReplayVideoExportResult finish() {
@@ -1277,21 +1296,30 @@ public:
     };
 
     while (!audioFinished) {
+      const auto audioEncodeStart = std::chrono::steady_clock::now();
       if (!encodeNextAudioFrame(audioFile, audioContext, formatContext,
                                 audioStream, audioFrame, audioPacket,
                                 audioBuffer, nextAudioPts, audioFinished,
                                 errorMessage)) {
+        audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
         return fail(errorMessage);
       }
+      audioEncodeMicrosTotal += elapsedMicros(audioEncodeStart);
     }
+    const auto videoEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
                      videoPacket, errorMessage, videoFrameDuration)) {
+      videoEncodeMicrosTotal += elapsedMicros(videoEncodeFlushStart);
       return fail(errorMessage);
     }
+    videoEncodeMicrosTotal += elapsedMicros(videoEncodeFlushStart);
+    const auto audioEncodeFlushStart = std::chrono::steady_clock::now();
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
                      audioPacket, errorMessage)) {
+      audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
       return fail(errorMessage);
     }
+    audioEncodeMicrosTotal += elapsedMicros(audioEncodeFlushStart);
 
     const int ret = av_write_trailer(formatContext);
     if (ret < 0) {
@@ -1303,6 +1331,11 @@ public:
             .outputPath = outputPath,
             .message = "MP4 exported"};
   }
+
+  long long audioEncodeMicros() const { return audioEncodeMicrosTotal; }
+  long long framePrepareMicros() const { return framePrepareMicrosTotal; }
+  long long pixelConvertMicros() const { return pixelConvertMicrosTotal; }
+  long long videoEncodeMicros() const { return videoEncodeMicrosTotal; }
 
 private:
   void cleanup() {
@@ -1347,6 +1380,10 @@ private:
   SwsContext *swsContext = nullptr;
   SNDFILE *audioFile = nullptr;
   std::vector<float> audioBuffer;
+  long long audioEncodeMicrosTotal = 0;
+  long long framePrepareMicrosTotal = 0;
+  long long pixelConvertMicrosTotal = 0;
+  long long videoEncodeMicrosTotal = 0;
   int64_t nextAudioPts = 0;
   bool audioFinished = false;
 };
@@ -1448,6 +1485,11 @@ public:
   long long encodedMicros() const {
     return encodedMicrosTotal.load(std::memory_order_relaxed);
   }
+
+  long long audioEncodeMicros() const { return writer.audioEncodeMicros(); }
+  long long framePrepareMicros() const { return writer.framePrepareMicros(); }
+  long long pixelConvertMicros() const { return writer.pixelConvertMicros(); }
+  long long videoEncodeMicros() const { return writer.videoEncodeMicros(); }
 
 private:
   struct PendingFrame {
@@ -1811,6 +1853,16 @@ ReplayVideoExportResult renderReplayVideoToMp4(
                   static_cast<double>(readbackWaitMicros) / 1000000.0,
                   static_cast<double>(encoder.encodedMicros()) / 1000000.0,
                   static_cast<double>(bufferWaitMicros) / 1000000.0);
+  replayExportLog(log,
+                  "Replay video encoder profile: %.2fs audio, %.2fs frame "
+                  "prepare, %.2fs pixel convert, %.2fs video encode/write",
+                  static_cast<double>(encoder.audioEncodeMicros()) / 1000000.0,
+                  static_cast<double>(encoder.framePrepareMicros()) /
+                      1000000.0,
+                  static_cast<double>(encoder.pixelConvertMicros()) /
+                      1000000.0,
+                  static_cast<double>(encoder.videoEncodeMicros()) /
+                      1000000.0);
   return result;
 }
 
