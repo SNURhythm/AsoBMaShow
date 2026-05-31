@@ -17,6 +17,8 @@ inline constexpr bgfx::ViewId ui_view = 254;
 
 inline constexpr std::array<bgfx::ViewId, 4> kGameplayOutputViews = {
     clear_view, final_view, main_view, ui_view};
+inline constexpr std::array<bgfx::ViewId, 3> kGameplayOrthographicOutputViews =
+    {clear_view, final_view, ui_view};
 inline constexpr std::array<bgfx::ViewId, 2> kGameplayBgaInputViews = {
     bga_view, bga_layer_view};
 

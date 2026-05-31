@@ -148,17 +148,17 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
                rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
                bgfx::getCaps()->homogeneousDepth);
-  bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  for (const auto view : rendering::kGameplayOrthographicOutputViews) {
+    bgfx::setViewTransform(view, nullptr, ortho);
+  }
   bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
-  bgfx::setViewTransform(rendering::clear_view, nullptr, ortho);
-  bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
   rendering::game_camera.render(true);
 }
 
 void configureReplayExportRenderViews(
     int width, int height, bgfx::FrameBufferHandle outputFrameBuffer,
-    const rendering::BlurPass &bgaBlurPass) {
+    const rendering::BlurPass &bgaBlurPass, const AppSettings &settings) {
   const auto exportWidth = static_cast<uint16_t>(width);
   const auto exportHeight = static_cast<uint16_t>(height);
 
@@ -175,11 +175,27 @@ void configureReplayExportRenderViews(
   bx::mtxOrtho(ortho, 0.0f, rendering::window_width,
                rendering::window_height, 0.0f, 0.0f, 100.0f, 0.0f,
                bgfx::getCaps()->homogeneousDepth);
-  for (const auto view : rendering::kGameplayOutputViews) {
+  for (const auto view : rendering::kGameplayOrthographicOutputViews) {
     bgfx::setViewTransform(view, nullptr, ortho);
   }
   bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
   bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
+
+  constexpr float kCameraDepth = 2.1f;
+  const float laneLookAtY = settings.laneLength * 0.25f;
+  const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
+  const bx::Vec3 at = {4.0f, laneLookAtY, 0.0f};
+  const bx::Vec3 eye = {4.0f,
+                        laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
+                        -kCameraDepth};
+  const float aspect = static_cast<float>(width) / static_cast<float>(height);
+  rendering::game_camera.edit()
+      .setPosition(eye)
+      .setLookAt(at)
+      .setAspectRatio(aspect)
+      .setViewRect(0, 0, exportWidth, exportHeight)
+      .commit();
+  rendering::game_camera.render(true);
 
   rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
                             rendering::final_view);
@@ -1238,6 +1254,9 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   bgaBlurPass->setCompositeEnabled(false);
   bgaBlurPass->setBlurStrength(settings.bgaBlurStrength);
 
+  configureReplayExportRenderViews(width, height, outputFrameBuffer,
+                                   *bgaBlurPass, settings);
+
   ScopedChartNoteReset chartReset(chart);
   Judge judge(chart.Meta.Rank);
   BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
@@ -1259,9 +1278,6 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   RenderContext renderContext;
   size_t replayCursor = 0;
   uint32_t currentFrame = bgfx::frame();
-
-  configureReplayExportRenderViews(width, height, outputFrameBuffer,
-                                   *bgaBlurPass);
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     const long long songTimeMicros = static_cast<long long>(
