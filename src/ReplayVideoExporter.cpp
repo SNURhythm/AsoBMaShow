@@ -755,7 +755,8 @@ std::optional<AVSampleFormat> chooseAudioSampleFormat(const AVCodec *codec) {
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
                  std::string &errorMessage,
-                 int64_t forcedPacketDuration = 0) {
+                 int64_t forcedPacketDuration = 0,
+                 int64_t *forcedPacketPts = nullptr) {
   int ret = avcodec_send_frame(encoderContext, frame);
   if (ret < 0) {
     errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
@@ -773,6 +774,11 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
       return false;
     }
 
+    if (forcedPacketPts != nullptr) {
+      packet->pts = *forcedPacketPts;
+      packet->dts = *forcedPacketPts;
+      *forcedPacketPts += forcedPacketDuration;
+    }
     if (forcedPacketDuration > 0) {
       packet->duration = forcedPacketDuration;
     }
@@ -1149,7 +1155,8 @@ public:
                      videoContext->time_base);
     videoFrame->duration = videoFrameDuration;
     return encodeFrame(videoContext, formatContext, videoStream, videoFrame,
-                       videoPacket, errorMessage, videoFrameDuration);
+                       videoPacket, errorMessage, videoFrameDuration,
+                       &nextVideoPacketPts);
   }
 
   ReplayVideoExportResult finish() {
@@ -1169,7 +1176,8 @@ public:
       }
     }
     if (!encodeFrame(videoContext, formatContext, videoStream, nullptr,
-                     videoPacket, errorMessage, videoFrameDuration)) {
+                     videoPacket, errorMessage, videoFrameDuration,
+                     &nextVideoPacketPts)) {
       return fail(errorMessage);
     }
     if (!encodeFrame(audioContext, formatContext, audioStream, nullptr,
@@ -1219,6 +1227,7 @@ private:
   int height = 0;
   int fps = 0;
   int64_t videoFrameDuration = kVideoTicksPerFrame;
+  int64_t nextVideoPacketPts = 0;
   AVFormatContext *formatContext = nullptr;
   AVCodecContext *videoContext = nullptr;
   AVCodecContext *audioContext = nullptr;
