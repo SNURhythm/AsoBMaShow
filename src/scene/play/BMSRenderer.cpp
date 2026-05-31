@@ -748,7 +748,11 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
-  drawRect(noteRenderWidth, 10.0f, laneToX(lane), 0.0f, color);
+  const float beamHeight = std::max(0.0f, upperBound - judgeY);
+  if (beamHeight <= 0.0f) {
+    return;
+  }
+  drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const { return lane == 7; }
