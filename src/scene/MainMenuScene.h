@@ -102,6 +102,7 @@ private:
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
   View *replayModalRoot = nullptr;
+  View *replayModalContentFrame = nullptr;
   View *replayListContent = nullptr;
   View *replayExportOptionsContent = nullptr;
   TextView *replayModalTitleText = nullptr;

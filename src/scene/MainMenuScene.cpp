@@ -433,6 +433,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
+  replayModalContentFrame = nullptr;
   replayListContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayModalTitleText = nullptr;
@@ -1224,6 +1225,12 @@ void MainMenuScene::buildReplayModal() {
     return;
   }
 
+  constexpr float kModalPanelWidth = 760.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalContentWidth =
+      kModalPanelWidth - kModalPanelPadding * 2.0f;
+  constexpr float kModalContentHeight = 418.0f;
+
   replayModalRoot =
       new ModalRootView(0, 0, rendering::window_width, rendering::window_height);
   replayModalRoot->setPositionType(YGPositionTypeAbsolute);
@@ -1237,7 +1244,7 @@ void MainMenuScene::buildReplayModal() {
   replayModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
 
   auto *panel = new View();
-  panel->setWidth(760)
+  panel->setWidth(kModalPanelWidth)
       ->setHeight(620)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -1253,10 +1260,20 @@ void MainMenuScene::buildReplayModal() {
   replayModalTitleText->setHeight(42);
   panel->addView(replayModalTitleText);
 
+  replayModalContentFrame = new View();
+  replayModalContentFrame->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setFlexShrink(0);
+  panel->addView(replayModalContentFrame);
+
   replayListContent = new View();
   replayListContent->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setHeight(418)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
       ->setGap(10);
   replayListView = new RecyclerView<ReplaySummary>(
       [](const ReplaySummary &a, const ReplaySummary &b) {
@@ -1302,12 +1319,17 @@ void MainMenuScene::buildReplayModal() {
   replayListView->setBorderColor(Color(55, 76, 102, 255));
   replayListView->setBorderWidth(2);
   replayListContent->addView(replayListView);
-  panel->addView(replayListContent);
+  replayModalContentFrame->addView(replayListContent);
 
   replayExportOptionsContent = new View();
   replayExportOptionsContent->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setHeight(0)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setJustifyContent(YGJustifyCenter)
       ->setGap(18);
   replayExportOptionsContent->setVisible(false);
 
@@ -1378,7 +1400,7 @@ void MainMenuScene::buildReplayModal() {
   resolutionRow->addView(replayResolution1080Button);
   resolutionRow->addView(replayResolutionFullButton);
   replayExportOptionsContent->addView(resolutionRow);
-  panel->addView(replayExportOptionsContent);
+  replayModalContentFrame->addView(replayExportOptionsContent);
 
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
@@ -1397,9 +1419,7 @@ void MainMenuScene::buildReplayModal() {
         replayExportOptionsContent->getVisible()) {
       replayModalTitleText->setText("Replay");
       replayExportOptionsContent->setVisible(false);
-      replayExportOptionsContent->setHeight(0);
       replayListContent->setVisible(true);
-      replayListContent->setHeight(418);
       refreshReplayModalActions();
       return;
     }
@@ -1457,9 +1477,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   selectedReplayIndex = -1;
   replayModalTitleText->setText("Replay");
   replayListContent->setVisible(true);
-  replayListContent->setHeight(418);
   replayExportOptionsContent->setVisible(false);
-  replayExportOptionsContent->setHeight(0);
   replayListView->setItems(replaySummaries);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
@@ -1475,9 +1493,7 @@ void MainMenuScene::showReplayExportOptions() {
 
   replayModalTitleText->setText("Export Options");
   replayListContent->setVisible(false);
-  replayListContent->setHeight(0);
   replayExportOptionsContent->setVisible(true);
-  replayExportOptionsContent->setHeight(418);
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   refreshReplayExportOptionButtons();
@@ -1816,6 +1832,7 @@ void MainMenuScene::cleanupScene() {
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
+  replayModalContentFrame = nullptr;
   replayListContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayModalTitleText = nullptr;
