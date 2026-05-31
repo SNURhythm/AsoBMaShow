@@ -1441,6 +1441,9 @@ public:
       replayExportLog(log,
                       "Replay video export native writer: BGRA pixel buffers, "
                       "no CPU pixel conversion");
+      replayExportLog(log,
+                      "Replay video export native writer: audio interleaved "
+                      "during video append");
       return true;
     }
 

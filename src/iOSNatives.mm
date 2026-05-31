@@ -23,6 +23,7 @@ constexpr int kIOSReplaySampleRate = 44100;
 constexpr int kIOSReplayChannels = 2;
 constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
 constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
+constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -370,6 +371,8 @@ void AppendReplayFrameContext(std::string &errorMessage, size_t frameIndex) {
 
 class IOSReplayVideoWriter {
 public:
+  ~IOSReplayVideoWriter() { releasePendingAudioSample(); }
+
   bool open(const std::string &wavPath, const std::string &outputPath,
             int width, int height, int fps, int64_t bitRate,
             std::string &errorMessage) {
@@ -444,25 +447,30 @@ public:
         return false;
       }
 
-      NSDictionary *audioSettings = @{
-        AVFormatIDKey : @(kAudioFormatMPEG4AAC),
-        AVSampleRateKey : @(kIOSReplaySampleRate),
-        AVNumberOfChannelsKey : @(kIOSReplayChannels),
-        AVEncoderBitRateKey : @(192000),
-      };
-      audioInput = [AVAssetWriterInput
-          assetWriterInputWithMediaType:AVMediaTypeAudio
-                         outputSettings:audioSettings];
-      if (audioInput == nil) {
-        errorMessage = "Replay video writer could not create audio input";
+      if (!openAudioReader(errorMessage)) {
         return false;
       }
-      audioInput.expectsMediaDataInRealTime = NO;
-      if (![writer canAddInput:audioInput]) {
-        errorMessage = "Replay video writer could not add audio input";
-        return false;
+      if (audioReaderOutput != nil) {
+        NSDictionary *audioSettings = @{
+          AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+          AVSampleRateKey : @(kIOSReplaySampleRate),
+          AVNumberOfChannelsKey : @(kIOSReplayChannels),
+          AVEncoderBitRateKey : @(192000),
+        };
+        audioInput = [AVAssetWriterInput
+            assetWriterInputWithMediaType:AVMediaTypeAudio
+                           outputSettings:audioSettings];
+        if (audioInput == nil) {
+          errorMessage = "Replay video writer could not create audio input";
+          return false;
+        }
+        audioInput.expectsMediaDataInRealTime = NO;
+        if (![writer canAddInput:audioInput]) {
+          errorMessage = "Replay video writer could not add audio input";
+          return false;
+        }
+        [writer addInput:audioInput];
       }
-      [writer addInput:audioInput];
 
       if (![writer startWriting]) {
         errorMessage =
@@ -531,6 +539,15 @@ public:
         AppendReplayFrameContext(errorMessage, frameIndex);
         return false;
       }
+
+      const CMTime audioLeadTarget = CMTimeAdd(
+          presentationTime,
+          CMTimeMakeWithSeconds(kIOSReplayAudioLeadSeconds, std::max(fps, 1)));
+      if (!appendAudioThrough(audioLeadTarget, errorMessage)) {
+        errorMessage += " while interleaving replay audio";
+        AppendReplayFrameContext(errorMessage, frameIndex);
+        return false;
+      }
       return true;
     }
   }
@@ -541,11 +558,14 @@ public:
         [videoInput markAsFinished];
         videoFinished = true;
       }
-      if (!appendAudio(errorMessage)) {
+      if (!appendRemainingAudio(errorMessage)) {
         [writer cancelWriting];
         return false;
       }
-      [audioInput markAsFinished];
+      if (audioInput != nil && !audioFinished) {
+        [audioInput markAsFinished];
+        audioFinished = true;
+      }
 
       __block BOOL finished = NO;
       __block AVAssetWriterStatus finishStatus = AVAssetWriterStatusUnknown;
@@ -583,13 +603,13 @@ public:
     if (writer != nil && writer.status == AVAssetWriterStatusWriting) {
       [writer cancelWriting];
     }
+    releasePendingAudioSample();
   }
 
   IOSReplayVideoWriterProfile profile;
 
 private:
-  bool appendAudio(std::string &errorMessage) {
-    const auto audioStart = std::chrono::steady_clock::now();
+  bool openAudioReader(std::string &errorMessage) {
     NSString *path = NSStringFromUtf8(wavPath);
     if (path == nil || path.length == 0) {
       errorMessage = "Replay audio path is empty";
@@ -600,14 +620,12 @@ private:
     NSArray<AVAssetTrack *> *tracks =
         [asset tracksWithMediaType:AVMediaTypeAudio];
     if (tracks.count == 0) {
-      profile.audioAppendMicros += ElapsedMicros(audioStart);
       return true;
     }
 
     NSError *error = nil;
-    AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset
-                                                           error:&error];
-    if (reader == nil) {
+    audioReader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
+    if (audioReader == nil) {
       errorMessage = NSErrorMessage(error, "Failed to read replay audio");
       return false;
     }
@@ -619,55 +637,145 @@ private:
       AVLinearPCMIsFloatKey : @NO,
       AVLinearPCMIsNonInterleaved : @NO,
     };
-    AVAssetReaderTrackOutput *readerOutput =
+    audioReaderOutput =
         [[AVAssetReaderTrackOutput alloc] initWithTrack:tracks.firstObject
                                          outputSettings:readerSettings];
-    readerOutput.alwaysCopiesSampleData = NO;
-    if (![reader canAddOutput:readerOutput]) {
+    audioReaderOutput.alwaysCopiesSampleData = NO;
+    if (![audioReader canAddOutput:audioReaderOutput]) {
       errorMessage = "Replay audio reader could not add output";
       return false;
     }
-    [reader addOutput:readerOutput];
-    if (![reader startReading]) {
-      errorMessage =
-          NSErrorMessage(reader.error, "Failed to start replay audio reader");
+    [audioReader addOutput:audioReaderOutput];
+    if (![audioReader startReading]) {
+      errorMessage = NSErrorMessage(audioReader.error,
+                                    "Failed to start replay audio reader");
       return false;
     }
+    return true;
+  }
 
-    while (true) {
-      CMSampleBufferRef sampleBuffer = [readerOutput copyNextSampleBuffer];
+  bool appendAudioThrough(CMTime targetTime, std::string &errorMessage) {
+    if (audioInput == nil || audioReaderOutput == nil || audioFinished) {
+      return true;
+    }
+    if (!CMTIME_IS_VALID(targetTime)) {
+      errorMessage = "Replay audio target time is invalid";
+      return false;
+    }
+    if (CMTIME_IS_VALID(audioQueuedThroughTime) &&
+        CMTimeCompare(audioQueuedThroughTime, targetTime) >= 0) {
+      return true;
+    }
+
+    const auto audioStart = std::chrono::steady_clock::now();
+    while (!CMTIME_IS_VALID(audioQueuedThroughTime) ||
+           CMTimeCompare(audioQueuedThroughTime, targetTime) < 0) {
+      CMSampleBufferRef sampleBuffer = pendingAudioSample;
+      pendingAudioSample = nullptr;
       if (sampleBuffer == nullptr) {
-        break;
+        sampleBuffer = [audioReaderOutput copyNextSampleBuffer];
       }
-      const bool ready = WaitForWriterInput(
-          writer, audioInput, "audio", kIOSReplayInputWaitTimeoutSeconds,
-          errorMessage);
-      BOOL appended = NO;
-      if (ready) {
-        appended = [audioInput appendSampleBuffer:sampleBuffer];
+      if (sampleBuffer == nullptr) {
+        profile.audioAppendMicros += ElapsedMicros(audioStart);
+        return handleAudioReaderEnd(errorMessage);
       }
+
+      if (!appendAudioSample(sampleBuffer, errorMessage)) {
+        CFRelease(sampleBuffer);
+        return false;
+      }
+      updateAudioQueuedThroughTime(sampleBuffer);
       CFRelease(sampleBuffer);
-      if (!ready) {
-        return false;
-      }
-      if (!appended) {
-        errorMessage =
-            AVWriterErrorMessage(writer, "Failed to append replay audio");
-        return false;
-      }
     }
 
-    if (reader.status == AVAssetReaderStatusFailed) {
-      errorMessage =
-          NSErrorMessage(reader.error, "Failed to finish replay audio reader");
+    profile.audioAppendMicros += ElapsedMicros(audioStart);
+    return true;
+  }
+
+  bool appendRemainingAudio(std::string &errorMessage) {
+    if (audioInput == nil || audioReaderOutput == nil || audioFinished) {
+      return true;
+    }
+
+    const auto audioStart = std::chrono::steady_clock::now();
+    while (!audioFinished) {
+      CMSampleBufferRef sampleBuffer = pendingAudioSample;
+      pendingAudioSample = nullptr;
+      if (sampleBuffer == nullptr) {
+        sampleBuffer = [audioReaderOutput copyNextSampleBuffer];
+      }
+      if (sampleBuffer == nullptr) {
+        profile.audioAppendMicros += ElapsedMicros(audioStart);
+        return handleAudioReaderEnd(errorMessage);
+      }
+
+      if (!appendAudioSample(sampleBuffer, errorMessage)) {
+        CFRelease(sampleBuffer);
+        return false;
+      }
+      updateAudioQueuedThroughTime(sampleBuffer);
+      CFRelease(sampleBuffer);
+    }
+
+    profile.audioAppendMicros += ElapsedMicros(audioStart);
+    return true;
+  }
+
+  bool appendAudioSample(CMSampleBufferRef sampleBuffer,
+                         std::string &errorMessage) {
+    const bool ready =
+        WaitForWriterInput(writer, audioInput, "audio",
+                           kIOSReplayInputWaitTimeoutSeconds, errorMessage);
+    BOOL appended = NO;
+    if (ready) {
+      appended = [audioInput appendSampleBuffer:sampleBuffer];
+    }
+    if (!ready) {
       return false;
     }
-    if (reader.status == AVAssetReaderStatusCancelled) {
+    if (!appended) {
+      errorMessage =
+          AVWriterErrorMessage(writer, "Failed to append replay audio");
+      return false;
+    }
+    return true;
+  }
+
+  bool handleAudioReaderEnd(std::string &errorMessage) {
+    if (audioReader.status == AVAssetReaderStatusFailed) {
+      errorMessage = NSErrorMessage(audioReader.error,
+                                    "Failed to finish replay audio reader");
+      return false;
+    }
+    if (audioReader.status == AVAssetReaderStatusCancelled) {
       errorMessage = "Replay audio reader was cancelled";
       return false;
     }
-    profile.audioAppendMicros += ElapsedMicros(audioStart);
+    if (audioInput != nil && !audioFinished) {
+      [audioInput markAsFinished];
+    }
+    audioFinished = true;
     return true;
+  }
+
+  void updateAudioQueuedThroughTime(CMSampleBufferRef sampleBuffer) {
+    CMTime sampleEnd = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    const CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
+    if (CMTIME_IS_VALID(sampleEnd) && CMTIME_IS_VALID(duration)) {
+      sampleEnd = CMTimeAdd(sampleEnd, duration);
+    }
+    if (CMTIME_IS_VALID(sampleEnd) &&
+        (!CMTIME_IS_VALID(audioQueuedThroughTime) ||
+         CMTimeCompare(sampleEnd, audioQueuedThroughTime) > 0)) {
+      audioQueuedThroughTime = sampleEnd;
+    }
+  }
+
+  void releasePendingAudioSample() {
+    if (pendingAudioSample != nullptr) {
+      CFRelease(pendingAudioSample);
+      pendingAudioSample = nullptr;
+    }
   }
 
   std::string wavPath;
@@ -679,7 +787,12 @@ private:
   AVAssetWriterInput *videoInput = nil;
   AVAssetWriterInput *audioInput = nil;
   AVAssetWriterInputPixelBufferAdaptor *adaptor = nil;
+  AVAssetReader *audioReader = nil;
+  AVAssetReaderTrackOutput *audioReaderOutput = nil;
+  CMSampleBufferRef pendingAudioSample = nullptr;
+  CMTime audioQueuedThroughTime = kCMTimeInvalid;
   bool videoFinished = false;
+  bool audioFinished = false;
 };
 } // namespace
 
