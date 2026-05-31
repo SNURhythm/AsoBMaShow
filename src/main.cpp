@@ -499,15 +499,21 @@ void run() {
   bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000,
                      1.0f, 0);
 
-  // This is set to determine the size of the drawable surface
-  bgfx::setViewRect(rendering::ui_view, rendering::ui_offset_x,
-                    rendering::ui_offset_y, rendering::ui_view_width,
-                    rendering::ui_view_height);
-  resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                     s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                     s_blurPass->finalView(), context.settings);
-  rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                            s_blurPass->finalView());
+  context.restoreGameplayRenderViews = [&context]() {
+    if (s_blurPass == nullptr) {
+      return;
+    }
+    bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
+    bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
+    bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+    s_blurPass->setInputViews({rendering::bga_view, rendering::bga_layer_view});
+    resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
+                       s_blurPass->blurViewH(), s_blurPass->blurViewV(),
+                       s_blurPass->finalView(), context.settings);
+    rendering::applyViewOrder(s_blurPass->blurViewH(), s_blurPass->blurViewV(),
+                              s_blurPass->finalView());
+  };
+  context.restoreGameplayRenderViews();
 
   constexpr bool kEnablePerfTelemetry = true;
   uint64_t rawEventsInWindow = 0;
@@ -609,12 +615,7 @@ void run() {
                     rendering::render_width, rendering::render_height,
                     logicalW, logicalH, s_renderScale);
       s_postProcess.resize(rendering::render_width, rendering::render_height);
-      resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                         s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                         s_blurPass->finalView(), context.settings);
-      rendering::applyViewOrder(s_blurPass->blurViewH(),
-                                s_blurPass->blurViewV(),
-                                s_blurPass->finalView());
+      context.restoreGameplayRenderViews();
       return true;
     };
 
@@ -711,9 +712,7 @@ void run() {
       if (bgfxLock.owns_lock()) {
         appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
         appliedLaneLength = context.settings.laneLength;
-        resetViewTransform(s_blurPass->sceneWidth(), s_blurPass->sceneHeight(),
-                           s_blurPass->blurViewH(), s_blurPass->blurViewV(),
-                           s_blurPass->finalView(), context.settings);
+        context.restoreGameplayRenderViews();
       }
     }
 

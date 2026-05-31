@@ -109,11 +109,17 @@ int64_t replayVideoBitRate(int width, int height, int fps) {
   return std::clamp<int64_t>(pixelsPerSecond / 8, 2500000, 16000000);
 }
 
-void restorePrimaryRenderViews() {
+void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   bgfx::setViewFrameBuffer(rendering::clear_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  if (context != nullptr && context->restoreGameplayRenderViews) {
+    context->restoreGameplayRenderViews();
+    return;
+  }
+
   bgfx::setViewFrameBuffer(rendering::bga_view, BGFX_INVALID_HANDLE);
   bgfx::setViewFrameBuffer(rendering::bga_layer_view, BGFX_INVALID_HANDLE);
-  bgfx::setViewFrameBuffer(rendering::main_view, BGFX_INVALID_HANDLE);
   bgfx::setViewRect(rendering::clear_view, 0, 0,
                     static_cast<uint16_t>(rendering::render_width),
                     static_cast<uint16_t>(rendering::render_height));
@@ -164,7 +170,7 @@ public:
     if (restoreResetFlags) {
       bgfx::reset(rendering::render_width, rendering::render_height,
                   originalResetFlags);
-      restorePrimaryRenderViews();
+      restorePrimaryRenderViews(&context);
     }
 #endif
     context.replayVideoExportActive.store(false, std::memory_order_release);
@@ -1132,7 +1138,7 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   auto cleanupBgfx = [&]() {
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
-    restorePrimaryRenderViews();
+    restorePrimaryRenderViews(&context);
     if (bgfx::isValid(readbackTexture)) {
       bgfx::destroy(readbackTexture);
       readbackTexture = BGFX_INVALID_HANDLE;
