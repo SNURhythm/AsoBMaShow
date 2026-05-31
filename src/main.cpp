@@ -750,11 +750,30 @@ void run() {
     // clear color
 
     bool renderedFrame = false;
-    if (!context.replayVideoExportActive.load(std::memory_order_acquire)) {
+    const bool replayExportActive =
+        context.replayVideoExportActive.load(std::memory_order_acquire);
+    const bool replayExportUiFrameRequested =
+        context.replayVideoExportUiFrameRequested.load(
+            std::memory_order_acquire);
+    if (!replayExportActive || replayExportUiFrameRequested) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
                                            std::try_to_lock);
       if (bgfxLock.owns_lock() &&
-          !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+          context.replayVideoExportActive.load(std::memory_order_acquire) &&
+          context.replayVideoExportUiFrameRequested.load(
+              std::memory_order_acquire)) {
+        bgfx::touch(rendering::clear_view);
+        bgfx::touch(rendering::ui_view);
+        sceneManager.render();
+        bgfx::frame();
+        context.replayVideoExportUiFrameSerial.fetch_add(
+            1, std::memory_order_release);
+        context.replayVideoExportUiFrameRequested.store(
+            false, std::memory_order_release);
+        renderedFrame = true;
+      } else if (bgfxLock.owns_lock() &&
+                 !context.replayVideoExportActive.load(
+                     std::memory_order_acquire)) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
         bgfx::touch(rendering::clear_view);

@@ -105,7 +105,12 @@ private:
   View *replayModalContentFrame = nullptr;
   View *replayListContent = nullptr;
   View *replayExportOptionsContent = nullptr;
+  View *replayExportProgressContent = nullptr;
+  View *replayExportProgressTrack = nullptr;
+  View *replayExportProgressFill = nullptr;
   TextView *replayModalTitleText = nullptr;
+  TextView *replayExportProgressMessageText = nullptr;
+  TextView *replayExportProgressPercentText = nullptr;
   RecyclerView<ReplaySummary> *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayModalExportButton = nullptr;
@@ -128,6 +133,12 @@ private:
   };
   std::mutex replayExportResultMutex;
   std::optional<PendingReplayExportResult> pendingReplayExportResult;
+  struct PendingReplayExportProgress {
+    double fraction = 0.0;
+    std::string message;
+  };
+  std::mutex replayExportProgressMutex;
+  std::optional<PendingReplayExportProgress> pendingReplayExportProgress;
 
   LibraryFolderItem activeFolder;
   ScoreClearRankCache scoreClearRanks;
@@ -140,6 +151,7 @@ private:
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
   bool selectedExportFullResolution = true;
+  double replayExportProgressFraction = 0.0;
   struct GaugeSelectionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
@@ -174,12 +186,16 @@ private:
   void buildReplayModal();
   void showReplayListModal(const ChartMetaRecord &record);
   void showReplayExportOptions();
+  void showReplayExportProgress();
   void hideReplayModal();
   void refreshReplayModalActions();
   void refreshReplayExportOptionButtons();
+  void updateReplayExportProgressUi(double fraction,
+                                    const std::string &message);
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
+  void applyReplayVideoExportProgress();
   void applyReplayVideoExportResult();
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);

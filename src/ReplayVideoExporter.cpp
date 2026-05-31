@@ -43,6 +43,7 @@ extern "C" {
 #include <ctime>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -106,10 +107,13 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
         std::lround(static_cast<double>(height) * aspectRatio));
   }
 
-  return {.width = makeEvenExportDimension(width),
-          .height = makeEvenExportDimension(height),
-          .fps = std::clamp(options.fps > 0 ? options.fps : kDefaultExportFps,
-                            1, 120)};
+  ReplayVideoExportOptions resolved;
+  resolved.width = makeEvenExportDimension(width);
+  resolved.height = makeEvenExportDimension(height);
+  resolved.fps = std::clamp(options.fps > 0 ? options.fps : kDefaultExportFps,
+                            1, 120);
+  resolved.progressCallback = options.progressCallback;
+  return resolved;
 }
 
 int64_t replayVideoBitRate(int width, int height, int fps) {
@@ -249,6 +253,22 @@ void replayExportLog(ReplayVideoExportLog *log, const char *format, ...) {
   }
 }
 
+void reportReplayExportProgress(const ReplayVideoExportOptions &options,
+                                double fraction,
+                                const std::string &message,
+                                std::size_t frameIndex = 0,
+                                std::size_t frameCount = 0) {
+  if (!options.progressCallback) {
+    return;
+  }
+
+  options.progressCallback(
+      {.fraction = std::clamp(fraction, 0.0, 1.0),
+       .message = message,
+       .frameIndex = frameIndex,
+       .frameCount = frameCount});
+}
+
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   for (const auto view : rendering::kGameplayOutputViews) {
     bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
@@ -300,9 +320,13 @@ void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
 
 void configureReplayExportRenderViews(
     int width, int height, bgfx::FrameBufferHandle outputFrameBuffer,
-    const rendering::BlurPass &bgaBlurPass, const AppSettings &settings) {
+    rendering::BlurPass &bgaBlurPass, const AppSettings &settings) {
   const auto exportWidth = static_cast<uint16_t>(width);
   const auto exportHeight = static_cast<uint16_t>(height);
+
+  bgaBlurPass.setInputViews(
+      std::vector<bgfx::ViewId>(rendering::kGameplayBgaInputViews.begin(),
+                                rendering::kGameplayBgaInputViews.end()));
 
   for (const auto view : rendering::kGameplayOutputViews) {
     bgfx::setViewFrameBuffer(view, outputFrameBuffer);
@@ -363,6 +387,13 @@ public:
   }
 
   ~ScopedReplayVideoBgfxAccess() {
+    release();
+  }
+
+  void release() {
+    if (released) {
+      return;
+    }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     if (restoreResetFlags) {
       bgfx::reset(rendering::render_width, rendering::render_height,
@@ -370,7 +401,40 @@ public:
       restorePrimaryRenderViews(&context);
     }
 #endif
+    context.replayVideoExportUiFrameRequested.store(false,
+                                                    std::memory_order_release);
     context.replayVideoExportActive.store(false, std::memory_order_release);
+    if (lock.owns_lock()) {
+      lock.unlock();
+    }
+    released = true;
+  }
+
+  void allowUiFrame(const std::function<void()> &restoreExportViews) {
+    if (released || context.quitFlag.load(std::memory_order_acquire)) {
+      return;
+    }
+
+    restorePrimaryRenderViews(&context);
+    const auto previousFrame =
+        context.replayVideoExportUiFrameSerial.load(std::memory_order_acquire);
+    context.replayVideoExportUiFrameRequested.store(
+        true, std::memory_order_release);
+    lock.unlock();
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(16);
+    while (!context.quitFlag.load(std::memory_order_acquire) &&
+           context.replayVideoExportUiFrameSerial.load(
+               std::memory_order_acquire) == previousFrame &&
+           std::chrono::steady_clock::now() < deadline) {
+      SDL_Delay(1);
+    }
+
+    lock.lock();
+    context.replayVideoExportUiFrameRequested.store(
+        false, std::memory_order_release);
+    restoreExportViews();
   }
 
   ScopedReplayVideoBgfxAccess(const ScopedReplayVideoBgfxAccess &) = delete;
@@ -382,6 +446,7 @@ private:
   std::unique_lock<std::mutex> lock;
   uint32_t originalResetFlags = 0;
   bool restoreResetFlags = false;
+  bool released = false;
 };
 
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
@@ -1804,6 +1869,10 @@ ReplayVideoExportResult renderReplayVideoToMp4(
 
   configureReplayExportRenderViews(width, height, outputFrameBuffer,
                                    *bgaBlurPass, settings);
+  auto restoreExportRenderViews = [&]() {
+    configureReplayExportRenderViews(width, height, outputFrameBuffer,
+                                     *bgaBlurPass, settings);
+  };
 
   ScopedChartNoteReset chartReset(chart);
   Judge judge(chart.Meta.Rank);
@@ -1840,11 +1909,15 @@ ReplayVideoExportResult renderReplayVideoToMp4(
                   "Replay video export frame buffers/readbacks: %zu, encoder "
                   "threads: %d",
                   frameBufferCount, replayVideoEncoderThreadCount());
+  reportReplayExportProgress(options, 0.05, "Rendering video", 0,
+                             frameCount);
 
   RenderContext renderContext;
   size_t replayCursor = 0;
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
+  auto lastUiProgress = std::chrono::steady_clock::now() -
+                        std::chrono::milliseconds(500);
   long long bufferWaitMicros = 0;
   long long renderSubmitMicros = 0;
   long long readbackWaitMicros = 0;
@@ -1892,6 +1965,23 @@ ReplayVideoExportResult renderReplayVideoToMp4(
       }
     }
     return true;
+  };
+
+  auto maybeReportFrameProgress = [&](size_t completedFrames, bool force) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now - lastUiProgress < std::chrono::milliseconds(250)) {
+      return;
+    }
+
+    lastUiProgress = now;
+    const double frameProgress =
+        frameCount == 0 ? 1.0
+                        : static_cast<double>(completedFrames) /
+                              static_cast<double>(frameCount);
+    reportReplayExportProgress(options, 0.05 + 0.90 * frameProgress,
+                               "Rendering video", completedFrames,
+                               frameCount);
+    bgfxAccess.allowUiFrame(restoreExportRenderViews);
   };
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
@@ -1958,6 +2048,7 @@ ReplayVideoExportResult renderReplayVideoToMp4(
          .readbackTextureIndex = readbackTextureIndex,
          .songTimeMicros = songTimeMicros,
          .expectedFrame = expectedFrame});
+    maybeReportFrameProgress(frameIndex + 1, frameIndex + 1 == frameCount);
 
     if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
         frameIndex + 1 == frameCount) {
@@ -1976,6 +2067,9 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   }
 
   cleanupBgfx();
+  bgfxAccess.release();
+  reportReplayExportProgress(options, 0.97, "Finalizing video", frameCount,
+                             frameCount);
   auto result = encoder.finish();
   if (!result.success && result.outputPath.empty()) {
     result.outputPath = outputPath;
@@ -2028,6 +2122,7 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   if (chart == nullptr) {
     return {.success = false, .message = "No chart selected"};
   }
+  reportReplayExportProgress(options, 0.0, "Preparing export");
 
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
@@ -2064,6 +2159,7 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
 
   replayExportLog(&exportLog, "Replay export audio: %s",
                   wavPath.string().c_str());
+  reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult =
       writeReplayAudioTrack(*chart, replay, context.settings, wavPath);
@@ -2075,6 +2171,7 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   }
   replayExportLog(&exportLog, "Replay export audio finished in %.2fs",
                   static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
+  reportReplayExportProgress(resolvedOptions, 0.05, "Audio track ready");
 
   replayExportLog(&exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
                   outputPath.string().c_str(), resolvedOptions.width,
@@ -2100,12 +2197,14 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
                     tempDir.string().c_str());
   }
 
+  reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
   if (!platformSaveResult.success) {
     replayExportLog(&exportLog, "Replay export platform save failed: %s",
                     platformSaveResult.message.c_str());
     return platformSaveResult;
   }
+  reportReplayExportProgress(resolvedOptions, 1.0, platformSaveResult.message);
   replayExportLog(&exportLog, "Replay export finished in %.2fs: %s",
                   static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
                   platformSaveResult.message.c_str());

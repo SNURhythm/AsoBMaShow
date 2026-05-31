@@ -124,6 +124,12 @@ std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
   return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
 }
 
+std::string formatReplayExportPercent(double fraction) {
+  const int percent =
+      static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0) * 100.0));
+  return std::to_string(percent) + "%";
+}
+
 void styleActionButton(Button *button, TextView *text, bool enabled,
                        const Color &normal, const Color &hover,
                        const Color &pressed, const Color &border) {
@@ -436,7 +442,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalContentFrame = nullptr;
   replayListContent = nullptr;
   replayExportOptionsContent = nullptr;
+  replayExportProgressContent = nullptr;
+  replayExportProgressTrack = nullptr;
+  replayExportProgressFill = nullptr;
   replayModalTitleText = nullptr;
+  replayExportProgressMessageText = nullptr;
+  replayExportProgressPercentText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
@@ -453,11 +464,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResolution1080ButtonText = nullptr;
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
+  pendingReplayExportProgress.reset();
   replayExportInProgress = false;
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;
   selectedExportFullResolution = true;
+  replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
@@ -1370,10 +1383,16 @@ void MainMenuScene::buildReplayModal() {
   replayFps60Button->setFlex(1);
   replayFps120Button->setFlex(1);
   replayFps60Button->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     selectedExportFps = 60;
     refreshReplayExportOptionButtons();
   });
   replayFps120Button->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     selectedExportFps = 120;
     refreshReplayExportOptionButtons();
   });
@@ -1390,10 +1409,16 @@ void MainMenuScene::buildReplayModal() {
   replayResolution1080Button->setFlex(1);
   replayResolutionFullButton->setFlex(1);
   replayResolution1080Button->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     selectedExportFullResolution = false;
     refreshReplayExportOptionButtons();
   });
   replayResolutionFullButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     selectedExportFullResolution = true;
     refreshReplayExportOptionButtons();
   });
@@ -1401,6 +1426,47 @@ void MainMenuScene::buildReplayModal() {
   resolutionRow->addView(replayResolutionFullButton);
   replayExportOptionsContent->addView(resolutionRow);
   replayModalContentFrame->addView(replayExportOptionsContent);
+
+  replayExportProgressContent = new View();
+  replayExportProgressContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setGap(18);
+  replayExportProgressContent->setVisible(false);
+
+  replayExportProgressMessageText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  replayExportProgressMessageText->setText("Preparing export");
+  replayExportProgressMessageText->setColor({235, 243, 252, 255});
+  replayExportProgressMessageText->setHeight(38);
+  replayExportProgressContent->addView(replayExportProgressMessageText);
+
+  replayExportProgressTrack = new View();
+  replayExportProgressTrack->setWidth(kModalContentWidth)
+      ->setHeight(24)
+      ->setBackgroundColor(Color(8, 14, 23, 230))
+      ->setBorderColor(Color(74, 101, 132, 255))
+      ->setBorderWidth(2);
+  replayExportProgressFill = new View();
+  replayExportProgressFill->setWidth(0)
+      ->setHeight(20)
+      ->setBackgroundColor(Color(62, 168, 145, 240));
+  replayExportProgressTrack->addView(replayExportProgressFill);
+  replayExportProgressContent->addView(replayExportProgressTrack);
+
+  replayExportProgressPercentText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  replayExportProgressPercentText->setText("0%");
+  replayExportProgressPercentText->setColor({173, 193, 216, 255});
+  replayExportProgressPercentText->setHeight(34);
+  replayExportProgressPercentText->setAlign(TextView::RIGHT);
+  replayExportProgressContent->addView(replayExportProgressPercentText);
+  replayModalContentFrame->addView(replayExportProgressContent);
 
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
@@ -1415,6 +1481,9 @@ void MainMenuScene::buildReplayModal() {
   replayModalExportButton =
       makeModalButton("Export", 20, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     if (replayExportOptionsContent != nullptr &&
         replayExportOptionsContent->getVisible()) {
       replayModalTitleText->setText("Replay");
@@ -1442,6 +1511,9 @@ void MainMenuScene::buildReplayModal() {
     hideReplayModal();
   });
   replayWatchButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     if (selectedReplayIndex < 0 ||
         selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
       return;
@@ -1450,6 +1522,9 @@ void MainMenuScene::buildReplayModal() {
                         replaySummaries[selectedReplayIndex].id);
   });
   replayModalExportButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
     if (selectedReplayIndex < 0 ||
         selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
       return;
@@ -1494,6 +1569,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayModalTitleText->setText("Replay");
   replayListContent->setVisible(true);
   replayExportOptionsContent->setVisible(false);
+  replayExportProgressContent->setVisible(false);
   replayListView->setItems(replaySummaries);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
@@ -1510,6 +1586,7 @@ void MainMenuScene::showReplayExportOptions() {
   replayModalTitleText->setText("Export Options");
   replayListContent->setVisible(false);
   replayExportOptionsContent->setVisible(true);
+  replayExportProgressContent->setVisible(false);
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   refreshReplayExportOptionButtons();
@@ -1517,8 +1594,27 @@ void MainMenuScene::showReplayExportOptions() {
   replayModalRoot->applyYogaLayout();
 }
 
+void MainMenuScene::showReplayExportProgress() {
+  if (replayModalRoot == nullptr) {
+    return;
+  }
+
+  replayModalTitleText->setText("Exporting Replay");
+  replayListContent->setVisible(false);
+  replayExportOptionsContent->setVisible(false);
+  replayExportProgressContent->setVisible(true);
+  updateReplayExportProgressUi(0.0, "Preparing export");
+  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
+  replayModalRoot->setVisible(true);
+  refreshReplayModalActions();
+  replayModalRoot->applyYogaLayout();
+}
+
 void MainMenuScene::hideReplayModal() {
   if (replayModalRoot == nullptr) {
+    return;
+  }
+  if (replayExportInProgress.load()) {
     return;
   }
   replayModalRoot->setVisible(false);
@@ -1537,29 +1633,41 @@ void MainMenuScene::refreshReplayModalActions() {
       selectedReplayIndex < static_cast<int>(replaySummaries.size());
   const bool optionsMode =
       replayExportOptionsContent != nullptr && replayExportOptionsContent->getVisible();
+  const bool progressMode = replayExportProgressContent != nullptr &&
+                            replayExportProgressContent->getVisible();
+  const bool exportInProgress = replayExportInProgress.load();
 
   if (replayModalCloseButtonText != nullptr) {
     replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
   }
   if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText(optionsMode ? "Start Export"
-                                                     : "Export");
+    replayModalExportButtonText->setText(
+        exportInProgress ? "Exporting" : (optionsMode ? "Start Export"
+                                                      : "Export"));
   }
 
   if (replayWatchButton != nullptr) {
-    replayWatchButton->setVisible(!optionsMode);
-    replayWatchButton->setWidth(optionsMode ? 0.0f : 160.0f);
+    replayWatchButton->setVisible(!optionsMode && !progressMode);
+    replayWatchButton->setWidth((optionsMode || progressMode) ? 0.0f : 160.0f);
+  }
+  if (replayModalExportButton != nullptr) {
+    replayModalExportButton->setVisible(!progressMode);
+    replayModalExportButton->setWidth(progressMode ? 0.0f : 160.0f);
   }
 
-  styleActionButton(replayModalCloseButton, replayModalCloseButtonText, true,
+  styleActionButton(replayModalCloseButton, replayModalCloseButtonText,
+                    !exportInProgress,
                     Color(47, 54, 70, 220), Color(62, 72, 92, 232),
                     Color(78, 90, 114, 242), Color(118, 137, 160, 220));
   styleActionButton(replayWatchButton, replayWatchButtonText,
-                    hasSelection && !optionsMode, Color(29, 73, 120, 224),
+                    hasSelection && !optionsMode && !progressMode &&
+                        !exportInProgress,
+                    Color(29, 73, 120, 224),
                     Color(40, 96, 156, 236), Color(58, 129, 204, 246),
                     Color(105, 162, 222, 255));
   styleActionButton(replayModalExportButton, replayModalExportButtonText,
-                    hasSelection, Color(47, 54, 88, 224),
+                    hasSelection && !progressMode && !exportInProgress,
+                    Color(47, 54, 88, 224),
                     Color(65, 75, 119, 236), Color(82, 94, 148, 246),
                     Color(126, 141, 219, 255));
 
@@ -1577,6 +1685,31 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
                     !selectedExportFullResolution);
   styleOptionButton(replayResolutionFullButton, replayResolutionFullButtonText,
                     selectedExportFullResolution);
+}
+
+void MainMenuScene::updateReplayExportProgressUi(
+    double fraction, const std::string &message) {
+  replayExportProgressFraction = std::clamp(fraction, 0.0, 1.0);
+  if (replayExportProgressMessageText != nullptr) {
+    replayExportProgressMessageText->setText(message);
+  }
+  if (replayExportProgressPercentText != nullptr) {
+    replayExportProgressPercentText->setText(
+        formatReplayExportPercent(replayExportProgressFraction));
+  }
+  if (replayExportProgressFill != nullptr) {
+    const int trackWidth = replayExportProgressTrack != nullptr
+                               ? replayExportProgressTrack->getWidth()
+                               : 0;
+    const float fallbackWidth = 640.0f;
+    const float fillWidth =
+        (trackWidth > 0 ? static_cast<float>(trackWidth) : fallbackWidth) *
+        static_cast<float>(replayExportProgressFraction);
+    replayExportProgressFill->setWidth(fillWidth);
+  }
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->applyYogaLayout();
+  }
 }
 
 void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
@@ -1658,10 +1791,22 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   willStart.store(true);
   previewLoadCancelled = true;
   selectedChartMediaReady.store(false);
-  hideReplayModal();
+  {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    pendingReplayExportProgress.reset();
+  }
+  showReplayExportProgress();
   if (replayStatusText != nullptr) {
     replayStatusText->setText("Exporting...");
   }
+
+  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    pendingReplayExportProgress = PendingReplayExportProgress{
+        .fraction = progress.fraction,
+        .message = progress.message,
+    };
+  };
 
   replayExportThread = std::jthread(
       [this, record, replayId, options](const std::stop_token &stopToken) {
@@ -1717,6 +1862,20 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       });
 }
 
+void MainMenuScene::applyReplayVideoExportProgress() {
+  std::optional<PendingReplayExportProgress> progress;
+  {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    if (!pendingReplayExportProgress.has_value()) {
+      return;
+    }
+    progress = std::move(pendingReplayExportProgress);
+    pendingReplayExportProgress.reset();
+  }
+
+  updateReplayExportProgressUi(progress->fraction, progress->message);
+}
+
 void MainMenuScene::applyReplayVideoExportResult() {
   std::optional<PendingReplayExportResult> result;
   {
@@ -1733,6 +1892,10 @@ void MainMenuScene::applyReplayVideoExportResult() {
   }
   replayExportInProgress = false;
   willStart.store(false);
+  {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    pendingReplayExportProgress.reset();
+  }
 
   if (recyclerView != nullptr) {
     const int selected = recyclerView->selectedIndex;
@@ -1758,6 +1921,24 @@ void MainMenuScene::applyReplayVideoExportResult() {
       replayStatusText->setText("Export Failed");
     }
   }
+  if (replayExportProgressContent != nullptr &&
+      replayExportProgressContent->getVisible()) {
+    if (result->success) {
+      updateReplayExportProgressUi(1.0, result->message == "Saved to Photos"
+                                            ? "Saved to Photos"
+                                            : "Export complete");
+    } else {
+      const std::string failureMessage =
+          (result->message == "No Replay" || result->message == "No Chart")
+              ? result->message
+              : "Export failed";
+      updateReplayExportProgressUi(replayExportProgressFraction,
+                                   failureMessage);
+    }
+    replayModalTitleText->setText(result->success ? "Export Complete"
+                                                  : "Export Failed");
+    refreshReplayModalActions();
+  }
 
   if (result->success) {
     SDL_Log("Replay video exported: %s (%s)",
@@ -1782,6 +1963,7 @@ void MainMenuScene::update(float dt) {
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
+  applyReplayVideoExportProgress();
   applyReplayVideoExportResult();
 }
 
@@ -1851,7 +2033,12 @@ void MainMenuScene::cleanupScene() {
   replayModalContentFrame = nullptr;
   replayListContent = nullptr;
   replayExportOptionsContent = nullptr;
+  replayExportProgressContent = nullptr;
+  replayExportProgressTrack = nullptr;
+  replayExportProgressFill = nullptr;
   replayModalTitleText = nullptr;
+  replayExportProgressMessageText = nullptr;
+  replayExportProgressPercentText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
@@ -1868,12 +2055,14 @@ void MainMenuScene::cleanupScene() {
   replayResolution1080ButtonText = nullptr;
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
+  pendingReplayExportProgress.reset();
   replayExportInProgress = false;
   selectedChartMediaReady.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;
   selectedExportFullResolution = true;
+  replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
