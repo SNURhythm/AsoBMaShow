@@ -56,6 +56,8 @@ constexpr int kExportChannels = 2;
 constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kAudioTailMicros = 3000000;
+constexpr const char *kQuickTimeFullFrameRatePlaybackIntentKey =
+    "com.apple.quicktime.full-frame-rate-playback-intent";
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
 
@@ -1140,8 +1142,15 @@ public:
       }
     }
 
+    ret = av_dict_set(&formatContext->metadata,
+                      kQuickTimeFullFrameRatePlaybackIntentKey, "1", 0);
+    if (ret < 0) {
+      return failOpen("Failed to set full-frame-rate playback metadata: " +
+                      ffmpegError(ret));
+    }
+
     AVDictionary *formatOptions = nullptr;
-    av_dict_set(&formatOptions, "movflags", "+faststart", 0);
+    av_dict_set(&formatOptions, "movflags", "+faststart+use_metadata_tags", 0);
     const std::string videoTrackTimescale = std::to_string(fps);
     av_dict_set(&formatOptions, "video_track_timescale",
                 videoTrackTimescale.c_str(), 0);
