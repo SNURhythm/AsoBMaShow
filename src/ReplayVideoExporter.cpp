@@ -36,10 +36,13 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -177,6 +180,65 @@ long long elapsedMicros(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now() - start)
       .count();
+}
+
+std::string formatString(const char *format, va_list args) {
+  va_list sizeArgs;
+  va_copy(sizeArgs, args);
+  const int length = std::vsnprintf(nullptr, 0, format, sizeArgs);
+  va_end(sizeArgs);
+  if (length < 0) {
+    return format != nullptr ? std::string(format) : std::string();
+  }
+  if (length == 0) {
+    return {};
+  }
+
+  std::vector<char> buffer(static_cast<size_t>(length) + 1);
+  std::vsnprintf(buffer.data(), buffer.size(), format, args);
+  return std::string(buffer.data(), static_cast<size_t>(length));
+}
+
+class ReplayVideoExportLog {
+public:
+  explicit ReplayVideoExportLog(const std::filesystem::path &path)
+      : startedAt(std::chrono::steady_clock::now()), path(path) {
+    file.open(path, std::ios::out | std::ios::trunc);
+    if (!file.is_open()) {
+      SDL_Log("Replay export could not open log file: %s",
+              path.string().c_str());
+    }
+  }
+
+  void write(const std::string &message) {
+    SDL_Log("%s", message.c_str());
+    if (!file.is_open()) {
+      return;
+    }
+    const double elapsedSeconds =
+        static_cast<double>(elapsedMicros(startedAt)) / 1000000.0;
+    file << std::fixed << std::setprecision(3) << elapsedSeconds << "s "
+         << message << '\n';
+    file.flush();
+  }
+
+private:
+  std::chrono::steady_clock::time_point startedAt;
+  std::filesystem::path path;
+  std::ofstream file;
+};
+
+void replayExportLog(ReplayVideoExportLog *log, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  const std::string message = formatString(format, args);
+  va_end(args);
+
+  if (log != nullptr) {
+    log->write(message);
+  } else {
+    SDL_Log("%s", message.c_str());
+  }
 }
 
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
@@ -931,7 +993,7 @@ public:
 
   bool open(const std::filesystem::path &wavPath,
             const std::filesystem::path &outputPath, int width, int height,
-            int fps, std::string &errorMessage) {
+            int fps, ReplayVideoExportLog *log, std::string &errorMessage) {
     this->outputPath = outputPath;
     this->width = width;
     this->height = height;
@@ -1016,13 +1078,14 @@ public:
     }
     videoFrameDuration = 1;
     const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
-    SDL_Log("Replay video export encoder: %s, pixel format: %s, time base: "
-            "%d/%d, frame duration: %lld, H.264 level: %s",
-            videoCodec->name, pixelFormatName != nullptr ? pixelFormatName
-                                                         : "unknown",
-            videoContext->time_base.num, videoContext->time_base.den,
-            static_cast<long long>(videoFrameDuration),
-            replayVideoH264LevelString(h264Level).c_str());
+    replayExportLog(log,
+                    "Replay video export encoder: %s, pixel format: %s, time "
+                    "base: %d/%d, frame duration: %lld, H.264 level: %s",
+                    videoCodec->name,
+                    pixelFormatName != nullptr ? pixelFormatName : "unknown",
+                    videoContext->time_base.num, videoContext->time_base.den,
+                    static_cast<long long>(videoFrameDuration),
+                    replayVideoH264LevelString(h264Level).c_str());
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
     if (ret < 0) {
       return failOpen("Failed to configure MP4 video stream: " +
@@ -1161,8 +1224,8 @@ public:
     if (ret < 0) {
       return failOpen("Failed to write MP4 header: " + ffmpegError(ret));
     }
-    SDL_Log("Replay video export MP4 stream time base: %d/%d",
-            videoStream->time_base.num, videoStream->time_base.den);
+    replayExportLog(log, "Replay video export MP4 stream time base: %d/%d",
+                    videoStream->time_base.num, videoStream->time_base.den);
 
     return true;
   }
@@ -1295,8 +1358,9 @@ public:
   bool start(const std::filesystem::path &wavPath,
              const std::filesystem::path &outputPath, int width, int height,
              int fps, size_t frameBytes, size_t bufferCount,
-             std::string &errorMessage) {
-    if (!writer.open(wavPath, outputPath, width, height, fps, errorMessage)) {
+             ReplayVideoExportLog *log, std::string &errorMessage) {
+    if (!writer.open(wavPath, outputPath, width, height, fps, log,
+                     errorMessage)) {
       return false;
     }
 
@@ -1455,7 +1519,7 @@ ReplayVideoExportResult renderReplayVideoToMp4(
     ApplicationContext &context, bms_parser::Chart &chart,
     const ReplayData &replay, const AppSettings &settings,
     const ReplayVideoExportOptions &options, const std::filesystem::path &wavPath,
-    const std::filesystem::path &outputPath) {
+    const std::filesystem::path &outputPath, ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
@@ -1581,13 +1645,23 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   ReplayAsyncFrameEncoder encoder;
   std::string errorMessage;
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
-                     frameBufferCount, errorMessage)) {
+                     frameBufferCount, log, errorMessage)) {
     cleanupBgfx();
     return {.success = false, .outputPath = outputPath, .message = errorMessage};
   }
-  SDL_Log("Replay video export frame buffers/readbacks: %zu, encoder threads: "
-          "%d",
-          frameBufferCount, replayVideoEncoderThreadCount());
+  const double durationSeconds =
+      static_cast<double>(durationMicros) / 1000000.0;
+  const double rawFrameGiB =
+      (static_cast<double>(frameBytes) * static_cast<double>(frameCount)) /
+      static_cast<double>(1024ULL * 1024ULL * 1024ULL);
+  replayExportLog(log,
+                  "Replay video export workload: %zu frames, %.2fs, %.2f GiB "
+                  "BGRA readback",
+                  frameCount, durationSeconds, rawFrameGiB);
+  replayExportLog(log,
+                  "Replay video export frame buffers/readbacks: %zu, encoder "
+                  "threads: %d",
+                  frameBufferCount, replayVideoEncoderThreadCount());
 
   RenderContext renderContext;
   size_t replayCursor = 0;
@@ -1709,8 +1783,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
 
     if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
         frameIndex + 1 == frameCount) {
-      SDL_Log("Replay video export encoded frame %zu/%zu", frameIndex + 1,
-              frameCount);
+      replayExportLog(log, "Replay video export encoded frame %zu/%zu",
+                      frameIndex + 1, frameCount);
     }
   }
 
@@ -1728,14 +1802,15 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   if (!result.success && result.outputPath.empty()) {
     result.outputPath = outputPath;
   }
-  SDL_Log("Replay video export profile: %.2fs total, %.2fs render submit, "
-          "%.2fs readback wait, %.2fs encode worker, %.2fs waiting for frame "
-          "buffers",
-          static_cast<double>(elapsedMicros(exportStart)) / 1000000.0,
-          static_cast<double>(renderSubmitMicros) / 1000000.0,
-          static_cast<double>(readbackWaitMicros) / 1000000.0,
-          static_cast<double>(encoder.encodedMicros()) / 1000000.0,
-          static_cast<double>(bufferWaitMicros) / 1000000.0);
+  replayExportLog(log,
+                  "Replay video export profile: %.2fs total, %.2fs render "
+                  "submit, %.2fs readback wait, %.2fs encode worker, %.2fs "
+                  "waiting for frame buffers",
+                  static_cast<double>(elapsedMicros(exportStart)) / 1000000.0,
+                  static_cast<double>(renderSubmitMicros) / 1000000.0,
+                  static_cast<double>(readbackWaitMicros) / 1000000.0,
+                  static_cast<double>(encoder.encodedMicros()) / 1000000.0,
+                  static_cast<double>(bufferWaitMicros) / 1000000.0);
   return result;
 }
 
@@ -1777,8 +1852,19 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   const std::string baseName =
       sanitizeFileNamePart(chart->Meta.Title) + "_" + makeTimestamp();
   const auto tempDir = outputDir / (baseName + "_tmp");
+  const auto logPath = outputDir / (baseName + ".log");
+  ReplayVideoExportLog exportLog(logPath);
+  replayExportLog(&exportLog, "Replay export log: %s",
+                  logPath.string().c_str());
+  replayExportLog(&exportLog, "Replay export chart: %s",
+                  chart->Meta.Title.c_str());
+  const auto totalStart = std::chrono::steady_clock::now();
+
   std::filesystem::create_directories(tempDir, ec);
   if (ec) {
+    replayExportLog(&exportLog,
+                    "Replay export failed to create work directory: %s",
+                    tempDir.string().c_str());
     return {.success = false,
             .message = "Failed to create replay export work directory"};
   }
@@ -1788,35 +1874,52 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
   const auto wavPath = tempDir / "audio.wav";
   const auto outputPath = outputDir / (baseName + ".mp4");
 
-  SDL_Log("Replay export audio: %s", wavPath.string().c_str());
+  replayExportLog(&exportLog, "Replay export audio: %s",
+                  wavPath.string().c_str());
+  const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult =
       writeReplayAudioTrack(*chart, replay, context.settings, wavPath);
   if (!audioResult.success) {
+    replayExportLog(&exportLog, "Replay export audio failed: %s",
+                    audioResult.message.c_str());
     std::filesystem::remove_all(tempDir, ec);
     return audioResult;
   }
+  replayExportLog(&exportLog, "Replay export audio finished in %.2fs",
+                  static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
 
-  SDL_Log("Replay export MP4: %s (%dx%d @ %dfps)",
-          outputPath.string().c_str(), resolvedOptions.width,
-          resolvedOptions.height, resolvedOptions.fps);
+  replayExportLog(&exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
+                  outputPath.string().c_str(), resolvedOptions.width,
+                  resolvedOptions.height, resolvedOptions.fps);
+  const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult = renderReplayVideoToMp4(
       context, *chart, replay, context.settings, resolvedOptions, wavPath,
-      outputPath);
+      outputPath, &exportLog);
   if (!muxResult.success) {
+    replayExportLog(&exportLog, "Replay export MP4 failed: %s",
+                    muxResult.message.c_str());
     std::filesystem::remove(outputPath, ec);
     std::filesystem::remove_all(tempDir, ec);
     return muxResult;
   }
+  replayExportLog(&exportLog, "Replay export MP4 finished in %.2fs",
+                  static_cast<double>(elapsedMicros(videoStart)) / 1000000.0);
 
   std::filesystem::remove_all(tempDir, ec);
   if (ec) {
-    SDL_Log("Replay export could not clean work directory: %s",
-            tempDir.string().c_str());
+    replayExportLog(&exportLog,
+                    "Replay export could not clean work directory: %s",
+                    tempDir.string().c_str());
   }
 
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
   if (!platformSaveResult.success) {
+    replayExportLog(&exportLog, "Replay export platform save failed: %s",
+                    platformSaveResult.message.c_str());
     return platformSaveResult;
   }
+  replayExportLog(&exportLog, "Replay export finished in %.2fs: %s",
+                  static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
+                  platformSaveResult.message.c_str());
   return platformSaveResult;
 }
