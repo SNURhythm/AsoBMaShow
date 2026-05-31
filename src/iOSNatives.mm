@@ -415,7 +415,6 @@ public:
         return false;
       }
       audioInput.expectsMediaDataInRealTime = NO;
-      audioInput.mediaTimeScale = kIOSReplaySampleRate;
       if (![writer canAddInput:audioInput]) {
         errorMessage = "Replay video writer could not add audio input";
         return false;
