@@ -9,6 +9,7 @@
 #include "IRhythmControl.h"
 #include "IInputSource.h"
 #include <map>
+#include <vector>
 
 struct FlickState {
   float startX, startY;
@@ -21,11 +22,12 @@ class RhythmInputHandler : public IInputHandler {
 private:
   IInputSource *sdlInputSource = nullptr;
   IInputSource *touchInputSource = nullptr;
-  int keyLaneCount;
   int totalLaneCount;
-  bool isDP;
+  int scratchLaneCount;
+  std::vector<int> laneOrder;
   std::map<SDL_FingerID, int> fingerToLane;
   int clampLane(int lane) const;
+  bool isScratchLane(int lane) const;
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);

@@ -105,7 +105,7 @@ private:
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
-  int keyLaneCount;
+  int scratchLaneCount = 0;
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
 

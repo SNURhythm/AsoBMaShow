@@ -20,6 +20,7 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
                          int visibleTimeGreenNumber, bool renderHud)
     : latePoorTiming(latePoorTiming), chart(chart),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud) {
+  scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
@@ -79,8 +80,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   }
   constexpr int width = 128;
   constexpr int height = 40;
-  keyLaneCount = chart->Meta.GetKeyLaneCount();
-  noteRenderWidth = 1.0f * 8.0f / chart->Meta.GetTotalLaneCount();
+  noteRenderWidth =
+      laneOrder.empty() ? 1.0f : 8.0f / static_cast<float>(laneOrder.size());
   noteImageHeight = height;
   noteImageWidth = width;
   noteRenderHeight = static_cast<float>(noteImageHeight) /
@@ -726,6 +727,9 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
         event.judgement == None || event.noteTimeMicros < 0) {
       continue;
     }
+    if (laneToOrderIndex.find(event.lane) == laneToOrderIndex.end()) {
+      continue;
+    }
 
     const auto timelineIt = std::lower_bound(
         timelines.begin(), timelines.end(), event.noteTimeMicros,
@@ -788,25 +792,22 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
 }
 
-inline bool BMSRenderer::isLeftScratch(int lane) const { return lane == 7; }
-inline bool BMSRenderer::isRightScratch(int lane) const { return lane == 15; }
+inline bool BMSRenderer::isLeftScratch(int lane) const {
+  return scratchLaneCount > 0 && lane == 7;
+}
+inline bool BMSRenderer::isRightScratch(int lane) const {
+  return scratchLaneCount > 1 && lane == 15;
+}
 inline bool BMSRenderer::isScratch(int lane) const {
   return isLeftScratch(lane) || isRightScratch(lane);
 }
 inline float BMSRenderer::computeLaneX(int lane) const {
-  if (isLeftScratch(lane)) {
-    return 0.0f;
-  }
-  if (lane >= 8) {
-    lane -=
-        keyLaneCount == 14
-            ? 1
-            : (isRightScratch(lane) ? 5
-                                    : 3); // skip left scratch index (7), since
-                                          // 7 is already placed in the leftmost
+  if (const auto it = laneToOrderIndex.find(lane);
+      it != laneToOrderIndex.end()) {
+    return static_cast<float>(it->second) * noteRenderWidth;
   }
 
-  return (lane + 1) * noteRenderWidth;
+  return 0.0f;
 }
 inline float BMSRenderer::laneToX(int lane) const {
   if (lane >= 0 && static_cast<size_t>(lane) < laneXLookup.size()) {

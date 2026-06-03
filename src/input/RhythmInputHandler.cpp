@@ -9,6 +9,7 @@
 #include "bx/math.h"
 #include "../rendering/Camera.h"
 #include "../targets.h"
+#include <algorithm>
 #include <array>
 #include <map>
 #include <cmath>
@@ -59,7 +60,7 @@ void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
                                           0,
                                           false};
   }
-  if (lane == 7 || lane == 15)
+  if (isScratchLane(lane))
     return;
 
   control->pressLane(lane);
@@ -86,7 +87,7 @@ void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
   if (fingerToLane.contains(fingerIndex)) {
     int lane = fingerToLane[fingerIndex];
     // is scratch lane
-    if (!(lane == 7 || lane == 15))
+    if (!isScratchLane(lane))
       return;
     if (!flickStates.contains(fingerIndex))
       return;
@@ -242,24 +243,22 @@ void RhythmInputHandler::pumpPendingTouchEvents() {
   releaseExpiredCancelledTouches();
 }
 int RhythmInputHandler::clampLane(int lane) const {
-  if (lane < 0) {
-    return 7; // left scratch
+  if (laneOrder.empty()) {
+    return 0;
   }
-  if (lane >= keyLaneCount) {
-    return isDP ? 15 : 7; // right scratch
-  }
-  if (lane >= 7 && keyLaneCount == 14) {
-    // 14Keys: 7 is scratch, so we should map 7~13 to 8~14
-    lane += 1;
-  }
-  if (lane >= 5 && keyLaneCount == 10) {
-    // 10Keys: 5,6 is empty and 7 is scratch, so we should map 5~9 to 8~12
-    lane += 3;
-  }
-  return lane;
+  const int clampedLane =
+      std::clamp(lane, 0, static_cast<int>(laneOrder.size()) - 1);
+  return laneOrder[clampedLane];
+}
+bool RhythmInputHandler::isScratchLane(int lane) const {
+  return (scratchLaneCount > 0 && lane == 7) ||
+         (scratchLaneCount > 1 && lane == 15);
 }
 int RhythmInputHandler::touchToLane(Vector3 location) {
   SDL_Log("Touch to lane: %f, %f, %f", location.x, location.y, location.z);
+  if (totalLaneCount <= 0) {
+    return 0;
+  }
   const bx::Vec3 nearPoint = rendering::game_camera.deproject(
       location.x, location.y, rendering::game_camera.getNearClip());
   const bx::Vec3 farPoint = rendering::game_camera.deproject(
@@ -273,7 +272,7 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
     position = {nearPoint.x + ray.x * t, nearPoint.y + ray.y * t,
                 nearPoint.z + ray.z * t};
   }
-  int line = (int)(position.x * totalLaneCount / 8.0f) - 1;
+  int line = static_cast<int>(position.x * totalLaneCount / 8.0f);
   line = clampLane(line);
   SDL_Log("Touch to lane: %d", line);
   return line;
@@ -294,6 +293,24 @@ RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
         // scratch: LShift, RShift
         {SDL_KeyCode::SDLK_LSHIFT, 7},
         {SDL_KeyCode::SDLK_RSHIFT, 7}}},
+      {8,
+       {// keys: ASDF, JKL;
+        {SDL_KeyCode::SDLK_a, 0},
+        {SDL_KeyCode::SDLK_s, 1},
+        {SDL_KeyCode::SDLK_d, 2},
+        {SDL_KeyCode::SDLK_f, 3},
+        {SDL_KeyCode::SDLK_j, 4},
+        {SDL_KeyCode::SDLK_k, 5},
+        {SDL_KeyCode::SDLK_l, 6},
+        {SDL_KeyCode::SDLK_SEMICOLON, 7}}},
+      {6,
+       {// keys: SDF, JKL
+        {SDL_KeyCode::SDLK_s, 0},
+        {SDL_KeyCode::SDLK_d, 1},
+        {SDL_KeyCode::SDLK_f, 2},
+        {SDL_KeyCode::SDLK_j, 3},
+        {SDL_KeyCode::SDLK_k, 4},
+        {SDL_KeyCode::SDLK_l, 5}}},
       {5,
        {// keys: DF, SPACE, JK
         {SDL_KeyCode::SDLK_d, 0},
@@ -304,6 +321,12 @@ RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
         // scratch: LShift, RShift
         {SDL_KeyCode::SDLK_LSHIFT, 7},
         {SDL_KeyCode::SDLK_RSHIFT, 7}}},
+      {4,
+       {// keys: DF, JK
+        {SDL_KeyCode::SDLK_d, 0},
+        {SDL_KeyCode::SDLK_f, 1},
+        {SDL_KeyCode::SDLK_j, 2},
+        {SDL_KeyCode::SDLK_k, 3}}},
       {14,
        {// keys: ZSXDCFV and MK,L.;/
         {SDL_KeyCode::SDLK_z, 0},
@@ -341,7 +364,7 @@ RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
         // Rscratch: RShift
         {SDL_KeyCode::SDLK_RSHIFT, 15}}}};
   keyMap = DefaultKeyMap[meta.KeyMode];
-  keyLaneCount = meta.GetKeyLaneCount();
-  totalLaneCount = meta.GetTotalLaneCount();
-  isDP = meta.IsDP;
+  laneOrder = meta.GetTotalLaneIndices();
+  totalLaneCount = static_cast<int>(laneOrder.size());
+  scratchLaneCount = meta.GetScratchLaneCount();
 }
