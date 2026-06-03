@@ -9,6 +9,7 @@
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
 #include <algorithm>
+#include <limits>
 #include <unordered_set>
 #ifdef _WIN32
 #include <timeapi.h>
@@ -16,6 +17,15 @@
 #include <avrt.h>
 #pragma comment(lib, "avrt.lib")
 #endif
+
+namespace {
+constexpr int kSchedulerPrecisionHz = 8000;
+constexpr long long kSchedulerTickMicros = 1000000LL / kSchedulerPrecisionHz;
+// Do not trust thread sleep for event timing; it is only used outside this
+// lead window to reduce idle CPU while preserving the existing poll cadence.
+constexpr long long kSchedulerPrecisionWindowMicros = 5000;
+constexpr long long kSchedulerMaxSleepMicros = 1000;
+} // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : audio(stopwatch), stopwatch(stopwatch) {
@@ -517,10 +527,9 @@ void Jukebox::play() {
   isPlaying = true;
   stopwatch->reset();
   stopwatch->start();
-  constexpr int hz = 8000;
-  SDL_Log("Jukebox scheduler tick: %d Hz", hz);
+  SDL_Log("Jukebox scheduler precision: %d Hz", kSchedulerPrecisionHz);
 
-  playThread = std::thread([this, hz] {
+  playThread = std::thread([this] {
 #ifdef _WIN32
     // Set thread priority using MMCS for audio playback
     HANDLE taskHandle = nullptr;
@@ -534,23 +543,28 @@ void Jukebox::play() {
 #endif
     using Clock = std::chrono::steady_clock;
     auto prevTimestamp = Clock::now();
-    auto interval = std::chrono::microseconds(1000000 / hz);
-    auto targetNextFrame = Clock::now() + interval;
+    const auto interval = std::chrono::microseconds(kSchedulerTickMicros);
     while (isPlaying) {
-      auto loopStartTimestamp = Clock::now();
       if (!stopwatch->isRunning()) {
         std::this_thread::sleep_for(interval);
         prevTimestamp = Clock::now();
-        targetNextFrame = prevTimestamp + interval;
         continue;
       }
+
+      long long nextWakeMicros = std::numeric_limits<long long>::max();
       {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
         auto positionMicro = stopwatch->elapsedMicros();
         const long long visualDelayMicros = getVisualOffsetMicros();
+        auto scheduleNextWake = [&](long long targetMicros) {
+          nextWakeMicros =
+              std::min(nextWakeMicros, std::max(targetMicros, positionMicro));
+        };
+
         if (onTickCb) {
           onTickCb(positionMicro);
+          scheduleNextWake(positionMicro + kSchedulerTickMicros);
         }
 
         while (audioCursor < audioList.size()) {
@@ -563,6 +577,9 @@ void Jukebox::play() {
             audio.playSound(it->second.c_str());
           }
           audioCursor++;
+        }
+        if (audioCursor < audioList.size()) {
+          scheduleNextWake(audioList[audioCursor].first);
         }
 
         while (bmpCursor < bmpList.size()) {
@@ -599,6 +616,9 @@ void Jukebox::play() {
           }
           bmpCursor++;
         }
+        if (bmpCursor < bmpList.size()) {
+          scheduleNextWake(bmpList[bmpCursor].first + visualDelayMicros);
+        }
         while (bmpLayerCursor < bmpLayerList.size()) {
           auto &target = bmpLayerList[bmpLayerCursor];
           if (positionMicro < target.first + visualDelayMicros) {
@@ -633,6 +653,10 @@ void Jukebox::play() {
           }
           bmpLayerCursor++;
         }
+        if (bmpLayerCursor < bmpLayerList.size()) {
+          scheduleNextWake(bmpLayerList[bmpLayerCursor].first +
+                           visualDelayMicros);
+        }
       }
 
       auto currentTimestamp = Clock::now();
@@ -649,23 +673,26 @@ void Jukebox::play() {
                                                 std::memory_order_relaxed);
       prevTimestamp = currentTimestamp;
 
-      targetNextFrame += interval;
-      if (targetNextFrame < Clock::now()) {
-        // we're late, skip sleeping
+      long long sleepMicros = kSchedulerMaxSleepMicros;
+      if (nextWakeMicros != std::numeric_limits<long long>::max()) {
+        const long long currentSongMicros = stopwatch->elapsedMicros();
+        const long long untilNextMicros = nextWakeMicros - currentSongMicros;
+        if (untilNextMicros <= 0) {
+          std::this_thread::yield();
+          continue;
+        }
+        if (untilNextMicros <= kSchedulerPrecisionWindowMicros) {
+          std::this_thread::yield();
+          continue;
+        }
+        sleepMicros =
+            std::min(kSchedulerMaxSleepMicros,
+                     untilNextMicros - kSchedulerPrecisionWindowMicros);
+      }
+      if (sleepMicros <= 0) {
         continue;
       }
-
-      // sleep only if hz is low enough
-      if (hz <= 250) {
-        auto loopRunTime = Clock::now() - loopStartTimestamp;
-        auto sleepTime = std::chrono::microseconds(1000000 / hz) - loopRunTime;
-        // 1.4 is a magic number to avoid sleeping longer than needed
-        std::this_thread::sleep_for(sleepTime / 1.4);
-      }
-      // spin wait for the rest of the time
-      while (Clock::now() < targetNextFrame) {
-        std::this_thread::yield();
-      }
+      std::this_thread::sleep_for(std::chrono::microseconds(sleepMicros));
     }
 #ifdef _WIN32
     // Clean up MMCS handle
