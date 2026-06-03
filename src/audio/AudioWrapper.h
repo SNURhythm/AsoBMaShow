@@ -1,6 +1,7 @@
 #pragma once
 
 #include <miniaudio.h>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../path.h"
@@ -9,7 +10,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <deque>
 #include <unordered_map>
 
 // Simple Biquad Filter
@@ -109,11 +109,34 @@ struct ScheduledSound {
   uint64_t sequence;
 };
 
+enum class AudioCommandType : uint8_t { PlayNow, Schedule, StopAll };
+
+struct AudioCommand {
+  AudioCommandType type = AudioCommandType::StopAll;
+  SoundData *soundData = nullptr;
+  long long startMicros = 0;
+  uint64_t sequence = 0;
+};
+
+constexpr size_t kMaxActiveSounds = 512;
+constexpr size_t kMaxScheduledSounds = 65536;
+constexpr size_t kAudioCommandQueueSize = 4096;
+
+struct AudioCallbackState {
+  AudioCallbackState();
+
+  std::unique_ptr<PlayingSound[]> playingSounds;
+  size_t playingSoundCount = 0;
+  std::unique_ptr<ScheduledSound[]> scheduledSounds;
+  size_t scheduledSoundCount = 0;
+  std::unique_ptr<AudioCommand[]> commandQueue;
+  std::atomic<uint32_t> commandReadCursor{0};
+  std::atomic<uint32_t> commandWriteCursor{0};
+};
+
 struct UserData {
   Stopwatch *stopwatch;
-  std::mutex *mutex;
-  std::vector<PlayingSound> *playingSounds;
-  std::deque<ScheduledSound> *scheduledSounds;
+  AudioCallbackState *callbackState;
   std::atomic<int> *sampleRate;
   std::atomic<long long> *audioClockBaseMicros;
   std::atomic<int64_t> *audioClockFrameCursor;
@@ -154,10 +177,9 @@ private:
   std::unique_ptr<IAudioBackend> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
-  std::vector<PlayingSound> playingSounds;
-  std::deque<ScheduledSound> scheduledSounds;
-  uint64_t scheduledSoundSequence = 0;
-  std::mutex playingSoundsMutex;
+  AudioCallbackState callbackState;
+  std::atomic<uint64_t> scheduledSoundSequence{0};
+  std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
   std::mutex soundDataListMutex;
@@ -177,4 +199,7 @@ private:
   Stopwatch *stopwatch;
 
   void updateCurrentSampleRate();
+  bool appendScheduledSound(SoundData *soundData, long long startMicros,
+                            uint64_t sequence);
+  void clearCallbackState();
 };
