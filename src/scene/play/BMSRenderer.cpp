@@ -84,7 +84,6 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
     }
   }
   buildTimelineScrollPositions();
-  groupedReplayGhostEvents.resize(timelines.size());
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -426,17 +425,32 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
              progress;
 }
 
-void BMSRenderer::drawReplayGhosts(size_t timelineIndex, float rxhs,
-                                   long long currentTimeMicros,
+void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
                                    double currentScrollPosition) {
-  if (timelineIndex >= groupedReplayGhostEvents.size()) {
+  if (replayGhostEvents.empty()) {
     return;
   }
 
-  for (const auto &event : groupedReplayGhostEvents[timelineIndex]) {
-    if (event.judgeTimeMicros < currentTimeMicros) {
-      continue;
-    }
+  const auto visibleTimeMs = std::max(
+      1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
+  const long long ghostLookaheadMicros =
+      static_cast<long long>(visibleTimeMs * 1000.0f) + latePoorTiming;
+  const long long latestGhostTime = currentTimeMicros + ghostLookaheadMicros;
+
+  const auto firstVisible = std::lower_bound(
+      replayGhostEvents.begin(), replayGhostEvents.end(), currentTimeMicros,
+      [](const ReplayGhostEvent &event, long long timeMicros) {
+        return event.judgeTimeMicros < timeMicros;
+      });
+  const auto lastVisible =
+      std::upper_bound(firstVisible, replayGhostEvents.end(), latestGhostTime,
+                       [](long long timeMicros,
+                          const ReplayGhostEvent &event) {
+                         return timeMicros < event.judgeTimeMicros;
+                       });
+
+  for (auto it = firstVisible; it != lastVisible; ++it) {
+    const auto &event = *it;
     const double eventScrollPosition =
         scrollPositionAtTime(event.judgeTimeMicros);
     const float ghostY =
@@ -630,7 +644,6 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
-    drawReplayGhosts(i, rxhs, micro, currentScrollPosition);
     // render landmine notes
     for (const auto &note : timeLine->LandmineNotes) {
       if (note != nullptr) {
@@ -643,6 +656,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   for (const auto &pair : longNoteLookahead) {
     drawLongNote(pair.second, upperBound, pair.first);
   }
+  drawReplayGhosts(rxhs, micro, currentScrollPosition);
 
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
@@ -729,8 +743,7 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
 }
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {
-  groupedReplayGhostEvents.clear();
-  groupedReplayGhostEvents.resize(timelines.size());
+  replayGhostEvents.clear();
   if (replayData == nullptr) {
     return;
   }
@@ -755,15 +768,24 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
       continue;
     }
 
-    const size_t timelineIndex =
-        static_cast<size_t>(std::distance(timelines.begin(), timelineIt));
-    groupedReplayGhostEvents[timelineIndex].push_back({
+    replayGhostEvents.push_back({
         .lane = event.lane,
         .noteTimeMicros = event.noteTimeMicros,
         .judgeTimeMicros = event.judgeTimeMicros,
         .judgement = event.judgement,
     });
   }
+
+  std::sort(replayGhostEvents.begin(), replayGhostEvents.end(),
+            [](const ReplayGhostEvent &a, const ReplayGhostEvent &b) {
+              if (a.judgeTimeMicros != b.judgeTimeMicros) {
+                return a.judgeTimeMicros < b.judgeTimeMicros;
+              }
+              if (a.noteTimeMicros != b.noteTimeMicros) {
+                return a.noteTimeMicros < b.noteTimeMicros;
+              }
+              return a.lane < b.lane;
+            });
 }
 
 void BMSRenderer::drawRect(float width, float height, float x, float y,

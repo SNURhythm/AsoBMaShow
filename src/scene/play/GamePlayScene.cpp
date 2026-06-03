@@ -467,9 +467,6 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                             judgedTime, poorResult);
         }
       } else if (timeline->Timing <= judgedTime) {
-        if (replayPlayback) {
-          continue;
-        }
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
           if (note == nullptr) {
@@ -489,14 +486,22 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 continue;
               }
               longNote->Release(judgedTime);
+              if (replayPlayback) {
+                continue;
+              }
               const auto judgeResult =
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
               onJudge(judgeResult);
+              appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
+                                time, judgedTime, judgeResult);
               if (options.autoPlay) {
                 renderer->onLaneReleased(note->Lane, visualNow);
               }
               continue;
             }
+          }
+          if (replayPlayback) {
+            continue;
           }
           if (options.autoPlay) // NormalNote or LongNote's head
           {
