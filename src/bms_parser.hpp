@@ -232,6 +232,7 @@ public:
   int TotalLandmineNotes = 0;
   int LnMode = 0; // 0: user decides, 1: LN, 2: CN, 3: HCN
   std::optional<unsigned int> RandomSeed;
+  std::optional<std::string> RandomPrng;
 
   [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
   [[nodiscard]] bool IsScratchlessKeyMode() const {
@@ -379,7 +380,12 @@ public:
 namespace bms_parser {
 class Parser {
 public:
+  static constexpr const char *RandomPrngId = "std::mt19937_64";
+
   Parser();
+  static bool IsSupportedRandomPrng(const std::string &RandomPrng);
+  bool SetRandomPrng(const std::string &RandomPrng);
+  [[nodiscard]] const std::string &GetRandomPrng() const;
   void SetRandomSeed(unsigned int RandomSeed);
   [[nodiscard]] unsigned int GetRandomSeed() const;
 
@@ -401,6 +407,7 @@ private:
   int Lnobj = -1;
   int Lntype = 1;
   unsigned int Seed;
+  std::string RandomPrng = RandomPrngId;
   static inline int ParseHex(std::string_view Str);
   inline int ParseInt(std::string_view Str, bool forceBase32 = false) const;
   void ParseHeader(Chart *Chart, std::string_view cmd, std::string_view Xx,

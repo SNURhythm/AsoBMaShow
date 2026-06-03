@@ -172,6 +172,11 @@ std::unique_ptr<bms_parser::Chart>
 parseChartForReplay(const ChartMetaRecord &record, const ReplayData &replay,
                     std::atomic_bool &cancelled) {
   bms_parser::Parser parser;
+  if (replay.randomPrng.has_value() &&
+      !parser.SetRandomPrng(*replay.randomPrng)) {
+    SDL_Log("Unsupported replay random PRNG: %s", replay.randomPrng->c_str());
+    return nullptr;
+  }
   if (replay.randomSeed.has_value()) {
     parser.SetRandomSeed(*replay.randomSeed);
   }

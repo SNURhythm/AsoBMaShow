@@ -2248,6 +2248,10 @@ ReplayVideoExporter::Export(ApplicationContext &context, bms_parser::Chart *char
     replayExportLog(&exportLog, "Replay export random seed: %u",
                     *replay.randomSeed);
   }
+  if (replay.randomPrng.has_value()) {
+    replayExportLog(&exportLog, "Replay export random PRNG: %s",
+                    replay.randomPrng->c_str());
+  }
   const auto totalStart = std::chrono::steady_clock::now();
 
   std::filesystem::create_directories(tempDir, ec);

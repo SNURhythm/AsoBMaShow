@@ -192,6 +192,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay = {};
   recordedReplay.chartMeta = chart->Meta;
   recordedReplay.randomSeed = chart->Meta.RandomSeed;
+  recordedReplay.randomPrng = chart->Meta.RandomPrng;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.finalScore = 0;

@@ -258,6 +258,20 @@ Parser::Parser() : BpmTable{}, StopLengthTable{}, ScrollTable{} {
   Seed = seeder();
 }
 
+bool Parser::IsSupportedRandomPrng(const std::string &RandomPrng) {
+  return RandomPrng == RandomPrngId;
+}
+
+bool Parser::SetRandomPrng(const std::string &RandomPrng) {
+  if (!IsSupportedRandomPrng(RandomPrng)) {
+    return false;
+  }
+  this->RandomPrng = RandomPrng;
+  return true;
+}
+
+const std::string &Parser::GetRandomPrng() const { return RandomPrng; }
+
 void Parser::SetRandomSeed(unsigned int RandomSeed) { Seed = RandomSeed; }
 
 unsigned int Parser::GetRandomSeed() const { return Seed; }
@@ -334,6 +348,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   auto new_chart = new Chart();
   *chart = new_chart;
   new_chart->Meta.RandomSeed = Seed;
+  new_chart->Meta.RandomPrng = RandomPrng;
 
   static std::regex headerRegex(R"(^#([A-Za-z]+?)(\d\d)? +?(.+)?)");
 

@@ -32,6 +32,7 @@ struct ReplayData {
   int id = 0;
   bms_parser::ChartMeta chartMeta;
   std::optional<unsigned int> randomSeed;
+  std::optional<std::string> randomPrng;
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;
