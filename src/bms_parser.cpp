@@ -260,6 +260,8 @@ Parser::Parser() : BpmTable{}, StopLengthTable{}, ScrollTable{} {
 
 void Parser::SetRandomSeed(unsigned int RandomSeed) { Seed = RandomSeed; }
 
+unsigned int Parser::GetRandomSeed() const { return Seed; }
+
 int Parser::NoWav = -1;
 int Parser::MetronomeWav = -2;
 
@@ -331,6 +333,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 #endif
   auto new_chart = new Chart();
   *chart = new_chart;
+  new_chart->Meta.RandomSeed = Seed;
 
   static std::regex headerRegex(R"(^#([A-Za-z]+?)(\d\d)? +?(.+)?)");
 

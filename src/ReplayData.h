@@ -4,6 +4,7 @@
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@ struct ReplayEvent {
 struct ReplayData {
   int id = 0;
   bms_parser::ChartMeta chartMeta;
+  std::optional<unsigned int> randomSeed;
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;

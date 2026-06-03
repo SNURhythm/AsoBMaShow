@@ -189,6 +189,7 @@ public:
 
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -230,6 +231,7 @@ public:
   int TotalBackSpinNotes = 0;
   int TotalLandmineNotes = 0;
   int LnMode = 0; // 0: user decides, 1: LN, 2: CN, 3: HCN
+  std::optional<unsigned int> RandomSeed;
 
   [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
   [[nodiscard]] bool IsScratchlessKeyMode() const {
@@ -379,6 +381,7 @@ class Parser {
 public:
   Parser();
   void SetRandomSeed(unsigned int RandomSeed);
+  [[nodiscard]] unsigned int GetRandomSeed() const;
 
   void Parse(const std::filesystem::path &path, Chart **Chart,
              bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
