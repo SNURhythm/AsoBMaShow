@@ -168,6 +168,24 @@ std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
   return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
 }
 
+std::unique_ptr<bms_parser::Chart>
+parseChartForReplay(const ChartMetaRecord &record, const ReplayData &replay,
+                    std::atomic_bool &cancelled) {
+  bms_parser::Parser parser;
+  if (replay.randomPrng.has_value() &&
+      !parser.SetRandomPrng(*replay.randomPrng)) {
+    SDL_Log("Unsupported replay random PRNG: %s", replay.randomPrng->c_str());
+    return nullptr;
+  }
+  if (replay.randomSeed.has_value()) {
+    parser.SetRandomSeed(*replay.randomSeed);
+  }
+
+  bms_parser::Chart *parsedChart = nullptr;
+  parser.Parse(record.meta.BmsPath, &parsedChart, false, false, cancelled);
+  return std::unique_ptr<bms_parser::Chart>(parsedChart);
+}
+
 void styleActionButton(Button *button, TextView *text, bool enabled,
                        const Color &normal, const Color &hover,
                        const Color &pressed, const Color &border) {
@@ -1815,6 +1833,33 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return true;
         }
 
+        if (replay->randomSeed.has_value()) {
+          std::atomic_bool parseCancelled = false;
+          auto replayChart =
+              parseChartForReplay(record, replay.value(), parseCancelled);
+          if (replayChart == nullptr || parseCancelled) {
+            willStart.store(false);
+            if (replayWatchButtonText != nullptr) {
+              replayWatchButtonText->setText("Watch");
+            }
+            return true;
+          }
+
+          context.jukebox.stop();
+          context.jukebox.loadChart(*replayChart, true, parseCancelled);
+          if (parseCancelled) {
+            willStart.store(false);
+            if (replayWatchButtonText != nullptr) {
+              replayWatchButtonText->setText("Watch");
+            }
+            return true;
+          }
+
+          auto *loadedChart = replayChart.release();
+          delete selectedChart.exchange(loadedChart);
+          selectedChartMediaReady.store(true);
+        }
+
         auto *chart = loadedSelectedChart();
         if (chart == nullptr) {
           willStart.store(false);
@@ -1911,13 +1956,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
             return;
           }
 
-          bms_parser::Parser parser;
-          bms_parser::Chart *parsedChart = nullptr;
           std::atomic_bool parseCancelled = false;
-          parser.Parse(record.meta.BmsPath, &parsedChart, false, false,
-                       parseCancelled);
-          std::unique_ptr<bms_parser::Chart> chart(parsedChart);
-          if (chart == nullptr) {
+          auto chart = parseChartForReplay(record, replay.value(),
+                                           parseCancelled);
+          if (chart == nullptr || parseCancelled) {
             complete({.success = false, .message = "No Chart"});
             return;
           }

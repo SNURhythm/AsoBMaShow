@@ -20,6 +20,12 @@
 - Firebase PR builds should keep the fixed DerivedData path so Xcode can reuse `ArchiveIntermediates`.
 - When adding a new source file under `src`, add its path to `membershipExceptions` in `ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj` so the app target builds it.
 
+## BMS Parser Updates
+
+- `src/bms_parser.hpp` and `src/bms_parser.cpp` are amalgamated from `../bms-parser-cpp`. Do not edit parser code directly in this repo.
+- To change parser behavior, edit `../bms-parser-cpp`, run `make clean && make test && make test_amalgamation` there, then copy `../bms-parser-cpp/build/bms_parser.hpp` and `../bms-parser-cpp/build/bms_parser.cpp` into `src/`.
+- Commit and push the parser repo when parser behavior changes.
+
 ## Local Build Verification
 
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:
