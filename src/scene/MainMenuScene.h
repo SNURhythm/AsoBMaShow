@@ -172,6 +172,7 @@ private:
   void reloadFolderItems();
   void reloadChartList();
   void reloadScoreClearRanks();
+  void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;

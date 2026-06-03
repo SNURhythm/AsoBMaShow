@@ -332,7 +332,7 @@ void MainMenuScene::init() {
       std::jthread(CheckEntries, std::ref(context), std::ref(*this));
 }
 
-void MainMenuScene::onResume() { requestLibraryReload(true); }
+void MainMenuScene::onResume() { refreshScoreClearRanksIfNeeded(); }
 
 void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
                                  ApplicationContext &context,
@@ -593,12 +593,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
     return new LibraryFolderItemView(0, 0, 260, 44);
   };
   folderRecyclerView->itemHeight = 44;
-  folderRecyclerView->onBind = [](View *view, const LibraryFolderItem &item,
-                                  int idx, bool isSelected) {
+  folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
+                                      int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
       folderView->setItem(item.label, item.depth, item.count, isSelected,
-                          item.clearRank);
+                          clearRankForFolder(item.key));
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -1120,13 +1120,23 @@ void MainMenuScene::reloadScoreClearRanks() {
       main_menu_library::LoadFolderClearRanks(db, scoreClearRanks);
 }
 
+void MainMenuScene::refreshScoreClearRankViews() {
+  reloadScoreClearRanks();
+  if (folderRecyclerView != nullptr) {
+    folderRecyclerView->rebindVisibleItems();
+  }
+  if (recyclerView != nullptr) {
+    recyclerView->rebindVisibleItems();
+  }
+}
+
 void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   const std::uint64_t revision = ScoreDBHelper::GetInstance().GetRevision();
   if (scoreClearRanksRevision == 0 || revision == scoreClearRanksRevision) {
     return;
   }
 
-  requestLibraryReload(true);
+  refreshScoreClearRankViews();
 }
 
 int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
