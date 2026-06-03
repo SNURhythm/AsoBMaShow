@@ -111,6 +111,7 @@ private:
   TextView *replayModalTitleText = nullptr;
   TextView *replayExportProgressMessageText = nullptr;
   TextView *replayExportProgressPercentText = nullptr;
+  TextView *startButtonText = nullptr;
   RecyclerView<ReplaySummary> *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayModalExportButton = nullptr;
@@ -182,6 +183,7 @@ private:
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
   bms_parser::Chart *loadedSelectedChart() const;
+  void startSelectedChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildReplayModal();

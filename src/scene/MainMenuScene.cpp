@@ -442,6 +442,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalTitleText = nullptr;
   replayExportProgressMessageText = nullptr;
   replayExportProgressPercentText = nullptr;
+  startButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
@@ -536,10 +537,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     } else {
       jacketView->freeImage();
     }
+    previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
       SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
-      previewLoadCancelled = false;
       // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
         if (previewLoadCancelled) {
@@ -807,6 +808,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto startButton = new Button(0, 0, 200, 100);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  startButtonText = buttonText;
   buttonText->setText("Start");
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
@@ -817,7 +819,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                Color(133, 190, 244, 255),
                                Color(162, 212, 255, 255));
   startButton->setStyledBorderWidth(2);
-  startButton->setOnClickListener([this, &context, buttonText]() {
+  startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
     }
@@ -827,38 +829,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
         return;
       }
-      willStart.store(true);
-      buttonText->setText("Loading...");
-
-      defer(
-          [this, &context, buttonText]() {
-            ImageView::dropAllCache();
-            if (loadThread.joinable()) {
-              loadThread.join();
-            }
-            auto *chart = loadedSelectedChart();
-            if (chart == nullptr) {
-              willStart.store(false);
-              buttonText->setText("Start");
-              return true;
-            }
-            context.jukebox.stop();
-            context.sceneManager->changeScene(
-                new GamePlayScene(
-                    context, chart,
-                    {
-                        .startPosition = 0,
-                        .autoKeySound = !context.settings.inputKeysoundEnabled,
-                        .autoPlay = false,
-                        .gaugeType = selectedGaugeType,
-                        .gaugeAutoShift = selectedGaugeAutoShift,
-                    }),
-                true);
-            willStart.store(false);
-            buttonText->setText("Start");
-            return true;
-          },
-          0, true);
+      startSelectedChart();
     }
   });
   replayButtonSlot = new View();
@@ -936,7 +907,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     previewLoadCancelled = true;
     context.jukebox.stop();
-    context.sceneManager->changeScene("Settings");
+    context.sceneManager->changeScene("Settings", true);
   });
   right->addView(settingsButton);
 
@@ -1211,6 +1182,57 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
       item.text->setColor({216, 227, 241, 255});
     }
   }
+}
+
+void MainMenuScene::startSelectedChart() {
+  if (willStart.exchange(true)) {
+    return;
+  }
+
+  if (startButtonText != nullptr) {
+    startButtonText->setText("Loading...");
+  }
+  ImageView::dropAllCache();
+
+  const GaugeType gaugeType = selectedGaugeType;
+  const bool gaugeAutoShift = selectedGaugeAutoShift;
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+
+  defer(
+      [this, gaugeType, gaugeAutoShift, autoKeySound]() {
+        if (!selectedChartMediaReady.load() && loadThread.joinable()) {
+          SDL_Log("Waiting for preview chart load before start");
+          loadThread.join();
+        }
+
+        auto *chart = loadedSelectedChart();
+        if (chart == nullptr) {
+          willStart.store(false);
+          if (startButtonText != nullptr) {
+            startButtonText->setText("Start");
+          }
+          return true;
+        }
+
+        context.jukebox.stop();
+        context.sceneManager->changeScene(
+            new GamePlayScene(
+                context, chart,
+                {
+                    .startPosition = 0,
+                    .autoKeySound = autoKeySound,
+                    .autoPlay = false,
+                    .gaugeType = gaugeType,
+                    .gaugeAutoShift = gaugeAutoShift,
+                }),
+            true);
+        willStart.store(false);
+        if (startButtonText != nullptr) {
+          startButtonText->setText("Start");
+        }
+        return true;
+      },
+      0, true);
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
@@ -2039,6 +2061,7 @@ void MainMenuScene::cleanupScene() {
   replayModalTitleText = nullptr;
   replayExportProgressMessageText = nullptr;
   replayExportProgressPercentText = nullptr;
+  startButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
