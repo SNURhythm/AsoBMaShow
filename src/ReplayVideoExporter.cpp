@@ -752,6 +752,53 @@ void resetChartNotes(bms_parser::Chart &chart) {
   }
 }
 
+std::vector<bms_parser::LongNote *>
+collectReplayAutoReleaseTails(bms_parser::Chart &chart) {
+  std::vector<bms_parser::LongNote *> tails;
+  for (const auto &measure : chart.Measures) {
+    for (const auto &timeline : measure->TimeLines) {
+      for (auto *note : timeline->Notes) {
+        if (note == nullptr || !note->IsLongNote()) {
+          continue;
+        }
+        auto *longNote = static_cast<bms_parser::LongNote *>(note);
+        if (longNote->IsTail() && longNote->Timeline != nullptr) {
+          tails.push_back(longNote);
+        }
+      }
+    }
+  }
+
+  std::sort(tails.begin(), tails.end(),
+            [](const bms_parser::LongNote *a,
+               const bms_parser::LongNote *b) {
+              if (a->Timeline->Timing != b->Timeline->Timing) {
+                return a->Timeline->Timing < b->Timeline->Timing;
+              }
+              return a->Lane < b->Lane;
+            });
+  return tails;
+}
+
+void releaseDueReplayLongNoteTails(
+    const std::vector<bms_parser::LongNote *> &tails, size_t &cursor,
+    long long songTimeMicros) {
+  while (cursor < tails.size()) {
+    auto *tail = tails[cursor];
+    if (tail == nullptr || tail->Timeline == nullptr) {
+      ++cursor;
+      continue;
+    }
+    if (tail->Timeline->Timing > songTimeMicros) {
+      break;
+    }
+    if (!tail->IsPlayed && tail->IsHolding) {
+      tail->Release(tail->Timeline->Timing);
+    }
+    ++cursor;
+  }
+}
+
 class ScopedChartNoteReset {
 public:
   explicit ScopedChartNoteReset(bms_parser::Chart &chart) : chart(chart) {
@@ -1916,6 +1963,8 @@ ReplayVideoExportResult renderReplayVideoToMp4(
   renderer.setReplayData(&replay);
 
   const auto replayNotes = buildReplayNoteLookup(chart);
+  const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
+  size_t replayAutoReleaseTailCursor = 0;
   const long long durationMicros = calculateExportDurationMicros(chart, replay);
   const long long visualOffsetMicros =
       static_cast<long long>(settings.visualOffsetMs) * 1000LL;
@@ -2070,6 +2119,9 @@ ReplayVideoExportResult renderReplayVideoToMp4(
                                visualTimeMicros, replay.gaugeAutoShift);
       ++replayCursor;
     }
+    releaseDueReplayLongNoteTails(replayAutoReleaseTails,
+                                  replayAutoReleaseTailCursor,
+                                  songTimeMicros);
 
     const auto renderStart = std::chrono::steady_clock::now();
     bgfx::touch(rendering::clear_view);

@@ -58,6 +58,7 @@ struct ReplayGhostEvent {
   int lane = -1;
   long long noteTimeMicros = 0;
   long long judgeTimeMicros = 0;
+  double judgeScrollPosition = 0.0;
   Judgement judgement = None;
 };
 
@@ -101,7 +102,7 @@ private:
   float noteImageWidth = 0;
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
-  std::vector<std::vector<ReplayGhostEvent>> groupedReplayGhostEvents;
+  std::vector<ReplayGhostEvent> replayGhostEvents;
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
@@ -136,8 +137,7 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
-  void drawReplayGhosts(size_t timelineIndex, float rxhs,
-                        long long currentTimeMicros,
+  void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
   void buildTimelineScrollPositions();
