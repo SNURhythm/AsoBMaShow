@@ -232,17 +232,31 @@ public:
   int LnMode = 0; // 0: user decides, 1: LN, 2: CN, 3: HCN
 
   [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
-  [[nodiscard]] int GetScratchLaneCount() const { return IsDP ? 2 : 1; }
+  [[nodiscard]] bool IsScratchlessKeyMode() const {
+    return KeyMode == 4 || KeyMode == 6 || KeyMode == 8;
+  }
+  [[nodiscard]] int GetScratchLaneCount() const {
+    if (IsScratchlessKeyMode()) {
+      return 0;
+    }
+    return IsDP ? 2 : 1;
+  }
   [[nodiscard]] int GetTotalLaneCount() const {
     return KeyMode + GetScratchLaneCount();
   }
 
   [[nodiscard]] std::vector<int> GetKeyLaneIndices() const {
     switch (KeyMode) {
+    case 4:
+      return {0, 1, 2, 3};
     case 5:
       return {0, 1, 2, 3, 4};
+    case 6:
+      return {0, 1, 2, 3, 4, 5};
     case 7:
       return {0, 1, 2, 3, 4, 5, 6};
+    case 8:
+      return {0, 1, 2, 3, 4, 5, 6, 7};
     case 10:
       return {0, 1, 2, 3, 4, 8, 9, 10, 11, 12};
     case 14:
@@ -253,6 +267,9 @@ public:
   }
 
   [[nodiscard]] std::vector<int> GetScratchLaneIndices() const {
+    if (IsScratchlessKeyMode()) {
+      return {};
+    }
     if (IsDP) {
       return {7, 15};
     }
@@ -263,9 +280,13 @@ public:
     std::vector<int> Result;
     std::vector<int> keyLaneIndices = GetKeyLaneIndices();
     std::vector<int> scratchLaneIndices = GetScratchLaneIndices();
+    if (!scratchLaneIndices.empty()) {
+      Result.push_back(scratchLaneIndices.front());
+    }
     Result.insert(Result.end(), keyLaneIndices.begin(), keyLaneIndices.end());
-    Result.insert(Result.end(), scratchLaneIndices.begin(),
-                  scratchLaneIndices.end());
+    if (scratchLaneIndices.size() > 1) {
+      Result.push_back(scratchLaneIndices[1]);
+    }
 
     return Result;
   }
@@ -281,6 +302,7 @@ public:
   std::unordered_map<int, std::string> BmpTable;
 };
 } // namespace bms_parser
+
 /*
  * Copyright (C) 2024 VioletXF, khoeun03
  * This program is free software: you can redistribute it and/or modify

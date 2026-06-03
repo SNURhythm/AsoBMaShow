@@ -228,8 +228,27 @@ enum Channel {
 };
 
 namespace KeyAssign {
-int Beat7[] = {0, 1, 2, 3, 4, 7, -1, 5, 6, 8, 9, 10, 11, 12, 15, -1, 13, 14};
+const int Beat7[] = {0, 1, 2, 3, 4, 7, -1, 5, 6, 8, 9, 10, 11, 12, 15, -1, 13, 14};
+const int Beat4[] = {0, 1, -1, 2, 3, -1, -1, -1, -1,
+                     -1, -1, -1, -1, -1, -1, -1, -1, -1};
+const int Beat6[] = {0, 1, 2, -1, 3, -1, -1, 4, 5,
+                     -1, -1, -1, -1, -1, -1, -1, -1, -1};
+const int Beat8[] = {1, 2, 3, 4, 5, 0, -1, 6, 7,
+                     -1, -1, -1, -1, -1, -1, -1, -1, -1};
 int PopN[] = {0, 1, 2, 3, 4, -1, -1, -1, -1, -1, 5, 6, 7, 8, -1, -1, -1, -1};
+
+const int *Scratchless(int keyMode) {
+  switch (keyMode) {
+  case 4:
+    return Beat4;
+  case 6:
+    return Beat6;
+  case 8:
+    return Beat8;
+  default:
+    return Beat7;
+  }
+}
 } // namespace KeyAssign
 
 constexpr int TempKey = 16;
@@ -458,6 +477,18 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       RandomStack.pop_back();
       continue;
     }
+    if (MatchHeader(line, "#4K")) {
+      ParseHeader(new_chart, "4K", "", "");
+      continue;
+    }
+    if (MatchHeader(line, "#6K")) {
+      ParseHeader(new_chart, "6K", "", "");
+      continue;
+    }
+    if (MatchHeader(line, "#8K")) {
+      ParseHeader(new_chart, "8K", "", "");
+      continue;
+    }
 
     if (line.length() >= 7 && std::isdigit(static_cast<unsigned char>(line[1])) &&
         std::isdigit(static_cast<unsigned char>(line[2])) &&
@@ -593,54 +624,63 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         continue;
       }
 
+      const bool scratchlessKeyMode =
+          new_chart->Meta.IsScratchlessKeyMode();
+      const auto *keyAssign =
+          scratchlessKeyMode ? KeyAssign::Scratchless(new_chart->Meta.KeyMode)
+                             : KeyAssign::Beat7;
       auto laneNumber = 0; // NOTE: This is intentionally set to 0, not -1!
       if (channel >= P1KeyBase && channel < P1KeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P1KeyBase];
+        laneNumber = keyAssign[channel - P1KeyBase];
         channel = P1KeyBase;
       } else if (channel >= P2KeyBase && channel < P2KeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P2KeyBase + 9];
+        laneNumber = keyAssign[channel - P2KeyBase + 9];
         channel = P1KeyBase;
       } else if (channel >= P1InvisibleKeyBase &&
                  channel < P1InvisibleKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P1InvisibleKeyBase];
+        laneNumber = keyAssign[channel - P1InvisibleKeyBase];
         channel = P1InvisibleKeyBase;
       } else if (channel >= P2InvisibleKeyBase &&
                  channel < P2InvisibleKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P2InvisibleKeyBase + 9];
+        laneNumber = keyAssign[channel - P2InvisibleKeyBase + 9];
         channel = P1InvisibleKeyBase;
       } else if (channel >= P1LongKeyBase && channel < P1LongKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P1LongKeyBase];
+        laneNumber = keyAssign[channel - P1LongKeyBase];
         channel = P1LongKeyBase;
       } else if (channel >= P2LongKeyBase && channel < P2LongKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P2LongKeyBase + 9];
+        laneNumber = keyAssign[channel - P2LongKeyBase + 9];
         channel = P1LongKeyBase;
       } else if (channel >= P1MineKeyBase && channel < P1MineKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P1MineKeyBase];
+        laneNumber = keyAssign[channel - P1MineKeyBase];
         channel = P1MineKeyBase;
       } else if (channel >= P2MineKeyBase && channel < P2MineKeyBase + 9) {
-        laneNumber = KeyAssign::Beat7[channel - P2MineKeyBase + 9];
+        laneNumber = keyAssign[channel - P2MineKeyBase + 9];
         channel = P1MineKeyBase;
       }
 
-      if (laneNumber == -1) {
+      if (laneNumber == -1 ||
+          (scratchlessKeyMode && laneNumber >= new_chart->Meta.KeyMode)) {
         continue;
       }
-      const bool isScratch = laneNumber == 7 || laneNumber == 15;
-      if (laneNumber == 5 || laneNumber == 6 || laneNumber == 13 ||
-          laneNumber == 14) {
-        if (new_chart->Meta.KeyMode == 5) {
-          new_chart->Meta.KeyMode = 7;
-        } else if (new_chart->Meta.KeyMode == 10) {
-          new_chart->Meta.KeyMode = 14;
+      const bool isScratch =
+          !scratchlessKeyMode && (laneNumber == 7 || laneNumber == 15);
+      if (!scratchlessKeyMode) {
+        if (laneNumber == 5 || laneNumber == 6 || laneNumber == 13 ||
+            laneNumber == 14) {
+          if (new_chart->Meta.KeyMode == 5) {
+            new_chart->Meta.KeyMode = 7;
+          } else if (new_chart->Meta.KeyMode == 10) {
+            new_chart->Meta.KeyMode = 14;
+          }
         }
-      }
-      if (laneNumber >= 8) {
-        if (new_chart->Meta.KeyMode == 7) {
-          new_chart->Meta.KeyMode = 14;
-        } else if (new_chart->Meta.KeyMode == 5) {
-          new_chart->Meta.KeyMode = 10;
+        if (laneNumber >= 8) {
+          if (new_chart->Meta.KeyMode == 7) {
+            new_chart->Meta.KeyMode = 14;
+          } else if (new_chart->Meta.KeyMode == 5) {
+            new_chart->Meta.KeyMode = 10;
+          }
+          new_chart->Meta.IsDP = true;
         }
-        new_chart->Meta.IsDP = true;
       }
 
       const auto dataCount = data.length() / 2;
@@ -733,7 +773,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           timeline->ScrollChange = true;
           if (ScrollTable.find(id) != ScrollTable.end()) {
             timeline->Scroll = ScrollTable[id];
-            
+
           } else {
             timeline->Scroll = 1;
           }
@@ -876,7 +916,13 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       } else {
         timeline->Bpm = currentBpm;
       }
-      
+
+      if (timeline->ScrollChange) {
+        currentScroll = timeline->Scroll;
+      } else {
+        timeline->Scroll = currentScroll;
+      }
+
       if (timeline->ScrollChange) {
         currentScroll = timeline->Scroll;
       } else {
@@ -989,6 +1035,15 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       return; // TODO: handle this
     }
     this->UseBase62 = base == 62;
+  } else if (MatchHeader(cmd, "4K")) {
+    Chart->Meta.KeyMode = 4;
+    Chart->Meta.IsDP = false;
+  } else if (MatchHeader(cmd, "6K")) {
+    Chart->Meta.KeyMode = 6;
+    Chart->Meta.IsDP = false;
+  } else if (MatchHeader(cmd, "8K")) {
+    Chart->Meta.KeyMode = 8;
+    Chart->Meta.IsDP = false;
   } else if (MatchHeader(cmd, "PLAYER")) {
     Chart->Meta.Player =
         static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
