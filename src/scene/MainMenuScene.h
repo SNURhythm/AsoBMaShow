@@ -111,6 +111,7 @@ private:
   TextView *replayModalTitleText = nullptr;
   TextView *replayExportProgressMessageText = nullptr;
   TextView *replayExportProgressPercentText = nullptr;
+  TextView *startButtonText = nullptr;
   RecyclerView<ReplaySummary> *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayModalExportButton = nullptr;
@@ -172,6 +173,7 @@ private:
   void reloadFolderItems();
   void reloadChartList();
   void reloadScoreClearRanks();
+  void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
@@ -181,6 +183,7 @@ private:
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
   bms_parser::Chart *loadedSelectedChart() const;
+  void startSelectedChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildReplayModal();

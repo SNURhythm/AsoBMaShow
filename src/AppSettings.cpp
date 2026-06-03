@@ -66,6 +66,29 @@ const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
   }
   return "fit";
 }
+
+std::string parseGaugeTypeId(const std::string &value,
+                             const std::string &fallback) {
+  if (value == "assisted_easy") {
+    return "assisted_easy";
+  }
+  if (value == "easy") {
+    return "easy";
+  }
+  if (value == "normal") {
+    return "normal";
+  }
+  if (value == "hard") {
+    return "hard";
+  }
+  if (value == "exhard") {
+    return "exhard";
+  }
+  if (value == "gas") {
+    return "gas";
+  }
+  return fallback;
+}
 } // namespace
 
 std::filesystem::path AppSettings::configPath() {
@@ -97,6 +120,7 @@ void AppSettings::sanitize() {
                                    kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
   laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
                              kMaxLaneLength);
+  selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
 }
 
 bool AppSettings::save() const {
@@ -134,6 +158,7 @@ bool AppSettings::save() const {
        << bgaDisplayModeToString(sanitized.bgaDisplayMode) << "\n";
   file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
   file << "lane_length=" << sanitized.laneLength << "\n";
+  file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   return file.good();
 }
 
@@ -194,6 +219,9 @@ AppSettings AppSettings::load() {
         settings.laneAngleDegrees = std::stof(value);
       } else if (key == "lane_length") {
         settings.laneLength = std::stof(value);
+      } else if (key == "selected_gauge_type") {
+        settings.selectedGaugeType =
+            parseGaugeTypeId(value, settings.selectedGaugeType);
       }
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),
