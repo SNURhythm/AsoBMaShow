@@ -122,7 +122,10 @@ private:
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
-  rendering::TexBatchRenderer texBatchRenderer;
+  std::vector<rendering::TexBatchRenderer> noteTextureBatchRenderers;
+  std::unordered_map<uint64_t, size_t> noteTextureBatchLookup;
+  uint32_t longBodySubmitDepth = 0;
+  uint32_t noteSheetSubmitDepth = 0;
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
@@ -150,6 +153,13 @@ private:
   float computeLaneX(int lane) const;
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
+  rendering::TexBatchRenderer &noteTextureBatch(bgfx::TextureHandle texture,
+                                                uint32_t submitDepth);
+  rendering::TexBatchRenderer &sheetBatchFor(const NoteSheet &sheet);
+  rendering::TexBatchRenderer &longBodyBatchFor(const NoteSheet &sheet,
+                                                bool isHolding);
+  void beginNoteTextureBatches(uint32_t bodyDepth, uint32_t sheetDepth);
+  void flushNoteTextureBatches();
   float calculateLanePlaneScreenTopIntersection();
   NoteSheet graySheet;
   NoteSheet blueSheet;
