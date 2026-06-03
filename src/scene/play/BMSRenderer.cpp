@@ -427,35 +427,42 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
 
 void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
                                    double currentScrollPosition) {
-  if (replayGhostEvents.empty()) {
+  if (replayGhostEvents.empty() || rxhs <= 0.0f) {
     return;
   }
 
-  const auto visibleTimeMs = std::max(
-      1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
-  const long long ghostLookaheadMicros =
-      static_cast<long long>(visibleTimeMs * 1000.0f) + latePoorTiming;
-  const long long latestGhostTime = currentTimeMicros + ghostLookaheadMicros;
+  double firstVisibleScrollPosition =
+      currentScrollPosition +
+      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
+          static_cast<double>(rxhs);
+  double lastVisibleScrollPosition =
+      currentScrollPosition +
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
+  if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
+    std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
+  }
 
   const auto firstVisible = std::lower_bound(
-      replayGhostEvents.begin(), replayGhostEvents.end(), currentTimeMicros,
-      [](const ReplayGhostEvent &event, long long timeMicros) {
-        return event.judgeTimeMicros < timeMicros;
+      replayGhostEvents.begin(), replayGhostEvents.end(),
+      firstVisibleScrollPosition,
+      [](const ReplayGhostEvent &event, double scrollPosition) {
+        return event.judgeScrollPosition < scrollPosition;
       });
-  const auto lastVisible =
-      std::upper_bound(firstVisible, replayGhostEvents.end(), latestGhostTime,
-                       [](long long timeMicros,
-                          const ReplayGhostEvent &event) {
-                         return timeMicros < event.judgeTimeMicros;
-                       });
+  const auto lastVisible = std::upper_bound(
+      firstVisible, replayGhostEvents.end(), lastVisibleScrollPosition,
+      [](double scrollPosition, const ReplayGhostEvent &event) {
+        return scrollPosition < event.judgeScrollPosition;
+      });
 
   for (auto it = firstVisible; it != lastVisible; ++it) {
     const auto &event = *it;
-    const double eventScrollPosition =
-        scrollPositionAtTime(event.judgeTimeMicros);
+    if (event.judgeTimeMicros < currentTimeMicros) {
+      continue;
+    }
     const float ghostY =
         judgeY +
-        static_cast<float>(eventScrollPosition - currentScrollPosition) * rxhs;
+        static_cast<float>(event.judgeScrollPosition - currentScrollPosition) *
+            rxhs;
     drawGhostNoteOutline(ghostY, event);
   }
 }
@@ -772,12 +779,16 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
         .lane = event.lane,
         .noteTimeMicros = event.noteTimeMicros,
         .judgeTimeMicros = event.judgeTimeMicros,
+        .judgeScrollPosition = scrollPositionAtTime(event.judgeTimeMicros),
         .judgement = event.judgement,
     });
   }
 
   std::sort(replayGhostEvents.begin(), replayGhostEvents.end(),
             [](const ReplayGhostEvent &a, const ReplayGhostEvent &b) {
+              if (a.judgeScrollPosition != b.judgeScrollPosition) {
+                return a.judgeScrollPosition < b.judgeScrollPosition;
+              }
               if (a.judgeTimeMicros != b.judgeTimeMicros) {
                 return a.judgeTimeMicros < b.judgeTimeMicros;
               }

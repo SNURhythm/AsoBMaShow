@@ -58,6 +58,7 @@ struct ReplayGhostEvent {
   int lane = -1;
   long long noteTimeMicros = 0;
   long long judgeTimeMicros = 0;
+  double judgeScrollPosition = 0.0;
   Judgement judgement = None;
 };
 
