@@ -19,12 +19,8 @@
 #endif
 
 namespace {
-constexpr int kSchedulerPrecisionHz = 8000;
-constexpr long long kSchedulerTickMicros = 1000000LL / kSchedulerPrecisionHz;
-// Do not trust thread sleep for event timing; it is only used outside this
-// lead window to reduce idle CPU while preserving the existing poll cadence.
-constexpr long long kSchedulerPrecisionWindowMicros = 5000;
-constexpr long long kSchedulerMaxSleepMicros = 1000;
+constexpr long long kSchedulerTickMicros = 1000000LL / 8000;
+constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
 } // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
@@ -34,6 +30,7 @@ Jukebox::Jukebox(Stopwatch *stopwatch)
 
 Jukebox::~Jukebox() {
   isPlaying = false;
+  wakeScheduler();
   if (playThread.joinable())
     playThread.join();
   audio.stopSounds();
@@ -44,6 +41,7 @@ void Jukebox::render() {
   if (!visualsEnabled.load(std::memory_order_relaxed)) {
     return;
   }
+  syncVisualClockToAudio();
   const int bga = currentBga.load(std::memory_order_relaxed);
   if (bga != -1) {
     bool rendered = false;
@@ -110,6 +108,7 @@ bool Jukebox::hasActiveVisuals() const {
 
 void Jukebox::setVisualsEnabled(bool enabled) {
   visualsEnabled.store(enabled, std::memory_order_relaxed);
+  wakeScheduler();
   if (enabled) {
     return;
   }
@@ -128,6 +127,7 @@ bool Jukebox::getVisualsEnabled() const {
 
 void Jukebox::setVisualOffsetMs(int offsetMs) {
   visualOffsetMs.store(offsetMs, std::memory_order_relaxed);
+  wakeScheduler();
 }
 
 void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
@@ -477,6 +477,14 @@ void Jukebox::scheduleAudioFromCursor() {
   }
 }
 
+void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
+
+void Jukebox::syncVisualClockToAudio() {
+  if (isPlaying.load(std::memory_order_relaxed) && stopwatch->isRunning()) {
+    stopwatch->seek(audio.getTimeMicros());
+  }
+}
+
 bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
@@ -546,7 +554,8 @@ void Jukebox::play() {
   }
   audio.startDevice();
   stopwatch->start();
-  SDL_Log("Jukebox scheduler precision: %d Hz", kSchedulerPrecisionHz);
+  wakeScheduler();
+  SDL_Log("Jukebox visual scheduler is event-driven");
 
   playThread = std::thread([this] {
 #ifdef _WIN32
@@ -562,10 +571,12 @@ void Jukebox::play() {
 #endif
     using Clock = std::chrono::steady_clock;
     auto prevTimestamp = Clock::now();
-    const auto interval = std::chrono::microseconds(kSchedulerTickMicros);
     while (isPlaying) {
       if (!stopwatch->isRunning()) {
-        std::this_thread::sleep_for(interval);
+        std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
+        schedulerWakeCv.wait_for(
+            waitLock,
+            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros));
         prevTimestamp = Clock::now();
         continue;
       }
@@ -575,7 +586,6 @@ void Jukebox::play() {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
         auto positionMicro = audio.getTimeMicros();
-        stopwatch->seek(positionMicro);
         const long long visualDelayMicros = getVisualOffsetMicros();
         auto scheduleNextWake = [&](long long targetMicros) {
           nextWakeMicros =
@@ -678,7 +688,7 @@ void Jukebox::play() {
                                                 std::memory_order_relaxed);
       prevTimestamp = currentTimestamp;
 
-      long long sleepMicros = kSchedulerMaxSleepMicros;
+      long long sleepMicros = kSchedulerMaxIdleSleepMicros;
       if (nextWakeMicros != std::numeric_limits<long long>::max()) {
         const long long currentSongMicros = audio.getTimeMicros();
         const long long untilNextMicros = nextWakeMicros - currentSongMicros;
@@ -686,18 +696,11 @@ void Jukebox::play() {
           std::this_thread::yield();
           continue;
         }
-        if (untilNextMicros <= kSchedulerPrecisionWindowMicros) {
-          std::this_thread::yield();
-          continue;
-        }
-        sleepMicros =
-            std::min(kSchedulerMaxSleepMicros,
-                     untilNextMicros - kSchedulerPrecisionWindowMicros);
+        sleepMicros = std::min(kSchedulerMaxIdleSleepMicros, untilNextMicros);
       }
-      if (sleepMicros <= 0) {
-        continue;
-      }
-      std::this_thread::sleep_for(std::chrono::microseconds(sleepMicros));
+      std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
+      schedulerWakeCv.wait_for(waitLock,
+                               std::chrono::microseconds(sleepMicros));
     }
 #ifdef _WIN32
     // Clean up MMCS handle
@@ -773,16 +776,19 @@ void Jukebox::pause() {
   SDL_Log("Pausing");
   audio.seekClock(audio.getTimeMicros());
   stopwatch->pause();
+  wakeScheduler();
 }
 void Jukebox::resume() {
   audio.seekClock(audio.getTimeMicros());
   stopwatch->resume();
+  wakeScheduler();
 }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 void Jukebox::stop() {
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   isPlaying = false;
+  wakeScheduler();
   if (playThread.joinable())
     playThread.join();
   audio.stopSounds();
@@ -811,6 +817,7 @@ void Jukebox::seek(long long micro) {
   if (isPlaying) {
     audio.startDevice();
   }
+  wakeScheduler();
   while (bmpCursor < bmpList.size() &&
          bmpList[bmpCursor].first + visualDelayMicros < micro) {
     bmpCursor++;
