@@ -80,6 +80,7 @@ private:
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);
+  void scheduleAudioFromCursor();
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {

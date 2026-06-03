@@ -455,6 +455,7 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
       }
     }
   }
+  std::sort(audioList.begin(), audioList.end());
 }
 void Jukebox::playKeySound(int wav) {
   if (!isPlaying) {
@@ -462,6 +463,17 @@ void Jukebox::playKeySound(int wav) {
   }
   if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
     audio.playSound(it->second.c_str());
+  }
+}
+
+void Jukebox::scheduleAudioFromCursor() {
+  while (audioCursor < audioList.size()) {
+    const auto &target = audioList[audioCursor];
+    if (const auto it = wavTableAbs.find(target.second);
+        it != wavTableAbs.end()) {
+      audio.scheduleSound(it->second, target.first);
+    }
+    audioCursor++;
   }
 }
 
@@ -523,9 +535,16 @@ void Jukebox::play() {
   std::lock_guard<std::mutex> lock(playThreadLock);
   if (playThread.joinable())
     playThread.join();
-  audio.startDevice();
+  audio.stopSounds();
   isPlaying = true;
   stopwatch->reset();
+  audio.seekClock(0);
+  {
+    std::lock_guard<std::mutex> lock(seekLock);
+    audioCursor = 0;
+    scheduleAudioFromCursor();
+  }
+  audio.startDevice();
   stopwatch->start();
   SDL_Log("Jukebox scheduler precision: %d Hz", kSchedulerPrecisionHz);
 
@@ -555,7 +574,8 @@ void Jukebox::play() {
       {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
-        auto positionMicro = stopwatch->elapsedMicros();
+        auto positionMicro = audio.getTimeMicros();
+        stopwatch->seek(positionMicro);
         const long long visualDelayMicros = getVisualOffsetMicros();
         auto scheduleNextWake = [&](long long targetMicros) {
           nextWakeMicros =
@@ -565,21 +585,6 @@ void Jukebox::play() {
         if (onTickCb) {
           onTickCb(positionMicro);
           scheduleNextWake(positionMicro + kSchedulerTickMicros);
-        }
-
-        while (audioCursor < audioList.size()) {
-          auto &target = audioList[audioCursor];
-          if (positionMicro < target.first) {
-            break;
-          }
-          if (const auto it = wavTableAbs.find(target.second);
-              it != wavTableAbs.end()) {
-            audio.playSound(it->second.c_str());
-          }
-          audioCursor++;
-        }
-        if (audioCursor < audioList.size()) {
-          scheduleNextWake(audioList[audioCursor].first);
         }
 
         while (bmpCursor < bmpList.size()) {
@@ -675,7 +680,7 @@ void Jukebox::play() {
 
       long long sleepMicros = kSchedulerMaxSleepMicros;
       if (nextWakeMicros != std::numeric_limits<long long>::max()) {
-        const long long currentSongMicros = stopwatch->elapsedMicros();
+        const long long currentSongMicros = audio.getTimeMicros();
         const long long untilNextMicros = nextWakeMicros - currentSongMicros;
         if (untilNextMicros <= 0) {
           std::this_thread::yield();
@@ -758,12 +763,21 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
                viewId == rendering::bga_view ? kBgaProgram : kBgaLayerProgram);
 }
 
-long long Jukebox::getTimeMicros() { return stopwatch->elapsedMicros(); }
+long long Jukebox::getTimeMicros() {
+  if (isPlaying.load(std::memory_order_relaxed)) {
+    return audio.getTimeMicros();
+  }
+  return stopwatch->elapsedMicros();
+}
 void Jukebox::pause() {
   SDL_Log("Pausing");
+  audio.seekClock(audio.getTimeMicros());
   stopwatch->pause();
 }
-void Jukebox::resume() { stopwatch->resume(); }
+void Jukebox::resume() {
+  audio.seekClock(audio.getTimeMicros());
+  stopwatch->resume();
+}
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 void Jukebox::stop() {
   currentBga.store(-1, std::memory_order_relaxed);
@@ -783,6 +797,7 @@ void Jukebox::seek(long long micro) {
   std::lock_guard<std::mutex> lock(seekLock);
   stopwatch->seek(micro);
   audio.stopSounds();
+  audio.seekClock(micro);
   const long long visualDelayMicros = getVisualOffsetMicros();
   // move cursors to micro
   audioCursor = 0;
@@ -791,6 +806,10 @@ void Jukebox::seek(long long micro) {
   while (audioCursor < audioList.size() &&
          audioList[audioCursor].first < micro) {
     audioCursor++;
+  }
+  scheduleAudioFromCursor();
+  if (isPlaying) {
+    audio.startDevice();
   }
   while (bmpCursor < bmpList.size() &&
          bmpList[bmpCursor].first + visualDelayMicros < micro) {

@@ -8,8 +8,9 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <deque>
 #include <unordered_map>
-#include <unordered_set>
 
 // Simple Biquad Filter
 struct Biquad {
@@ -95,10 +96,30 @@ struct SoundData {
   std::vector<short> resampledData;
   size_t resampledFrameCount;
 };
+
+struct PlayingSound {
+  SoundData *soundData;
+  size_t currentFrame;
+  ma_uint32 outputOffsetFrames;
+};
+
+struct ScheduledSound {
+  SoundData *soundData;
+  long long startMicros;
+  uint64_t sequence;
+};
+
 struct UserData {
   Stopwatch *stopwatch;
   std::mutex *mutex;
-  std::unordered_set<SoundData *> *playingSounds;
+  std::vector<PlayingSound> *playingSounds;
+  std::deque<ScheduledSound> *scheduledSounds;
+  std::atomic<int> *sampleRate;
+  std::atomic<long long> *audioClockBaseMicros;
+  std::atomic<int64_t> *audioClockFrameCursor;
+  std::atomic<long long> *audioClockAnchorMicros;
+  std::atomic<long long> *audioClockAnchorWallMicros;
+  std::atomic<long long> *audioClockAnchorEndMicros;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -113,6 +134,9 @@ public:
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path);
+  bool scheduleSound(const path_t &path, long long startMicros);
+  long long getTimeMicros() const;
+  void seekClock(long long micros);
   void startDevice();
   void stopSounds();
   void unloadSound(const path_t &path);
@@ -130,7 +154,9 @@ private:
   std::unique_ptr<IAudioBackend> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
-  std::unordered_set<SoundData *> playingSounds;
+  std::vector<PlayingSound> playingSounds;
+  std::deque<ScheduledSound> scheduledSounds;
+  uint64_t scheduledSoundSequence = 0;
   std::mutex playingSoundsMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
@@ -140,8 +166,15 @@ private:
   Biquad trebleFilter;
   PlateReverb reverb;
   SoftKneeCompressor compressor;
-  int currentSampleRate = 44100;
+  std::atomic<int> currentSampleRate{44100};
+  std::atomic<long long> audioClockBaseMicros{0};
+  std::atomic<int64_t> audioClockFrameCursor{0};
+  std::atomic<long long> audioClockAnchorMicros{0};
+  std::atomic<long long> audioClockAnchorWallMicros{0};
+  std::atomic<long long> audioClockAnchorEndMicros{0};
 
   UserData userData;
   Stopwatch *stopwatch;
+
+  void updateCurrentSampleRate();
 };
