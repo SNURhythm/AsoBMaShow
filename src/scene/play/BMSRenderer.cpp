@@ -16,6 +16,15 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+
+namespace {
+uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
+                             uint32_t submitDepth) {
+  return (static_cast<uint64_t>(submitDepth) << 16U) |
+         static_cast<uint64_t>(texture.idx);
+}
+} // namespace
+
 BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
                          int visibleTimeGreenNumber, bool renderHud)
     : latePoorTiming(latePoorTiming), chart(chart),
@@ -28,6 +37,8 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   evenKeyLaneIndices.reserve(laneOrder.size());
   oddKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
+  noteTextureBatchRenderers.reserve(16);
+  noteTextureBatchLookup.reserve(16);
   for (size_t i = 0; i < laneOrder.size(); ++i) {
     const int lane = laneOrder[i];
     laneToOrderIndex.emplace(lane, i);
@@ -307,22 +318,24 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
     float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
                                                 : longBodyRenderHeightOff);
-    texBatchRenderer.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
-                             1.0f, tileV, bodyTexture);
+    longBodyBatchFor(sheet, head->IsHolding)
+        .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
+                 tileV, bodyTexture);
   }
 
   // Tail
-  texBatchRenderer.addRectUV(laneToX(head->Tail->Lane), tailY, noteRenderWidth,
-                             noteRenderHeight, tailUv.u0, tailUv.v0, tailUv.u1,
-                             tailUv.v1, sheet.texture);
+  sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
+                                 noteRenderWidth, noteRenderHeight, tailUv.u0,
+                                 tailUv.v0, tailUv.u1, tailUv.v1,
+                                 sheet.texture);
 
   if (head->IsPlayed)
     return;
 
   // Head
-  texBatchRenderer.addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
-                             noteRenderHeight, headUv.u0, headUv.v0, headUv.u1,
-                             headUv.v1, sheet.texture);
+  sheetBatchFor(sheet).addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
+                                 noteRenderHeight, headUv.u0, headUv.v0,
+                                 headUv.u1, headUv.v1, sheet.texture);
 }
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
@@ -330,9 +343,10 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
-  texBatchRenderer.addRectUV(laneToX(note->Lane), y, noteRenderWidth,
-                             noteRenderHeight, sheet.note.u0, sheet.note.v0,
-                             sheet.note.u1, sheet.note.v1, sheet.texture);
+  sheetBatchFor(sheet).addRectUV(laneToX(note->Lane), y, noteRenderWidth,
+                                 noteRenderHeight, sheet.note.u0,
+                                 sheet.note.v0, sheet.note.u1, sheet.note.v1,
+                                 sheet.texture);
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {
@@ -489,16 +503,16 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   applyPendingHudText();
 
   constexpr uint32_t kDepthBackground = 100;
+  constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
 
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
   ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
-  texBatchRenderer.setSubmitDepth(kDepthNotes);
   simpleBatchRenderer.begin();
   ghostBatchRenderer.begin();
-  texBatchRenderer.begin();
+  beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
   // background
   drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
   // judge line
@@ -632,7 +646,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
-  texBatchRenderer.flush();
+  flushNoteTextureBatches();
   ghostBatchRenderer.flush();
 
   if (renderLaneBeams) {
@@ -830,6 +844,50 @@ inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
   }
   return (lane % 2 == 0) ? graySheet : blueSheet;
 }
+
+rendering::TexBatchRenderer &BMSRenderer::noteTextureBatch(
+    bgfx::TextureHandle texture, uint32_t submitDepth) {
+  const uint64_t key = noteTextureBatchKey(texture, submitDepth);
+  if (const auto it = noteTextureBatchLookup.find(key);
+      it != noteTextureBatchLookup.end()) {
+    return noteTextureBatchRenderers[it->second];
+  }
+
+  const size_t index = noteTextureBatchRenderers.size();
+  auto &renderer = noteTextureBatchRenderers.emplace_back();
+  renderer.setSubmitDepth(submitDepth);
+  renderer.begin();
+  noteTextureBatchLookup.emplace(key, index);
+  return renderer;
+}
+
+rendering::TexBatchRenderer &BMSRenderer::sheetBatchFor(
+    const NoteSheet &sheet) {
+  return noteTextureBatch(sheet.texture, noteSheetSubmitDepth);
+}
+
+rendering::TexBatchRenderer &BMSRenderer::longBodyBatchFor(
+    const NoteSheet &sheet, bool isHolding) {
+  return noteTextureBatch(isHolding ? sheet.longBodyOnTexture
+                                    : sheet.longBodyOffTexture,
+                          longBodySubmitDepth);
+}
+
+void BMSRenderer::beginNoteTextureBatches(uint32_t bodyDepth,
+                                          uint32_t sheetDepth) {
+  longBodySubmitDepth = bodyDepth;
+  noteSheetSubmitDepth = sheetDepth;
+  for (auto &renderer : noteTextureBatchRenderers) {
+    renderer.begin();
+  }
+}
+
+void BMSRenderer::flushNoteTextureBatches() {
+  for (auto &renderer : noteTextureBatchRenderers) {
+    renderer.flush();
+  }
+}
+
 void BMSRendererState::reset() {
   orphanLongNotes.clear();
   currentTimelineIndex = 0;

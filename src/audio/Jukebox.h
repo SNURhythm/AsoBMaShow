@@ -5,6 +5,7 @@
 #include <thread>
 #include <unordered_map>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
@@ -75,11 +76,16 @@ private:
   std::mutex seekLock;
   // playthread lock
   std::mutex playThreadLock;
+  std::mutex schedulerWaitMutex;
+  std::condition_variable schedulerWakeCv;
   void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);
+  void scheduleAudioFromCursor();
+  void wakeScheduler();
+  void syncVisualClockToAudio();
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {

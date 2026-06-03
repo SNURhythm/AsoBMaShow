@@ -1,6 +1,7 @@
 #pragma once
 
 #include <miniaudio.h>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../path.h"
@@ -8,8 +9,8 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <unordered_map>
-#include <unordered_set>
 
 // Simple Biquad Filter
 struct Biquad {
@@ -95,10 +96,53 @@ struct SoundData {
   std::vector<short> resampledData;
   size_t resampledFrameCount;
 };
+
+struct PlayingSound {
+  SoundData *soundData;
+  size_t currentFrame;
+  ma_uint32 outputOffsetFrames;
+};
+
+struct ScheduledSound {
+  SoundData *soundData;
+  long long startMicros;
+  uint64_t sequence;
+};
+
+enum class AudioCommandType : uint8_t { PlayNow, Schedule, StopAll };
+
+struct AudioCommand {
+  AudioCommandType type = AudioCommandType::StopAll;
+  SoundData *soundData = nullptr;
+  long long startMicros = 0;
+  uint64_t sequence = 0;
+};
+
+constexpr size_t kMaxActiveSounds = 512;
+constexpr size_t kMaxScheduledSounds = 65536;
+constexpr size_t kAudioCommandQueueSize = 4096;
+
+struct AudioCallbackState {
+  AudioCallbackState();
+
+  std::unique_ptr<PlayingSound[]> playingSounds;
+  size_t playingSoundCount = 0;
+  std::unique_ptr<ScheduledSound[]> scheduledSounds;
+  size_t scheduledSoundCount = 0;
+  std::unique_ptr<AudioCommand[]> commandQueue;
+  std::atomic<uint32_t> commandReadCursor{0};
+  std::atomic<uint32_t> commandWriteCursor{0};
+};
+
 struct UserData {
   Stopwatch *stopwatch;
-  std::mutex *mutex;
-  std::unordered_set<SoundData *> *playingSounds;
+  AudioCallbackState *callbackState;
+  std::atomic<int> *sampleRate;
+  std::atomic<long long> *audioClockBaseMicros;
+  std::atomic<int64_t> *audioClockFrameCursor;
+  std::atomic<long long> *audioClockAnchorMicros;
+  std::atomic<long long> *audioClockAnchorWallMicros;
+  std::atomic<long long> *audioClockAnchorEndMicros;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -113,6 +157,9 @@ public:
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path);
+  bool scheduleSound(const path_t &path, long long startMicros);
+  long long getTimeMicros() const;
+  void seekClock(long long micros);
   void startDevice();
   void stopSounds();
   void unloadSound(const path_t &path);
@@ -130,8 +177,9 @@ private:
   std::unique_ptr<IAudioBackend> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
-  std::unordered_set<SoundData *> playingSounds;
-  std::mutex playingSoundsMutex;
+  AudioCallbackState callbackState;
+  std::atomic<uint64_t> scheduledSoundSequence{0};
+  std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
   std::mutex soundDataListMutex;
@@ -140,8 +188,18 @@ private:
   Biquad trebleFilter;
   PlateReverb reverb;
   SoftKneeCompressor compressor;
-  int currentSampleRate = 44100;
+  std::atomic<int> currentSampleRate{44100};
+  std::atomic<long long> audioClockBaseMicros{0};
+  std::atomic<int64_t> audioClockFrameCursor{0};
+  std::atomic<long long> audioClockAnchorMicros{0};
+  std::atomic<long long> audioClockAnchorWallMicros{0};
+  std::atomic<long long> audioClockAnchorEndMicros{0};
 
   UserData userData;
   Stopwatch *stopwatch;
+
+  void updateCurrentSampleRate();
+  bool appendScheduledSound(SoundData *soundData, long long startMicros,
+                            uint64_t sequence);
+  void clearCallbackState();
 };
