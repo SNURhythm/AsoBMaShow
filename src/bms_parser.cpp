@@ -923,12 +923,6 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         timeline->Scroll = currentScroll;
       }
 
-      if (timeline->ScrollChange) {
-        currentScroll = timeline->Scroll;
-      } else {
-        timeline->Scroll = currentScroll;
-      }
-
       // Debug.Log($"measure: {measureIdx}, position: {position}, lastPosition:
       // {lastPosition}, bpm: {currentBpm} scale: {measure.Scale} interval:
       // {interval} stop: {timeline.GetStopDuration()}");
