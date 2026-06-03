@@ -791,7 +791,6 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           timeline->ScrollChange = true;
           if (ScrollTable.find(id) != ScrollTable.end()) {
             timeline->Scroll = ScrollTable[id];
-
           } else {
             timeline->Scroll = 1;
           }
