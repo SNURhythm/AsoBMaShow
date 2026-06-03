@@ -114,6 +114,50 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
   }
 }
 
+const char *gaugeSettingId(GaugeType gaugeType, bool autoShift) {
+  if (autoShift) {
+    return "gas";
+  }
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return "assisted_easy";
+  case GaugeType::Easy:
+    return "easy";
+  case GaugeType::Normal:
+    return "normal";
+  case GaugeType::Hard:
+    return "hard";
+  case GaugeType::ExHard:
+    return "exhard";
+  default:
+    return "normal";
+  }
+}
+
+struct GaugeSelection {
+  GaugeType type = GaugeType::Normal;
+  bool autoShift = false;
+};
+
+GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
+  if (id == "gas") {
+    return {.type = GaugeType::ExHard, .autoShift = true};
+  }
+  if (id == "assisted_easy") {
+    return {.type = GaugeType::AssistedEasy};
+  }
+  if (id == "easy") {
+    return {.type = GaugeType::Easy};
+  }
+  if (id == "hard") {
+    return {.type = GaugeType::Hard};
+  }
+  if (id == "exhard") {
+    return {.type = GaugeType::ExHard};
+  }
+  return {.type = GaugeType::Normal};
+}
+
 std::string formatReplayGauge(float gauge) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(1) << gauge << "%";
@@ -804,6 +848,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   gaugePanel->addView(gaugeRowA);
   gaugePanel->addView(gaugeRowB);
   right->addView(gaugePanel);
+  const GaugeSelection savedGaugeSelection =
+      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+  selectedGaugeType = savedGaugeSelection.type;
+  selectedGaugeAutoShift = savedGaugeSelection.autoShift;
   refreshGaugeSelectionButtons();
 
   auto startButton = new Button(0, 0, 200, 100);
@@ -1146,6 +1194,11 @@ void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
   selectedGaugeType = gaugeType;
   selectedGaugeAutoShift = autoShift;
+  context.settings.selectedGaugeType = gaugeSettingId(gaugeType, autoShift);
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save gauge selection");
+  }
   refreshGaugeSelectionButtons();
 }
 
