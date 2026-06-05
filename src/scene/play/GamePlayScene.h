@@ -10,6 +10,8 @@
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
 #include <memory>
+#include <optional>
+#include <string>
 #include <unordered_map>
 class Button;
 struct StartOptions {
@@ -19,6 +21,11 @@ struct StartOptions {
   GaugeType gaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   std::shared_ptr<ReplayData> replayData = nullptr;
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+  bool ownsChart = false;
 };
 class RhythmInputHandler;
 class BMSRenderer;
@@ -50,6 +57,7 @@ public:
 
 private:
   void reset();
+  void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   void beginReplayRecording();
@@ -74,13 +82,12 @@ private:
   void checkPassedTimeline(long long time);
   void onJudge(const JudgeResult &judgeResult);
   void appendReplayEvent(ReplayEventAction action, int lane,
-                         const bms_parser::Note *note,
-                         long long songTimeMicros, long long judgeTimeMicros,
+                         const bms_parser::Note *note, long long songTimeMicros,
+                         long long judgeTimeMicros,
                          const JudgeResult &judgeResult);
   JudgeResult pressNote(bms_parser::Note *note, long long pressedTime,
                         const JudgeResult *precomputedJudge = nullptr,
-                        long long songTimeMicros = -1,
-                        bool recordEvent = true);
+                        long long songTimeMicros = -1, bool recordEvent = true);
   JudgeResult releaseNote(bms_parser::Note *Note, long long ReleasedTime,
                           const JudgeResult *precomputedJudge = nullptr,
                           long long songTimeMicros = -1,

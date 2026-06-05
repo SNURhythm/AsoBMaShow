@@ -1,8 +1,10 @@
 #include "ResultScene.h"
+#include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
+#include "play/GamePlayScene.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/ShaderManager.h"
@@ -10,6 +12,10 @@
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
 #include "../skin/SkinTypes.h"
+
+#include <atomic>
+#include <optional>
+#include <string>
 
 static void drawRect(float x, float y, float width, float height, Color color) {
   static const bgfx::ProgramHandle kSimpleProgram =
@@ -45,29 +51,27 @@ static void drawRect(float x, float y, float width, float height, Color color) {
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
 
-  bgfx::submit(
-      rendering::main_view,
-      kSimpleProgram);
+  bgfx::submit(rendering::main_view, kSimpleProgram);
 }
-
-
 
 // ... (drawRect function remains the same)
 
 ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
                          const RhythmState &state, const ReplayData *replay,
-                         bool shouldSaveScore)
+                         bool shouldSaveScore, const ReplayData *retrySource)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
+      retryData(retrySource != nullptr
+                    ? std::optional<ReplayData>(*retrySource)
+                    : (replay != nullptr ? std::optional<ReplayData>(*replay)
+                                         : std::nullopt)),
       shouldSaveScore(shouldSaveScore) {
-        skin = new DefaultSkin();
-    }
-
-ResultScene::~ResultScene() { 
-    delete skin;
+  skin = new DefaultSkin();
 }
+
+ResultScene::~ResultScene() { delete skin; }
 
 void ResultScene::saveScore() {
   if (scoreSaved || !shouldSaveScore) {
@@ -81,7 +85,8 @@ void ResultScene::saveScore() {
 }
 
 void ResultScene::saveReplay() {
-  if (replaySaved || !replayToSave.has_value() || replayToSave->events.empty()) {
+  if (replaySaved || !replayToSave.has_value() ||
+      replayToSave->events.empty()) {
     return;
   }
   replaySaved = true;
@@ -91,15 +96,120 @@ void ResultScene::saveReplay() {
   }
 }
 
+void ResultScene::addRetryButtons() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  auto retryRow = new View();
+  retryRow->setFlexDirection(FlexDirection::Row);
+  retryRow->setAlignItems(YGAlignCenter);
+  retryRow->setJustifyContent(YGJustifyCenter);
+  retryRow->setGap(12);
+
+  auto makeButton = [this](const std::string &label, bool samePattern) {
+    auto button = new Button();
+    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    button->setContentView(text);
+    button->setOnClickListener(
+        [this, samePattern]() { startRetry(samePattern); });
+    button->setSize(220, 70);
+    return button;
+  };
+
+  retryRow->addView(makeButton("Retry", false));
+  retryRow->addView(makeButton("Retry Same", true));
+  rootLayout->addView(retryRow);
+}
+
+void ResultScene::startRetry(bool samePattern) {
+  ReplayData retrySource;
+  if (retryData.has_value()) {
+    retrySource = *retryData;
+  } else {
+    retrySource.chartMeta = meta;
+    retrySource.randomSeed = meta.RandomSeed;
+    retrySource.randomPrng = meta.RandomPrng;
+  }
+
+  context.jukebox.stop();
+  defer(
+      [this, retrySource, samePattern]() {
+        std::atomic_bool parseCancelled = false;
+        auto retryChart =
+            play_options::parseChartForRetry(retrySource, meta, parseCancelled);
+        if (retryChart == nullptr || parseCancelled) {
+          return true;
+        }
+
+        StartOptions options;
+        options.startPosition = 0;
+        options.autoKeySound = !context.settings.inputKeysoundEnabled;
+        options.autoPlay = false;
+        options.gaugeType = retrySource.initialGaugeType;
+        options.gaugeAutoShift = retrySource.gaugeAutoShift;
+        options.ownsChart = true;
+
+        if (retrySource.playOption.has_value()) {
+          if (samePattern &&
+              !play_options::isNormalPlayOption(*retrySource.playOption) &&
+              !retrySource.playOptionSeed.has_value()) {
+            SDL_Log("Cannot retry same pattern: missing play option seed");
+            return true;
+          }
+          const std::optional<long long> optionSeed =
+              samePattern ? retrySource.playOptionSeed
+                          : std::optional<long long>();
+          if (!play_options::applyPlayOptionModifier(
+                  *retryChart, *retrySource.playOption, optionSeed, 0,
+                  options.playOption, options.playOptionSeed, "retry")) {
+            return true;
+          }
+        }
+
+        if (retryChart->Meta.IsDP && retrySource.playOption2.has_value()) {
+          if (samePattern &&
+              !play_options::isNormalPlayOption(*retrySource.playOption2) &&
+              !retrySource.playOption2Seed.has_value()) {
+            SDL_Log("Cannot retry same pattern: missing P2 play option seed");
+            return true;
+          }
+          const std::optional<long long> optionSeed =
+              samePattern ? retrySource.playOption2Seed
+                          : std::optional<long long>();
+          if (!play_options::applyPlayOptionModifier(
+                  *retryChart, *retrySource.playOption2, optionSeed, 1,
+                  options.playOption2, options.playOption2Seed, "retry")) {
+            return true;
+          }
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*retryChart, true, parseCancelled);
+        if (parseCancelled) {
+          return true;
+        }
+
+        auto *loadedChart = retryChart.release();
+        context.sceneManager->changeScene(
+            new GamePlayScene(context, loadedChart, options), false);
+        return false;
+      },
+      0, true);
+}
+
 void ResultScene::init() {
   saveScore();
   saveReplay();
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
-  
-  ResultSkinData data = { &resultState, &meta, &context };
+
+  ResultSkinData data = {&resultState, &meta, &context};
   skin->buildLayout("Result", rootLayout, &data);
+  addRetryButtons();
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
@@ -126,13 +236,12 @@ void ResultScene::renderScene() {
       bgfx::TransientVertexBuffer tvb{};
       bgfx::TransientIndexBuffer tib{};
 
-      if (bgfx::getAvailTransientVertexBuffer(count * 4,
-                                              rendering::PosColorVertex::ms_decl) ==
-              count * 4 &&
+      if (bgfx::getAvailTransientVertexBuffer(
+              count * 4, rendering::PosColorVertex::ms_decl) == count * 4 &&
           bgfx::getAvailTransientIndexBuffer(count * 6) == count * 6) {
 
-        bgfx::allocTransientVertexBuffer(
-            &tvb, count * 4, rendering::PosColorVertex::ms_decl);
+        bgfx::allocTransientVertexBuffer(&tvb, count * 4,
+                                         rendering::PosColorVertex::ms_decl);
         bgfx::allocTransientIndexBuffer(&tib, count * 6);
 
         auto *vertices = (rendering::PosColorVertex *)tvb.data;
@@ -181,6 +290,6 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::cleanupScene() {
-    // Resources are cleaned up by Scene logic usually, but we have Views.
-    // Scene::cleanup() deletes all views.
+  // Resources are cleaned up by Scene logic usually, but we have Views.
+  // Scene::cleanup() deletes all views.
 }

@@ -89,6 +89,34 @@ std::string parseGaugeTypeId(const std::string &value,
   }
   return fallback;
 }
+
+std::string normalizePlayOptionId(std::string value) {
+  value = trim(value);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::toupper(ch));
+                 });
+  if (value == "OFF") {
+    return AppSettings::kDefaultPlayOption;
+  }
+  return value;
+}
+
+std::string parsePlayOptionId(const std::string &value,
+                              const std::string &fallback) {
+  const std::string normalized = normalizePlayOptionId(value);
+  if (normalized == "NORMAL" || normalized == "MIRROR" ||
+      normalized == "RANDOM" || normalized == "R-RANDOM" ||
+      normalized == "S-RANDOM" || normalized == "SPIRAL" ||
+      normalized == "H-RANDOM" || normalized == "ALL-SCR" ||
+      normalized == "RANDOM-EX" || normalized == "S-RANDOM-EX") {
+    return normalized;
+  }
+  return fallback;
+}
 } // namespace
 
 std::filesystem::path AppSettings::configPath() {
@@ -121,6 +149,8 @@ void AppSettings::sanitize() {
   laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
                              kMaxLaneLength);
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
+  selectedPlayOption =
+      parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
 }
 
 bool AppSettings::save() const {
@@ -159,6 +189,7 @@ bool AppSettings::save() const {
   file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
   file << "lane_length=" << sanitized.laneLength << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
+  file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   return file.good();
 }
 
@@ -222,6 +253,9 @@ AppSettings AppSettings::load() {
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);
+      } else if (key == "selected_play_option") {
+        settings.selectedPlayOption =
+            parsePlayOptionId(value, settings.selectedPlayOption);
       }
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),

@@ -17,6 +17,10 @@ struct ReplaySummary {
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
   int eventCount = 0;
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
 };
 
 class ReplayDBHelper {
@@ -31,8 +35,8 @@ public:
   void Close(sqlite3 *db);
   bool CreateReplayTables(sqlite3 *db);
   std::optional<int> SaveReplay(const ReplayData &replay);
-  std::vector<ReplaySummary>
-  ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100);
+  std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
+                                         int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
   std::optional<ReplayData>

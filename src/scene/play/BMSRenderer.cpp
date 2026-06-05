@@ -186,6 +186,10 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   gaugeText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   gaugeText->setPosition(10, 50);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
+  playOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  playOptionText->setPosition(10, 82);
+  playOptionText->setColor({255, 205, 37, 255});
+  playOptionText->setVisible(false);
 
   refreshGeometry();
 }
@@ -251,6 +255,9 @@ void BMSRenderer::drawScore(RenderContext &context) const {
 }
 void BMSRenderer::drawGauge(RenderContext &context) const {
   gaugeText->render(context);
+}
+void BMSRenderer::drawPlayOption(RenderContext &context) const {
+  playOptionText->render(context);
 }
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
@@ -696,6 +703,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     drawJudgement(context);
     drawScore(context);
     drawGauge(context);
+    drawPlayOption(context);
   }
 }
 
@@ -747,6 +755,15 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
 
   const Color color = clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
   gaugeText->setColor({color.r, color.g, color.b, 255});
+}
+
+void BMSRenderer::setPlayOptionStatus(const std::string &label) {
+  if (playOptionText == nullptr) {
+    return;
+  }
+
+  playOptionText->setVisible(!label.empty());
+  playOptionText->setText(label);
 }
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {
@@ -961,4 +978,5 @@ BMSRenderer::~BMSRenderer() {
   delete judgeText;
   delete scoreText;
   delete gaugeText;
+  delete playOptionText;
 }
