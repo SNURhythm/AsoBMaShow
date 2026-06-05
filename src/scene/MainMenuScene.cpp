@@ -2092,11 +2092,9 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         }
 
         std::atomic_bool parseCancelled = false;
-        auto replayChart = play_options::parseChartForReplay(
+        auto replayChart = play_options::prepareReplayChart(
             record.meta.BmsPath, replay.value(), parseCancelled);
-        if (replayChart == nullptr || parseCancelled ||
-            !play_options::applyReplayPlayOptions(*replayChart,
-                                                  replay.value())) {
+        if (replayChart == nullptr || parseCancelled) {
           willStart.store(false);
           if (replayWatchButtonText != nullptr) {
             replayWatchButtonText->setText("Watch");
@@ -2214,10 +2212,9 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
           }
 
           std::atomic_bool parseCancelled = false;
-          auto chart = play_options::parseChartForReplay(
+          auto chart = play_options::prepareReplayChart(
               record.meta.BmsPath, replay.value(), parseCancelled);
-          if (chart == nullptr || parseCancelled ||
-              !play_options::applyReplayPlayOptions(*chart, replay.value())) {
+          if (chart == nullptr || parseCancelled) {
             complete({.success = false, .message = "No Chart"});
             return;
           }

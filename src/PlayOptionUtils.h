@@ -233,6 +233,16 @@ parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
 }
 
 inline std::unique_ptr<bms_parser::Chart>
+prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
+                   std::atomic_bool &cancelled) {
+  auto chart = parseChartForReplay(path, replay, cancelled);
+  if (chart == nullptr || cancelled || !applyReplayPlayOptions(*chart, replay)) {
+    return nullptr;
+  }
+  return chart;
+}
+
+inline std::unique_ptr<bms_parser::Chart>
 parseChartForRetry(const ReplayData &retrySource,
                    const bms_parser::ChartMeta &fallbackMeta,
                    std::atomic_bool &cancelled, bool samePattern) {

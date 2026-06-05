@@ -223,11 +223,9 @@ void ResultScene::startReplay() {
   defer(
       [this, replaySource]() {
         std::atomic_bool parseCancelled = false;
-        auto replayChart = play_options::parseChartForReplay(
+        auto replayChart = play_options::prepareReplayChart(
             meta.BmsPath, replaySource, parseCancelled);
-        if (replayChart == nullptr || parseCancelled ||
-            !play_options::applyReplayPlayOptions(*replayChart,
-                                                  replaySource)) {
+        if (replayChart == nullptr || parseCancelled) {
           return true;
         }
 
