@@ -148,52 +148,40 @@ void GamePlayScene::init() {
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
     {
+      auto makePauseButton = [](const std::string &label, int width, int height,
+                                auto onClick) {
+        auto button = new Button();
+        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+        text->setText(label);
+        text->setAlign(TextView::CENTER);
+        button->setContentView(text);
+        button->setOnClickListener(onClick);
+        button->setSize(width, height);
+        return button;
+      };
+
       auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
       pauseText->setSize(200, 100);
       pauseText->setText("Paused");
       pauseText->setAlign(TextView::CENTER);
       pauseScreen->addView(pauseText);
-      auto resumeButton = new Button();
-      auto resumeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      resumeText->setText("Resume");
-      resumeText->setAlign(TextView::CENTER);
-      resumeButton->setContentView(resumeText);
-      resumeButton->setOnClickListener([this]() {
+      pauseScreen->addView(makePauseButton("Resume", 200, 100, [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
-      });
-      resumeButton->setSize(200, 100);
-      pauseScreen->addView(resumeButton);
-      auto retryButton = new Button();
-      auto retryText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      retryText->setText("Retry");
-      retryText->setAlign(TextView::CENTER);
-      retryButton->setContentView(retryText);
-      retryButton->setOnClickListener([this]() { retryWithNewPattern(); });
-      retryButton->setSize(260, 90);
-      pauseScreen->addView(retryButton);
-      auto retrySameButton = new Button();
-      auto retrySameText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      retrySameText->setText("Retry Same");
-      retrySameText->setAlign(TextView::CENTER);
-      retrySameButton->setContentView(retrySameText);
-      retrySameButton->setOnClickListener([this]() {
-        pauseLayout->setVisible(false);
-        defer(
-            [this]() {
-              reset();
-              return true;
-            },
-            0, true);
-      });
-      retrySameButton->setSize(260, 90);
-      pauseScreen->addView(retrySameButton);
-      auto exitButton = new Button();
-      auto exitText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      exitText->setText("Exit");
-      exitText->setAlign(TextView::CENTER);
-      exitButton->setContentView(exitText);
-      exitButton->setOnClickListener([this]() {
+      }));
+      pauseScreen->addView(makePauseButton(
+          isReplayPlayback() ? "Replay" : "Retry", 260, 90, [this]() {
+            if (isReplayPlayback()) {
+              restartCurrentPattern();
+            } else {
+              retryWithNewPattern();
+            }
+          }));
+      if (!isReplayPlayback()) {
+        pauseScreen->addView(makePauseButton(
+            "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
+      }
+      pauseScreen->addView(makePauseButton("Exit", 200, 100, [this]() {
         context.jukebox.stop();
         defer(
             [this]() {
@@ -201,9 +189,7 @@ void GamePlayScene::init() {
               return false;
             },
             0, true);
-      });
-      exitButton->setSize(200, 100);
-      pauseScreen->addView(exitButton);
+      }));
     }
 
     pauseLayout->addView(pauseScreen);
@@ -261,7 +247,23 @@ void GamePlayScene::reset() {
   updateGaugeStatusText();
 }
 
+void GamePlayScene::restartCurrentPattern() {
+  pauseLayout->setVisible(false);
+  context.jukebox.stop();
+  defer(
+      [this]() {
+        reset();
+        return true;
+      },
+      0, true);
+}
+
 void GamePlayScene::retryWithNewPattern() {
+  if (isReplayPlayback()) {
+    restartCurrentPattern();
+    return;
+  }
+
   pauseLayout->setVisible(false);
   context.jukebox.stop();
 

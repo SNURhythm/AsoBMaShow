@@ -57,6 +57,7 @@ public:
 
 private:
   void reset();
+  void restartCurrentPattern();
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool shouldRecordReplay() const;
