@@ -1142,6 +1142,14 @@ void Parser::SetRandomSeed(unsigned int RandomSeed) { Seed = RandomSeed; }
 
 unsigned int Parser::GetRandomSeed() const { return Seed; }
 
+void Parser::SetRandomValues(const std::vector<int> &RandomValues) {
+  this->RandomValues = RandomValues;
+}
+
+const std::vector<int> &Parser::GetRandomValues() const {
+  return RandomValues;
+}
+
 int Parser::NoWav = -1;
 int Parser::MetronomeWav = -2;
 
@@ -1341,16 +1349,24 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       SkipStack.pop_back();
       continue;
     }
-    if (!SkipStack.empty() && SkipStack.back()) {
-      continue;
-    }
     if (MatchHeader(line, "#RANDOM") ||
         MatchHeader(line, "#RONDAM")) // #RANDOM n
     {
       const int n =
           static_cast<int>(std::strtol(line.substr(7).c_str(), nullptr, 10));
-      std::uniform_int_distribution<int> dist(1, n);
-      RandomStack.push_back(dist(Prng));
+      if (n <= 0) {
+        continue;
+      }
+      const size_t randomIndex = new_chart->Meta.RandomValues.size();
+      int selectedRandom;
+      if (randomIndex < RandomValues.size()) {
+        selectedRandom = RandomValues[randomIndex];
+      } else {
+        std::uniform_int_distribution<int> dist(1, n);
+        selectedRandom = dist(Prng);
+      }
+      new_chart->Meta.RandomValues.push_back(selectedRandom);
+      RandomStack.push_back(selectedRandom);
       continue;
     }
     if (MatchHeader(line, "#ENDRANDOM")) {
@@ -1359,6 +1375,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         continue;
       }
       RandomStack.pop_back();
+      continue;
+    }
+    if (!SkipStack.empty() && SkipStack.back()) {
       continue;
     }
     if (MatchHeader(line, "#4K")) {

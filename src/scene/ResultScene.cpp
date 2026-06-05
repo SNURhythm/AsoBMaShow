@@ -132,14 +132,15 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.chartMeta = meta;
     retrySource.randomSeed = meta.RandomSeed;
     retrySource.randomPrng = meta.RandomPrng;
+    retrySource.randomValues = meta.RandomValues;
   }
 
   context.jukebox.stop();
   defer(
       [this, retrySource, samePattern]() {
         std::atomic_bool parseCancelled = false;
-        auto retryChart =
-            play_options::parseChartForRetry(retrySource, meta, parseCancelled);
+        auto retryChart = play_options::parseChartForRetry(
+            retrySource, meta, parseCancelled, samePattern);
         if (retryChart == nullptr || parseCancelled) {
           return true;
         }

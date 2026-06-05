@@ -19,6 +19,7 @@
 #include <cctype>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 
@@ -1362,14 +1363,18 @@ void MainMenuScene::startSelectedChart() {
   const std::string playOption = selectedPlayOption;
   std::optional<unsigned int> chartRandomSeed;
   std::optional<std::string> chartRandomPrng;
+  std::optional<std::vector<int>> chartRandomValues;
   if (auto *currentChart = selectedChart.load(); currentChart != nullptr) {
     chartRandomSeed = currentChart->Meta.RandomSeed;
     chartRandomPrng = currentChart->Meta.RandomPrng;
+    if (!currentChart->Meta.RandomValues.empty()) {
+      chartRandomValues = currentChart->Meta.RandomValues;
+    }
   }
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       chartRandomSeed, chartRandomPrng]() {
+       chartRandomSeed, chartRandomPrng, chartRandomValues]() {
         previewLoadCancelled = true;
         if (loadThread.joinable()) {
           loadThread.join();
@@ -1381,7 +1386,8 @@ void MainMenuScene::startSelectedChart() {
         try {
           preparedChart =
               play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
-                                       chartRandomPrng, parseCancelled);
+                                       chartRandomPrng, chartRandomValues,
+                                       parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());

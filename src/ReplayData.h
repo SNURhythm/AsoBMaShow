@@ -33,6 +33,7 @@ struct ReplayData {
   bms_parser::ChartMeta chartMeta;
   std::optional<unsigned int> randomSeed;
   std::optional<std::string> randomPrng;
+  std::vector<int> randomValues;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

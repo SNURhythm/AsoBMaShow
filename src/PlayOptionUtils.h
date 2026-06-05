@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace play_options {
 
@@ -160,10 +161,19 @@ applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
   return info;
 }
 
+inline std::optional<std::vector<int>>
+randomValuesOrNull(const std::vector<int> &randomValues) {
+  if (randomValues.empty()) {
+    return std::nullopt;
+  }
+  return randomValues;
+}
+
 inline std::unique_ptr<bms_parser::Chart>
 parseChart(const std::filesystem::path &path,
            const std::optional<unsigned int> &randomSeed,
            const std::optional<std::string> &randomPrng,
+           const std::optional<std::vector<int>> &randomValues,
            std::atomic_bool &cancelled, std::string_view logContext = "chart") {
   if (path.empty()) {
     SDL_Log("Cannot parse %.*s: chart path is empty",
@@ -181,6 +191,9 @@ parseChart(const std::filesystem::path &path,
   if (randomSeed.has_value()) {
     parser.SetRandomSeed(*randomSeed);
   }
+  if (randomValues.has_value()) {
+    parser.SetRandomValues(*randomValues);
+  }
 
   bms_parser::Chart *parsedChart = nullptr;
   parser.Parse(path, &parsedChart, false, false, cancelled);
@@ -188,34 +201,58 @@ parseChart(const std::filesystem::path &path,
 }
 
 inline std::unique_ptr<bms_parser::Chart>
+parseChart(const std::filesystem::path &path,
+           const std::optional<unsigned int> &randomSeed,
+           const std::optional<std::string> &randomPrng,
+           std::atomic_bool &cancelled, std::string_view logContext = "chart") {
+  return parseChart(path, randomSeed, randomPrng, std::nullopt, cancelled,
+                    logContext);
+}
+
+inline std::unique_ptr<bms_parser::Chart>
+parseChart(const std::filesystem::path &path, std::atomic_bool &cancelled,
+           std::string_view logContext = "chart") {
+  return parseChart(path, std::nullopt, std::nullopt, std::nullopt, cancelled,
+                    logContext);
+}
+
+inline std::unique_ptr<bms_parser::Chart>
 parseChart(const bms_parser::ChartMeta &meta, std::atomic_bool &cancelled,
            std::string_view logContext = "chart") {
-  return parseChart(meta.BmsPath, meta.RandomSeed, meta.RandomPrng, cancelled,
+  return parseChart(meta.BmsPath, meta.RandomSeed, meta.RandomPrng,
+                    randomValuesOrNull(meta.RandomValues), cancelled,
                     logContext);
 }
 
 inline std::unique_ptr<bms_parser::Chart>
 parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
                     std::atomic_bool &cancelled) {
-  return parseChart(path, replay.randomSeed, replay.randomPrng, cancelled,
+  return parseChart(path, replay.randomSeed, replay.randomPrng,
+                    randomValuesOrNull(replay.randomValues), cancelled,
                     "replay");
 }
 
 inline std::unique_ptr<bms_parser::Chart>
 parseChartForRetry(const ReplayData &retrySource,
                    const bms_parser::ChartMeta &fallbackMeta,
-                   std::atomic_bool &cancelled) {
+                   std::atomic_bool &cancelled, bool samePattern) {
   const bms_parser::ChartMeta &chartMeta = retrySource.chartMeta.BmsPath.empty()
                                                ? fallbackMeta
                                                : retrySource.chartMeta;
-  const std::optional<std::string> randomPrng =
-      retrySource.randomPrng.has_value() ? retrySource.randomPrng
-                                         : chartMeta.RandomPrng;
-  const std::optional<unsigned int> randomSeed =
-      retrySource.randomSeed.has_value() ? retrySource.randomSeed
-                                         : chartMeta.RandomSeed;
-  return parseChart(chartMeta.BmsPath, randomSeed, randomPrng, cancelled,
-                    "retry");
+  std::optional<std::string> randomPrng;
+  std::optional<unsigned int> randomSeed;
+  std::optional<std::vector<int>> randomValues;
+  if (samePattern) {
+    randomPrng = retrySource.randomPrng.has_value() ? retrySource.randomPrng
+                                                    : chartMeta.RandomPrng;
+    randomSeed = retrySource.randomSeed.has_value() ? retrySource.randomSeed
+                                                    : chartMeta.RandomSeed;
+    randomValues = !retrySource.randomValues.empty()
+                       ? randomValuesOrNull(retrySource.randomValues)
+                       : randomValuesOrNull(chartMeta.RandomValues);
+  }
+  return parseChart(chartMeta.BmsPath, randomSeed, randomPrng, randomValues,
+                    cancelled, "retry");
 }
 
 } // namespace play_options

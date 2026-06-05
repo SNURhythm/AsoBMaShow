@@ -60,7 +60,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
                        std::unique_ptr<bms_parser::Chart> &retryChart,
                        StartOptions &retryOptions,
                        std::atomic_bool &cancelled) {
-  retryChart = play_options::parseChart(meta, cancelled, "retry");
+  retryChart = play_options::parseChart(meta.BmsPath, cancelled, "retry");
   if (retryChart == nullptr || cancelled) {
     return false;
   }
@@ -311,6 +311,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.chartMeta = chart->Meta;
   recordedReplay.randomSeed = chart->Meta.RandomSeed;
   recordedReplay.randomPrng = chart->Meta.RandomPrng;
+  recordedReplay.randomValues = chart->Meta.RandomValues;
   recordedReplay.playOption = options.playOption;
   recordedReplay.playOptionSeed = options.playOptionSeed;
   recordedReplay.playOption2 = options.playOption2;

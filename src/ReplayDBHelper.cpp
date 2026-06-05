@@ -7,8 +7,11 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
@@ -139,6 +142,39 @@ std::string readText(sqlite3_stmt *stmt, int idx) {
   return text == nullptr ? "" : std::string(text);
 }
 
+std::optional<std::string> serializeRandomValues(
+    const std::vector<int> &values) {
+  if (values.empty()) {
+    return std::nullopt;
+  }
+  std::ostringstream output;
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      output << ",";
+    }
+    output << values[i];
+  }
+  return output.str();
+}
+
+std::vector<int> parseRandomValues(const std::string &value) {
+  std::vector<int> values;
+  std::istringstream input(value);
+  std::string token;
+  while (std::getline(input, token, ',')) {
+    token = trimCopy(token);
+    if (token.empty()) {
+      continue;
+    }
+    char *end = nullptr;
+    const long parsed = std::strtol(token.c_str(), &end, 10);
+    if (end != token.c_str()) {
+      values.push_back(static_cast<int>(parsed));
+    }
+  }
+  return values;
+}
+
 ReplayEventAction actionFromInt(int value) {
   switch (value) {
   case 1:
@@ -266,6 +302,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
                             "clear_type INTEGER NOT NULL,"
                             "random_seed INTEGER,"
                             "random_prng TEXT,"
+                            "random_values TEXT,"
                             "play_option TEXT,"
                             "play_option_seed INTEGER,"
                             "play_option2 TEXT,"
@@ -283,6 +320,11 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!tableHasColumn(db, "replays", "random_prng") &&
       !execSql(db, "ALTER TABLE replays ADD COLUMN random_prng TEXT",
                "adding replay random PRNG column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "random_values") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN random_values TEXT",
+               "adding replay random values column")) {
     return false;
   }
   if (!tableHasColumn(db, "replays", "play_option") &&
@@ -362,13 +404,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "INSERT INTO replays ("
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
       "gauge_type, gauge_auto_shift, final_score, final_gauge, clear_type,"
-      "random_seed, random_prng, play_option, play_option_seed,"
+      "random_seed, random_prng, random_values, play_option, play_option_seed,"
       "play_option2, play_option2_seed"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
       "@gauge_type, @gauge_auto_shift, @final_score, @final_gauge,"
-      "@clear_type, @random_seed, @random_prng, @play_option,"
-      "@play_option_seed, @play_option2, @play_option2_seed"
+      "@clear_type, @random_seed, @random_prng, @random_values,"
+      "@play_option, @play_option_seed, @play_option2, @play_option2_seed"
       ")";
 
   sqlite3_stmt *replayStmt = nullptr;
@@ -407,6 +449,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   } else {
     sqlite3_bind_null(replayStmt, bindIndex++);
   }
+  bindOptionalText(replayStmt, bindIndex++,
+                   serializeRandomValues(replay.randomValues));
   bindOptionalText(replayStmt, bindIndex++, replay.playOption);
   bindOptionalInt64(replayStmt, bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt, bindIndex++, replay.playOption2);
@@ -527,7 +571,8 @@ ReplayDBHelper::LoadReplay(int replayId,
   const char *query =
       "SELECT id, chart_path, chart_md5, chart_sha256, chart_title,"
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
-      "clear_type, created_at, random_seed, random_prng, play_option,"
+      "clear_type, created_at, random_seed, random_prng, random_values,"
+      "play_option,"
       "play_option_seed, play_option2, play_option2_seed "
       "FROM replays WHERE id = ? AND "
       "((? != '' AND chart_sha256 = ?) OR "
@@ -572,16 +617,20 @@ ReplayDBHelper::LoadReplay(int replayId,
     }
     loaded.chartMeta.RandomPrng = loaded.randomPrng;
     if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
-      loaded.playOption = readText(stmt, 14);
+      loaded.randomValues = parseRandomValues(readText(stmt, 14));
     }
+    loaded.chartMeta.RandomValues = loaded.randomValues;
     if (sqlite3_column_type(stmt, 15) != SQLITE_NULL) {
-      loaded.playOptionSeed = sqlite3_column_int64(stmt, 15);
+      loaded.playOption = readText(stmt, 15);
     }
     if (sqlite3_column_type(stmt, 16) != SQLITE_NULL) {
-      loaded.playOption2 = readText(stmt, 16);
+      loaded.playOptionSeed = sqlite3_column_int64(stmt, 16);
     }
     if (sqlite3_column_type(stmt, 17) != SQLITE_NULL) {
-      loaded.playOption2Seed = sqlite3_column_int64(stmt, 17);
+      loaded.playOption2 = readText(stmt, 17);
+    }
+    if (sqlite3_column_type(stmt, 18) != SQLITE_NULL) {
+      loaded.playOption2Seed = sqlite3_column_int64(stmt, 18);
     }
     replay = std::move(loaded);
   }
