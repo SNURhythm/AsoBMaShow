@@ -624,10 +624,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (!longNote->IsHolding) {
                 continue;
               }
-              longNote->Release(judgedTime);
               if (replayPlayback) {
                 continue;
               }
+              longNote->Release(judgedTime);
               const auto judgeResult =
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
               onJudge(judgeResult);
@@ -764,8 +764,12 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
 
     if (auto *note = findReplayNote(event);
         note != nullptr && event.judgement != None) {
-      releaseNote(note, event.judgeTimeMicros, &recordedJudge,
-                  event.songTimeMicros, false);
+      const JudgeResult appliedJudge = releaseNote(
+          note, event.judgeTimeMicros, &recordedJudge, event.songTimeMicros,
+          false);
+      if (appliedJudge.judgement == None) {
+        onJudge(recordedJudge);
+      }
       applyReplayGauge(event);
     }
     break;
