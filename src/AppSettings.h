@@ -32,6 +32,7 @@ public:
   static constexpr float kMaxLaneLength = 12.0f;
   static constexpr float kDefaultLaneLength = 8.0f;
   static constexpr const char *kDefaultGaugeType = "normal";
+  static constexpr const char *kDefaultPlayOption = "NORMAL";
 
   int inputOffsetMs = 0;
   int visualOffsetMs = 0;
@@ -45,6 +46,7 @@ public:
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
   std::string selectedGaugeType = kDefaultGaugeType;
+  std::string selectedPlayOption = kDefaultPlayOption;
 
   void sanitize();
   bool save() const;

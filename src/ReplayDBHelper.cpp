@@ -7,13 +7,17 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static const std::filesystem::path documents = Utils::GetDocumentsPath("BMS/");
+  static const std::filesystem::path documents =
+      Utils::GetDocumentsPath("BMS/");
   const std::string documentString = documents.string();
   const std::string pathString = path.string();
   if (pathString.find(documentString) == 0) {
@@ -88,6 +92,24 @@ bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
          SQLITE_OK;
 }
 
+void bindOptionalText(sqlite3_stmt *stmt, int idx,
+                      const std::optional<std::string> &value) {
+  if (value.has_value() && !value->empty()) {
+    bindText(stmt, idx, *value);
+  } else {
+    sqlite3_bind_null(stmt, idx);
+  }
+}
+
+void bindOptionalInt64(sqlite3_stmt *stmt, int idx,
+                       const std::optional<long long> &value) {
+  if (value.has_value()) {
+    sqlite3_bind_int64(stmt, idx, static_cast<sqlite3_int64>(*value));
+  } else {
+    sqlite3_bind_null(stmt, idx);
+  }
+}
+
 struct ReplayChartMatch {
   std::string chartPath;
   std::string sha256;
@@ -118,6 +140,39 @@ std::string readText(sqlite3_stmt *stmt, int idx) {
   const auto *text =
       reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
   return text == nullptr ? "" : std::string(text);
+}
+
+std::optional<std::string> serializeRandomValues(
+    const std::vector<int> &values) {
+  if (values.empty()) {
+    return std::nullopt;
+  }
+  std::ostringstream output;
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      output << ",";
+    }
+    output << values[i];
+  }
+  return output.str();
+}
+
+std::vector<int> parseRandomValues(const std::string &value) {
+  std::vector<int> values;
+  std::istringstream input(value);
+  std::string token;
+  while (std::getline(input, token, ',')) {
+    token = trimCopy(token);
+    if (token.empty()) {
+      continue;
+    }
+    char *end = nullptr;
+    const long parsed = std::strtol(token.c_str(), &end, 10);
+    if (end != token.c_str()) {
+      values.push_back(static_cast<int>(parsed));
+    }
+  }
+  return values;
 }
 
 ReplayEventAction actionFromInt(int value) {
@@ -178,6 +233,18 @@ ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn) {
   summary.finalGauge = static_cast<float>(sqlite3_column_double(stmt, 9));
   summary.clearType = sqlite3_column_int(stmt, 10);
   summary.createdAt = readText(stmt, 11);
+  if (sqlite3_column_type(stmt, 12) != SQLITE_NULL) {
+    summary.playOption = readText(stmt, 12);
+  }
+  if (sqlite3_column_type(stmt, 13) != SQLITE_NULL) {
+    summary.playOptionSeed = sqlite3_column_int64(stmt, 13);
+  }
+  if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
+    summary.playOption2 = readText(stmt, 14);
+  }
+  if (sqlite3_column_type(stmt, 15) != SQLITE_NULL) {
+    summary.playOption2Seed = sqlite3_column_int64(stmt, 15);
+  }
   summary.eventCount = sqlite3_column_int(stmt, eventCountColumn);
   return summary;
 }
@@ -221,23 +288,27 @@ void ReplayDBHelper::Close(sqlite3 *db) {
 }
 
 bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
-  const char *replayQuery =
-      "CREATE TABLE IF NOT EXISTS replays ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "chart_path TEXT,"
-      "chart_md5 TEXT,"
-      "chart_sha256 TEXT,"
-      "chart_title TEXT,"
-      "chart_artist TEXT,"
-      "gauge_type INTEGER NOT NULL,"
-      "gauge_auto_shift INTEGER NOT NULL,"
-      "final_score INTEGER NOT NULL,"
-      "final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,"
-      "random_seed INTEGER,"
-      "random_prng TEXT,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-      ")";
+  const char *replayQuery = "CREATE TABLE IF NOT EXISTS replays ("
+                            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                            "chart_path TEXT,"
+                            "chart_md5 TEXT,"
+                            "chart_sha256 TEXT,"
+                            "chart_title TEXT,"
+                            "chart_artist TEXT,"
+                            "gauge_type INTEGER NOT NULL,"
+                            "gauge_auto_shift INTEGER NOT NULL,"
+                            "final_score INTEGER NOT NULL,"
+                            "final_gauge REAL NOT NULL,"
+                            "clear_type INTEGER NOT NULL,"
+                            "random_seed INTEGER,"
+                            "random_prng TEXT,"
+                            "random_values TEXT,"
+                            "play_option TEXT,"
+                            "play_option_seed INTEGER,"
+                            "play_option2 TEXT,"
+                            "play_option2_seed INTEGER,"
+                            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                            ")";
   if (!execSql(db, replayQuery, "creating replay table")) {
     return false;
   }
@@ -249,6 +320,31 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!tableHasColumn(db, "replays", "random_prng") &&
       !execSql(db, "ALTER TABLE replays ADD COLUMN random_prng TEXT",
                "adding replay random PRNG column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "random_values") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN random_values TEXT",
+               "adding replay random values column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "play_option") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option TEXT",
+               "adding replay play option column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "play_option_seed") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
+               "adding replay play option seed column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "play_option2") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
+               "adding replay 2P play option column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "play_option2_seed") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
+               "adding replay 2P play option seed column")) {
     return false;
   }
 
@@ -308,11 +404,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "INSERT INTO replays ("
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
       "gauge_type, gauge_auto_shift, final_score, final_gauge, clear_type,"
-      "random_seed, random_prng"
+      "random_seed, random_prng, random_values, play_option, play_option_seed,"
+      "play_option2, play_option2_seed"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
       "@gauge_type, @gauge_auto_shift, @final_score, @final_gauge,"
-      "@clear_type, @random_seed, @random_prng"
+      "@clear_type, @random_seed, @random_prng, @random_values,"
+      "@play_option, @play_option_seed, @play_option2, @play_option2_seed"
       ")";
 
   sqlite3_stmt *replayStmt = nullptr;
@@ -351,6 +449,12 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   } else {
     sqlite3_bind_null(replayStmt, bindIndex++);
   }
+  bindOptionalText(replayStmt, bindIndex++,
+                   serializeRandomValues(replay.randomValues));
+  bindOptionalText(replayStmt, bindIndex++, replay.playOption);
+  bindOptionalInt64(replayStmt, bindIndex++, replay.playOptionSeed);
+  bindOptionalText(replayStmt, bindIndex++, replay.playOption2);
+  bindOptionalInt64(replayStmt, bindIndex++, replay.playOption2Seed);
 
   rc = sqlite3_step(replayStmt);
   sqlite3_finalize(replayStmt);
@@ -401,8 +505,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
 }
 
 std::vector<ReplaySummary>
-ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta,
-                            int limit) {
+ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   std::vector<ReplaySummary> replays;
   sqlite3 *db = Connect();
   if (db == nullptr) {
@@ -421,6 +524,8 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta,
       "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
       "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
+      "r.play_option, r.play_option_seed, r.play_option2,"
+      "r.play_option2_seed,"
       "COUNT(e.id) "
       "FROM replays r "
       "LEFT JOIN replay_events e ON e.replay_id = r.id "
@@ -442,7 +547,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta,
   sqlite3_bind_int(stmt, bindIndex++, limit);
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    replays.push_back(readReplaySummary(stmt, 12));
+    replays.push_back(readReplaySummary(stmt, 16));
   }
   sqlite3_finalize(stmt);
   Close(db);
@@ -466,7 +571,9 @@ ReplayDBHelper::LoadReplay(int replayId,
   const char *query =
       "SELECT id, chart_path, chart_md5, chart_sha256, chart_title,"
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
-      "clear_type, created_at, random_seed, random_prng "
+      "clear_type, created_at, random_seed, random_prng, random_values,"
+      "play_option,"
+      "play_option_seed, play_option2, play_option2_seed "
       "FROM replays WHERE id = ? AND "
       "((? != '' AND chart_sha256 = ?) OR "
       "(? != '' AND chart_md5 = ?) OR "
@@ -509,6 +616,22 @@ ReplayDBHelper::LoadReplay(int replayId,
       loaded.randomPrng = bms_parser::Parser::RandomPrngId;
     }
     loaded.chartMeta.RandomPrng = loaded.randomPrng;
+    if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
+      loaded.randomValues = parseRandomValues(readText(stmt, 14));
+    }
+    loaded.chartMeta.RandomValues = loaded.randomValues;
+    if (sqlite3_column_type(stmt, 15) != SQLITE_NULL) {
+      loaded.playOption = readText(stmt, 15);
+    }
+    if (sqlite3_column_type(stmt, 16) != SQLITE_NULL) {
+      loaded.playOptionSeed = sqlite3_column_int64(stmt, 16);
+    }
+    if (sqlite3_column_type(stmt, 17) != SQLITE_NULL) {
+      loaded.playOption2 = readText(stmt, 17);
+    }
+    if (sqlite3_column_type(stmt, 18) != SQLITE_NULL) {
+      loaded.playOption2Seed = sqlite3_column_int64(stmt, 18);
+    }
     replay = std::move(loaded);
   }
   sqlite3_finalize(stmt);

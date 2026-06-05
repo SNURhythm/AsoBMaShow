@@ -3,6 +3,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "../../PlayOptionUtils.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
 #include "../../input/RhythmInputHandler.h"
@@ -13,6 +14,8 @@
 
 #include <array>
 #include <chrono>
+#include <memory>
+#include <optional>
 #include <string>
 
 namespace {
@@ -26,6 +29,80 @@ std::string replayNoteKey(int lane, long long noteTimeMicros) {
   return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
 }
 
+std::string gameplayPlayOptionLabel(const StartOptions &options) {
+  std::optional<std::string> option = options.playOption;
+  std::optional<long long> seed = options.playOptionSeed;
+  std::optional<std::string> option2 = options.playOption2;
+  std::optional<long long> seed2 = options.playOption2Seed;
+
+  if (options.replayData != nullptr) {
+    if (!option.has_value()) {
+      option = options.replayData->playOption;
+    }
+    if (!seed.has_value()) {
+      seed = options.replayData->playOptionSeed;
+    }
+    if (!option2.has_value()) {
+      option2 = options.replayData->playOption2;
+    }
+    if (!seed2.has_value()) {
+      seed2 = options.replayData->playOption2Seed;
+    }
+  }
+
+  const std::string label =
+      play_options::formatPlayOptionLabel(option, seed, option2, seed2);
+  return label.empty() ? "" : "Option: " + label;
+}
+
+bool prepareRetryChart(const bms_parser::ChartMeta &meta,
+                       const StartOptions &sourceOptions,
+                       std::unique_ptr<bms_parser::Chart> &retryChart,
+                       StartOptions &retryOptions,
+                       std::atomic_bool &cancelled) {
+  retryChart = play_options::parseChart(meta.BmsPath, cancelled, "retry");
+  if (retryChart == nullptr || cancelled) {
+    return false;
+  }
+
+  retryOptions = sourceOptions;
+  retryOptions.startPosition = 0;
+  retryOptions.autoPlay = false;
+  retryOptions.replayData = nullptr;
+  retryOptions.playOption.reset();
+  retryOptions.playOptionSeed.reset();
+  retryOptions.playOption2.reset();
+  retryOptions.playOption2Seed.reset();
+  retryOptions.ownsChart = true;
+
+  std::optional<std::string> playOption = sourceOptions.playOption;
+  std::optional<std::string> playOption2 = sourceOptions.playOption2;
+  if (sourceOptions.replayData != nullptr) {
+    if (!playOption.has_value()) {
+      playOption = sourceOptions.replayData->playOption;
+    }
+    if (!playOption2.has_value()) {
+      playOption2 = sourceOptions.replayData->playOption2;
+    }
+  }
+
+  if (playOption.has_value() &&
+      !play_options::applyPlayOptionModifier(
+          *retryChart, *playOption, std::nullopt, 0, retryOptions.playOption,
+          retryOptions.playOptionSeed, "retry")) {
+    return false;
+  }
+
+  if (retryChart->Meta.IsDP && playOption2.has_value() &&
+      !play_options::applyPlayOptionModifier(
+          *retryChart, *playOption2, std::nullopt, 1, retryOptions.playOption2,
+          retryOptions.playOption2Seed, "retry")) {
+    return false;
+  }
+
+  return true;
+}
+
 #if defined(DEBUG) || defined(_DEBUG)
 constexpr bool kShowLaneStateOverlay = true;
 #else
@@ -37,6 +114,7 @@ void GamePlayScene::init() {
   renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
                              context.settings.visibleTimeGreenNumber);
   renderer->setReplayData(options.replayData.get());
+  renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback()) {
@@ -70,44 +148,40 @@ void GamePlayScene::init() {
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
     {
+      auto makePauseButton = [](const std::string &label, int width, int height,
+                                auto onClick) {
+        auto button = new Button();
+        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+        text->setText(label);
+        text->setAlign(TextView::CENTER);
+        button->setContentView(text);
+        button->setOnClickListener(onClick);
+        button->setSize(width, height);
+        return button;
+      };
+
       auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
       pauseText->setSize(200, 100);
       pauseText->setText("Paused");
       pauseText->setAlign(TextView::CENTER);
       pauseScreen->addView(pauseText);
-      auto resumeButton = new Button();
-      auto resumeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      resumeText->setText("Resume");
-      resumeText->setAlign(TextView::CENTER);
-      resumeButton->setContentView(resumeText);
-      resumeButton->setOnClickListener([this]() {
+      pauseScreen->addView(makePauseButton("Resume", 200, 100, [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
-      });
-      resumeButton->setSize(200, 100);
-      pauseScreen->addView(resumeButton);
-      auto restartButton = new Button();
-      auto restartText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      restartText->setText("Restart");
-      restartText->setAlign(TextView::CENTER);
-      restartButton->setContentView(restartText);
-      restartButton->setOnClickListener([this]() {
-        pauseLayout->setVisible(false);
-        defer(
-            [this]() {
-              reset();
-              return true;
-            },
-            0, true);
-      });
-      restartButton->setSize(200, 100);
-      pauseScreen->addView(restartButton);
-      auto exitButton = new Button();
-      auto exitText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      exitText->setText("Exit");
-      exitText->setAlign(TextView::CENTER);
-      exitButton->setContentView(exitText);
-      exitButton->setOnClickListener([this]() {
+      }));
+      pauseScreen->addView(makePauseButton(
+          isReplayPlayback() ? "Replay" : "Retry", 260, 90, [this]() {
+            if (isReplayPlayback()) {
+              restartCurrentPattern();
+            } else {
+              retryWithNewPattern();
+            }
+          }));
+      if (!isReplayPlayback()) {
+        pauseScreen->addView(makePauseButton(
+            "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
+      }
+      pauseScreen->addView(makePauseButton("Exit", 200, 100, [this]() {
         context.jukebox.stop();
         defer(
             [this]() {
@@ -115,9 +189,7 @@ void GamePlayScene::init() {
               return false;
             },
             0, true);
-      });
-      exitButton->setSize(200, 100);
-      pauseScreen->addView(exitButton);
+      }));
     }
 
     pauseLayout->addView(pauseScreen);
@@ -160,12 +232,12 @@ void GamePlayScene::reset() {
                            isCancelled);
   context.jukebox.play();
   state = new RhythmState(chart, false);
-  const GaugeType initialGaugeType =
-      isReplayPlayback() ? options.replayData->initialGaugeType
-                         : options.gaugeType;
-  const bool gaugeAutoShift =
-      isReplayPlayback() ? options.replayData->gaugeAutoShift
-                         : options.gaugeAutoShift;
+  const GaugeType initialGaugeType = isReplayPlayback()
+                                         ? options.replayData->initialGaugeType
+                                         : options.gaugeType;
+  const bool gaugeAutoShift = isReplayPlayback()
+                                  ? options.replayData->gaugeAutoShift
+                                  : options.gaugeAutoShift;
   state->configureGauge(initialGaugeType, gaugeAutoShift);
   state->isPlaying = true;
   replayKeySoundCursor = 0;
@@ -173,6 +245,54 @@ void GamePlayScene::reset() {
   buildReplayNoteLookup();
   beginReplayRecording();
   updateGaugeStatusText();
+}
+
+void GamePlayScene::restartCurrentPattern() {
+  pauseLayout->setVisible(false);
+  context.jukebox.stop();
+  defer(
+      [this]() {
+        reset();
+        return true;
+      },
+      0, true);
+}
+
+void GamePlayScene::retryWithNewPattern() {
+  if (isReplayPlayback()) {
+    restartCurrentPattern();
+    return;
+  }
+
+  pauseLayout->setVisible(false);
+  context.jukebox.stop();
+
+  defer(
+      [this]() {
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> retryChart;
+        StartOptions retryOptions;
+        if (!prepareRetryChart(chart->Meta, options, retryChart, retryOptions,
+                               parseCancelled)) {
+          SDL_Log("Failed to prepare retry chart for: %s",
+                  chart->Meta.Title.c_str());
+          reset();
+          return true;
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*retryChart, true, parseCancelled);
+        if (parseCancelled) {
+          reset();
+          return true;
+        }
+
+        auto *loadedChart = retryChart.release();
+        context.sceneManager->changeScene(
+            new GamePlayScene(context, loadedChart, retryOptions), false);
+        return false;
+      },
+      0, true);
 }
 
 bool GamePlayScene::isReplayPlayback() const {
@@ -193,6 +313,11 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.chartMeta = chart->Meta;
   recordedReplay.randomSeed = chart->Meta.RandomSeed;
   recordedReplay.randomPrng = chart->Meta.RandomPrng;
+  recordedReplay.randomValues = chart->Meta.RandomValues;
+  recordedReplay.playOption = options.playOption;
+  recordedReplay.playOptionSeed = options.playOptionSeed;
+  recordedReplay.playOption2 = options.playOption2;
+  recordedReplay.playOption2Seed = options.playOption2Seed;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.finalScore = 0;
@@ -262,10 +387,17 @@ void GamePlayScene::update(float dt) {
   finishReplayRecording();
   defer(
       [this]() {
-        context.sceneManager->changeScene(new ResultScene(
-            context, chart->Meta, *state,
-            shouldRecordReplay() ? &recordedReplay : nullptr,
-            !isReplayPlayback()));
+        const ReplayData *replayToSave =
+            shouldRecordReplay() ? &recordedReplay : nullptr;
+        const ReplayData *retrySource =
+            replayToSave != nullptr
+                ? replayToSave
+                : (options.replayData != nullptr ? options.replayData.get()
+                                                 : nullptr);
+        context.sceneManager->changeScene(
+            new ResultScene(context, chart->Meta, *state, replayToSave,
+                            !isReplayPlayback(), retrySource),
+            false);
         return false;
       },
       2000, true);
@@ -292,8 +424,14 @@ void GamePlayScene::cleanupScene() {
   }
   delete renderer;
   renderer = nullptr;
+  delete state;
+  state = nullptr;
   delete laneStateText;
   laneStateText = nullptr;
+  if (options.ownsChart) {
+    delete chart;
+    chart = nullptr;
+  }
   SDL_Log("Cleaned up GamePlayScene");
 }
 bms_parser::Note *GamePlayScene::pressLane(int lane, double inputDelay) {
@@ -463,7 +601,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               longNote->MissPress(judgedTime);
             }
           }
-          const auto poorResult = JudgeResult(Poor, judgedTime - timeline->Timing);
+          const auto poorResult =
+              JudgeResult(Poor, judgedTime - timeline->Timing);
           onJudge(poorResult);
           appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                             judgedTime, poorResult);
@@ -488,9 +627,6 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 continue;
               }
               longNote->Release(judgedTime);
-              if (replayPlayback) {
-                continue;
-              }
               const auto judgeResult =
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
               onJudge(judgeResult);
@@ -650,7 +786,8 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   state->gaugeType = event.gaugeType;
   state->currentGauge = event.gauge;
   const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
-  if (gaugeIndex >= 0 && gaugeIndex < static_cast<int>(state->gaugeValues.size())) {
+  if (gaugeIndex >= 0 &&
+      gaugeIndex < static_cast<int>(state->gaugeValues.size())) {
     state->gaugeValues[gaugeIndex] = event.gauge;
   }
   if (!state->gaugeHistory.empty()) {
@@ -724,9 +861,9 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       !isReplayPlayback()) {
     context.jukebox.playKeySound(note->Wav);
   }
-  const JudgeResult judgeResult =
-      precomputedJudge != nullptr ? *precomputedJudge
-                                  : judge.judgeNow(note, pressedTime);
+  const JudgeResult judgeResult = precomputedJudge != nullptr
+                                      ? *precomputedJudge
+                                      : judge.judgeNow(note, pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
       // TODO: play keybomb
@@ -771,9 +908,9 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
     return JudgeResult(None, 0);
   }
   LongNote->Release(ReleasedTime);
-  const auto judgeResult =
-      precomputedJudge != nullptr ? *precomputedJudge
-                                  : judge.judgeNow(LongNote, ReleasedTime);
+  const auto judgeResult = precomputedJudge != nullptr
+                               ? *precomputedJudge
+                               : judge.judgeNow(LongNote, ReleasedTime);
   // if tail judgement is not good/great/pgreat, make it bad
   JudgeResult appliedJudge(None, 0);
   if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
