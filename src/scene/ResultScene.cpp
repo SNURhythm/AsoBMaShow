@@ -14,6 +14,7 @@
 #include "../skin/SkinTypes.h"
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -67,7 +68,8 @@ ResultScene::ResultScene(ApplicationContext &context,
                     ? std::optional<ReplayData>(*retrySource)
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
                                          : std::nullopt)),
-      shouldSaveScore(shouldSaveScore) {
+      shouldSaveScore(shouldSaveScore),
+      replayResult(!shouldSaveScore && retrySource != nullptr) {
   skin = new DefaultSkin();
 }
 
@@ -107,20 +109,30 @@ void ResultScene::addRetryButtons() {
   retryRow->setJustifyContent(YGJustifyCenter);
   retryRow->setGap(12);
 
-  auto makeButton = [this](const std::string &label, bool samePattern) {
+  auto makeButton = [this](const std::string &label, bool samePattern,
+                           bool replay) {
     auto button = new Button();
     auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     button->setContentView(text);
-    button->setOnClickListener(
-        [this, samePattern]() { startRetry(samePattern); });
+    button->setOnClickListener([this, samePattern, replay]() {
+      if (replay) {
+        startReplay();
+      } else {
+        startRetry(samePattern);
+      }
+    });
     button->setSize(220, 70);
     return button;
   };
 
-  retryRow->addView(makeButton("Retry", false));
-  retryRow->addView(makeButton("Retry Same", true));
+  if (replayResult) {
+    retryRow->addView(makeButton("Replay", true, true));
+  } else {
+    retryRow->addView(makeButton("Retry", false, false));
+    retryRow->addView(makeButton("Retry Same", true, false));
+  }
   rootLayout->addView(retryRow);
 }
 
@@ -196,6 +208,49 @@ void ResultScene::startRetry(bool samePattern) {
         auto *loadedChart = retryChart.release();
         context.sceneManager->changeScene(
             new GamePlayScene(context, loadedChart, options), false);
+        return false;
+      },
+      0, true);
+}
+
+void ResultScene::startReplay() {
+  if (!retryData.has_value()) {
+    return;
+  }
+
+  const ReplayData replaySource = *retryData;
+  context.jukebox.stop();
+  defer(
+      [this, replaySource]() {
+        std::atomic_bool parseCancelled = false;
+        auto replayChart = play_options::parseChartForReplay(
+            meta.BmsPath, replaySource, parseCancelled);
+        if (replayChart == nullptr || parseCancelled ||
+            !play_options::applyReplayPlayOptions(*replayChart,
+                                                  replaySource)) {
+          return true;
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*replayChart, true, parseCancelled);
+        if (parseCancelled) {
+          return true;
+        }
+
+        auto replayData = std::make_shared<ReplayData>(replaySource);
+        auto *loadedChart = replayChart.release();
+        context.sceneManager->changeScene(
+            new GamePlayScene(context, loadedChart,
+                              {
+                                  .startPosition = 0,
+                                  .autoKeySound = false,
+                                  .autoPlay = false,
+                                  .gaugeType = replayData->initialGaugeType,
+                                  .gaugeAutoShift = replayData->gaugeAutoShift,
+                                  .replayData = replayData,
+                                  .ownsChart = true,
+                              }),
+            false);
         return false;
       },
       0, true);

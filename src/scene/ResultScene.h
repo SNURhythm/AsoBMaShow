@@ -26,6 +26,7 @@ private:
   void saveReplay();
   void addRetryButtons();
   void startRetry(bool samePattern);
+  void startReplay();
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
@@ -35,6 +36,7 @@ private:
   View *graphPlaceHolder = nullptr;
   ISkin *skin = nullptr;
   bool shouldSaveScore = true;
+  bool replayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
 };
