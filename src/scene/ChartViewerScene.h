@@ -35,6 +35,7 @@ private:
     int maxValue = 1;
     int selectedValue = 1;
     int depth = 0;
+    size_t sourceLine = 0;
   };
 
   ChartMetaRecord record;

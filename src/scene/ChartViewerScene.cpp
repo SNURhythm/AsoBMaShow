@@ -411,7 +411,7 @@ private:
     contentRightMargin = baseSideMargin + horizontalSafeInset;
     const float maxColumnHeight =
         std::max(280.0f, static_cast<float>(getHeight() - 16));
-    const float baseMeasureHeight = 68.0f * zoom;
+    const float baseMeasureHeight = 136.0f * zoom;
 
     std::vector<float> measureHeights;
     measureHeights.reserve(chart->Measures.size());
@@ -1309,14 +1309,68 @@ void ChartViewerScene::setRandomValue(size_t index, int value) {
   if (index >= randomOptions.size()) {
     return;
   }
-  const auto &option = randomOptions[index];
-  std::vector<int> nextValues = selectedRandomValues;
-  if (nextValues.size() <= index) {
-    nextValues.resize(index + 1, 1);
+  const auto option = randomOptions[index];
+  const std::vector<RandomOption> previousOptions = randomOptions;
+  const std::vector<int> previousValues = selectedRandomValues;
+  const int clampedValue = std::clamp(value, 1, option.maxValue);
+  size_t nextSibling = index + 1;
+  while (nextSibling < previousOptions.size() &&
+         previousOptions[nextSibling].depth > option.depth) {
+    ++nextSibling;
   }
-  nextValues[index] = std::clamp(value, 1, option.maxValue);
-  nextValues.resize(index + 1);
-  parseAndRefresh(nextValues);
+
+  auto previousSelectedAt = [&](size_t optionIndex) {
+    if (optionIndex < previousValues.size()) {
+      return previousValues[optionIndex];
+    }
+    if (optionIndex < previousOptions.size()) {
+      return previousOptions[optionIndex].selectedValue;
+    }
+    return 1;
+  };
+
+  std::unordered_map<size_t, int> preservedBySourceLine;
+  for (size_t i = 0; i < previousOptions.size(); ++i) {
+    if (i == index || (i > index && i < nextSibling)) {
+      continue;
+    }
+    preservedBySourceLine[previousOptions[i].sourceLine] = previousSelectedAt(i);
+  }
+
+  std::vector<int> seedValues;
+  seedValues.reserve(index + 1);
+  for (size_t i = 0; i < index; ++i) {
+    seedValues.push_back(previousSelectedAt(i));
+  }
+  seedValues.push_back(clampedValue);
+  parseAndRefresh(seedValues);
+  if (chart == nullptr) {
+    return;
+  }
+
+  std::vector<int> nextValues;
+  nextValues.reserve(randomOptions.size());
+  for (size_t i = 0; i < randomOptions.size(); ++i) {
+    const auto &current = randomOptions[i];
+    if (current.sourceLine == option.sourceLine) {
+      nextValues.push_back(std::clamp(clampedValue, 1, current.maxValue));
+      continue;
+    }
+    const auto preserved = preservedBySourceLine.find(current.sourceLine);
+    if (preserved != preservedBySourceLine.end()) {
+      nextValues.push_back(std::clamp(preserved->second, 1, current.maxValue));
+      continue;
+    }
+    if (i < selectedRandomValues.size()) {
+      nextValues.push_back(selectedRandomValues[i]);
+    } else {
+      nextValues.push_back(current.selectedValue);
+    }
+  }
+
+  if (nextValues != selectedRandomValues) {
+    parseAndRefresh(nextValues);
+  }
 }
 
 void ChartViewerScene::refreshHeaderText() {
@@ -1411,7 +1465,9 @@ ChartViewerScene::scanActiveRandomOptions() const {
 
   std::istringstream stream(content);
   std::string line;
+  size_t sourceLine = 0;
   while (std::getline(stream, line)) {
+    ++sourceLine;
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
@@ -1482,7 +1538,7 @@ ChartViewerScene::scanActiveRandomOptions() const {
       if (index < selectedRandomValues.size()) {
         selected = std::clamp(selectedRandomValues[index], 1, n);
       }
-      options.push_back({index, n, selected, activeRandomDepth()});
+      options.push_back({index, n, selected, activeRandomDepth(), sourceLine});
       randomStack.push_back(selected);
       randomFrames.push_back({true});
       continue;
