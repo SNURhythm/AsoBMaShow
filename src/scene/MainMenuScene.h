@@ -7,6 +7,7 @@
 #include "../ScoreDBHelper.h"
 #include "../path.h"
 #include "../view/ImageView.h"
+#include "../view/ReplaySummaryListView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include <filesystem>
@@ -117,7 +118,7 @@ private:
   TextView *readyPlayOptionText = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
-  RecyclerView<ReplaySummary> *replayListView = nullptr;
+  ReplaySummaryListView *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayModalExportButton = nullptr;
   Button *replayModalCloseButton = nullptr;

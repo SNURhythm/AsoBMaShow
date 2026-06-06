@@ -146,6 +146,7 @@ Measure::~Measure() {
 #include <limits>
 #include <random>
 #include <unordered_map>
+#include <utility>
 
 namespace bms_parser {
 namespace {
@@ -280,6 +281,114 @@ std::string NormalizeOption(std::string_view option) {
     }
   }
   return normalized;
+}
+
+std::string NormalizeLaneAssignNotation(std::string_view option) {
+  std::string notation = NormalizeOption(option);
+  constexpr std::array<std::string_view, 4> prefixes = {
+      "ASSIGN:", "ASSIGN-", "MANUAL:", "MANUAL-"};
+  for (std::string_view prefix : prefixes) {
+    if (notation.rfind(prefix, 0) == 0) {
+      notation.erase(0, prefix.size());
+      break;
+    }
+  }
+
+  std::string result;
+  result.reserve(notation.size());
+  for (char c : notation) {
+    if (c == '-' || c == '/' || c == ':') {
+      continue;
+    }
+    result.push_back(c);
+  }
+  return result;
+}
+
+bool IsLaneAssignNotation(std::string_view option,
+                          std::string *error = nullptr) {
+  const std::string notation = NormalizeLaneAssignNotation(option);
+  if (notation.empty()) {
+    if (error != nullptr) {
+      *error = "Lane assign is empty.";
+    }
+    return false;
+  }
+  for (char c : notation) {
+    if (c == 'S' || c == 'L' || c == 'R' || (c >= '1' && c <= '9') ||
+        (c >= 'A' && c <= 'E')) {
+      continue;
+    }
+    if (error != nullptr) {
+      *error = "Unknown lane symbol: " + std::string(1, c);
+    }
+    return false;
+  }
+  return true;
+}
+
+bool BuildLaneAssignMap(const ChartMeta &meta, const std::string &notation,
+                        std::vector<int> &destinationLanes,
+                        std::vector<int> &sourceLanes,
+                        std::string *error = nullptr) {
+  destinationLanes.clear();
+  sourceLanes.clear();
+
+  destinationLanes = meta.GetTotalLaneIndices();
+  if (notation.size() != destinationLanes.size()) {
+    if (error != nullptr) {
+      *error = "Expected " + std::to_string(destinationLanes.size()) +
+               " lane symbols.";
+    }
+    return false;
+  }
+
+  std::unordered_map<char, int> symbolToLane;
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  if (meta.IsDP) {
+    if (scratchLanes.size() < 2) {
+      if (error != nullptr) {
+        *error = "DP lane assign requires L and R scratch lanes.";
+      }
+      return false;
+    }
+    symbolToLane['L'] = scratchLanes.front();
+    symbolToLane['R'] = scratchLanes.back();
+  } else if (!scratchLanes.empty()) {
+    symbolToLane['S'] = scratchLanes.front();
+  }
+
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  if (keyLanes.size() > keySymbols.size()) {
+    if (error != nullptr) {
+      *error = "Lane assign supports up to 14 key lanes.";
+    }
+    return false;
+  }
+  for (size_t i = 0; i < keyLanes.size(); ++i) {
+    symbolToLane[keySymbols[i]] = keyLanes[i];
+  }
+
+  sourceLanes.reserve(destinationLanes.size());
+  for (char c : notation) {
+    const auto it = symbolToLane.find(c);
+    if (it == symbolToLane.end()) {
+      if (error != nullptr) {
+        *error = "Unknown lane symbol: " + std::string(1, c);
+      }
+      return false;
+    }
+    if (std::find(sourceLanes.begin(), sourceLanes.end(), it->second) !=
+        sourceLanes.end()) {
+      if (error != nullptr) {
+        *error = "Duplicate lane symbol: " + std::string(1, c);
+      }
+      return false;
+    }
+    sourceLanes.push_back(it->second);
+  }
+  return true;
 }
 
 class IdentityModifier final : public BaseModifier {
@@ -618,6 +727,27 @@ void BaseModifier::SetPlayer(int player) { Player = player; }
 
 int BaseModifier::GetPlayer() const { return Player; }
 
+std::vector<int> BaseModifier::GetLaneOrder(const ChartMeta &meta) const {
+  const auto destinationLanes = meta.GetTotalLaneIndices();
+  std::vector<int> result;
+  result.reserve(destinationLanes.size());
+  for (int destinationLane : destinationLanes) {
+    int sourceLane = destinationLane;
+    if (destinationLane >= 0 &&
+        destinationLane < static_cast<int>(LaneMap.size())) {
+      sourceLane = LaneMap[static_cast<size_t>(destinationLane)];
+    }
+    result.push_back(sourceLane);
+  }
+  return result;
+}
+
+void BaseModifier::SetLaneMap(std::vector<int> laneMap) {
+  LaneMap = std::move(laneMap);
+}
+
+void BaseModifier::ClearLaneMap() { LaneMap.clear(); }
+
 std::vector<int> BaseModifier::GetModifyLanes(const ChartMeta &meta,
                                               bool includeScratch) const {
   auto keyLanes = meta.GetKeyLaneIndices();
@@ -715,6 +845,18 @@ const char *ToString(PlayOptionModifier option) {
   return "NORMAL";
 }
 
+bool ValidateLaneAssignNotation(const ChartMeta &meta,
+                                std::string_view notation,
+                                std::string *error) {
+  if (!IsLaneAssignNotation(notation, error)) {
+    return false;
+  }
+  std::vector<int> destinationLanes;
+  std::vector<int> sourceLanes;
+  return BuildLaneAssignMap(meta, NormalizeLaneAssignNotation(notation),
+                            destinationLanes, sourceLanes, error);
+}
+
 std::unique_ptr<BaseModifier>
 CreatePlayOptionModifier(PlayOptionModifier option, long long seed, int player,
                          int hranThresholdBpm) {
@@ -788,6 +930,10 @@ std::unique_ptr<BaseModifier> CreatePlayOptionModifier(std::string_view option,
     return CreatePlayOptionModifier(PlayOptionModifier::SRandomEx, seed, player,
                                     hranThresholdBpm);
   }
+  if (IsLaneAssignNotation(option)) {
+    return std::make_unique<LaneAssignModifier>(
+        NormalizeLaneAssignNotation(option), player);
+  }
   return nullptr;
 }
 
@@ -800,6 +946,7 @@ bool LaneShuffleModifier::IncludesScratch() const { return IncludeScratch; }
 void LaneShuffleModifier::Modify(Chart &chart) {
   const auto keys = GetModifyLanes(chart.Meta, IncludeScratch);
   if (keys.empty()) {
+    ClearLaneMap();
     return;
   }
 
@@ -809,8 +956,10 @@ void LaneShuffleModifier::Modify(Chart &chart) {
   }
   const auto laneMap = MakeLaneMap(chart, keys, laneCount);
   if (laneMap.empty()) {
+    ClearLaneMap();
     return;
   }
+  SetLaneMap(laneMap);
 
   for (auto *timeline : GetAllTimeLines(chart)) {
     std::vector<Note *> notes = timeline->Notes;
@@ -909,6 +1058,60 @@ std::vector<int> RandomExModifier::MakeLaneMap(const Chart &chart,
   (void)chart;
   return MakeRandomLaneMap(keys, laneCount, GetSeed());
 }
+
+LaneAssignModifier::LaneAssignModifier(std::string notation, int player)
+    : BaseModifier(0, player), Notation(NormalizeLaneAssignNotation(notation)),
+      NameText("ASSIGN:" + Notation) {}
+
+void LaneAssignModifier::Modify(Chart &chart) {
+  std::vector<int> destinationLanes;
+  std::vector<int> sourceLanes;
+  if (!BuildLaneAssignMap(chart.Meta, Notation, destinationLanes,
+                          sourceLanes)) {
+    ClearLaneMap();
+    return;
+  }
+
+  size_t laneCount = 0;
+  for (const auto *timeline : GetAllTimeLines(chart)) {
+    laneCount = std::max(laneCount, timeline->Notes.size());
+  }
+  std::vector<int> laneMap(laneCount);
+  for (size_t lane = 0; lane < laneMap.size(); ++lane) {
+    laneMap[lane] = static_cast<int>(lane);
+  }
+  for (size_t i = 0; i < destinationLanes.size(); ++i) {
+    const int destinationLane = destinationLanes[i];
+    if (destinationLane >= 0 &&
+        destinationLane < static_cast<int>(laneMap.size())) {
+      laneMap[static_cast<size_t>(destinationLane)] = sourceLanes[i];
+    }
+  }
+  SetLaneMap(std::move(laneMap));
+
+  for (auto *timeline : GetAllTimeLines(chart)) {
+    std::vector<Note *> notes = timeline->Notes;
+    std::vector<Note *> hiddenNotes = timeline->InvisibleNotes;
+    std::vector<LandmineNote *> landmineNotes = timeline->LandmineNotes;
+
+    for (size_t i = 0; i < destinationLanes.size(); ++i) {
+      const int destinationLane = destinationLanes[i];
+      const int sourceLane = sourceLanes[i];
+      if (destinationLane < 0 || sourceLane < 0 ||
+          destinationLane >= static_cast<int>(notes.size()) ||
+          sourceLane >= static_cast<int>(notes.size())) {
+        continue;
+      }
+      AssignNote(*timeline, destinationLane, notes[sourceLane]);
+      AssignHiddenNote(*timeline, destinationLane, hiddenNotes[sourceLane]);
+      AssignLandmineNote(*timeline, destinationLane,
+                         landmineNotes[sourceLane]);
+    }
+  }
+  RecalculateNoteCounts(chart);
+}
+
+const char *LaneAssignModifier::Name() const { return NameText.c_str(); }
 
 NoteShuffleModifier::NoteShuffleModifier(bool includeScratch,
                                          int keyRepeatThresholdMillis,

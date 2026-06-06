@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ChartDBHelper.h"
+#include "../ReplayDBHelper.h"
 #include "../bms_parser.hpp"
 #include "Scene.h"
 
@@ -11,7 +12,9 @@
 
 class Button;
 class ChartCanvasView;
+class ReplaySummaryListView;
 class ScrollView;
+class TextInputBox;
 class TextView;
 class View;
 
@@ -56,6 +59,17 @@ private:
   TextView *listenPauseText = nullptr;
   Button *listenPauseButton = nullptr;
   Button *listenStopButton = nullptr;
+  Button *ghostLoadButton = nullptr;
+  TextView *ghostLoadButtonText = nullptr;
+  Button *ghostClearButton = nullptr;
+  TextView *ghostClearButtonText = nullptr;
+  View *ghostModalRoot = nullptr;
+  TextView *ghostModalEmptyText = nullptr;
+  ReplaySummaryListView *ghostReplayListView = nullptr;
+  View *optionsDrawerRoot = nullptr;
+  TextView *viewerOptionText = nullptr;
+  TextInputBox *laneAssignInput = nullptr;
+  TextView *laneAssignStatusText = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
 
@@ -68,6 +82,14 @@ private:
   size_t randomDrawerPage = 0;
   bool listenActive = false;
   bool listenAudioLoaded = false;
+  std::vector<ReplaySummary> ghostReplaySummaries;
+  int selectedGhostReplayIndex = -1;
+  int loadedGhostReplayId = -1;
+  std::optional<std::string> viewerPlayOption;
+  std::optional<long long> viewerPlayOptionSeed;
+  std::optional<std::string> viewerPlayOption2;
+  std::optional<long long> viewerPlayOption2Seed;
+  std::optional<std::string> viewerLaneOrderSummary;
 
   void initView();
   void rebuildRandomDrawer();
@@ -79,6 +101,25 @@ private:
   void updateZoomText();
   void updateSelectionText();
   void updateListenControls();
+  void rebuildGhostModal();
+  void showGhostModal();
+  void hideGhostModal();
+  void updateGhostControls();
+  void updateGhostModalActions();
+  void loadSelectedGhostReplay();
+  void clearGhostReplay();
+  void rebuildOptionsDrawer();
+  void showOptionsDrawer();
+  void hideOptionsDrawer();
+  void refreshOptionsDrawer();
+  void setViewerNamedPlayOption(const std::string &option);
+  void setViewerLaneAssign(const std::string &notation);
+  void setViewerPlayOptions(const std::optional<std::string> &option,
+                            const std::optional<long long> &seed,
+                            const std::optional<std::string> &option2,
+                            const std::optional<long long> &seed2);
+  bool applyViewerPlayOptions(bms_parser::Chart &target,
+                              const char *logContext);
   void onCanvasSelectionChanged(long long timeMicros);
   void startListeningFromSelection();
   void toggleListenPause();
@@ -88,4 +129,6 @@ private:
 
   [[nodiscard]] std::vector<RandomOption> scanActiveRandomOptions() const;
   [[nodiscard]] std::string randomSummary() const;
+  [[nodiscard]] std::string viewerPlayOptionLabel() const;
+  [[nodiscard]] std::string defaultLaneAssignNotation() const;
 };

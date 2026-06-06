@@ -1,13 +1,18 @@
 #include "ChartViewerScene.h"
 
 #include "../PlayOptionUtils.h"
+#include "../ReplayDBHelper.h"
+#include "../ReplayGhostUtils.h"
 #include "../path.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
 #include "../targets.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
+#include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
+#include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/View.h"
 #include "play/GamePlayScene.h"
@@ -166,6 +171,67 @@ std::string markerGlyphCacheKey(char glyph, const SDL_Color &color) {
   return key;
 }
 
+std::optional<std::string>
+storedPlayOption(const std::optional<std::string> &option) {
+  if (!option.has_value()) {
+    return std::nullopt;
+  }
+  const std::string normalized = play_options::normalizePlayOption(*option);
+  if (play_options::isNormalPlayOption(normalized)) {
+    return std::nullopt;
+  }
+  return normalized;
+}
+
+bool isLaneOrderSummaryOption(const std::optional<std::string> &option) {
+  const std::string normalized =
+      option.has_value() ? play_options::normalizePlayOption(*option)
+                         : "NORMAL";
+  return normalized == "NORMAL" || normalized == "MIRROR" ||
+         normalized == "RANDOM" || normalized == "R-RANDOM" ||
+         normalized == "RANDOM-EX";
+}
+
+std::optional<std::string>
+formatLaneOrderSummary(const bms_parser::ChartMeta &meta,
+                       const std::vector<int> &laneOrder) {
+  const std::vector<int> destinationLanes = meta.GetTotalLaneIndices();
+  if (destinationLanes.empty() || laneOrder.size() != destinationLanes.size()) {
+    return std::nullopt;
+  }
+
+  std::unordered_map<int, char> laneToSymbol;
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  if (meta.IsDP) {
+    if (scratchLanes.size() >= 2) {
+      laneToSymbol[scratchLanes.front()] = 'L';
+      laneToSymbol[scratchLanes.back()] = 'R';
+    }
+  } else if (!scratchLanes.empty()) {
+    laneToSymbol[scratchLanes.front()] = 'S';
+  }
+
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  if (keyLanes.size() > keySymbols.size()) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < keyLanes.size(); ++i) {
+    laneToSymbol[keyLanes[i]] = keySymbols[i];
+  }
+
+  std::string result;
+  result.reserve(laneOrder.size());
+  for (int sourceLane : laneOrder) {
+    const auto symbol = laneToSymbol.find(sourceLane);
+    if (symbol == laneToSymbol.end()) {
+      return std::nullopt;
+    }
+    result.push_back(symbol->second);
+  }
+  return result;
+}
+
 bool matchHeader(std::string_view line, std::string_view headerUpper) {
   if (line.size() < headerUpper.size()) {
     return false;
@@ -201,29 +267,6 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   return button;
 }
 
-class BlockingOverlayView : public View {
-public:
-  using View::View;
-
-private:
-  bool handleEventsImpl(SDL_Event &event) override {
-    switch (event.type) {
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEMOTION:
-    case SDL_MOUSEWHEEL:
-    case SDL_FINGERDOWN:
-    case SDL_FINGERUP:
-    case SDL_FINGERMOTION:
-    case SDL_KEYDOWN:
-    case SDL_KEYUP:
-      return false;
-    default:
-      return true;
-    }
-  }
-};
-
 } // namespace
 
 class ChartCanvasView : public View {
@@ -239,6 +282,7 @@ public:
     markerGlyphTextures.clear();
     selectedTimeMicros.reset();
     playbackActive = false;
+    replayGhostEvents.clear();
     rebuildLayout();
   }
 
@@ -268,6 +312,14 @@ public:
 
   void clearPlaybackTime() { playbackActive = false; }
 
+  void setGhostReplay(const ReplayData &replayData) {
+    replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+        replayData, orderedTimelines, laneToOrderIndex,
+        [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
+  }
+
+  void clearGhostReplay() { replayGhostEvents.clear(); }
+
 protected:
   struct TouchPoint {
     float x = 0.0f;
@@ -288,6 +340,7 @@ protected:
     drawMarkers();
     drawLongNotes();
     drawNotes();
+    drawGhosts();
     drawCursorBars();
     batch.end();
 
@@ -429,7 +482,7 @@ protected:
         } else if (activeTouches.size() == 1) {
           pinchActive = false;
           dragTouchId = activeTouches.begin()->first;
-          touchGestureWasPinch = false;
+          touchGestureWasPinch = true;
           touchStartX = activeTouches.begin()->second.x;
           touchStartY = activeTouches.begin()->second.y;
           touchDragDistance = 0.0f;
@@ -508,6 +561,7 @@ private:
   std::vector<MeasureLayout> measureLayouts;
   std::vector<ColumnLayout> columnLayouts;
   std::vector<const bms_parser::TimeLine *> orderedTimelines;
+  std::vector<ReplayGhostEvent> replayGhostEvents;
   std::unordered_map<const bms_parser::TimeLine *, float> timelineY;
   std::unordered_map<const bms_parser::TimeLine *, size_t> timelineMeasure;
   std::vector<std::unique_ptr<TextView>> measureLabels;
@@ -790,6 +844,33 @@ private:
       const float height = isLongNote ? 7.0f : 6.0f;
       drawRectClip(x, y, width, height, noteColor(lane, note));
     });
+  }
+
+  void drawGhosts() {
+    if (replayGhostEvents.empty()) {
+      return;
+    }
+
+    for (const auto &event : replayGhostEvents) {
+      CursorDrawPosition position;
+      if (!beatToCursorPosition(event.judgeScrollPosition, position)) {
+        continue;
+      }
+      const float x = laneContentX(position.column, event.lane) + 2.0f;
+      const float y = position.y - 4.0f;
+      const float width = std::max(5.0f, laneWidth - 4.0f);
+      const float height = 8.0f;
+      if (!contentRectIntersects(x, y, width, height)) {
+        continue;
+      }
+
+      const uint32_t color = ghostColor(event).toABGR();
+      const float thickness = std::max(1.25f, std::min(2.4f, laneWidth * 0.12f));
+      drawRectClip(x, y, width, thickness, color);
+      drawRectClip(x, y + height - thickness, width, thickness, color);
+      drawRectClip(x, y, thickness, height, color);
+      drawRectClip(x + width - thickness, y, thickness, height, color);
+    }
   }
 
   void drawMarkers() {
@@ -1265,6 +1346,15 @@ private:
                          : Color(82, 154, 226, 164).toABGR();
   }
 
+  Color ghostColor(const ReplayGhostEvent &event) const {
+    if (event.judgement == PGreat) {
+      return Color(255, 255, 255, 222);
+    }
+    return event.judgeTimeMicros < event.noteTimeMicros
+               ? Color(53, 134, 255, 222)
+               : Color(255, 65, 72, 222);
+  }
+
   bool isScratchLane(int lane) const {
     const auto scratchLanes = chart->Meta.GetScratchLaneIndices();
     return std::find(scratchLanes.begin(), scratchLanes.end(), lane) !=
@@ -1414,6 +1504,12 @@ ChartViewerScene::ChartViewerScene(
   if (randomValues.has_value()) {
     selectedRandomValues = *randomValues;
   }
+  const std::optional<std::string> selectedPlayOption =
+      context.settings.selectedPlayOption;
+  setViewerPlayOptions(selectedPlayOption, std::nullopt,
+                       this->record.meta.IsDP ? selectedPlayOption
+                                              : std::nullopt,
+                       std::nullopt);
 }
 
 void ChartViewerScene::init() {
@@ -1465,6 +1561,16 @@ void ChartViewerScene::update(float dt) {
                                 rendering::window_height);
       randomDrawerRoot->applyYogaLayout();
     }
+    if (ghostModalRoot != nullptr) {
+      ghostModalRoot->setSize(rendering::window_width,
+                              rendering::window_height);
+      ghostModalRoot->applyYogaLayout();
+    }
+    if (optionsDrawerRoot != nullptr) {
+      optionsDrawerRoot->setSize(rendering::window_width,
+                                 rendering::window_height);
+      optionsDrawerRoot->applyYogaLayout();
+    }
   }
 }
 
@@ -1478,6 +1584,33 @@ void ChartViewerScene::cleanupScene() {
   }
   chart.reset();
   randomOptions.clear();
+  ghostReplaySummaries.clear();
+  loadedGhostReplayId = -1;
+  selectedGhostReplayIndex = -1;
+  rootLayout = nullptr;
+  canvasView = nullptr;
+  titleText = nullptr;
+  subtitleText = nullptr;
+  statusText = nullptr;
+  randomSummaryText = nullptr;
+  zoomText = nullptr;
+  selectionText = nullptr;
+  listenPauseText = nullptr;
+  listenPauseButton = nullptr;
+  listenStopButton = nullptr;
+  ghostLoadButton = nullptr;
+  ghostLoadButtonText = nullptr;
+  ghostClearButton = nullptr;
+  ghostClearButtonText = nullptr;
+  ghostModalRoot = nullptr;
+  ghostModalEmptyText = nullptr;
+  ghostReplayListView = nullptr;
+  optionsDrawerRoot = nullptr;
+  viewerOptionText = nullptr;
+  laneAssignInput = nullptr;
+  laneAssignStatusText = nullptr;
+  randomDrawerRoot = nullptr;
+  randomDrawerScroll = nullptr;
 }
 
 void ChartViewerScene::initView() {
@@ -1570,6 +1703,10 @@ void ChartViewerScene::initView() {
   randomButton->setOnClickListener([this]() { showRandomDrawer(); });
   header->addView(randomButton);
 
+  auto *optionButton = makeButton("Option", 106, 20);
+  optionButton->setOnClickListener([this]() { showOptionsDrawer(); });
+  header->addView(optionButton);
+
   auto *backButton = makeButton("Back", 92, 20);
   backButton->setOnClickListener([this]() { goBack(); });
   header->addView(backButton);
@@ -1611,6 +1748,15 @@ void ChartViewerScene::initView() {
   practiceButton->setOnClickListener([this]() { startPracticeFromSelection(); });
   toolbar->addView(practiceButton);
 
+  ghostLoadButton = makeButton("Ghost", 90, 18, &ghostLoadButtonText);
+  ghostLoadButton->setOnClickListener([this]() { showGhostModal(); });
+  toolbar->addView(ghostLoadButton);
+
+  ghostClearButton = makeButton("Clear", 92, 18, &ghostClearButtonText);
+  ghostClearButton->setOnClickListener([this]() { clearGhostReplay(); });
+  ghostClearButton->setVisible(false);
+  toolbar->addView(ghostClearButton);
+
   canvasView = new ChartCanvasView();
   canvasView->setFlex(1);
   canvasView->setSelectionListener(
@@ -1624,7 +1770,10 @@ void ChartViewerScene::initView() {
   updateZoomText();
   updateSelectionText();
   updateListenControls();
+  updateGhostControls();
   refreshHeaderText();
+  rebuildGhostModal();
+  rebuildOptionsDrawer();
   rebuildRandomDrawer();
   rootLayout->applyYogaLayout();
 }
@@ -1852,6 +2001,11 @@ void ChartViewerScene::parseAndRefresh(
     context.jukebox.stop();
     listenAudioLoaded = false;
   }
+  if (canvasView != nullptr) {
+    canvasView->clearGhostReplay();
+  }
+  loadedGhostReplayId = -1;
+  updateGhostControls();
   if (statusText != nullptr) {
     statusText->setText("Parsing...");
   }
@@ -1874,6 +2028,21 @@ void ChartViewerScene::parseAndRefresh(
     }
     if (statusText != nullptr) {
       statusText->setText("Parse failed");
+    }
+    refreshHeaderText();
+    updateSelectionText();
+    rebuildRandomDrawer();
+    return;
+  }
+
+  if (!applyViewerPlayOptions(*parsed, "chart viewer")) {
+    chart.reset();
+    randomOptions.clear();
+    if (canvasView != nullptr) {
+      canvasView->setChart(nullptr);
+    }
+    if (statusText != nullptr) {
+      statusText->setText("Play option failed");
     }
     refreshHeaderText();
     updateSelectionText();
@@ -1979,7 +2148,8 @@ void ChartViewerScene::refreshHeaderText() {
                           std::to_string(meta.KeyMode) + "K");
   }
   if (randomSummaryText != nullptr) {
-    randomSummaryText->setText(randomSummary());
+    randomSummaryText->setText(randomSummary() + " / Option: " +
+                               viewerPlayOptionLabel());
   }
 }
 
@@ -2006,19 +2176,596 @@ void ChartViewerScene::updateSelectionText() {
   if (listenActive) {
     text += " / Listening";
   }
+  if (loadedGhostReplayId >= 0) {
+    text += " / Ghost #" + std::to_string(loadedGhostReplayId);
+  }
   selectionText->setText(text);
 }
 
 void ChartViewerScene::updateListenControls() {
   if (listenPauseButton != nullptr) {
     listenPauseButton->setVisible(listenActive);
+    listenPauseButton->setWidth(listenActive ? 104.0f : 0.0f);
   }
   if (listenStopButton != nullptr) {
     listenStopButton->setVisible(listenActive);
+    listenStopButton->setWidth(listenActive ? 92.0f : 0.0f);
   }
   if (listenPauseText != nullptr && listenActive) {
     listenPauseText->setText(context.jukebox.isPaused() ? "Resume" : "Pause");
   }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ChartViewerScene::updateGhostControls() {
+  const bool hasGhost = loadedGhostReplayId >= 0;
+  if (ghostClearButton != nullptr) {
+    ghostClearButton->setVisible(hasGhost);
+    ghostClearButton->setWidth(hasGhost ? 92.0f : 0.0f);
+  }
+  if (ghostLoadButtonText != nullptr) {
+    ghostLoadButtonText->setText("Ghost");
+  }
+  updateSelectionText();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ChartViewerScene::rebuildGhostModal() {
+  if (rootLayout == nullptr || ghostModalRoot != nullptr) {
+    return;
+  }
+
+  constexpr float kPanelWidth = 760.0f;
+  constexpr float kPanelPadding = 22.0f;
+  constexpr float kContentHeight = 390.0f;
+
+  ghostModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                           rendering::window_height);
+  ghostModalRoot->setPositionType(YGPositionTypeAbsolute);
+  ghostModalRoot->setPosition(Edge::Left, 0);
+  ghostModalRoot->setPosition(Edge::Top, 0);
+  ghostModalRoot->setZIndex(1000);
+  ghostModalRoot->setVisible(false);
+  ghostModalRoot->setFlexDirection(FlexDirection::Column);
+  ghostModalRoot->setAlignItems(YGAlignCenter);
+  ghostModalRoot->setJustifyContent(YGJustifyCenter);
+  ghostModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
+      ->setHeight(560)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, kPanelPadding)
+      ->setBackgroundColor(Color(14, 18, 22, 246))
+      ->setBorderColor(Color(78, 96, 104, 255))
+      ->setBorderWidth(2);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Load Ghost");
+  title->setColor({245, 249, 247, 255});
+  title->setHeight(42);
+  panel->addView(title);
+
+  ghostModalEmptyText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  ghostModalEmptyText->setText("");
+  ghostModalEmptyText->setColor({177, 190, 194, 255});
+  ghostModalEmptyText->setHeight(28);
+  ghostModalEmptyText->setOverflow(TextView::TextOverflow::Hidden);
+  panel->addView(ghostModalEmptyText);
+
+  ghostReplayListView = new ReplaySummaryListView();
+  ghostReplayListView->setWidthPercent(100)
+      ->setHeight(kContentHeight)
+      ->setFlexShrink(0);
+  ghostReplayListView->clearBackgroundColor();
+  ghostReplayListView->setBorderColor(Color(54, 69, 76, 255));
+  ghostReplayListView->setBorderWidth(2);
+  ghostReplayListView->onSelectionChanged = [this](int idx) {
+    selectedGhostReplayIndex = idx;
+    updateGhostModalActions();
+  };
+  panel->addView(ghostReplayListView);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(kHeaderButtonHeight);
+
+  auto *closeButton = makeButton("Close", 104, 19);
+  auto *clearButton = makeButton("Clear Ghost", 138, 18);
+  auto *loadButton = makeButton("Load", 104, 19);
+  closeButton->setOnClickListener([this]() { hideGhostModal(); });
+  clearButton->setOnClickListener([this]() { clearGhostReplay(); });
+  loadButton->setOnClickListener([this]() { loadSelectedGhostReplay(); });
+  footer->addView(closeButton);
+  footer->addView(clearButton);
+  footer->addView(loadButton);
+  panel->addView(footer);
+
+  ghostModalRoot->addView(panel);
+  rootLayout->addView(ghostModalRoot);
+}
+
+void ChartViewerScene::showGhostModal() {
+  if (chart == nullptr) {
+    if (statusText != nullptr) {
+      statusText->setText("Parse a chart first");
+    }
+    return;
+  }
+  rebuildGhostModal();
+  if (ghostModalRoot == nullptr || ghostReplayListView == nullptr) {
+    return;
+  }
+
+  ghostReplaySummaries = ReplayDBHelper::GetInstance().ListReplays(chart->Meta);
+  selectedGhostReplayIndex = -1;
+  ghostReplayListView->setReplaySummaries(ghostReplaySummaries);
+  if (ghostModalEmptyText != nullptr) {
+    ghostModalEmptyText->setText(
+        ghostReplaySummaries.empty()
+            ? "No saved replays found for this chart."
+            : "Select a replay to draw its judgement ghost over the chart.");
+  }
+  ghostModalRoot->setSize(rendering::window_width, rendering::window_height);
+  ghostModalRoot->setVisible(true);
+  updateGhostModalActions();
+  ghostModalRoot->applyYogaLayout();
+}
+
+void ChartViewerScene::hideGhostModal() {
+  if (ghostModalRoot != nullptr) {
+    ghostModalRoot->setVisible(false);
+  }
+  selectedGhostReplayIndex = -1;
+}
+
+void ChartViewerScene::updateGhostModalActions() {
+  if (ghostModalRoot != nullptr) {
+    ghostModalRoot->applyYogaLayout();
+  }
+}
+
+void ChartViewerScene::loadSelectedGhostReplay() {
+  if (chart == nullptr || canvasView == nullptr || selectedGhostReplayIndex < 0 ||
+      selectedGhostReplayIndex >=
+          static_cast<int>(ghostReplaySummaries.size())) {
+    return;
+  }
+
+  const int replayId = ghostReplaySummaries[selectedGhostReplayIndex].id;
+  if (statusText != nullptr) {
+    statusText->setText("Loading ghost...");
+  }
+
+  defer(
+      [this, replayId]() {
+        if (canvasView == nullptr) {
+          return true;
+        }
+
+        auto replay =
+            ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+        if (!replay.has_value()) {
+          if (statusText != nullptr) {
+            statusText->setText("Ghost load failed");
+          }
+          return true;
+        }
+
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> replayChart;
+        try {
+          replayChart = play_options::parseChartForReplay(
+              record.meta.BmsPath, replay.value(), parseCancelled);
+        } catch (const std::exception &e) {
+          SDL_Log("Error parsing %s for ghost replay: %s",
+                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+        }
+
+        if (replayChart == nullptr || parseCancelled) {
+          if (statusText != nullptr) {
+            statusText->setText(parseCancelled ? "Ghost load cancelled"
+                                               : "Ghost parse failed");
+          }
+          return true;
+        }
+
+        const auto previousPlayOption = viewerPlayOption;
+        const auto previousPlayOptionSeed = viewerPlayOptionSeed;
+        const auto previousPlayOption2 = viewerPlayOption2;
+        const auto previousPlayOption2Seed = viewerPlayOption2Seed;
+        setViewerPlayOptions(replay->playOption, replay->playOptionSeed,
+                             replay->playOption2, replay->playOption2Seed);
+        if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
+          viewerPlayOption = previousPlayOption;
+          viewerPlayOptionSeed = previousPlayOptionSeed;
+          viewerPlayOption2 = previousPlayOption2;
+          viewerPlayOption2Seed = previousPlayOption2Seed;
+          if (statusText != nullptr) {
+            statusText->setText("Ghost play option failed");
+          }
+          return true;
+        }
+
+        stopListening();
+        if (listenAudioLoaded) {
+          context.jukebox.stop();
+          listenAudioLoaded = false;
+        }
+
+        randomSeed = replayChart->Meta.RandomSeed;
+        randomPrng = replayChart->Meta.RandomPrng;
+        selectedRandomValues = replayChart->Meta.RandomValues;
+        chart = std::move(replayChart);
+        randomOptions = scanActiveRandomOptions();
+        canvasView->setChart(chart.get());
+        canvasView->setGhostReplay(*replay);
+        loadedGhostReplayId = replay->id;
+
+        if (statusText != nullptr) {
+          statusText->setText("Ghost #" + std::to_string(loadedGhostReplayId) +
+                              " loaded");
+        }
+        hideGhostModal();
+        updateGhostControls();
+        refreshHeaderText();
+        updateSelectionText();
+        rebuildRandomDrawer();
+        return true;
+      },
+      0, true);
+}
+
+void ChartViewerScene::clearGhostReplay() {
+  if (canvasView != nullptr) {
+    canvasView->clearGhostReplay();
+  }
+  loadedGhostReplayId = -1;
+  if (statusText != nullptr && chart != nullptr) {
+    statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
+  }
+  hideGhostModal();
+  updateGhostControls();
+}
+
+void ChartViewerScene::rebuildOptionsDrawer() {
+  if (rootLayout == nullptr || optionsDrawerRoot != nullptr) {
+    return;
+  }
+
+  constexpr float kPanelWidth = 660.0f;
+  optionsDrawerRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                              rendering::window_height);
+  optionsDrawerRoot->setPositionType(YGPositionTypeAbsolute);
+  optionsDrawerRoot->setPosition(Edge::Left, 0);
+  optionsDrawerRoot->setPosition(Edge::Top, 0);
+  optionsDrawerRoot->setZIndex(1000);
+  optionsDrawerRoot->setVisible(false);
+  optionsDrawerRoot->setFlexDirection(FlexDirection::Column);
+  optionsDrawerRoot->setAlignItems(YGAlignCenter);
+  optionsDrawerRoot->setJustifyContent(YGJustifyCenter);
+  optionsDrawerRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
+      ->setHeight(std::min<float>(540, rendering::window_height - 36))
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(16)
+      ->setPadding(Edge::All, 22)
+      ->setBackgroundColor(Color(14, 18, 22, 248))
+      ->setBorderColor(Color(78, 96, 104, 255))
+      ->setBorderWidth(2);
+
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Row);
+  header->setAlignItems(YGAlignCenter);
+  header->setGap(12);
+  header->setHeight(52);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  title->setText("Chart Option");
+  title->setColor({245, 249, 247, 255});
+  title->setVAlign(TextView::MIDDLE);
+  title->setFlex(1);
+  header->addView(title);
+
+  auto *closeButton = makeButton("Close", 98, 19);
+  closeButton->setOnClickListener([this]() { hideOptionsDrawer(); });
+  header->addView(closeButton);
+  panel->addView(header);
+
+  auto *currentRow = new View();
+  currentRow->setFlexDirection(FlexDirection::Row);
+  currentRow->setAlignItems(YGAlignCenter);
+  currentRow->setGap(12);
+  currentRow->setHeight(52);
+
+  auto *currentLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+  currentLabel->setText("Current");
+  currentLabel->setColor({204, 216, 214, 255});
+  currentLabel->setVAlign(TextView::MIDDLE);
+  currentLabel->setWidth(86);
+  currentLabel->setHeight(44);
+  currentRow->addView(currentLabel);
+
+  viewerOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  viewerOptionText->setColor({242, 209, 106, 255});
+  viewerOptionText->setVAlign(TextView::MIDDLE);
+  viewerOptionText->setOverflow(TextView::TextOverflow::Hidden);
+  viewerOptionText->setFlex(1);
+  viewerOptionText->setHeight(44);
+  currentRow->addView(viewerOptionText);
+  panel->addView(currentRow);
+
+  auto makeOptionButton = [this](const std::string &option, int width) {
+    auto *button = makeButton(option, width, 16);
+    button->setOnClickListener([this, option]() {
+      setViewerNamedPlayOption(option);
+    });
+    return button;
+  };
+
+  for (int rowIndex = 0; rowIndex < 3; ++rowIndex) {
+    auto *optionRow = new View();
+    optionRow->setFlexDirection(FlexDirection::Row);
+    optionRow->setAlignItems(YGAlignCenter);
+    optionRow->setGap(10);
+    optionRow->setHeight(52);
+    const size_t start = static_cast<size_t>(rowIndex) * 4;
+    const size_t end =
+        std::min(start + 4, play_options::kPlayOptions.size());
+    for (size_t i = start; i < end; ++i) {
+      optionRow->addView(makeOptionButton(play_options::kPlayOptions[i], 136));
+    }
+    panel->addView(optionRow);
+  }
+
+  auto *assignRow = new View();
+  assignRow->setFlexDirection(FlexDirection::Row);
+  assignRow->setAlignItems(YGAlignCenter);
+  assignRow->setGap(12);
+  assignRow->setHeight(62);
+
+  auto *assignLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+  assignLabel->setText("Lane");
+  assignLabel->setColor({204, 216, 214, 255});
+  assignLabel->setVAlign(TextView::MIDDLE);
+  assignLabel->setWidth(58);
+  assignLabel->setHeight(46);
+  assignRow->addView(assignLabel);
+
+  laneAssignInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 20);
+  laneAssignInput->setColor({238, 243, 241, 255});
+  laneAssignInput->setBackgroundColor(Color(24, 29, 32, 248));
+  laneAssignInput->setBorderColor(Color(80, 96, 101, 255));
+  laneAssignInput->setBorderWidth(2);
+  laneAssignInput->setPadding(Edge::Left, 12);
+  laneAssignInput->setPadding(Edge::Right, 12);
+  laneAssignInput->setVAlign(TextView::MIDDLE);
+  laneAssignInput->setOverflow(TextView::TextOverflow::Hidden);
+  laneAssignInput->setFlex(1);
+  laneAssignInput->setHeight(48);
+  laneAssignInput->onSubmit(
+      [this](const std::string &text) { setViewerLaneAssign(text); });
+  assignRow->addView(laneAssignInput);
+
+  auto *applyButton = makeButton("Apply", 96, 18);
+  applyButton->setOnClickListener([this]() {
+    if (laneAssignInput != nullptr) {
+      setViewerLaneAssign(laneAssignInput->getText());
+    }
+  });
+  assignRow->addView(applyButton);
+
+  auto *resetButton = makeButton("Reset", 92, 18);
+  resetButton->setOnClickListener([this]() {
+    setViewerNamedPlayOption("NORMAL");
+  });
+  assignRow->addView(resetButton);
+  panel->addView(assignRow);
+
+  laneAssignStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  laneAssignStatusText->setText("");
+  laneAssignStatusText->setColor({177, 190, 194, 255});
+  laneAssignStatusText->setOverflow(TextView::TextOverflow::Hidden);
+  laneAssignStatusText->setHeight(28);
+  panel->addView(laneAssignStatusText);
+
+  optionsDrawerRoot->addView(panel);
+  rootLayout->addView(optionsDrawerRoot);
+  refreshOptionsDrawer();
+}
+
+void ChartViewerScene::showOptionsDrawer() {
+  rebuildOptionsDrawer();
+  if (optionsDrawerRoot == nullptr) {
+    return;
+  }
+  refreshOptionsDrawer();
+  optionsDrawerRoot->setSize(rendering::window_width, rendering::window_height);
+  optionsDrawerRoot->setVisible(true);
+  optionsDrawerRoot->applyYogaLayout();
+}
+
+void ChartViewerScene::hideOptionsDrawer() {
+  if (optionsDrawerRoot != nullptr) {
+    optionsDrawerRoot->setVisible(false);
+  }
+}
+
+void ChartViewerScene::refreshOptionsDrawer() {
+  if (viewerOptionText != nullptr) {
+    viewerOptionText->setText(viewerPlayOptionLabel());
+  }
+  if (laneAssignInput != nullptr) {
+    const auto assign = viewerPlayOption.has_value()
+                            ? play_options::laneAssignNotationFromOption(
+                                  *viewerPlayOption)
+                            : std::nullopt;
+    laneAssignInput->setEditingText(assign.value_or(defaultLaneAssignNotation()));
+  }
+  if (laneAssignStatusText != nullptr) {
+    laneAssignStatusText->setText("");
+  }
+}
+
+void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
+  const std::string normalized = play_options::normalizePlayOption(option);
+  if (play_options::laneAssignNotationFromOption(normalized).has_value()) {
+    setViewerLaneAssign(normalized);
+    return;
+  }
+
+  setViewerPlayOptions(
+      play_options::isNormalPlayOption(normalized)
+          ? std::nullopt
+          : std::optional<std::string>(normalized),
+      std::nullopt,
+      chart != nullptr && chart->Meta.IsDP &&
+              !play_options::isNormalPlayOption(normalized)
+          ? std::optional<std::string>(normalized)
+          : std::nullopt,
+      std::nullopt);
+  parseAndRefresh(selectedRandomValues.empty()
+                      ? std::nullopt
+                      : std::optional<std::vector<int>>(selectedRandomValues));
+  refreshOptionsDrawer();
+}
+
+void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
+  const std::string option = play_options::makeLaneAssignOption(notation);
+  std::string error;
+  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+  if (play_options::isNormalPlayOption(option) ||
+      !play_options::validateLaneAssignOption(meta, option, &error)) {
+    if (laneAssignStatusText != nullptr) {
+      laneAssignStatusText->setText(error.empty() ? "Invalid lane assign."
+                                                 : error);
+    }
+    return;
+  }
+
+  setViewerPlayOptions(option, std::nullopt, std::nullopt, std::nullopt);
+  parseAndRefresh(selectedRandomValues.empty()
+                      ? std::nullopt
+                      : std::optional<std::vector<int>>(selectedRandomValues));
+  refreshOptionsDrawer();
+  if (laneAssignStatusText != nullptr) {
+    laneAssignStatusText->setText("Applied");
+  }
+}
+
+void ChartViewerScene::setViewerPlayOptions(
+    const std::optional<std::string> &option,
+    const std::optional<long long> &seed,
+    const std::optional<std::string> &option2,
+    const std::optional<long long> &seed2) {
+  viewerLaneOrderSummary.reset();
+  viewerPlayOption = storedPlayOption(option);
+  viewerPlayOptionSeed = viewerPlayOption.has_value() ? seed : std::nullopt;
+  if (viewerPlayOption.has_value() &&
+      play_options::laneAssignNotationFromOption(*viewerPlayOption)
+          .has_value()) {
+    viewerPlayOptionSeed.reset();
+    viewerPlayOption2.reset();
+    viewerPlayOption2Seed.reset();
+    return;
+  }
+  viewerPlayOption2 = storedPlayOption(option2);
+  viewerPlayOption2Seed = viewerPlayOption2.has_value() ? seed2 : std::nullopt;
+}
+
+bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
+                                              const char *logContext) {
+  viewerLaneOrderSummary.reset();
+  if (!target.Meta.IsDP) {
+    viewerPlayOption2.reset();
+    viewerPlayOption2Seed.reset();
+  }
+
+  const bool shouldSummarizeLaneOrder =
+      isLaneOrderSummaryOption(viewerPlayOption) &&
+      (!target.Meta.IsDP || isLaneOrderSummaryOption(viewerPlayOption2));
+  const std::vector<int> identityLaneOrder = target.Meta.GetTotalLaneIndices();
+  std::vector<int> combinedLaneOrder = identityLaneOrder;
+  auto mergeLaneOrder = [&](const std::vector<int> &laneOrder) {
+    if (laneOrder.size() != combinedLaneOrder.size() ||
+        laneOrder.size() != identityLaneOrder.size()) {
+      return;
+    }
+    for (size_t i = 0; i < laneOrder.size(); ++i) {
+      if (laneOrder[i] != identityLaneOrder[i]) {
+        combinedLaneOrder[i] = laneOrder[i];
+      }
+    }
+  };
+
+  if (viewerPlayOption.has_value() &&
+      play_options::laneAssignNotationFromOption(*viewerPlayOption)
+          .has_value()) {
+    std::optional<std::string> appliedOption;
+    std::optional<long long> appliedSeed;
+    if (!play_options::applyPlayOptionModifier(
+            target, *viewerPlayOption, std::nullopt, 0, appliedOption,
+            appliedSeed, logContext)) {
+      return false;
+    }
+    viewerPlayOption = appliedOption;
+    viewerPlayOptionSeed.reset();
+    viewerPlayOption2.reset();
+    viewerPlayOption2Seed.reset();
+    viewerLaneOrderSummary.reset();
+    return true;
+  }
+
+  if (viewerPlayOption.has_value()) {
+    std::optional<std::string> appliedOption;
+    std::optional<long long> appliedSeed;
+    std::vector<int> appliedLaneOrder;
+    if (!play_options::applyPlayOptionModifier(
+            target, *viewerPlayOption, viewerPlayOptionSeed, 0, appliedOption,
+            appliedSeed, logContext, &appliedLaneOrder)) {
+      return false;
+    }
+    viewerPlayOption = appliedOption;
+    viewerPlayOptionSeed = appliedSeed;
+    if (shouldSummarizeLaneOrder) {
+      mergeLaneOrder(appliedLaneOrder);
+    }
+  }
+
+  if (target.Meta.IsDP && viewerPlayOption2.has_value()) {
+    std::optional<std::string> appliedOption;
+    std::optional<long long> appliedSeed;
+    std::vector<int> appliedLaneOrder;
+    if (!play_options::applyPlayOptionModifier(
+            target, *viewerPlayOption2, viewerPlayOption2Seed, 1,
+            appliedOption, appliedSeed, logContext, &appliedLaneOrder)) {
+      return false;
+    }
+    viewerPlayOption2 = appliedOption;
+    viewerPlayOption2Seed = appliedSeed;
+    if (shouldSummarizeLaneOrder) {
+      mergeLaneOrder(appliedLaneOrder);
+    }
+  }
+
+  if (shouldSummarizeLaneOrder) {
+    viewerLaneOrderSummary = formatLaneOrderSummary(target.Meta,
+                                                    combinedLaneOrder);
+  }
+
+  return true;
 }
 
 void ChartViewerScene::onCanvasSelectionChanged(long long timeMicros) {
@@ -2132,8 +2879,6 @@ void ChartViewerScene::startPracticeFromSelection() {
       chart->Meta.RandomValues.empty()
           ? std::nullopt
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
-  const std::string playOption =
-      play_options::normalizePlayOption(context.settings.selectedPlayOption);
   const GaugeSelection gaugeSelection =
       gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
@@ -2145,7 +2890,7 @@ void ChartViewerScene::startPracticeFromSelection() {
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       playOption, gaugeSelection, autoKeySound]() {
+       gaugeSelection, autoKeySound]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -2164,8 +2909,12 @@ void ChartViewerScene::startPracticeFromSelection() {
           return true;
         }
 
-        play_options::PlayOptionReplayInfo playInfo =
-            play_options::applySelectedPlayOptions(*practiceChart, playOption);
+        if (!applyViewerPlayOptions(*practiceChart, "practice")) {
+          if (statusText != nullptr) {
+            statusText->setText("Practice play option failed");
+          }
+          return true;
+        }
         context.jukebox.stop();
         context.jukebox.loadChart(*practiceChart, true, parseCancelled);
         if (parseCancelled) {
@@ -2190,10 +2939,10 @@ void ChartViewerScene::startPracticeFromSelection() {
                                   .autoPlay = false,
                                   .gaugeType = gaugeSelection.type,
                                   .gaugeAutoShift = gaugeSelection.autoShift,
-                                  .playOption = playInfo.option,
-                                  .playOptionSeed = playInfo.seed,
-                                  .playOption2 = playInfo.option2,
-                                  .playOption2Seed = playInfo.seed2,
+                                  .playOption = viewerPlayOption,
+                                  .playOptionSeed = viewerPlayOptionSeed,
+                                  .playOption2 = viewerPlayOption2,
+                                  .playOption2Seed = viewerPlayOption2Seed,
                                   .ownsChart = true,
                                   .practiceMode = true,
                                   .practiceLeadInMicros =
@@ -2409,4 +3158,34 @@ std::string ChartViewerScene::randomSummary() const {
            " (" + std::to_string(selectedRandomValues.size()) + " values)";
   }
   return "RANDOM: " + joinRandomValues(selectedRandomValues);
+}
+
+std::string ChartViewerScene::viewerPlayOptionLabel() const {
+  const std::string label = play_options::formatPlayOptionLabel(
+      viewerPlayOption, viewerPlayOptionSeed, viewerPlayOption2,
+      viewerPlayOption2Seed);
+  std::string result = label.empty() ? "NORMAL" : label;
+  if (viewerLaneOrderSummary.has_value()) {
+    result += " / Lane " + *viewerLaneOrderSummary;
+  }
+  return result;
+}
+
+std::string ChartViewerScene::defaultLaneAssignNotation() const {
+  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  std::string notation;
+  if (meta.IsDP && scratchLanes.size() >= 2) {
+    notation.push_back('L');
+  } else if (!meta.IsDP && !scratchLanes.empty()) {
+    notation.push_back('S');
+  }
+  const size_t keyCount = std::min(keyLanes.size(), keySymbols.size());
+  notation.append(keySymbols.substr(0, keyCount));
+  if (meta.IsDP && scratchLanes.size() >= 2) {
+    notation.push_back('R');
+  }
+  return notation;
 }
