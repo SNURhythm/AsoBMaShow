@@ -1281,8 +1281,30 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             << "\n";
 #endif
   // std::wcout<<content<<std::endl;
+  struct ConditionalFrame {
+    bool parentSkipped = false;
+    bool branchMatched = false;
+    bool currentSkipped = false;
+  };
+  struct RandomFrame {
+    bool active = false;
+  };
   std::vector<int> RandomStack;
-  std::vector<bool> SkipStack;
+  std::vector<RandomFrame> RandomFrames;
+  std::vector<ConditionalFrame> ConditionalStack;
+  auto isSkipping = [&]() {
+    for (const auto &frame : ConditionalStack) {
+      if (frame.currentSkipped) {
+        return true;
+      }
+    }
+    for (const auto &frame : RandomFrames) {
+      if (!frame.active) {
+        return true;
+      }
+    }
+    return false;
+  };
   // init prng with seed
   std::mt19937_64 Prng(Seed);
 
@@ -1308,50 +1330,66 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 
     if (MatchHeader(line, "#IF")) // #IF n
     {
-      if (RandomStack.empty()) {
+      const bool parentSkipped = isSkipping();
+      if (RandomStack.empty() && !parentSkipped) {
         // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
         continue;
       }
-      const int CurrentRandom = RandomStack.back();
+      const int CurrentRandom = parentSkipped ? 0 : RandomStack.back();
       const int n =
           static_cast<int>(std::strtol(line.substr(4).c_str(), nullptr, 10));
-      SkipStack.push_back(CurrentRandom != n);
-      continue;
-    }
-    if (MatchHeader(line, "#ELSE")) {
-      if (SkipStack.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
-        continue;
-      }
-      const bool CurrentSkip = SkipStack.back();
-      SkipStack.pop_back();
-      SkipStack.push_back(!CurrentSkip);
+      const bool matched = !parentSkipped && CurrentRandom == n;
+      ConditionalStack.push_back({parentSkipped, matched,
+                                  parentSkipped || !matched});
       continue;
     }
     if (MatchHeader(line, "#ELSEIF")) {
-      if (SkipStack.empty()) {
+      if (ConditionalStack.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
         continue;
       }
-      const bool CurrentSkip = SkipStack.back();
-      SkipStack.pop_back();
-      const int CurrentRandom = RandomStack.back();
+      auto &frame = ConditionalStack.back();
       const int n =
           static_cast<int>(std::strtol(line.substr(8).c_str(), nullptr, 10));
-      SkipStack.push_back(CurrentSkip && CurrentRandom != n);
+      if (frame.parentSkipped || frame.branchMatched || RandomStack.empty()) {
+        frame.currentSkipped = true;
+        continue;
+      }
+      const int CurrentRandom = RandomStack.back();
+      const bool matched = CurrentRandom == n;
+      frame.branchMatched = matched;
+      frame.currentSkipped = !matched;
+      continue;
+    }
+    if (MatchHeader(line, "#ELSE")) {
+      if (ConditionalStack.empty()) {
+        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
+        continue;
+      }
+      auto &frame = ConditionalStack.back();
+      if (frame.parentSkipped) {
+        frame.currentSkipped = true;
+      } else {
+        frame.currentSkipped = frame.branchMatched;
+        frame.branchMatched = true;
+      }
       continue;
     }
     if (MatchHeader(line, "#ENDIF") || MatchHeader(line, "#END IF")) {
-      if (SkipStack.empty()) {
+      if (ConditionalStack.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
         continue;
       }
-      SkipStack.pop_back();
+      ConditionalStack.pop_back();
       continue;
     }
     if (MatchHeader(line, "#RANDOM") ||
         MatchHeader(line, "#RONDAM")) // #RANDOM n
     {
+      if (isSkipping()) {
+        RandomFrames.push_back({false});
+        continue;
+      }
       const int n =
           static_cast<int>(std::strtol(line.substr(7).c_str(), nullptr, 10));
       if (n <= 0) {
@@ -1367,17 +1405,22 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
       new_chart->Meta.RandomValues.push_back(selectedRandom);
       RandomStack.push_back(selectedRandom);
+      RandomFrames.push_back({true});
       continue;
     }
     if (MatchHeader(line, "#ENDRANDOM")) {
-      if (RandomStack.empty()) {
+      if (RandomFrames.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
         continue;
       }
-      RandomStack.pop_back();
+      const bool wasActive = RandomFrames.back().active;
+      RandomFrames.pop_back();
+      if (wasActive && !RandomStack.empty()) {
+        RandomStack.pop_back();
+      }
       continue;
     }
-    if (!SkipStack.empty() && SkipStack.back()) {
+    if (isSkipping()) {
       continue;
     }
     if (MatchHeader(line, "#4K")) {

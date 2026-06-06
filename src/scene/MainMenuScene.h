@@ -199,6 +199,7 @@ private:
   void refreshReadySettingsSummary();
   bms_parser::Chart *loadedSelectedChart() const;
   void startSelectedChart();
+  void openChartViewerForSelection();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildPlayOptionsModal();

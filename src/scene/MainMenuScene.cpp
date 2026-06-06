@@ -14,6 +14,7 @@
 #include "../targets.h"
 #include "../video/transcode.h"
 #include "../view/Button.h"
+#include "ChartViewerScene.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
 #include <cctype>
@@ -990,6 +991,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setHeight(86);
   right->addView(jacketCard);
   right->addView(startButton);
+
+  auto *viewerButton = new Button(0, 0, 220, 58);
+  auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 25);
+  viewerButtonText->setText("Viewer");
+  viewerButtonText->setAlign(TextView::CENTER);
+  viewerButtonText->setVAlign(TextView::MIDDLE);
+  viewerButton->setContentView(viewerButtonText);
+  viewerButton->setBackgroundColors(
+      Color(31, 51, 74, 216), Color(43, 70, 100, 228),
+      Color(58, 93, 132, 236));
+  viewerButton->setBorderColors(Color(106, 153, 205, 255),
+                                Color(135, 181, 229, 255),
+                                Color(167, 209, 248, 255));
+  viewerButton->setStyledBorderWidth(2);
+  viewerButton->setOnClickListener(
+      [this]() { openChartViewerForSelection(); });
+  right->addView(viewerButton);
+
   right->addView(replayButtonSlot);
   right->addView(replayStatusText);
 
@@ -1455,6 +1474,46 @@ void MainMenuScene::startSelectedChart() {
         return true;
       },
       0, true);
+}
+
+void MainMenuScene::openChartViewerForSelection() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.unavailable || record.meta.BmsPath.empty()) {
+    return;
+  }
+
+  std::optional<unsigned int> chartRandomSeed;
+  std::optional<std::string> chartRandomPrng;
+  std::optional<std::vector<int>> chartRandomValues;
+  if (auto *currentChart = selectedChart.load();
+      currentChart != nullptr &&
+      currentChart->Meta.BmsPath == record.meta.BmsPath) {
+    chartRandomSeed = currentChart->Meta.RandomSeed;
+    chartRandomPrng = currentChart->Meta.RandomPrng;
+    if (!currentChart->Meta.RandomValues.empty()) {
+      chartRandomValues = currentChart->Meta.RandomValues;
+    }
+  }
+
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+  context.sceneManager->changeScene(
+      new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
+                           chartRandomValues),
+      true);
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
