@@ -824,48 +824,14 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
     return;
   }
 
-  for (const auto &event : replayData->events) {
-    if ((event.action != ReplayEventAction::Press &&
-         event.action != ReplayEventAction::Release) ||
-        event.judgement == None || event.noteTimeMicros < 0) {
-      continue;
-    }
-    if (laneToOrderIndex.find(event.lane) == laneToOrderIndex.end()) {
-      continue;
-    }
-
-    const auto timelineIt = std::lower_bound(
-        timelines.begin(), timelines.end(), event.noteTimeMicros,
-        [](const bms_parser::TimeLine *timeline, long long timing) {
-          return timeline->Timing < timing;
-        });
-    if (timelineIt == timelines.end() ||
-        (*timelineIt)->Timing != event.noteTimeMicros) {
-      continue;
-    }
-
-    replayGhostEvents.push_back({
-        .lane = event.lane,
-        .noteTimeMicros = event.noteTimeMicros,
-        .judgeTimeMicros = event.judgeTimeMicros,
-        .judgeScrollPosition = scrollPositionAtTime(event.judgeTimeMicros),
-        .judgement = event.judgement,
-    });
+  std::vector<const bms_parser::TimeLine *> timelineRefs;
+  timelineRefs.reserve(timelines.size());
+  for (const auto *timeline : timelines) {
+    timelineRefs.push_back(timeline);
   }
-
-  std::sort(replayGhostEvents.begin(), replayGhostEvents.end(),
-            [](const ReplayGhostEvent &a, const ReplayGhostEvent &b) {
-              if (a.judgeScrollPosition != b.judgeScrollPosition) {
-                return a.judgeScrollPosition < b.judgeScrollPosition;
-              }
-              if (a.judgeTimeMicros != b.judgeTimeMicros) {
-                return a.judgeTimeMicros < b.judgeTimeMicros;
-              }
-              if (a.noteTimeMicros != b.noteTimeMicros) {
-                return a.noteTimeMicros < b.noteTimeMicros;
-              }
-              return a.lane < b.lane;
-            });
+  replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+      *replayData, timelineRefs, laneToOrderIndex,
+      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
 }
 
 void BMSRenderer::drawRect(float width, float height, float x, float y,

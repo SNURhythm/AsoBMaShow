@@ -45,6 +45,31 @@ long long absoluteTimeDistance(long long a, long long b) {
   return a > b ? a - b : b - a;
 }
 
+void markPracticeSkippedNote(bms_parser::Note *note, long long startTime) {
+  if (note == nullptr) {
+    return;
+  }
+  note->IsPlayed = true;
+  note->IsDead = true;
+  note->PlayedTime = startTime;
+  if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+      longNote != nullptr) {
+    longNote->IsHolding = false;
+    if (!longNote->IsTail() && longNote->Tail != nullptr) {
+      longNote->Tail->IsPlayed = true;
+      longNote->Tail->IsDead = true;
+      longNote->Tail->PlayedTime = startTime;
+      longNote->Tail->IsHolding = false;
+    }
+    if (longNote->IsTail() && longNote->Head != nullptr) {
+      longNote->Head->IsPlayed = true;
+      longNote->Head->IsDead = true;
+      longNote->Head->PlayedTime = startTime;
+      longNote->Head->IsHolding = false;
+    }
+  }
+}
+
 long long latestHittableNoteTiming(const Judge &judge, long long inputTime) {
   bool hasWindow = false;
   long long earliestWindow = 0;
@@ -243,13 +268,13 @@ void GamePlayScene::init() {
       }));
       pauseScreen->addView(makePauseButton(
           isReplayPlayback() ? "Replay" : "Retry", 260, 90, [this]() {
-            if (isReplayPlayback()) {
+            if (isReplayPlayback() || options.practiceMode) {
               restartCurrentPattern();
             } else {
               retryWithNewPattern();
             }
           }));
-      if (!isReplayPlayback()) {
+      if (!isReplayPlayback() && !options.practiceMode) {
         pauseScreen->addView(makePauseButton(
             "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
       }
@@ -257,7 +282,11 @@ void GamePlayScene::init() {
         context.jukebox.stop();
         defer(
             [this]() {
-              context.sceneManager->changeScene("MainMenu");
+              if (options.practiceMode && options.returnScene != nullptr) {
+                context.sceneManager->changeScene(options.returnScene, false);
+              } else {
+                context.sceneManager->changeScene("MainMenu");
+              }
               return false;
             },
             0, true);
@@ -300,9 +329,18 @@ void GamePlayScene::reset() {
     }
   }
   context.jukebox.stop();
+  const long long startPositionMicros = getStartPositionMicros();
+  const std::optional<long long> practiceKeySoundCutoff =
+      options.practiceLeadInMicros > 0 ? std::optional<long long>(
+                                             startPositionMicros)
+                                       : std::nullopt;
   context.jukebox.schedule(*chart, options.autoKeySound && !isReplayPlayback(),
-                           isCancelled);
+                           isCancelled, practiceKeySoundCutoff);
   context.jukebox.play();
+  const long long audioSeekPosition = getAudioSeekPositionMicros();
+  if (audioSeekPosition > 0) {
+    context.jukebox.seek(audioSeekPosition);
+  }
   state = new RhythmState(chart, false);
   const GaugeType initialGaugeType = isReplayPlayback()
                                          ? options.replayData->initialGaugeType
@@ -311,6 +349,7 @@ void GamePlayScene::reset() {
                                   ? options.replayData->gaugeAutoShift
                                   : options.gaugeAutoShift;
   state->configureGauge(initialGaugeType, gaugeAutoShift);
+  initializeStartPositionState();
   state->isPlaying = true;
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
@@ -372,7 +411,7 @@ bool GamePlayScene::isReplayPlayback() const {
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
-  return !options.autoPlay && !isReplayPlayback();
+  return !options.practiceMode && !options.autoPlay && !isReplayPlayback();
 }
 
 void GamePlayScene::beginReplayRecording() {
@@ -411,6 +450,75 @@ void GamePlayScene::finishReplayRecording() {
 
 long long GamePlayScene::getAudioOffsetMicros() const {
   return static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
+}
+
+long long GamePlayScene::getStartPositionMicros() const {
+  const long long requested =
+      static_cast<long long>(std::min<unsigned long long>(
+          options.startPosition,
+          static_cast<unsigned long long>(
+              std::max(0LL, chart != nullptr ? chart->Meta.TotalLength : 0LL))));
+  return std::max(0LL, requested);
+}
+
+long long GamePlayScene::getAudioSeekPositionMicros() const {
+  const long long startPosition = getStartPositionMicros();
+  const long long leadIn =
+      static_cast<long long>(std::min<unsigned long long>(
+          options.practiceLeadInMicros,
+          static_cast<unsigned long long>(std::max(0LL, startPosition))));
+  return std::max(0LL, startPosition - leadIn);
+}
+
+void GamePlayScene::initializeStartPositionState() {
+  if (state == nullptr || chart == nullptr) {
+    return;
+  }
+
+  const long long startPosition = getStartPositionMicros();
+  if (startPosition <= 0) {
+    return;
+  }
+
+  bool foundStartTimeline = false;
+  for (size_t measureIndex = 0; measureIndex < chart->Measures.size();
+       ++measureIndex) {
+    const auto *measure = chart->Measures[measureIndex];
+    if (measure == nullptr) {
+      continue;
+    }
+
+    for (size_t timelineIndex = 0; timelineIndex < measure->TimeLines.size();
+         ++timelineIndex) {
+      auto *timeline = measure->TimeLines[timelineIndex];
+      if (timeline == nullptr) {
+        continue;
+      }
+
+      if (timeline->Timing >= startPosition) {
+        state->passedMeasureCount = measureIndex;
+        state->passedTimelineCount = timelineIndex;
+        foundStartTimeline = true;
+        break;
+      }
+
+      for (auto *note : timeline->Notes) {
+        markPracticeSkippedNote(note, startPosition);
+      }
+      for (auto *note : timeline->LandmineNotes) {
+        markPracticeSkippedNote(note, startPosition);
+      }
+    }
+
+    if (foundStartTimeline) {
+      break;
+    }
+  }
+
+  if (!foundStartTimeline) {
+    state->passedMeasureCount = chart->Measures.size();
+    state->passedTimelineCount = 0;
+  }
 }
 
 long long
@@ -468,9 +576,25 @@ void GamePlayScene::update(float dt) {
                 ? replayToSave
                 : (options.replayData != nullptr ? options.replayData.get()
                                                  : nullptr);
+        ResultPracticeOptions practiceResultOptions;
+        if (options.practiceMode) {
+          practiceResultOptions.enabled = true;
+          practiceResultOptions.startPosition =
+              static_cast<unsigned long long>(getStartPositionMicros());
+          practiceResultOptions.autoKeySound = options.autoKeySound;
+          practiceResultOptions.gaugeType = options.gaugeType;
+          practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
+          practiceResultOptions.playOption = options.playOption;
+          practiceResultOptions.playOptionSeed = options.playOptionSeed;
+          practiceResultOptions.playOption2 = options.playOption2;
+          practiceResultOptions.playOption2Seed = options.playOption2Seed;
+          practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
+          practiceResultOptions.returnScene = options.returnScene;
+        }
         context.sceneManager->changeScene(
             new ResultScene(context, chart->Meta, *state, replayToSave,
-                            !isReplayPlayback(), retrySource),
+                            !options.practiceMode && !isReplayPlayback(),
+                            retrySource, practiceResultOptions),
             false);
         return false;
       },

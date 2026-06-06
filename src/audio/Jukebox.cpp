@@ -410,7 +410,8 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
 }
 
 void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
-                       std::atomic_bool &isCancelled) {
+                       std::atomic_bool &isCancelled,
+                       std::optional<long long> noteScheduleCutoffMicros) {
   audioCursor = 0;
   audioList.clear();
   scheduleVisuals(chart, isCancelled);
@@ -421,7 +422,11 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
       if (isCancelled)
         return;
       std::vector<std::pair<long long, int>> notes;
-      if (scheduleNotes) {
+      const bool includeTimelineNotes =
+          scheduleNotes ||
+          (noteScheduleCutoffMicros.has_value() &&
+           timeline->Timing < *noteScheduleCutoffMicros);
+      if (includeTimelineNotes) {
         for (auto &note : timeline->Notes) {
           if (isCancelled)
             return;
@@ -470,6 +475,34 @@ void Jukebox::scheduleAudioFromCursor() {
       audio.scheduleSound(it->second, target.first);
     }
     audioCursor++;
+  }
+}
+
+void Jukebox::playOverlappingAudioAt(long long micro) {
+  std::vector<std::pair<path_t, long long>> overlapping;
+  const auto seekIt =
+      std::lower_bound(audioList.begin(), audioList.end(), micro,
+                       [](const std::pair<long long, int> &entry,
+                          long long targetMicros) {
+                         return entry.first < targetMicros;
+                       });
+  for (auto it = std::make_reverse_iterator(seekIt); it != audioList.rend();
+       ++it) {
+    const auto &target = *it;
+    const auto wavIt = wavTableAbs.find(target.second);
+    if (wavIt == wavTableAbs.end()) {
+      continue;
+    }
+    const long long elapsed = micro - target.first;
+    const auto duration = audio.getSoundDurationMicros(wavIt->second);
+    if (!duration.has_value() || elapsed >= *duration) {
+      continue;
+    }
+    overlapping.emplace_back(wavIt->second, elapsed);
+  }
+
+  for (auto it = overlapping.rbegin(); it != overlapping.rend(); ++it) {
+    audio.playSound(it->first, it->second);
   }
 }
 
@@ -809,8 +842,6 @@ void Jukebox::stop() {
   }
 }
 void Jukebox::seek(long long micro) {
-  /* TODO: should also play audio/video which starts earlier than seek but
-      ends later than seek */
   std::lock_guard<std::mutex> lock(seekLock);
   const long long bgaTimelineMicro = getBgaTimelineMicros(micro);
   stopwatch->seek(bgaTimelineMicro);
@@ -825,6 +856,7 @@ void Jukebox::seek(long long micro) {
     audioCursor++;
   }
   scheduleAudioFromCursor();
+  playOverlappingAudioAt(micro);
   if (isPlaying) {
     audio.startDevice();
   }

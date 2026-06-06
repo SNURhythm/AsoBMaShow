@@ -401,19 +401,26 @@ public:
 
   void SetPlayer(int player);
   [[nodiscard]] int GetPlayer() const;
+  [[nodiscard]] std::vector<int> GetLaneOrder(const ChartMeta &meta) const;
 
   static void RecalculateNoteCounts(Chart &chart);
 
 protected:
   [[nodiscard]] std::vector<int> GetModifyLanes(const ChartMeta &meta,
                                                 bool includeScratch) const;
+  void SetLaneMap(std::vector<int> laneMap);
+  void ClearLaneMap();
 
 private:
   long long Seed;
   int Player;
+  std::vector<int> LaneMap;
 };
 
 [[nodiscard]] const char *ToString(PlayOptionModifier option);
+[[nodiscard]] bool ValidateLaneAssignNotation(const ChartMeta &meta,
+                                              std::string_view notation,
+                                              std::string *error = nullptr);
 [[nodiscard]] std::unique_ptr<BaseModifier>
 CreatePlayOptionModifier(PlayOptionModifier option, long long seed = -1,
                          int player = 0, int hranThresholdBpm = 120);
@@ -484,6 +491,18 @@ private:
   [[nodiscard]] std::vector<int> MakeLaneMap(const Chart &chart,
                                              const std::vector<int> &keys,
                                              size_t laneCount) override;
+};
+
+class LaneAssignModifier final : public BaseModifier {
+public:
+  explicit LaneAssignModifier(std::string notation, int player = 0);
+
+  void Modify(Chart &chart) override;
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  std::string Notation;
+  std::string NameText;
 };
 
 class NoteShuffleModifier : public BaseModifier {

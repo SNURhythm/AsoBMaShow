@@ -26,6 +26,9 @@ struct StartOptions {
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
   bool ownsChart = false;
+  bool practiceMode = false;
+  unsigned long long practiceLeadInMicros = 0;
+  Scene *returnScene = nullptr;
 };
 class RhythmInputHandler;
 class BMSRenderer;
@@ -57,6 +60,7 @@ public:
 
 private:
   void reset();
+  void initializeStartPositionState();
   void restartCurrentPattern();
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
@@ -70,6 +74,8 @@ private:
   void applyReplayGauge(const ReplayEvent &event);
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
   [[nodiscard]] long long getAudioOffsetMicros() const;
+  [[nodiscard]] long long getStartPositionMicros() const;
+  [[nodiscard]] long long getAudioSeekPositionMicros() const;
   [[nodiscard]] long long
   getGameplayTimeMicros(long long rawSongTimeMicros) const;
   [[nodiscard]] long long getInputSongTimeMicros(long long songTimeMicros,

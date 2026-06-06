@@ -5,6 +5,7 @@
 #include "bx/math.h"
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
@@ -563,13 +564,12 @@ void run() {
     lastFrameTime = currentFrameTime;
 
     SDL_Event pendingMouseMotion{};
-    SDL_Event pendingFingerMotion{};
+    std::vector<SDL_Event> pendingFingerMotions;
     SDL_Event pendingResizeEvent{};
     uint32_t pendingMouseMotionCount = 0;
     uint32_t pendingFingerMotionCount = 0;
     uint32_t pendingResizeCount = 0;
     bool hasPendingMouseMotion = false;
-    bool hasPendingFingerMotion = false;
     bool hasPendingResize = false;
 
     auto shouldDispatchToScene = [](Uint32 eventType) {
@@ -688,8 +688,19 @@ void run() {
         continue;
       }
       if (e.type == SDL_FINGERMOTION) {
-        pendingFingerMotion = e;
-        hasPendingFingerMotion = true;
+        auto existing =
+            std::find_if(pendingFingerMotions.begin(),
+                         pendingFingerMotions.end(),
+                         [&](const SDL_Event &pending) {
+                           return pending.tfinger.touchId == e.tfinger.touchId &&
+                                  pending.tfinger.fingerId ==
+                                      e.tfinger.fingerId;
+                         });
+        if (existing != pendingFingerMotions.end()) {
+          *existing = e;
+        } else {
+          pendingFingerMotions.push_back(e);
+        }
         ++pendingFingerMotionCount;
         continue;
       }
@@ -711,10 +722,13 @@ void run() {
         coalescedResizeInWindow += (pendingResizeCount - 1);
       }
     }
-    if (hasPendingFingerMotion) {
-      processEvent(pendingFingerMotion);
-      if (pendingFingerMotionCount > 1) {
-        coalescedFingerMotionInWindow += (pendingFingerMotionCount - 1);
+    if (!pendingFingerMotions.empty()) {
+      for (const auto &pendingFingerMotion : pendingFingerMotions) {
+        processEvent(pendingFingerMotion);
+      }
+      if (pendingFingerMotionCount > pendingFingerMotions.size()) {
+        coalescedFingerMotionInWindow +=
+            pendingFingerMotionCount - pendingFingerMotions.size();
       }
     }
     if (hasPendingMouseMotion) {

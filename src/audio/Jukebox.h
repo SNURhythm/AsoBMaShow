@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <optional>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
 #include "../utils/Stopwatch.h"
@@ -46,7 +47,9 @@ public:
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
-                std::atomic_bool &isCancelled);
+                std::atomic_bool &isCancelled,
+                std::optional<long long> noteScheduleCutoffMicros =
+                    std::nullopt);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
   void play();
@@ -84,6 +87,7 @@ private:
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);
   void scheduleAudioFromCursor();
+  void playOverlappingAudioAt(long long micro);
   void wakeScheduler();
   void syncVisualClockToAudio();
   [[nodiscard]] long long getBgaOffsetMicros() const;

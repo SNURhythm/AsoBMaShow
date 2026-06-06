@@ -146,6 +146,7 @@ Measure::~Measure() {
 #include <limits>
 #include <random>
 #include <unordered_map>
+#include <utility>
 
 namespace bms_parser {
 namespace {
@@ -280,6 +281,114 @@ std::string NormalizeOption(std::string_view option) {
     }
   }
   return normalized;
+}
+
+std::string NormalizeLaneAssignNotation(std::string_view option) {
+  std::string notation = NormalizeOption(option);
+  constexpr std::array<std::string_view, 4> prefixes = {
+      "ASSIGN:", "ASSIGN-", "MANUAL:", "MANUAL-"};
+  for (std::string_view prefix : prefixes) {
+    if (notation.rfind(prefix, 0) == 0) {
+      notation.erase(0, prefix.size());
+      break;
+    }
+  }
+
+  std::string result;
+  result.reserve(notation.size());
+  for (char c : notation) {
+    if (c == '-' || c == '/' || c == ':') {
+      continue;
+    }
+    result.push_back(c);
+  }
+  return result;
+}
+
+bool IsLaneAssignNotation(std::string_view option,
+                          std::string *error = nullptr) {
+  const std::string notation = NormalizeLaneAssignNotation(option);
+  if (notation.empty()) {
+    if (error != nullptr) {
+      *error = "Lane assign is empty.";
+    }
+    return false;
+  }
+  for (char c : notation) {
+    if (c == 'S' || c == 'L' || c == 'R' || (c >= '1' && c <= '9') ||
+        (c >= 'A' && c <= 'E')) {
+      continue;
+    }
+    if (error != nullptr) {
+      *error = "Unknown lane symbol: " + std::string(1, c);
+    }
+    return false;
+  }
+  return true;
+}
+
+bool BuildLaneAssignMap(const ChartMeta &meta, const std::string &notation,
+                        std::vector<int> &destinationLanes,
+                        std::vector<int> &sourceLanes,
+                        std::string *error = nullptr) {
+  destinationLanes.clear();
+  sourceLanes.clear();
+
+  destinationLanes = meta.GetTotalLaneIndices();
+  if (notation.size() != destinationLanes.size()) {
+    if (error != nullptr) {
+      *error = "Expected " + std::to_string(destinationLanes.size()) +
+               " lane symbols.";
+    }
+    return false;
+  }
+
+  std::unordered_map<char, int> symbolToLane;
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  if (meta.IsDP) {
+    if (scratchLanes.size() < 2) {
+      if (error != nullptr) {
+        *error = "DP lane assign requires L and R scratch lanes.";
+      }
+      return false;
+    }
+    symbolToLane['L'] = scratchLanes.front();
+    symbolToLane['R'] = scratchLanes.back();
+  } else if (!scratchLanes.empty()) {
+    symbolToLane['S'] = scratchLanes.front();
+  }
+
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  if (keyLanes.size() > keySymbols.size()) {
+    if (error != nullptr) {
+      *error = "Lane assign supports up to 14 key lanes.";
+    }
+    return false;
+  }
+  for (size_t i = 0; i < keyLanes.size(); ++i) {
+    symbolToLane[keySymbols[i]] = keyLanes[i];
+  }
+
+  sourceLanes.reserve(destinationLanes.size());
+  for (char c : notation) {
+    const auto it = symbolToLane.find(c);
+    if (it == symbolToLane.end()) {
+      if (error != nullptr) {
+        *error = "Unknown lane symbol: " + std::string(1, c);
+      }
+      return false;
+    }
+    if (std::find(sourceLanes.begin(), sourceLanes.end(), it->second) !=
+        sourceLanes.end()) {
+      if (error != nullptr) {
+        *error = "Duplicate lane symbol: " + std::string(1, c);
+      }
+      return false;
+    }
+    sourceLanes.push_back(it->second);
+  }
+  return true;
 }
 
 class IdentityModifier final : public BaseModifier {
@@ -618,6 +727,27 @@ void BaseModifier::SetPlayer(int player) { Player = player; }
 
 int BaseModifier::GetPlayer() const { return Player; }
 
+std::vector<int> BaseModifier::GetLaneOrder(const ChartMeta &meta) const {
+  const auto destinationLanes = meta.GetTotalLaneIndices();
+  std::vector<int> result;
+  result.reserve(destinationLanes.size());
+  for (int destinationLane : destinationLanes) {
+    int sourceLane = destinationLane;
+    if (destinationLane >= 0 &&
+        destinationLane < static_cast<int>(LaneMap.size())) {
+      sourceLane = LaneMap[static_cast<size_t>(destinationLane)];
+    }
+    result.push_back(sourceLane);
+  }
+  return result;
+}
+
+void BaseModifier::SetLaneMap(std::vector<int> laneMap) {
+  LaneMap = std::move(laneMap);
+}
+
+void BaseModifier::ClearLaneMap() { LaneMap.clear(); }
+
 std::vector<int> BaseModifier::GetModifyLanes(const ChartMeta &meta,
                                               bool includeScratch) const {
   auto keyLanes = meta.GetKeyLaneIndices();
@@ -715,6 +845,18 @@ const char *ToString(PlayOptionModifier option) {
   return "NORMAL";
 }
 
+bool ValidateLaneAssignNotation(const ChartMeta &meta,
+                                std::string_view notation,
+                                std::string *error) {
+  if (!IsLaneAssignNotation(notation, error)) {
+    return false;
+  }
+  std::vector<int> destinationLanes;
+  std::vector<int> sourceLanes;
+  return BuildLaneAssignMap(meta, NormalizeLaneAssignNotation(notation),
+                            destinationLanes, sourceLanes, error);
+}
+
 std::unique_ptr<BaseModifier>
 CreatePlayOptionModifier(PlayOptionModifier option, long long seed, int player,
                          int hranThresholdBpm) {
@@ -788,6 +930,10 @@ std::unique_ptr<BaseModifier> CreatePlayOptionModifier(std::string_view option,
     return CreatePlayOptionModifier(PlayOptionModifier::SRandomEx, seed, player,
                                     hranThresholdBpm);
   }
+  if (IsLaneAssignNotation(option)) {
+    return std::make_unique<LaneAssignModifier>(
+        NormalizeLaneAssignNotation(option), player);
+  }
   return nullptr;
 }
 
@@ -800,6 +946,7 @@ bool LaneShuffleModifier::IncludesScratch() const { return IncludeScratch; }
 void LaneShuffleModifier::Modify(Chart &chart) {
   const auto keys = GetModifyLanes(chart.Meta, IncludeScratch);
   if (keys.empty()) {
+    ClearLaneMap();
     return;
   }
 
@@ -809,8 +956,10 @@ void LaneShuffleModifier::Modify(Chart &chart) {
   }
   const auto laneMap = MakeLaneMap(chart, keys, laneCount);
   if (laneMap.empty()) {
+    ClearLaneMap();
     return;
   }
+  SetLaneMap(laneMap);
 
   for (auto *timeline : GetAllTimeLines(chart)) {
     std::vector<Note *> notes = timeline->Notes;
@@ -909,6 +1058,60 @@ std::vector<int> RandomExModifier::MakeLaneMap(const Chart &chart,
   (void)chart;
   return MakeRandomLaneMap(keys, laneCount, GetSeed());
 }
+
+LaneAssignModifier::LaneAssignModifier(std::string notation, int player)
+    : BaseModifier(0, player), Notation(NormalizeLaneAssignNotation(notation)),
+      NameText("ASSIGN:" + Notation) {}
+
+void LaneAssignModifier::Modify(Chart &chart) {
+  std::vector<int> destinationLanes;
+  std::vector<int> sourceLanes;
+  if (!BuildLaneAssignMap(chart.Meta, Notation, destinationLanes,
+                          sourceLanes)) {
+    ClearLaneMap();
+    return;
+  }
+
+  size_t laneCount = 0;
+  for (const auto *timeline : GetAllTimeLines(chart)) {
+    laneCount = std::max(laneCount, timeline->Notes.size());
+  }
+  std::vector<int> laneMap(laneCount);
+  for (size_t lane = 0; lane < laneMap.size(); ++lane) {
+    laneMap[lane] = static_cast<int>(lane);
+  }
+  for (size_t i = 0; i < destinationLanes.size(); ++i) {
+    const int destinationLane = destinationLanes[i];
+    if (destinationLane >= 0 &&
+        destinationLane < static_cast<int>(laneMap.size())) {
+      laneMap[static_cast<size_t>(destinationLane)] = sourceLanes[i];
+    }
+  }
+  SetLaneMap(std::move(laneMap));
+
+  for (auto *timeline : GetAllTimeLines(chart)) {
+    std::vector<Note *> notes = timeline->Notes;
+    std::vector<Note *> hiddenNotes = timeline->InvisibleNotes;
+    std::vector<LandmineNote *> landmineNotes = timeline->LandmineNotes;
+
+    for (size_t i = 0; i < destinationLanes.size(); ++i) {
+      const int destinationLane = destinationLanes[i];
+      const int sourceLane = sourceLanes[i];
+      if (destinationLane < 0 || sourceLane < 0 ||
+          destinationLane >= static_cast<int>(notes.size()) ||
+          sourceLane >= static_cast<int>(notes.size())) {
+        continue;
+      }
+      AssignNote(*timeline, destinationLane, notes[sourceLane]);
+      AssignHiddenNote(*timeline, destinationLane, hiddenNotes[sourceLane]);
+      AssignLandmineNote(*timeline, destinationLane,
+                         landmineNotes[sourceLane]);
+    }
+  }
+  RecalculateNoteCounts(chart);
+}
+
+const char *LaneAssignModifier::Name() const { return NameText.c_str(); }
 
 NoteShuffleModifier::NoteShuffleModifier(bool includeScratch,
                                          int keyRepeatThresholdMillis,
@@ -1281,8 +1484,59 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             << "\n";
 #endif
   // std::wcout<<content<<std::endl;
+  struct ConditionalFrame {
+    bool parentSkipped = false;
+    bool branchMatched = false;
+    bool currentSkipped = false;
+    size_t randomDepth = 0;
+  };
+  struct RandomFrame {
+    bool active = false;
+  };
   std::vector<int> RandomStack;
-  std::vector<bool> SkipStack;
+  std::vector<RandomFrame> RandomFrames;
+  std::vector<ConditionalFrame> ConditionalStack;
+  auto isSkipping = [&]() {
+    for (const auto &frame : ConditionalStack) {
+      if (frame.currentSkipped) {
+        return true;
+      }
+    }
+    for (const auto &frame : RandomFrames) {
+      if (!frame.active) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto popRandomFrame = [&]() {
+    if (RandomFrames.empty()) {
+      return;
+    }
+    const bool wasActive = RandomFrames.back().active;
+    RandomFrames.pop_back();
+    if (wasActive && !RandomStack.empty()) {
+      RandomStack.pop_back();
+    }
+  };
+  auto isInsideConditionalBranchOfRandomDepth = [&](size_t randomDepth) {
+    for (auto it = ConditionalStack.rbegin(); it != ConditionalStack.rend();
+         ++it) {
+      if (it->randomDepth == randomDepth) {
+        return true;
+      }
+      if (it->randomDepth < randomDepth) {
+        return false;
+      }
+    }
+    return false;
+  };
+  auto closeUnbranchedRandomFrames = [&]() {
+    while (!RandomFrames.empty() &&
+           !isInsideConditionalBranchOfRandomDepth(RandomFrames.size())) {
+      popRandomFrame();
+    }
+  };
   // init prng with seed
   std::mt19937_64 Prng(Seed);
 
@@ -1308,50 +1562,68 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 
     if (MatchHeader(line, "#IF")) // #IF n
     {
-      if (RandomStack.empty()) {
+      const bool parentSkipped = isSkipping();
+      if (RandomStack.empty() && !parentSkipped) {
         // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
         continue;
       }
-      const int CurrentRandom = RandomStack.back();
+      const int CurrentRandom = parentSkipped ? 0 : RandomStack.back();
       const int n =
           static_cast<int>(std::strtol(line.substr(4).c_str(), nullptr, 10));
-      SkipStack.push_back(CurrentRandom != n);
-      continue;
-    }
-    if (MatchHeader(line, "#ELSE")) {
-      if (SkipStack.empty()) {
-        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
-        continue;
-      }
-      const bool CurrentSkip = SkipStack.back();
-      SkipStack.pop_back();
-      SkipStack.push_back(!CurrentSkip);
+      const bool matched = !parentSkipped && CurrentRandom == n;
+      ConditionalStack.push_back({parentSkipped, matched,
+                                  parentSkipped || !matched,
+                                  RandomFrames.size()});
       continue;
     }
     if (MatchHeader(line, "#ELSEIF")) {
-      if (SkipStack.empty()) {
+      if (ConditionalStack.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
         continue;
       }
-      const bool CurrentSkip = SkipStack.back();
-      SkipStack.pop_back();
-      const int CurrentRandom = RandomStack.back();
+      auto &frame = ConditionalStack.back();
       const int n =
           static_cast<int>(std::strtol(line.substr(8).c_str(), nullptr, 10));
-      SkipStack.push_back(CurrentSkip && CurrentRandom != n);
+      if (frame.parentSkipped || frame.branchMatched || RandomStack.empty()) {
+        frame.currentSkipped = true;
+        continue;
+      }
+      const int CurrentRandom = RandomStack.back();
+      const bool matched = CurrentRandom == n;
+      frame.branchMatched = matched;
+      frame.currentSkipped = !matched;
+      continue;
+    }
+    if (MatchHeader(line, "#ELSE")) {
+      if (ConditionalStack.empty()) {
+        // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
+        continue;
+      }
+      auto &frame = ConditionalStack.back();
+      if (frame.parentSkipped) {
+        frame.currentSkipped = true;
+      } else {
+        frame.currentSkipped = frame.branchMatched;
+        frame.branchMatched = true;
+      }
       continue;
     }
     if (MatchHeader(line, "#ENDIF") || MatchHeader(line, "#END IF")) {
-      if (SkipStack.empty()) {
+      if (ConditionalStack.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("SkipStack is empty!"));
         continue;
       }
-      SkipStack.pop_back();
+      ConditionalStack.pop_back();
       continue;
     }
     if (MatchHeader(line, "#RANDOM") ||
         MatchHeader(line, "#RONDAM")) // #RANDOM n
     {
+      closeUnbranchedRandomFrames();
+      if (isSkipping()) {
+        RandomFrames.push_back({false});
+        continue;
+      }
       const int n =
           static_cast<int>(std::strtol(line.substr(7).c_str(), nullptr, 10));
       if (n <= 0) {
@@ -1367,17 +1639,18 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
       new_chart->Meta.RandomValues.push_back(selectedRandom);
       RandomStack.push_back(selectedRandom);
+      RandomFrames.push_back({true});
       continue;
     }
     if (MatchHeader(line, "#ENDRANDOM")) {
-      if (RandomStack.empty()) {
+      if (RandomFrames.empty()) {
         // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
         continue;
       }
-      RandomStack.pop_back();
+      popRandomFrame();
       continue;
     }
-    if (!SkipStack.empty() && SkipStack.back()) {
+    if (isSkipping()) {
       continue;
     }
     if (MatchHeader(line, "#4K")) {

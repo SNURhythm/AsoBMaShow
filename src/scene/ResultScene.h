@@ -5,6 +5,21 @@
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
 #include <optional>
+#include <string>
+
+struct ResultPracticeOptions {
+  bool enabled = false;
+  unsigned long long startPosition = 0;
+  bool autoKeySound = false;
+  GaugeType gaugeType = GaugeType::Normal;
+  bool gaugeAutoShift = false;
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+  unsigned long long leadInMicros = 0;
+  Scene *returnScene = nullptr;
+};
 
 class TextView;
 
@@ -13,7 +28,8 @@ public:
   ResultScene(ApplicationContext &context, const bms_parser::ChartMeta &meta,
               const RhythmState &state, const ReplayData *replay = nullptr,
               bool shouldSaveScore = true,
-              const ReplayData *retrySource = nullptr);
+              const ReplayData *retrySource = nullptr,
+              ResultPracticeOptions practiceOptions = {});
   ~ResultScene() override;
 
   void init() override;
@@ -27,11 +43,13 @@ private:
   void addRetryButtons();
   void startRetry(bool samePattern);
   void startReplay();
+  void exitResult();
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
+  ResultPracticeOptions practiceOptions;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
   ISkin *skin = nullptr;

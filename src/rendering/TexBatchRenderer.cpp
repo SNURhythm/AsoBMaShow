@@ -27,6 +27,20 @@ void TexBatchRenderer::begin() {
 
 void TexBatchRenderer::end() { flush(); }
 
+void TexBatchRenderer::setScissor(int x, int y, int width, int height) {
+  hasScissor = true;
+  scissorX = x;
+  scissorY = y;
+  scissorWidth = width;
+  scissorHeight = height;
+}
+
+void TexBatchRenderer::clearScissor() {
+  hasScissor = false;
+  scissorWidth = -1;
+  scissorHeight = -1;
+}
+
 void TexBatchRenderer::addRect(float x, float y, float width, float height,
                                float tileU, float tileV,
                                bgfx::TextureHandle texture) {
@@ -116,10 +130,15 @@ void TexBatchRenderer::flush() {
   uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_BLEND_ALPHA;
   bgfx::setState(state);
+  if (hasScissor) {
+    rendering::setScissorUI(scissorX, scissorY, scissorWidth, scissorHeight);
+  } else {
+    bgfx::setScissor();
+  }
 
   static const bgfx::ProgramHandle kProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-  bgfx::submit(rendering::main_view, kProgram, submitDepth);
+  bgfx::submit(submitView, kProgram, submitDepth);
   ++submitCount;
 
   vertices.clear();

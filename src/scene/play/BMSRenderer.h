@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../../ReplayData.h"
+#include "../../ReplayGhostUtils.h"
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -54,14 +55,6 @@ struct NoteSheet {
   NoteUvRegion longBodyOff;
   NoteUvRegion longBodyOn;
   NoteUvRegion longTail;
-};
-
-struct ReplayGhostEvent {
-  int lane = -1;
-  long long noteTimeMicros = 0;
-  long long judgeTimeMicros = 0;
-  double judgeScrollPosition = 0.0;
-  Judgement judgement = None;
 };
 
 class BMSRendererState {

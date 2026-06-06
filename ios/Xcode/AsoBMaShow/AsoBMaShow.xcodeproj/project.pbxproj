@@ -727,6 +727,7 @@
 				rendering/SimpleBatchRenderer.cpp,
 				rendering/TexBatchRenderer.cpp,
 				rendering/UniformCache.cpp,
+				scene/ChartViewerScene.cpp,
 				scene/MainMenuLibrary.cpp,
 				scene/MainMenuScene.cpp,
 				scene/ResultScene.cpp,

@@ -14,8 +14,11 @@
 #include "../targets.h"
 #include "../video/transcode.h"
 #include "../view/Button.h"
+#include "../view/BlockingOverlayView.h"
+#include "ChartViewerScene.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
+#include "../view/ReplaySummaryListView.h"
 #include <cctype>
 #include <memory>
 #include <unordered_set>
@@ -170,22 +173,6 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   return {.type = GaugeType::Normal};
 }
 
-std::string formatReplayGauge(float gauge) {
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(1) << gauge << "%";
-  return stream.str();
-}
-
-std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
-  return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
-}
-
-std::string replayPlayOptionLabel(const ReplaySummary &summary) {
-  return play_options::formatPlayOptionLabel(
-      summary.playOption, summary.playOptionSeed, summary.playOption2,
-      summary.playOption2Seed);
-}
-
 void styleActionButton(Button *button, TextView *text, bool enabled,
                        const Color &normal, const Color &hover,
                        const Color &pressed, const Color &border) {
@@ -251,114 +238,6 @@ Button *makeModalButton(const std::string &label, int fontSize,
   return button;
 }
 
-class ModalRootView : public View {
-public:
-  using View::View;
-
-private:
-  bool handleEventsImpl(SDL_Event &event) override {
-    switch (event.type) {
-    case SDL_MOUSEBUTTONDOWN:
-    case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEMOTION:
-    case SDL_MOUSEWHEEL:
-    case SDL_FINGERDOWN:
-    case SDL_FINGERUP:
-    case SDL_FINGERMOTION:
-    case SDL_KEYDOWN:
-    case SDL_KEYUP:
-      return false;
-    default:
-      return true;
-    }
-  }
-};
-
-class ReplayListItemView : public View {
-public:
-  ReplayListItemView() {
-    clearLamp = new View();
-    textColumn = new View();
-    titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-    detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
-    scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-
-    setFlexDirection(FlexDirection::Row)
-        ->setAlignItems(YGAlignCenter)
-        ->setPadding(Edge::All, 8)
-        ->setGap(12);
-
-    clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
-    addView(clearLamp);
-
-    textColumn->setFlexDirection(FlexDirection::Column)
-        ->setJustifyContent(YGJustifyCenter)
-        ->setFlexGrow(1)
-        ->setFlexBasis(0)
-        ->setMinWidth(0)
-        ->setGap(4);
-    titleText->setHeight(28);
-    titleText->setOverflow(TextView::TextOverflow::Marquee);
-    detailText->setHeight(22);
-    detailText->setOverflow(TextView::TextOverflow::Hidden);
-    textColumn->addView(titleText);
-    textColumn->addView(detailText);
-    addView(textColumn);
-
-    scoreText->setWidth(140)->setHeight(32);
-    scoreText->setAlign(TextView::TextAlign::RIGHT);
-    scoreText->setVAlign(TextView::TextVAlign::MIDDLE);
-    addView(scoreText);
-    onUnselected();
-  }
-
-  void setSummary(const ReplaySummary &summary) {
-    titleText->setText(summary.createdAt.empty()
-                           ? "Replay #" + std::to_string(summary.id)
-                           : summary.createdAt);
-    std::string detail =
-        replayGaugeLabel(summary.initialGaugeType, summary.gaugeAutoShift) +
-        "  Gauge " + formatReplayGauge(summary.finalGauge) + "  Events " +
-        std::to_string(summary.eventCount);
-    const std::string optionLabel = replayPlayOptionLabel(summary);
-    if (!optionLabel.empty()) {
-      detail += "  " + optionLabel;
-    }
-    detailText->setText(detail);
-    scoreText->setText(std::to_string(summary.finalScore));
-
-    if (hasClearLampColor(summary.clearType)) {
-      clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
-    } else {
-      clearLamp->clearBackgroundColor();
-    }
-  }
-
-  void onSelected() override {
-    setBackgroundColor(Color(32, 55, 82, 224));
-    setBorderColor(Color(112, 177, 238, 255));
-    setBorderWidth(1);
-    titleText->setColor({255, 255, 255, 255});
-    detailText->setColor({203, 220, 239, 255});
-    scoreText->setColor({245, 250, 255, 255});
-  }
-
-  void onUnselected() override {
-    setBackgroundColor(Color(7, 12, 20, 138));
-    setBorderColor(Color(38, 52, 70, 160));
-    setBorderWidth(1);
-    titleText->setColor({235, 242, 250, 255});
-    detailText->setColor({151, 171, 194, 255});
-    scoreText->setColor({197, 216, 238, 255});
-  }
-
-private:
-  View *clearLamp = nullptr;
-  View *textColumn = nullptr;
-  TextView *titleText = nullptr;
-  TextView *detailText = nullptr;
-  TextView *scoreText = nullptr;
-};
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
@@ -990,6 +869,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setHeight(86);
   right->addView(jacketCard);
   right->addView(startButton);
+
+  auto *viewerButton = new Button(0, 0, 220, 58);
+  auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 25);
+  viewerButtonText->setText("Viewer");
+  viewerButtonText->setAlign(TextView::CENTER);
+  viewerButtonText->setVAlign(TextView::MIDDLE);
+  viewerButton->setContentView(viewerButtonText);
+  viewerButton->setBackgroundColors(
+      Color(31, 51, 74, 216), Color(43, 70, 100, 228),
+      Color(58, 93, 132, 236));
+  viewerButton->setBorderColors(Color(106, 153, 205, 255),
+                                Color(135, 181, 229, 255),
+                                Color(167, 209, 248, 255));
+  viewerButton->setStyledBorderWidth(2);
+  viewerButton->setOnClickListener(
+      [this]() { openChartViewerForSelection(); });
+  right->addView(viewerButton);
+
   right->addView(replayButtonSlot);
   right->addView(replayStatusText);
 
@@ -1457,6 +1354,46 @@ void MainMenuScene::startSelectedChart() {
       0, true);
 }
 
+void MainMenuScene::openChartViewerForSelection() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.unavailable || record.meta.BmsPath.empty()) {
+    return;
+  }
+
+  std::optional<unsigned int> chartRandomSeed;
+  std::optional<std::string> chartRandomPrng;
+  std::optional<std::vector<int>> chartRandomValues;
+  if (auto *currentChart = selectedChart.load();
+      currentChart != nullptr &&
+      currentChart->Meta.BmsPath == record.meta.BmsPath) {
+    chartRandomSeed = currentChart->Meta.RandomSeed;
+    chartRandomPrng = currentChart->Meta.RandomPrng;
+    if (!currentChart->Meta.RandomValues.empty()) {
+      chartRandomValues = currentChart->Meta.RandomValues;
+    }
+  }
+
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+  context.sceneManager->changeScene(
+      new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
+                           chartRandomValues),
+      true);
+}
+
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   replaySummaries.clear();
   selectedReplayIndex = -1;
@@ -1494,8 +1431,8 @@ void MainMenuScene::buildPlayOptionsModal() {
       (kModalPanelWidth - kModalPanelPadding * 2.0f - kModalGridGap * 3.0f) /
       4.0f;
 
-  playOptionsModalRoot = new ModalRootView(0, 0, rendering::window_width,
-                                           rendering::window_height);
+  playOptionsModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                                 rendering::window_height);
   playOptionsModalRoot->setPositionType(YGPositionTypeAbsolute);
   playOptionsModalRoot->setPosition(Edge::Left, 0);
   playOptionsModalRoot->setPosition(Edge::Top, 0);
@@ -1632,8 +1569,8 @@ void MainMenuScene::buildReplayModal() {
       kModalPanelWidth - kModalPanelPadding * 2.0f;
   constexpr float kModalContentHeight = 418.0f;
 
-  replayModalRoot = new ModalRootView(0, 0, rendering::window_width,
-                                      rendering::window_height);
+  replayModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                            rendering::window_height);
   replayModalRoot->setPositionType(YGPositionTypeAbsolute);
   replayModalRoot->setPosition(Edge::Left, 0);
   replayModalRoot->setPosition(Edge::Top, 0);
@@ -1676,44 +1613,10 @@ void MainMenuScene::buildReplayModal() {
       ->setWidth(kModalContentWidth)
       ->setHeight(kModalContentHeight)
       ->setGap(10);
-  replayListView = new RecyclerView<ReplaySummary>(
-      [](const ReplaySummary &a, const ReplaySummary &b) {
-        return a.id == b.id;
-      });
-  replayListView->itemHeight = 74;
-  replayListView->onCreateView = [](const ReplaySummary &) {
-    return new ReplayListItemView();
-  };
-  replayListView->onBind = [](View *view, const ReplaySummary &item, int,
-                              bool isSelected) {
-    auto *itemView = dynamic_cast<ReplayListItemView *>(view);
-    if (itemView == nullptr) {
-      return;
-    }
-    itemView->setSummary(item);
-    if (isSelected) {
-      itemView->onSelected();
-    } else {
-      itemView->onUnselected();
-    }
-  };
-  replayListView->onSelected = [this](const ReplaySummary &, int idx) {
-    if (selectedReplayIndex >= 0 && replayListView != nullptr &&
-        selectedReplayIndex < replayListView->size()) {
-      if (auto *oldView = replayListView->getViewByIndex(selectedReplayIndex)) {
-        oldView->onUnselected();
-      }
-    }
+  replayListView = new ReplaySummaryListView();
+  replayListView->onSelectionChanged = [this](int idx) {
     selectedReplayIndex = idx;
-    if (auto *newView = replayListView->getViewByIndex(idx)) {
-      newView->onSelected();
-    }
     refreshReplayModalActions();
-  };
-  replayListView->onUnselected = [this](const ReplaySummary &, int idx) {
-    if (auto *view = replayListView->getViewByIndex(idx)) {
-      view->onUnselected();
-    }
   };
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
@@ -1848,20 +1751,14 @@ void MainMenuScene::buildReplayModal() {
       replayListContent->setVisible(true);
       const int previousSelection = selectedReplayIndex;
       const float previousScrollOffset = replayListView->scrollOffset;
-      replayListView->setItems(replaySummaries);
+      replayListView->setReplaySummaries(replaySummaries);
       replayListView->scrollOffset = previousScrollOffset;
       selectedReplayIndex =
           previousSelection >= 0 &&
                   previousSelection < static_cast<int>(replaySummaries.size())
               ? previousSelection
               : -1;
-      replayListView->selectedIndex = selectedReplayIndex;
-      if (selectedReplayIndex >= 0) {
-        if (auto *selectedView =
-                replayListView->getViewByIndex(selectedReplayIndex)) {
-          selectedView->onSelected();
-        }
-      }
+      replayListView->restoreSelection(selectedReplayIndex);
       refreshReplayModalActions();
       return;
     }
@@ -1927,7 +1824,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayListContent->setVisible(true);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(false);
-  replayListView->setItems(replaySummaries);
+  replayListView->setReplaySummaries(replaySummaries);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayModalActions();

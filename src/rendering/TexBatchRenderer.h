@@ -24,6 +24,9 @@ public:
                  float v0, float u1, float v1,
                  bgfx::TextureHandle texture);
   void setSubmitDepth(uint32_t depth) { submitDepth = depth; }
+  void setSubmitView(bgfx::ViewId viewId) { submitView = viewId; }
+  void setScissor(int x, int y, int width, int height);
+  void clearScissor();
 
   void flush();
   [[nodiscard]] uint32_t getRectCount() const { return rectCount; }
@@ -36,6 +39,12 @@ private:
   bgfx::TextureHandle currentTexture = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
   uint32_t submitDepth = 0;
+  bgfx::ViewId submitView = rendering::main_view;
+  bool hasScissor = false;
+  int scissorX = 0;
+  int scissorY = 0;
+  int scissorWidth = -1;
+  int scissorHeight = -1;
   uint32_t rectCount = 0;
   uint32_t flushCount = 0;
   uint32_t submitCount = 0;

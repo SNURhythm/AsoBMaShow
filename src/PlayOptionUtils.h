@@ -28,6 +28,79 @@ inline constexpr std::array<const char *, 10> kPlayOptions = {
     "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
     "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
 
+inline std::string normalizeLaneAssignNotation(std::string notation) {
+  notation.erase(notation.begin(),
+                 std::find_if(notation.begin(), notation.end(),
+                              [](unsigned char c) {
+                                return std::isspace(c) == 0;
+                              }));
+  notation.erase(
+      std::find_if(notation.rbegin(), notation.rend(), [](unsigned char c) {
+        return std::isspace(c) == 0;
+      }).base(),
+      notation.end());
+
+  std::transform(notation.begin(), notation.end(), notation.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::toupper(c));
+                 });
+
+  constexpr std::array<std::string_view, 4> prefixes = {
+      "ASSIGN:", "ASSIGN-", "MANUAL:", "MANUAL-"};
+  for (std::string_view prefix : prefixes) {
+    if (notation.rfind(prefix, 0) == 0) {
+      notation.erase(0, prefix.size());
+      break;
+    }
+  }
+
+  std::string result;
+  result.reserve(notation.size());
+  bool hasDigit = false;
+  for (unsigned char c : notation) {
+    if (std::isspace(c) || c == '-' || c == '_' || c == '/' || c == ':') {
+      continue;
+    }
+    const char upper = static_cast<char>(std::toupper(c));
+    hasDigit = hasDigit || (upper >= '1' && upper <= '9');
+    result.push_back(upper);
+  }
+  return hasDigit ? result : "";
+}
+
+inline std::optional<std::string>
+laneAssignNotationFromOption(const std::string &option) {
+  const std::string normalized = normalizeLaneAssignNotation(option);
+  if (normalized.empty()) {
+    return std::nullopt;
+  }
+  for (char c : normalized) {
+    if (c != 'S' && c != 'L' && c != 'R' && (c < '1' || c > '9') &&
+        (c < 'A' || c > 'E')) {
+      return std::nullopt;
+    }
+  }
+  return normalized;
+}
+
+inline std::string makeLaneAssignOption(const std::string &notation) {
+  const auto normalized = laneAssignNotationFromOption(notation);
+  return normalized.has_value() ? "ASSIGN:" + *normalized : "NORMAL";
+}
+
+inline bool validateLaneAssignOption(const bms_parser::ChartMeta &meta,
+                                     const std::string &option,
+                                     std::string *error = nullptr) {
+  const auto notation = laneAssignNotationFromOption(option);
+  if (!notation.has_value()) {
+    if (error != nullptr) {
+      *error = "Invalid lane assign notation.";
+    }
+    return false;
+  }
+  return bms_parser::ValidateLaneAssignNotation(meta, *notation, error);
+}
+
 inline std::string normalizePlayOption(std::string option) {
   option.erase(option.begin(),
                std::find_if(option.begin(), option.end(), [](unsigned char c) {
@@ -53,17 +126,11 @@ inline std::string normalizePlayOption(std::string option) {
       return option;
     }
   }
-  return "NORMAL";
-}
-
-inline std::string nextPlayOption(const std::string &option) {
-  const std::string normalized = normalizePlayOption(option);
-  for (size_t i = 0; i < kPlayOptions.size(); ++i) {
-    if (normalized == kPlayOptions[i]) {
-      return kPlayOptions[(i + 1) % kPlayOptions.size()];
-    }
+  if (const auto notation = laneAssignNotationFromOption(option);
+      notation.has_value()) {
+    return "ASSIGN:" + *notation;
   }
-  return kPlayOptions.front();
+  return "NORMAL";
 }
 
 inline bool isNormalPlayOption(const std::string &option) {
@@ -75,6 +142,12 @@ formatPlayOptionLabel(const std::optional<std::string> &option,
                       const std::optional<long long> &seed = std::nullopt,
                       const std::optional<std::string> &option2 = std::nullopt,
                       const std::optional<long long> &seed2 = std::nullopt) {
+  if (option.has_value()) {
+    if (const auto assign = laneAssignNotationFromOption(*option);
+        assign.has_value()) {
+      return "ASSIGN " + *assign;
+    }
+  }
   const std::string normalizedOption =
       option.has_value() ? normalizePlayOption(*option) : "NORMAL";
   const std::string normalizedOption2 =
@@ -107,10 +180,20 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
                         std::optional<long long> seed, int player,
                         std::optional<std::string> &appliedOption,
                         std::optional<long long> &appliedSeed,
-                        std::string_view logContext = "play option") {
+                        std::string_view logContext = "play option",
+                        std::vector<int> *appliedLaneOrder = nullptr) {
   const std::string normalized = normalizePlayOption(option);
   if (normalized.empty() || normalized == "NORMAL") {
     return true;
+  }
+  if (laneAssignNotationFromOption(normalized).has_value()) {
+    std::string error;
+    if (!validateLaneAssignOption(chart.Meta, normalized, &error)) {
+      SDL_Log("Invalid %.*s modifier %s: %s",
+              static_cast<int>(logContext.size()), logContext.data(),
+              normalized.c_str(), error.c_str());
+      return false;
+    }
   }
 
   auto modifier = bms_parser::CreatePlayOptionModifier(
@@ -124,7 +207,12 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
 
   modifier->Modify(chart);
   appliedOption = modifier->Name();
-  appliedSeed = modifier->GetSeed();
+  appliedSeed = laneAssignNotationFromOption(*appliedOption).has_value()
+                    ? std::nullopt
+                    : std::optional<long long>(modifier->GetSeed());
+  if (appliedLaneOrder != nullptr) {
+    *appliedLaneOrder = modifier->GetLaneOrder(chart.Meta);
+  }
   return true;
 }
 
@@ -154,6 +242,7 @@ applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
     return {};
   }
   if (chart.Meta.IsDP &&
+      !laneAssignNotationFromOption(info.option.value_or("")).has_value() &&
       !applyPlayOptionModifier(chart, option, std::nullopt, 1, info.option2,
                                info.seed2)) {
     return {};

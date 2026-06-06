@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 static void drawRect(float x, float y, float width, float height, Color color) {
   static const bgfx::ProgramHandle kSimpleProgram =
@@ -60,7 +61,8 @@ static void drawRect(float x, float y, float width, float height, Color color) {
 ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
                          const RhythmState &state, const ReplayData *replay,
-                         bool shouldSaveScore, const ReplayData *retrySource)
+                         bool shouldSaveScore, const ReplayData *retrySource,
+                         ResultPracticeOptions practiceOptions)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -68,8 +70,10 @@ ResultScene::ResultScene(ApplicationContext &context,
                     ? std::optional<ReplayData>(*retrySource)
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
                                          : std::nullopt)),
+      practiceOptions(std::move(practiceOptions)),
       shouldSaveScore(shouldSaveScore),
-      replayResult(!shouldSaveScore && retrySource != nullptr) {
+      replayResult(!shouldSaveScore && retrySource != nullptr &&
+                   !this->practiceOptions.enabled) {
   skin = new DefaultSkin();
 }
 
@@ -129,6 +133,8 @@ void ResultScene::addRetryButtons() {
 
   if (replayResult) {
     retryRow->addView(makeButton("Replay", true, true));
+  } else if (practiceOptions.enabled) {
+    retryRow->addView(makeButton("Retry", true, false));
   } else {
     retryRow->addView(makeButton("Retry", false, false));
     retryRow->addView(makeButton("Retry Same", true, false));
@@ -146,6 +152,14 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.randomPrng = meta.RandomPrng;
     retrySource.randomValues = meta.RandomValues;
   }
+  if (practiceOptions.enabled) {
+    retrySource.playOption = practiceOptions.playOption;
+    retrySource.playOptionSeed = practiceOptions.playOptionSeed;
+    retrySource.playOption2 = practiceOptions.playOption2;
+    retrySource.playOption2Seed = practiceOptions.playOption2Seed;
+    retrySource.initialGaugeType = practiceOptions.gaugeType;
+    retrySource.gaugeAutoShift = practiceOptions.gaugeAutoShift;
+  }
 
   context.jukebox.stop();
   defer(
@@ -158,12 +172,20 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         StartOptions options;
-        options.startPosition = 0;
-        options.autoKeySound = !context.settings.inputKeysoundEnabled;
+        options.startPosition =
+            practiceOptions.enabled ? practiceOptions.startPosition : 0;
+        options.autoKeySound =
+            practiceOptions.enabled ? practiceOptions.autoKeySound
+                                    : !context.settings.inputKeysoundEnabled;
         options.autoPlay = false;
         options.gaugeType = retrySource.initialGaugeType;
         options.gaugeAutoShift = retrySource.gaugeAutoShift;
         options.ownsChart = true;
+        if (practiceOptions.enabled) {
+          options.practiceMode = true;
+          options.practiceLeadInMicros = practiceOptions.leadInMicros;
+          options.returnScene = practiceOptions.returnScene;
+        }
 
         if (retrySource.playOption.has_value()) {
           if (samePattern &&
@@ -211,6 +233,15 @@ void ResultScene::startRetry(bool samePattern) {
         return false;
       },
       0, true);
+}
+
+void ResultScene::exitResult() {
+  context.jukebox.stop();
+  if (practiceOptions.enabled && practiceOptions.returnScene != nullptr) {
+    context.sceneManager->changeScene(practiceOptions.returnScene, false);
+    return;
+  }
+  context.sceneManager->changeScene("MainMenu");
 }
 
 void ResultScene::startReplay() {
@@ -264,6 +295,12 @@ void ResultScene::init() {
   ResultSkinData data = {&resultState, &meta, &context};
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();
+
+  if (auto *backButton =
+          dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
+      backButton != nullptr) {
+    backButton->setOnClickListener([this]() { exitResult(); });
+  }
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
