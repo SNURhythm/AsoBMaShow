@@ -369,14 +369,15 @@ void removeActiveSoundAt(AudioCallbackState &state, size_t index) {
 }
 
 bool appendActiveSound(AudioCallbackState &state, SoundData *soundData,
-                       ma_uint32 outputOffsetFrames) {
-  if (soundData == nullptr || state.playingSoundCount >= kMaxActiveSounds) {
+                       ma_uint32 outputOffsetFrames, size_t startFrame = 0) {
+  if (soundData == nullptr || startFrame >= soundData->resampledFrameCount ||
+      state.playingSoundCount >= kMaxActiveSounds) {
     return false;
   }
   soundData->playing = true;
   state.playingSounds[state.playingSoundCount++] = {
       .soundData = soundData,
-      .currentFrame = 0,
+      .currentFrame = startFrame,
       .outputOffsetFrames = outputOffsetFrames,
   };
   return true;
@@ -433,12 +434,13 @@ void drainAudioCommands(AudioCallbackState &state) {
         state.commandQueue[readCursor % kAudioCommandQueueSize];
     switch (command.type) {
     case AudioCommandType::PlayNow:
-      appendActiveSound(state, command.soundData, 0);
+      appendActiveSound(state, command.soundData, 0, command.startFrame);
       break;
     case AudioCommandType::Schedule:
       insertScheduledSound(state, {.soundData = command.soundData,
                                    .startMicros = command.startMicros,
-                                   .sequence = command.sequence});
+                                   .sequence = command.sequence,
+                                   .startFrame = command.startFrame});
       break;
     case AudioCommandType::StopAll:
       clearCallbackSounds(state);
@@ -480,7 +482,8 @@ void activateScheduledSounds(AudioCallbackState &state,
     if (!isDue) {
       break;
     }
-    appendActiveSound(state, scheduledSound.soundData, outputOffsetFrames);
+    appendActiveSound(state, scheduledSound.soundData, outputOffsetFrames,
+                      scheduledSound.startFrame);
   }
 
   if (scheduledSoundsToRemove == 0) {
@@ -885,7 +888,7 @@ bool AudioWrapper::loadSound(const path_t &path,
   auto soundData = std::make_shared<SoundData>();
   bool result = decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
   if (!result) {
-    SDL_Log("Failed to decode audio file %ls", path.c_str());
+    SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
   }
   if (isCancelled)
@@ -961,10 +964,12 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
 
 bool AudioWrapper::appendScheduledSound(SoundData *soundData,
                                         long long startMicros,
-                                        uint64_t sequence) {
+                                        uint64_t sequence,
+                                        size_t startFrame) {
   return insertScheduledSound(callbackState, {.soundData = soundData,
                                               .startMicros = startMicros,
-                                              .sequence = sequence});
+                                              .sequence = sequence,
+                                              .startFrame = startFrame});
 }
 
 void AudioWrapper::clearCallbackState() {
@@ -973,7 +978,7 @@ void AudioWrapper::clearCallbackState() {
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
 }
 
-bool AudioWrapper::playSound(const path_t &path) {
+bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
   const auto indexIt = soundDataIndexMap.find(path);
@@ -983,12 +988,23 @@ bool AudioWrapper::playSound(const path_t &path) {
   }
 
   auto &soundData = soundDataList[indexIt->second];
+  const long long clampedOffsetMicros = std::max(0LL, startOffsetMicros);
+  const size_t startFrame = static_cast<size_t>(
+      std::min<long long>(
+          static_cast<long long>(soundData->resampledFrameCount),
+          clampedOffsetMicros *
+              static_cast<long long>(
+                  currentSampleRate.load(std::memory_order_acquire)) /
+              1000000LL));
+  if (startFrame >= soundData->resampledFrameCount) {
+    return false;
+  }
 
   bool shouldStartBackend = false;
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     if (backend && !backend->isStarted()) {
-      if (!appendActiveSound(callbackState, soundData.get(), 0)) {
+      if (!appendActiveSound(callbackState, soundData.get(), 0, startFrame)) {
         SDL_Log("Too many active sounds; dropping %s",
                 path_t_to_utf8(path).c_str());
         return false;
@@ -996,7 +1012,8 @@ bool AudioWrapper::playSound(const path_t &path) {
       shouldStartBackend = true;
     } else if (!enqueueCallbackCommand(
                    callbackState, {.type = AudioCommandType::PlayNow,
-                                   .soundData = soundData.get()})) {
+                                   .soundData = soundData.get(),
+                                   .startFrame = startFrame})) {
       SDL_Log("Audio command queue full; dropping %s",
               path_t_to_utf8(path).c_str());
       return false;
@@ -1008,6 +1025,25 @@ bool AudioWrapper::playSound(const path_t &path) {
   }
 
   return true;
+}
+
+std::optional<long long>
+AudioWrapper::getSoundDurationMicros(const path_t &path) const {
+  std::lock_guard<std::mutex> lock(soundDataListMutex);
+
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
+    return std::nullopt;
+  }
+
+  const auto &soundData = soundDataList[indexIt->second];
+  const int sampleRate = currentSampleRate.load(std::memory_order_acquire);
+  if (soundData == nullptr || sampleRate <= 0) {
+    return std::nullopt;
+  }
+  return static_cast<long long>(
+      static_cast<double>(soundData->resampledFrameCount) * 1000000.0 /
+      static_cast<double>(sampleRate));
 }
 
 bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {

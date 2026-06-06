@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 // Simple Biquad Filter
@@ -107,6 +108,7 @@ struct ScheduledSound {
   SoundData *soundData;
   long long startMicros;
   uint64_t sequence;
+  size_t startFrame;
 };
 
 enum class AudioCommandType : uint8_t { PlayNow, Schedule, StopAll };
@@ -116,6 +118,7 @@ struct AudioCommand {
   SoundData *soundData = nullptr;
   long long startMicros = 0;
   uint64_t sequence = 0;
+  size_t startFrame = 0;
 };
 
 constexpr size_t kMaxActiveSounds = 512;
@@ -156,8 +159,9 @@ public:
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
-  bool playSound(const path_t &path);
+  bool playSound(const path_t &path, long long startOffsetMicros = 0);
   bool scheduleSound(const path_t &path, long long startMicros);
+  std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   void seekClock(long long micros);
   void startDevice();
@@ -182,7 +186,7 @@ private:
   std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
-  std::mutex soundDataListMutex;
+  mutable std::mutex soundDataListMutex;
   std::vector<float> mixBuffer;
   Biquad bassFilter;
   Biquad trebleFilter;
@@ -200,6 +204,6 @@ private:
 
   void updateCurrentSampleRate();
   bool appendScheduledSound(SoundData *soundData, long long startMicros,
-                            uint64_t sequence);
+                            uint64_t sequence, size_t startFrame = 0);
   void clearCallbackState();
 };

@@ -52,6 +52,10 @@ private:
   TextView *statusText = nullptr;
   TextView *randomSummaryText = nullptr;
   TextView *zoomText = nullptr;
+  TextView *selectionText = nullptr;
+  TextView *listenPauseText = nullptr;
+  Button *listenPauseButton = nullptr;
+  Button *listenStopButton = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
 
@@ -62,6 +66,8 @@ private:
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
   size_t randomDrawerPage = 0;
+  bool listenActive = false;
+  bool listenAudioLoaded = false;
 
   void initView();
   void rebuildRandomDrawer();
@@ -71,6 +77,13 @@ private:
   void setRandomValue(size_t index, int value);
   void refreshHeaderText();
   void updateZoomText();
+  void updateSelectionText();
+  void updateListenControls();
+  void onCanvasSelectionChanged(long long timeMicros);
+  void startListeningFromSelection();
+  void toggleListenPause();
+  void stopListening();
+  void startPracticeFromSelection();
   void goBack();
 
   [[nodiscard]] std::vector<RandomOption> scanActiveRandomOptions() const;

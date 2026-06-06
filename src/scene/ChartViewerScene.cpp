@@ -1,6 +1,7 @@
 #include "ChartViewerScene.h"
 
 #include "../PlayOptionUtils.h"
+#include "../path.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
@@ -9,6 +10,7 @@
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
 #include "../view/View.h"
+#include "play/GamePlayScene.h"
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -18,6 +20,7 @@
 #include <atomic>
 #include <cmath>
 #include <cctype>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -43,6 +46,9 @@ constexpr float kMarkerLabelWidth = 74.0f;
 constexpr float kMarkerLabelHeight = 18.0f;
 constexpr float kChartContentTopPadding = 48.0f;
 constexpr float kChartContentBottomPadding = 64.0f;
+constexpr float kCursorTapSlop = 10.0f;
+constexpr long long kListenStopTailMicros = 1000000LL;
+constexpr long long kPracticeLeadInMicros = 3000000LL;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -50,6 +56,30 @@ struct SafeAreaInsets {
   int bottom = 0;
   int right = 0;
 };
+
+struct GaugeSelection {
+  GaugeType type = GaugeType::Normal;
+  bool autoShift = false;
+};
+
+GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
+  if (id == "gas") {
+    return {.type = GaugeType::ExHard, .autoShift = true};
+  }
+  if (id == "assisted_easy") {
+    return {.type = GaugeType::AssistedEasy};
+  }
+  if (id == "easy") {
+    return {.type = GaugeType::Easy};
+  }
+  if (id == "hard") {
+    return {.type = GaugeType::Hard};
+  }
+  if (id == "exhard") {
+    return {.type = GaugeType::ExHard};
+  }
+  return {.type = GaugeType::Normal};
+}
 
 SafeAreaInsets getSafeAreaInsetsUi() {
   SafeAreaInsets insets;
@@ -107,6 +137,18 @@ std::string joinRandomValueRange(const std::vector<int> &values, size_t start,
     }
     stream << values[i];
   }
+  return stream.str();
+}
+
+std::string formatMicrosTime(long long micros) {
+  micros = std::max(0LL, micros);
+  const long long totalMillis = micros / 1000LL;
+  const long long minutes = totalMillis / 60000LL;
+  const long long seconds = (totalMillis / 1000LL) % 60LL;
+  const long long millis = totalMillis % 1000LL;
+  std::ostringstream stream;
+  stream << minutes << ":" << std::setw(2) << std::setfill('0') << seconds
+         << "." << std::setw(3) << std::setfill('0') << millis;
   return stream.str();
 }
 
@@ -195,6 +237,8 @@ public:
   void setChart(bms_parser::Chart *newChart) {
     chart = newChart;
     markerGlyphTextures.clear();
+    selectedTimeMicros.reset();
+    playbackActive = false;
     rebuildLayout();
   }
 
@@ -204,6 +248,25 @@ public:
   }
 
   [[nodiscard]] float getZoom() const { return zoom; }
+
+  void setSelectionListener(std::function<void(long long)> listener) {
+    selectionListener = std::move(listener);
+  }
+
+  [[nodiscard]] bool hasSelectedTime() const {
+    return selectedTimeMicros.has_value();
+  }
+
+  [[nodiscard]] long long getSelectedTimeMicros() const {
+    return selectedTimeMicros.value_or(0LL);
+  }
+
+  void setPlaybackTime(long long timeMicros, bool active) {
+    playbackTimeMicros = std::max(0LL, timeMicros);
+    playbackActive = active;
+  }
+
+  void clearPlaybackTime() { playbackActive = false; }
 
 protected:
   struct TouchPoint {
@@ -225,6 +288,7 @@ protected:
     drawMarkers();
     drawLongNotes();
     drawNotes();
+    drawCursorBars();
     batch.end();
 
     ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
@@ -267,6 +331,9 @@ protected:
       mouseDragging = true;
       lastMouseX = uiX;
       lastMouseY = uiY;
+      mouseStartX = uiX;
+      mouseStartY = uiY;
+      mouseDragDistance = 0.0f;
       return false;
     }
     case SDL_MOUSEMOTION: {
@@ -276,15 +343,28 @@ protected:
       int uiX = 0;
       int uiY = 0;
       mouseMotionToUi(event.motion, uiX, uiY);
-      scrollX -= static_cast<float>(uiX - lastMouseX) / screenZoom;
-      scrollY -= static_cast<float>(uiY - lastMouseY) / screenZoom;
+      const int dx = uiX - lastMouseX;
+      const int dy = uiY - lastMouseY;
+      scrollX -= static_cast<float>(dx) / screenZoom;
+      scrollY -= static_cast<float>(dy) / screenZoom;
       lastMouseX = uiX;
       lastMouseY = uiY;
+      mouseDragDistance =
+          std::max(mouseDragDistance,
+                   std::hypot(static_cast<float>(uiX - mouseStartX),
+                              static_cast<float>(uiY - mouseStartY)));
       clampScroll();
       return false;
     }
     case SDL_MOUSEBUTTONUP:
       if (event.button.button == SDL_BUTTON_LEFT && mouseDragging) {
+        int uiX = 0;
+        int uiY = 0;
+        mouseEventToUi(event.button, uiX, uiY);
+        if (mouseDragDistance <= kCursorTapSlop &&
+            containsPoint(static_cast<float>(uiX), static_cast<float>(uiY))) {
+          selectAtUiPoint(static_cast<float>(uiX), static_cast<float>(uiY));
+        }
         mouseDragging = false;
         return false;
       }
@@ -299,10 +379,15 @@ protected:
       const SDL_FingerID fingerId = event.tfinger.fingerId;
       activeTouches[fingerId] = {uiX, uiY};
       if (activeTouches.size() >= 2) {
+        touchGestureWasPinch = true;
         beginPinch();
       } else if (activeTouches.size() == 1) {
         pinchActive = false;
         dragTouchId = fingerId;
+        touchGestureWasPinch = false;
+        touchStartX = uiX;
+        touchStartY = uiY;
+        touchDragDistance = 0.0f;
       }
       return false;
     }
@@ -317,24 +402,41 @@ protected:
       const TouchPoint previous = touchIt->second;
       touchIt->second = {uiX, uiY};
       if (activeTouches.size() >= 2) {
+        touchGestureWasPinch = true;
         applyPinch();
       } else if (!pinchActive && event.tfinger.fingerId == dragTouchId) {
         scrollX -= (uiX - previous.x) / screenZoom;
         scrollY -= (uiY - previous.y) / screenZoom;
+        touchDragDistance =
+            std::max(touchDragDistance,
+                     std::hypot(uiX - touchStartX, uiY - touchStartY));
         clampScroll();
       }
       return false;
     }
     case SDL_FINGERUP:
       if (activeTouches.erase(event.tfinger.fingerId) > 0) {
+        float uiX = 0.0f;
+        float uiY = 0.0f;
+        rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+        if (!touchGestureWasPinch && event.tfinger.fingerId == dragTouchId &&
+            touchDragDistance <= kCursorTapSlop && containsPoint(uiX, uiY)) {
+          selectAtUiPoint(uiX, uiY);
+        }
         if (activeTouches.size() >= 2) {
+          touchGestureWasPinch = true;
           beginPinch();
         } else if (activeTouches.size() == 1) {
           pinchActive = false;
           dragTouchId = activeTouches.begin()->first;
+          touchGestureWasPinch = false;
+          touchStartX = activeTouches.begin()->second.x;
+          touchStartY = activeTouches.begin()->second.y;
+          touchDragDistance = 0.0f;
         } else {
           pinchActive = false;
           dragTouchId = -1;
+          touchGestureWasPinch = false;
         }
         return false;
       }
@@ -392,6 +494,12 @@ private:
     float u1 = 1.0f;
   };
 
+  struct CursorDrawPosition {
+    int column = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+  };
+
   bms_parser::Chart *chart = nullptr;
   rendering::SimpleBatchRenderer batch;
   rendering::TexBatchRenderer markerTextBatch;
@@ -399,6 +507,7 @@ private:
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<MeasureLayout> measureLayouts;
   std::vector<ColumnLayout> columnLayouts;
+  std::vector<const bms_parser::TimeLine *> orderedTimelines;
   std::unordered_map<const bms_parser::TimeLine *, float> timelineY;
   std::unordered_map<const bms_parser::TimeLine *, size_t> timelineMeasure;
   std::vector<std::unique_ptr<TextView>> measureLabels;
@@ -415,6 +524,7 @@ private:
   float contentRightMargin = 72.0f;
   float contentWidth = 0.0f;
   float contentHeight = 0.0f;
+  double totalBeatLength = 0.0;
   float scrollX = 0.0f;
   float scrollY = 0.0f;
   float screenZoom = 1.0f;
@@ -422,18 +532,30 @@ private:
   bool mouseDragging = false;
   int lastMouseX = 0;
   int lastMouseY = 0;
+  int mouseStartX = 0;
+  int mouseStartY = 0;
+  float mouseDragDistance = 0.0f;
   std::unordered_map<SDL_FingerID, TouchPoint> activeTouches;
   SDL_FingerID dragTouchId = -1;
   bool pinchActive = false;
+  bool touchGestureWasPinch = false;
+  float touchStartX = 0.0f;
+  float touchStartY = 0.0f;
+  float touchDragDistance = 0.0f;
   float pinchStartDistance = 1.0f;
   float pinchStartScreenZoom = 1.0f;
   float pinchAnchorContentX = 0.0f;
   float pinchAnchorContentY = 0.0f;
+  std::optional<long long> selectedTimeMicros;
+  long long playbackTimeMicros = 0;
+  bool playbackActive = false;
+  std::function<void(long long)> selectionListener;
 
   void rebuildLayout() {
     layoutDirty = false;
     measureLayouts.clear();
     columnLayouts.clear();
+    orderedTimelines.clear();
     timelineY.clear();
     timelineMeasure.clear();
     measureLabels.clear();
@@ -443,6 +565,7 @@ private:
     if (chart == nullptr) {
       contentWidth = 0.0f;
       contentHeight = 0.0f;
+      totalBeatLength = 0.0;
       return;
     }
 
@@ -473,6 +596,10 @@ private:
                              kChartContentTopPadding -
                              kChartContentBottomPadding);
     const float baseMeasureHeight = 136.0f * zoom;
+    totalBeatLength = 0.0;
+    for (const auto *measure : chart->Measures) {
+      totalBeatLength += measure == nullptr ? 1.0 : measure->Scale;
+    }
 
     std::vector<float> measureHeights;
     measureHeights.reserve(chart->Measures.size());
@@ -561,6 +688,7 @@ private:
         const float y =
             layout.y + layout.height - static_cast<float>(localBeat) *
                                             layout.height;
+        orderedTimelines.push_back(timeline);
         timelineY[timeline] = y;
         timelineMeasure[timeline] = layoutIndex;
         appendMarkerLabel(timeline);
@@ -690,6 +818,229 @@ private:
         drawRectClip(laneX, y + 2.0f, laneAreaWidth, 2.0f, scrollColor);
       }
     }
+  }
+
+  void drawCursorBars() {
+    if (selectedTimeMicros.has_value()) {
+      drawCursorBar(*selectedTimeMicros, Color(255, 220, 92, 235), 4.0f);
+    }
+    if (playbackActive) {
+      drawCursorBar(playbackTimeMicros, Color(91, 218, 236, 242), 3.0f);
+    }
+  }
+
+  void drawCursorBar(long long timeMicros, Color color, float thickness) {
+    CursorDrawPosition position;
+    if (!timeToCursorPosition(timeMicros, position)) {
+      return;
+    }
+    const float laneX = position.x + gutterWidth;
+    drawRectClip(laneX, position.y - thickness * 0.5f, laneAreaWidth,
+                 thickness, color.toABGR());
+    drawRectClip(position.x + gutterWidth - 6.0f,
+                 position.y - thickness * 1.4f, 6.0f, thickness * 2.8f,
+                 color.toABGR());
+  }
+
+  void selectAtUiPoint(float uiX, float uiY) {
+    if (chart == nullptr) {
+      return;
+    }
+
+    const float contentX = uiToContentX(uiX);
+    const float contentY = uiToContentY(uiY);
+    for (const auto &layout : measureLayouts) {
+      const float laneLeft = layout.x;
+      const float laneRight = layout.x + gutterWidth + laneAreaWidth;
+      if (contentX < laneLeft || contentX > laneRight ||
+          contentY < layout.y || contentY > layout.y + layout.height ||
+          layout.scale <= 0.0) {
+        continue;
+      }
+
+      const double local =
+          std::clamp(static_cast<double>(layout.y + layout.height - contentY) /
+                         static_cast<double>(layout.height),
+                     0.0, 1.0);
+      const double beatPosition = layout.beatStart + layout.scale * local;
+      const long long timeMicros = beatToTimeMicros(beatPosition);
+      selectedTimeMicros = std::max(0LL, timeMicros);
+      playbackActive = false;
+      if (selectionListener != nullptr) {
+        selectionListener(*selectedTimeMicros);
+      }
+      return;
+    }
+  }
+
+  bool timeToCursorPosition(long long timeMicros,
+                            CursorDrawPosition &position) const {
+    if (measureLayouts.empty()) {
+      return false;
+    }
+    return beatToCursorPosition(timeToBeatPosition(timeMicros), position);
+  }
+
+  bool beatToCursorPosition(double beatPosition,
+                            CursorDrawPosition &position) const {
+    if (measureLayouts.empty()) {
+      return false;
+    }
+
+    constexpr double epsilon = 0.000001;
+    for (const auto &layout : measureLayouts) {
+      if (layout.scale <= 0.0) {
+        continue;
+      }
+      const double start = layout.beatStart;
+      const double end = layout.beatStart + layout.scale;
+      if (beatPosition + epsilon < start || beatPosition - epsilon > end) {
+        continue;
+      }
+      const double local =
+          std::clamp((beatPosition - start) / layout.scale, 0.0, 1.0);
+      position.column = layout.column;
+      position.x = layout.x;
+      position.y = layout.y + layout.height -
+                   static_cast<float>(local) * layout.height;
+      return true;
+    }
+
+    const auto &fallback =
+        beatPosition < measureLayouts.front().beatStart ? measureLayouts.front()
+                                                        : measureLayouts.back();
+    const double local = beatPosition < fallback.beatStart ? 0.0 : 1.0;
+    position.column = fallback.column;
+    position.x = fallback.x;
+    position.y = fallback.y + fallback.height -
+                 static_cast<float>(local) * fallback.height;
+    return true;
+  }
+
+  double timeToBeatPosition(long long timeMicros) const {
+    if (orderedTimelines.empty()) {
+      return 0.0;
+    }
+
+    const long long clampedTime = std::max(0LL, timeMicros);
+    const auto *first = orderedTimelines.front();
+    if (clampedTime <= first->Timing) {
+      if (first->Timing <= 0 || first->BeatPosition <= 0.0) {
+        return first->BeatPosition;
+      }
+      return first->BeatPosition *
+             std::clamp(static_cast<double>(clampedTime) /
+                            static_cast<double>(first->Timing),
+                        0.0, 1.0);
+    }
+
+    for (size_t i = 1; i < orderedTimelines.size(); ++i) {
+      const auto *prev = orderedTimelines[i - 1];
+      const auto *current = orderedTimelines[i];
+      const long long stopEnd =
+          prev->Timing +
+          std::max(0LL, static_cast<long long>(prev->GetStopDuration()));
+      if (clampedTime <= stopEnd) {
+        return prev->BeatPosition;
+      }
+      if (clampedTime <= current->Timing) {
+        const long long duration = current->Timing - stopEnd;
+        if (duration <= 0) {
+          return current->BeatPosition;
+        }
+        const double progress =
+            std::clamp(static_cast<double>(clampedTime - stopEnd) /
+                           static_cast<double>(duration),
+                       0.0, 1.0);
+        return prev->BeatPosition +
+               (current->BeatPosition - prev->BeatPosition) * progress;
+      }
+    }
+
+    const auto *last = orderedTimelines.back();
+    const long long stopEnd =
+        last->Timing +
+        std::max(0LL, static_cast<long long>(last->GetStopDuration()));
+    if (clampedTime <= stopEnd) {
+      return last->BeatPosition;
+    }
+
+    const long long totalLength =
+        chart != nullptr ? std::max(chart->Meta.TotalLength, last->Timing)
+                         : last->Timing;
+    if (totalLength <= stopEnd || totalBeatLength <= last->BeatPosition) {
+      return last->BeatPosition;
+    }
+    const double progress =
+        std::clamp(static_cast<double>(clampedTime - stopEnd) /
+                       static_cast<double>(totalLength - stopEnd),
+                   0.0, 1.0);
+    return last->BeatPosition +
+           (totalBeatLength - last->BeatPosition) * progress;
+  }
+
+  long long beatToTimeMicros(double beatPosition) const {
+    if (orderedTimelines.empty()) {
+      return 0LL;
+    }
+
+    constexpr double epsilon = 0.000001;
+    const double clampedBeat =
+        std::clamp(beatPosition, 0.0, std::max(0.0, totalBeatLength));
+    const auto *first = orderedTimelines.front();
+    if (clampedBeat <= first->BeatPosition + epsilon) {
+      if (first->BeatPosition <= epsilon || first->Timing <= 0) {
+        return first->Timing;
+      }
+      const double progress =
+          std::clamp(clampedBeat / first->BeatPosition, 0.0, 1.0);
+      return static_cast<long long>(
+          std::llround(static_cast<double>(first->Timing) * progress));
+    }
+
+    for (size_t i = 1; i < orderedTimelines.size(); ++i) {
+      const auto *prev = orderedTimelines[i - 1];
+      const auto *current = orderedTimelines[i];
+      if (clampedBeat <= current->BeatPosition + epsilon) {
+        if (clampedBeat <= prev->BeatPosition + epsilon) {
+          return prev->Timing;
+        }
+        const long long stopEnd =
+            prev->Timing +
+            std::max(0LL, static_cast<long long>(prev->GetStopDuration()));
+        const double beatDistance = current->BeatPosition - prev->BeatPosition;
+        if (beatDistance <= epsilon) {
+          return current->Timing;
+        }
+        const double progress =
+            std::clamp((clampedBeat - prev->BeatPosition) / beatDistance, 0.0,
+                       1.0);
+        return static_cast<long long>(std::llround(
+            static_cast<double>(stopEnd) +
+            static_cast<double>(current->Timing - stopEnd) * progress));
+      }
+    }
+
+    const auto *last = orderedTimelines.back();
+    if (clampedBeat <= last->BeatPosition + epsilon) {
+      return last->Timing;
+    }
+    const long long stopEnd =
+        last->Timing +
+        std::max(0LL, static_cast<long long>(last->GetStopDuration()));
+    const long long totalLength =
+        chart != nullptr ? std::max(chart->Meta.TotalLength, last->Timing)
+                         : last->Timing;
+    const double beatDistance = totalBeatLength - last->BeatPosition;
+    if (beatDistance <= epsilon || totalLength <= stopEnd) {
+      return last->Timing;
+    }
+    const double progress =
+        std::clamp((clampedBeat - last->BeatPosition) / beatDistance, 0.0,
+                   1.0);
+    return static_cast<long long>(std::llround(
+        static_cast<double>(stopEnd) +
+        static_cast<double>(totalLength - stopEnd) * progress));
   }
 
   void renderLabels(RenderContext &context) {
@@ -1082,6 +1433,19 @@ EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
 
 void ChartViewerScene::update(float dt) {
   (void)dt;
+  if (listenActive && canvasView != nullptr) {
+    const long long rawTime = context.jukebox.getTimeMicros();
+    const long long displayTime =
+        rawTime + static_cast<long long>(context.settings.audioOffsetMs) *
+                      1000LL;
+    canvasView->setPlaybackTime(displayTime, true);
+    if (chart != nullptr &&
+        rawTime >= chart->Meta.TotalLength + kListenStopTailMicros) {
+      stopListening();
+    }
+    updateListenControls();
+  }
+
   const SafeAreaInsets safe = getSafeAreaInsetsUi();
   if (rootLayout != nullptr &&
       (lastLayoutWidth != rendering::window_width ||
@@ -1107,6 +1471,11 @@ void ChartViewerScene::update(float dt) {
 void ChartViewerScene::renderScene() {}
 
 void ChartViewerScene::cleanupScene() {
+  if (listenActive || listenAudioLoaded) {
+    context.jukebox.stop();
+    listenActive = false;
+    listenAudioLoaded = false;
+  }
   chart.reset();
   randomOptions.clear();
 }
@@ -1205,14 +1574,56 @@ void ChartViewerScene::initView() {
   backButton->setOnClickListener([this]() { goBack(); });
   header->addView(backButton);
 
+  auto *toolbar = new View();
+  toolbar->setHeight(64);
+  toolbar->setFlexDirection(FlexDirection::Row);
+  toolbar->setAlignItems(YGAlignCenter);
+  toolbar->setPadding(Edge::Left, safe.left + kHeaderPadding);
+  toolbar->setPadding(Edge::Right, safe.right + kHeaderPadding);
+  toolbar->setGap(12);
+  toolbar->setBackgroundColor(Color(13, 15, 17, 246));
+  toolbar->setBorderColor(Color(40, 46, 49, 255));
+  toolbar->setBorderWidth(1);
+
+  selectionText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  selectionText->setColor({206, 216, 214, 255});
+  selectionText->setVAlign(TextView::MIDDLE);
+  selectionText->setOverflow(TextView::TextOverflow::Hidden);
+  selectionText->setFlex(1);
+  selectionText->setHeight(42);
+  toolbar->addView(selectionText);
+
+  auto *listenButton = makeButton("Listen", 104, 19);
+  listenButton->setOnClickListener([this]() { startListeningFromSelection(); });
+  toolbar->addView(listenButton);
+
+  listenPauseButton = makeButton("Pause", 104, 18, &listenPauseText);
+  listenPauseButton->setOnClickListener([this]() { toggleListenPause(); });
+  listenPauseButton->setVisible(false);
+  toolbar->addView(listenPauseButton);
+
+  listenStopButton = makeButton("Stop", 92, 18);
+  listenStopButton->setOnClickListener([this]() { stopListening(); });
+  listenStopButton->setVisible(false);
+  toolbar->addView(listenStopButton);
+
+  auto *practiceButton = makeButton("Practice", 128, 18);
+  practiceButton->setOnClickListener([this]() { startPracticeFromSelection(); });
+  toolbar->addView(practiceButton);
+
   canvasView = new ChartCanvasView();
   canvasView->setFlex(1);
+  canvasView->setSelectionListener(
+      [this](long long timeMicros) { onCanvasSelectionChanged(timeMicros); });
 
   rootLayout->addView(header);
+  rootLayout->addView(toolbar);
   rootLayout->addView(canvasView);
   addView(rootLayout);
 
   updateZoomText();
+  updateSelectionText();
+  updateListenControls();
   refreshHeaderText();
   rebuildRandomDrawer();
   rootLayout->applyYogaLayout();
@@ -1436,6 +1847,11 @@ void ChartViewerScene::hideRandomDrawer() {
 
 void ChartViewerScene::parseAndRefresh(
     std::optional<std::vector<int>> requestedValues) {
+  stopListening();
+  if (listenAudioLoaded) {
+    context.jukebox.stop();
+    listenAudioLoaded = false;
+  }
   if (statusText != nullptr) {
     statusText->setText("Parsing...");
   }
@@ -1460,6 +1876,7 @@ void ChartViewerScene::parseAndRefresh(
       statusText->setText("Parse failed");
     }
     refreshHeaderText();
+    updateSelectionText();
     rebuildRandomDrawer();
     return;
   }
@@ -1476,6 +1893,7 @@ void ChartViewerScene::parseAndRefresh(
     statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
   }
   refreshHeaderText();
+  updateSelectionText();
   rebuildRandomDrawer();
 }
 
@@ -1574,7 +1992,223 @@ void ChartViewerScene::updateZoomText() {
                     "%");
 }
 
+void ChartViewerScene::updateSelectionText() {
+  if (selectionText == nullptr) {
+    return;
+  }
+  if (canvasView == nullptr || !canvasView->hasSelectedTime()) {
+    selectionText->setText("Tap the chart to place a cursor.");
+    return;
+  }
+
+  std::string text =
+      "Cursor " + formatMicrosTime(canvasView->getSelectedTimeMicros());
+  if (listenActive) {
+    text += " / Listening";
+  }
+  selectionText->setText(text);
+}
+
+void ChartViewerScene::updateListenControls() {
+  if (listenPauseButton != nullptr) {
+    listenPauseButton->setVisible(listenActive);
+  }
+  if (listenStopButton != nullptr) {
+    listenStopButton->setVisible(listenActive);
+  }
+  if (listenPauseText != nullptr && listenActive) {
+    listenPauseText->setText(context.jukebox.isPaused() ? "Resume" : "Pause");
+  }
+}
+
+void ChartViewerScene::onCanvasSelectionChanged(long long timeMicros) {
+  (void)timeMicros;
+  if (listenActive) {
+    stopListening();
+  }
+  updateSelectionText();
+}
+
+void ChartViewerScene::startListeningFromSelection() {
+  if (chart == nullptr || canvasView == nullptr ||
+      !canvasView->hasSelectedTime()) {
+    if (statusText != nullptr) {
+      statusText->setText("Set a cursor first");
+    }
+    return;
+  }
+
+  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  if (statusText != nullptr) {
+    statusText->setText(listenAudioLoaded ? "Seeking audio..."
+                                          : "Loading audio...");
+  }
+  listenActive = false;
+  canvasView->clearPlaybackTime();
+  updateListenControls();
+
+  defer(
+      [this, selectedTime]() {
+        if (chart == nullptr || canvasView == nullptr) {
+          return true;
+        }
+
+        std::atomic_bool cancelled = false;
+        if (!listenAudioLoaded) {
+          const bool previousVisuals = context.jukebox.getVisualsEnabled();
+          context.jukebox.stop();
+          context.jukebox.setVisualsEnabled(false);
+          context.jukebox.loadChart(*chart, true, cancelled);
+          context.jukebox.setVisualsEnabled(previousVisuals);
+          if (cancelled) {
+            if (statusText != nullptr) {
+              statusText->setText("Audio load cancelled");
+            }
+            updateListenControls();
+            return true;
+          }
+          listenAudioLoaded = true;
+        } else {
+          context.jukebox.stop();
+        }
+
+        context.jukebox.play();
+        context.jukebox.seek(std::max(0LL, selectedTime));
+        listenActive = true;
+        canvasView->setPlaybackTime(
+            selectedTime +
+                static_cast<long long>(context.settings.audioOffsetMs) *
+                    1000LL,
+            true);
+        if (statusText != nullptr && chart != nullptr) {
+          statusText->setText(std::to_string(chart->Meta.TotalNotes) +
+                              " notes");
+        }
+        updateSelectionText();
+        updateListenControls();
+        return true;
+      },
+      0, true);
+}
+
+void ChartViewerScene::toggleListenPause() {
+  if (!listenActive) {
+    return;
+  }
+  if (context.jukebox.isPaused()) {
+    context.jukebox.resume();
+  } else {
+    context.jukebox.pause();
+  }
+  updateSelectionText();
+  updateListenControls();
+}
+
+void ChartViewerScene::stopListening() {
+  if (listenActive) {
+    context.jukebox.stop();
+  }
+  listenActive = false;
+  if (canvasView != nullptr) {
+    canvasView->clearPlaybackTime();
+  }
+  updateSelectionText();
+  updateListenControls();
+}
+
+void ChartViewerScene::startPracticeFromSelection() {
+  if (chart == nullptr || canvasView == nullptr ||
+      !canvasView->hasSelectedTime()) {
+    if (statusText != nullptr) {
+      statusText->setText("Set a cursor first");
+    }
+    return;
+  }
+
+  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  const auto chartRandomSeed = chart->Meta.RandomSeed;
+  const auto chartRandomPrng = chart->Meta.RandomPrng;
+  const std::optional<std::vector<int>> chartRandomValues =
+      chart->Meta.RandomValues.empty()
+          ? std::nullopt
+          : std::optional<std::vector<int>>(chart->Meta.RandomValues);
+  const std::string playOption =
+      play_options::normalizePlayOption(context.settings.selectedPlayOption);
+  const GaugeSelection gaugeSelection =
+      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+
+  stopListening();
+  if (statusText != nullptr) {
+    statusText->setText("Preparing practice...");
+  }
+
+  defer(
+      [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
+       playOption, gaugeSelection, autoKeySound]() {
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> practiceChart;
+        try {
+          practiceChart =
+              play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
+                                       chartRandomPrng, chartRandomValues,
+                                       parseCancelled, "practice");
+        } catch (const std::exception &e) {
+          SDL_Log("Error parsing %s for practice: %s",
+                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+        }
+        if (practiceChart == nullptr || parseCancelled) {
+          if (statusText != nullptr) {
+            statusText->setText("Practice parse failed");
+          }
+          return true;
+        }
+
+        play_options::PlayOptionReplayInfo playInfo =
+            play_options::applySelectedPlayOptions(*practiceChart, playOption);
+        context.jukebox.stop();
+        context.jukebox.loadChart(*practiceChart, true, parseCancelled);
+        if (parseCancelled) {
+          if (statusText != nullptr) {
+            statusText->setText("Practice load cancelled");
+          }
+          return true;
+        }
+
+        auto *loadedChart = practiceChart.release();
+        if (statusText != nullptr && chart != nullptr) {
+          statusText->setText(std::to_string(chart->Meta.TotalNotes) +
+                              " notes");
+        }
+        context.sceneManager->changeScene(
+            new GamePlayScene(context, loadedChart,
+                              {
+                                  .startPosition =
+                                      static_cast<unsigned long long>(
+                                          std::max(0LL, selectedTime)),
+                                  .autoKeySound = autoKeySound,
+                                  .autoPlay = false,
+                                  .gaugeType = gaugeSelection.type,
+                                  .gaugeAutoShift = gaugeSelection.autoShift,
+                                  .playOption = playInfo.option,
+                                  .playOptionSeed = playInfo.seed,
+                                  .playOption2 = playInfo.option2,
+                                  .playOption2Seed = playInfo.seed2,
+                                  .ownsChart = true,
+                                  .practiceMode = true,
+                                  .practiceLeadInMicros =
+                                      static_cast<unsigned long long>(
+                                          kPracticeLeadInMicros),
+                                  .returnScene = this,
+                              }),
+            true);
+        return true;
+      },
+      0, true);
+}
+
 void ChartViewerScene::goBack() {
+  stopListening();
   context.sceneManager->changeScene("MainMenu", false);
 }
 
