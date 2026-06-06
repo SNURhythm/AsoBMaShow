@@ -12,10 +12,9 @@
 #include "../../view/TextView.h"
 #include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
+#include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include <bx/math.h>
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -65,28 +64,6 @@ struct ReplayGhostEvent {
   Judgement judgement = None;
 };
 
-struct JudgementIndicatorSample {
-  long long diffMicros = 0;
-  long long createdTimeMicros = 0;
-  Judgement judgement = None;
-};
-
-struct JudgementIndicatorLayout {
-  float x = 0.0f;
-  float centerY = 0.0f;
-  float width = 1.0f;
-  float barHeight = 0.05f;
-  float markerHeight = 0.3f;
-  float markerWidth = 0.02f;
-};
-
-struct AtomicJudgementIndicatorSample {
-  std::atomic<uint64_t> sequence{0};
-  std::atomic<long long> diffMicros{0};
-  std::atomic<long long> createdTimeMicros{0};
-  std::atomic<int> judgement{None};
-};
-
 class BMSRendererState {
 public:
   ~BMSRendererState() = default;
@@ -104,9 +81,6 @@ public:
   ~BMSRenderer();
 
 private:
-  static constexpr size_t kJudgementIndicatorAverageSampleCount = 20;
-  static constexpr size_t kJudgementIndicatorMaxVisibleSamples = 96;
-
   TextView *titleText = nullptr;
   TextView *judgeText = nullptr;
   TextView *scoreText = nullptr;
@@ -132,10 +106,7 @@ private:
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<ReplayGhostEvent> replayGhostEvents;
-  std::array<AtomicJudgementIndicatorSample,
-             kJudgementIndicatorMaxVisibleSamples>
-      judgementIndicatorSamples;
-  std::atomic<uint64_t> judgementIndicatorWriteSequence{0};
+  JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
@@ -148,16 +119,11 @@ private:
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
-  std::map<Judgement, std::pair<long long, long long>> timingWindows;
   long long latePoorTiming;
-  long long judgementIndicatorRangeMicros = 500000;
   int visibleTimeGreenNumber = 400;
   bool renderHud = true;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
-  std::atomic_bool judgementIndicatorEnabled{true};
-  std::atomic_bool judgementIndicatorHudMode{false};
-  std::atomic<int> judgementIndicatorYPermille{500};
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
@@ -173,19 +139,6 @@ private:
   void drawScore(RenderContext &context) const;
   void drawGauge(RenderContext &context) const;
   void drawPlayOption(RenderContext &context) const;
-  void drawJudgementIndicator(long long currentTimeMicros);
-  void drawJudgementIndicatorSegment(long long startMicros,
-                                     long long endMicros,
-                                     const JudgementIndicatorLayout &layout,
-                                     float barY, Color color);
-  JudgementIndicatorLayout judgementIndicatorLayout(bool hudMode) const;
-  float judgementOffsetToX(long long diffMicros,
-                           const JudgementIndicatorLayout &layout) const;
-  long long timingWindowEarly(Judgement judgement) const;
-  long long timingWindowLate(Judgement judgement) const;
-  void clearJudgementIndicatorSamples();
-  bool readJudgementIndicatorSample(uint64_t sequence,
-                                    JudgementIndicatorSample &sample) const;
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);

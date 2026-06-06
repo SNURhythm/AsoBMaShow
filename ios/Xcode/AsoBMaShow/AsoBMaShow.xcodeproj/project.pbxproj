@@ -733,6 +733,7 @@
 				scene/SettingsScene.cpp,
 				scene/play/BMSRenderer.cpp,
 				scene/play/GamePlayScene.cpp,
+				scene/play/JudgementIndicatorRenderer.cpp,
 				scene/play/Judge.cpp,
 				scene/SceneManager.cpp,
 				SDL_uikit_main.c,
