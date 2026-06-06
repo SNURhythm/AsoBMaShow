@@ -409,11 +409,13 @@ void GamePlayScene::finishReplayRecording() {
   recordedReplay.clearType = state->getClearTypeRank();
 }
 
-long long GamePlayScene::getJudgementOffsetMicros() const {
-  if (isReplayPlayback()) {
-    return 0;
-  }
-  return static_cast<long long>(context.settings.inputOffsetMs) * 1000LL;
+long long GamePlayScene::getAudioOffsetMicros() const {
+  return static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
+}
+
+long long
+GamePlayScene::getGameplayTimeMicros(long long rawSongTimeMicros) const {
+  return rawSongTimeMicros + getAudioOffsetMicros();
 }
 
 long long GamePlayScene::getInputSongTimeMicros(long long songTimeMicros,
@@ -423,8 +425,7 @@ long long GamePlayScene::getInputSongTimeMicros(long long songTimeMicros,
 
 long long GamePlayScene::getJudgementTimeMicros(long long songTimeMicros,
                                                 double inputDelay) const {
-  return getInputSongTimeMicros(songTimeMicros, inputDelay) +
-         getJudgementOffsetMicros();
+  return getInputSongTimeMicros(songTimeMicros, inputDelay);
 }
 
 long long GamePlayScene::getVisualOffsetMicros() const {
@@ -444,12 +445,13 @@ void GamePlayScene::update(float dt) {
     return;
   }
 
-  const long long songTimeMicros = context.jukebox.getTimeMicros();
+  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
   if (isReplayPlayback()) {
-    processReplayKeySounds(songTimeMicros);
-    processReplayEvents(songTimeMicros);
+    processReplayKeySounds(rawSongTimeMicros);
+    processReplayEvents(gameplayTimeMicros);
   }
-  checkPassedTimeline(songTimeMicros);
+  checkPassedTimeline(gameplayTimeMicros);
   if (state->passedMeasureCount != chart->Measures.size()) {
     return;
   }
@@ -479,8 +481,8 @@ void GamePlayScene::renderScene() {
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   // pauseButton->setPosition(rendering::window_width - 40, 10);
-  renderer->render(renderContext,
-                   getVisualTimeMicros(context.jukebox.getTimeMicros()));
+  renderer->render(renderContext, getVisualTimeMicros(getGameplayTimeMicros(
+                                      context.jukebox.getTimeMicros())));
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
@@ -535,9 +537,10 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
 
   const auto &measures = chart->Measures;
   const long long rawSongTime = context.jukebox.getTimeMicros();
+  const long long gameplayTime = getGameplayTimeMicros(rawSongTime);
   const long long inputSongTime =
-      getInputSongTimeMicros(rawSongTime, inputDelay);
-  const long long pressedTime = inputSongTime + getJudgementOffsetMicros();
+      getInputSongTimeMicros(gameplayTime, inputDelay);
+  const long long pressedTime = inputSongTime;
   const long long futureCutoff = latestHittableNoteTiming(judge, pressedTime);
   const AppSettings::NotePriorityMode priorityMode =
       context.settings.notePriorityMode;
@@ -625,9 +628,10 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   updateLaneStateText();
   renderer->onLaneReleased(lane, nowMicros());
   const long long rawSongTime = context.jukebox.getTimeMicros();
+  const long long gameplayTime = getGameplayTimeMicros(rawSongTime);
   const long long inputSongTime =
-      getInputSongTimeMicros(rawSongTime, inputDelay);
-  const long long releasedTime = inputSongTime + getJudgementOffsetMicros();
+      getInputSongTimeMicros(gameplayTime, inputDelay);
+  const long long releasedTime = inputSongTime;
 
   const auto &Measures = chart->Measures;
 
@@ -789,17 +793,16 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
   return it == replayNoteLookup.end() ? nullptr : it->second;
 }
 
-void GamePlayScene::processReplayKeySounds(long long songTimeMicros) {
+void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
   if (!isReplayPlayback() || options.replayData == nullptr ||
       options.autoKeySound) {
     return;
   }
 
   const auto &events = options.replayData->events;
-  const long long audioDelayMicros = getVisualOffsetMicros();
   while (replayKeySoundCursor < events.size()) {
     const auto &event = events[replayKeySoundCursor];
-    if (event.songTimeMicros - audioDelayMicros > songTimeMicros) {
+    if (event.songTimeMicros > rawSongTimeMicros) {
       break;
     }
 
@@ -813,7 +816,7 @@ void GamePlayScene::processReplayKeySounds(long long songTimeMicros) {
   }
 }
 
-void GamePlayScene::processReplayEvents(long long songTimeMicros) {
+void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   if (!isReplayPlayback() || options.replayData == nullptr) {
     return;
   }
@@ -821,7 +824,7 @@ void GamePlayScene::processReplayEvents(long long songTimeMicros) {
   const auto &events = options.replayData->events;
   const long long visualNow = nowMicros();
   while (replayEventCursor < events.size() &&
-         events[replayEventCursor].songTimeMicros <= songTimeMicros) {
+         events[replayEventCursor].songTimeMicros <= gameplayTimeMicros) {
     applyReplayEvent(events[replayEventCursor], visualNow);
     replayEventCursor++;
   }
@@ -910,7 +913,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     }
   }
   renderer->onJudge(judgeResult, state->combo, state->getScore(),
-                    getVisualTimeMicros(context.jukebox.getTimeMicros()),
+                    getVisualTimeMicros(
+                        getGameplayTimeMicros(context.jukebox.getTimeMicros())),
                     recordTimingSample);
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),

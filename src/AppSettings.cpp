@@ -195,8 +195,8 @@ std::filesystem::path AppSettings::configPath() {
 }
 
 void AppSettings::sanitize() {
-  inputOffsetMs =
-      std::clamp(inputOffsetMs, kMinInputOffsetMs, kMaxInputOffsetMs);
+  audioOffsetMs =
+      std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
   visibleTimeGreenNumber =
@@ -268,7 +268,7 @@ bool AppSettings::save() const {
   }
 
   file << "# AsoBMaShow settings\n";
-  file << "input_offset_ms=" << sanitized.inputOffsetMs << "\n";
+  file << "audio_offset_ms=" << sanitized.audioOffsetMs << "\n";
   file << "visual_offset_ms=" << sanitized.visualOffsetMs << "\n";
   file << "visible_time_green_number=" << sanitized.visibleTimeGreenNumber
        << "\n";
@@ -324,8 +324,8 @@ AppSettings AppSettings::load() {
     const std::string value = trim(line.substr(separator + 1));
 
     try {
-      if (key == "input_offset_ms") {
-        settings.inputOffsetMs = std::stoi(value);
+      if (key == "audio_offset_ms") {
+        settings.audioOffsetMs = std::stoi(value);
       } else if (key == "visual_offset_ms") {
         settings.visualOffsetMs = std::stoi(value);
       } else if (key == "visible_time_green_number") {

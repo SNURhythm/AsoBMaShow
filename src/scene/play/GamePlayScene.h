@@ -64,12 +64,14 @@ private:
   void beginReplayRecording();
   void finishReplayRecording();
   void buildReplayNoteLookup();
-  void processReplayKeySounds(long long songTimeMicros);
-  void processReplayEvents(long long songTimeMicros);
+  void processReplayKeySounds(long long rawSongTimeMicros);
+  void processReplayEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
   void applyReplayGauge(const ReplayEvent &event);
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
-  [[nodiscard]] long long getJudgementOffsetMicros() const;
+  [[nodiscard]] long long getAudioOffsetMicros() const;
+  [[nodiscard]] long long
+  getGameplayTimeMicros(long long rawSongTimeMicros) const;
   [[nodiscard]] long long getInputSongTimeMicros(long long songTimeMicros,
                                                  double inputDelay = 0.0) const;
   [[nodiscard]] long long getJudgementTimeMicros(long long songTimeMicros,

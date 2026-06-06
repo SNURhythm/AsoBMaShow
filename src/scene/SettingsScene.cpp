@@ -300,8 +300,8 @@ View *makeSummaryRow(const LayoutMetrics &metrics, const std::string &label,
 }
 
 int clampOffset(int value) {
-  return std::clamp(value, AppSettings::kMinInputOffsetMs,
-                    AppSettings::kMaxInputOffsetMs);
+  return std::clamp(value, AppSettings::kMinAudioOffsetMs,
+                    AppSettings::kMaxAudioOffsetMs);
 }
 
 int clampVisualOffset(int value) {
@@ -1358,8 +1358,8 @@ void SettingsScene::initView() {
     offsetControls->setAlignItems(YGAlignFlexStart);
 
     auto updateOffset = [this](int delta) {
-      context.settings.inputOffsetMs =
-          clampOffset(context.settings.inputOffsetMs + delta);
+      context.settings.audioOffsetMs =
+          clampOffset(context.settings.audioOffsetMs + delta);
       persistSettings();
       syncOffsetInputText(true);
     };
@@ -1431,20 +1431,19 @@ void SettingsScene::initView() {
         Color(153, 96, 74, 255), Color(165, 105, 79, 255),
         Color(193, 124, 93, 255), Color(219, 145, 108, 255));
     resetOffset->setOnClickListener([this]() {
-      context.settings.inputOffsetMs = 0;
+      context.settings.audioOffsetMs = 0;
       persistSettings();
       syncOffsetInputText(true);
     });
     offsetControls->addView(resetOffset);
 
-    cardsColumn->addView(
-        makeCard(metrics, "Judgement Offset",
-                 metrics.compact
-                     ? "Positive values judge later when your hits feel early."
-                     : "Positive values judge later. Use this when your hits "
-                       "consistently "
-                       "feel early relative to the music.",
-                 offsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
+    cardsColumn->addView(makeCard(
+        metrics, "Audio Offset",
+        metrics.compact
+            ? "Negative values make chart audio feel earlier."
+            : "Negative values delay gameplay and BGA so chart audio, "
+              "auto-timed keysounds, and replay keysounds feel earlier.",
+        offsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
     auto *visualOffsetControls = new View();
     visualOffsetControls->setFlexDirection(FlexDirection::Row);
@@ -1541,9 +1540,9 @@ void SettingsScene::initView() {
     cardsColumn->addView(makeCard(
         metrics, "Visual Offset",
         metrics.compact
-            ? "Positive values delay notes and BGA to match late audio output."
-            : "Positive values delay note rendering and BGA playback. Use this "
-              "for late audio paths such as Bluetooth headphones.",
+            ? "Adjusts note display time only."
+            : "Adjusts note display time only. BGA timing stays on the chart "
+              "audio timeline.",
         visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
     auto *judgementIndicatorControls = new View();
@@ -2267,7 +2266,7 @@ void SettingsScene::initView() {
 }
 
 void SettingsScene::refreshSettingsText() {
-  const int offsetMs = context.settings.inputOffsetMs;
+  const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
   const int visibleTimeGreenNumber = context.settings.visibleTimeGreenNumber;
   const std::string offsetLabel = formatOffsetLabel(offsetMs);
@@ -2511,7 +2510,7 @@ void SettingsScene::persistSettings() {
     SDL_Log("Failed to save settings");
   }
   context.jukebox.setVisualsEnabled(context.settings.bgaEnabled);
-  context.jukebox.setVisualOffsetMs(context.settings.visualOffsetMs);
+  context.jukebox.setBgaOffsetMs(context.settings.audioOffsetMs);
   context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
   refreshSettingsText();
 }
@@ -2524,7 +2523,7 @@ void SettingsScene::syncOffsetInputText(bool force) {
     return;
   }
   offsetInput->setEditingText(
-      formatOffsetInputValue(context.settings.inputOffsetMs));
+      formatOffsetInputValue(context.settings.audioOffsetMs));
 }
 
 void SettingsScene::syncVisualOffsetInputText(bool force) {
@@ -2630,7 +2629,7 @@ void SettingsScene::commitOffsetInput() {
   }
 
   try {
-    context.settings.inputOffsetMs = clampOffset(std::stoi(rawText));
+    context.settings.audioOffsetMs = clampOffset(std::stoi(rawText));
     persistSettings();
     syncOffsetInputText(true);
   } catch (const std::exception &) {

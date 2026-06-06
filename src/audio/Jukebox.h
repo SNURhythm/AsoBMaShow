@@ -55,7 +55,7 @@ public:
   bool hasActiveVisuals() const;
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;
-  void setVisualOffsetMs(int offsetMs);
+  void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
   long long getTimeMicros();
@@ -86,6 +86,10 @@ private:
   void scheduleAudioFromCursor();
   void wakeScheduler();
   void syncVisualClockToAudio();
+  [[nodiscard]] long long getBgaOffsetMicros() const;
+  [[nodiscard]] long long getBgaTimelineMicros(long long rawSongMicros) const;
+  [[nodiscard]] long long
+  getRawSongMicrosForBgaTarget(long long bgaTargetMicros) const;
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {
@@ -113,7 +117,7 @@ private:
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};
-  std::atomic<int> visualOffsetMs{0};
+  std::atomic<int> bgaOffsetMs{0};
   std::atomic<int> bgaDisplayMode{
       static_cast<int>(AppSettings::BgaDisplayMode::Fit)};
   const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
@@ -121,6 +125,4 @@ private:
                                           "mpeg", "m1v", "m2v", "avi"};
   const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
                                           "bmp", "png",  "tga"};
-
-  [[nodiscard]] long long getVisualOffsetMicros() const;
 };
