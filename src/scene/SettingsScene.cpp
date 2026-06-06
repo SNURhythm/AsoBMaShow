@@ -423,6 +423,20 @@ std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   return "Fit";
 }
 
+std::string formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Lowest:
+    return "Lowest";
+  case AppSettings::NotePriorityMode::Combo:
+    return "Combo";
+  case AppSettings::NotePriorityMode::Duration:
+    return "Duration";
+  case AppSettings::NotePriorityMode::Score:
+    return "Score";
+  }
+  return "Lowest";
+}
+
 std::string formatTableCount(int chartCount) {
   return std::to_string(chartCount) +
          (chartCount == 1 ? " chart" : " charts");
@@ -446,6 +460,21 @@ nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
     return AppSettings::BgaDisplayMode::Fit;
   }
   return AppSettings::BgaDisplayMode::Fit;
+}
+
+AppSettings::NotePriorityMode
+nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Lowest:
+    return AppSettings::NotePriorityMode::Combo;
+  case AppSettings::NotePriorityMode::Combo:
+    return AppSettings::NotePriorityMode::Duration;
+  case AppSettings::NotePriorityMode::Duration:
+    return AppSettings::NotePriorityMode::Score;
+  case AppSettings::NotePriorityMode::Score:
+    return AppSettings::NotePriorityMode::Lowest;
+  }
+  return AppSettings::NotePriorityMode::Lowest;
 }
 
 constexpr long long kPreviewLoopMicros = 8000000LL;
@@ -835,12 +864,15 @@ void SettingsScene::resetViewState() {
   summaryBgaDisplayValueText = nullptr;
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
+  summaryNotePriorityValueText = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
+  notePriorityModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
+  notePriorityModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   timingTabButton = nullptr;
@@ -1490,6 +1522,40 @@ void SettingsScene::initView() {
               "auto-timed playback for cleaner timing practice.",
         keysoundControls, metrics.modeCardHeight, metrics.secondaryCardWidth));
 
+    auto *notePriorityControls = new View();
+    notePriorityControls->setFlexDirection(FlexDirection::Column);
+    notePriorityControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    notePriorityControls->setAlignItems(YGAlignFlexStart);
+    notePriorityControls->addView(makeWrappedText(
+        metrics.compact
+            ? "Choose which hittable note a lane press judges first."
+            : "Choose which hittable note a lane press judges first when "
+              "multiple notes are inside the input window.",
+        metrics.bodyTextSize, Color(150, 171, 193)));
+    notePriorityModeText =
+        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+                 TextView::CENTER, TextView::MIDDLE);
+    notePriorityModeButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        notePriorityModeText, Color(33, 56, 87, 255),
+        Color(43, 72, 110, 255), Color(59, 98, 147, 255),
+        Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+        Color(139, 189, 244, 255));
+    notePriorityModeButton->setOnClickListener([this]() {
+      context.settings.notePriorityMode =
+          nextNotePriorityMode(context.settings.notePriorityMode);
+      persistSettings();
+    });
+    notePriorityControls->addView(notePriorityModeButton);
+    secondaryCards->addView(makeCard(
+        metrics, "Note Priority",
+        metrics.compact ? "Lowest keeps the original frontmost-note behavior."
+                        : "Lowest keeps the original frontmost-note behavior. "
+                          "Other modes can prefer a following note based on "
+                          "combo, timing distance, or score.",
+        notePriorityControls, metrics.modeCardHeight,
+        metrics.secondaryCardWidth));
+
     cardsColumn->addView(secondaryCards);
   }
 
@@ -1986,6 +2052,8 @@ void SettingsScene::refreshSettingsText() {
       formatLaneAngleLabel(context.settings.laneAngleDegrees);
   const std::string laneLengthLabel =
       formatLaneLengthLabel(context.settings.laneLength);
+  const std::string notePriorityLabel =
+      formatNotePriorityModeLabel(context.settings.notePriorityMode);
 
   syncOffsetInputText();
   if (summaryOffsetValueText != nullptr) {
@@ -2024,8 +2092,14 @@ void SettingsScene::refreshSettingsText() {
   if (summaryLaneLengthValueText != nullptr) {
     summaryLaneLengthValueText->setText(laneLengthLabel);
   }
+  if (summaryNotePriorityValueText != nullptr) {
+    summaryNotePriorityValueText->setText(notePriorityLabel);
+  }
   if (keysoundModeText != nullptr) {
     keysoundModeText->setText(keysoundLabel);
+  }
+  if (notePriorityModeText != nullptr) {
+    notePriorityModeText->setText(notePriorityLabel);
   }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
@@ -2072,6 +2146,25 @@ void SettingsScene::refreshSettingsText() {
       keysoundModeButton->setBorderColors(Color(165, 120, 74, 255),
                                           Color(194, 141, 88, 255),
                                           Color(224, 163, 103, 255));
+    }
+  }
+
+  if (notePriorityModeButton != nullptr) {
+    if (context.settings.notePriorityMode ==
+        AppSettings::NotePriorityMode::Lowest) {
+      notePriorityModeButton->setBackgroundColors(Color(33, 56, 87, 255),
+                                                  Color(43, 72, 110, 255),
+                                                  Color(59, 98, 147, 255));
+      notePriorityModeButton->setBorderColors(Color(92, 131, 177, 255),
+                                              Color(118, 163, 217, 255),
+                                              Color(139, 189, 244, 255));
+    } else {
+      notePriorityModeButton->setBackgroundColors(Color(35, 68, 62, 255),
+                                                  Color(45, 88, 80, 255),
+                                                  Color(63, 118, 107, 255));
+      notePriorityModeButton->setBorderColors(Color(97, 157, 142, 255),
+                                              Color(120, 187, 169, 255),
+                                              Color(145, 214, 195, 255));
     }
   }
 
@@ -2414,12 +2507,15 @@ void SettingsScene::cleanupScene() {
   summaryBgaDisplayValueText = nullptr;
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
+  summaryNotePriorityValueText = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
+  notePriorityModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
+  notePriorityModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   timingTabButton = nullptr;
