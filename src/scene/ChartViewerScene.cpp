@@ -1600,6 +1600,7 @@ ChartViewerScene::scanActiveRandomOptions() const {
     bool parentSkipped = false;
     bool branchMatched = false;
     bool currentSkipped = false;
+    size_t randomDepth = 0;
   };
   struct RandomFrame {
     bool active = false;
@@ -1619,6 +1620,34 @@ ChartViewerScene::scanActiveRandomOptions() const {
       }
     }
     return false;
+  };
+  auto popRandomFrame = [&]() {
+    if (randomFrames.empty()) {
+      return;
+    }
+    const bool wasActive = randomFrames.back().active;
+    randomFrames.pop_back();
+    if (wasActive && !randomStack.empty()) {
+      randomStack.pop_back();
+    }
+  };
+  auto isInsideConditionalBranchOfRandomDepth = [&](size_t randomDepth) {
+    for (auto it = conditionalStack.rbegin(); it != conditionalStack.rend();
+         ++it) {
+      if (it->randomDepth == randomDepth) {
+        return true;
+      }
+      if (it->randomDepth < randomDepth) {
+        return false;
+      }
+    }
+    return false;
+  };
+  auto closeUnbranchedRandomFrames = [&]() {
+    while (!randomFrames.empty() &&
+           !isInsideConditionalBranchOfRandomDepth(randomFrames.size())) {
+      popRandomFrame();
+    }
   };
   auto activeRandomDepth = [&]() {
     int depth = 0;
@@ -1652,7 +1681,8 @@ ChartViewerScene::scanActiveRandomOptions() const {
           static_cast<int>(std::strtol(line.substr(4).c_str(), nullptr, 10));
       const bool matched = !parentSkipped && currentRandom == n;
       conditionalStack.push_back({parentSkipped, matched,
-                                  parentSkipped || !matched});
+                                  parentSkipped || !matched,
+                                  randomFrames.size()});
       continue;
     }
     if (matchHeader(line, "#ELSEIF")) {
@@ -1691,6 +1721,7 @@ ChartViewerScene::scanActiveRandomOptions() const {
       continue;
     }
     if (matchHeader(line, "#RANDOM") || matchHeader(line, "#RONDAM")) {
+      closeUnbranchedRandomFrames();
       if (isSkipping()) {
         randomFrames.push_back({false});
         continue;
@@ -1714,11 +1745,7 @@ ChartViewerScene::scanActiveRandomOptions() const {
       if (randomFrames.empty()) {
         continue;
       }
-      const bool wasActive = randomFrames.back().active;
-      randomFrames.pop_back();
-      if (wasActive && !randomStack.empty()) {
-        randomStack.pop_back();
-      }
+      popRandomFrame();
       continue;
     }
   }

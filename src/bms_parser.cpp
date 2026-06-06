@@ -1285,6 +1285,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     bool parentSkipped = false;
     bool branchMatched = false;
     bool currentSkipped = false;
+    size_t randomDepth = 0;
   };
   struct RandomFrame {
     bool active = false;
@@ -1304,6 +1305,34 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
     }
     return false;
+  };
+  auto popRandomFrame = [&]() {
+    if (RandomFrames.empty()) {
+      return;
+    }
+    const bool wasActive = RandomFrames.back().active;
+    RandomFrames.pop_back();
+    if (wasActive && !RandomStack.empty()) {
+      RandomStack.pop_back();
+    }
+  };
+  auto isInsideConditionalBranchOfRandomDepth = [&](size_t randomDepth) {
+    for (auto it = ConditionalStack.rbegin(); it != ConditionalStack.rend();
+         ++it) {
+      if (it->randomDepth == randomDepth) {
+        return true;
+      }
+      if (it->randomDepth < randomDepth) {
+        return false;
+      }
+    }
+    return false;
+  };
+  auto closeUnbranchedRandomFrames = [&]() {
+    while (!RandomFrames.empty() &&
+           !isInsideConditionalBranchOfRandomDepth(RandomFrames.size())) {
+      popRandomFrame();
+    }
   };
   // init prng with seed
   std::mt19937_64 Prng(Seed);
@@ -1340,7 +1369,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           static_cast<int>(std::strtol(line.substr(4).c_str(), nullptr, 10));
       const bool matched = !parentSkipped && CurrentRandom == n;
       ConditionalStack.push_back({parentSkipped, matched,
-                                  parentSkipped || !matched});
+                                  parentSkipped || !matched,
+                                  RandomFrames.size()});
       continue;
     }
     if (MatchHeader(line, "#ELSEIF")) {
@@ -1386,6 +1416,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     if (MatchHeader(line, "#RANDOM") ||
         MatchHeader(line, "#RONDAM")) // #RANDOM n
     {
+      closeUnbranchedRandomFrames();
       if (isSkipping()) {
         RandomFrames.push_back({false});
         continue;
@@ -1413,11 +1444,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         // UE_LOG(LogTemp, Warning, TEXT("RandomStack is empty!"));
         continue;
       }
-      const bool wasActive = RandomFrames.back().active;
-      RandomFrames.pop_back();
-      if (wasActive && !RandomStack.empty()) {
-        RandomStack.pop_back();
-      }
+      popRandomFrame();
       continue;
     }
     if (isSkipping()) {
