@@ -41,6 +41,8 @@ constexpr size_t kRandomSummaryTail = 8;
 constexpr int kMarkerLabelFontSize = 13;
 constexpr float kMarkerLabelWidth = 74.0f;
 constexpr float kMarkerLabelHeight = 18.0f;
+constexpr float kChartContentTopPadding = 48.0f;
+constexpr float kChartContentBottomPadding = 64.0f;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -467,7 +469,9 @@ private:
     contentLeftMargin = baseSideMargin + horizontalSafeInset;
     contentRightMargin = baseSideMargin + horizontalSafeInset;
     const float maxColumnHeight =
-        std::max(280.0f, static_cast<float>(getHeight() - 16));
+        std::max(280.0f, static_cast<float>(getHeight()) -
+                             kChartContentTopPadding -
+                             kChartContentBottomPadding);
     const float baseMeasureHeight = 136.0f * zoom;
 
     std::vector<float> measureHeights;
@@ -495,8 +499,10 @@ private:
 
       const float columnX = contentLeftMargin +
                             static_cast<float>(column) * columnWidth;
-      float cursorY = maxColumnHeight;
-      ColumnLayout columnLayout{columnX, maxColumnHeight, 0.0f};
+      const float columnBottom = kChartContentTopPadding + maxColumnHeight;
+      float cursorY = columnBottom;
+      ColumnLayout columnLayout{columnX, columnBottom,
+                                kChartContentTopPadding};
       double beatStart = 0.0;
       for (size_t i = 0; i < groupStart; ++i) {
         const auto *measure = chart->Measures[i];
@@ -520,7 +526,8 @@ private:
       ++column;
     }
 
-    contentHeight = maxColumnHeight;
+    contentHeight =
+        kChartContentTopPadding + maxColumnHeight + kChartContentBottomPadding;
     contentWidth =
         columnLayouts.empty()
             ? 0.0f
