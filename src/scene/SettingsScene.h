@@ -51,14 +51,20 @@ private:
   TextView *summaryLaneAngleValueText = nullptr;
   TextView *summaryLaneLengthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
+  TextInputBox *judgementIndicatorYInput = nullptr;
+  TextInputBox *judgementIndicatorWidthInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
+  TextView *judgementIndicatorModeText = nullptr;
+  TextView *judgementIndicatorRenderModeText = nullptr;
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
+  Button *judgementIndicatorModeButton = nullptr;
+  Button *judgementIndicatorRenderModeButton = nullptr;
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;
   Button *timingTabButton = nullptr;
@@ -122,6 +128,8 @@ private:
   void syncBgaBlurInputText(bool force = false);
   void syncLaneAngleInputText(bool force = false);
   void syncLaneLengthInputText(bool force = false);
+  void syncJudgementIndicatorYInputText(bool force = false);
+  void syncJudgementIndicatorWidthInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
@@ -129,4 +137,6 @@ private:
   void commitBgaBlurInput();
   void commitLaneAngleInput();
   void commitLaneLengthInput();
+  void commitJudgementIndicatorYInput();
+  void commitJudgementIndicatorWidthInput();
 };

@@ -18,6 +18,11 @@ public:
     Score = 3,
   };
 
+  enum class JudgementIndicatorRenderMode {
+    World3D = 0,
+    Hud2D = 1,
+  };
+
   static constexpr int kMinInputOffsetMs = -300;
   static constexpr int kMaxInputOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
@@ -38,6 +43,12 @@ public:
   static constexpr float kMinLaneLength = 5.0f;
   static constexpr float kMaxLaneLength = 12.0f;
   static constexpr float kDefaultLaneLength = 8.0f;
+  static constexpr float kMinJudgementIndicatorY = 0.0f;
+  static constexpr float kMaxJudgementIndicatorY = 1.0f;
+  static constexpr float kDefaultJudgementIndicatorY = 0.5f;
+  static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
+  static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
+  static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 
@@ -53,6 +64,11 @@ public:
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
   NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
+  bool judgementIndicatorEnabled = true;
+  float judgementIndicatorY = kDefaultJudgementIndicatorY;
+  float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+  JudgementIndicatorRenderMode judgementIndicatorRenderMode =
+      JudgementIndicatorRenderMode::World3D;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
 

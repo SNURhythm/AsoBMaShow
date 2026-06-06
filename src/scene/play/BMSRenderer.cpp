@@ -14,22 +14,35 @@
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <string>
 
 namespace {
+constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
   return (static_cast<uint64_t>(submitDepth) << 16U) |
          static_cast<uint64_t>(texture.idx);
 }
+
+long long latePoorTimingFromWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  const auto it = windows.find(Bad);
+  return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
+}
 } // namespace
 
-BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
-                         int visibleTimeGreenNumber, bool renderHud)
-    : latePoorTiming(latePoorTiming), chart(chart),
-      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud) {
+BMSRenderer::BMSRenderer(
+    bms_parser::Chart *chart,
+    const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
+    int visibleTimeGreenNumber, bool renderHud)
+    : judgementIndicator(timingWindows),
+      latePoorTiming(latePoorTimingFromWindows(timingWindows)),
+      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
+      chart(chart) {
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
@@ -287,9 +300,14 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.isPressed = false;
   laneState.lastStateTime = time;
 }
-void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
+void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
+                          long long displayTimeMicros,
+                          bool recordTimingSample) {
   if (judgeResult.judgement == None) {
     return;
+  }
+  if (recordTimingSample) {
+    judgementIndicator.record(judgeResult, displayTimeMicros);
   }
   state.latestJudgeResult = judgeResult;
   state.latestJudgeResultTime = std::chrono::system_clock::now();
@@ -539,7 +557,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
+  constexpr uint32_t kDepthJudgementIndicator = 330;
 
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
   ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   simpleBatchRenderer.begin();
@@ -705,6 +725,23 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.flush();
   }
 
+  if (judgementIndicator.isEnabled()) {
+    const bool indicatorHudMode = judgementIndicator.isHudMode();
+    simpleBatchRenderer.setSubmitView(indicatorHudMode ? rendering::ui_view
+                                                       : rendering::main_view);
+    simpleBatchRenderer.setSubmitDepth(indicatorHudMode
+                                           ? 0
+                                           : kDepthJudgementIndicator);
+    simpleBatchRenderer.begin();
+    judgementIndicator.render(simpleBatchRenderer, micro,
+                              {.judgeY = judgeY,
+                               .upperBound = upperBound,
+                               .noteRenderWidth = noteRenderWidth,
+                               .noteRenderHeight = noteRenderHeight});
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitView(rendering::main_view);
+  }
+
   if (renderHud) {
     drawTitle(context);
     drawJudgement(context);
@@ -730,7 +767,10 @@ void BMSRenderer::applyPendingHudText() {
   scoreText->setText("Score: " + std::to_string(score));
 }
 
-void BMSRenderer::reset() { state.reset(); }
+void BMSRenderer::reset() {
+  state.reset();
+  judgementIndicator.clear();
+}
 
 void BMSRenderer::refreshGeometry() {
   upperBound = calculateLanePlaneScreenTopIntersection();
@@ -746,6 +786,11 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
   useRenderTimeForLaneBeams = enabled;
+}
+
+void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
+                                              float widthScale, bool hudMode) {
+  judgementIndicator.configure(enabled, y, widthScale, hudMode);
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

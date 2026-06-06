@@ -12,10 +12,12 @@
 #include "../../view/TextView.h"
 #include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
+#include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include <bx/math.h>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -104,6 +106,7 @@ private:
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<ReplayGhostEvent> replayGhostEvents;
+  JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
@@ -171,8 +174,11 @@ private:
 public:
   void onLanePressed(int lane, const JudgeResult judge, long long time);
   void onLaneReleased(int lane, long long time);
-  void onJudge(JudgeResult judgeResult, int combo, int score);
-  explicit BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
+  void onJudge(JudgeResult judgeResult, int combo, int score,
+               long long displayTimeMicros, bool recordTimingSample = true);
+  explicit BMSRenderer(
+      bms_parser::Chart *chart,
+      const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
                        int visibleTimeGreenNumber, bool renderHud = true);
 
   void render(RenderContext &context, long long micro);
@@ -181,6 +187,8 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamClockUsesRenderTime(bool enabled);
+  void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
+                                   bool hudMode);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);

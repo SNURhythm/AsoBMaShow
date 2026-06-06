@@ -81,7 +81,8 @@ private:
   Judge judge;
   StartOptions options;
   void checkPassedTimeline(long long time);
-  void onJudge(const JudgeResult &judgeResult);
+  void onJudge(const JudgeResult &judgeResult,
+               bool recordTimingSample = true);
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
