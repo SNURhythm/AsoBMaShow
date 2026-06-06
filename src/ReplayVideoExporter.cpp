@@ -704,11 +704,9 @@ bool writeWavFile(const std::filesystem::path &path,
 
 ReplayVideoExportResult
 writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
-                      const AppSettings &settings,
                       const std::filesystem::path &path) {
   long long durationMicros = 0;
-  const long long keySoundOffsetMicros =
-      static_cast<long long>(settings.visualOffsetMs) * 1000LL;
+  constexpr long long keySoundOffsetMicros = 0;
   const auto audioEvents =
       collectAudioEvents(chart, replay, keySoundOffsetMicros, durationMicros);
   const size_t initialFrames = static_cast<size_t>(
@@ -1848,7 +1846,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             .message = "Renderer does not support texture readback"};
   }
 
-  context.jukebox.setVisualOffsetMs(settings.visualOffsetMs);
   context.jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
   context.jukebox.setVisualsEnabled(settings.bgaEnabled);
   std::atomic_bool visualLoadCancelled = false;
@@ -2274,8 +2271,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   wavPath.string().c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
-  auto audioResult =
-      writeReplayAudioTrack(*chart, replay, context.settings, wavPath);
+  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath);
   if (!audioResult.success) {
     replayExportLog(&exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());

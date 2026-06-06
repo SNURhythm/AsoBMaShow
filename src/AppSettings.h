@@ -23,8 +23,8 @@ public:
     Hud2D = 1,
   };
 
-  static constexpr int kMinInputOffsetMs = -300;
-  static constexpr int kMaxInputOffsetMs = 300;
+  static constexpr int kMinAudioOffsetMs = -300;
+  static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
   static constexpr int kMaxVisualOffsetMs = 500;
   static constexpr int kMinVisibleTimeGreenNumber = 60;
@@ -52,7 +52,7 @@ public:
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 
-  int inputOffsetMs = 0;
+  int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;
   bool visibleTimeUseMilliseconds = false;

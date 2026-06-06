@@ -125,9 +125,11 @@ bool Jukebox::getVisualsEnabled() const {
   return visualsEnabled.load(std::memory_order_relaxed);
 }
 
-void Jukebox::setVisualOffsetMs(int offsetMs) {
-  visualOffsetMs.store(offsetMs, std::memory_order_relaxed);
-  wakeScheduler();
+void Jukebox::setBgaOffsetMs(int offsetMs) {
+  const int previous = bgaOffsetMs.exchange(offsetMs, std::memory_order_relaxed);
+  if (previous != offsetMs) {
+    wakeScheduler();
+  }
 }
 
 void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
@@ -158,12 +160,6 @@ Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
   const float height = static_cast<float>(sourceHeight) * scale;
   return {(targetWidth - width) * 0.5f, (targetHeight - height) * 0.5f, width,
           height};
-}
-
-long long Jukebox::getVisualOffsetMicros() const {
-  return static_cast<long long>(
-             visualOffsetMs.load(std::memory_order_relaxed)) *
-         1000LL;
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
@@ -481,8 +477,22 @@ void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
 
 void Jukebox::syncVisualClockToAudio() {
   if (isPlaying.load(std::memory_order_relaxed) && stopwatch->isRunning()) {
-    stopwatch->seek(audio.getTimeMicros());
+    stopwatch->seek(getBgaTimelineMicros(audio.getTimeMicros()));
   }
+}
+
+long long Jukebox::getBgaOffsetMicros() const {
+  return static_cast<long long>(bgaOffsetMs.load(std::memory_order_relaxed)) *
+         1000LL;
+}
+
+long long Jukebox::getBgaTimelineMicros(long long rawSongMicros) const {
+  return rawSongMicros + getBgaOffsetMicros();
+}
+
+long long
+Jukebox::getRawSongMicrosForBgaTarget(long long bgaTargetMicros) const {
+  return bgaTargetMicros - getBgaOffsetMicros();
 }
 
 bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
@@ -515,10 +525,9 @@ void Jukebox::renderVisualsAt(long long micro) {
 
   std::lock_guard<std::mutex> lock(seekLock);
   stopwatch->seek(micro);
-  const long long visualDelayMicros = getVisualOffsetMicros();
   while (bmpCursor < bmpList.size()) {
     const auto &target = bmpList[bmpCursor];
-    if (micro < target.first + visualDelayMicros) {
+    if (micro < target.first) {
       break;
     }
     if (activateVisual(target.second, rendering::bga_view)) {
@@ -528,7 +537,7 @@ void Jukebox::renderVisualsAt(long long micro) {
   }
   while (bmpLayerCursor < bmpLayerList.size()) {
     const auto &target = bmpLayerList[bmpLayerCursor];
-    if (micro < target.first + visualDelayMicros) {
+    if (micro < target.first) {
       break;
     }
     if (activateVisual(target.second, rendering::bga_layer_view)) {
@@ -585,8 +594,9 @@ void Jukebox::play() {
       {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
-        auto positionMicro = audio.getTimeMicros();
-        const long long visualDelayMicros = getVisualOffsetMicros();
+        const long long positionMicro = audio.getTimeMicros();
+        const long long bgaPositionMicro = getBgaTimelineMicros(positionMicro);
+        stopwatch->seek(bgaPositionMicro);
         auto scheduleNextWake = [&](long long targetMicros) {
           nextWakeMicros =
               std::min(nextWakeMicros, std::max(targetMicros, positionMicro));
@@ -599,7 +609,7 @@ void Jukebox::play() {
 
         while (bmpCursor < bmpList.size()) {
           auto &target = bmpList[bmpCursor];
-          if (positionMicro < target.first + visualDelayMicros) {
+          if (bgaPositionMicro < target.first) {
             break;
           }
           if (!visualsEnabled.load(std::memory_order_relaxed)) {
@@ -632,11 +642,12 @@ void Jukebox::play() {
           bmpCursor++;
         }
         if (bmpCursor < bmpList.size()) {
-          scheduleNextWake(bmpList[bmpCursor].first + visualDelayMicros);
+          scheduleNextWake(
+              getRawSongMicrosForBgaTarget(bmpList[bmpCursor].first));
         }
         while (bmpLayerCursor < bmpLayerList.size()) {
           auto &target = bmpLayerList[bmpLayerCursor];
-          if (positionMicro < target.first + visualDelayMicros) {
+          if (bgaPositionMicro < target.first) {
             break;
           }
           if (!visualsEnabled.load(std::memory_order_relaxed)) {
@@ -669,8 +680,8 @@ void Jukebox::play() {
           bmpLayerCursor++;
         }
         if (bmpLayerCursor < bmpLayerList.size()) {
-          scheduleNextWake(bmpLayerList[bmpLayerCursor].first +
-                           visualDelayMicros);
+          scheduleNextWake(getRawSongMicrosForBgaTarget(
+              bmpLayerList[bmpLayerCursor].first));
         }
       }
 
@@ -801,10 +812,10 @@ void Jukebox::seek(long long micro) {
   /* TODO: should also play audio/video which starts earlier than seek but
       ends later than seek */
   std::lock_guard<std::mutex> lock(seekLock);
-  stopwatch->seek(micro);
+  const long long bgaTimelineMicro = getBgaTimelineMicros(micro);
+  stopwatch->seek(bgaTimelineMicro);
   audio.stopSounds();
   audio.seekClock(micro);
-  const long long visualDelayMicros = getVisualOffsetMicros();
   // move cursors to micro
   audioCursor = 0;
   bmpCursor = 0;
@@ -819,11 +830,11 @@ void Jukebox::seek(long long micro) {
   }
   wakeScheduler();
   while (bmpCursor < bmpList.size() &&
-         bmpList[bmpCursor].first + visualDelayMicros < micro) {
+         bmpList[bmpCursor].first < bgaTimelineMicro) {
     bmpCursor++;
   }
   while (bmpLayerCursor < bmpLayerList.size() &&
-         bmpLayerList[bmpLayerCursor].first + visualDelayMicros < micro) {
+         bmpLayerList[bmpLayerCursor].first < bgaTimelineMicro) {
     bmpLayerCursor++;
   }
 }

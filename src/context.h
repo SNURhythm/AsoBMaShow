@@ -34,7 +34,7 @@ public:
         jukebox(&gameStopwatch) {
     settings.sanitize();
     jukebox.setVisualsEnabled(settings.bgaEnabled);
-    jukebox.setVisualOffsetMs(settings.visualOffsetMs);
+    jukebox.setBgaOffsetMs(settings.audioOffsetMs);
     jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
   }
   ~ApplicationContext() {
