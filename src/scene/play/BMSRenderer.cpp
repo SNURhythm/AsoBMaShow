@@ -42,6 +42,14 @@ bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
       std::min(keyPosition, keyLaneCount - keyPosition - 1);
   return (mirroredPosition & 1U) != 0;
 }
+
+bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
+  if (head == nullptr || head->Tail == nullptr || !head->Tail->IsPlayed ||
+      head->Tail->Timeline == nullptr) {
+    return false;
+  }
+  return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
+}
 } // namespace
 
 BMSRenderer::BMSRenderer(
@@ -361,7 +369,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
-  if (head->Tail->IsPlayed)
+  if (head->Tail->IsPlayed && !wasLongNoteTailReleasedEarly(head))
     return;
   float startY = head->IsPlayed ? judgeY : headY;
   const float bodyHeight = tailY - startY;
