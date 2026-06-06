@@ -33,6 +33,15 @@ long long latePoorTimingFromWindows(
   const auto it = windows.find(Bad);
   return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
 }
+
+bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
+  if (keyLaneCount == 0 || keyPosition >= keyLaneCount) {
+    return false;
+  }
+  const size_t mirroredPosition =
+      std::min(keyPosition, keyLaneCount - keyPosition - 1);
+  return (mirroredPosition & 1U) != 0;
+}
 } // namespace
 
 BMSRenderer::BMSRenderer(
@@ -48,11 +57,13 @@ BMSRenderer::BMSRenderer(
   laneStatesByOrder.resize(laneOrder.size());
   laneToOrderIndex.reserve(laneOrder.size());
   laneStateSnapshot.reserve(laneOrder.size());
-  evenKeyLaneIndices.reserve(laneOrder.size());
-  oddKeyLaneIndices.reserve(laneOrder.size());
+  whiteKeyLaneIndices.reserve(laneOrder.size());
+  blueKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
   noteTextureBatchRenderers.reserve(16);
   noteTextureBatchLookup.reserve(16);
+  std::vector<int> keyLanes;
+  keyLanes.reserve(laneOrder.size());
   for (size_t i = 0; i < laneOrder.size(); ++i) {
     const int lane = laneOrder[i];
     laneToOrderIndex.emplace(lane, i);
@@ -62,10 +73,25 @@ BMSRenderer::BMSRenderer(
     const size_t laneIndex = static_cast<size_t>(lane);
     if (isScratch(lane)) {
       scratchLaneIndices.push_back(laneIndex);
-    } else if ((lane & 1) == 0) {
-      evenKeyLaneIndices.push_back(laneIndex);
     } else {
-      oddKeyLaneIndices.push_back(laneIndex);
+      keyLanes.push_back(lane);
+    }
+  }
+  std::unordered_map<int, bool> laneUsesBlueSheet;
+  laneUsesBlueSheet.reserve(keyLanes.size());
+  for (size_t keyPosition = 0; keyPosition < keyLanes.size(); ++keyPosition) {
+    const int lane = keyLanes[keyPosition];
+    if (lane < 0) {
+      continue;
+    }
+    const bool usesBlue =
+        usesBlueSymmetricKeyColor(keyPosition, keyLanes.size());
+    laneUsesBlueSheet.emplace(lane, usesBlue);
+    const size_t laneIndex = static_cast<size_t>(lane);
+    if (usesBlue) {
+      blueKeyLaneIndices.push_back(laneIndex);
+    } else {
+      whiteKeyLaneIndices.push_back(laneIndex);
     }
   }
   state.orphanLongNotes.reserve(laneOrder.size() * 2);
@@ -92,8 +118,8 @@ BMSRenderer::BMSRenderer(
           }
         }
       };
-      appendLaneGroup(evenKeyLaneIndices);
-      appendLaneGroup(oddKeyLaneIndices);
+      appendLaneGroup(whiteKeyLaneIndices);
+      appendLaneGroup(blueKeyLaneIndices);
       appendLaneGroup(scratchLaneIndices);
     }
   }
@@ -125,9 +151,14 @@ BMSRenderer::BMSRenderer(
         }
         const size_t laneIndex = static_cast<size_t>(lane);
         laneXLookup[laneIndex] = computeLaneX(lane);
-        laneSheetLookup[laneIndex] =
-            isScratch(lane) ? &scratchSheet
-                            : ((lane % 2 == 0) ? &graySheet : &blueSheet);
+        if (isScratch(lane)) {
+          laneSheetLookup[laneIndex] = &scratchSheet;
+        } else {
+          const auto colorIt = laneUsesBlueSheet.find(lane);
+          laneSheetLookup[laneIndex] =
+              colorIt != laneUsesBlueSheet.end() && colorIt->second ? &blueSheet
+                                                                     : &graySheet;
+        }
       }
     }
   }
@@ -621,7 +652,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       state.currentTimelineIndex = i;
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
-    // Render notes in grouped lane order (even/odd/scratch) to reduce texture
+    // Render notes in grouped lane order (white/blue/scratch) to reduce texture
     // switches while keeping per-lane ordering intact.
     auto processNote = [&](bms_parser::Note *note) {
       if (note == nullptr) {
@@ -910,7 +941,7 @@ inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
   if (isScratch(lane)) {
     return scratchSheet;
   }
-  return (lane % 2 == 0) ? graySheet : blueSheet;
+  return graySheet;
 }
 
 rendering::TexBatchRenderer &BMSRenderer::noteTextureBatch(

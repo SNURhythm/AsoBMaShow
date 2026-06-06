@@ -183,6 +183,15 @@ storedPlayOption(const std::optional<std::string> &option) {
   return normalized;
 }
 
+bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
+  if (keyLaneCount == 0 || keyPosition >= keyLaneCount) {
+    return false;
+  }
+  const size_t mirroredPosition =
+      std::min(keyPosition, keyLaneCount - keyPosition - 1);
+  return (mirroredPosition & 1U) != 0;
+}
+
 bool isLaneOrderSummaryOption(const std::optional<std::string> &option) {
   const std::string normalized =
       option.has_value() ? play_options::normalizePlayOption(*option)
@@ -558,6 +567,7 @@ private:
   rendering::TexBatchRenderer markerTextBatch;
   std::vector<int> laneOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
+  std::unordered_map<int, bool> laneUsesBlueNoteColor;
   std::vector<MeasureLayout> measureLayouts;
   std::vector<ColumnLayout> columnLayouts;
   std::vector<const bms_parser::TimeLine *> orderedTimelines;
@@ -615,6 +625,7 @@ private:
     measureLabels.clear();
     markerLabels.clear();
     laneToOrderIndex.clear();
+    laneUsesBlueNoteColor.clear();
 
     if (chart == nullptr) {
       contentWidth = 0.0f;
@@ -630,6 +641,18 @@ private:
     const size_t laneCount = std::max<size_t>(1, laneOrder.size());
     for (size_t i = 0; i < laneOrder.size(); ++i) {
       laneToOrderIndex[laneOrder[i]] = i;
+    }
+    std::vector<int> keyLanes;
+    keyLanes.reserve(laneOrder.size());
+    for (int lane : laneOrder) {
+      if (!isScratchLane(lane)) {
+        keyLanes.push_back(lane);
+      }
+    }
+    laneUsesBlueNoteColor.reserve(keyLanes.size());
+    for (size_t keyPosition = 0; keyPosition < keyLanes.size(); ++keyPosition) {
+      laneUsesBlueNoteColor[keyLanes[keyPosition]] =
+          usesBlueSymmetricKeyColor(keyPosition, keyLanes.size());
     }
 
     laneWidth = laneCount > 12 ? 18.0f : (laneCount > 8 ? 21.0f : 24.0f);
@@ -1330,20 +1353,26 @@ private:
     if (isScratchLane(lane)) {
       return Color(231, 94, 58, 246).toABGR();
     }
+    const bool useBlue = usesBlueNoteColor(lane);
     if (dynamic_cast<const bms_parser::LongNote *>(note) != nullptr) {
-      return lane % 2 == 0 ? Color(225, 232, 230, 245).toABGR()
-                           : Color(84, 151, 224, 245).toABGR();
+      return useBlue ? Color(84, 151, 224, 245).toABGR()
+                     : Color(225, 232, 230, 245).toABGR();
     }
-    return lane % 2 == 0 ? Color(236, 240, 238, 248).toABGR()
-                         : Color(82, 154, 226, 248).toABGR();
+    return useBlue ? Color(82, 154, 226, 248).toABGR()
+                   : Color(236, 240, 238, 248).toABGR();
   }
 
   uint32_t longNoteColor(int lane) const {
     if (isScratchLane(lane)) {
       return Color(231, 94, 58, 164).toABGR();
     }
-    return lane % 2 == 0 ? Color(226, 232, 230, 154).toABGR()
-                         : Color(82, 154, 226, 164).toABGR();
+    return usesBlueNoteColor(lane) ? Color(82, 154, 226, 164).toABGR()
+                                   : Color(226, 232, 230, 154).toABGR();
+  }
+
+  bool usesBlueNoteColor(int lane) const {
+    const auto it = laneUsesBlueNoteColor.find(lane);
+    return it != laneUsesBlueNoteColor.end() && it->second;
   }
 
   Color ghostColor(const ReplayGhostEvent &event) const {

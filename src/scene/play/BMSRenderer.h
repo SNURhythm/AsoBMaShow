@@ -90,8 +90,8 @@ private:
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
   std::vector<float> laneXLookup;
   std::vector<const NoteSheet *> laneSheetLookup;
-  std::vector<size_t> evenKeyLaneIndices;
-  std::vector<size_t> oddKeyLaneIndices;
+  std::vector<size_t> whiteKeyLaneIndices;
+  std::vector<size_t> blueKeyLaneIndices;
   std::vector<size_t> scratchLaneIndices;
 
   float noteImageHeight = 0;
