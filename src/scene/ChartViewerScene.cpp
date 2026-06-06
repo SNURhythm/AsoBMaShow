@@ -31,6 +31,8 @@ constexpr int kHeaderButtonHeight = 54;
 constexpr int kHeaderPadding = 18;
 constexpr float kMinZoom = 0.55f;
 constexpr float kMaxZoom = 2.0f;
+constexpr float kMinScreenZoom = 0.65f;
+constexpr float kMaxScreenZoom = 3.0f;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -63,11 +65,13 @@ std::string formatDouble(double value, int precision = 3) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(precision) << value;
   std::string text = stream.str();
-  while (text.size() > 1 && text.back() == '0') {
-    text.pop_back();
-  }
-  if (!text.empty() && text.back() == '.') {
-    text.pop_back();
+  if (text.find('.') != std::string::npos) {
+    while (text.size() > 1 && text.back() == '0') {
+      text.pop_back();
+    }
+    if (!text.empty() && text.back() == '.') {
+      text.pop_back();
+    }
   }
   return text;
 }
@@ -106,12 +110,12 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   text->setOverflow(TextView::TextOverflow::Hidden);
   button->setContentView(text);
   button->setStyledBorderWidth(2);
-  button->setBackgroundColors(Color(22, 32, 45, 224),
-                              Color(34, 49, 68, 235),
-                              Color(48, 69, 94, 245));
-  button->setBorderColors(Color(88, 111, 139, 230),
-                          Color(126, 155, 189, 245),
-                          Color(166, 194, 226, 255));
+  button->setBackgroundColors(Color(29, 32, 35, 232),
+                              Color(42, 47, 49, 242),
+                              Color(56, 63, 65, 248));
+  button->setBorderColors(Color(78, 86, 89, 232),
+                          Color(119, 134, 136, 246),
+                          Color(158, 177, 179, 255));
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -146,7 +150,7 @@ private:
 class ChartCanvasView : public View {
 public:
   ChartCanvasView() {
-    setBackgroundColor(Color(0, 0, 0, 255));
+    setBackgroundColor(Color(8, 9, 11, 255));
     batch.setSubmitView(rendering::ui_view);
   }
 
@@ -163,6 +167,11 @@ public:
   [[nodiscard]] float getZoom() const { return zoom; }
 
 protected:
+  struct TouchPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+  };
+
   void renderImpl(RenderContext &context) override {
     if (chart == nullptr) {
       return;
@@ -174,9 +183,9 @@ protected:
 
     batch.begin();
     drawGrid();
+    drawMarkers();
     drawLongNotes();
     drawNotes();
-    drawMarkers();
     batch.end();
 
     ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
@@ -200,8 +209,8 @@ protected:
       const float horizontal =
           event.wheel.x != 0 ? static_cast<float>(-event.wheel.x)
                              : static_cast<float>(-event.wheel.y);
-      scrollX += horizontal * 88.0f;
-      scrollY += static_cast<float>(-event.wheel.y) * 12.0f;
+      scrollX += horizontal * 88.0f / screenZoom;
+      scrollY += static_cast<float>(-event.wheel.y) * 12.0f / screenZoom;
       clampScroll();
       return false;
     }
@@ -228,8 +237,8 @@ protected:
       int uiX = 0;
       int uiY = 0;
       mouseMotionToUi(event.motion, uiX, uiY);
-      scrollX -= static_cast<float>(uiX - lastMouseX);
-      scrollY -= static_cast<float>(uiY - lastMouseY);
+      scrollX -= static_cast<float>(uiX - lastMouseX) / screenZoom;
+      scrollY -= static_cast<float>(uiY - lastMouseY) / screenZoom;
       lastMouseX = uiX;
       lastMouseY = uiY;
       clampScroll();
@@ -242,37 +251,52 @@ protected:
       }
       return true;
     case SDL_FINGERDOWN: {
-      if (activeTouchId != -1) {
-        return true;
-      }
       float uiX = 0.0f;
       float uiY = 0.0f;
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
       if (!containsPoint(uiX, uiY)) {
         return true;
       }
-      activeTouchId = event.tfinger.fingerId;
-      lastTouchX = uiX;
-      lastTouchY = uiY;
+      const SDL_FingerID fingerId = event.tfinger.fingerId;
+      activeTouches[fingerId] = {uiX, uiY};
+      if (activeTouches.size() >= 2) {
+        beginPinch();
+      } else if (activeTouches.size() == 1) {
+        pinchActive = false;
+        dragTouchId = fingerId;
+      }
       return false;
     }
     case SDL_FINGERMOTION: {
-      if (event.tfinger.fingerId != activeTouchId) {
+      auto touchIt = activeTouches.find(event.tfinger.fingerId);
+      if (touchIt == activeTouches.end()) {
         return true;
       }
       float uiX = 0.0f;
       float uiY = 0.0f;
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
-      scrollX -= uiX - lastTouchX;
-      scrollY -= uiY - lastTouchY;
-      lastTouchX = uiX;
-      lastTouchY = uiY;
-      clampScroll();
+      const TouchPoint previous = touchIt->second;
+      touchIt->second = {uiX, uiY};
+      if (activeTouches.size() >= 2) {
+        applyPinch();
+      } else if (!pinchActive && event.tfinger.fingerId == dragTouchId) {
+        scrollX -= (uiX - previous.x) / screenZoom;
+        scrollY -= (uiY - previous.y) / screenZoom;
+        clampScroll();
+      }
       return false;
     }
     case SDL_FINGERUP:
-      if (event.tfinger.fingerId == activeTouchId) {
-        activeTouchId = -1;
+      if (activeTouches.erase(event.tfinger.fingerId) > 0) {
+        if (activeTouches.size() >= 2) {
+          beginPinch();
+        } else if (activeTouches.size() == 1) {
+          pinchActive = false;
+          dragTouchId = activeTouches.begin()->first;
+        } else {
+          pinchActive = false;
+          dragTouchId = -1;
+        }
         return false;
       }
       return true;
@@ -328,17 +352,24 @@ private:
   float gutterWidth = 54.0f;
   float columnGap = 36.0f;
   float columnWidth = 0.0f;
+  float contentLeftMargin = 72.0f;
+  float contentRightMargin = 72.0f;
   float contentWidth = 0.0f;
   float contentHeight = 0.0f;
   float scrollX = 0.0f;
   float scrollY = 0.0f;
+  float screenZoom = 1.0f;
   bool layoutDirty = false;
   bool mouseDragging = false;
   int lastMouseX = 0;
   int lastMouseY = 0;
-  SDL_FingerID activeTouchId = -1;
-  float lastTouchX = 0.0f;
-  float lastTouchY = 0.0f;
+  std::unordered_map<SDL_FingerID, TouchPoint> activeTouches;
+  SDL_FingerID dragTouchId = -1;
+  bool pinchActive = false;
+  float pinchStartDistance = 1.0f;
+  float pinchStartScreenZoom = 1.0f;
+  float pinchAnchorContentX = 0.0f;
+  float pinchAnchorContentY = 0.0f;
 
   void rebuildLayout() {
     layoutDirty = false;
@@ -371,6 +402,13 @@ private:
     laneAreaWidth = static_cast<float>(laneCount) * laneWidth;
     columnGap = 34.0f;
     columnWidth = gutterWidth + laneAreaWidth + columnGap + 78.0f;
+    const SafeAreaInsets safe = getSafeAreaInsetsUi();
+    const float horizontalSafeInset =
+        static_cast<float>(std::max(safe.left, safe.right));
+    const float baseSideMargin =
+        std::clamp(static_cast<float>(getWidth()) * 0.12f, 84.0f, 156.0f);
+    contentLeftMargin = baseSideMargin + horizontalSafeInset;
+    contentRightMargin = baseSideMargin + horizontalSafeInset;
     const float maxColumnHeight =
         std::max(280.0f, static_cast<float>(getHeight() - 16));
     const float baseMeasureHeight = 68.0f * zoom;
@@ -398,7 +436,8 @@ private:
         ++groupEnd;
       }
 
-      const float columnX = static_cast<float>(column) * columnWidth;
+      const float columnX = contentLeftMargin +
+                            static_cast<float>(column) * columnWidth;
       float cursorY = maxColumnHeight;
       ColumnLayout columnLayout{columnX, maxColumnHeight, 0.0f};
       double beatStart = 0.0;
@@ -428,7 +467,8 @@ private:
     contentWidth =
         columnLayouts.empty()
             ? 0.0f
-            : columnLayouts.back().x + gutterWidth + laneAreaWidth + 78.0f;
+            : columnLayouts.back().x + gutterWidth + laneAreaWidth + 78.0f +
+                  contentRightMargin;
 
     for (size_t layoutIndex = 0; layoutIndex < measureLayouts.size();
          ++layoutIndex) {
@@ -482,26 +522,27 @@ private:
 
     if (timeline->BpmChange) {
       addLabel(MarkerType::Bpm, formatDouble(timeline->Bpm),
-               {108, 255, 94, 255});
+               {132, 224, 124, 255});
     }
     if (timeline->StopLength > 0.0) {
       addLabel(MarkerType::Stop,
                formatDouble(timeline->StopLength, 1) + " STOP",
-               {255, 245, 48, 255});
+               {242, 211, 80, 255});
     }
     if (timeline->ScrollChange) {
       addLabel(MarkerType::Scroll,
                "SCROLL " + formatDouble(timeline->Scroll),
-               {78, 223, 255, 255});
+               {101, 205, 208, 255});
     }
   }
 
   void drawGrid() {
-    const uint32_t gutterColor = Color(126, 128, 128, 255).toABGR();
-    const uint32_t laneBackground = Color(4, 5, 5, 255).toABGR();
-    const uint32_t majorLine = Color(190, 195, 199, 210).toABGR();
-    const uint32_t minorLine = Color(63, 66, 68, 190).toABGR();
-    const uint32_t fineLine = Color(38, 41, 43, 170).toABGR();
+    const uint32_t gutterColor = Color(43, 46, 47, 248).toABGR();
+    const uint32_t gutterAccent = Color(86, 98, 99, 215).toABGR();
+    const uint32_t laneBackground = Color(11, 12, 13, 255).toABGR();
+    const uint32_t majorLine = Color(120, 128, 130, 178).toABGR();
+    const uint32_t minorLine = Color(58, 64, 65, 148).toABGR();
+    const uint32_t fineLine = Color(34, 38, 39, 128).toABGR();
 
     for (const auto &layout : measureLayouts) {
       if (!contentRectIntersects(layout.x, layout.y, gutterWidth + laneAreaWidth,
@@ -510,6 +551,8 @@ private:
       }
       const float laneX = layout.x + gutterWidth;
       drawRectClip(layout.x, layout.y, gutterWidth, layout.height, gutterColor);
+      drawRectClip(layout.x + gutterWidth - 2.0f, layout.y, 2.0f,
+                   layout.height, gutterAccent);
       drawRectClip(laneX, layout.y, laneAreaWidth, layout.height,
                    laneBackground);
       drawRectClip(layout.x, layout.y, gutterWidth + laneAreaWidth, 1.5f,
@@ -567,9 +610,9 @@ private:
   }
 
   void drawMarkers() {
-    const uint32_t bpmColor = Color(95, 255, 72, 238).toABGR();
-    const uint32_t stopColor = Color(255, 246, 36, 220).toABGR();
-    const uint32_t scrollColor = Color(82, 215, 255, 230).toABGR();
+    const uint32_t bpmColor = Color(123, 220, 117, 226).toABGR();
+    const uint32_t stopColor = Color(238, 202, 72, 218).toABGR();
+    const uint32_t scrollColor = Color(92, 196, 198, 220).toABGR();
 
     for (const auto &[timeline, y] : timelineY) {
       auto layoutIt = timelineMeasure.find(timeline);
@@ -603,10 +646,14 @@ private:
         continue;
       }
       auto *label = measureLabels[i].get();
+      label->setSize(std::max(28, static_cast<int>(std::lround(gutterWidth *
+                                                               screenZoom))),
+                     std::max(16, static_cast<int>(std::lround(22.0f *
+                                                               screenZoom))));
       label->setPositionNoLayout(
-          static_cast<int>(std::round(getX() + layout.x - scrollX)),
+          static_cast<int>(std::round(contentToScreenX(layout.x))),
           static_cast<int>(
-              std::round(getY() + layout.y + layout.height - 24.0f - scrollY)),
+              std::round(contentToScreenY(layout.y + layout.height - 24.0f))),
           YGPositionTypeAbsolute);
       label->render(context);
     }
@@ -628,9 +675,12 @@ private:
       if (!contentRectIntersects(x, y, 74.0f, 18.0f)) {
         continue;
       }
+      marker.text->setSize(
+          std::max(60, static_cast<int>(std::lround(74.0f * screenZoom))),
+          std::max(16, static_cast<int>(std::lround(18.0f * screenZoom))));
       marker.text->setPositionNoLayout(
-          static_cast<int>(std::round(getX() + x - scrollX)),
-          static_cast<int>(std::round(getY() + y - scrollY)),
+          static_cast<int>(std::round(contentToScreenX(x))),
+          static_cast<int>(std::round(contentToScreenY(y))),
           YGPositionTypeAbsolute);
       marker.text->render(context);
     }
@@ -682,7 +732,7 @@ private:
       std::swap(firstColumn, lastColumn);
     }
 
-    const float bodyWidth = std::max(4.0f, laneWidth * 0.42f);
+    const float bodyWidth = std::max(6.0f, laneWidth * 0.62f);
     const uint32_t color = longNoteColor(lane);
     for (int column = firstColumn; column <= lastColumn; ++column) {
       if (column < 0 || column >= static_cast<int>(columnLayouts.size())) {
@@ -716,31 +766,31 @@ private:
     const float columnX =
         column >= 0 && column < static_cast<int>(columnLayouts.size())
             ? columnLayouts[static_cast<size_t>(column)].x
-            : static_cast<float>(column) * columnWidth;
+            : contentLeftMargin + static_cast<float>(column) * columnWidth;
     return columnX + gutterWidth + static_cast<float>(orderIndex) * laneWidth;
   }
 
   uint32_t noteColor(int lane, const bms_parser::Note *note) const {
     if (dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
-      return Color(220, 48, 38, 245).toABGR();
+      return Color(217, 69, 58, 246).toABGR();
     }
     if (isScratchLane(lane)) {
-      return Color(218, 52, 32, 245).toABGR();
+      return Color(231, 94, 58, 246).toABGR();
     }
     if (dynamic_cast<const bms_parser::LongNote *>(note) != nullptr) {
-      return lane % 2 == 0 ? Color(218, 225, 230, 245).toABGR()
-                           : Color(50, 132, 230, 245).toABGR();
+      return lane % 2 == 0 ? Color(225, 232, 230, 245).toABGR()
+                           : Color(84, 151, 224, 245).toABGR();
     }
-    return lane % 2 == 0 ? Color(232, 236, 238, 248).toABGR()
-                         : Color(42, 128, 230, 248).toABGR();
+    return lane % 2 == 0 ? Color(236, 240, 238, 248).toABGR()
+                         : Color(82, 154, 226, 248).toABGR();
   }
 
   uint32_t longNoteColor(int lane) const {
     if (isScratchLane(lane)) {
-      return Color(220, 74, 44, 116).toABGR();
+      return Color(231, 94, 58, 164).toABGR();
     }
-    return lane % 2 == 0 ? Color(230, 234, 238, 116).toABGR()
-                         : Color(48, 126, 220, 116).toABGR();
+    return lane % 2 == 0 ? Color(226, 232, 230, 154).toABGR()
+                         : Color(82, 154, 226, 164).toABGR();
   }
 
   bool isScratchLane(int lane) const {
@@ -750,10 +800,26 @@ private:
   }
 
   bool contentRectIntersects(float x, float y, float width, float height) const {
-    const float sx = x - scrollX;
-    const float sy = y - scrollY;
-    return sx + width >= 0.0f && sx <= static_cast<float>(getWidth()) &&
-           sy + height >= 0.0f && sy <= static_cast<float>(getHeight());
+    const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
+    const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
+    return x + width >= scrollX && x <= scrollX + viewportWidth &&
+           y + height >= scrollY && y <= scrollY + viewportHeight;
+  }
+
+  float contentToScreenX(float contentX) const {
+    return static_cast<float>(getX()) + (contentX - scrollX) * screenZoom;
+  }
+
+  float contentToScreenY(float contentY) const {
+    return static_cast<float>(getY()) + (contentY - scrollY) * screenZoom;
+  }
+
+  float uiToContentX(float uiX) const {
+    return scrollX + (uiX - static_cast<float>(getX())) / screenZoom;
+  }
+
+  float uiToContentY(float uiY) const {
+    return scrollY + (uiY - static_cast<float>(getY())) / screenZoom;
   }
 
   void drawRectClip(float x, float y, float width, float height,
@@ -761,14 +827,18 @@ private:
     if (width <= 0.0f || height <= 0.0f) {
       return;
     }
-    const float screenX = static_cast<float>(getX()) + x - scrollX;
-    const float screenY = static_cast<float>(getY()) + y - scrollY;
+    const float screenX = contentToScreenX(x);
+    const float screenY = contentToScreenY(y);
+    const float screenWidth = width * screenZoom;
+    const float screenHeight = height * screenZoom;
     const float left = std::max(screenX, static_cast<float>(getX()));
     const float top = std::max(screenY, static_cast<float>(getY()));
     const float right =
-        std::min(screenX + width, static_cast<float>(getX() + getWidth()));
+        std::min(screenX + screenWidth,
+                 static_cast<float>(getX() + getWidth()));
     const float bottom =
-        std::min(screenY + height, static_cast<float>(getY() + getHeight()));
+        std::min(screenY + screenHeight,
+                 static_cast<float>(getY() + getHeight()));
     if (right <= left || bottom <= top) {
       return;
     }
@@ -781,12 +851,70 @@ private:
   }
 
   void clampScroll() {
+    screenZoom = std::clamp(screenZoom, kMinScreenZoom, kMaxScreenZoom);
+    const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
+    const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
     const float maxX =
-        std::max(0.0f, contentWidth - static_cast<float>(getWidth()) + 24.0f);
+        std::max(0.0f, contentWidth - viewportWidth);
     const float maxY =
-        std::max(0.0f, contentHeight - static_cast<float>(getHeight()));
+        std::max(0.0f, contentHeight - viewportHeight);
     scrollX = std::clamp(scrollX, 0.0f, maxX);
     scrollY = std::clamp(scrollY, 0.0f, maxY);
+  }
+
+  bool twoTouchGeometry(float &distance, float &centerX, float &centerY) const {
+    if (activeTouches.size() < 2) {
+      return false;
+    }
+    auto touchIt = activeTouches.begin();
+    const TouchPoint first = touchIt->second;
+    ++touchIt;
+    const TouchPoint second = touchIt->second;
+    const float dx = second.x - first.x;
+    const float dy = second.y - first.y;
+    distance = std::max(1.0f, std::hypot(dx, dy));
+    centerX = (first.x + second.x) * 0.5f;
+    centerY = (first.y + second.y) * 0.5f;
+    return true;
+  }
+
+  void beginPinch() {
+    float distance = 0.0f;
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    if (!twoTouchGeometry(distance, centerX, centerY)) {
+      pinchActive = false;
+      return;
+    }
+    pinchActive = true;
+    mouseDragging = false;
+    dragTouchId = -1;
+    pinchStartDistance = distance;
+    pinchStartScreenZoom = screenZoom;
+    pinchAnchorContentX = uiToContentX(centerX);
+    pinchAnchorContentY = uiToContentY(centerY);
+  }
+
+  void applyPinch() {
+    if (!pinchActive) {
+      beginPinch();
+      return;
+    }
+    float distance = 0.0f;
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    if (!twoTouchGeometry(distance, centerX, centerY)) {
+      pinchActive = false;
+      return;
+    }
+    screenZoom = std::clamp(pinchStartScreenZoom * distance /
+                                std::max(1.0f, pinchStartDistance),
+                            kMinScreenZoom, kMaxScreenZoom);
+    scrollX = pinchAnchorContentX -
+              (centerX - static_cast<float>(getX())) / screenZoom;
+    scrollY = pinchAnchorContentY -
+              (centerY - static_cast<float>(getY())) / screenZoom;
+    clampScroll();
   }
 
   static void mouseEventToUi(const SDL_MouseButtonEvent &event, int &uiX,
@@ -874,7 +1002,7 @@ void ChartViewerScene::initView() {
   rootLayout = new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
-  rootLayout->setBackgroundColor(Color(0, 0, 0, 255));
+  rootLayout->setBackgroundColor(Color(8, 9, 11, 255));
 
   auto *header = new View();
   header->setHeight(safe.top + 98);
@@ -885,8 +1013,8 @@ void ChartViewerScene::initView() {
   header->setPadding(Edge::Right, safe.right + kHeaderPadding);
   header->setPadding(Edge::Bottom, 10);
   header->setGap(12);
-  header->setBackgroundColor(Color(62, 88, 123, 255));
-  header->setBorderColor(Color(118, 137, 158, 255));
+  header->setBackgroundColor(Color(20, 22, 25, 250));
+  header->setBorderColor(Color(56, 63, 66, 255));
   header->setBorderWidth(1);
 
   auto *titleColumn = new View();
@@ -897,15 +1025,15 @@ void ChartViewerScene::initView() {
   titleColumn->setGap(2);
 
   titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 29);
-  titleText->setColor({246, 248, 252, 255});
+  titleText->setColor({244, 246, 245, 255});
   titleText->setHeight(36);
   titleText->setOverflow(TextView::TextOverflow::Marquee);
   subtitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  subtitleText->setColor({218, 226, 236, 255});
+  subtitleText->setColor({177, 187, 189, 255});
   subtitleText->setHeight(23);
   subtitleText->setOverflow(TextView::TextOverflow::Hidden);
   randomSummaryText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  randomSummaryText->setColor({255, 245, 145, 255});
+  randomSummaryText->setColor({242, 209, 106, 255});
   randomSummaryText->setHeight(21);
   randomSummaryText->setOverflow(TextView::TextOverflow::Hidden);
   titleColumn->addView(titleText);
@@ -914,7 +1042,7 @@ void ChartViewerScene::initView() {
   header->addView(titleColumn);
 
   statusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  statusText->setColor({229, 237, 247, 255});
+  statusText->setColor({218, 226, 224, 255});
   statusText->setAlign(TextView::RIGHT);
   statusText->setVAlign(TextView::MIDDLE);
   statusText->setWidth(250);
@@ -927,7 +1055,7 @@ void ChartViewerScene::initView() {
   zoomText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   zoomText->setAlign(TextView::CENTER);
   zoomText->setVAlign(TextView::MIDDLE);
-  zoomText->setColor({238, 243, 249, 255});
+  zoomText->setColor({232, 237, 235, 255});
   zoomText->setWidth(70);
   zoomText->setHeight(kHeaderButtonHeight);
   auto *zoomInButton = makeButton("+", 52, 26, &zoomButtonText);
@@ -987,7 +1115,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     randomDrawerRoot->setVisible(false);
     randomDrawerRoot->setFlexDirection(FlexDirection::Row);
     randomDrawerRoot->setAlignItems(YGAlignStretch);
-    randomDrawerRoot->setBackgroundColor(Color(0, 0, 0, 136));
+    randomDrawerRoot->setBackgroundColor(Color(0, 0, 0, 154));
 
     auto *spacer = new View();
     spacer->setFlex(1);
@@ -999,8 +1127,8 @@ void ChartViewerScene::rebuildRandomDrawer() {
     panel->setAlignItems(YGAlignStretch);
     panel->setPadding(Edge::All, 20);
     panel->setGap(14);
-    panel->setBackgroundColor(Color(10, 15, 22, 244));
-    panel->setBorderColor(Color(88, 112, 142, 255));
+    panel->setBackgroundColor(Color(18, 20, 22, 248));
+    panel->setBorderColor(Color(79, 88, 91, 255));
     panel->setBorderWidth(2);
 
     auto *drawerHeader = new View();
@@ -1011,7 +1139,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
 
     auto *drawerTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
     drawerTitle->setText("#RANDOM");
-    drawerTitle->setColor({247, 249, 252, 255});
+    drawerTitle->setColor({244, 246, 245, 255});
     drawerTitle->setVAlign(TextView::MIDDLE);
     drawerTitle->setFlex(1);
     drawerHeader->addView(drawerTitle);
@@ -1024,7 +1152,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     randomDrawerScroll = new ScrollView();
     randomDrawerScroll->setFlex(1);
     randomDrawerScroll->clearBackgroundColor();
-    randomDrawerScroll->setBorderColor(Color(55, 72, 94, 255));
+    randomDrawerScroll->setBorderColor(Color(52, 59, 62, 255));
     randomDrawerScroll->setBorderWidth(1);
     panel->addView(randomDrawerScroll);
 
@@ -1041,7 +1169,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
   if (randomOptions.empty()) {
     auto *empty = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
     empty->setText("No active #RANDOM in this interpretation.");
-    empty->setColor({181, 197, 217, 255});
+    empty->setColor({178, 187, 188, 255});
     empty->setWrap(true);
     empty->setHeight(84);
     content->addView(empty);
@@ -1054,13 +1182,13 @@ void ChartViewerScene::rebuildRandomDrawer() {
       row->setHeight(62);
       row->setPadding(Edge::Left, 10 + option.depth * 18);
       row->setPadding(Edge::Right, 10);
-      row->setBackgroundColor(Color(19, 29, 43, 220));
-      row->setBorderColor(Color(58, 78, 103, 220));
+      row->setBackgroundColor(Color(27, 30, 32, 226));
+      row->setBorderColor(Color(61, 69, 72, 224));
       row->setBorderWidth(1);
 
       auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
       label->setText("#" + std::to_string(option.index + 1));
-      label->setColor({235, 241, 249, 255});
+      label->setColor({235, 239, 237, 255});
       label->setVAlign(TextView::MIDDLE);
       label->setWidth(58);
       label->setHeight(42);
@@ -1068,7 +1196,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
 
       auto *range = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
       range->setText("1-" + std::to_string(option.maxValue));
-      range->setColor({158, 178, 203, 255});
+      range->setColor({159, 172, 173, 255});
       range->setVAlign(TextView::MIDDLE);
       range->setFlex(1);
       range->setHeight(42);
@@ -1086,7 +1214,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
 
       auto *value = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
       value->setText(std::to_string(option.selectedValue));
-      value->setColor({255, 246, 147, 255});
+      value->setColor({242, 209, 106, 255});
       value->setAlign(TextView::CENTER);
       value->setVAlign(TextView::MIDDLE);
       value->setWidth(64);
@@ -1213,7 +1341,9 @@ void ChartViewerScene::updateZoomText() {
   if (zoomText == nullptr || canvasView == nullptr) {
     return;
   }
-  zoomText->setText(formatDouble(canvasView->getZoom() * 100.0, 0) + "%");
+  zoomText->setText(std::to_string(static_cast<int>(
+                        std::lround(canvasView->getZoom() * 100.0f))) +
+                    "%");
 }
 
 void ChartViewerScene::goBack() {
