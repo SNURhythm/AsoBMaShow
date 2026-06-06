@@ -2,6 +2,7 @@
 
 #include "../PlayOptionUtils.h"
 #include "../rendering/SimpleBatchRenderer.h"
+#include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
@@ -33,6 +34,13 @@ constexpr float kMinZoom = 0.55f;
 constexpr float kMaxZoom = 2.0f;
 constexpr float kMinScreenZoom = 0.65f;
 constexpr float kMaxScreenZoom = 3.0f;
+constexpr size_t kRandomDrawerPageSize = 96;
+constexpr size_t kRandomSummaryLimit = 48;
+constexpr size_t kRandomSummaryHead = 32;
+constexpr size_t kRandomSummaryTail = 8;
+constexpr int kMarkerLabelFontSize = 13;
+constexpr float kMarkerLabelWidth = 74.0f;
+constexpr float kMarkerLabelHeight = 18.0f;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -85,6 +93,33 @@ std::string joinRandomValues(const std::vector<int> &values) {
     stream << values[i];
   }
   return stream.str();
+}
+
+std::string joinRandomValueRange(const std::vector<int> &values, size_t start,
+                                 size_t end) {
+  std::ostringstream stream;
+  end = std::min(end, values.size());
+  for (size_t i = start; i < end; ++i) {
+    if (i > start) {
+      stream << "-";
+    }
+    stream << values[i];
+  }
+  return stream.str();
+}
+
+uint32_t markerLabelColorKey(const SDL_Color &color) {
+  return (static_cast<uint32_t>(color.r) << 24) |
+         (static_cast<uint32_t>(color.g) << 16) |
+         (static_cast<uint32_t>(color.b) << 8) |
+         static_cast<uint32_t>(color.a);
+}
+
+std::string markerGlyphCacheKey(char glyph, const SDL_Color &color) {
+  std::string key = std::to_string(markerLabelColorKey(color));
+  key.push_back(':');
+  key.push_back(glyph);
+  return key;
 }
 
 bool matchHeader(std::string_view line, std::string_view headerUpper) {
@@ -152,10 +187,12 @@ public:
   ChartCanvasView() {
     setBackgroundColor(Color(8, 9, 11, 255));
     batch.setSubmitView(rendering::ui_view);
+    markerTextBatch.setSubmitView(rendering::ui_view);
   }
 
   void setChart(bms_parser::Chart *newChart) {
     chart = newChart;
+    markerGlyphTextures.clear();
     rebuildLayout();
   }
 
@@ -333,11 +370,29 @@ private:
   struct MarkerLabel {
     const bms_parser::TimeLine *timeline = nullptr;
     MarkerType type = MarkerType::Bpm;
+    std::string text;
+    SDL_Color color{255, 255, 255, 255};
+  };
+
+  struct CachedMarkerGlyph {
     std::unique_ptr<TextView> text;
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+
+  struct MarkerLabelDraw {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float u1 = 1.0f;
   };
 
   bms_parser::Chart *chart = nullptr;
   rendering::SimpleBatchRenderer batch;
+  rendering::TexBatchRenderer markerTextBatch;
   std::vector<int> laneOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<MeasureLayout> measureLayouts;
@@ -346,6 +401,8 @@ private:
   std::unordered_map<const bms_parser::TimeLine *, size_t> timelineMeasure;
   std::vector<std::unique_ptr<TextView>> measureLabels;
   std::vector<MarkerLabel> markerLabels;
+  std::unordered_map<std::string, CachedMarkerGlyph> markerGlyphTextures;
+  std::vector<MarkerLabelDraw> visibleMarkerLabelDraws;
   float zoom = 1.0f;
   float laneWidth = 24.0f;
   float laneAreaWidth = 0.0f;
@@ -507,17 +564,8 @@ private:
   }
 
   void appendMarkerLabel(const bms_parser::TimeLine *timeline) {
-    auto addLabel = [&](MarkerType type, std::string text,
-                        SDL_Color color) {
-      auto label =
-          std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 13);
-      label->setText(std::move(text));
-      label->setColor(color);
-      label->setAlign(TextView::LEFT);
-      label->setVAlign(TextView::MIDDLE);
-      label->setOverflow(TextView::TextOverflow::Hidden);
-      label->setSize(74, 18);
-      markerLabels.push_back({timeline, type, std::move(label)});
+    auto addLabel = [&](MarkerType type, std::string text, SDL_Color color) {
+      markerLabels.push_back({timeline, type, std::move(text), color});
     };
 
     if (timeline->BpmChange) {
@@ -658,6 +706,7 @@ private:
       label->render(context);
     }
 
+    visibleMarkerLabelDraws.clear();
     for (auto &marker : markerLabels) {
       auto yIt = timelineY.find(marker.timeline);
       auto layoutIt = timelineMeasure.find(marker.timeline);
@@ -672,18 +721,83 @@ private:
       } else if (marker.type == MarkerType::Scroll) {
         y += 20.0f;
       }
-      if (!contentRectIntersects(x, y, 74.0f, 18.0f)) {
+      if (!contentRectIntersects(x, y, kMarkerLabelWidth,
+                                 kMarkerLabelHeight)) {
         continue;
       }
-      marker.text->setSize(
-          std::max(60, static_cast<int>(std::lround(74.0f * screenZoom))),
-          std::max(16, static_cast<int>(std::lround(18.0f * screenZoom))));
-      marker.text->setPositionNoLayout(
-          static_cast<int>(std::round(contentToScreenX(x))),
-          static_cast<int>(std::round(contentToScreenY(y))),
-          YGPositionTypeAbsolute);
-      marker.text->render(context);
+      const float labelBoxWidth = std::max(60.0f, kMarkerLabelWidth * screenZoom);
+      const float labelBoxHeight =
+          std::max(16.0f, kMarkerLabelHeight * screenZoom);
+      const float labelTextScale = std::max(1.0f, screenZoom);
+      const float labelScreenX = contentToScreenX(x);
+      const float labelScreenY = contentToScreenY(y);
+      const float labelRight = labelScreenX + labelBoxWidth;
+      float cursorX = labelScreenX;
+      for (char glyphChar : marker.text) {
+        const auto *glyph = cachedMarkerGlyph(glyphChar, marker.color);
+        if (glyph == nullptr) {
+          continue;
+        }
+
+        const float glyphWidth = std::max(1.0f, glyph->width) * labelTextScale;
+        const float glyphHeight = glyph->height * labelTextScale;
+        if (cursorX >= labelRight) {
+          break;
+        }
+        const float clippedWidth = std::min(glyphWidth, labelRight - cursorX);
+        if (glyphChar != ' ' && bgfx::isValid(glyph->texture) &&
+            glyphHeight > 0.0f && clippedWidth > 0.0f) {
+          visibleMarkerLabelDraws.push_back(
+              {glyph->texture, cursorX,
+               labelScreenY + (labelBoxHeight - glyphHeight) * 0.5f,
+               clippedWidth, glyphHeight,
+               std::clamp(clippedWidth / glyphWidth, 0.0f, 1.0f)});
+        }
+        cursorX += glyphWidth;
+      }
     }
+
+    if (visibleMarkerLabelDraws.empty()) {
+      return;
+    }
+
+    std::sort(visibleMarkerLabelDraws.begin(), visibleMarkerLabelDraws.end(),
+              [](const MarkerLabelDraw &lhs, const MarkerLabelDraw &rhs) {
+                return lhs.texture.idx < rhs.texture.idx;
+              });
+    markerTextBatch.setScissor(context.scissor.x, context.scissor.y,
+                               context.scissor.width, context.scissor.height);
+    markerTextBatch.begin();
+    for (const auto &draw : visibleMarkerLabelDraws) {
+      markerTextBatch.addRectUV(draw.x, draw.y, draw.width, draw.height, 0.0f,
+                                1.0f, draw.u1, 0.0f, draw.texture);
+    }
+    markerTextBatch.end();
+    markerTextBatch.clearScissor();
+  }
+
+  const CachedMarkerGlyph *cachedMarkerGlyph(char glyph,
+                                             const SDL_Color &color) {
+    const std::string key = markerGlyphCacheKey(glyph, color);
+    if (const auto it = markerGlyphTextures.find(key);
+        it != markerGlyphTextures.end()) {
+      return &it->second;
+    }
+
+    CachedMarkerGlyph label;
+    label.text =
+        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf",
+                                   kMarkerLabelFontSize);
+    label.text->setColor(color);
+    label.text->setText(std::string(1, glyph));
+    label.texture = label.text->textureHandle();
+    label.width = glyph == ' ' ? static_cast<float>(kMarkerLabelFontSize) * 0.34f
+                               : static_cast<float>(label.text->textureWidth());
+    label.height = static_cast<float>(label.text->textureHeight());
+    auto [it, inserted] =
+        markerGlyphTextures.emplace(key, std::move(label));
+    (void)inserted;
+    return &it->second;
   }
 
   template <typename Fn> void forEachNote(Fn &&fn) {
@@ -1167,6 +1281,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
   content->setGap(10);
 
   if (randomOptions.empty()) {
+    randomDrawerPage = 0;
     auto *empty = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
     empty->setText("No active #RANDOM in this interpretation.");
     empty->setColor({178, 187, 188, 255});
@@ -1174,7 +1289,59 @@ void ChartViewerScene::rebuildRandomDrawer() {
     empty->setHeight(84);
     content->addView(empty);
   } else {
-    for (const auto &option : randomOptions) {
+    const size_t totalOptions = randomOptions.size();
+    const size_t maxPage = (totalOptions - 1) / kRandomDrawerPageSize;
+    randomDrawerPage = std::min(randomDrawerPage, maxPage);
+    const size_t pageStart = randomDrawerPage * kRandomDrawerPageSize;
+    const size_t pageEnd =
+        std::min(pageStart + kRandomDrawerPageSize, totalOptions);
+
+    if (totalOptions > kRandomDrawerPageSize) {
+      auto *pager = new View();
+      pager->setFlexDirection(FlexDirection::Row);
+      pager->setAlignItems(YGAlignCenter);
+      pager->setGap(10);
+      pager->setHeight(58);
+      pager->setPadding(Edge::Left, 10);
+      pager->setPadding(Edge::Right, 10);
+      pager->setBackgroundColor(Color(22, 25, 27, 232));
+      pager->setBorderColor(Color(61, 69, 72, 224));
+      pager->setBorderWidth(1);
+
+      auto *pageLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      pageLabel->setText("Showing " + std::to_string(pageStart + 1) + "-" +
+                         std::to_string(pageEnd) + " / " +
+                         std::to_string(totalOptions));
+      pageLabel->setColor({218, 226, 224, 255});
+      pageLabel->setVAlign(TextView::MIDDLE);
+      pageLabel->setOverflow(TextView::TextOverflow::Hidden);
+      pageLabel->setFlex(1);
+      pageLabel->setHeight(42);
+      pager->addView(pageLabel);
+
+      auto *prevPage = makeButton("Prev", 82, 17);
+      prevPage->setOnClickListener([this]() {
+        if (randomDrawerPage > 0) {
+          --randomDrawerPage;
+          rebuildRandomDrawer();
+        }
+      });
+      pager->addView(prevPage);
+
+      auto *nextPage = makeButton("Next", 82, 17);
+      nextPage->setOnClickListener([this, maxPage]() {
+        if (randomDrawerPage < maxPage) {
+          ++randomDrawerPage;
+          rebuildRandomDrawer();
+        }
+      });
+      pager->addView(nextPage);
+      content->addView(pager);
+    }
+
+    for (size_t optionIndex = pageStart; optionIndex < pageEnd;
+         ++optionIndex) {
+      const auto &option = randomOptions[optionIndex];
       auto *row = new View();
       row->setFlexDirection(FlexDirection::Row);
       row->setAlignItems(YGAlignCenter);
@@ -1190,7 +1357,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
       label->setText("#" + std::to_string(option.index + 1));
       label->setColor({235, 239, 237, 255});
       label->setVAlign(TextView::MIDDLE);
-      label->setWidth(58);
+      label->setWidth(72);
       label->setHeight(42);
       row->addView(label);
 
@@ -1562,6 +1729,16 @@ ChartViewerScene::scanActiveRandomOptions() const {
 std::string ChartViewerScene::randomSummary() const {
   if (selectedRandomValues.empty()) {
     return "RANDOM: none";
+  }
+  if (selectedRandomValues.size() > kRandomSummaryLimit) {
+    return "RANDOM: " +
+           joinRandomValueRange(selectedRandomValues, 0, kRandomSummaryHead) +
+           " ... " +
+           joinRandomValueRange(selectedRandomValues,
+                                selectedRandomValues.size() -
+                                    kRandomSummaryTail,
+                                selectedRandomValues.size()) +
+           " (" + std::to_string(selectedRandomValues.size()) + " values)";
   }
   return "RANDOM: " + joinRandomValues(selectedRandomValues);
 }

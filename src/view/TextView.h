@@ -22,6 +22,9 @@ public:
   void setVAlign(TextVAlign newVAlign);
   void setOverflow(TextOverflow newOverflow);
   void setWrap(bool enabled);
+  [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
+  [[nodiscard]] int textureWidth() const { return rect.w; }
+  [[nodiscard]] int textureHeight() const { return rect.h; }
 
 protected:
   struct FontFace {

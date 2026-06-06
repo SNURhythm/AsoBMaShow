@@ -61,6 +61,7 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
+  size_t randomDrawerPage = 0;
 
   void initView();
   void rebuildRandomDrawer();
