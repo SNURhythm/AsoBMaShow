@@ -52,6 +52,7 @@ private:
   TextView *summaryLaneLengthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
+  TextInputBox *judgementIndicatorWidthInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
@@ -128,6 +129,7 @@ private:
   void syncLaneAngleInputText(bool force = false);
   void syncLaneLengthInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
+  void syncJudgementIndicatorWidthInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
@@ -136,4 +138,5 @@ private:
   void commitLaneAngleInput();
   void commitLaneLengthInput();
   void commitJudgementIndicatorYInput();
+  void commitJudgementIndicatorWidthInput();
 };

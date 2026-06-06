@@ -187,7 +187,8 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamClockUsesRenderTime(bool enabled);
-  void setJudgementIndicatorConfig(bool enabled, float y, bool hudMode);
+  void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
+                                   bool hudMode);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);

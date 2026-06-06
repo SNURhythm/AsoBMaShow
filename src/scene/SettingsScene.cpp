@@ -360,6 +360,24 @@ float judgementIndicatorPercentToY(int percent) {
   return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
 }
 
+float clampJudgementIndicatorWidthScale(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultJudgementIndicatorWidthScale;
+  }
+  return std::clamp(value, AppSettings::kMinJudgementIndicatorWidthScale,
+                    AppSettings::kMaxJudgementIndicatorWidthScale);
+}
+
+int judgementIndicatorWidthScaleToPercent(float value) {
+  return static_cast<int>(
+      std::lround(clampJudgementIndicatorWidthScale(value) * 100.0f));
+}
+
+float judgementIndicatorWidthPercentToScale(int percent) {
+  return clampJudgementIndicatorWidthScale(static_cast<float>(percent) /
+                                           100.0f);
+}
+
 int greenNumberToMilliseconds(int greenNumber) {
   return static_cast<int>(
       std::lround(static_cast<double>(greenNumber) * 1000.0 / 600.0));
@@ -904,6 +922,7 @@ void SettingsScene::resetViewState() {
   summaryLaneLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
+  judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   notePriorityModeText = nullptr;
@@ -1573,6 +1592,8 @@ void SettingsScene::initView() {
         judgementIndicatorRenderModeButton);
     judgementIndicatorControls->addView(judgementIndicatorModeControls);
 
+    judgementIndicatorControls->addView(
+        makeText("Y Position", metrics.bodyTextSize, Color(168, 186, 209)));
     auto *judgementIndicatorYControls = new View();
     judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
     judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
@@ -1623,13 +1644,79 @@ void SettingsScene::initView() {
     judgementIndicatorYControls->addView(resetIndicatorY);
     judgementIndicatorControls->addView(judgementIndicatorYControls);
 
+    judgementIndicatorControls->addView(
+        makeText("Width", metrics.bodyTextSize, Color(168, 186, 209)));
+    auto *judgementIndicatorWidthControls = new View();
+    judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
+    judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
+    judgementIndicatorWidthControls->setGap(metrics.compact ? 8.0f : 12.0f);
+    judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
+    auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
+      const int currentPercent = judgementIndicatorWidthScaleToPercent(
+          context.settings.judgementIndicatorWidthScale);
+      const int minPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMinJudgementIndicatorWidthScale);
+      const int maxPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMaxJudgementIndicatorWidthScale);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
+      context.settings.judgementIndicatorWidthScale =
+          judgementIndicatorWidthPercentToScale(nextPercent);
+      persistSettings();
+      syncJudgementIndicatorWidthInputText(true);
+    };
+
+    auto *minusIndicatorWidthLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+    minusIndicatorWidthLarge->setOnClickListener(
+        [updateJudgementIndicatorWidth]() {
+          updateJudgementIndicatorWidth(-10);
+        });
+    judgementIndicatorWidthControls->addView(minusIndicatorWidthLarge);
+    auto *minusIndicatorWidthSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
+    minusIndicatorWidthSmall->setOnClickListener(
+        [updateJudgementIndicatorWidth]() {
+          updateJudgementIndicatorWidth(-1);
+        });
+    judgementIndicatorWidthControls->addView(minusIndicatorWidthSmall);
+    judgementIndicatorWidthInput = makeNumericInput(metrics);
+    judgementIndicatorWidthInput->onEditingFinished(
+        [this](const std::string &) { commitJudgementIndicatorWidthInput(); });
+    judgementIndicatorWidthControls->addView(
+        makeInputFrame(metrics, judgementIndicatorWidthInput));
+    auto *plusIndicatorWidthSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
+    plusIndicatorWidthSmall->setOnClickListener(
+        [updateJudgementIndicatorWidth]() {
+          updateJudgementIndicatorWidth(1);
+        });
+    judgementIndicatorWidthControls->addView(plusIndicatorWidthSmall);
+    auto *plusIndicatorWidthLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+    plusIndicatorWidthLarge->setOnClickListener(
+        [updateJudgementIndicatorWidth]() {
+          updateJudgementIndicatorWidth(10);
+        });
+    judgementIndicatorWidthControls->addView(plusIndicatorWidthLarge);
+    auto *resetIndicatorWidth = makeResetButton(metrics);
+    resetIndicatorWidth->setOnClickListener([this]() {
+      context.settings.judgementIndicatorWidthScale =
+          AppSettings::kDefaultJudgementIndicatorWidthScale;
+      persistSettings();
+      syncJudgementIndicatorWidthInputText(true);
+    });
+    judgementIndicatorWidthControls->addView(resetIndicatorWidth);
+    judgementIndicatorControls->addView(judgementIndicatorWidthControls);
+
     cardsColumn->addView(makeCard(
         metrics, "Judgement Indicator",
         metrics.compact
-            ? "Y position: 0% bottom, 50% center, 100% top."
+            ? "Y: 0% bottom, 50% center, 100% top. Width: 100% base."
             : "Y position is vertical placement: 0% is the "
               "judgement-line/bottom side, 50% is center, and 100% is top. "
-              "3D draws on the lane plane; HUD draws screen-flat.",
+              "Width percent scales the selected mode's base width; 100% is "
+              "default. 3D draws on the lane plane; HUD draws screen-flat.",
         judgementIndicatorControls, metrics.visibleTimeCardHeight,
         metrics.cardsWidth));
 
@@ -2250,6 +2337,7 @@ void SettingsScene::refreshSettingsText() {
     summaryNotePriorityValueText->setText(notePriorityLabel);
   }
   syncJudgementIndicatorYInputText();
+  syncJudgementIndicatorWidthInputText();
   if (keysoundModeText != nullptr) {
     keysoundModeText->setText(keysoundLabel);
   }
@@ -2518,6 +2606,18 @@ void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
           context.settings.judgementIndicatorY)));
 }
 
+void SettingsScene::syncJudgementIndicatorWidthInputText(bool force) {
+  if (judgementIndicatorWidthInput == nullptr) {
+    return;
+  }
+  if (!force && judgementIndicatorWidthInput->getSelected()) {
+    return;
+  }
+  judgementIndicatorWidthInput->setEditingText(
+      std::to_string(judgementIndicatorWidthScaleToPercent(
+          context.settings.judgementIndicatorWidthScale)));
+}
+
 void SettingsScene::commitOffsetInput() {
   if (offsetInput == nullptr) {
     return;
@@ -2691,6 +2791,33 @@ void SettingsScene::commitJudgementIndicatorYInput() {
   }
 }
 
+void SettingsScene::commitJudgementIndicatorWidthInput() {
+  if (judgementIndicatorWidthInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = judgementIndicatorWidthInput->getText();
+  if (rawText.empty()) {
+    syncJudgementIndicatorWidthInputText(true);
+    return;
+  }
+
+  try {
+    const int minPercent = judgementIndicatorWidthScaleToPercent(
+        AppSettings::kMinJudgementIndicatorWidthScale);
+    const int maxPercent = judgementIndicatorWidthScaleToPercent(
+        AppSettings::kMaxJudgementIndicatorWidthScale);
+    const int percent =
+        std::clamp(std::stoi(rawText), minPercent, maxPercent);
+    context.settings.judgementIndicatorWidthScale =
+        judgementIndicatorWidthPercentToScale(percent);
+    persistSettings();
+    syncJudgementIndicatorWidthInputText(true);
+  } catch (const std::exception &) {
+    syncJudgementIndicatorWidthInputText(true);
+  }
+}
+
 void SettingsScene::update(float dt) {
   if (previewActive) {
     ensurePreviewRenderer();
@@ -2714,6 +2841,7 @@ void SettingsScene::renderScene() {
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
         context.settings.judgementIndicatorY,
+        context.settings.judgementIndicatorWidthScale,
         context.settings.judgementIndicatorRenderMode ==
             AppSettings::JudgementIndicatorRenderMode::Hud2D);
     previewRenderer->refreshGeometry();
@@ -2746,6 +2874,7 @@ void SettingsScene::cleanupScene() {
   summaryLaneLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
+  judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   notePriorityModeText = nullptr;

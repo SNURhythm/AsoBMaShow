@@ -1949,6 +1949,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   renderer.setJudgementIndicatorConfig(settings.judgementIndicatorEnabled,
                                        settings.judgementIndicatorY,
+                                       settings.judgementIndicatorWidthScale,
                                        judgementIndicatorHudMode);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
                           gaugeInitialValue(replay.initialGaugeType));

@@ -11,10 +11,12 @@
 namespace {
 constexpr long long kDefaultRangeMicros = 500000LL;
 constexpr long long kFadeMicros = 1800000LL;
-constexpr float kWorldWidthRatio = 0.34f;
+constexpr float kWorldWidthRatio = 0.4f;
 constexpr float kHudWidthRatio = 0.2f;
 constexpr float kHudMinWidth = 220.0f;
-constexpr float kHudMaxWidth = 360.0f;
+constexpr float kHudMaxWidth = 720.0f;
+constexpr float kMinWidthScale = 0.5f;
+constexpr float kMaxWidthScale = 2.0f;
 
 static_assert(std::atomic<uint64_t>::is_always_lock_free,
               "Judgement indicator sequence atomic must be lock-free");
@@ -89,12 +91,18 @@ JudgementIndicatorRenderer::JudgementIndicatorRenderer(
       rangeMicros(indicatorRangeFromWindows(timingWindows)) {}
 
 void JudgementIndicatorRenderer::configure(bool enabled, float y,
-                                           bool hudMode) {
+                                           float widthScale, bool hudMode) {
   const int nextYPermille =
       std::clamp(static_cast<int>(std::lround(std::clamp(y, 0.0f, 1.0f) *
                                               1000.0f)),
                  0, 1000);
+  const float clampedWidthScale =
+      std::clamp(widthScale, kMinWidthScale, kMaxWidthScale);
+  const int nextWidthPermille =
+      std::clamp(static_cast<int>(std::lround(clampedWidthScale * 1000.0f)),
+                 500, 2000);
   yPermille.store(nextYPermille, std::memory_order_relaxed);
+  widthPermille.store(nextWidthPermille, std::memory_order_relaxed);
   this->hudMode.store(hudMode, std::memory_order_relaxed);
   this->enabled.store(enabled, std::memory_order_release);
   if (!enabled) {
@@ -258,11 +266,16 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
       static_cast<float>(
           std::clamp(yPermille.load(std::memory_order_relaxed), 0, 1000)) /
       1000.0f;
+  const float widthScale =
+      static_cast<float>(
+          std::clamp(widthPermille.load(std::memory_order_relaxed), 500, 2000)) /
+      1000.0f;
 
   Layout indicatorLayout{};
   if (hudMode) {
     indicatorLayout.width =
-        std::clamp(static_cast<float>(rendering::window_width) * kHudWidthRatio,
+        std::clamp(static_cast<float>(rendering::window_width) *
+                       kHudWidthRatio * widthScale,
                    kHudMinWidth, kHudMaxWidth);
     indicatorLayout.x =
         (static_cast<float>(rendering::window_width) - indicatorLayout.width) *
@@ -281,7 +294,7 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
   }
 
   indicatorLayout.width =
-      gameplay_geometry::kPlayAreaWidth * kWorldWidthRatio;
+      gameplay_geometry::kPlayAreaWidth * kWorldWidthRatio * widthScale;
   indicatorLayout.x =
       gameplay_geometry::kPlayAreaCenterX - indicatorLayout.width * 0.5f;
   const float laneHeight = std::max(0.1f, geometry.upperBound - geometry.judgeY);

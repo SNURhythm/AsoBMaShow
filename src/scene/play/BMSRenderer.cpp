@@ -789,8 +789,8 @@ void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
 }
 
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
-                                              bool hudMode) {
-  judgementIndicator.configure(enabled, y, hudMode);
+                                              float widthScale, bool hudMode) {
+  judgementIndicator.configure(enabled, y, widthScale, hudMode);
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

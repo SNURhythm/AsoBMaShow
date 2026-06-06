@@ -46,6 +46,9 @@ public:
   static constexpr float kMinJudgementIndicatorY = 0.0f;
   static constexpr float kMaxJudgementIndicatorY = 1.0f;
   static constexpr float kDefaultJudgementIndicatorY = 0.5f;
+  static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
+  static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
+  static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 
@@ -63,6 +66,7 @@ public:
   NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
+  float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
   std::string selectedGaugeType = kDefaultGaugeType;

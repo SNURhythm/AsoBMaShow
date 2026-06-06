@@ -26,7 +26,7 @@ public:
       const std::map<Judgement, std::pair<long long, long long>>
           &timingWindows);
 
-  void configure(bool enabled, float y, bool hudMode);
+  void configure(bool enabled, float y, float widthScale, bool hudMode);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
   void clear();
   void render(rendering::SimpleBatchRenderer &batch, long long currentTimeMicros,
@@ -78,4 +78,5 @@ private:
   std::atomic_bool enabled{true};
   std::atomic_bool hudMode{false};
   std::atomic<int> yPermille{500};
+  std::atomic<int> widthPermille{1000};
 };
