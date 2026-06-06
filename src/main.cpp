@@ -14,6 +14,7 @@
 #endif
 #include "main.h"
 #include "scene/MainMenuScene.h"
+#include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include <cstdlib>
@@ -903,8 +904,9 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
   constexpr float kCameraDepth = 2.1f;
   const float laneLookAtY = settings.laneLength * 0.25f;
   const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
-  bx::Vec3 at = {4.0f, laneLookAtY, 0.0f};
-  bx::Vec3 eye = {4.0f, laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
+  bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0f};
+  bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
+                  laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
                   -kCameraDepth};
 
   float aspect =

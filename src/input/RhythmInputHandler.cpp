@@ -8,6 +8,7 @@
 #include "../rendering/common.h"
 #include "bx/math.h"
 #include "../rendering/Camera.h"
+#include "../scene/play/GameplayGeometry.h"
 #include "../targets.h"
 #include <algorithm>
 #include <array>
@@ -272,7 +273,8 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
     position = {nearPoint.x + ray.x * t, nearPoint.y + ray.y * t,
                 nearPoint.z + ray.z * t};
   }
-  int line = static_cast<int>(position.x * totalLaneCount / 8.0f);
+  int line = static_cast<int>(position.x * totalLaneCount /
+                              gameplay_geometry::kPlayAreaWidth);
   line = clampLane(line);
   SDL_Log("Touch to lane: %d", line);
   return line;

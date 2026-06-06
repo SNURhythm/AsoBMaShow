@@ -7,6 +7,7 @@
 #include "rendering/RenderPlan.h"
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
+#include "scene/play/GameplayGeometry.h"
 #include "scene/play/Judge.h"
 #include "targets.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -348,9 +349,11 @@ void configureReplayExportRenderViews(int width, int height,
   constexpr float kCameraDepth = 2.1f;
   const float laneLookAtY = settings.laneLength * 0.25f;
   const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
-  const bx::Vec3 at = {4.0f, laneLookAtY, 0.0f};
-  const bx::Vec3 eye = {
-      4.0f, laneLookAtY - std::tan(laneAngleRad) * kCameraDepth, -kCameraDepth};
+  const bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY,
+                       0.0f};
+  const bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
+                        laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
+                        -kCameraDepth};
   const float aspect = static_cast<float>(width) / static_cast<float>(height);
   rendering::game_camera.edit()
       .setPosition(eye)

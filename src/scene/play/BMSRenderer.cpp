@@ -4,6 +4,7 @@
 
 #include "BMSRenderer.h"
 
+#include "GameplayGeometry.h"
 #include "Judge.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
@@ -91,7 +92,10 @@ BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
   constexpr int width = 128;
   constexpr int height = 40;
   noteRenderWidth =
-      laneOrder.empty() ? 1.0f : 8.0f / static_cast<float>(laneOrder.size());
+      laneOrder.empty()
+          ? gameplay_geometry::kStandardNoteWidth
+          : gameplay_geometry::kPlayAreaWidth /
+                static_cast<float>(laneOrder.size());
   noteImageHeight = height;
   noteImageWidth = width;
   noteRenderHeight = static_cast<float>(noteImageHeight) /
@@ -542,9 +546,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   ghostBatchRenderer.begin();
   beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
   // background
-  drawRect(8.0f, upperBound - judgeY, 0.0f, judgeY, Color(20, 20, 20, 122));
+  drawRect(gameplay_geometry::kPlayAreaWidth, upperBound - judgeY, 0.0f,
+           judgeY, Color(20, 20, 20, 122));
   // judge line
-  drawRect(8.0f, noteRenderHeight, 0.0f, judgeY, Color(255, 255, 255, 255));
+  drawRect(gameplay_geometry::kPlayAreaWidth, noteRenderHeight, 0.0f, judgeY,
+           Color(255, 255, 255, 255));
   // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
   const float visibleTimeMs = std::max(
       1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
@@ -585,7 +591,8 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
       if (timeLine->IsFirstInMeasure) {
         // render measure line
-        drawRect(8.0f, 0.05f, 0.0f, y, Color(255, 255, 255, 128));
+        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
+                 Color(255, 255, 255, 128));
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
       y = judgeY + (micro - timeLine->Timing) /
