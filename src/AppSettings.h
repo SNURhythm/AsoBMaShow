@@ -11,6 +11,13 @@ public:
     Stretch = 2,
   };
 
+  enum class NotePriorityMode {
+    Lowest = 0,
+    Combo = 1,
+    Duration = 2,
+    Score = 3,
+  };
+
   static constexpr int kMinInputOffsetMs = -300;
   static constexpr int kMaxInputOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
@@ -45,6 +52,7 @@ public:
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
+  NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
 

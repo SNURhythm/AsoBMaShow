@@ -55,6 +55,18 @@ parseBgaDisplayMode(const std::string &value,
   return fallback;
 }
 
+std::string normalizeSettingToken(std::string value) {
+  value = trim(value);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return value;
+}
+
 const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -65,6 +77,40 @@ const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
     return "stretch";
   }
   return "fit";
+}
+
+AppSettings::NotePriorityMode
+parseNotePriorityMode(const std::string &value,
+                      AppSettings::NotePriorityMode fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "lowest") {
+    return AppSettings::NotePriorityMode::Lowest;
+  }
+  if (normalized == "combo") {
+    return AppSettings::NotePriorityMode::Combo;
+  }
+  if (normalized == "duration") {
+    return AppSettings::NotePriorityMode::Duration;
+  }
+  if (normalized == "score") {
+    return AppSettings::NotePriorityMode::Score;
+  }
+  return fallback;
+}
+
+const char *
+notePriorityModeToString(AppSettings::NotePriorityMode notePriorityMode) {
+  switch (notePriorityMode) {
+  case AppSettings::NotePriorityMode::Lowest:
+    return "lowest";
+  case AppSettings::NotePriorityMode::Combo:
+    return "combo";
+  case AppSettings::NotePriorityMode::Duration:
+    return "duration";
+  case AppSettings::NotePriorityMode::Score:
+    return "score";
+  }
+  return "lowest";
 }
 
 std::string parseGaugeTypeId(const std::string &value,
@@ -148,6 +194,16 @@ void AppSettings::sanitize() {
                                    kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
   laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
                              kMaxLaneLength);
+  switch (notePriorityMode) {
+  case NotePriorityMode::Lowest:
+  case NotePriorityMode::Combo:
+  case NotePriorityMode::Duration:
+  case NotePriorityMode::Score:
+    break;
+  default:
+    notePriorityMode = NotePriorityMode::Lowest;
+    break;
+  }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
@@ -188,6 +244,8 @@ bool AppSettings::save() const {
        << bgaDisplayModeToString(sanitized.bgaDisplayMode) << "\n";
   file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
   file << "lane_length=" << sanitized.laneLength << "\n";
+  file << "note_priority_mode="
+       << notePriorityModeToString(sanitized.notePriorityMode) << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   return file.good();
@@ -250,6 +308,9 @@ AppSettings AppSettings::load() {
         settings.laneAngleDegrees = std::stof(value);
       } else if (key == "lane_length") {
         settings.laneLength = std::stof(value);
+      } else if (key == "note_priority_mode") {
+        settings.notePriorityMode =
+            parseNotePriorityMode(value, settings.notePriorityMode);
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

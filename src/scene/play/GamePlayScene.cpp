@@ -12,6 +12,7 @@
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <memory>
@@ -27,6 +28,71 @@ long long nowMicros() {
 
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
   return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
+}
+
+struct PressLaneCandidate {
+  int lane = 0;
+  bms_parser::Note *note = nullptr;
+  JudgeResult judge = JudgeResult(None, 0);
+};
+
+long long noteTimingMicros(const bms_parser::Note *note) {
+  return note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
+                                                      : 0;
+}
+
+long long absoluteTimeDistance(long long a, long long b) {
+  return a > b ? a - b : b - a;
+}
+
+long long latestHittableNoteTiming(const Judge &judge, long long inputTime) {
+  bool hasWindow = false;
+  long long earliestWindow = 0;
+  for (const auto &entry : judge.timingWindows) {
+    if (!hasWindow || entry.second.first < earliestWindow) {
+      earliestWindow = entry.second.first;
+      hasWindow = true;
+    }
+  }
+  return hasWindow ? inputTime - earliestWindow : inputTime;
+}
+
+bool preferByTimingWindow(const PressLaneCandidate &current,
+                          const PressLaneCandidate &next,
+                          long long inputTime, const Judge &judge,
+                          Judgement threshold) {
+  if (next.note == nullptr || next.note->IsPlayed) {
+    return false;
+  }
+  const auto windowIt = judge.timingWindows.find(threshold);
+  if (windowIt == judge.timingWindows.end()) {
+    return false;
+  }
+
+  const auto &window = windowIt->second;
+  const long long currentTiming = noteTimingMicros(current.note);
+  const long long nextTiming = noteTimingMicros(next.note);
+  return currentTiming < inputTime - window.second &&
+         nextTiming <= inputTime - window.first;
+}
+
+bool shouldPreferCandidate(const PressLaneCandidate &current,
+                           const PressLaneCandidate &next,
+                           long long inputTime, const Judge &judge,
+                           AppSettings::NotePriorityMode mode) {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Combo:
+    return preferByTimingWindow(current, next, inputTime, judge, Good);
+  case AppSettings::NotePriorityMode::Duration:
+    return next.note != nullptr && !next.note->IsPlayed &&
+           absoluteTimeDistance(noteTimingMicros(current.note), inputTime) >
+               absoluteTimeDistance(noteTimingMicros(next.note), inputTime);
+  case AppSettings::NotePriorityMode::Score:
+    return preferByTimingWindow(current, next, inputTime, judge, Great);
+  case AppSettings::NotePriorityMode::Lowest:
+    return false;
+  }
+  return false;
 }
 
 std::string gameplayPlayOptionLabel(const StartOptions &options) {
@@ -466,15 +532,27 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   const long long inputSongTime =
       getInputSongTimeMicros(rawSongTime, inputDelay);
   const long long pressedTime = inputSongTime + getJudgementOffsetMicros();
-  for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
+  const long long futureCutoff = latestHittableNoteTiming(judge, pressedTime);
+  const AppSettings::NotePriorityMode priorityMode =
+      context.settings.notePriorityMode;
+  bool hasSelectedCandidate = false;
+  bool stopScanning = false;
+  PressLaneCandidate selectedCandidate;
+
+  for (size_t i = state->passedMeasureCount;
+       i < measures.size() && !stopScanning; i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
 
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
-         j < measure->TimeLines.size(); j++) {
+         j < measure->TimeLines.size() && !stopScanning; j++) {
       const auto &timeline = measure->TimeLines[j];
       if (timeline->Timing < pressedTime - latePoorTiming) {
         continue;
+      }
+      if (timeline->Timing > futureCutoff) {
+        stopScanning = true;
+        break;
       }
       for (size_t candidateIdx = 0; candidateIdx < candidateCount;
            ++candidateIdx) {
@@ -493,17 +571,31 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
         if (noteJudge.judgement == None) {
           continue;
         }
-        const JudgeResult judgement =
-            pressNote(note, pressedTime, &noteJudge, inputSongTime);
-        if (const auto pressedIt = lanePressed.find(lane);
-            pressedIt != lanePressed.end()) {
-          pressedIt->second = true;
+        const PressLaneCandidate candidate{lane, note, noteJudge};
+        if (!hasSelectedCandidate ||
+            shouldPreferCandidate(selectedCandidate, candidate, pressedTime,
+                                  judge, priorityMode)) {
+          selectedCandidate = candidate;
+          hasSelectedCandidate = true;
         }
-        updateLaneStateText();
-        renderer->onLanePressed(lane, judgement, nowMicros());
-        return note;
+        if (priorityMode == AppSettings::NotePriorityMode::Lowest) {
+          stopScanning = true;
+          break;
+        }
       }
     }
+  }
+  if (hasSelectedCandidate) {
+    const JudgeResult judgement =
+        pressNote(selectedCandidate.note, pressedTime,
+                  &selectedCandidate.judge, inputSongTime);
+    if (const auto pressedIt = lanePressed.find(selectedCandidate.lane);
+        pressedIt != lanePressed.end()) {
+      pressedIt->second = true;
+    }
+    updateLaneStateText();
+    renderer->onLanePressed(selectedCandidate.lane, judgement, nowMicros());
+    return selectedCandidate.note;
   }
   if (mainLaneIt != lanePressed.end()) {
     mainLaneIt->second = true;

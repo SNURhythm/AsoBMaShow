@@ -50,12 +50,15 @@ private:
   TextView *summaryBgaDisplayValueText = nullptr;
   TextView *summaryLaneAngleValueText = nullptr;
   TextView *summaryLaneLengthValueText = nullptr;
+  TextView *summaryNotePriorityValueText = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
+  TextView *notePriorityModeText = nullptr;
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *keysoundModeButton = nullptr;
+  Button *notePriorityModeButton = nullptr;
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;
   Button *timingTabButton = nullptr;
