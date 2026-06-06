@@ -369,7 +369,8 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
-  if (head->Tail->IsPlayed && !wasLongNoteTailReleasedEarly(head))
+  const bool tailReleasedEarly = wasLongNoteTailReleasedEarly(head);
+  if (head->Tail->IsPlayed && !tailReleasedEarly)
     return;
   float startY = head->IsPlayed ? judgeY : headY;
   const float bodyHeight = tailY - startY;
@@ -390,11 +391,12 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                  tileV, bodyTexture);
   }
 
-  // Tail
-  sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
-                                 noteRenderWidth, noteRenderHeight, tailUv.u0,
-                                 tailUv.v0, tailUv.u1, tailUv.v1,
-                                 sheet.texture);
+  if (!tailReleasedEarly || tailY > judgeY) {
+    sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
+                                   noteRenderWidth, noteRenderHeight, tailUv.u0,
+                                   tailUv.v0, tailUv.u1, tailUv.v1,
+                                   sheet.texture);
+  }
 
   if (head->IsPlayed)
     return;
