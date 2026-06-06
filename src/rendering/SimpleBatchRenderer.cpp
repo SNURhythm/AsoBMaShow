@@ -86,8 +86,7 @@ void SimpleBatchRenderer::flush() {
 
   static const bgfx::ProgramHandle kProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::submit(
-      rendering::main_view, kProgram, submitDepth);
+  bgfx::submit(submitView, kProgram, submitDepth);
 
   vertices.clear();
   indices.clear();

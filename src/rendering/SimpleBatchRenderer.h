@@ -15,12 +15,14 @@ public:
   void end();
   void addRect(float x, float y, float width, float height, uint32_t color);
   void setSubmitDepth(uint32_t depth) { submitDepth = depth; }
+  void setSubmitView(bgfx::ViewId viewId) { submitView = viewId; }
   void flush();
 
 private:
   std::vector<PosColorVertex> vertices;
   std::vector<uint16_t> indices;
   uint32_t submitDepth = 0;
+  bgfx::ViewId submitView = rendering::main_view;
   uint32_t transientBufferMissCount = 0;
 };
 } // namespace rendering

@@ -113,6 +113,31 @@ notePriorityModeToString(AppSettings::NotePriorityMode notePriorityMode) {
   return "lowest";
 }
 
+AppSettings::JudgementIndicatorRenderMode parseJudgementIndicatorRenderMode(
+    const std::string &value,
+    AppSettings::JudgementIndicatorRenderMode fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "3d" || normalized == "world" ||
+      normalized == "world-3d") {
+    return AppSettings::JudgementIndicatorRenderMode::World3D;
+  }
+  if (normalized == "hud" || normalized == "2d" || normalized == "hud-2d") {
+    return AppSettings::JudgementIndicatorRenderMode::Hud2D;
+  }
+  return fallback;
+}
+
+const char *judgementIndicatorRenderModeToString(
+    AppSettings::JudgementIndicatorRenderMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementIndicatorRenderMode::World3D:
+    return "3d";
+  case AppSettings::JudgementIndicatorRenderMode::Hud2D:
+    return "hud";
+  }
+  return "3d";
+}
+
 std::string parseGaugeTypeId(const std::string &value,
                              const std::string &fallback) {
   if (value == "assisted_easy") {
@@ -194,6 +219,9 @@ void AppSettings::sanitize() {
                                    kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
   laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
                              kMaxLaneLength);
+  judgementIndicatorY = sanitizeFloat(
+      judgementIndicatorY, kDefaultJudgementIndicatorY,
+      kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:
@@ -202,6 +230,14 @@ void AppSettings::sanitize() {
     break;
   default:
     notePriorityMode = NotePriorityMode::Lowest;
+    break;
+  }
+  switch (judgementIndicatorRenderMode) {
+  case JudgementIndicatorRenderMode::World3D:
+  case JudgementIndicatorRenderMode::Hud2D:
+    break;
+  default:
+    judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
     break;
   }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
@@ -246,6 +282,13 @@ bool AppSettings::save() const {
   file << "lane_length=" << sanitized.laneLength << "\n";
   file << "note_priority_mode="
        << notePriorityModeToString(sanitized.notePriorityMode) << "\n";
+  file << "judgement_indicator_enabled="
+       << (sanitized.judgementIndicatorEnabled ? 1 : 0) << "\n";
+  file << "judgement_indicator_y=" << sanitized.judgementIndicatorY << "\n";
+  file << "judgement_indicator_render_mode="
+       << judgementIndicatorRenderModeToString(
+              sanitized.judgementIndicatorRenderMode)
+       << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   return file.good();
@@ -311,6 +354,17 @@ AppSettings AppSettings::load() {
       } else if (key == "note_priority_mode") {
         settings.notePriorityMode =
             parseNotePriorityMode(value, settings.notePriorityMode);
+      } else if (key == "judgement_indicator_enabled") {
+        bool parsed = settings.judgementIndicatorEnabled;
+        if (parseBool(value, parsed)) {
+          settings.judgementIndicatorEnabled = parsed;
+        }
+      } else if (key == "judgement_indicator_y") {
+        settings.judgementIndicatorY = std::stof(value);
+      } else if (key == "judgement_indicator_render_mode") {
+        settings.judgementIndicatorRenderMode =
+            parseJudgementIndicatorRenderMode(
+                value, settings.judgementIndicatorRenderMode);
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

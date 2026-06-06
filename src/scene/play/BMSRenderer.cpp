@@ -14,22 +14,104 @@
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <string>
 
 namespace {
+constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+constexpr long long kDefaultJudgementIndicatorRangeMicros = 500000LL;
+constexpr long long kJudgementIndicatorFadeMicros = 1800000LL;
+constexpr float kJudgementIndicatorWorldWidthRatio = 0.34f;
+constexpr float kJudgementIndicatorHudWidthRatio = 0.2f;
+constexpr float kJudgementIndicatorHudMinWidth = 220.0f;
+constexpr float kJudgementIndicatorHudMaxWidth = 360.0f;
+
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "Judgement indicator sequence atomic must be lock-free");
+static_assert(std::atomic<long long>::is_always_lock_free,
+              "Judgement indicator timing atomic must be lock-free");
+static_assert(std::atomic<int>::is_always_lock_free,
+              "Judgement indicator value atomic must be lock-free");
+
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
   return (static_cast<uint64_t>(submitDepth) << 16U) |
          static_cast<uint64_t>(texture.idx);
 }
+
+long long timingWindowEarlyFrom(
+    const std::map<Judgement, std::pair<long long, long long>> &windows,
+    Judgement judgement, long long fallback) {
+  const auto it = windows.find(judgement);
+  return it == windows.end() ? fallback : it->second.first;
+}
+
+long long timingWindowLateFrom(
+    const std::map<Judgement, std::pair<long long, long long>> &windows,
+    Judgement judgement, long long fallback) {
+  const auto it = windows.find(judgement);
+  return it == windows.end() ? fallback : it->second.second;
+}
+
+long long latePoorTimingFromWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  return timingWindowLateFrom(windows, Bad, kDefaultLatePoorTimingMicros);
+}
+
+long long judgementIndicatorRangeFromWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  long long range = kDefaultJudgementIndicatorRangeMicros;
+  for (Judgement judgement : {PGreat, Great, Good, Bad, Kpoor}) {
+    const auto it = windows.find(judgement);
+    if (it == windows.end()) {
+      continue;
+    }
+    range = std::max(range, std::llabs(it->second.first));
+    range = std::max(range, std::llabs(it->second.second));
+  }
+  return std::max(1LL, range);
+}
+
+uint8_t alphaByte(float alpha) {
+  return static_cast<uint8_t>(
+      std::clamp(static_cast<int>(std::lround(alpha * 255.0f)), 0, 255));
+}
+
+Color judgementColor(Judgement judgement, uint8_t alpha) {
+  switch (judgement) {
+  case PGreat:
+    return Color(200, 255, 255, alpha);
+  case Great:
+    return Color(200, 255, 200, alpha);
+  case Good:
+    return Color(200, 200, 255, alpha);
+  case Bad:
+    return Color(255, 200, 200, alpha);
+  case Kpoor:
+    return Color(255, 50, 50, alpha);
+  case Poor:
+    return Color(255, 100, 100, alpha);
+  case None:
+  case JudgementCount:
+    break;
+  }
+  return Color(255, 255, 255, alpha);
+}
 } // namespace
 
-BMSRenderer::BMSRenderer(bms_parser::Chart *chart, long long latePoorTiming,
-                         int visibleTimeGreenNumber, bool renderHud)
-    : latePoorTiming(latePoorTiming), chart(chart),
-      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud) {
+BMSRenderer::BMSRenderer(
+    bms_parser::Chart *chart,
+    const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
+    int visibleTimeGreenNumber, bool renderHud)
+    : timingWindows(timingWindows),
+      latePoorTiming(latePoorTimingFromWindows(timingWindows)),
+      judgementIndicatorRangeMicros(
+          judgementIndicatorRangeFromWindows(timingWindows)),
+      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
+      chart(chart) {
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
@@ -264,6 +346,240 @@ void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
 }
 
+JudgementIndicatorLayout
+BMSRenderer::judgementIndicatorLayout(bool hudMode) const {
+  const float normalizedY =
+      static_cast<float>(
+          std::clamp(judgementIndicatorYPermille.load(std::memory_order_relaxed),
+                     0, 1000)) /
+      1000.0f;
+
+  JudgementIndicatorLayout layout{};
+  if (hudMode) {
+    layout.width = std::clamp(
+        static_cast<float>(rendering::window_width) *
+            kJudgementIndicatorHudWidthRatio,
+        kJudgementIndicatorHudMinWidth, kJudgementIndicatorHudMaxWidth);
+    layout.x = (static_cast<float>(rendering::window_width) - layout.width) *
+               0.5f;
+    layout.barHeight = 5.0f;
+    layout.markerHeight = 18.0f;
+    layout.markerWidth = 2.0f;
+    layout.centerY = static_cast<float>(rendering::window_height) *
+                     (1.0f - normalizedY);
+    layout.centerY =
+        std::clamp(layout.centerY, layout.markerHeight * 0.5f,
+                   static_cast<float>(rendering::window_height) -
+                       layout.markerHeight * 0.5f);
+    return layout;
+  }
+
+  layout.width =
+      gameplay_geometry::kPlayAreaWidth * kJudgementIndicatorWorldWidthRatio;
+  layout.x = gameplay_geometry::kPlayAreaCenterX - layout.width * 0.5f;
+  const float laneHeight = std::max(0.1f, upperBound - judgeY);
+  layout.centerY = judgeY + laneHeight * normalizedY;
+  layout.barHeight = std::max(0.02f, noteRenderHeight * 0.08f);
+  layout.markerHeight = std::max(0.16f, noteRenderHeight * 0.5f);
+  layout.markerWidth = std::max(0.01f, noteRenderWidth * 0.014f);
+  return layout;
+}
+
+float BMSRenderer::judgementOffsetToX(
+    long long diffMicros, const JudgementIndicatorLayout &layout) const {
+  const long long clampedDiff =
+      std::clamp(diffMicros, -judgementIndicatorRangeMicros,
+                 judgementIndicatorRangeMicros);
+  const float normalized =
+      static_cast<float>(clampedDiff) /
+      static_cast<float>(judgementIndicatorRangeMicros);
+  return layout.x + layout.width * 0.5f + normalized * layout.width * 0.5f;
+}
+
+long long BMSRenderer::timingWindowEarly(Judgement judgement) const {
+  return timingWindowEarlyFrom(timingWindows, judgement, 0);
+}
+
+long long BMSRenderer::timingWindowLate(Judgement judgement) const {
+  return timingWindowLateFrom(timingWindows, judgement, 0);
+}
+
+void BMSRenderer::clearJudgementIndicatorSamples() {
+  judgementIndicatorWriteSequence.store(0, std::memory_order_release);
+  for (auto &sample : judgementIndicatorSamples) {
+    sample.sequence.store(0, std::memory_order_release);
+    sample.diffMicros.store(0, std::memory_order_relaxed);
+    sample.createdTimeMicros.store(0, std::memory_order_relaxed);
+    sample.judgement.store(None, std::memory_order_relaxed);
+  }
+}
+
+bool BMSRenderer::readJudgementIndicatorSample(
+    uint64_t sequence, JudgementIndicatorSample &sample) const {
+  const auto &slot =
+      judgementIndicatorSamples[sequence % kJudgementIndicatorMaxVisibleSamples];
+  const uint64_t expectedSequence = sequence + 1;
+  const uint64_t firstSequence =
+      slot.sequence.load(std::memory_order_acquire);
+  if (firstSequence != expectedSequence) {
+    return false;
+  }
+
+  JudgementIndicatorSample snapshot{
+      .diffMicros = slot.diffMicros.load(std::memory_order_relaxed),
+      .createdTimeMicros =
+          slot.createdTimeMicros.load(std::memory_order_relaxed),
+      .judgement =
+          static_cast<Judgement>(slot.judgement.load(std::memory_order_relaxed)),
+  };
+
+  const uint64_t secondSequence =
+      slot.sequence.load(std::memory_order_acquire);
+  if (secondSequence != firstSequence) {
+    return false;
+  }
+
+  sample = snapshot;
+  return true;
+}
+
+void BMSRenderer::drawJudgementIndicatorSegment(long long startMicros,
+                                                long long endMicros,
+                                                const JudgementIndicatorLayout
+                                                    &layout,
+                                                float barY, Color color) {
+  if (endMicros <= startMicros) {
+    return;
+  }
+  const float x0 = std::clamp(judgementOffsetToX(startMicros, layout), layout.x,
+                              layout.x + layout.width);
+  const float x1 = std::clamp(judgementOffsetToX(endMicros, layout), layout.x,
+                              layout.x + layout.width);
+  if (x1 <= x0) {
+    return;
+  }
+  drawRect(x1 - x0, layout.barHeight, x0, barY, color);
+}
+
+void BMSRenderer::drawJudgementIndicator(long long currentTimeMicros) {
+  if (!judgementIndicatorEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  std::array<JudgementIndicatorSample, kJudgementIndicatorMaxVisibleSamples>
+      samples{};
+  size_t sampleCount = 0;
+  long long averageSum = 0;
+  size_t averageCount = 0;
+  const uint64_t nextSequence =
+      judgementIndicatorWriteSequence.load(std::memory_order_acquire);
+  const uint64_t firstSequence =
+      nextSequence > kJudgementIndicatorMaxVisibleSamples
+          ? nextSequence - kJudgementIndicatorMaxVisibleSamples
+          : 0;
+
+  for (uint64_t sequence = firstSequence; sequence < nextSequence; ++sequence) {
+    JudgementIndicatorSample sample;
+    if (!readJudgementIndicatorSample(sequence, sample)) {
+      continue;
+    }
+    if (currentTimeMicros >= sample.createdTimeMicros &&
+        currentTimeMicros - sample.createdTimeMicros <=
+            kJudgementIndicatorFadeMicros &&
+        sampleCount < samples.size()) {
+      samples[sampleCount++] = sample;
+    }
+  }
+
+  for (uint64_t sequence = nextSequence; sequence > firstSequence;) {
+    --sequence;
+    JudgementIndicatorSample sample;
+    if (!readJudgementIndicatorSample(sequence, sample)) {
+      continue;
+    }
+    if (sample.judgement == Kpoor) {
+      continue;
+    }
+    averageSum += sample.diffMicros;
+    averageCount++;
+    if (averageCount >= kJudgementIndicatorAverageSampleCount) {
+      break;
+    }
+  }
+
+  const bool hudMode = judgementIndicatorHudMode.load(std::memory_order_relaxed);
+  const JudgementIndicatorLayout layout = judgementIndicatorLayout(hudMode);
+  const float barY = layout.centerY - layout.barHeight * 0.5f;
+  const float markerY = layout.centerY - layout.markerHeight * 0.5f;
+
+  drawRect(layout.width, layout.barHeight + (hudMode ? 2.0f : 0.026f),
+           layout.x, barY - (hudMode ? 1.0f : 0.013f),
+           Color(0, 0, 0, hudMode ? 132 : 118));
+  drawJudgementIndicatorSegment(-judgementIndicatorRangeMicros,
+                                timingWindowEarly(Bad), layout, barY,
+                                judgementColor(Poor, 118));
+  drawJudgementIndicatorSegment(timingWindowEarly(Bad),
+                                timingWindowEarly(Good), layout, barY,
+                                judgementColor(Bad, 126));
+  drawJudgementIndicatorSegment(timingWindowEarly(Good),
+                                timingWindowEarly(Great), layout, barY,
+                                judgementColor(Good, 134));
+  drawJudgementIndicatorSegment(timingWindowEarly(Great),
+                                timingWindowEarly(PGreat), layout, barY,
+                                judgementColor(Great, 142));
+  drawJudgementIndicatorSegment(timingWindowEarly(PGreat),
+                                timingWindowLate(PGreat), layout, barY,
+                                judgementColor(PGreat, 170));
+  drawJudgementIndicatorSegment(timingWindowLate(PGreat),
+                                timingWindowLate(Great), layout, barY,
+                                judgementColor(Great, 142));
+  drawJudgementIndicatorSegment(timingWindowLate(Great), timingWindowLate(Good),
+                                layout, barY, judgementColor(Good, 134));
+  drawJudgementIndicatorSegment(timingWindowLate(Good), timingWindowLate(Bad),
+                                layout, barY, judgementColor(Bad, 126));
+  drawJudgementIndicatorSegment(timingWindowLate(Bad),
+                                judgementIndicatorRangeMicros, layout, barY,
+                                judgementColor(Poor, 118));
+
+  const float centerTickWidth = layout.markerWidth * 0.8f;
+  drawRect(centerTickWidth, layout.markerHeight * 0.64f,
+           layout.x + layout.width * 0.5f - centerTickWidth * 0.5f,
+           layout.centerY - layout.markerHeight * 0.32f,
+           Color(255, 255, 255, hudMode ? 118 : 105));
+
+  for (size_t i = 0; i < sampleCount; ++i) {
+    const auto &sample = samples[i];
+    long long ageMicros = currentTimeMicros - sample.createdTimeMicros;
+    if (ageMicros < 0) {
+      ageMicros = 0;
+    }
+    const float alpha = 1.0f - static_cast<float>(ageMicros) /
+                                   static_cast<float>(
+                                       kJudgementIndicatorFadeMicros);
+    if (alpha <= 0.0f) {
+      continue;
+    }
+    const float x = judgementOffsetToX(sample.diffMicros, layout);
+    drawRect(layout.markerWidth, layout.markerHeight,
+             x - layout.markerWidth * 0.5f, markerY,
+             judgementColor(sample.judgement, alphaByte(alpha * 0.95f)));
+  }
+
+  if (averageCount > 0) {
+    const long long averageDiff =
+        averageSum / static_cast<long long>(averageCount);
+    const float x = judgementOffsetToX(averageDiff, layout);
+    const float averageWidth = layout.markerWidth * 2.4f;
+    const float averagePad = hudMode ? 3.0f : 0.04f;
+    drawRect(averageWidth, layout.markerHeight + averagePad * 2.0f,
+             x - averageWidth * 0.5f, markerY - averagePad,
+             Color(0, 0, 0, 205));
+    drawRect(averageWidth * 0.44f, layout.markerHeight + averagePad,
+             x - averageWidth * 0.22f, markerY - averagePad * 0.5f,
+             Color(255, 245, 140, 240));
+  }
+}
+
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
   std::lock_guard<std::mutex> lock(laneMutex);
@@ -287,9 +603,26 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.isPressed = false;
   laneState.lastStateTime = time;
 }
-void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score) {
+void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
+                          long long displayTimeMicros,
+                          bool recordTimingSample) {
   if (judgeResult.judgement == None) {
     return;
+  }
+  if (recordTimingSample &&
+      judgementIndicatorEnabled.load(std::memory_order_relaxed)) {
+    const uint64_t sequence =
+        judgementIndicatorWriteSequence.fetch_add(1, std::memory_order_acq_rel);
+    auto &sample =
+        judgementIndicatorSamples[sequence %
+                                  kJudgementIndicatorMaxVisibleSamples];
+    sample.sequence.store(0, std::memory_order_release);
+    sample.diffMicros.store(judgeResult.Diff, std::memory_order_relaxed);
+    sample.createdTimeMicros.store(displayTimeMicros,
+                                   std::memory_order_relaxed);
+    sample.judgement.store(static_cast<int>(judgeResult.judgement),
+                           std::memory_order_relaxed);
+    sample.sequence.store(sequence + 1, std::memory_order_release);
   }
   state.latestJudgeResult = judgeResult;
   state.latestJudgeResultTime = std::chrono::system_clock::now();
@@ -539,7 +872,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
+  constexpr uint32_t kDepthJudgementIndicator = 330;
 
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
   ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   simpleBatchRenderer.begin();
@@ -705,6 +1040,20 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.flush();
   }
 
+  if (judgementIndicatorEnabled.load(std::memory_order_relaxed)) {
+    const bool indicatorHudMode =
+        judgementIndicatorHudMode.load(std::memory_order_relaxed);
+    simpleBatchRenderer.setSubmitView(indicatorHudMode ? rendering::ui_view
+                                                       : rendering::main_view);
+    simpleBatchRenderer.setSubmitDepth(indicatorHudMode
+                                           ? 0
+                                           : kDepthJudgementIndicator);
+    simpleBatchRenderer.begin();
+    drawJudgementIndicator(micro);
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitView(rendering::main_view);
+  }
+
   if (renderHud) {
     drawTitle(context);
     drawJudgement(context);
@@ -730,7 +1079,10 @@ void BMSRenderer::applyPendingHudText() {
   scoreText->setText("Score: " + std::to_string(score));
 }
 
-void BMSRenderer::reset() { state.reset(); }
+void BMSRenderer::reset() {
+  state.reset();
+  clearJudgementIndicatorSamples();
+}
 
 void BMSRenderer::refreshGeometry() {
   upperBound = calculateLanePlaneScreenTopIntersection();
@@ -746,6 +1098,20 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
   useRenderTimeForLaneBeams = enabled;
+}
+
+void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
+                                              bool hudMode) {
+  const int yPermille =
+      std::clamp(static_cast<int>(std::lround(std::clamp(y, 0.0f, 1.0f) *
+                                              1000.0f)),
+                 0, 1000);
+  judgementIndicatorYPermille.store(yPermille, std::memory_order_relaxed);
+  judgementIndicatorHudMode.store(hudMode, std::memory_order_relaxed);
+  judgementIndicatorEnabled.store(enabled, std::memory_order_release);
+  if (!enabled) {
+    clearJudgementIndicatorSamples();
+  }
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

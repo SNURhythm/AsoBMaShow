@@ -825,7 +825,9 @@ void applyReplayEventForVideo(
     if (event.judgement == None) {
       return;
     }
-    renderer.onJudge(recordedJudge, event.combo, event.score);
+    renderer.onJudge(recordedJudge, event.combo, event.score,
+                     visualTimeMicros,
+                     event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
   };
 
@@ -1939,9 +1941,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   ScopedChartNoteReset chartReset(chart);
   Judge judge(chart.Meta.Rank);
-  BMSRenderer renderer(&chart, judge.timingWindows[Bad].second,
+  BMSRenderer renderer(&chart, judge.timingWindows,
                        settings.visibleTimeGreenNumber);
   renderer.setLaneBeamClockUsesRenderTime(true);
+  const bool judgementIndicatorHudMode =
+      settings.judgementIndicatorRenderMode ==
+      AppSettings::JudgementIndicatorRenderMode::Hud2D;
+  renderer.setJudgementIndicatorConfig(settings.judgementIndicatorEnabled,
+                                       settings.judgementIndicatorY,
+                                       judgementIndicatorHudMode);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
                           gaugeInitialValue(replay.initialGaugeType));
   renderer.setReplayData(&replay);

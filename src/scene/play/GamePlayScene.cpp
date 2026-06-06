@@ -177,8 +177,13 @@ constexpr bool kShowLaneStateOverlay = false;
 } // namespace
 
 void GamePlayScene::init() {
-  renderer = new BMSRenderer(chart, judge.timingWindows[Bad].second,
+  renderer = new BMSRenderer(chart, judge.timingWindows,
                              context.settings.visibleTimeGreenNumber);
+  renderer->setJudgementIndicatorConfig(
+      context.settings.judgementIndicatorEnabled,
+      context.settings.judgementIndicatorY,
+      context.settings.judgementIndicatorRenderMode ==
+          AppSettings::JudgementIndicatorRenderMode::Hud2D);
   renderer->setReplayData(options.replayData.get());
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
   context.jukebox.stop();
@@ -695,7 +700,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           const auto poorResult =
               JudgeResult(Poor, judgedTime - timeline->Timing);
-          onJudge(poorResult);
+          onJudge(poorResult, false);
           appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                             judgedTime, poorResult);
         }
@@ -721,7 +726,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               longNote->Release(judgedTime);
               const auto judgeResult =
                   judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
-              onJudge(judgeResult);
+              onJudge(judgeResult, false);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
               if (options.autoPlay) {
@@ -863,7 +868,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
   }
   case ReplayEventAction::Miss:
     if (event.judgement != None) {
-      onJudge(recordedJudge);
+      onJudge(recordedJudge, false);
       applyReplayGauge(event);
     }
     break;
@@ -888,7 +893,8 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   updateGaugeStatusText();
 }
 
-void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
+void GamePlayScene::onJudge(const JudgeResult &judgeResult,
+                            bool recordTimingSample) {
   std::lock_guard<std::mutex> lock(judgeMutex);
   state->latestJudgeResult = judgeResult;
 
@@ -902,7 +908,9 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult) {
       state->maxCombo = state->combo;
     }
   }
-  renderer->onJudge(judgeResult, state->combo, state->getScore());
+  renderer->onJudge(judgeResult, state->combo, state->getScore(),
+                    getVisualTimeMicros(context.jukebox.getTimeMicros()),
+                    recordTimingSample);
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);
@@ -974,7 +982,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       }
       note->Press(pressedTime);
     }
-    onJudge(judgeResult);
+    onJudge(judgeResult, !options.autoPlay || isReplayPlayback());
     if (recordEvent) {
       appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
                         songTimeMicros >= 0 ? songTimeMicros : pressedTime,
@@ -1014,7 +1022,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
     // otherwise, follow the head's judgement
     appliedJudge = judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
   }
-  onJudge(appliedJudge);
+  onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
   if (recordEvent) {
     appendReplayEvent(ReplayEventAction::Release, Note->Lane, Note,
                       songTimeMicros >= 0 ? songTimeMicros : ReleasedTime,

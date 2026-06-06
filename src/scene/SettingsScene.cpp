@@ -343,6 +343,23 @@ float clampLaneLength(float value) {
                     AppSettings::kMaxLaneLength);
 }
 
+float clampJudgementIndicatorY(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultJudgementIndicatorY;
+  }
+  return std::clamp(value, AppSettings::kMinJudgementIndicatorY,
+                    AppSettings::kMaxJudgementIndicatorY);
+}
+
+int judgementIndicatorYToPercent(float value) {
+  return static_cast<int>(
+      std::lround(clampJudgementIndicatorY(value) * 100.0f));
+}
+
+float judgementIndicatorPercentToY(int percent) {
+  return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
+}
+
 int greenNumberToMilliseconds(int greenNumber) {
   return static_cast<int>(
       std::lround(static_cast<double>(greenNumber) * 1000.0 / 600.0));
@@ -411,6 +428,17 @@ std::string formatLaneLengthLabel(float length) {
   return formatFloatValue(length, 1);
 }
 
+std::string formatJudgementIndicatorRenderModeLabel(
+    AppSettings::JudgementIndicatorRenderMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementIndicatorRenderMode::World3D:
+    return "3D Space";
+  case AppSettings::JudgementIndicatorRenderMode::Hud2D:
+    return "2D HUD";
+  }
+  return "3D Space";
+}
+
 std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -477,11 +505,20 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
+AppSettings::JudgementIndicatorRenderMode nextJudgementIndicatorRenderMode(
+    AppSettings::JudgementIndicatorRenderMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementIndicatorRenderMode::World3D:
+    return AppSettings::JudgementIndicatorRenderMode::Hud2D;
+  case AppSettings::JudgementIndicatorRenderMode::Hud2D:
+    return AppSettings::JudgementIndicatorRenderMode::World3D;
+  }
+  return AppSettings::JudgementIndicatorRenderMode::World3D;
+}
+
 constexpr long long kPreviewLoopMicros = 8000000LL;
 constexpr int kPreviewTimelineLanes = 16;
 constexpr double kPreviewBpm = 120.0;
-constexpr long long kPreviewLatePoorMicros = 200000LL;
-
 bms_parser::TimeLine *makePreviewTimeline(long long timingMicros,
                                           bool firstInMeasure = false) {
   auto *timeline = new bms_parser::TimeLine(kPreviewTimelineLanes, false);
@@ -575,8 +612,9 @@ void SettingsScene::ensurePreviewRenderer() {
     previewChart = makePreviewChart();
   }
   if (previewRenderer == nullptr && previewChart != nullptr) {
+    Judge previewJudge(previewChart->Meta.Rank);
     previewRenderer =
-        new BMSRenderer(previewChart, kPreviewLatePoorMicros,
+        new BMSRenderer(previewChart, previewJudge.timingWindows,
                         context.settings.visibleTimeGreenNumber, false);
   }
 }
@@ -865,14 +903,19 @@ void SettingsScene::resetViewState() {
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  judgementIndicatorYInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   notePriorityModeText = nullptr;
+  judgementIndicatorModeText = nullptr;
+  judgementIndicatorRenderModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
   notePriorityModeButton = nullptr;
+  judgementIndicatorModeButton = nullptr;
+  judgementIndicatorRenderModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   timingTabButton = nullptr;
@@ -1484,6 +1527,112 @@ void SettingsScene::initView() {
               "for late audio paths such as Bluetooth headphones.",
         visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
+    auto *judgementIndicatorControls = new View();
+    judgementIndicatorControls->setFlexDirection(FlexDirection::Column);
+    judgementIndicatorControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    judgementIndicatorControls->setAlignItems(YGAlignFlexStart);
+
+    auto *judgementIndicatorModeControls = new View();
+    judgementIndicatorModeControls->setFlexDirection(FlexDirection::Row);
+    judgementIndicatorModeControls->setFlexWrap(YGWrapWrap);
+    judgementIndicatorModeControls->setGap(metrics.compact ? 8.0f : 12.0f);
+    judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
+
+    judgementIndicatorModeText =
+        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorModeButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        judgementIndicatorModeText, Color(35, 68, 62, 255),
+        Color(45, 88, 80, 255), Color(63, 118, 107, 255),
+        Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+        Color(145, 214, 195, 255));
+    judgementIndicatorModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorEnabled =
+          !context.settings.judgementIndicatorEnabled;
+      persistSettings();
+    });
+    judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
+
+    judgementIndicatorRenderModeText =
+        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorRenderModeButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        judgementIndicatorRenderModeText, Color(33, 56, 87, 255),
+        Color(43, 72, 110, 255), Color(59, 98, 147, 255),
+        Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+        Color(139, 189, 244, 255));
+    judgementIndicatorRenderModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorRenderMode =
+          nextJudgementIndicatorRenderMode(
+              context.settings.judgementIndicatorRenderMode);
+      persistSettings();
+    });
+    judgementIndicatorModeControls->addView(
+        judgementIndicatorRenderModeButton);
+    judgementIndicatorControls->addView(judgementIndicatorModeControls);
+
+    auto *judgementIndicatorYControls = new View();
+    judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
+    judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
+    judgementIndicatorYControls->setGap(metrics.compact ? 8.0f : 12.0f);
+    judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
+    auto updateJudgementIndicatorY = [this](int deltaPercent) {
+      const int currentPercent =
+          judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
+      const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
+      context.settings.judgementIndicatorY =
+          judgementIndicatorPercentToY(nextPercent);
+      persistSettings();
+      syncJudgementIndicatorYInputText(true);
+    };
+
+    auto *minusIndicatorYLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+    minusIndicatorYLarge->setOnClickListener(
+        [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-10); });
+    judgementIndicatorYControls->addView(minusIndicatorYLarge);
+    auto *minusIndicatorYSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
+    minusIndicatorYSmall->setOnClickListener(
+        [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-1); });
+    judgementIndicatorYControls->addView(minusIndicatorYSmall);
+    judgementIndicatorYInput = makeNumericInput(metrics);
+    judgementIndicatorYInput->onEditingFinished(
+        [this](const std::string &) { commitJudgementIndicatorYInput(); });
+    judgementIndicatorYControls->addView(
+        makeInputFrame(metrics, judgementIndicatorYInput));
+    auto *plusIndicatorYSmall =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
+    plusIndicatorYSmall->setOnClickListener(
+        [updateJudgementIndicatorY]() { updateJudgementIndicatorY(1); });
+    judgementIndicatorYControls->addView(plusIndicatorYSmall);
+    auto *plusIndicatorYLarge =
+        makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+    plusIndicatorYLarge->setOnClickListener(
+        [updateJudgementIndicatorY]() { updateJudgementIndicatorY(10); });
+    judgementIndicatorYControls->addView(plusIndicatorYLarge);
+    auto *resetIndicatorY = makeResetButton(metrics);
+    resetIndicatorY->setOnClickListener([this]() {
+      context.settings.judgementIndicatorY =
+          AppSettings::kDefaultJudgementIndicatorY;
+      persistSettings();
+      syncJudgementIndicatorYInputText(true);
+    });
+    judgementIndicatorYControls->addView(resetIndicatorY);
+    judgementIndicatorControls->addView(judgementIndicatorYControls);
+
+    cardsColumn->addView(makeCard(
+        metrics, "Judgement Indicator",
+        metrics.compact
+            ? "Y position: 0% bottom, 50% center, 100% top."
+            : "Y position is vertical placement: 0% is the "
+              "judgement-line/bottom side, 50% is center, and 100% is top. "
+              "3D draws on the lane plane; HUD draws screen-flat.",
+        judgementIndicatorControls, metrics.visibleTimeCardHeight,
+        metrics.cardsWidth));
+
     auto *secondaryCards = new View();
     secondaryCards->setFlexDirection(
         metrics.useDualCardRow ? FlexDirection::Row : FlexDirection::Column);
@@ -2054,6 +2203,11 @@ void SettingsScene::refreshSettingsText() {
       formatLaneLengthLabel(context.settings.laneLength);
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
+  const std::string judgementIndicatorLabel =
+      context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
+  const std::string judgementIndicatorRenderModeLabel =
+      formatJudgementIndicatorRenderModeLabel(
+          context.settings.judgementIndicatorRenderMode);
 
   syncOffsetInputText();
   if (summaryOffsetValueText != nullptr) {
@@ -2095,11 +2249,18 @@ void SettingsScene::refreshSettingsText() {
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
   }
+  syncJudgementIndicatorYInputText();
   if (keysoundModeText != nullptr) {
     keysoundModeText->setText(keysoundLabel);
   }
   if (notePriorityModeText != nullptr) {
     notePriorityModeText->setText(notePriorityLabel);
+  }
+  if (judgementIndicatorModeText != nullptr) {
+    judgementIndicatorModeText->setText(judgementIndicatorLabel);
+  }
+  if (judgementIndicatorRenderModeText != nullptr) {
+    judgementIndicatorRenderModeText->setText(judgementIndicatorRenderModeLabel);
   }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
@@ -2165,6 +2326,43 @@ void SettingsScene::refreshSettingsText() {
       notePriorityModeButton->setBorderColors(Color(97, 157, 142, 255),
                                               Color(120, 187, 169, 255),
                                               Color(145, 214, 195, 255));
+    }
+  }
+
+  if (judgementIndicatorModeButton != nullptr) {
+    if (context.settings.judgementIndicatorEnabled) {
+      judgementIndicatorModeButton->setBackgroundColors(
+          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+          Color(63, 118, 107, 255));
+      judgementIndicatorModeButton->setBorderColors(
+          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+          Color(145, 214, 195, 255));
+    } else {
+      judgementIndicatorModeButton->setBackgroundColors(
+          Color(56, 42, 40, 255), Color(75, 55, 52, 255),
+          Color(104, 75, 71, 255));
+      judgementIndicatorModeButton->setBorderColors(
+          Color(141, 103, 98, 255), Color(176, 127, 121, 255),
+          Color(209, 150, 143, 255));
+    }
+  }
+
+  if (judgementIndicatorRenderModeButton != nullptr) {
+    if (context.settings.judgementIndicatorRenderMode ==
+        AppSettings::JudgementIndicatorRenderMode::Hud2D) {
+      judgementIndicatorRenderModeButton->setBackgroundColors(
+          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+          Color(63, 118, 107, 255));
+      judgementIndicatorRenderModeButton->setBorderColors(
+          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+          Color(145, 214, 195, 255));
+    } else {
+      judgementIndicatorRenderModeButton->setBackgroundColors(
+          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+          Color(59, 98, 147, 255));
+      judgementIndicatorRenderModeButton->setBorderColors(
+          Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+          Color(139, 189, 244, 255));
     }
   }
 
@@ -2306,6 +2504,18 @@ void SettingsScene::syncLaneLengthInputText(bool force) {
   }
   laneLengthInput->setEditingText(
       formatFloatValue(context.settings.laneLength));
+}
+
+void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
+  if (judgementIndicatorYInput == nullptr) {
+    return;
+  }
+  if (!force && judgementIndicatorYInput->getSelected()) {
+    return;
+  }
+  judgementIndicatorYInput->setEditingText(
+      std::to_string(judgementIndicatorYToPercent(
+          context.settings.judgementIndicatorY)));
 }
 
 void SettingsScene::commitOffsetInput() {
@@ -2459,6 +2669,28 @@ void SettingsScene::commitLaneLengthInput() {
   }
 }
 
+void SettingsScene::commitJudgementIndicatorYInput() {
+  if (judgementIndicatorYInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = judgementIndicatorYInput->getText();
+  if (rawText.empty()) {
+    syncJudgementIndicatorYInputText(true);
+    return;
+  }
+
+  try {
+    const int percent = std::clamp(std::stoi(rawText), 0, 100);
+    context.settings.judgementIndicatorY =
+        judgementIndicatorPercentToY(percent);
+    persistSettings();
+    syncJudgementIndicatorYInputText(true);
+  } catch (const std::exception &) {
+    syncJudgementIndicatorYInputText(true);
+  }
+}
+
 void SettingsScene::update(float dt) {
   if (previewActive) {
     ensurePreviewRenderer();
@@ -2479,6 +2711,11 @@ void SettingsScene::renderScene() {
   if (previewActive && previewRenderer != nullptr) {
     previewRenderer->setVisibleTimeGreenNumber(
         context.settings.visibleTimeGreenNumber);
+    previewRenderer->setJudgementIndicatorConfig(
+        context.settings.judgementIndicatorEnabled,
+        context.settings.judgementIndicatorY,
+        context.settings.judgementIndicatorRenderMode ==
+            AppSettings::JudgementIndicatorRenderMode::Hud2D);
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);
@@ -2508,14 +2745,19 @@ void SettingsScene::cleanupScene() {
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  judgementIndicatorYInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   notePriorityModeText = nullptr;
+  judgementIndicatorModeText = nullptr;
+  judgementIndicatorRenderModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
   notePriorityModeButton = nullptr;
+  judgementIndicatorModeButton = nullptr;
+  judgementIndicatorRenderModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   timingTabButton = nullptr;
