@@ -12,7 +12,8 @@ class ResultScene : public Scene {
 public:
   ResultScene(ApplicationContext &context, const bms_parser::ChartMeta &meta,
               const RhythmState &state, const ReplayData *replay = nullptr,
-              bool shouldSaveScore = true);
+              bool shouldSaveScore = true,
+              const ReplayData *retrySource = nullptr);
   ~ResultScene() override;
 
   void init() override;
@@ -23,14 +24,19 @@ public:
 private:
   void saveScore();
   void saveReplay();
+  void addRetryButtons();
+  void startRetry(bool samePattern);
+  void startReplay();
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   std::optional<ReplayData> replayToSave;
+  std::optional<ReplayData> retryData;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
-  ISkin* skin = nullptr;
+  ISkin *skin = nullptr;
   bool shouldSaveScore = true;
+  bool replayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
 };

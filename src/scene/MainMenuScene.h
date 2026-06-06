@@ -111,6 +111,12 @@ private:
   TextView *replayModalTitleText = nullptr;
   TextView *replayExportProgressMessageText = nullptr;
   TextView *replayExportProgressPercentText = nullptr;
+  TextView *startButtonText = nullptr;
+  View *playOptionsModalRoot = nullptr;
+  TextView *readyGaugeText = nullptr;
+  TextView *readyPlayOptionText = nullptr;
+  Button *playOptionsCloseButton = nullptr;
+  TextView *playOptionsCloseButtonText = nullptr;
   RecyclerView<ReplaySummary> *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayModalExportButton = nullptr;
@@ -161,6 +167,13 @@ private:
   std::vector<GaugeSelectionButton> gaugeSelectionButtons;
   GaugeType selectedGaugeType = GaugeType::Normal;
   bool selectedGaugeAutoShift = false;
+  struct PlayOptionButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::string option;
+  };
+  std::vector<PlayOptionButton> playOptionButtons;
+  std::string selectedPlayOption = "NORMAL";
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -172,6 +185,7 @@ private:
   void reloadFolderItems();
   void reloadChartList();
   void reloadScoreClearRanks();
+  void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
@@ -180,9 +194,16 @@ private:
   void selectFolder(const LibraryFolderItem &item);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
+  void setPlayOptionSelection(const std::string &option);
+  void refreshPlayOptionButtons();
+  void refreshReadySettingsSummary();
   bms_parser::Chart *loadedSelectedChart() const;
+  void startSelectedChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
+  void buildPlayOptionsModal();
+  void showPlayOptionsModal();
+  void hidePlayOptionsModal();
   void buildReplayModal();
   void showReplayListModal(const ChartMetaRecord &record);
   void showReplayExportOptions();

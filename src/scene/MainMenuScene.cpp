@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
+#include "../PlayOptionUtils.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -15,8 +16,10 @@
 #include "../view/Button.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
+#include <cctype>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 
@@ -114,6 +117,59 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
   }
 }
 
+SDL_Color readyGaugeTextColor(GaugeType gaugeType, bool autoShift) {
+  if (autoShift) {
+    return SDL_Color{255, 205, 37, 255};
+  }
+
+  const Color color = clearLampColorForRank(clearRankForGaugeType(gaugeType));
+  return SDL_Color{color.r, color.g, color.b, 255};
+}
+
+const char *gaugeSettingId(GaugeType gaugeType, bool autoShift) {
+  if (autoShift) {
+    return "gas";
+  }
+  switch (gaugeType) {
+  case GaugeType::AssistedEasy:
+    return "assisted_easy";
+  case GaugeType::Easy:
+    return "easy";
+  case GaugeType::Normal:
+    return "normal";
+  case GaugeType::Hard:
+    return "hard";
+  case GaugeType::ExHard:
+    return "exhard";
+  default:
+    return "normal";
+  }
+}
+
+struct GaugeSelection {
+  GaugeType type = GaugeType::Normal;
+  bool autoShift = false;
+};
+
+GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
+  if (id == "gas") {
+    return {.type = GaugeType::ExHard, .autoShift = true};
+  }
+  if (id == "assisted_easy") {
+    return {.type = GaugeType::AssistedEasy};
+  }
+  if (id == "easy") {
+    return {.type = GaugeType::Easy};
+  }
+  if (id == "hard") {
+    return {.type = GaugeType::Hard};
+  }
+  if (id == "exhard") {
+    return {.type = GaugeType::ExHard};
+  }
+  return {.type = GaugeType::Normal};
+}
+
 std::string formatReplayGauge(float gauge) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(1) << gauge << "%";
@@ -122,6 +178,12 @@ std::string formatReplayGauge(float gauge) {
 
 std::string replayGaugeLabel(GaugeType gaugeType, bool autoShift) {
   return autoShift ? "GAS" : gaugeButtonLabel(gaugeType, false);
+}
+
+std::string replayPlayOptionLabel(const ReplaySummary &summary) {
+  return play_options::formatPlayOptionLabel(
+      summary.playOption, summary.playOptionSeed, summary.playOption2,
+      summary.playOption2Seed);
 }
 
 void styleActionButton(Button *button, TextView *text, bool enabled,
@@ -137,11 +199,9 @@ void styleActionButton(Button *button, TextView *text, bool enabled,
                             Color(235, 246, 255, 255));
     text->setColor({242, 247, 255, 255});
   } else {
-    button->setBackgroundColors(Color(25, 31, 39, 154),
-                                Color(25, 31, 39, 154),
+    button->setBackgroundColors(Color(25, 31, 39, 154), Color(25, 31, 39, 154),
                                 Color(25, 31, 39, 154));
-    button->setBorderColors(Color(76, 88, 102, 120),
-                            Color(76, 88, 102, 120),
+    button->setBorderColors(Color(76, 88, 102, 120), Color(76, 88, 102, 120),
                             Color(76, 88, 102, 120));
     text->setColor({129, 143, 160, 255});
   }
@@ -157,6 +217,38 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
                       Color(32, 48, 70, 232), Color(44, 65, 94, 242),
                       Color(83, 109, 140, 220));
   }
+}
+
+TextView *makeModalLabel(const std::string &text) {
+  auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  label->setText(text);
+  label->setColor({173, 193, 216, 255});
+  label->setHeight(28);
+  return label;
+}
+
+View *makeModalOptionRow(float height = 58.0f) {
+  auto *row = new View();
+  row->setFlexDirection(FlexDirection::Row);
+  row->setAlignItems(YGAlignStretch);
+  row->setGap(12);
+  row->setHeight(height);
+  return row;
+}
+
+Button *makeModalButton(const std::string &label, int fontSize,
+                        TextView **textOut = nullptr) {
+  auto *button = new Button(0, 0, 160, 58);
+  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
+  text->setText(label);
+  text->setAlign(TextView::CENTER);
+  text->setVAlign(TextView::MIDDLE);
+  button->setContentView(text);
+  button->setStyledBorderWidth(2);
+  if (textOut != nullptr) {
+    *textOut = text;
+  }
+  return button;
 }
 
 class ModalRootView : public View {
@@ -224,10 +316,15 @@ public:
     titleText->setText(summary.createdAt.empty()
                            ? "Replay #" + std::to_string(summary.id)
                            : summary.createdAt);
-    detailText->setText(replayGaugeLabel(summary.initialGaugeType,
-                                         summary.gaugeAutoShift) +
-                        "  Gauge " + formatReplayGauge(summary.finalGauge) +
-                        "  Events " + std::to_string(summary.eventCount));
+    std::string detail =
+        replayGaugeLabel(summary.initialGaugeType, summary.gaugeAutoShift) +
+        "  Gauge " + formatReplayGauge(summary.finalGauge) + "  Events " +
+        std::to_string(summary.eventCount);
+    const std::string optionLabel = replayPlayOptionLabel(summary);
+    if (!optionLabel.empty()) {
+      detail += "  " + optionLabel;
+    }
+    detailText->setText(detail);
     scoreText->setText(std::to_string(summary.finalScore));
 
     if (hasClearLampColor(summary.clearType)) {
@@ -264,8 +361,9 @@ private:
 };
 } // namespace
 
-void MainMenuScene::ChartListPageCache::reset(
-    sqlite3 *database, const ChartMetaQuery &chartQuery, int count) {
+void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
+                                              const ChartMetaQuery &chartQuery,
+                                              int count) {
   db = database;
   query = chartQuery;
   query.limit = 0;
@@ -279,8 +377,7 @@ void MainMenuScene::ChartListPageCache::clear() {
   pageOrder.clear();
 }
 
-const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(
-    int index) const {
+const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
   if (db == nullptr || index < 0 || index >= totalCount) {
     return fallbackRecord;
   }
@@ -300,8 +397,7 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(
   touchPage(pageIndex);
 
   const int localIndex = index - (pageIndex * pageSize);
-  if (localIndex < 0 ||
-      localIndex >= static_cast<int>(pageIt->second.size())) {
+  if (localIndex < 0 || localIndex >= static_cast<int>(pageIt->second.size())) {
     return fallbackRecord;
   }
   return pageIt->second[localIndex];
@@ -332,7 +428,7 @@ void MainMenuScene::init() {
       std::jthread(CheckEntries, std::ref(context), std::ref(*this));
 }
 
-void MainMenuScene::onResume() { requestLibraryReload(true); }
+void MainMenuScene::onResume() { refreshScoreClearRanksIfNeeded(); }
 
 void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
                                  ApplicationContext &context,
@@ -442,6 +538,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalTitleText = nullptr;
   replayExportProgressMessageText = nullptr;
   replayExportProgressPercentText = nullptr;
+  startButtonText = nullptr;
+  playOptionsModalRoot = nullptr;
+  readyGaugeText = nullptr;
+  readyPlayOptionText = nullptr;
+  playOptionsCloseButton = nullptr;
+  playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
@@ -466,6 +568,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedExportFullResolution = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
+  playOptionButtons.clear();
 
   const Color kBackdropTint(10, 18, 30, 112);
   const Color kPanelFill(17, 27, 42, 196);
@@ -536,10 +639,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     } else {
       jacketView->freeImage();
     }
+    previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
       SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
 
-      previewLoadCancelled = false;
       // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
         if (previewLoadCancelled) {
@@ -593,12 +696,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
     return new LibraryFolderItemView(0, 0, 260, 44);
   };
   folderRecyclerView->itemHeight = 44;
-  folderRecyclerView->onBind = [](View *view, const LibraryFolderItem &item,
-                                  int idx, bool isSelected) {
+  folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
+                                      int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
       folderView->setItem(item.label, item.depth, item.count, isSelected,
-                          item.clearRank);
+                          clearRankForFolder(item.key));
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -733,80 +836,84 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto right = new View();
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
-  right->setPadding(Edge::All, 24);
-  right->setGap(18);
+  right->setPadding(Edge::All, 20);
+  right->setGap(12);
   right->setWidth(300);
   right->setBackgroundColor(kPanelFill);
   right->setBorderColor(Color(70, 95, 124, 255));
   right->setBorderWidth(2);
 
-  auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
+  auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
   rightTitle->setText("Ready");
   rightTitle->setColor({243, 247, 255, 255});
   rightTitle->setAlign(TextView::CENTER);
+  rightTitle->setHeight(42);
   right->addView(rightTitle);
 
-  auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   rightSubtitle->setText("Preview, tweak, and start.");
   rightSubtitle->setColor({157, 177, 200, 255});
   rightSubtitle->setAlign(TextView::CENTER);
+  rightSubtitle->setHeight(28);
   right->addView(rightSubtitle);
 
-  auto *gaugePanel = new View();
-  gaugePanel->setFlexDirection(FlexDirection::Column);
-  gaugePanel->setAlignItems(YGAlignStretch);
-  gaugePanel->setWidth(252);
-  gaugePanel->setGap(7);
+  const GaugeSelection savedGaugeSelection =
+      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+  selectedGaugeType = savedGaugeSelection.type;
+  selectedGaugeAutoShift = savedGaugeSelection.autoShift;
+  selectedPlayOption =
+      play_options::normalizePlayOption(context.settings.selectedPlayOption);
 
-  auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  gaugeLabel->setText("Gauge");
-  gaugeLabel->setColor({157, 177, 200, 255});
-  gaugePanel->addView(gaugeLabel);
+  auto *readySettings = new View();
+  readySettings->setFlexDirection(FlexDirection::Column);
+  readySettings->setAlignItems(YGAlignStretch);
+  readySettings->setWidth(220);
+  readySettings->setGap(6);
 
-  auto makeGaugeRow = []() {
-    auto *row = new View();
-    row->setFlexDirection(FlexDirection::Row);
-    row->setAlignItems(YGAlignStretch);
-    row->setGap(6);
-    return row;
+  auto makeReadyStatusText = []() {
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    text->setHeight(28);
+    text->setColor({222, 234, 247, 255});
+    return text;
   };
+  auto *readyGaugeRow = new View();
+  readyGaugeRow->setFlexDirection(FlexDirection::Row);
+  readyGaugeRow->setAlignItems(YGAlignCenter);
+  readyGaugeRow->setGap(6);
+  readyGaugeRow->setHeight(28);
+  auto *readyGaugeLabelText = makeReadyStatusText();
+  readyGaugeLabelText->setText("Gauge:");
+  readyGaugeLabelText->setColor({157, 177, 200, 255});
+  readyGaugeLabelText->setWidth(70);
+  readyGaugeText = makeReadyStatusText();
+  readyGaugeText->setFlex(1);
+  readyGaugeRow->addView(readyGaugeLabelText);
+  readyGaugeRow->addView(readyGaugeText);
+  readyPlayOptionText = makeReadyStatusText();
+  readySettings->addView(readyGaugeRow);
+  readySettings->addView(readyPlayOptionText);
 
-  auto *gaugeRowA = makeGaugeRow();
-  auto *gaugeRowB = makeGaugeRow();
-  auto makeGaugeButton = [this](GaugeType type, bool autoShift) {
-    auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
-    text->setText(gaugeButtonLabel(type, autoShift));
-    text->setAlign(TextView::CENTER);
-    text->setVAlign(TextView::MIDDLE);
-    button->setContentView(text);
-    button->setHeight(40);
-    button->setFlex(1);
-    button->setStyledBorderWidth(2);
-    button->setOnClickListener(
-        [this, type, autoShift]() { setGaugeSelection(type, autoShift); });
-    gaugeSelectionButtons.push_back({
-        .button = button,
-        .text = text,
-        .type = type,
-        .autoShift = autoShift,
-    });
-    return button;
-  };
+  auto *playOptionsButton = new Button(0, 0, 220, 54);
+  auto *playOptionsButtonText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  playOptionsButtonText->setText("Options");
+  playOptionsButtonText->setAlign(TextView::CENTER);
+  playOptionsButtonText->setVAlign(TextView::MIDDLE);
+  playOptionsButton->setContentView(playOptionsButtonText);
+  playOptionsButton->setBackgroundColors(
+      Color(30, 63, 75, 216), Color(42, 83, 97, 228), Color(55, 106, 123, 236));
+  playOptionsButton->setBorderColors(Color(96, 169, 181, 255),
+                                     Color(121, 199, 211, 255),
+                                     Color(151, 224, 235, 255));
+  playOptionsButton->setStyledBorderWidth(2);
+  playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
+  readySettings->addView(playOptionsButton);
+  right->addView(readySettings);
+  refreshReadySettingsSummary();
 
-  gaugeRowA->addView(makeGaugeButton(GaugeType::AssistedEasy, false));
-  gaugeRowA->addView(makeGaugeButton(GaugeType::Easy, false));
-  gaugeRowA->addView(makeGaugeButton(GaugeType::Normal, false));
-  gaugeRowB->addView(makeGaugeButton(GaugeType::Hard, false));
-  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, false));
-  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, true));
-  gaugePanel->addView(gaugeRowA);
-  gaugePanel->addView(gaugeRowB);
-  right->addView(gaugePanel);
-  refreshGaugeSelectionButtons();
-
-  auto startButton = new Button(0, 0, 200, 100);
+  auto startButton = new Button(0, 0, 220, 86);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  startButtonText = buttonText;
   buttonText->setText("Start");
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
@@ -817,7 +924,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                Color(133, 190, 244, 255),
                                Color(162, 212, 255, 255));
   startButton->setStyledBorderWidth(2);
-  startButton->setOnClickListener([this, &context, buttonText]() {
+  startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
     }
@@ -827,38 +934,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
         return;
       }
-      willStart.store(true);
-      buttonText->setText("Loading...");
-
-      defer(
-          [this, &context, buttonText]() {
-            ImageView::dropAllCache();
-            if (loadThread.joinable()) {
-              loadThread.join();
-            }
-            auto *chart = loadedSelectedChart();
-            if (chart == nullptr) {
-              willStart.store(false);
-              buttonText->setText("Start");
-              return true;
-            }
-            context.jukebox.stop();
-            context.sceneManager->changeScene(
-                new GamePlayScene(
-                    context, chart,
-                    {
-                        .startPosition = 0,
-                        .autoKeySound = !context.settings.inputKeysoundEnabled,
-                        .autoPlay = false,
-                        .gaugeType = selectedGaugeType,
-                        .gaugeAutoShift = selectedGaugeAutoShift,
-                    }),
-                true);
-            willStart.store(false);
-            buttonText->setText("Start");
-            return true;
-          },
-          0, true);
+      startSelectedChart();
     }
   });
   replayButtonSlot = new View();
@@ -866,15 +942,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonSlot->setVisible(false);
   replayButtonSlot->setAlignItems(YGAlignStretch);
 
-  replayButton = new Button(0, 0, 220, 64);
-  replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  replayButton = new Button(0, 0, 220, 58);
+  replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   replayButtonText->setText("Replay");
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
-  replayButton->setBackgroundColors(Color(25, 58, 65, 216),
-                                    Color(35, 82, 92, 228),
-                                    Color(48, 111, 124, 236));
+  replayButton->setBackgroundColors(
+      Color(25, 58, 65, 216), Color(35, 82, 92, 228), Color(48, 111, 124, 236));
   replayButton->setBorderColors(Color(91, 174, 184, 255),
                                 Color(116, 204, 214, 255),
                                 Color(145, 232, 241, 255));
@@ -900,26 +975,31 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayStatusText->setText("");
   replayStatusText->setColor({157, 177, 200, 255});
   replayStatusText->setAlign(TextView::CENTER);
-  replayStatusText->setHeight(24);
+  replayStatusText->setHeight(20);
 
   auto *jacketCard = new View();
-  jacketCard->setWidth(220);
-  jacketCard->setHeight(220);
+  jacketCard->setWidth(200);
+  jacketCard->setHeight(200);
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
   jacketCard->setBackgroundColor(kSurfaceFill);
   jacketCard->setBorderColor(Color(88, 115, 149, 255));
   jacketCard->setBorderWidth(2);
-  jacketView->setWidth(220)->setHeight(220);
+  jacketView->setWidth(200)->setHeight(200);
   jacketCard->addView(jacketView);
-  startButton->setHeight(100);
+  startButton->setHeight(86);
   right->addView(jacketCard);
   right->addView(startButton);
   right->addView(replayButtonSlot);
   right->addView(replayStatusText);
 
-  auto *settingsButton = new Button(0, 0, 220, 78);
-  auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  auto *settingsSpacer = new View();
+  settingsSpacer->setWidth(220);
+  settingsSpacer->setFlex(1);
+  right->addView(settingsSpacer);
+
+  auto *settingsButton = new Button(0, 0, 220, 64);
+  auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   settingsText->setText("Settings");
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
@@ -936,11 +1016,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     previewLoadCancelled = true;
     context.jukebox.stop();
-    context.sceneManager->changeScene("Settings");
+    context.sceneManager->changeScene("Settings", true);
   });
   right->addView(settingsButton);
 
   rootLayout->addView(right);
+  buildPlayOptionsModal();
   buildReplayModal();
   addView(rootLayout);
   reloadScoreClearRanks();
@@ -1107,10 +1188,10 @@ void MainMenuScene::reloadChartList() {
   const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   chartListCache.reset(db, query, count);
   refreshReplayAvailability(nullptr);
-  recyclerView->setItemProvider(
-      count, [this](int index) -> const ChartMetaRecord & {
-        return chartListCache.get(index);
-      });
+  recyclerView->setItemProvider(count,
+                                [this](int index) -> const ChartMetaRecord & {
+                                  return chartListCache.get(index);
+                                });
 }
 
 void MainMenuScene::reloadScoreClearRanks() {
@@ -1120,13 +1201,23 @@ void MainMenuScene::reloadScoreClearRanks() {
       main_menu_library::LoadFolderClearRanks(db, scoreClearRanks);
 }
 
+void MainMenuScene::refreshScoreClearRankViews() {
+  reloadScoreClearRanks();
+  if (folderRecyclerView != nullptr) {
+    folderRecyclerView->rebindVisibleItems();
+  }
+  if (recyclerView != nullptr) {
+    recyclerView->rebindVisibleItems();
+  }
+}
+
 void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   const std::uint64_t revision = ScoreDBHelper::GetInstance().GetRevision();
   if (scoreClearRanksRevision == 0 || revision == scoreClearRanksRevision) {
     return;
   }
 
-  requestLibraryReload(true);
+  refreshScoreClearRankViews();
 }
 
 int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
@@ -1165,6 +1256,11 @@ void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
   selectedGaugeType = gaugeType;
   selectedGaugeAutoShift = autoShift;
+  context.settings.selectedGaugeType = gaugeSettingId(gaugeType, autoShift);
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save gauge selection");
+  }
   refreshGaugeSelectionButtons();
 }
 
@@ -1174,16 +1270,15 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
       continue;
     }
 
-    const bool selected =
-        item.autoShift == selectedGaugeAutoShift &&
-        (item.autoShift || item.type == selectedGaugeType);
+    const bool selected = item.autoShift == selectedGaugeAutoShift &&
+                          (item.autoShift || item.type == selectedGaugeType);
     if (selected) {
       const Color accent =
           item.autoShift
               ? Color(255, 205, 37, 242)
               : clearLampColorForRank(clearRankForGaugeType(item.type));
-      item.button->setBackgroundColors(accent, accent,
-                                       Color(accent.r, accent.g, accent.b, 255));
+      item.button->setBackgroundColors(
+          accent, accent, Color(accent.r, accent.g, accent.b, 255));
       item.button->setBorderColors(Color(255, 255, 255, 220),
                                    Color(255, 255, 255, 240),
                                    Color(255, 255, 255, 255));
@@ -1201,12 +1296,172 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
       item.text->setColor({216, 227, 241, 255});
     }
   }
+  refreshReadySettingsSummary();
+}
+
+void MainMenuScene::setPlayOptionSelection(const std::string &option) {
+  selectedPlayOption = play_options::normalizePlayOption(option);
+  context.settings.selectedPlayOption = selectedPlayOption;
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save play option selection");
+  }
+  refreshPlayOptionButtons();
+}
+
+void MainMenuScene::refreshPlayOptionButtons() {
+  for (auto &item : playOptionButtons) {
+    if (item.button == nullptr || item.text == nullptr) {
+      continue;
+    }
+
+    item.text->setText(item.option);
+    styleOptionButton(item.button, item.text,
+                      play_options::normalizePlayOption(item.option) ==
+                          selectedPlayOption);
+  }
+  refreshReadySettingsSummary();
+}
+
+void MainMenuScene::refreshReadySettingsSummary() {
+  if (readyGaugeText != nullptr) {
+    readyGaugeText->setText(
+        gaugeButtonLabel(selectedGaugeType, selectedGaugeAutoShift));
+    readyGaugeText->setColor(
+        readyGaugeTextColor(selectedGaugeType, selectedGaugeAutoShift));
+  }
+  if (readyPlayOptionText != nullptr) {
+    readyPlayOptionText->setText("Option: " + selectedPlayOption);
+  }
+}
+
+void MainMenuScene::startSelectedChart() {
+  if (willStart.exchange(true)) {
+    return;
+  }
+
+  int selected = recyclerView != nullptr ? recyclerView->selectedIndex : -1;
+  if (recyclerView == nullptr || selected < 0 ||
+      selected >= recyclerView->size()) {
+    willStart.store(false);
+    return;
+  }
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.unavailable || record.meta.BmsPath.empty()) {
+    willStart.store(false);
+    return;
+  }
+
+  if (startButtonText != nullptr) {
+    startButtonText->setText("Loading...");
+  }
+  ImageView::dropAllCache();
+
+  const GaugeType gaugeType = selectedGaugeType;
+  const bool gaugeAutoShift = selectedGaugeAutoShift;
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const std::string playOption = selectedPlayOption;
+  std::optional<unsigned int> chartRandomSeed;
+  std::optional<std::string> chartRandomPrng;
+  std::optional<std::vector<int>> chartRandomValues;
+  if (auto *currentChart = selectedChart.load(); currentChart != nullptr) {
+    chartRandomSeed = currentChart->Meta.RandomSeed;
+    chartRandomPrng = currentChart->Meta.RandomPrng;
+    if (!currentChart->Meta.RandomValues.empty()) {
+      chartRandomValues = currentChart->Meta.RandomValues;
+    }
+  }
+
+  defer(
+      [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
+       chartRandomSeed, chartRandomPrng, chartRandomValues]() {
+        previewLoadCancelled = true;
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+
+        selectedChartMediaReady.store(false);
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> preparedChart;
+        try {
+          preparedChart =
+              play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
+                                       chartRandomPrng, chartRandomValues,
+                                       parseCancelled);
+        } catch (const std::exception &e) {
+          SDL_Log("Error parsing %s for start: %s",
+                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+        }
+        if (preparedChart != nullptr && !parseCancelled) {
+          play_options::PlayOptionReplayInfo playInfo =
+              play_options::applySelectedPlayOptions(*preparedChart,
+                                                     playOption);
+          context.jukebox.stop();
+          context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+          if (!parseCancelled) {
+            auto *loadedChart = preparedChart.release();
+            delete selectedChart.exchange(loadedChart);
+            selectedChartMediaReady.store(true);
+          }
+          if (parseCancelled) {
+            preparedChart.reset();
+          } else {
+            context.sceneManager->changeScene(
+                new GamePlayScene(context, selectedChart.load(),
+                                  {
+                                      .startPosition = 0,
+                                      .autoKeySound = autoKeySound,
+                                      .autoPlay = false,
+                                      .gaugeType = gaugeType,
+                                      .gaugeAutoShift = gaugeAutoShift,
+                                      .playOption = playInfo.option,
+                                      .playOptionSeed = playInfo.seed,
+                                      .playOption2 = playInfo.option2,
+                                      .playOption2Seed = playInfo.seed2,
+                                  }),
+                true);
+            willStart.store(false);
+            if (startButtonText != nullptr) {
+              startButtonText->setText("Start");
+            }
+            return true;
+          }
+        }
+
+        auto *chart = loadedSelectedChart();
+        if (chart == nullptr) {
+          willStart.store(false);
+          if (startButtonText != nullptr) {
+            startButtonText->setText("Start");
+          }
+          return true;
+        }
+
+        context.jukebox.stop();
+        context.sceneManager->changeScene(
+            new GamePlayScene(context, chart,
+                              {
+                                  .startPosition = 0,
+                                  .autoKeySound = autoKeySound,
+                                  .autoPlay = false,
+                                  .gaugeType = gaugeType,
+                                  .gaugeAutoShift = gaugeAutoShift,
+                              }),
+            true);
+        willStart.store(false);
+        if (startButtonText != nullptr) {
+          startButtonText->setText("Start");
+        }
+        return true;
+      },
+      0, true);
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   replaySummaries.clear();
   selectedReplayIndex = -1;
-  if (record == nullptr || record->unavailable || record->meta.BmsPath.empty()) {
+  if (record == nullptr || record->unavailable ||
+      record->meta.BmsPath.empty()) {
     setReplayButtonVisible(false);
     return;
   }
@@ -1221,10 +1476,149 @@ void MainMenuScene::setReplayButtonVisible(bool visible) {
   }
 
   replayButtonSlot->setVisible(visible);
-  replayButtonSlot->setHeight(visible ? 64.0f : 0.0f);
+  replayButtonSlot->setHeight(visible ? 58.0f : 0.0f);
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
+}
+
+void MainMenuScene::buildPlayOptionsModal() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  constexpr float kModalPanelWidth = 760.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalGridGap = 12.0f;
+  constexpr float kPlayOptionColumnWidth =
+      (kModalPanelWidth - kModalPanelPadding * 2.0f - kModalGridGap * 3.0f) /
+      4.0f;
+
+  playOptionsModalRoot = new ModalRootView(0, 0, rendering::window_width,
+                                           rendering::window_height);
+  playOptionsModalRoot->setPositionType(YGPositionTypeAbsolute);
+  playOptionsModalRoot->setPosition(Edge::Left, 0);
+  playOptionsModalRoot->setPosition(Edge::Top, 0);
+  playOptionsModalRoot->setZIndex(1000);
+  playOptionsModalRoot->setVisible(false);
+  playOptionsModalRoot->setFlexDirection(FlexDirection::Column);
+  playOptionsModalRoot->setAlignItems(YGAlignCenter);
+  playOptionsModalRoot->setJustifyContent(YGJustifyCenter);
+  playOptionsModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setHeight(640)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12)
+      ->setPadding(Edge::All, 22)
+      ->setBackgroundColor(Color(13, 22, 35, 242))
+      ->setBorderColor(Color(86, 118, 153, 255))
+      ->setBorderWidth(2);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Play Options");
+  title->setColor({245, 249, 255, 255});
+  title->setHeight(42);
+  panel->addView(title);
+
+  panel->addView(makeModalLabel("Gauge"));
+
+  auto makeGaugeButton = [this](GaugeType type, bool autoShift) {
+    TextView *text = nullptr;
+    auto *button =
+        makeModalButton(gaugeButtonLabel(type, autoShift), 18, &text);
+    button->setFlex(1);
+    button->setOnClickListener(
+        [this, type, autoShift]() { setGaugeSelection(type, autoShift); });
+    gaugeSelectionButtons.push_back({
+        .button = button,
+        .text = text,
+        .type = type,
+        .autoShift = autoShift,
+    });
+    return button;
+  };
+
+  auto *gaugeRowA = makeModalOptionRow(58);
+  gaugeRowA->addView(makeGaugeButton(GaugeType::AssistedEasy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Easy, false));
+  gaugeRowA->addView(makeGaugeButton(GaugeType::Normal, false));
+  auto *gaugeRowB = makeModalOptionRow(58);
+  gaugeRowB->addView(makeGaugeButton(GaugeType::Hard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, false));
+  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, true));
+  panel->addView(gaugeRowA);
+  panel->addView(gaugeRowB);
+
+  panel->addView(makeModalLabel("Play Option"));
+
+  auto makePlayOptionButton = [this](std::string option) {
+    TextView *text = nullptr;
+    auto *button = makeModalButton(option, 15, &text);
+    button->setWidth(kPlayOptionColumnWidth);
+    button->setOnClickListener(
+        [this, option]() { setPlayOptionSelection(option); });
+    playOptionButtons.push_back({
+        .button = button,
+        .text = text,
+        .option = option,
+    });
+    return button;
+  };
+
+  auto *playOptionRowA = makeModalOptionRow(58);
+  auto *playOptionRowB = makeModalOptionRow(58);
+  auto *playOptionRowC = makeModalOptionRow(58);
+  for (size_t i = 0; i < play_options::kPlayOptions.size(); ++i) {
+    auto *row =
+        i < 4 ? playOptionRowA : (i < 8 ? playOptionRowB : playOptionRowC);
+    row->addView(makePlayOptionButton(play_options::kPlayOptions[i]));
+  }
+  panel->addView(playOptionRowA);
+  panel->addView(playOptionRowB);
+  panel->addView(playOptionRowC);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setHeight(58);
+  playOptionsCloseButton =
+      makeModalButton("Close", 20, &playOptionsCloseButtonText);
+  playOptionsCloseButton->setOnClickListener(
+      [this]() { hidePlayOptionsModal(); });
+  footer->addView(playOptionsCloseButton);
+  panel->addView(footer);
+
+  playOptionsModalRoot->addView(panel);
+  rootLayout->addView(playOptionsModalRoot);
+  refreshGaugeSelectionButtons();
+  refreshPlayOptionButtons();
+  styleActionButton(playOptionsCloseButton, playOptionsCloseButtonText, true,
+                    Color(47, 54, 70, 220), Color(62, 72, 92, 232),
+                    Color(78, 90, 114, 242), Color(118, 137, 160, 220));
+}
+
+void MainMenuScene::showPlayOptionsModal() {
+  if (playOptionsModalRoot == nullptr) {
+    return;
+  }
+
+  refreshGaugeSelectionButtons();
+  refreshPlayOptionButtons();
+  playOptionsModalRoot->setSize(rendering::window_width,
+                                rendering::window_height);
+  playOptionsModalRoot->setVisible(true);
+  playOptionsModalRoot->applyYogaLayout();
+}
+
+void MainMenuScene::hidePlayOptionsModal() {
+  if (playOptionsModalRoot == nullptr) {
+    return;
+  }
+  playOptionsModalRoot->setVisible(false);
 }
 
 void MainMenuScene::buildReplayModal() {
@@ -1238,8 +1632,8 @@ void MainMenuScene::buildReplayModal() {
       kModalPanelWidth - kModalPanelPadding * 2.0f;
   constexpr float kModalContentHeight = 418.0f;
 
-  replayModalRoot =
-      new ModalRootView(0, 0, rendering::window_width, rendering::window_height);
+  replayModalRoot = new ModalRootView(0, 0, rendering::window_width,
+                                      rendering::window_height);
   replayModalRoot->setPositionType(YGPositionTypeAbsolute);
   replayModalRoot->setPosition(Edge::Left, 0);
   replayModalRoot->setPosition(Edge::Top, 0);
@@ -1340,38 +1734,8 @@ void MainMenuScene::buildReplayModal() {
       ->setGap(18);
   replayExportOptionsContent->setVisible(false);
 
-  auto makeOptionLabel = [](const std::string &text) {
-    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-    label->setText(text);
-    label->setColor({173, 193, 216, 255});
-    label->setHeight(28);
-    return label;
-  };
-  auto makeOptionRow = []() {
-    auto *row = new View();
-    row->setFlexDirection(FlexDirection::Row);
-    row->setAlignItems(YGAlignStretch);
-    row->setGap(12);
-    row->setHeight(58);
-    return row;
-  };
-  auto makeModalButton = [](const std::string &label, int fontSize,
-                            TextView **textOut) {
-    auto *button = new Button(0, 0, 160, 58);
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
-    text->setText(label);
-    text->setAlign(TextView::CENTER);
-    text->setVAlign(TextView::MIDDLE);
-    button->setContentView(text);
-    button->setStyledBorderWidth(2);
-    if (textOut != nullptr) {
-      *textOut = text;
-    }
-    return button;
-  };
-
-  replayExportOptionsContent->addView(makeOptionLabel("Frame Rate"));
-  auto *fpsRow = makeOptionRow();
+  replayExportOptionsContent->addView(makeModalLabel("Frame Rate"));
+  auto *fpsRow = makeModalOptionRow();
   replayFps60Button = makeModalButton("60 fps", 20, &replayFps60ButtonText);
   replayFps120Button = makeModalButton("120 fps", 20, &replayFps120ButtonText);
   replayFps60Button->setFlex(1);
@@ -1394,8 +1758,8 @@ void MainMenuScene::buildReplayModal() {
   fpsRow->addView(replayFps120Button);
   replayExportOptionsContent->addView(fpsRow);
 
-  replayExportOptionsContent->addView(makeOptionLabel("Resolution"));
-  auto *resolutionRow = makeOptionRow();
+  replayExportOptionsContent->addView(makeModalLabel("Resolution"));
+  auto *resolutionRow = makeModalOptionRow();
   replayResolution1080Button =
       makeModalButton("1080p", 20, &replayResolution1080ButtonText);
   replayResolutionFullButton =
@@ -1447,9 +1811,8 @@ void MainMenuScene::buildReplayModal() {
       ->setBorderColor(Color(74, 101, 132, 255))
       ->setBorderWidth(2);
   replayExportProgressFill = new View();
-  replayExportProgressFill->setWidth(0)
-      ->setHeight(20)
-      ->setBackgroundColor(Color(62, 168, 145, 240));
+  replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
+      Color(62, 168, 145, 240));
   replayExportProgressTrack->addView(replayExportProgressFill);
   replayExportProgressContent->addView(replayExportProgressTrack);
 
@@ -1625,8 +1988,8 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool hasSelection =
       selectedReplayIndex >= 0 &&
       selectedReplayIndex < static_cast<int>(replaySummaries.size());
-  const bool optionsMode =
-      replayExportOptionsContent != nullptr && replayExportOptionsContent->getVisible();
+  const bool optionsMode = replayExportOptionsContent != nullptr &&
+                           replayExportOptionsContent->getVisible();
   const bool progressMode = replayExportProgressContent != nullptr &&
                             replayExportProgressContent->getVisible();
   const bool exportInProgress = replayExportInProgress.load();
@@ -1636,8 +1999,8 @@ void MainMenuScene::refreshReplayModalActions() {
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText(
-        exportInProgress ? "Exporting" : (optionsMode ? "Start Export"
-                                                      : "Export"));
+        exportInProgress ? "Exporting"
+                         : (optionsMode ? "Start Export" : "Export"));
   }
 
   if (replayWatchButton != nullptr) {
@@ -1650,20 +2013,18 @@ void MainMenuScene::refreshReplayModalActions() {
   }
 
   styleActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                    !exportInProgress,
-                    Color(47, 54, 70, 220), Color(62, 72, 92, 232),
-                    Color(78, 90, 114, 242), Color(118, 137, 160, 220));
+                    !exportInProgress, Color(47, 54, 70, 220),
+                    Color(62, 72, 92, 232), Color(78, 90, 114, 242),
+                    Color(118, 137, 160, 220));
   styleActionButton(replayWatchButton, replayWatchButtonText,
                     hasSelection && !optionsMode && !progressMode &&
                         !exportInProgress,
-                    Color(29, 73, 120, 224),
-                    Color(40, 96, 156, 236), Color(58, 129, 204, 246),
-                    Color(105, 162, 222, 255));
+                    Color(29, 73, 120, 224), Color(40, 96, 156, 236),
+                    Color(58, 129, 204, 246), Color(105, 162, 222, 255));
   styleActionButton(replayModalExportButton, replayModalExportButtonText,
                     hasSelection && !progressMode && !exportInProgress,
-                    Color(47, 54, 88, 224),
-                    Color(65, 75, 119, 236), Color(82, 94, 148, 246),
-                    Color(126, 141, 219, 255));
+                    Color(47, 54, 88, 224), Color(65, 75, 119, 236),
+                    Color(82, 94, 148, 246), Color(126, 141, 219, 255));
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayout();
@@ -1681,8 +2042,8 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
                     selectedExportFullResolution);
 }
 
-void MainMenuScene::updateReplayExportProgressUi(
-    double fraction, const std::string &message) {
+void MainMenuScene::updateReplayExportProgressUi(double fraction,
+                                                 const std::string &message) {
   replayExportProgressFraction = std::clamp(fraction, 0.0, 1.0);
   const int displayedPercent =
       static_cast<int>(std::lround(replayExportProgressFraction * 100.0));
@@ -1719,8 +2080,8 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           loadThread.join();
         }
 
-        auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId,
-                                                               record.meta);
+        auto replay =
+            ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
         if (!replay.has_value()) {
           willStart.store(false);
           if (replayWatchButtonText != nullptr) {
@@ -1729,6 +2090,31 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           refreshReplayAvailability(&record);
           return true;
         }
+
+        std::atomic_bool parseCancelled = false;
+        auto replayChart = play_options::prepareReplayChart(
+            record.meta.BmsPath, replay.value(), parseCancelled);
+        if (replayChart == nullptr || parseCancelled) {
+          willStart.store(false);
+          if (replayWatchButtonText != nullptr) {
+            replayWatchButtonText->setText("Watch");
+          }
+          return true;
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*replayChart, true, parseCancelled);
+        if (parseCancelled) {
+          willStart.store(false);
+          if (replayWatchButtonText != nullptr) {
+            replayWatchButtonText->setText("Watch");
+          }
+          return true;
+        }
+
+        auto *loadedChart = replayChart.release();
+        delete selectedChart.exchange(loadedChart);
+        selectedChartMediaReady.store(true);
 
         auto *chart = loadedSelectedChart();
         if (chart == nullptr) {
@@ -1744,16 +2130,15 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         context.jukebox.stop();
         hideReplayModal();
         context.sceneManager->changeScene(
-            new GamePlayScene(
-                context, chart,
-                {
-                    .startPosition = 0,
-                    .autoKeySound = false,
-                    .autoPlay = false,
-                    .gaugeType = replayData->initialGaugeType,
-                    .gaugeAutoShift = replayData->gaugeAutoShift,
-                    .replayData = replayData,
-                }),
+            new GamePlayScene(context, chart,
+                              {
+                                  .startPosition = 0,
+                                  .autoKeySound = false,
+                                  .autoPlay = false,
+                                  .gaugeType = replayData->initialGaugeType,
+                                  .gaugeAutoShift = replayData->gaugeAutoShift,
+                                  .replayData = replayData,
+                              }),
             true);
         willStart.store(false);
         return true;
@@ -1826,13 +2211,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
             return;
           }
 
-          bms_parser::Parser parser;
-          bms_parser::Chart *parsedChart = nullptr;
           std::atomic_bool parseCancelled = false;
-          parser.Parse(record.meta.BmsPath, &parsedChart, false, false,
-                       parseCancelled);
-          std::unique_ptr<bms_parser::Chart> chart(parsedChart);
-          if (chart == nullptr) {
+          auto chart = play_options::prepareReplayChart(
+              record.meta.BmsPath, replay.value(), parseCancelled);
+          if (chart == nullptr || parseCancelled) {
             complete({.success = false, .message = "No Chart"});
             return;
           }
@@ -1900,9 +2282,8 @@ void MainMenuScene::applyReplayVideoExportResult() {
 
   if (replayStatusText != nullptr) {
     if (result->success) {
-      replayStatusText->setText(result->message == "Saved to Photos"
-                                    ? "Saved"
-                                    : "Exported");
+      replayStatusText->setText(
+          result->message == "Saved to Photos" ? "Saved" : "Exported");
     } else if (result->message == "No Replay") {
       replayStatusText->setText("No Replay");
     } else if (result->message == "No Chart") {
@@ -1973,6 +2354,10 @@ void MainMenuScene::renderScene() {
   if (replayModalRoot != nullptr) {
     replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   }
+  if (playOptionsModalRoot != nullptr) {
+    playOptionsModalRoot->setSize(rendering::window_width,
+                                  rendering::window_height);
+  }
   if (layoutChanged) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
@@ -2029,6 +2414,12 @@ void MainMenuScene::cleanupScene() {
   replayModalTitleText = nullptr;
   replayExportProgressMessageText = nullptr;
   replayExportProgressPercentText = nullptr;
+  startButtonText = nullptr;
+  playOptionsModalRoot = nullptr;
+  readyGaugeText = nullptr;
+  readyPlayOptionText = nullptr;
+  playOptionsCloseButton = nullptr;
+  playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayModalExportButton = nullptr;
@@ -2054,6 +2445,7 @@ void MainMenuScene::cleanupScene() {
   selectedExportFullResolution = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
+  playOptionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

@@ -353,6 +353,11 @@ public:
     return nullptr;
   }
 
+  inline void rebindVisibleItems() {
+    visibleItemsNeedRebind = true;
+    updateVisibleItems();
+  }
+
 private:
   std::vector<T> items;
   int externalItemCount = 0;

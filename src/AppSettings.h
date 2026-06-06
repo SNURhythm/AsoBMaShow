@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 class AppSettings {
 public:
@@ -30,6 +31,8 @@ public:
   static constexpr float kMinLaneLength = 5.0f;
   static constexpr float kMaxLaneLength = 12.0f;
   static constexpr float kDefaultLaneLength = 8.0f;
+  static constexpr const char *kDefaultGaugeType = "normal";
+  static constexpr const char *kDefaultPlayOption = "NORMAL";
 
   int inputOffsetMs = 0;
   int visualOffsetMs = 0;
@@ -42,6 +45,8 @@ public:
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
+  std::string selectedGaugeType = kDefaultGaugeType;
+  std::string selectedPlayOption = kDefaultPlayOption;
 
   void sanitize();
   bool save() const;
