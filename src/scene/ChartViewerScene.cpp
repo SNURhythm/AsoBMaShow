@@ -348,6 +348,8 @@ public:
     rebuildLayout();
   }
 
+  void setShowInvisibleNotes(bool enabled) { showInvisibleNotes = enabled; }
+
   void setZoom(float newZoom) {
     const std::optional<ZoomFocusAnchor> focusAnchor =
         zoomFocusAnchorAtViewportCenter();
@@ -420,6 +422,7 @@ protected:
     drawMarkers();
     drawLongNotes();
     drawNotes();
+    drawInvisibleNotes();
     drawGhosts();
     drawCursorBars();
     batch.end();
@@ -691,6 +694,7 @@ private:
   std::optional<long long> selectedTimeMicros;
   long long playbackTimeMicros = 0;
   bool playbackActive = false;
+  bool showInvisibleNotes = false;
   std::function<void(long long)> selectionListener;
 
   void rebuildLayout() {
@@ -944,6 +948,26 @@ private:
           dynamic_cast<const bms_parser::LongNote *>(note) != nullptr;
       const float height = isLongNote ? 7.0f : 6.0f;
       drawRectClip(x, y, width, height, noteColor(lane, note));
+    });
+  }
+
+  void drawInvisibleNotes() {
+    if (!showInvisibleNotes) {
+      return;
+    }
+    forEachInvisibleNote([&](int lane, const bms_parser::Note *note,
+                             const bms_parser::TimeLine *timeline) {
+      (void)note;
+      auto yIt = timelineY.find(timeline);
+      auto layoutIt = timelineMeasure.find(timeline);
+      if (yIt == timelineY.end() || layoutIt == timelineMeasure.end()) {
+        return;
+      }
+      const auto &layout = measureLayouts[layoutIt->second];
+      const float x = laneContentX(layout.column, lane) + 2.0f;
+      const float y = yIt->second - 3.0f;
+      const float width = std::max(5.0f, laneWidth - 4.0f);
+      drawRectClip(x, y, width, 6.0f, invisibleNoteColor());
     });
   }
 
@@ -1382,6 +1406,33 @@ private:
     }
   }
 
+  template <typename Fn> void forEachInvisibleNote(Fn &&fn) {
+    if (chart == nullptr) {
+      return;
+    }
+    for (const auto *measure : chart->Measures) {
+      if (measure == nullptr) {
+        continue;
+      }
+      for (const auto *timeline : measure->TimeLines) {
+        if (timeline == nullptr) {
+          continue;
+        }
+        for (int lane : laneOrder) {
+          if (lane < 0 ||
+              lane >= static_cast<int>(timeline->InvisibleNotes.size())) {
+            continue;
+          }
+          const auto *note =
+              timeline->InvisibleNotes[static_cast<size_t>(lane)];
+          if (note != nullptr) {
+            fn(lane, note, timeline);
+          }
+        }
+      }
+    }
+  }
+
   void drawLongNoteBody(int lane, const bms_parser::TimeLine *headTimeline,
                         const bms_parser::TimeLine *tailTimeline) {
     auto headYIt = timelineY.find(headTimeline);
@@ -1462,6 +1513,10 @@ private:
     }
     return usesBlueNoteColor(lane) ? Color(82, 154, 226, 164).toABGR()
                                    : Color(226, 232, 230, 154).toABGR();
+  }
+
+  uint32_t invisibleNoteColor() const {
+    return Color(255, 149, 36, 224).toABGR();
   }
 
   bool usesBlueNoteColor(int lane) const {
@@ -2171,6 +2226,7 @@ void ChartViewerScene::initView() {
   toolbar->addView(ghostClearButton);
 
   canvasView = new ChartCanvasView();
+  canvasView->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   canvasView->setFlex(1);
   canvasView->setSelectionListener(
       [this](long long timeMicros) { onCanvasSelectionChanged(timeMicros); });
