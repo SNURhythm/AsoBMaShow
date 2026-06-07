@@ -2337,7 +2337,7 @@ void ChartViewerScene::rebuildGhostModal() {
 
   constexpr float kPanelWidth = 760.0f;
   constexpr float kPanelPadding = 22.0f;
-  constexpr float kContentHeight = 300.0f;
+  constexpr float kMinPanelMargin = 36.0f;
 
   ghostModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
                                            rendering::window_height);
@@ -2352,8 +2352,10 @@ void ChartViewerScene::rebuildGhostModal() {
   ghostModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
 
   auto *panel = new View();
-  panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
-      ->setHeight(std::min<float>(640, rendering::window_height - 36))
+  panel->setWidth(std::min<float>(kPanelWidth,
+                                  rendering::window_width - kMinPanelMargin))
+      ->setHeight(std::min<float>(640,
+                                  rendering::window_height - kMinPanelMargin))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -2387,8 +2389,10 @@ void ChartViewerScene::rebuildGhostModal() {
 
   ghostReplayListView = new ReplaySummaryListView();
   ghostReplayListView->setWidthPercent(100)
-      ->setHeight(kContentHeight)
-      ->setFlexShrink(0);
+      ->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinHeight(0);
   ghostReplayListView->clearBackgroundColor();
   ghostReplayListView->setBorderColor(Color(54, 69, 76, 255));
   ghostReplayListView->setBorderWidth(2);
@@ -2402,12 +2406,25 @@ void ChartViewerScene::rebuildGhostModal() {
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
-  footer->setGap(12);
+  footer->setGap(8);
   footer->setHeight(kHeaderButtonHeight);
+  footer->setFlexShrink(0);
 
   auto *closeButton = makeButton("Close", 104, 19);
   auto *clearButton = makeButton("Clear Ghost", 138, 18);
   auto *loadButton = makeButton("Load", 104, 19);
+  closeButton->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
+  clearButton->setFlexGrow(1.25f)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
+  loadButton->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
   closeButton->setOnClickListener([this]() { hideGhostModal(); });
   clearButton->setOnClickListener([this]() { clearGhostReplay(); });
   loadButton->setOnClickListener([this]() { loadSelectedGhostReplay(); });
