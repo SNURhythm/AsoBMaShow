@@ -39,7 +39,8 @@ namespace {
 constexpr int kHeaderButtonHeight = 54;
 constexpr int kHeaderPadding = 18;
 constexpr float kMinZoom = 0.55f;
-constexpr float kMaxZoom = 2.0f;
+constexpr float kMaxZoom = 5.0f;
+constexpr float kZoomStep = 0.20f;
 constexpr float kMinScreenZoom = 0.65f;
 constexpr float kMaxScreenZoom = 3.0f;
 constexpr size_t kRandomDrawerPageSize = 96;
@@ -55,6 +56,8 @@ constexpr int kMarkerLabelMaxRasterFontSize = 128;
 constexpr float kChartContentTopPadding = 16.0f;
 constexpr float kChartContentBottomPadding = 24.0f;
 constexpr float kCursorTapSlop = 10.0f;
+constexpr float kPlaybackAutofocusPaddingX = 48.0f;
+constexpr float kPlaybackAutofocusPaddingY = 40.0f;
 constexpr long long kListenStopTailMicros = 1000000LL;
 constexpr long long kPracticeLeadInMicros = 3000000LL;
 constexpr int kNoGhostReplayId = -1;
@@ -346,8 +349,17 @@ public:
   }
 
   void setZoom(float newZoom) {
+    const std::optional<ZoomFocusAnchor> focusAnchor =
+        zoomFocusAnchorAtViewportCenter();
+    const float previousZoom = zoom;
     zoom = std::clamp(newZoom, kMinZoom, kMaxZoom);
+    if (std::abs(zoom - previousZoom) <= 0.001f) {
+      return;
+    }
     rebuildLayout();
+    if (focusAnchor.has_value()) {
+      focusZoomAnchor(*focusAnchor);
+    }
   }
 
   [[nodiscard]] float getZoom() const { return zoom; }
@@ -367,6 +379,9 @@ public:
   void setPlaybackTime(long long timeMicros, bool active) {
     playbackTimeMicros = std::max(0LL, timeMicros);
     playbackActive = active;
+    if (playbackActive) {
+      autofocusPlaybackCursor();
+    }
   }
 
   void clearPlaybackTime() { playbackActive = false; }
@@ -587,6 +602,12 @@ private:
     float x = 0.0f;
     float yTop = 0.0f;
     float yBottom = 0.0f;
+  };
+
+  struct ZoomFocusAnchor {
+    std::vector<int> measureIndices;
+    int centerMeasureIndex = -1;
+    float centerMeasureLocalY = 0.5f;
   };
 
   struct MarkerLabel {
@@ -1534,6 +1555,252 @@ private:
            uiY <= getY() + getHeight();
   }
 
+  float columnVisualWidth() const {
+    return gutterWidth + laneAreaWidth + 78.0f;
+  }
+
+  std::optional<int> columnAtViewportCenter() const {
+    if (columnLayouts.empty() || getWidth() <= 0 || screenZoom <= 0.0f) {
+      return std::nullopt;
+    }
+
+    const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
+    const float centerX = scrollX + viewportWidth * 0.5f;
+    const float visualWidth = columnVisualWidth();
+    int nearestColumn = 0;
+    float nearestDistance = std::numeric_limits<float>::max();
+    for (size_t i = 0; i < columnLayouts.size(); ++i) {
+      const float left = columnLayouts[i].x;
+      const float right = left + visualWidth;
+      if (centerX >= left && centerX <= right) {
+        return static_cast<int>(i);
+      }
+
+      const float columnCenter = left + visualWidth * 0.5f;
+      const float distance = std::abs(centerX - columnCenter);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestColumn = static_cast<int>(i);
+      }
+    }
+    return nearestColumn;
+  }
+
+  bool zoomAnchorContainsMeasure(const ZoomFocusAnchor &anchor,
+                                 int measureIndex) const {
+    return std::find(anchor.measureIndices.begin(), anchor.measureIndices.end(),
+                     measureIndex) != anchor.measureIndices.end();
+  }
+
+  std::optional<ZoomFocusAnchor> zoomFocusAnchorAtViewportCenter() const {
+    const std::optional<int> centerColumn = columnAtViewportCenter();
+    if (!centerColumn.has_value() || getHeight() <= 0 || screenZoom <= 0.0f) {
+      return std::nullopt;
+    }
+
+    const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
+    const float centerY = scrollY + viewportHeight * 0.5f;
+    ZoomFocusAnchor anchor;
+    float nearestMeasureDistance = std::numeric_limits<float>::max();
+    for (const auto &layout : measureLayouts) {
+      if (layout.column != *centerColumn) {
+        continue;
+      }
+
+      anchor.measureIndices.push_back(layout.measureIndex);
+      const float measureTop = layout.y;
+      const float measureBottom = layout.y + layout.height;
+      const float measureCenter = (measureTop + measureBottom) * 0.5f;
+      const float distance =
+          centerY >= measureTop && centerY <= measureBottom
+              ? 0.0f
+              : std::abs(centerY - measureCenter);
+      if (distance < nearestMeasureDistance && layout.height > 0.0f) {
+        nearestMeasureDistance = distance;
+        anchor.centerMeasureIndex = layout.measureIndex;
+        anchor.centerMeasureLocalY =
+            std::clamp((centerY - layout.y) / layout.height, 0.0f, 1.0f);
+      }
+    }
+
+    if (anchor.measureIndices.empty()) {
+      return std::nullopt;
+    }
+    return anchor;
+  }
+
+  std::optional<int> columnForZoomAnchor(const ZoomFocusAnchor &anchor) const {
+    if (anchor.measureIndices.empty() || columnLayouts.empty()) {
+      return std::nullopt;
+    }
+
+    int bestColumn = -1;
+    int bestOverlap = 0;
+    bool bestHasCenterMeasure = false;
+    for (size_t columnIndex = 0; columnIndex < columnLayouts.size();
+         ++columnIndex) {
+      int overlap = 0;
+      bool hasCenterMeasure = false;
+      for (const auto &layout : measureLayouts) {
+        if (layout.column != static_cast<int>(columnIndex)) {
+          continue;
+        }
+        if (!zoomAnchorContainsMeasure(anchor, layout.measureIndex)) {
+          continue;
+        }
+
+        ++overlap;
+        if (layout.measureIndex == anchor.centerMeasureIndex) {
+          hasCenterMeasure = true;
+        }
+      }
+
+      if (overlap <= 0) {
+        continue;
+      }
+      if (overlap > bestOverlap ||
+          (overlap == bestOverlap && hasCenterMeasure &&
+           !bestHasCenterMeasure)) {
+        bestColumn = static_cast<int>(columnIndex);
+        bestOverlap = overlap;
+        bestHasCenterMeasure = hasCenterMeasure;
+      }
+    }
+
+    if (bestColumn < 0) {
+      return std::nullopt;
+    }
+    return bestColumn;
+  }
+
+  const MeasureLayout *
+  measureForZoomAnchorInColumn(const ZoomFocusAnchor &anchor,
+                               int column) const {
+    const MeasureLayout *fallback = nullptr;
+    int fallbackDistance = std::numeric_limits<int>::max();
+    for (const auto &layout : measureLayouts) {
+      if (layout.column != column ||
+          !zoomAnchorContainsMeasure(anchor, layout.measureIndex)) {
+        continue;
+      }
+
+      if (layout.measureIndex == anchor.centerMeasureIndex) {
+        return &layout;
+      }
+
+      const int distance =
+          std::abs(layout.measureIndex - anchor.centerMeasureIndex);
+      if (fallback == nullptr || distance < fallbackDistance) {
+        fallback = &layout;
+        fallbackDistance = distance;
+      }
+    }
+    return fallback;
+  }
+
+  void focusZoomAnchor(const ZoomFocusAnchor &anchor) {
+    const std::optional<int> targetColumn = columnForZoomAnchor(anchor);
+    if (!targetColumn.has_value()) {
+      return;
+    }
+
+    focusColumn(*targetColumn);
+    const auto *targetMeasure =
+        measureForZoomAnchorInColumn(anchor, *targetColumn);
+    if (targetMeasure == nullptr || getHeight() <= 0 || screenZoom <= 0.0f) {
+      return;
+    }
+
+    const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
+    const float localY = targetMeasure->measureIndex == anchor.centerMeasureIndex
+                             ? anchor.centerMeasureLocalY
+                             : 0.5f;
+    scrollY = targetMeasure->y + targetMeasure->height * localY -
+              viewportHeight * 0.5f;
+    clampScroll();
+  }
+
+  void focusColumn(int column) {
+    if (columnLayouts.empty() || getWidth() <= 0 || screenZoom <= 0.0f) {
+      return;
+    }
+
+    const int clampedColumn =
+        std::clamp(column, 0, static_cast<int>(columnLayouts.size()) - 1);
+    const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
+    const float columnCenter =
+        columnLayouts[clampedColumn].x + columnVisualWidth() * 0.5f;
+    scrollX = columnCenter - viewportWidth * 0.5f;
+    clampScroll();
+  }
+
+  bool isUserInteracting() const {
+    return mouseDragging || pinchActive || !activeTouches.empty();
+  }
+
+  void ensureContentRectVisible(float x, float y, float width, float height,
+                                float paddingUiX, float paddingUiY) {
+    if (getWidth() <= 0 || getHeight() <= 0 || screenZoom <= 0.0f) {
+      return;
+    }
+
+    const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
+    const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
+    const float paddingX =
+        std::min(viewportWidth * 0.25f, paddingUiX / screenZoom);
+    const float paddingY =
+        std::min(viewportHeight * 0.25f, paddingUiY / screenZoom);
+
+    bool changed = false;
+    if (width + paddingX * 2.0f >= viewportWidth) {
+      const float nextScrollX = x + width * 0.5f - viewportWidth * 0.5f;
+      changed = changed || std::abs(scrollX - nextScrollX) > 0.001f;
+      scrollX = nextScrollX;
+    } else if (x < scrollX + paddingX) {
+      scrollX = x - paddingX;
+      changed = true;
+    } else if (x + width > scrollX + viewportWidth - paddingX) {
+      scrollX = x + width - viewportWidth + paddingX;
+      changed = true;
+    }
+
+    if (height + paddingY * 2.0f >= viewportHeight) {
+      const float nextScrollY = y + height * 0.5f - viewportHeight * 0.5f;
+      changed = changed || std::abs(scrollY - nextScrollY) > 0.001f;
+      scrollY = nextScrollY;
+    } else if (y < scrollY + paddingY) {
+      scrollY = y - paddingY;
+      changed = true;
+    } else if (y + height > scrollY + viewportHeight - paddingY) {
+      scrollY = y + height - viewportHeight + paddingY;
+      changed = true;
+    }
+
+    if (changed) {
+      clampScroll();
+    }
+  }
+
+  void autofocusPlaybackCursor() {
+    if (chart == nullptr || isUserInteracting()) {
+      return;
+    }
+    if (layoutDirty) {
+      rebuildLayout();
+    }
+
+    CursorDrawPosition position;
+    if (!timeToCursorPosition(playbackTimeMicros, position)) {
+      return;
+    }
+
+    constexpr float kCursorFocusHeight = 24.0f;
+    ensureContentRectVisible(
+        position.x, position.y - kCursorFocusHeight * 0.5f,
+        gutterWidth + laneAreaWidth, kCursorFocusHeight,
+        kPlaybackAutofocusPaddingX, kPlaybackAutofocusPaddingY);
+  }
+
   void clampScroll() {
     screenZoom = std::clamp(screenZoom, kMinScreenZoom, kMaxScreenZoom);
     const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
@@ -1831,13 +2098,13 @@ void ChartViewerScene::initView() {
   (void)zoomButtonText;
   zoomOutButton->setOnClickListener([this]() {
     if (canvasView != nullptr) {
-      canvasView->setZoom(canvasView->getZoom() - 0.12f);
+      canvasView->setZoom(canvasView->getZoom() - kZoomStep);
       updateZoomText();
     }
   });
   zoomInButton->setOnClickListener([this]() {
     if (canvasView != nullptr) {
-      canvasView->setZoom(canvasView->getZoom() + 0.12f);
+      canvasView->setZoom(canvasView->getZoom() + kZoomStep);
       updateZoomText();
     }
   });
