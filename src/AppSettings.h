@@ -57,6 +57,7 @@ public:
   int visibleTimeGreenNumber = 400;
   bool visibleTimeUseMilliseconds = false;
   bool inputKeysoundEnabled = true;
+  bool showInvisibleNotes = false;
   bool bgaEnabled = true;
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;

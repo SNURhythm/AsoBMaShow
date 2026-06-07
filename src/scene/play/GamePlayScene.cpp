@@ -120,6 +120,12 @@ bool shouldPreferCandidate(const PressLaneCandidate &current,
   return false;
 }
 
+bool laneIsPressed(const std::unordered_map<int, bool> &lanePressed,
+                   int lane) {
+  const auto it = lanePressed.find(lane);
+  return it != lanePressed.end() && it->second;
+}
+
 std::string gameplayPlayOptionLabel(const StartOptions &options) {
   std::optional<std::string> option = options.playOption;
   std::optional<long long> seed = options.playOptionSeed;
@@ -211,6 +217,7 @@ void GamePlayScene::init() {
       context.settings.judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D);
   renderer->setReplayData(options.replayData.get());
+  renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
   context.jukebox.stop();
   reset();
@@ -323,6 +330,18 @@ void GamePlayScene::reset() {
   for (const auto &measure : chart->Measures) {
     for (const auto &timeline : measure->TimeLines) {
       for (const auto &note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        note->Reset();
+      }
+      for (const auto &note : timeline->InvisibleNotes) {
+        if (note == nullptr) {
+          continue;
+        }
+        note->Reset();
+      }
+      for (const auto &note : timeline->LandmineNotes) {
         if (note == nullptr) {
           continue;
         }
@@ -829,6 +848,14 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           state->passedTimelineCount++;
         }
         if (replayPlayback) {
+          for (const auto &note : timeline->Notes) {
+            if (note != nullptr && note->IsLandmineNote()) {
+              expireGimmickNote(note, judgedTime);
+            }
+          }
+          for (const auto &note : timeline->LandmineNotes) {
+            expireGimmickNote(note, judgedTime);
+          }
           continue;
         }
         // make remaining notes POOR
@@ -840,6 +867,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
             continue;
           }
           if (note->IsLandmineNote()) {
+            expireGimmickNote(note, judgedTime);
             continue;
           }
           if (note->IsLongNote()) {
@@ -854,6 +882,12 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                             judgedTime, poorResult);
         }
+        for (const auto &note : timeline->LandmineNotes) {
+          if (note == nullptr || note->IsDead) {
+            continue;
+          }
+          expireGimmickNote(note, judgedTime);
+        }
       } else if (timeline->Timing <= judgedTime) {
         // auto-release long notes
         for (const auto &note : timeline->Notes) {
@@ -864,7 +898,12 @@ void GamePlayScene::checkPassedTimeline(long long time) {
             continue;
           }
           if (note->IsLandmineNote()) {
-            // TODO: if lane is being pressed, detonate landmine
+            auto *landmine = static_cast<bms_parser::LandmineNote *>(note);
+            if (!replayPlayback && laneIsPressed(lanePressed, note->Lane)) {
+              detonateLandmine(landmine, time, judgedTime);
+            } else {
+              expireGimmickNote(landmine, judgedTime);
+            }
             continue;
           }
           if (note->IsLongNote()) {
@@ -898,6 +937,16 @@ void GamePlayScene::checkPassedTimeline(long long time) {
             }
           }
         }
+        for (const auto &note : timeline->LandmineNotes) {
+          if (note == nullptr || note->IsDead) {
+            continue;
+          }
+          if (!replayPlayback && laneIsPressed(lanePressed, note->Lane)) {
+            detonateLandmine(note, time, judgedTime);
+          } else {
+            expireGimmickNote(note, judgedTime);
+          }
+        }
       } else {
         return;
       }
@@ -919,6 +968,12 @@ void GamePlayScene::buildReplayNoteLookup() {
   for (const auto &measure : chart->Measures) {
     for (const auto &timeline : measure->TimeLines) {
       for (const auto &note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        replayNoteLookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+      }
+      for (const auto &note : timeline->LandmineNotes) {
         if (note == nullptr) {
           continue;
         }
@@ -1021,11 +1076,18 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
       applyReplayGauge(event);
     }
     break;
+  case ReplayEventAction::Mine:
+    if (auto *note = findReplayNote(event); note != nullptr) {
+      note->IsPlayed = true;
+      expireGimmickNote(note, event.judgeTimeMicros);
+    }
+    applyReplayGauge(event);
+    break;
   }
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
-  if (!isReplayPlayback() || state == nullptr || event.judgement == None) {
+  if (!isReplayPlayback() || state == nullptr) {
     return;
   }
 
@@ -1040,6 +1102,35 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
     state->gaugeHistory.back() = event.gauge;
   }
   updateGaugeStatusText();
+}
+
+void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
+                                     long long songTimeMicros,
+                                     long long judgeTimeMicros) {
+  if (note == nullptr || note->IsDead) {
+    return;
+  }
+
+  note->IsPlayed = true;
+  note->IsDead = true;
+  note->PlayedTime = judgeTimeMicros;
+
+  if (state != nullptr) {
+    state->applyGaugeDelta(-note->Damage);
+    updateGaugeStatusText();
+  }
+  appendReplayEvent(ReplayEventAction::Mine, note->Lane, note, songTimeMicros,
+                    judgeTimeMicros, JudgeResult(None, 0));
+}
+
+void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
+                                      long long judgeTimeMicros) {
+  if (note == nullptr || note->IsDead) {
+    return;
+  }
+
+  note->IsDead = true;
+  note->PlayedTime = judgeTimeMicros;
 }
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,

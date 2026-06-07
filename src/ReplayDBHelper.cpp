@@ -181,6 +181,8 @@ ReplayEventAction actionFromInt(int value) {
     return ReplayEventAction::Release;
   case 2:
     return ReplayEventAction::Miss;
+  case 3:
+    return ReplayEventAction::Mine;
   case 0:
   default:
     return ReplayEventAction::Press;
