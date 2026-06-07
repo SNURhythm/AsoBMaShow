@@ -20,10 +20,18 @@
 #include <string>
 
 namespace {
+constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
   return (static_cast<uint64_t>(submitDepth) << 16U) |
          static_cast<uint64_t>(texture.idx);
+}
+
+long long latePoorTimingFromWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  const auto it = windows.find(Bad);
+  return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
 }
 
 bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
@@ -49,6 +57,7 @@ BMSRenderer::BMSRenderer(
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
     int visibleTimeGreenNumber, bool renderHud)
     : judgementIndicator(timingWindows),
+      latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
@@ -95,20 +104,17 @@ BMSRenderer::BMSRenderer(
   }
   state.orphanLongNotes.reserve(laneOrder.size() * 2);
   longNoteLookaheadScratch.reserve(laneOrder.size() * 2);
-  // Beatoraja's LaneRenderer renders a filtered timeline list, not the full
-  // model timeline list. Background/BGA-only timelines are skipped; timing
-  // changes, section lines, playable notes, hidden notes, and mines are kept.
+  // flatten timeline
   size_t timelineCount = 0;
   for (const auto &measure : chart->Measures) {
     timelineCount += measure->TimeLines.size();
   }
   timelines.reserve(timelineCount);
   groupedTimelineNotes.reserve(timelineCount);
-  double previousBpm = chart->Meta.Bpm;
-  double previousScroll = 1.0;
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
-      std::vector<bms_parser::Note *> timelineNotes;
+      timelines.push_back(timeLine);
+      auto &timelineNotes = groupedTimelineNotes.emplace_back();
       timelineNotes.reserve(laneOrder.size());
       auto appendLaneGroup = [&](const std::vector<size_t> &laneGroup) {
         for (size_t laneIndex : laneGroup) {
@@ -123,27 +129,6 @@ BMSRenderer::BMSRenderer(
       appendLaneGroup(whiteKeyLaneIndices);
       appendLaneGroup(blueKeyLaneIndices);
       appendLaneGroup(scratchLaneIndices);
-
-      const bool hasHiddenNote =
-          std::any_of(timeLine->InvisibleNotes.begin(),
-                      timeLine->InvisibleNotes.end(),
-                      [](const auto *note) { return note != nullptr; });
-      const bool hasLandmineNote =
-          std::any_of(timeLine->LandmineNotes.begin(),
-                      timeLine->LandmineNotes.end(),
-                      [](const auto *note) { return note != nullptr; });
-      const bool keepTimeline =
-          previousBpm != timeLine->Bpm || timeLine->GetStopDuration() > 0.0 ||
-          previousScroll != timeLine->Scroll || timeLine->IsFirstInMeasure ||
-          !timelineNotes.empty() || hasHiddenNote || hasLandmineNote;
-      previousBpm = timeLine->Bpm;
-      previousScroll = timeLine->Scroll;
-      if (!keepTimeline) {
-        continue;
-      }
-
-      timelines.push_back(timeLine);
-      groupedTimelineNotes.push_back(std::move(timelineNotes));
     }
   }
   buildTimelineScrollPositions();
@@ -398,68 +383,60 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
       head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
   // Body
-  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture) &&
-      isVerticalRangeVisible(startY, bodyHeight)) {
-    const float bodyRenderHeight =
-        head->IsHolding ? longBodyRenderHeightOn : longBodyRenderHeightOff;
-    const float visibleStartY = std::max(startY, judgeY);
-    const float visibleEndY = std::min(tailY, upperBound);
-    const float visibleBodyHeight = visibleEndY - visibleStartY;
-    if (visibleBodyHeight > 0.0f && bodyRenderHeight > 0.0f) {
-      const float tileV0 = (visibleStartY - startY) / bodyRenderHeight;
-      const float tileV1 = (visibleEndY - startY) / bodyRenderHeight;
-      longBodyBatchFor(sheet, head->IsHolding)
-          .addRectUV(laneToX(head->Lane), visibleStartY, bodyWidth,
-                     visibleBodyHeight, 0.0f, tileV0, 1.0f, tileV1,
-                     bodyTexture);
-    }
+  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
+    float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
+                                                : longBodyRenderHeightOff);
+    longBodyBatchFor(sheet, head->IsHolding)
+        .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
+                 tileV, bodyTexture);
   }
 
-  if ((!tailReleasedEarly || tailY > judgeY) && isNoteVisible(tailY)) {
-    drawNoteRectClipped(sheetBatchFor(sheet), laneToX(head->Tail->Lane), tailY,
-                        noteRenderWidth, noteRenderHeight, tailUv,
-                        sheet.texture);
+  if (!tailReleasedEarly || tailY > judgeY) {
+    sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
+                                   noteRenderWidth, noteRenderHeight, tailUv.u0,
+                                   tailUv.v0, tailUv.u1, tailUv.v1,
+                                   sheet.texture);
   }
 
   if (head->IsPlayed)
     return;
 
   // Head
-  if (!isNoteVisible(startY)) {
-    return;
-  }
-  drawNoteRectClipped(sheetBatchFor(sheet), laneToX(head->Lane), startY,
-                      noteRenderWidth, noteRenderHeight, headUv,
-                      sheet.texture);
+  sheetBatchFor(sheet).addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
+                                 noteRenderHeight, headUv.u0, headUv.v0,
+                                 headUv.u1, headUv.v1, sheet.texture);
 }
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || !isNoteVisible(y))
+  if (note->IsPlayed)
     return;
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
-  drawNoteRectClipped(sheetBatchFor(sheet), laneToX(note->Lane), y,
-                      noteRenderWidth, noteRenderHeight, sheet.note,
-                      sheet.texture);
+  sheetBatchFor(sheet).addRectUV(laneToX(note->Lane), y, noteRenderWidth,
+                                 noteRenderHeight, sheet.note.u0,
+                                 sheet.note.v0, sheet.note.u1, sheet.note.v1,
+                                 sheet.texture);
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || note->IsDead || !isNoteVisible(y)) {
+  if (note->IsPlayed || note->IsDead) {
     return;
   }
 
-  drawLaneRectClipped(laneToX(note->Lane), y, noteRenderWidth,
-                      noteRenderHeight, Color(255, 149, 36, 224));
+  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
+                               noteRenderHeight,
+                               Color(255, 149, 36, 224).toABGR());
 }
 
 void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note) {
-  if (note->IsPlayed || note->IsDead || !isNoteVisible(y)) {
+  if (note->IsPlayed || note->IsDead) {
     return;
   }
 
-  drawLaneRectClipped(laneToX(note->Lane), y, noteRenderWidth,
-                      noteRenderHeight, Color(217, 69, 58, 232));
+  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
+                               noteRenderHeight,
+                               Color(217, 69, 58, 232).toABGR());
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {
@@ -478,14 +455,6 @@ void BMSRenderer::buildTimelineScrollPositions() {
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
   }
-}
-
-bool BMSRenderer::isNoteVisible(float y) const {
-  return y + noteRenderHeight >= judgeY && y <= upperBound;
-}
-
-bool BMSRenderer::isVerticalRangeVisible(float y, float height) const {
-  return height > 0.0f && y + height >= judgeY && y <= upperBound;
 }
 
 double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
@@ -547,17 +516,19 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
              progress;
 }
 
-void BMSRenderer::drawReplayGhosts(double rxhs, long long currentTimeMicros,
+void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
                                    double currentScrollPosition) {
-  if (replayGhostEvents.empty() || rxhs <= 0.0) {
+  if (replayGhostEvents.empty() || rxhs <= 0.0f) {
     return;
   }
 
   double firstVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(lowerBound - judgeY - noteRenderHeight) / rxhs;
+      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
+          static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
-      currentScrollPosition + static_cast<double>(upperBound - judgeY) / rxhs;
+      currentScrollPosition +
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -579,24 +550,27 @@ void BMSRenderer::drawReplayGhosts(double rxhs, long long currentTimeMicros,
     if (event.judgeTimeMicros < currentTimeMicros) {
       continue;
     }
-    const float ghostY = static_cast<float>(
-        static_cast<double>(judgeY) +
-        (event.judgeScrollPosition - currentScrollPosition) * rxhs);
+    const float ghostY =
+        judgeY +
+        static_cast<float>(event.judgeScrollPosition - currentScrollPosition) *
+            rxhs;
     drawGhostNoteOutline(ghostY, event);
   }
 }
 
-void BMSRenderer::drawReplayMissMarkers(double rxhs,
+void BMSRenderer::drawReplayMissMarkers(float rxhs,
                                         double currentScrollPosition) {
-  if (replayMissMarkers.empty() || rxhs <= 0.0) {
+  if (replayMissMarkers.empty() || rxhs <= 0.0f) {
     return;
   }
 
   double firstVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(lowerBound - judgeY - noteRenderHeight) / rxhs;
+      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
+          static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
-      currentScrollPosition + static_cast<double>(upperBound - judgeY) / rxhs;
+      currentScrollPosition +
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -615,9 +589,10 @@ void BMSRenderer::drawReplayMissMarkers(double rxhs,
 
   for (auto it = firstVisible; it != lastVisible; ++it) {
     const auto &marker = *it;
-    const float markerY = static_cast<float>(
-        static_cast<double>(judgeY) +
-        (marker.noteScrollPosition - currentScrollPosition) * rxhs);
+    const float markerY =
+        judgeY +
+        static_cast<float>(marker.noteScrollPosition - currentScrollPosition) *
+            rxhs;
     drawMissMarkerX(markerY, marker);
   }
 }
@@ -702,13 +677,6 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 void BMSRenderer::render(RenderContext &context, long long micro) {
   applyPendingHudText();
 
-  const long long rawRenderTimeMicros = micro;
-  // Beatoraja's LaneRenderer receives millisecond chart time and converts it
-  // back to microseconds. Gimmick charts can place scroll rows only a few
-  // microseconds apart, so using the raw audio clock here evaluates positions
-  // between states that beatoraja never renders.
-  micro = (micro / 1000LL) * 1000LL;
-
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
@@ -732,94 +700,53 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   drawRect(gameplay_geometry::kPlayAreaWidth, noteRenderHeight, 0.0f, judgeY,
            Color(255, 255, 255, 255));
   // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
-  const double visibleTimeMs = std::max(
-      1.0, static_cast<double>(visibleTimeGreenNumber) * (1000.0 / 600.0));
-  const double hispeed = 240000.0 / chart->Meta.Bpm / visibleTimeMs;
-  const double visibleLaneBottom = judgeY;
-  const double rxhs = (static_cast<double>(upperBound) - visibleLaneBottom) *
-                      hispeed;
+  const float visibleTimeMs = std::max(
+      1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
+  float hispeed = 240000.0f / chart->Meta.Bpm / visibleTimeMs;
+  float visibleLaneBottom = judgeY;
+  float rxhs = (upperBound - visibleLaneBottom) * hispeed;
+  float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(micro);
-
-  auto advanceTimelineY = [&](size_t i, const bms_parser::TimeLine *timeLine,
-                              double currentY) {
-    if (i > 0) {
-      if (const auto &prevTimeLine = timelines[i - 1];
-          prevTimeLine->Timing + prevTimeLine->GetStopDuration() > micro) {
-        // when the previous timeline is stopped
-        currentY += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-                    prevTimeLine->Scroll * rxhs;
-      } else {
-        currentY += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-                    prevTimeLine->Scroll * (timeLine->Timing - micro) /
-                    (timeLine->Timing - prevTimeLine->Timing -
-                     prevTimeLine->GetStopDuration()) *
-                    rxhs;
-      }
-    } else {
-      currentY += timeLine->BeatPosition * (timeLine->Timing - micro) /
-                  timeLine->Timing * rxhs;
-    }
-    return currentY;
-  };
-
-  auto timelineKeepsCursor = [&](size_t index) {
-    if (index >= groupedTimelineNotes.size()) {
-      return false;
-    }
-    for (auto *note : groupedTimelineNotes[index]) {
-      if (note == nullptr || !note->IsLongNote()) {
-        continue;
-      }
-      auto *longNote = static_cast<bms_parser::LongNote *>(note);
-      auto *endpoint = longNote->IsTail() ? longNote : longNote->Tail;
-      if (endpoint == nullptr) {
-        continue;
-      }
-      const long long endpointTiming =
-          endpoint->Timeline != nullptr ? endpoint->Timeline->Timing
-                                        : timelines[index]->Timing;
-      if (endpointTiming >= micro) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  // Beatoraja first walks the timeline for section lines and cursor updates,
-  // then resets y and walks the same path for notes.
-  double y = judgeY;
-  for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y <= static_cast<double>(upperBound); i++) {
-    const auto &timeLine = timelines[i];
-    if (timeLine->Timing >= micro) {
-      y = advanceTimelineY(i, timeLine, y);
-
-      if (timeLine->IsFirstInMeasure &&
-          isVerticalRangeVisible(static_cast<float>(y), 0.05f)) {
-        // render measure line
-        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f,
-                 static_cast<float>(y), Color(255, 255, 255, 128));
-      }
-    } else if (i > 0 && state.currentTimelineIndex == i - 1 &&
-               !timelineKeepsCursor(i)) {
-      state.currentTimelineIndex = i;
-    }
-  }
-
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
-
-  y = judgeY;
+  // render timeline
   for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y <= static_cast<double>(upperBound); i++) {
+       i < timelines.size() && y < upperBound; i++) {
     const auto &timeLine = timelines[i];
-    double timelineY = y;
     if (timeLine->Timing >= micro) {
-      y = advanceTimelineY(i, timeLine, y);
-      timelineY = y;
+      if (y < judgeY)
+        y = judgeY;
+      if (i > 0) {
+        if (const auto &prevTimeLine = timelines[i - 1];
+            prevTimeLine->Timing + prevTimeLine->GetStopDuration() > micro) {
+          // when the previous timeline is stopped
+          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
+               prevTimeLine->Scroll * rxhs;
+        } else {
+          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
+               prevTimeLine->Scroll * (timeLine->Timing - micro) /
+               (timeLine->Timing - prevTimeLine->Timing -
+                prevTimeLine->GetStopDuration()) *
+               rxhs;
+        }
+      } else {
+        y += timeLine->BeatPosition * (timeLine->Timing - micro) /
+             timeLine->Timing * rxhs;
+      }
+
+      if (timeLine->IsFirstInMeasure) {
+        // render measure line
+        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
+                 Color(255, 255, 255, 128));
+      }
+    } else if (timeLine->Timing >= micro - latePoorTiming) {
+      y = judgeY + (micro - timeLine->Timing) /
+                       static_cast<float>(latePoorTiming) * lowerBound;
+    } else {
+      state.currentTimelineIndex = i;
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
     // Render notes in grouped lane order (white/blue/scratch) to reduce texture
@@ -828,46 +755,68 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       if (note == nullptr) {
         return;
       }
-      if (note->IsDead) {
-        return;
-      }
-      if (note->IsLandmineNote()) {
-        if (timeLine->Timing >= micro) {
-          drawLandmineNote(static_cast<float>(timelineY),
-                           static_cast<bms_parser::LandmineNote *>(note));
+      if (timeLine->Timing >= micro - latePoorTiming) {
+        // note is in the hittable timing
+        if (note->IsDead) {
+          return;
         }
-        return;
-      }
-      if (note->IsLongNote()) {
-        auto *longNote = static_cast<bms_parser::LongNote *>(note);
-        if (longNote->IsTail()) {
-          if (longNote->Head == nullptr) {
-            // ignore malformed chart: long note is not terminated
-            return;
+        if (note->IsLandmineNote()) {
+          if (timeLine->Timing >= micro) {
+            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
           }
-          state.orphanLongNotes.erase(longNote->Head);
-          if (auto it = longNoteLookahead.find(longNote->Head);
-              it != longNoteLookahead.end()) {
-            drawLongNote(it->second, static_cast<float>(timelineY),
-                         longNote->Head);
+          return;
+        }
+        // render note
+        if (note->IsLongNote()) {
+          auto *longNote = static_cast<bms_parser::LongNote *>(note);
+          if (longNote->IsTail()) {
+            if (longNote->Head == nullptr) {
+              // ignore malformed chart: long note is not terminated
+              return;
+            }
+            // find head's y
+            if (auto it = longNoteLookahead.find(longNote->Head);
+                it != longNoteLookahead.end()) {
+              drawLongNote(it->second, y, longNote->Head);
+              // remove from lookahead
+              longNoteLookahead.erase(longNote->Head);
+            } else {
+              drawLongNote(lowerBound, y, longNote->Head);
+            }
+          } else {
+            longNoteLookahead[longNote] = y;
+          }
+        } else {
+          drawNormalNote(y, note);
+        }
+      } else {
+        // note has passed the last hittable timing
+        if (note->IsDead) {
+          return;
+        }
+        if (note->IsLandmineNote()) {
+          return;
+        }
+        if (note->IsLongNote()) {
+          auto *longNote = static_cast<bms_parser::LongNote *>(note);
+          if (longNote->IsTail()) {
+            if (longNote->Head == nullptr) {
+              // ignore malformed chart: long note is not terminated
+              return;
+            }
+            // remove from orphan long note
+            state.orphanLongNotes.erase(longNote->Head);
+            // and from long note lookahead
             longNoteLookahead.erase(longNote->Head);
           } else {
-            drawLongNote(lowerBound, static_cast<float>(timelineY),
-                         longNote->Head);
-          }
-        } else if (longNote->Tail != nullptr &&
-                   longNote->Tail->Timeline != nullptr &&
-                   longNote->Tail->Timeline->Timing >= micro) {
-          if (timeLine->Timing < micro) {
+            // add to orphan long note
             state.orphanLongNotes.insert(longNote);
+
+            // setting to lowerBound in all cases is OK because the played
+            // state will be correctly handled by drawLongNote
+            longNoteLookahead[longNote] = lowerBound;
           }
-          longNoteLookahead[longNote] =
-              timeLine->Timing < micro ? judgeY : static_cast<float>(timelineY);
         }
-        return;
-      }
-      if (timeLine->Timing >= micro) {
-        drawNormalNote(static_cast<float>(timelineY), note);
       }
     };
 
@@ -882,7 +831,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       }
       if (timeLine->Timing >= micro) {
         if (showInvisibleNotes) {
-          drawInvisibleNote(static_cast<float>(timelineY), note);
+          drawInvisibleNote(y, note);
         }
       } else {
         note->IsDead = true;
@@ -893,7 +842,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         continue;
       }
       if (timeLine->Timing >= micro) {
-        drawLandmineNote(static_cast<float>(timelineY), note);
+        drawLandmineNote(y, note);
       }
     }
   }
@@ -915,7 +864,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.setSubmitDepth(kDepthBeams);
     const long long nowMicros =
         useRenderTimeForLaneBeams
-            ? rawRenderTimeMicros
+            ? micro
             : std::chrono::duration_cast<std::chrono::microseconds>(
                   std::chrono::steady_clock::now().time_since_epoch())
                   .count();
@@ -940,7 +889,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
                                            ? 0
                                            : kDepthJudgementIndicator);
     simpleBatchRenderer.begin();
-    judgementIndicator.render(simpleBatchRenderer, rawRenderTimeMicros,
+    judgementIndicator.render(simpleBatchRenderer, micro,
                               {.judgeY = judgeY,
                                .upperBound = upperBound,
                                .noteRenderWidth = noteRenderWidth,
@@ -1053,43 +1002,6 @@ void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
-
-void BMSRenderer::drawLaneRectClipped(float x, float y, float width,
-                                      float height, Color color) {
-  const float clippedY = std::max(y, judgeY);
-  const float clippedTop = std::min(y + height, upperBound);
-  const float clippedHeight = clippedTop - clippedY;
-  if (clippedHeight <= 0.0f) {
-    return;
-  }
-
-  gimmickBatchRenderer.addRect(x, clippedY, width, clippedHeight,
-                               color.toABGR());
-}
-
-void BMSRenderer::drawNoteRectClipped(rendering::TexBatchRenderer &batch,
-                                      float x, float y, float width,
-                                      float height, const NoteUvRegion &uv,
-                                      bgfx::TextureHandle texture) {
-  if (height <= 0.0f || !bgfx::isValid(texture)) {
-    return;
-  }
-
-  const float clippedY = std::max(y, judgeY);
-  const float clippedTop = std::min(y + height, upperBound);
-  const float clippedHeight = clippedTop - clippedY;
-  if (clippedHeight <= 0.0f) {
-    return;
-  }
-
-  const float startRatio = (clippedY - y) / height;
-  const float endRatio = (clippedTop - y) / height;
-  const float clippedBottomV = uv.v1 + (uv.v0 - uv.v1) * startRatio;
-  const float clippedTopV = uv.v1 + (uv.v0 - uv.v1) * endRatio;
-  batch.addRectUV(x, clippedY, width, clippedHeight, uv.u0, clippedTopV, uv.u1,
-                  clippedBottomV, texture);
-}
-
 void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                const long long time) {
   if (laneState.lastStateTime == -1) {
