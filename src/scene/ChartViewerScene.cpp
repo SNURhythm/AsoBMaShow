@@ -49,17 +49,27 @@ constexpr size_t kRandomSummaryTail = 8;
 constexpr int kMarkerLabelFontSize = 13;
 constexpr float kMarkerLabelWidth = 74.0f;
 constexpr float kMarkerLabelHeight = 18.0f;
+constexpr float kMarkerLabelRasterStep = 0.25f;
+constexpr float kMarkerLabelSupersample = 1.25f;
+constexpr int kMarkerLabelMaxRasterFontSize = 128;
 constexpr float kChartContentTopPadding = 16.0f;
 constexpr float kChartContentBottomPadding = 24.0f;
 constexpr float kCursorTapSlop = 10.0f;
 constexpr long long kListenStopTailMicros = 1000000LL;
 constexpr long long kPracticeLeadInMicros = 3000000LL;
+constexpr int kNoGhostReplayId = -1;
+constexpr int kPracticeGhostReplayId = -2;
 
 struct SafeAreaInsets {
   int top = 0;
   int left = 0;
   int bottom = 0;
   int right = 0;
+};
+
+struct MarkerTextRasterConfig {
+  int fontSize = kMarkerLabelFontSize;
+  float textureToUiScale = 1.0f;
 };
 
 struct GaugeSelection {
@@ -84,6 +94,25 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
     return {.type = GaugeType::ExHard};
   }
   return {.type = GaugeType::Normal};
+}
+
+ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
+                                      int summaryId,
+                                      const std::string &createdAt) {
+  ReplaySummary summary;
+  summary.id = summaryId;
+  summary.initialGaugeType = replay.initialGaugeType;
+  summary.gaugeAutoShift = replay.gaugeAutoShift;
+  summary.finalScore = replay.finalScore;
+  summary.finalGauge = replay.finalGauge;
+  summary.clearType = replay.clearType;
+  summary.createdAt = createdAt;
+  summary.eventCount = static_cast<int>(replay.events.size());
+  summary.playOption = replay.playOption;
+  summary.playOptionSeed = replay.playOptionSeed;
+  summary.playOption2 = replay.playOption2;
+  summary.playOption2Seed = replay.playOption2Seed;
+  return summary;
 }
 
 SafeAreaInsets getSafeAreaInsetsUi() {
@@ -164,11 +193,32 @@ uint32_t markerLabelColorKey(const SDL_Color &color) {
          static_cast<uint32_t>(color.a);
 }
 
-std::string markerGlyphCacheKey(char glyph, const SDL_Color &color) {
+std::string markerGlyphCacheKey(char glyph, const SDL_Color &color,
+                                int fontSize) {
   std::string key = std::to_string(markerLabelColorKey(color));
+  key.push_back(':');
+  key += std::to_string(fontSize);
   key.push_back(':');
   key.push_back(glyph);
   return key;
+}
+
+MarkerTextRasterConfig markerTextRasterConfig(float labelTextScale) {
+  labelTextScale = std::max(1.0f, labelTextScale);
+  const float uiScale =
+      std::max({1.0f, rendering::ui_scale_x, rendering::ui_scale_y});
+  const float rawRasterScale =
+      labelTextScale * uiScale * kMarkerLabelSupersample;
+  const float steppedRasterScale =
+      std::ceil(rawRasterScale / kMarkerLabelRasterStep) *
+      kMarkerLabelRasterStep;
+  const int fontSize = std::clamp(
+      static_cast<int>(std::ceil(static_cast<float>(kMarkerLabelFontSize) *
+                                 steppedRasterScale)),
+      kMarkerLabelFontSize, kMarkerLabelMaxRasterFontSize);
+  const float effectiveRasterScale =
+      static_cast<float>(fontSize) / static_cast<float>(kMarkerLabelFontSize);
+  return {fontSize, effectiveRasterScale / labelTextScale};
 }
 
 std::optional<std::string>
@@ -325,9 +375,15 @@ public:
     replayGhostEvents = replay_ghost::buildReplayGhostEvents(
         replayData, orderedTimelines, laneToOrderIndex,
         [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
+    replayMissMarkers = replay_ghost::buildReplayMissMarkers(
+        replayData, orderedTimelines, laneToOrderIndex,
+        [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
   }
 
-  void clearGhostReplay() { replayGhostEvents.clear(); }
+  void clearGhostReplay() {
+    replayGhostEvents.clear();
+    replayMissMarkers.clear();
+  }
 
 protected:
   struct TouchPoint {
@@ -572,6 +628,7 @@ private:
   std::vector<ColumnLayout> columnLayouts;
   std::vector<const bms_parser::TimeLine *> orderedTimelines;
   std::vector<ReplayGhostEvent> replayGhostEvents;
+  std::vector<ReplayMissMarker> replayMissMarkers;
   std::unordered_map<const bms_parser::TimeLine *, float> timelineY;
   std::unordered_map<const bms_parser::TimeLine *, size_t> timelineMeasure;
   std::vector<std::unique_ptr<TextView>> measureLabels;
@@ -870,7 +927,7 @@ private:
   }
 
   void drawGhosts() {
-    if (replayGhostEvents.empty()) {
+    if (replayGhostEvents.empty() && replayMissMarkers.empty()) {
       return;
     }
 
@@ -893,6 +950,18 @@ private:
       drawRectClip(x, y + height - thickness, width, thickness, color);
       drawRectClip(x, y, thickness, height, color);
       drawRectClip(x + width - thickness, y, thickness, height, color);
+    }
+
+    for (const auto &marker : replayMissMarkers) {
+      CursorDrawPosition position;
+      if (!beatToCursorPosition(marker.noteScrollPosition, position)) {
+        continue;
+      }
+      const float x = laneContentX(position.column, marker.lane) + 2.0f;
+      const float y = position.y - 4.0f;
+      const float width = std::max(5.0f, laneWidth - 4.0f);
+      const float height = 8.0f;
+      drawMissMarkerX(x, y, width, height);
     }
   }
 
@@ -1187,22 +1256,27 @@ private:
                                  kMarkerLabelHeight)) {
         continue;
       }
-      const float labelBoxWidth = std::max(60.0f, kMarkerLabelWidth * screenZoom);
+      const float labelBoxWidth =
+          std::max(60.0f, kMarkerLabelWidth * screenZoom);
       const float labelBoxHeight =
           std::max(16.0f, kMarkerLabelHeight * screenZoom);
       const float labelTextScale = std::max(1.0f, screenZoom);
+      const MarkerTextRasterConfig raster =
+          markerTextRasterConfig(labelTextScale);
       const float labelScreenX = contentToScreenX(x);
       const float labelScreenY = contentToScreenY(y);
       const float labelRight = labelScreenX + labelBoxWidth;
       float cursorX = labelScreenX;
       for (char glyphChar : marker.text) {
-        const auto *glyph = cachedMarkerGlyph(glyphChar, marker.color);
+        const auto *glyph =
+            cachedMarkerGlyph(glyphChar, marker.color, raster.fontSize);
         if (glyph == nullptr) {
           continue;
         }
 
-        const float glyphWidth = std::max(1.0f, glyph->width) * labelTextScale;
-        const float glyphHeight = glyph->height * labelTextScale;
+        const float glyphWidth =
+            std::max(1.0f, glyph->width) / raster.textureToUiScale;
+        const float glyphHeight = glyph->height / raster.textureToUiScale;
         if (cursorX >= labelRight) {
           break;
         }
@@ -1238,9 +1312,9 @@ private:
     markerTextBatch.clearScissor();
   }
 
-  const CachedMarkerGlyph *cachedMarkerGlyph(char glyph,
-                                             const SDL_Color &color) {
-    const std::string key = markerGlyphCacheKey(glyph, color);
+  const CachedMarkerGlyph *cachedMarkerGlyph(char glyph, const SDL_Color &color,
+                                             int fontSize) {
+    const std::string key = markerGlyphCacheKey(glyph, color, fontSize);
     if (const auto it = markerGlyphTextures.find(key);
         it != markerGlyphTextures.end()) {
       return &it->second;
@@ -1248,12 +1322,11 @@ private:
 
     CachedMarkerGlyph label;
     label.text =
-        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf",
-                                   kMarkerLabelFontSize);
+        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", fontSize);
     label.text->setColor(color);
     label.text->setText(std::string(1, glyph));
     label.texture = label.text->textureHandle();
-    label.width = glyph == ' ' ? static_cast<float>(kMarkerLabelFontSize) * 0.34f
+    label.width = glyph == ' ' ? static_cast<float>(fontSize) * 0.34f
                                : static_cast<float>(label.text->textureWidth());
     label.height = static_cast<float>(label.text->textureHeight());
     auto [it, inserted] =
@@ -1382,6 +1455,26 @@ private:
     return event.judgeTimeMicros < event.noteTimeMicros
                ? Color(53, 134, 255, 222)
                : Color(255, 65, 72, 222);
+  }
+
+  void drawMissMarkerX(float x, float y, float width, float height) {
+    if (!contentRectIntersects(x, y, width, height)) {
+      return;
+    }
+
+    constexpr int kSteps = 7;
+    const uint32_t color = Color(255, 48, 56, 236).toABGR();
+    const float block = std::max(1.5f, std::min(width, height) * 0.24f);
+    const float maxX = std::max(0.0f, width - block);
+    const float maxY = std::max(0.0f, height - block);
+    for (int i = 0; i < kSteps; ++i) {
+      const float t = kSteps == 1 ? 0.0f
+                                  : static_cast<float>(i) /
+                                        static_cast<float>(kSteps - 1);
+      const float yOffset = maxY * t;
+      drawRectClip(x + maxX * t, y + yOffset, block, block, color);
+      drawRectClip(x + maxX * (1.0f - t), y + yOffset, block, block, color);
+    }
   }
 
   bool isScratchLane(int lane) const {
@@ -1613,8 +1706,9 @@ void ChartViewerScene::cleanupScene() {
   }
   chart.reset();
   randomOptions.clear();
+  practiceGhostReplay.reset();
   ghostReplaySummaries.clear();
-  loadedGhostReplayId = -1;
+  loadedGhostReplayId = kNoGhostReplayId;
   selectedGhostReplayIndex = -1;
   rootLayout = nullptr;
   canvasView = nullptr;
@@ -1633,6 +1727,8 @@ void ChartViewerScene::cleanupScene() {
   ghostClearButtonText = nullptr;
   ghostModalRoot = nullptr;
   ghostModalEmptyText = nullptr;
+  practiceGhostReplayButton = nullptr;
+  practiceGhostReplayItem = nullptr;
   ghostReplayListView = nullptr;
   optionsDrawerRoot = nullptr;
   viewerOptionText = nullptr;
@@ -1640,6 +1736,27 @@ void ChartViewerScene::cleanupScene() {
   laneAssignStatusText = nullptr;
   randomDrawerRoot = nullptr;
   randomDrawerScroll = nullptr;
+}
+
+void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
+  if (replayData.events.empty()) {
+    return;
+  }
+
+  practiceGhostReplay = replayData;
+  practiceGhostReplay->id = kPracticeGhostReplayId;
+  practiceGhostReplay->createdAt = "Practice Ghost";
+  loadedGhostReplayId = kPracticeGhostReplayId;
+  selectedGhostReplayIndex = -1;
+
+  if (canvasView != nullptr && chart != nullptr) {
+    canvasView->setGhostReplay(*practiceGhostReplay);
+  }
+  if (statusText != nullptr) {
+    statusText->setText("Practice ghost loaded");
+  }
+  updatePracticeGhostReplayButton();
+  updateGhostControls();
 }
 
 void ChartViewerScene::initView() {
@@ -2033,7 +2150,8 @@ void ChartViewerScene::parseAndRefresh(
   if (canvasView != nullptr) {
     canvasView->clearGhostReplay();
   }
-  loadedGhostReplayId = -1;
+  loadedGhostReplayId = kNoGhostReplayId;
+  updatePracticeGhostReplayButton();
   updateGhostControls();
   if (statusText != nullptr) {
     statusText->setText("Parsing...");
@@ -2205,7 +2323,9 @@ void ChartViewerScene::updateSelectionText() {
   if (listenActive) {
     text += " / Listening";
   }
-  if (loadedGhostReplayId >= 0) {
+  if (loadedGhostReplayId == kPracticeGhostReplayId) {
+    text += " / Practice Ghost";
+  } else if (loadedGhostReplayId >= 0) {
     text += " / Ghost #" + std::to_string(loadedGhostReplayId);
   }
   selectionText->setText(text);
@@ -2229,7 +2349,7 @@ void ChartViewerScene::updateListenControls() {
 }
 
 void ChartViewerScene::updateGhostControls() {
-  const bool hasGhost = loadedGhostReplayId >= 0;
+  const bool hasGhost = loadedGhostReplayId != kNoGhostReplayId;
   if (ghostClearButton != nullptr) {
     ghostClearButton->setVisible(hasGhost);
     ghostClearButton->setWidth(hasGhost ? 92.0f : 0.0f);
@@ -2250,7 +2370,7 @@ void ChartViewerScene::rebuildGhostModal() {
 
   constexpr float kPanelWidth = 760.0f;
   constexpr float kPanelPadding = 22.0f;
-  constexpr float kContentHeight = 390.0f;
+  constexpr float kMinPanelMargin = 36.0f;
 
   ghostModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
                                            rendering::window_height);
@@ -2265,8 +2385,10 @@ void ChartViewerScene::rebuildGhostModal() {
   ghostModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
 
   auto *panel = new View();
-  panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
-      ->setHeight(560)
+  panel->setWidth(std::min<float>(kPanelWidth,
+                                  rendering::window_width - kMinPanelMargin))
+      ->setHeight(std::min<float>(640,
+                                  rendering::window_height - kMinPanelMargin))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -2288,10 +2410,22 @@ void ChartViewerScene::rebuildGhostModal() {
   ghostModalEmptyText->setOverflow(TextView::TextOverflow::Hidden);
   panel->addView(ghostModalEmptyText);
 
+  practiceGhostReplayButton = new Button();
+  practiceGhostReplayButton->setWidthPercent(100)
+      ->setHeight(0)
+      ->setFlexShrink(0);
+  practiceGhostReplayItem = new ReplaySummaryListItemView();
+  practiceGhostReplayButton->setContentView(practiceGhostReplayItem);
+  practiceGhostReplayButton->setOnClickListener(
+      [this]() { loadPracticeGhostReplay(); });
+  panel->addView(practiceGhostReplayButton);
+
   ghostReplayListView = new ReplaySummaryListView();
   ghostReplayListView->setWidthPercent(100)
-      ->setHeight(kContentHeight)
-      ->setFlexShrink(0);
+      ->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinHeight(0);
   ghostReplayListView->clearBackgroundColor();
   ghostReplayListView->setBorderColor(Color(54, 69, 76, 255));
   ghostReplayListView->setBorderWidth(2);
@@ -2305,12 +2439,25 @@ void ChartViewerScene::rebuildGhostModal() {
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
-  footer->setGap(12);
+  footer->setGap(8);
   footer->setHeight(kHeaderButtonHeight);
+  footer->setFlexShrink(0);
 
   auto *closeButton = makeButton("Close", 104, 19);
   auto *clearButton = makeButton("Clear Ghost", 138, 18);
   auto *loadButton = makeButton("Load", 104, 19);
+  closeButton->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
+  clearButton->setFlexGrow(1.25f)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
+  loadButton->setFlexGrow(1)
+      ->setFlexShrink(1)
+      ->setFlexBasis(0)
+      ->setMinWidth(0);
   closeButton->setOnClickListener([this]() { hideGhostModal(); });
   clearButton->setOnClickListener([this]() { clearGhostReplay(); });
   loadButton->setOnClickListener([this]() { loadSelectedGhostReplay(); });
@@ -2321,6 +2468,7 @@ void ChartViewerScene::rebuildGhostModal() {
 
   ghostModalRoot->addView(panel);
   rootLayout->addView(ghostModalRoot);
+  updatePracticeGhostReplayButton();
 }
 
 void ChartViewerScene::showGhostModal() {
@@ -2339,11 +2487,16 @@ void ChartViewerScene::showGhostModal() {
   selectedGhostReplayIndex = -1;
   ghostReplayListView->setReplaySummaries(ghostReplaySummaries);
   if (ghostModalEmptyText != nullptr) {
+    const bool hasPracticeGhost = practiceGhostReplay.has_value() &&
+                                  !practiceGhostReplay->events.empty();
     ghostModalEmptyText->setText(
-        ghostReplaySummaries.empty()
-            ? "No saved replays found for this chart."
-            : "Select a replay to draw its judgement ghost over the chart.");
+        hasPracticeGhost
+            ? "Temporary practice ghost is available above saved replays."
+            : (ghostReplaySummaries.empty()
+                   ? "No saved replays found for this chart."
+                   : "Select a replay to draw its judgement ghost over the chart."));
   }
+  updatePracticeGhostReplayButton();
   ghostModalRoot->setSize(rendering::window_width, rendering::window_height);
   ghostModalRoot->setVisible(true);
   updateGhostModalActions();
@@ -2361,6 +2514,122 @@ void ChartViewerScene::updateGhostModalActions() {
   if (ghostModalRoot != nullptr) {
     ghostModalRoot->applyYogaLayout();
   }
+}
+
+void ChartViewerScene::updatePracticeGhostReplayButton() {
+  if (practiceGhostReplayButton == nullptr ||
+      practiceGhostReplayItem == nullptr) {
+    return;
+  }
+
+  const bool hasPracticeGhost =
+      practiceGhostReplay.has_value() && !practiceGhostReplay->events.empty();
+  practiceGhostReplayButton->setVisible(hasPracticeGhost);
+  practiceGhostReplayButton->setHeight(hasPracticeGhost ? 74 : 0);
+  if (!hasPracticeGhost) {
+    return;
+  }
+
+  practiceGhostReplayItem->setSummary(replaySummaryFromReplay(
+      *practiceGhostReplay, kPracticeGhostReplayId, "Practice Ghost"));
+  if (loadedGhostReplayId == kPracticeGhostReplayId) {
+    practiceGhostReplayItem->onSelected();
+  } else {
+    practiceGhostReplayItem->onUnselected();
+  }
+  if (ghostModalRoot != nullptr) {
+    ghostModalRoot->applyYogaLayout();
+  }
+}
+
+void ChartViewerScene::loadPracticeGhostReplay() {
+  if (!practiceGhostReplay.has_value() || practiceGhostReplay->events.empty()) {
+    if (statusText != nullptr) {
+      statusText->setText("No practice ghost available");
+    }
+    return;
+  }
+
+  if (statusText != nullptr) {
+    statusText->setText("Loading practice ghost...");
+  }
+  const ReplayData replay = *practiceGhostReplay;
+  defer(
+      [this, replay]() {
+        applyGhostReplayData(replay, kPracticeGhostReplayId,
+                             "Practice ghost loaded");
+        return true;
+      },
+      0, true);
+}
+
+bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
+                                            int loadedReplayId,
+                                            const std::string &successText) {
+  if (canvasView == nullptr) {
+    return false;
+  }
+
+  std::atomic_bool parseCancelled = false;
+  std::unique_ptr<bms_parser::Chart> replayChart;
+  try {
+    replayChart = play_options::parseChartForReplay(record.meta.BmsPath,
+                                                    replayData, parseCancelled);
+  } catch (const std::exception &e) {
+    SDL_Log("Error parsing %s for ghost replay: %s",
+            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+  }
+
+  if (replayChart == nullptr || parseCancelled) {
+    if (statusText != nullptr) {
+      statusText->setText(parseCancelled ? "Ghost load cancelled"
+                                         : "Ghost parse failed");
+    }
+    return false;
+  }
+
+  const auto previousPlayOption = viewerPlayOption;
+  const auto previousPlayOptionSeed = viewerPlayOptionSeed;
+  const auto previousPlayOption2 = viewerPlayOption2;
+  const auto previousPlayOption2Seed = viewerPlayOption2Seed;
+  setViewerPlayOptions(replayData.playOption, replayData.playOptionSeed,
+                       replayData.playOption2, replayData.playOption2Seed);
+  if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
+    viewerPlayOption = previousPlayOption;
+    viewerPlayOptionSeed = previousPlayOptionSeed;
+    viewerPlayOption2 = previousPlayOption2;
+    viewerPlayOption2Seed = previousPlayOption2Seed;
+    if (statusText != nullptr) {
+      statusText->setText("Ghost play option failed");
+    }
+    return false;
+  }
+
+  stopListening();
+  if (listenAudioLoaded) {
+    context.jukebox.stop();
+    listenAudioLoaded = false;
+  }
+
+  randomSeed = replayChart->Meta.RandomSeed;
+  randomPrng = replayChart->Meta.RandomPrng;
+  selectedRandomValues = replayChart->Meta.RandomValues;
+  chart = std::move(replayChart);
+  randomOptions = scanActiveRandomOptions();
+  canvasView->setChart(chart.get());
+  canvasView->setGhostReplay(replayData);
+  loadedGhostReplayId = loadedReplayId;
+
+  if (statusText != nullptr) {
+    statusText->setText(successText);
+  }
+  hideGhostModal();
+  updatePracticeGhostReplayButton();
+  updateGhostControls();
+  refreshHeaderText();
+  updateSelectionText();
+  rebuildRandomDrawer();
+  return true;
 }
 
 void ChartViewerScene::loadSelectedGhostReplay() {
@@ -2390,65 +2659,9 @@ void ChartViewerScene::loadSelectedGhostReplay() {
           return true;
         }
 
-        std::atomic_bool parseCancelled = false;
-        std::unique_ptr<bms_parser::Chart> replayChart;
-        try {
-          replayChart = play_options::parseChartForReplay(
-              record.meta.BmsPath, replay.value(), parseCancelled);
-        } catch (const std::exception &e) {
-          SDL_Log("Error parsing %s for ghost replay: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
-        }
-
-        if (replayChart == nullptr || parseCancelled) {
-          if (statusText != nullptr) {
-            statusText->setText(parseCancelled ? "Ghost load cancelled"
-                                               : "Ghost parse failed");
-          }
-          return true;
-        }
-
-        const auto previousPlayOption = viewerPlayOption;
-        const auto previousPlayOptionSeed = viewerPlayOptionSeed;
-        const auto previousPlayOption2 = viewerPlayOption2;
-        const auto previousPlayOption2Seed = viewerPlayOption2Seed;
-        setViewerPlayOptions(replay->playOption, replay->playOptionSeed,
-                             replay->playOption2, replay->playOption2Seed);
-        if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
-          viewerPlayOption = previousPlayOption;
-          viewerPlayOptionSeed = previousPlayOptionSeed;
-          viewerPlayOption2 = previousPlayOption2;
-          viewerPlayOption2Seed = previousPlayOption2Seed;
-          if (statusText != nullptr) {
-            statusText->setText("Ghost play option failed");
-          }
-          return true;
-        }
-
-        stopListening();
-        if (listenAudioLoaded) {
-          context.jukebox.stop();
-          listenAudioLoaded = false;
-        }
-
-        randomSeed = replayChart->Meta.RandomSeed;
-        randomPrng = replayChart->Meta.RandomPrng;
-        selectedRandomValues = replayChart->Meta.RandomValues;
-        chart = std::move(replayChart);
-        randomOptions = scanActiveRandomOptions();
-        canvasView->setChart(chart.get());
-        canvasView->setGhostReplay(*replay);
-        loadedGhostReplayId = replay->id;
-
-        if (statusText != nullptr) {
-          statusText->setText("Ghost #" + std::to_string(loadedGhostReplayId) +
-                              " loaded");
-        }
-        hideGhostModal();
-        updateGhostControls();
-        refreshHeaderText();
-        updateSelectionText();
-        rebuildRandomDrawer();
+        applyGhostReplayData(*replay, replay->id,
+                             "Ghost #" + std::to_string(replay->id) +
+                                 " loaded");
         return true;
       },
       0, true);
@@ -2458,11 +2671,12 @@ void ChartViewerScene::clearGhostReplay() {
   if (canvasView != nullptr) {
     canvasView->clearGhostReplay();
   }
-  loadedGhostReplayId = -1;
+  loadedGhostReplayId = kNoGhostReplayId;
   if (statusText != nullptr && chart != nullptr) {
     statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
   }
   hideGhostModal();
+  updatePracticeGhostReplayButton();
   updateGhostControls();
 }
 
@@ -2978,6 +3192,10 @@ void ChartViewerScene::startPracticeFromSelection() {
                                       static_cast<unsigned long long>(
                                           kPracticeLeadInMicros),
                                   .returnScene = this,
+                                  .practiceGhostCallback =
+                                      [this](const ReplayData &replayData) {
+                                        setPracticeGhostReplay(replayData);
+                                      },
                               }),
             true);
         return true;

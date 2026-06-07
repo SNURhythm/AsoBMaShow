@@ -537,6 +537,45 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
   }
 }
 
+void BMSRenderer::drawReplayMissMarkers(float rxhs,
+                                        double currentScrollPosition) {
+  if (replayMissMarkers.empty() || rxhs <= 0.0f) {
+    return;
+  }
+
+  double firstVisibleScrollPosition =
+      currentScrollPosition +
+      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
+          static_cast<double>(rxhs);
+  double lastVisibleScrollPosition =
+      currentScrollPosition +
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
+  if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
+    std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
+  }
+
+  const auto firstVisible = std::lower_bound(
+      replayMissMarkers.begin(), replayMissMarkers.end(),
+      firstVisibleScrollPosition,
+      [](const ReplayMissMarker &marker, double scrollPosition) {
+        return marker.noteScrollPosition < scrollPosition;
+      });
+  const auto lastVisible = std::upper_bound(
+      firstVisible, replayMissMarkers.end(), lastVisibleScrollPosition,
+      [](double scrollPosition, const ReplayMissMarker &marker) {
+        return scrollPosition < marker.noteScrollPosition;
+      });
+
+  for (auto it = firstVisible; it != lastVisible; ++it) {
+    const auto &marker = *it;
+    const float markerY =
+        judgeY +
+        static_cast<float>(marker.noteScrollPosition - currentScrollPosition) *
+            rxhs;
+    drawMissMarkerX(markerY, marker);
+  }
+}
+
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   if (y + noteRenderHeight < lowerBound || y > upperBound) {
     return;
@@ -558,6 +597,30 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   ghostBatchRenderer.addRect(x, y, thickness, noteRenderHeight, abgr);
   ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
                              noteRenderHeight, abgr);
+}
+
+void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
+
+  constexpr int kSteps = 7;
+  const float x = laneToX(marker.lane);
+  const float block =
+      std::max(0.018f, std::min(noteRenderWidth, noteRenderHeight) * 0.22f);
+  const float maxX = std::max(0.0f, noteRenderWidth - block);
+  const float maxY = std::max(0.0f, noteRenderHeight - block);
+  const uint32_t color = Color(255, 42, 42, 236).toABGR();
+
+  for (int i = 0; i < kSteps; ++i) {
+    const float t = kSteps == 1 ? 0.0f
+                                : static_cast<float>(i) /
+                                      static_cast<float>(kSteps - 1);
+    const float yOffset = maxY * t;
+    ghostBatchRenderer.addRect(x + maxX * t, y + yOffset, block, block, color);
+    ghostBatchRenderer.addRect(x + maxX * (1.0f - t), y + yOffset, block, block,
+                               color);
+  }
 }
 
 float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
@@ -698,6 +761,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         }
       } else {
         // note has passed the last hittable timing
+        if (note->IsDead) {
+          return;
+        }
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
           if (longNote->IsTail()) {
@@ -739,6 +805,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     drawLongNote(pair.second, upperBound, pair.first);
   }
   drawReplayGhosts(rxhs, micro, currentScrollPosition);
+  drawReplayMissMarkers(rxhs, currentScrollPosition);
 
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
@@ -861,6 +928,7 @@ void BMSRenderer::setPlayOptionStatus(const std::string &label) {
 
 void BMSRenderer::setReplayData(const ReplayData *replayData) {
   replayGhostEvents.clear();
+  replayMissMarkers.clear();
   if (replayData == nullptr) {
     return;
   }
@@ -871,6 +939,9 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
     timelineRefs.push_back(timeline);
   }
   replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+      *replayData, timelineRefs, laneToOrderIndex,
+      [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
+  replayMissMarkers = replay_ghost::buildReplayMissMarkers(
       *replayData, timelineRefs, laneToOrderIndex,
       [this](long long timeMicros) { return scrollPositionAtTime(timeMicros); });
 }

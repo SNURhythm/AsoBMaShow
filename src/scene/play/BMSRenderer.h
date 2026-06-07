@@ -99,6 +99,7 @@ private:
   std::vector<bms_parser::TimeLine *> timelines;
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<ReplayGhostEvent> replayGhostEvents;
+  std::vector<ReplayMissMarker> replayMissMarkers;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
@@ -138,6 +139,8 @@ private:
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
+  void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
+  void drawMissMarkerX(float y, const ReplayMissMarker &marker);
   void buildTimelineScrollPositions();
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText();

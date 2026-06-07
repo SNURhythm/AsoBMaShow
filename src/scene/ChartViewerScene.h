@@ -12,6 +12,7 @@
 
 class Button;
 class ChartCanvasView;
+class ReplaySummaryListItemView;
 class ReplaySummaryListView;
 class ScrollView;
 class TextInputBox;
@@ -31,6 +32,8 @@ public:
   void update(float dt) override;
   void renderScene() override;
   void cleanupScene() override;
+
+  void setPracticeGhostReplay(const ReplayData &replayData);
 
 private:
   struct RandomOption {
@@ -65,6 +68,8 @@ private:
   TextView *ghostClearButtonText = nullptr;
   View *ghostModalRoot = nullptr;
   TextView *ghostModalEmptyText = nullptr;
+  Button *practiceGhostReplayButton = nullptr;
+  ReplaySummaryListItemView *practiceGhostReplayItem = nullptr;
   ReplaySummaryListView *ghostReplayListView = nullptr;
   View *optionsDrawerRoot = nullptr;
   TextView *viewerOptionText = nullptr;
@@ -82,6 +87,7 @@ private:
   size_t randomDrawerPage = 0;
   bool listenActive = false;
   bool listenAudioLoaded = false;
+  std::optional<ReplayData> practiceGhostReplay;
   std::vector<ReplaySummary> ghostReplaySummaries;
   int selectedGhostReplayIndex = -1;
   int loadedGhostReplayId = -1;
@@ -106,7 +112,11 @@ private:
   void hideGhostModal();
   void updateGhostControls();
   void updateGhostModalActions();
+  void updatePracticeGhostReplayButton();
+  void loadPracticeGhostReplay();
   void loadSelectedGhostReplay();
+  bool applyGhostReplayData(const ReplayData &replayData, int loadedReplayId,
+                            const std::string &successText);
   void clearGhostReplay();
   void rebuildOptionsDrawer();
   void showOptionsDrawer();

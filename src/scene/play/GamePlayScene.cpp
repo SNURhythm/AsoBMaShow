@@ -279,6 +279,8 @@ void GamePlayScene::init() {
             "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
       }
       pauseScreen->addView(makePauseButton("Exit", 200, 100, [this]() {
+        finishReplayRecording();
+        publishPracticeGhost();
         context.jukebox.stop();
         defer(
             [this]() {
@@ -411,10 +413,15 @@ bool GamePlayScene::isReplayPlayback() const {
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
-  return !options.practiceMode && !options.autoPlay && !isReplayPlayback();
+  return !options.autoPlay && !isReplayPlayback();
+}
+
+bool GamePlayScene::shouldPersistRecordedReplay() const {
+  return shouldRecordReplay() && !options.practiceMode;
 }
 
 void GamePlayScene::beginReplayRecording() {
+  practiceGhostPublished = false;
   if (!shouldRecordReplay()) {
     recordedReplay = {};
     return;
@@ -446,6 +453,17 @@ void GamePlayScene::finishReplayRecording() {
   recordedReplay.finalScore = state->getScore();
   recordedReplay.finalGauge = state->currentGauge;
   recordedReplay.clearType = state->getClearTypeRank();
+}
+
+void GamePlayScene::publishPracticeGhost() {
+  if (!options.practiceMode || practiceGhostPublished ||
+      !options.practiceGhostCallback || recordedReplay.events.empty()) {
+    return;
+  }
+
+  finishReplayRecording();
+  practiceGhostPublished = true;
+  options.practiceGhostCallback(recordedReplay);
 }
 
 long long GamePlayScene::getAudioOffsetMicros() const {
@@ -567,10 +585,11 @@ void GamePlayScene::update(float dt) {
   SDL_Log("All measures passed");
   state->isEnding = true;
   finishReplayRecording();
+  publishPracticeGhost();
   defer(
       [this]() {
         const ReplayData *replayToSave =
-            shouldRecordReplay() ? &recordedReplay : nullptr;
+            shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
         const ReplayData *retrySource =
             replayToSave != nullptr
                 ? replayToSave
@@ -590,6 +609,8 @@ void GamePlayScene::update(float dt) {
           practiceResultOptions.playOption2Seed = options.playOption2Seed;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
           practiceResultOptions.returnScene = options.returnScene;
+          practiceResultOptions.practiceGhostCallback =
+              options.practiceGhostCallback;
         }
         context.sceneManager->changeScene(
             new ResultScene(context, chart->Meta, *state, replayToSave,

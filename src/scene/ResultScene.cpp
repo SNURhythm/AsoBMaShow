@@ -185,6 +185,8 @@ void ResultScene::startRetry(bool samePattern) {
           options.practiceMode = true;
           options.practiceLeadInMicros = practiceOptions.leadInMicros;
           options.returnScene = practiceOptions.returnScene;
+          options.practiceGhostCallback =
+              practiceOptions.practiceGhostCallback;
         }
 
         if (retrySource.playOption.has_value()) {

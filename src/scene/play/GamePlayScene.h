@@ -9,6 +9,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -29,6 +30,7 @@ struct StartOptions {
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   Scene *returnScene = nullptr;
+  std::function<void(const ReplayData &)> practiceGhostCallback;
 };
 class RhythmInputHandler;
 class BMSRenderer;
@@ -65,8 +67,10 @@ private:
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool shouldRecordReplay() const;
+  [[nodiscard]] bool shouldPersistRecordedReplay() const;
   void beginReplayRecording();
   void finishReplayRecording();
+  void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayKeySounds(long long rawSongTimeMicros);
   void processReplayEvents(long long gameplayTimeMicros);
@@ -110,6 +114,7 @@ private:
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
+  bool practiceGhostPublished = false;
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();
   void updateLaneStateText();
