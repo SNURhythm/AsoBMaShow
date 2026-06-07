@@ -113,7 +113,6 @@ private:
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
-  long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
   bool renderHud = true;
   bool renderLaneBeams = true;
@@ -140,12 +139,20 @@ private:
   void drawNormalNote(float y, bms_parser::Note *const &note);
   void drawInvisibleNote(float y, bms_parser::Note *const &note);
   void drawLandmineNote(float y, bms_parser::LandmineNote *const &note);
-  void drawReplayGhosts(float rxhs, long long currentTimeMicros,
+  void drawLaneRectClipped(float x, float y, float width, float height,
+                           Color color);
+  void drawNoteRectClipped(rendering::TexBatchRenderer &batch, float x,
+                           float y, float width, float height,
+                           const NoteUvRegion &uv,
+                           bgfx::TextureHandle texture);
+  void drawReplayGhosts(double rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
-  void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
+  void drawReplayMissMarkers(double rxhs, double currentScrollPosition);
   void drawMissMarkerX(float y, const ReplayMissMarker &marker);
   void buildTimelineScrollPositions();
+  bool isNoteVisible(float y) const;
+  bool isVerticalRangeVisible(float y, float height) const;
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText();
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
