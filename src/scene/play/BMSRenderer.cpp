@@ -761,6 +761,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         }
       } else {
         // note has passed the last hittable timing
+        if (note->IsDead) {
+          return;
+        }
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
           if (longNote->IsTail()) {
