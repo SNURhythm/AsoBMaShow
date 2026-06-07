@@ -102,7 +102,6 @@ private:
   std::vector<ReplayMissMarker> replayMissMarkers;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
-  bool hasReverseScroll = false;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int scratchLaneCount = 0;
@@ -137,7 +136,7 @@ private:
   void drawGauge(RenderContext &context) const;
   void drawPlayOption(RenderContext &context) const;
   void drawLongNote(float headY, float tailY,
-                    bms_parser::LongNote *const &head, bool tailHasPassed);
+                    bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
   void drawInvisibleNote(float y, bms_parser::Note *const &note);
   void drawLandmineNote(float y, bms_parser::LandmineNote *const &note);

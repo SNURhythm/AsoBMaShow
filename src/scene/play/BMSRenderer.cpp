@@ -366,17 +366,14 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
   }
 }
 void BMSRenderer::drawLongNote(float headY, float tailY,
-                               bms_parser::LongNote *const &head,
-                               bool tailHasPassed) {
+                               bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
   const bool tailReleasedEarly = wasLongNoteTailReleasedEarly(head);
-  if (head->Tail->IsPlayed && (!tailReleasedEarly || tailHasPassed)) {
+  if (head->Tail->IsPlayed && !tailReleasedEarly)
     return;
-  }
   float startY = head->IsPlayed ? judgeY : headY;
-  const float bodyTop = std::min(startY, tailY);
-  const float bodyHeight = std::abs(tailY - startY);
+  const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
@@ -386,16 +383,15 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
       head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
   // Body
-  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture) &&
-      bodyTop + bodyHeight >= lowerBound && bodyTop <= upperBound) {
+  if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
     float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
                                                 : longBodyRenderHeightOff);
     longBodyBatchFor(sheet, head->IsHolding)
-        .addRect(laneToX(head->Lane), bodyTop, bodyWidth, bodyHeight, 1.0f,
+        .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
                  tileV, bodyTexture);
   }
 
-  if (tailY + noteRenderHeight >= lowerBound && tailY <= upperBound) {
+  if (!tailReleasedEarly || tailY > judgeY) {
     sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
                                    noteRenderWidth, noteRenderHeight, tailUv.u0,
                                    tailUv.v0, tailUv.u1, tailUv.v1,
@@ -406,9 +402,6 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
     return;
 
   // Head
-  if (startY + noteRenderHeight < lowerBound || startY > upperBound) {
-    return;
-  }
   sheetBatchFor(sheet).addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
                                  noteRenderHeight, headUv.u0, headUv.v0,
                                  headUv.u1, headUv.v1, sheet.texture);
@@ -416,9 +409,6 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
     return;
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
-    return;
-  }
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
@@ -432,9 +422,6 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed || note->IsDead) {
     return;
   }
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
-    return;
-  }
 
   gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
                                noteRenderHeight,
@@ -446,9 +433,6 @@ void BMSRenderer::drawLandmineNote(float y,
   if (note->IsPlayed || note->IsDead) {
     return;
   }
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
-    return;
-  }
 
   gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
                                noteRenderHeight,
@@ -457,7 +441,6 @@ void BMSRenderer::drawLandmineNote(float y,
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
-  hasReverseScroll = false;
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -468,7 +451,6 @@ void BMSRenderer::buildTimelineScrollPositions() {
   for (size_t i = 1; i < timelines.size(); ++i) {
     const auto *prevTimeline = timelines[i - 1];
     const auto *timeline = timelines[i];
-    hasReverseScroll = hasReverseScroll || prevTimeline->Scroll < 0.0;
     position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
@@ -723,6 +705,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   float hispeed = 240000.0f / chart->Meta.Bpm / visibleTimeMs;
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
+  float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(micro);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
@@ -730,20 +713,32 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
   // render timeline
-  for (size_t i = state.currentTimelineIndex; i < timelines.size(); i++) {
+  for (size_t i = state.currentTimelineIndex;
+       i < timelines.size() && y < upperBound; i++) {
     const auto &timeLine = timelines[i];
-    float y =
-        judgeY +
-        static_cast<float>(timelineScrollPositions[i] - currentScrollPosition) *
-            rxhs;
     if (timeLine->Timing >= micro) {
-      if (timeLine->IsFirstInMeasure && y >= lowerBound && y <= upperBound) {
+      if (i > 0) {
+        if (const auto &prevTimeLine = timelines[i - 1];
+            prevTimeLine->Timing + prevTimeLine->GetStopDuration() > micro) {
+          // when the previous timeline is stopped
+          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
+               prevTimeLine->Scroll * rxhs;
+        } else {
+          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
+               prevTimeLine->Scroll * (timeLine->Timing - micro) /
+               (timeLine->Timing - prevTimeLine->Timing -
+                prevTimeLine->GetStopDuration()) *
+               rxhs;
+        }
+      } else {
+        y += timeLine->BeatPosition * (timeLine->Timing - micro) /
+             timeLine->Timing * rxhs;
+      }
+
+      if (timeLine->IsFirstInMeasure) {
         // render measure line
         drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
                  Color(255, 255, 255, 128));
-      }
-      if (!hasReverseScroll && y > upperBound) {
-        break;
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
       y = judgeY + (micro - timeLine->Timing) /
@@ -780,13 +775,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
             // find head's y
             if (auto it = longNoteLookahead.find(longNote->Head);
                 it != longNoteLookahead.end()) {
-              drawLongNote(it->second, y, longNote->Head,
-                           timeLine->Timing < micro);
+              drawLongNote(it->second, y, longNote->Head);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
-              drawLongNote(lowerBound, y, longNote->Head,
-                           timeLine->Timing < micro);
+              drawLongNote(lowerBound, y, longNote->Head);
             }
           } else {
             longNoteLookahead[longNote] = y;
@@ -854,7 +847,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(pair.second, upperBound, pair.first, false);
+    drawLongNote(pair.second, upperBound, pair.first);
   }
   drawReplayGhosts(rxhs, micro, currentScrollPosition);
   drawReplayMissMarkers(rxhs, currentScrollPosition);
