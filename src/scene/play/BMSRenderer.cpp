@@ -20,18 +20,10 @@
 #include <string>
 
 namespace {
-constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
-
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
   return (static_cast<uint64_t>(submitDepth) << 16U) |
          static_cast<uint64_t>(texture.idx);
-}
-
-long long latePoorTimingFromWindows(
-    const std::map<Judgement, std::pair<long long, long long>> &windows) {
-  const auto it = windows.find(Bad);
-  return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
 }
 
 bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
@@ -50,6 +42,17 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   }
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
 }
+
+bool longNoteTailReachesTime(const bms_parser::LongNote *longNote,
+                             long long timeMicros) {
+  if (longNote == nullptr) {
+    return false;
+  }
+
+  const auto *tail = longNote->IsTail() ? longNote : longNote->Tail;
+  return tail != nullptr && tail->Timeline != nullptr &&
+         tail->Timeline->Timing >= timeMicros;
+}
 } // namespace
 
 BMSRenderer::BMSRenderer(
@@ -57,7 +60,6 @@ BMSRenderer::BMSRenderer(
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
     int visibleTimeGreenNumber, bool renderHud)
     : judgementIndicator(timingWindows),
-      latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
@@ -102,7 +104,6 @@ BMSRenderer::BMSRenderer(
       whiteKeyLaneIndices.push_back(laneIndex);
     }
   }
-  state.orphanLongNotes.reserve(laneOrder.size() * 2);
   longNoteLookaheadScratch.reserve(laneOrder.size() * 2);
   // flatten timeline
   size_t timelineCount = 0;
@@ -374,6 +375,9 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
     return;
   float startY = head->IsPlayed ? judgeY : headY;
   const float bodyHeight = tailY - startY;
+  if (bodyHeight <= 0.0f) {
+    return;
+  }
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
@@ -409,6 +413,9 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed)
     return;
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
@@ -422,6 +429,9 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
   if (note->IsPlayed || note->IsDead) {
     return;
   }
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
 
   gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
                                noteRenderHeight,
@@ -433,6 +443,9 @@ void BMSRenderer::drawLandmineNote(float y,
   if (note->IsPlayed || note->IsDead) {
     return;
   }
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+    return;
+  }
 
   gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
                                noteRenderHeight,
@@ -441,6 +454,8 @@ void BMSRenderer::drawLandmineNote(float y,
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
+  timelineScrollSuffixMin.clear();
+  timelineScrollSuffixMax.clear();
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -454,6 +469,21 @@ void BMSRenderer::buildTimelineScrollPositions() {
     position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
+  }
+
+  timelineScrollSuffixMin.resize(timelineScrollPositions.size());
+  timelineScrollSuffixMax.resize(timelineScrollPositions.size());
+  for (size_t i = timelineScrollPositions.size(); i-- > 0;) {
+    const double current = timelineScrollPositions[i];
+    if (i + 1 < timelineScrollPositions.size()) {
+      timelineScrollSuffixMin[i] =
+          std::min(current, timelineScrollSuffixMin[i + 1]);
+      timelineScrollSuffixMax[i] =
+          std::max(current, timelineScrollSuffixMax[i + 1]);
+    } else {
+      timelineScrollSuffixMin[i] = current;
+      timelineScrollSuffixMax[i] = current;
+    }
   }
 }
 
@@ -709,44 +739,69 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   const double currentScrollPosition = scrollPositionAtTime(micro);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
-  for (auto *orphanLongNote : state.orphanLongNotes) {
-    longNoteLookahead[orphanLongNote] = lowerBound;
+  double firstVisibleScrollPosition = -std::numeric_limits<double>::infinity();
+  double lastVisibleScrollPosition = std::numeric_limits<double>::infinity();
+  if (rxhs > 0.0f) {
+    firstVisibleScrollPosition =
+        currentScrollPosition +
+        static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
+            static_cast<double>(rxhs);
+    lastVisibleScrollPosition =
+        currentScrollPosition +
+        static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
   }
-  // render timeline
-  for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y < upperBound; i++) {
-    const auto &timeLine = timelines[i];
-    if (timeLine->Timing >= micro) {
-      if (y < judgeY)
-        y = judgeY;
-      if (i > 0) {
-        if (const auto &prevTimeLine = timelines[i - 1];
-            prevTimeLine->Timing + prevTimeLine->GetStopDuration() > micro) {
-          // when the previous timeline is stopped
-          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-               prevTimeLine->Scroll * rxhs;
-        } else {
-          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-               prevTimeLine->Scroll * (timeLine->Timing - micro) /
-               (timeLine->Timing - prevTimeLine->Timing -
-                prevTimeLine->GetStopDuration()) *
-               rxhs;
-        }
-      } else {
-        y += timeLine->BeatPosition * (timeLine->Timing - micro) /
-             timeLine->Timing * rxhs;
+  auto timelineHasActiveLongNote = [&](size_t timelineIndex) {
+    if (timelineIndex >= groupedTimelineNotes.size()) {
+      return false;
+    }
+    for (auto *note : groupedTimelineNotes[timelineIndex]) {
+      if (note == nullptr || note->IsDead || !note->IsLongNote()) {
+        continue;
       }
+      if (longNoteTailReachesTime(
+              static_cast<bms_parser::LongNote *>(note), micro)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto timelineY = [&](size_t timelineIndex) {
+    return judgeY +
+           static_cast<float>(
+               (timelineScrollPositions[timelineIndex] - currentScrollPosition) *
+               static_cast<double>(rxhs));
+  };
+  auto remainingTimelinesCanReachVisibleLane = [&](size_t timelineIndex) {
+    if (timelineIndex >= timelineScrollSuffixMin.size() ||
+        timelineIndex >= timelineScrollSuffixMax.size()) {
+      return false;
+    }
+    return timelineScrollSuffixMin[timelineIndex] <= lastVisibleScrollPosition &&
+           timelineScrollSuffixMax[timelineIndex] >= firstVisibleScrollPosition;
+  };
+  // render timeline
+  bool canAdvanceRenderStart = true;
+  for (size_t i = state.currentTimelineIndex; i < timelines.size(); i++) {
+    const auto &timeLine = timelines[i];
+    const bool timelineIsFuture = timeLine->Timing >= micro;
+    if (timelineIsFuture) {
+      if (!remainingTimelinesCanReachVisibleLane(i) &&
+          longNoteLookahead.empty()) {
+        break;
+      }
+      y = timelineY(i);
 
-      if (timeLine->IsFirstInMeasure) {
+      if (timeLine->IsFirstInMeasure && y >= lowerBound && y <= upperBound) {
         // render measure line
         drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
                  Color(255, 255, 255, 128));
       }
-    } else if (timeLine->Timing >= micro - latePoorTiming) {
-      y = judgeY + (micro - timeLine->Timing) /
-                       static_cast<float>(latePoorTiming) * lowerBound;
-    } else {
-      state.currentTimelineIndex = i;
+    } else if (canAdvanceRenderStart) {
+      if (timelineHasActiveLongNote(i)) {
+        canAdvanceRenderStart = false;
+      } else {
+        state.currentTimelineIndex = i;
+      }
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
     // Render notes in grouped lane order (white/blue/scratch) to reduce texture
@@ -755,68 +810,40 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       if (note == nullptr) {
         return;
       }
-      if (timeLine->Timing >= micro - latePoorTiming) {
-        // note is in the hittable timing
-        if (note->IsDead) {
-          return;
+      if (note->IsDead) {
+        return;
+      }
+      if (note->IsLandmineNote()) {
+        if (timelineIsFuture) {
+          drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
         }
-        if (note->IsLandmineNote()) {
-          if (timeLine->Timing >= micro) {
-            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
+        return;
+      }
+      if (note->IsLongNote()) {
+        auto *longNote = static_cast<bms_parser::LongNote *>(note);
+        auto *head = longNote->IsTail() ? longNote->Head : longNote;
+        if (head == nullptr || head->Tail == nullptr ||
+            !longNoteTailReachesTime(longNote, micro)) {
+          if (head != nullptr) {
+            longNoteLookahead.erase(head);
           }
           return;
         }
-        // render note
-        if (note->IsLongNote()) {
-          auto *longNote = static_cast<bms_parser::LongNote *>(note);
-          if (longNote->IsTail()) {
-            if (longNote->Head == nullptr) {
-              // ignore malformed chart: long note is not terminated
-              return;
-            }
-            // find head's y
-            if (auto it = longNoteLookahead.find(longNote->Head);
-                it != longNoteLookahead.end()) {
-              drawLongNote(it->second, y, longNote->Head);
-              // remove from lookahead
-              longNoteLookahead.erase(longNote->Head);
-            } else {
-              drawLongNote(lowerBound, y, longNote->Head);
-            }
+        if (longNote->IsTail()) {
+          if (auto it = longNoteLookahead.find(head);
+              it != longNoteLookahead.end()) {
+            drawLongNote(it->second, y, head);
+            longNoteLookahead.erase(head);
           } else {
-            longNoteLookahead[longNote] = y;
+            drawLongNote(judgeY, y, head);
           }
         } else {
-          drawNormalNote(y, note);
+          longNoteLookahead[longNote] = timelineIsFuture ? y : judgeY;
         }
-      } else {
-        // note has passed the last hittable timing
-        if (note->IsDead) {
-          return;
-        }
-        if (note->IsLandmineNote()) {
-          return;
-        }
-        if (note->IsLongNote()) {
-          auto *longNote = static_cast<bms_parser::LongNote *>(note);
-          if (longNote->IsTail()) {
-            if (longNote->Head == nullptr) {
-              // ignore malformed chart: long note is not terminated
-              return;
-            }
-            // remove from orphan long note
-            state.orphanLongNotes.erase(longNote->Head);
-            // and from long note lookahead
-            longNoteLookahead.erase(longNote->Head);
-          } else {
-            // add to orphan long note
-            state.orphanLongNotes.insert(longNote);
-
-            // setting to lowerBound in all cases is OK because the played
-            // state will be correctly handled by drawLongNote
-            longNoteLookahead[longNote] = lowerBound;
-          }
-        }
+        return;
+      }
+      if (timelineIsFuture) {
+        drawNormalNote(y, note);
       }
     };
 
@@ -1121,7 +1148,6 @@ void BMSRenderer::flushNoteTextureBatches() {
 }
 
 void BMSRendererState::reset() {
-  orphanLongNotes.clear();
   currentTimelineIndex = 0;
   latestJudgeResult = JudgeResult(None, 0);
   latestJudgeResultTime = std::chrono::system_clock::now();

@@ -22,7 +22,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -60,8 +59,6 @@ struct NoteSheet {
 class BMSRendererState {
 public:
   ~BMSRendererState() = default;
-  std::unordered_set<bms_parser::LongNote *>
-      orphanLongNotes; // long note whose head is dead but tail is alive
   size_t currentTimelineIndex = 0;
   JudgeResult latestJudgeResult = JudgeResult(None, 0);
   std::chrono::system_clock::time_point latestJudgeResultTime;
@@ -102,6 +99,8 @@ private:
   std::vector<ReplayMissMarker> replayMissMarkers;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
+  std::vector<double> timelineScrollSuffixMin;
+  std::vector<double> timelineScrollSuffixMax;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int scratchLaneCount = 0;
@@ -113,7 +112,6 @@ private:
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
   float judgeY = 0.0f;
-  long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
   bool renderHud = true;
   bool renderLaneBeams = true;
