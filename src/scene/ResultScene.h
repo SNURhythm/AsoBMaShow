@@ -4,6 +4,7 @@
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -19,6 +20,7 @@ struct ResultPracticeOptions {
   std::optional<long long> playOption2Seed;
   unsigned long long leadInMicros = 0;
   Scene *returnScene = nullptr;
+  std::function<void(const ReplayData &)> practiceGhostCallback;
 };
 
 class TextView;
