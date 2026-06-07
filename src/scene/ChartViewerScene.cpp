@@ -49,6 +49,9 @@ constexpr size_t kRandomSummaryTail = 8;
 constexpr int kMarkerLabelFontSize = 13;
 constexpr float kMarkerLabelWidth = 74.0f;
 constexpr float kMarkerLabelHeight = 18.0f;
+constexpr float kMarkerLabelRasterStep = 0.25f;
+constexpr float kMarkerLabelSupersample = 1.25f;
+constexpr int kMarkerLabelMaxRasterFontSize = 128;
 constexpr float kChartContentTopPadding = 16.0f;
 constexpr float kChartContentBottomPadding = 24.0f;
 constexpr float kCursorTapSlop = 10.0f;
@@ -62,6 +65,11 @@ struct SafeAreaInsets {
   int left = 0;
   int bottom = 0;
   int right = 0;
+};
+
+struct MarkerTextRasterConfig {
+  int fontSize = kMarkerLabelFontSize;
+  float textureToUiScale = 1.0f;
 };
 
 struct GaugeSelection {
@@ -185,11 +193,32 @@ uint32_t markerLabelColorKey(const SDL_Color &color) {
          static_cast<uint32_t>(color.a);
 }
 
-std::string markerGlyphCacheKey(char glyph, const SDL_Color &color) {
+std::string markerGlyphCacheKey(char glyph, const SDL_Color &color,
+                                int fontSize) {
   std::string key = std::to_string(markerLabelColorKey(color));
+  key.push_back(':');
+  key += std::to_string(fontSize);
   key.push_back(':');
   key.push_back(glyph);
   return key;
+}
+
+MarkerTextRasterConfig markerTextRasterConfig(float labelTextScale) {
+  labelTextScale = std::max(1.0f, labelTextScale);
+  const float uiScale =
+      std::max({1.0f, rendering::ui_scale_x, rendering::ui_scale_y});
+  const float rawRasterScale =
+      labelTextScale * uiScale * kMarkerLabelSupersample;
+  const float steppedRasterScale =
+      std::ceil(rawRasterScale / kMarkerLabelRasterStep) *
+      kMarkerLabelRasterStep;
+  const int fontSize = std::clamp(
+      static_cast<int>(std::ceil(static_cast<float>(kMarkerLabelFontSize) *
+                                 steppedRasterScale)),
+      kMarkerLabelFontSize, kMarkerLabelMaxRasterFontSize);
+  const float effectiveRasterScale =
+      static_cast<float>(fontSize) / static_cast<float>(kMarkerLabelFontSize);
+  return {fontSize, effectiveRasterScale / labelTextScale};
 }
 
 std::optional<std::string>
@@ -1227,22 +1256,27 @@ private:
                                  kMarkerLabelHeight)) {
         continue;
       }
-      const float labelBoxWidth = std::max(60.0f, kMarkerLabelWidth * screenZoom);
+      const float labelBoxWidth =
+          std::max(60.0f, kMarkerLabelWidth * screenZoom);
       const float labelBoxHeight =
           std::max(16.0f, kMarkerLabelHeight * screenZoom);
       const float labelTextScale = std::max(1.0f, screenZoom);
+      const MarkerTextRasterConfig raster =
+          markerTextRasterConfig(labelTextScale);
       const float labelScreenX = contentToScreenX(x);
       const float labelScreenY = contentToScreenY(y);
       const float labelRight = labelScreenX + labelBoxWidth;
       float cursorX = labelScreenX;
       for (char glyphChar : marker.text) {
-        const auto *glyph = cachedMarkerGlyph(glyphChar, marker.color);
+        const auto *glyph =
+            cachedMarkerGlyph(glyphChar, marker.color, raster.fontSize);
         if (glyph == nullptr) {
           continue;
         }
 
-        const float glyphWidth = std::max(1.0f, glyph->width) * labelTextScale;
-        const float glyphHeight = glyph->height * labelTextScale;
+        const float glyphWidth =
+            std::max(1.0f, glyph->width) / raster.textureToUiScale;
+        const float glyphHeight = glyph->height / raster.textureToUiScale;
         if (cursorX >= labelRight) {
           break;
         }
@@ -1278,9 +1312,9 @@ private:
     markerTextBatch.clearScissor();
   }
 
-  const CachedMarkerGlyph *cachedMarkerGlyph(char glyph,
-                                             const SDL_Color &color) {
-    const std::string key = markerGlyphCacheKey(glyph, color);
+  const CachedMarkerGlyph *cachedMarkerGlyph(char glyph, const SDL_Color &color,
+                                             int fontSize) {
+    const std::string key = markerGlyphCacheKey(glyph, color, fontSize);
     if (const auto it = markerGlyphTextures.find(key);
         it != markerGlyphTextures.end()) {
       return &it->second;
@@ -1288,12 +1322,11 @@ private:
 
     CachedMarkerGlyph label;
     label.text =
-        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf",
-                                   kMarkerLabelFontSize);
+        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", fontSize);
     label.text->setColor(color);
     label.text->setText(std::string(1, glyph));
     label.texture = label.text->textureHandle();
-    label.width = glyph == ' ' ? static_cast<float>(kMarkerLabelFontSize) * 0.34f
+    label.width = glyph == ' ' ? static_cast<float>(fontSize) * 0.34f
                                : static_cast<float>(label.text->textureWidth());
     label.height = static_cast<float>(label.text->textureHeight());
     auto [it, inserted] =
