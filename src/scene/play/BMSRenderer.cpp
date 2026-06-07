@@ -716,6 +716,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   for (size_t i = state.currentTimelineIndex;
        i < timelines.size() && y < upperBound; i++) {
     const auto &timeLine = timelines[i];
+    float timelineY = y;
     if (timeLine->Timing >= micro) {
       if (i > 0) {
         if (const auto &prevTimeLine = timelines[i - 1];
@@ -734,15 +735,16 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         y += timeLine->BeatPosition * (timeLine->Timing - micro) /
              timeLine->Timing * rxhs;
       }
+      timelineY = y;
 
       if (timeLine->IsFirstInMeasure) {
         // render measure line
-        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
+        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, timelineY,
                  Color(255, 255, 255, 128));
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
-      y = judgeY + (micro - timeLine->Timing) /
-                       static_cast<float>(latePoorTiming) * lowerBound;
+      timelineY = judgeY + (micro - timeLine->Timing) /
+                               static_cast<float>(latePoorTiming) * lowerBound;
     } else {
       state.currentTimelineIndex = i;
     }
@@ -760,7 +762,8 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         }
         if (note->IsLandmineNote()) {
           if (timeLine->Timing >= micro) {
-            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
+            drawLandmineNote(timelineY,
+                             static_cast<bms_parser::LandmineNote *>(note));
           }
           return;
         }
@@ -775,17 +778,17 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
             // find head's y
             if (auto it = longNoteLookahead.find(longNote->Head);
                 it != longNoteLookahead.end()) {
-              drawLongNote(it->second, y, longNote->Head);
+              drawLongNote(it->second, timelineY, longNote->Head);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
-              drawLongNote(lowerBound, y, longNote->Head);
+              drawLongNote(lowerBound, timelineY, longNote->Head);
             }
           } else {
-            longNoteLookahead[longNote] = y;
+            longNoteLookahead[longNote] = timelineY;
           }
         } else {
-          drawNormalNote(y, note);
+          drawNormalNote(timelineY, note);
         }
       } else {
         // note has passed the last hittable timing
@@ -829,7 +832,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       }
       if (timeLine->Timing >= micro) {
         if (showInvisibleNotes) {
-          drawInvisibleNote(y, note);
+          drawInvisibleNote(timelineY, note);
         }
       } else {
         note->IsDead = true;
@@ -840,7 +843,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         continue;
       }
       if (timeLine->Timing >= micro) {
-        drawLandmineNote(y, note);
+        drawLandmineNote(timelineY, note);
       }
     }
   }
