@@ -805,6 +805,320 @@ private:
 };
 } // namespace
 
+@interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
+@private
+  UITextField *_textField;
+  __unsafe_unretained UIView *_rootView;
+  void *_context;
+  IOSNativeTextEditorCallback _callback;
+  CGRect _lastKeyboardFrame;
+  BOOL _keyboardVisible;
+  BOOL _hiding;
+}
+- (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
+                       context:(void *)context
+                      callback:(IOSNativeTextEditorCallback)callback;
+- (void *)context;
+- (void)showInView:(UIView *)rootView;
+- (void)hideWithNotifyFinished:(BOOL)notifyFinished;
+- (void)keyboardFrameChanged:(NSNotification *)notification;
+- (void)keyboardWillHide:(NSNotification *)notification;
+- (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
+    (NSNotification *)notification;
+- (void)updateFrameAnimated:(BOOL)animated
+                   duration:(NSTimeInterval)duration
+                    options:(UIViewAnimationOptions)options;
+- (void)textFieldEditingChanged:(UITextField *)textField;
+- (void)emitEvent:(IOSNativeTextEditorEvent)event;
+@end
+
+static AsoNativeTextEditorView *gNativeTextEditor = nil;
+static constexpr CGFloat kNativeTextEditorHeight = 54.0;
+static constexpr CGFloat kNativeTextEditorHorizontalPadding = 8.0;
+static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
+
+@implementation AsoNativeTextEditorView
+- (instancetype)initWithConfig:(const IOSNativeTextEditorConfig &)config
+                       context:(void *)context
+                      callback:(IOSNativeTextEditorCallback)callback {
+  self = [super initWithFrame:CGRectZero];
+  if (self == nil) {
+    return nil;
+  }
+
+  _context = context;
+  _callback = callback;
+  _lastKeyboardFrame = CGRectZero;
+  _keyboardVisible = NO;
+  _hiding = NO;
+
+  self.autoresizingMask =
+      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+  self.backgroundColor =
+      [UIColor colorWithWhite:0.08 alpha:0.96];
+
+  _textField = [[UITextField alloc] initWithFrame:CGRectZero];
+  _textField.autoresizingMask =
+      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  _textField.borderStyle = UITextBorderStyleRoundedRect;
+  if (@available(iOS 13.0, *)) {
+    _textField.backgroundColor = UIColor.systemBackgroundColor;
+    _textField.textColor = UIColor.labelColor;
+  } else {
+    _textField.backgroundColor = UIColor.whiteColor;
+    _textField.textColor = UIColor.blackColor;
+  }
+  _textField.tintColor = UIColor.systemBlueColor;
+  _textField.font =
+      [UIFont systemFontOfSize:std::max(12, config.fontSize)];
+  _textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+  _textField.autocorrectionType = UITextAutocorrectionTypeNo;
+  _textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+  _textField.spellCheckingType = UITextSpellCheckingTypeNo;
+  _textField.smartDashesType = UITextSmartDashesTypeNo;
+  _textField.smartQuotesType = UITextSmartQuotesTypeNo;
+  _textField.returnKeyType = UIReturnKeyDone;
+  _textField.enablesReturnKeyAutomatically = NO;
+  _textField.delegate = self;
+  _textField.text = NSStringFromUtf8(config.text);
+  _textField.placeholder = NSStringFromUtf8(config.placeholder);
+  [_textField addTarget:self
+                 action:@selector(textFieldEditingChanged:)
+       forControlEvents:UIControlEventEditingChanged];
+  [self addSubview:_textField];
+
+  return self;
+}
+
+- (void *)context {
+  return _context;
+}
+
+- (void)showInView:(UIView *)rootView {
+  if (rootView == nil) {
+    return;
+  }
+  _rootView = rootView;
+  [rootView addSubview:self];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(keyboardFrameChanged:)
+             name:UIKeyboardWillChangeFrameNotification
+           object:nil];
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(keyboardWillHide:)
+             name:UIKeyboardWillHideNotification
+           object:nil];
+  [self updateFrameAnimated:NO duration:0.0 options:0];
+  [_textField becomeFirstResponder];
+}
+
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  const CGFloat fieldX = kNativeTextEditorHorizontalPadding;
+  const CGFloat fieldY = kNativeTextEditorVerticalPadding;
+  const CGFloat fieldWidth =
+      std::max<CGFloat>(1.0, self.bounds.size.width -
+                                 2.0 * kNativeTextEditorHorizontalPadding);
+  const CGFloat fieldHeight =
+      std::max<CGFloat>(1.0, self.bounds.size.height -
+                                 2.0 * kNativeTextEditorVerticalPadding);
+  _textField.frame = CGRectMake(fieldX, fieldY, fieldWidth, fieldHeight);
+}
+
+- (void)keyboardFrameChanged:(NSNotification *)notification {
+  NSValue *frameValue =
+      notification.userInfo[UIKeyboardFrameEndUserInfoKey];
+  if (frameValue != nil) {
+    _lastKeyboardFrame = [frameValue CGRectValue];
+    _keyboardVisible = YES;
+  }
+  NSTimeInterval duration =
+      [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey]
+          doubleValue];
+  UIViewAnimationOptions options =
+      [self animationOptionsForKeyboardNotification:notification];
+  [self updateFrameAnimated:YES duration:duration options:options];
+}
+
+- (void)keyboardWillHide:(NSNotification *)notification {
+  _keyboardVisible = NO;
+  NSTimeInterval duration =
+      [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey]
+          doubleValue];
+  UIViewAnimationOptions options =
+      [self animationOptionsForKeyboardNotification:notification];
+  [self updateFrameAnimated:YES duration:duration options:options];
+}
+
+- (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
+    (NSNotification *)notification {
+  NSNumber *curveValue =
+      notification.userInfo[UIKeyboardAnimationCurveUserInfoKey];
+  UIViewAnimationCurve curve =
+      curveValue != nil ? static_cast<UIViewAnimationCurve>(curveValue.integerValue)
+                        : UIViewAnimationCurveEaseInOut;
+  return static_cast<UIViewAnimationOptions>(curve << 16);
+}
+
+- (void)updateFrameAnimated:(BOOL)animated
+                   duration:(NSTimeInterval)duration
+                    options:(UIViewAnimationOptions)options {
+  UIView *rootView = _rootView;
+  if (rootView == nil) {
+    return;
+  }
+
+  UIEdgeInsets safeInsets = UIEdgeInsetsZero;
+  if (@available(iOS 11.0, *)) {
+    safeInsets = rootView.safeAreaInsets;
+  }
+
+  CGRect bounds = rootView.bounds;
+  CGFloat keyboardTop = bounds.size.height - safeInsets.bottom;
+  if (_keyboardVisible && !CGRectIsEmpty(_lastKeyboardFrame)) {
+    CGRect keyboardFrame = [rootView convertRect:_lastKeyboardFrame fromView:nil];
+    if (CGRectIntersectsRect(bounds, keyboardFrame)) {
+      keyboardTop = std::max<CGFloat>(
+          0.0, std::min<CGFloat>(keyboardTop, CGRectGetMinY(keyboardFrame)));
+    }
+  }
+
+  const CGFloat x = safeInsets.left;
+  const CGFloat width =
+      std::max<CGFloat>(1.0, bounds.size.width - safeInsets.left -
+                                 safeInsets.right);
+  const CGFloat y = std::max<CGFloat>(safeInsets.top,
+                                      keyboardTop - kNativeTextEditorHeight);
+  CGRect nextFrame = CGRectMake(x, y, width, kNativeTextEditorHeight);
+
+  auto applyFrame = ^{
+    self.frame = nextFrame;
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+  };
+
+  if (animated && duration > 0.0) {
+    [UIView animateWithDuration:duration
+                          delay:0.0
+                        options:options
+                     animations:applyFrame
+                     completion:nil];
+  } else {
+    applyFrame();
+  }
+}
+
+- (void)textFieldEditingChanged:(UITextField *)textField {
+  (void)textField;
+  [self emitEvent:IOSNativeTextEditorEvent::Changed];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+  (void)textField;
+  [self emitEvent:IOSNativeTextEditorEvent::Submitted];
+  if (!_hiding) {
+    [self hideWithNotifyFinished:NO];
+  }
+  return NO;
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+  (void)textField;
+  if (!_hiding) {
+    [self hideWithNotifyFinished:YES];
+  }
+}
+
+- (void)emitEvent:(IOSNativeTextEditorEvent)event {
+  if (_callback == nullptr) {
+    return;
+  }
+  const std::string text = NSStringToString(_textField.text);
+  _callback(_context, event, text);
+}
+
+- (void)hideWithNotifyFinished:(BOOL)notifyFinished {
+  if (_hiding) {
+    return;
+  }
+  _hiding = YES;
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  if (notifyFinished) {
+    [self emitEvent:IOSNativeTextEditorEvent::Finished];
+  }
+  [_textField resignFirstResponder];
+  [self removeFromSuperview];
+  if (gNativeTextEditor == self) {
+    gNativeTextEditor = nil;
+  }
+}
+@end
+
+void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
+                             void *context,
+                             IOSNativeTextEditorCallback callback) {
+  const IOSNativeTextEditorConfig editorConfig = config;
+  void *editorContext = context;
+  auto editorCallback = callback;
+  auto showBlock = ^{
+    @autoreleasepool {
+      if (editorCallback == nullptr) {
+        return;
+      }
+      UIWindow *window = FindActiveWindow();
+      UIView *rootView = window.rootViewController.view;
+      if (rootView == nil) {
+        return;
+      }
+      if (gNativeTextEditor != nil) {
+        if ([gNativeTextEditor context] == editorContext) {
+          return;
+        }
+        [gNativeTextEditor hideWithNotifyFinished:YES];
+      }
+      gNativeTextEditor =
+          [[AsoNativeTextEditorView alloc] initWithConfig:editorConfig
+                                                  context:editorContext
+                                                 callback:editorCallback];
+      [gNativeTextEditor showInView:rootView];
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    showBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), showBlock);
+  }
+}
+
+void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
+  void *editorContext = context;
+  auto hideBlock = ^{
+    @autoreleasepool {
+      if (gNativeTextEditor == nil) {
+        return;
+      }
+      if (editorContext != nullptr &&
+          [gNativeTextEditor context] != editorContext) {
+        return;
+      }
+      [gNativeTextEditor hideWithNotifyFinished:notifyFinished ? YES : NO];
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    hideBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), hideBlock);
+  }
+}
+
 std::string GetIOSDocumentsPath() {
   return std::string([[NSSearchPathForDirectoriesInDomains(
       NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0] UTF8String]);

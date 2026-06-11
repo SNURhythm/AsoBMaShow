@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../targets.h"
 #include "View.h"
 #include "TextView.h"
 #include <bgfx/bgfx.h>
@@ -8,6 +9,10 @@
 #include <string>
 #include <functional>
 #include <vector>
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 
 class TextInputBox : public TextView {
 public:
@@ -50,6 +55,7 @@ private:
   SDL_FingerID pendingFocusTouchId = -1;
   float pendingFocusUiX = 0.0f;
   float pendingFocusUiY = 0.0f;
+  bool nativeTextEditorVisible = false;
   uint64_t pointerDownListenerId = 0;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
@@ -80,6 +86,7 @@ private:
   bool commitComposition();
   void selectAll();
   void copySelectionToClipboard() const;
+  bool pasteClipboardAtCursor();
   std::string displayedText() const;
   size_t compositionDisplayStart() const;
   size_t compositionDisplayEnd() const;
@@ -87,6 +94,17 @@ private:
   void refreshDisplay(bool notifyTextChanged, bool notifySubmit = false);
   void updateCompositionGeometry(const std::string &display);
   void renderSelection(RenderContext &context, bgfx::ProgramHandle program);
+  SDL_Rect nativeRectFromUiRect(int x, int y, int width, int height) const;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  void showNativeTextEditor();
+  void hideNativeTextEditor(bool notifyFinished = false);
+  bool syncNativeTextEditorText(const std::string &newText);
+  void handleNativeTextEditorEvent(IOSNativeTextEditorEvent event,
+                                   const std::string &text);
+  static void handleNativeTextEditorEvent(void *context,
+                                          IOSNativeTextEditorEvent event,
+                                          const std::string &text);
+#endif
   void registerPointerDownListener();
   void unregisterPointerDownListener();
   void handlePointerDownOutside(const SDL_Event &event);

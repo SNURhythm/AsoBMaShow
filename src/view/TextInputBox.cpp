@@ -106,6 +106,9 @@ TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
 }
 
 TextInputBox::~TextInputBox() {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  hideNativeTextEditor(false);
+#endif
   unregisterPointerDownListener();
   if (isSelected) {
     SDL_StopTextInput();
@@ -117,39 +120,14 @@ std::string TextInputBox::getText() const { return displayedText(); }
 void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
   const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
-  SDL_Rect nextRect = {cursorX, cursorY, lineWidth, lineHeight};
-
-  SDL_Window *window = SDL_GetKeyboardFocus();
-  if (window == nullptr) {
-    window = SDL_GetMouseFocus();
-  }
-
-  int logicalW = 0;
-  int logicalH = 0;
-  if (window != nullptr) {
-    SDL_GetWindowSize(window, &logicalW, &logicalH);
-  }
-
-  if (logicalW > 0 && logicalH > 0 && rendering::window_width > 0 &&
-      rendering::window_height > 0) {
-    const float scaleX = static_cast<float>(logicalW) /
-                         static_cast<float>(rendering::window_width);
-    const float scaleY = static_cast<float>(logicalH) /
-                         static_cast<float>(rendering::window_height);
-    nextRect.x =
-        static_cast<int>(std::lround(static_cast<float>(cursorX) * scaleX));
-    nextRect.y =
-        static_cast<int>(std::lround(static_cast<float>(cursorY) * scaleY));
-    nextRect.w = std::max(1, static_cast<int>(std::lround(lineWidth * scaleX)));
-    nextRect.h =
-        std::max(1, static_cast<int>(std::lround(lineHeight * scaleY)));
-  }
-
-  viewRect = nextRect;
+  viewRect = nativeRectFromUiRect(cursorX, cursorY, lineWidth, lineHeight);
   SDL_SetTextInputRect(&viewRect);
 }
 
 void TextInputBox::setEditingText(const std::string &newText) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  hideNativeTextEditor(false);
+#endif
   editingText = newText;
   clearComposition();
   cursorPos = editingText.size();
@@ -188,6 +166,14 @@ size_t TextInputBox::getPrevUnicodePos(size_t pos) {
   return pos;
 }
 bool TextInputBox::handleEventsImpl(SDL_Event &event) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (nativeTextEditorVisible &&
+      (event.type == SDL_TEXTINPUT || event.type == SDL_TEXTEDITING ||
+       event.type == SDL_TEXTEDITING_EXT || event.type == SDL_KEYDOWN)) {
+    return false;
+  }
+#endif
+
   bool displayChanged = false;
   bool textChanged = false;
   bool isSubmit = false;
@@ -243,14 +229,8 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       break;
     }
     if (shortcutHeld && key == SDLK_v) {
-      if (SDL_HasClipboardText()) {
-        char *clipboardText = SDL_GetClipboardText();
-        if (clipboardText != nullptr) {
-          textChanged = insertTextAtCursor(clipboardText);
-          SDL_free(clipboardText);
-          displayChanged = textChanged;
-        }
-      }
+      textChanged = pasteClipboardAtCursor();
+      displayChanged = textChanged;
       break;
     }
 
@@ -366,10 +346,15 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
                           static_cast<float>(y))) {
       commitComposition();
       onSelected();
-      SDL_StartTextInput();
       setCursor(posToCursor(x - getX(), y - getY()),
                 hasShiftModifier(static_cast<SDL_Keymod>(SDL_GetModState())));
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      showNativeTextEditor();
+      isDraggingSelection = false;
+#else
+      SDL_StartTextInput();
       isDraggingSelection = true;
+#endif
       displayChanged = true;
       break;
     }
@@ -424,12 +409,18 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       }
       commitComposition();
       onSelected();
-      SDL_StartTextInput();
       setCursor(posToCursor(static_cast<int>(x) - getX(),
                             static_cast<int>(y) - getY()),
                 false);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      showNativeTextEditor();
+      activeTouchId = event.tfinger.fingerId;
+      isDraggingSelection = false;
+#else
+      SDL_StartTextInput();
       activeTouchId = event.tfinger.fingerId;
       isDraggingSelection = true;
+#endif
       displayChanged = true;
       break;
     }
@@ -455,6 +446,11 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
     float x = 0.0f;
     float y = 0.0f;
     fingerEventToUi(event.tfinger, x, y);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    if (isSelected) {
+      return false;
+    }
+#endif
     if (isSelected && isDraggingSelection) {
       setCursor(posToCursor(static_cast<int>(x) - getX(),
                             static_cast<int>(y) - getY()),
@@ -475,10 +471,14 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
       }
       commitComposition();
       onSelected();
-      SDL_StartTextInput();
       setCursor(posToCursor(static_cast<int>(x) - getX(),
                             static_cast<int>(y) - getY()),
                 false);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      showNativeTextEditor();
+#else
+      SDL_StartTextInput();
+#endif
       refreshDisplay(false);
       return false;
     }
@@ -659,6 +659,20 @@ void TextInputBox::copySelectionToClipboard() const {
   SDL_SetClipboardText(selectedText.c_str());
 }
 
+bool TextInputBox::pasteClipboardAtCursor() {
+  if (!SDL_HasClipboardText()) {
+    return false;
+  }
+
+  char *clipboardText = SDL_GetClipboardText();
+  if (clipboardText == nullptr) {
+    return false;
+  }
+  const bool textChanged = insertTextAtCursor(clipboardText);
+  SDL_free(clipboardText);
+  return textChanged;
+}
+
 void TextInputBox::clearComposition() {
   composition.clear();
   compositionCursor = 0;
@@ -793,12 +807,133 @@ void TextInputBox::renderSelection(RenderContext &context,
              selectionHeight, sdlColorToAbgr(selectionColor));
 }
 
+SDL_Rect TextInputBox::nativeRectFromUiRect(int x, int y, int width,
+                                            int height) const {
+  SDL_Rect nativeRect = {x, y, std::max(1, width), std::max(1, height)};
+
+  SDL_Window *window = SDL_GetKeyboardFocus();
+  if (window == nullptr) {
+    window = SDL_GetMouseFocus();
+  }
+
+  int logicalW = 0;
+  int logicalH = 0;
+  if (window != nullptr) {
+    SDL_GetWindowSize(window, &logicalW, &logicalH);
+  }
+
+  if (logicalW > 0 && logicalH > 0 && rendering::window_width > 0 &&
+      rendering::window_height > 0) {
+    const float scaleX = static_cast<float>(logicalW) /
+                         static_cast<float>(rendering::window_width);
+    const float scaleY = static_cast<float>(logicalH) /
+                         static_cast<float>(rendering::window_height);
+    nativeRect.x =
+        static_cast<int>(std::lround(static_cast<float>(x) * scaleX));
+    nativeRect.y =
+        static_cast<int>(std::lround(static_cast<float>(y) * scaleY));
+    nativeRect.w =
+        std::max(1, static_cast<int>(std::lround(width * scaleX)));
+    nativeRect.h =
+        std::max(1, static_cast<int>(std::lround(height * scaleY)));
+  }
+
+  return nativeRect;
+}
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+void TextInputBox::showNativeTextEditor() {
+  if (nativeTextEditorVisible) {
+    return;
+  }
+  commitComposition();
+  if (!isSelected) {
+    onSelected();
+  }
+  SDL_StopTextInput();
+  nativeTextEditorVisible = true;
+  isDraggingSelection = false;
+  refreshDisplay(false);
+
+  IOSNativeTextEditorConfig config;
+  config.text = editingText;
+  config.fontSize = std::max(12, fontSize);
+  ShowIOSNativeTextEditor(config, this,
+                          &TextInputBox::handleNativeTextEditorEvent);
+}
+
+void TextInputBox::hideNativeTextEditor(bool notifyFinished) {
+  if (nativeTextEditorVisible) {
+    HideIOSNativeTextEditor(this, notifyFinished);
+  }
+  nativeTextEditorVisible = false;
+}
+
+bool TextInputBox::syncNativeTextEditorText(const std::string &newText) {
+  const bool textChanged = editingText != newText || !composition.empty();
+  if (!textChanged) {
+    return false;
+  }
+  editingText = newText;
+  clearComposition();
+  cursorPos = editingText.size();
+  selectionAnchor = cursorPos;
+  lastRenderedCaretCursor = static_cast<size_t>(-1);
+  return true;
+}
+
+void TextInputBox::handleNativeTextEditorEvent(
+    IOSNativeTextEditorEvent event, const std::string &text) {
+  if (!isSelected) {
+    isSelected = true;
+    registerPointerDownListener();
+  }
+  const bool textChanged = syncNativeTextEditorText(text);
+
+  switch (event) {
+  case IOSNativeTextEditorEvent::Changed:
+    nativeTextEditorVisible = true;
+    if (textChanged) {
+      refreshDisplay(true);
+    }
+    return;
+  case IOSNativeTextEditorEvent::Submitted:
+    nativeTextEditorVisible = false;
+    refreshDisplay(textChanged, true);
+    onUnselected();
+    SDL_StopTextInput();
+    return;
+  case IOSNativeTextEditorEvent::Finished:
+    nativeTextEditorVisible = false;
+    if (textChanged) {
+      refreshDisplay(true);
+    }
+    notifyEditingFinished();
+    onUnselected();
+    SDL_StopTextInput();
+    return;
+  }
+}
+
+void TextInputBox::handleNativeTextEditorEvent(
+    void *context, IOSNativeTextEditorEvent event, const std::string &text) {
+  if (context == nullptr) {
+    return;
+  }
+  static_cast<TextInputBox *>(context)->handleNativeTextEditorEvent(event,
+                                                                    text);
+}
+#endif
+
 void TextInputBox::onSelected() {
   isSelected = true;
   registerPointerDownListener();
 }
 
 void TextInputBox::onUnselected() {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  hideNativeTextEditor(false);
+#endif
   unregisterPointerDownListener();
   isSelected = false;
   isDraggingSelection = false;
@@ -862,6 +997,9 @@ void TextInputBox::finishEditing() {
   if (!isSelected) {
     return;
   }
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  hideNativeTextEditor(false);
+#endif
   commitComposition();
   notifyEditingFinished();
   onUnselected();

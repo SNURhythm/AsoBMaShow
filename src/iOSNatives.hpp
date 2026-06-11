@@ -26,6 +26,22 @@ struct IOSReplayVideoWriterProfile {
   long long finishMicros = 0;
 };
 
+enum class IOSNativeTextEditorEvent {
+  Changed,
+  Submitted,
+  Finished,
+};
+
+struct IOSNativeTextEditorConfig {
+  std::string text;
+  std::string placeholder;
+  int fontSize = 17;
+};
+
+using IOSNativeTextEditorCallback =
+    void (*)(void *context, IOSNativeTextEditorEvent event,
+             const std::string &text);
+
 // get Documents path
 std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
@@ -50,4 +66,8 @@ IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize);
 int MeasureIOSSystemTextWidth(const std::string &utf8, int fontSize);
 SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
                                         SDL_Color color);
+void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
+                             void *context,
+                             IOSNativeTextEditorCallback callback);
+void HideIOSNativeTextEditor(void *context, bool notifyFinished);
 #endif
