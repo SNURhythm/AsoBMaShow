@@ -201,6 +201,7 @@ private:
   bms_parser::Chart *loadedSelectedChart() const;
   void startSelectedChart();
   void openChartViewerForSelection();
+  void revealSelectedChartInFileManager();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildPlayOptionsModal();

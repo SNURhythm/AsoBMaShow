@@ -20,11 +20,13 @@
 #include "../view/ClearLampColors.h"
 #include "../view/ReplaySummaryListView.h"
 #include <cctype>
+#include <cstring>
 #include <memory>
 #include <unordered_set>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
+#include <shlobj.h>
 
 #elif __APPLE__
 
@@ -53,6 +55,11 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#if TARGET_OS_LINUX
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
 
 namespace {
 constexpr int kRootPadding = 28;
@@ -77,6 +84,107 @@ SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.right * static_cast<float>(rendering::window_width)));
 #endif
   return insets;
+}
+
+bool revealPathInFileManager(const std::filesystem::path &path,
+                             std::string &errorMessage) {
+  errorMessage.clear();
+  if (path.empty()) {
+    errorMessage = "Chart file path is empty";
+    return false;
+  }
+
+  std::error_code errorCode;
+  std::filesystem::path targetPath = path;
+  if (!targetPath.is_absolute()) {
+    const auto absolutePath = std::filesystem::absolute(targetPath, errorCode);
+    if (!errorCode) {
+      targetPath = absolutePath;
+    }
+    errorCode.clear();
+  }
+
+  if (!std::filesystem::exists(targetPath, errorCode) || errorCode) {
+    errorMessage = "Chart file does not exist: " +
+                   path_t_to_utf8(fspath_to_path_t(targetPath));
+    return false;
+  }
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  return RevealIOSFileInFiles(path_t_to_utf8(fspath_to_path_t(targetPath)),
+                              errorMessage);
+#elif TARGET_OS_OSX
+  return RevealPathInFinder(path_t_to_utf8(fspath_to_path_t(targetPath)),
+                            errorMessage);
+#elif defined(_WIN32)
+  const std::wstring nativePath = targetPath.wstring();
+  const HRESULT coInit =
+      CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  const bool didCoInitialize = SUCCEEDED(coInit);
+  PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(nativePath.c_str());
+  if (pidl == nullptr) {
+    if (didCoInitialize) {
+      CoUninitialize();
+    }
+    errorMessage = "Could not resolve chart file for Explorer";
+    return false;
+  }
+
+  const HRESULT result = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+  ILFree(pidl);
+  if (didCoInitialize) {
+    CoUninitialize();
+  }
+  if (FAILED(result)) {
+    std::ostringstream stream;
+    stream << "Could not open Explorer: HRESULT 0x" << std::hex
+           << static_cast<unsigned long>(result);
+    errorMessage = stream.str();
+    return false;
+  }
+  return true;
+#elif TARGET_OS_LINUX
+  const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
+  std::filesystem::path directoryPath =
+      isDirectory ? targetPath : targetPath.parent_path();
+  if (directoryPath.empty()) {
+    directoryPath = ".";
+  }
+
+  std::string openerPath;
+  for (const char *candidate :
+       {"/usr/bin/xdg-open", "/bin/xdg-open", "/usr/local/bin/xdg-open"}) {
+    if (std::filesystem::exists(candidate, errorCode)) {
+      openerPath = candidate;
+      break;
+    }
+    errorCode.clear();
+  }
+  if (openerPath.empty()) {
+    errorMessage = "Could not find xdg-open";
+    return false;
+  }
+
+  const std::string directoryText = directoryPath.string();
+  pid_t pid = 0;
+  char *argv[] = {const_cast<char *>(openerPath.c_str()),
+                  const_cast<char *>(directoryText.c_str()), nullptr};
+  const int result =
+      posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
+  if (result != 0) {
+    errorMessage = std::string("Could not open file manager: ") +
+                   std::strerror(result);
+    return false;
+  }
+  std::thread([pid]() {
+    int status = 0;
+    waitpid(pid, &status, 0);
+  }).detach();
+  return true;
+#else
+  errorMessage = "Reveal is not supported on this platform";
+  return false;
+#endif
 }
 
 using main_menu_library::folderKeyForCourse;
@@ -994,8 +1102,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(jacketCard);
   right->addView(startButton);
 
-  auto *viewerButton = new Button(0, 0, 220, 58);
-  auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 25);
+  auto *chartActionsRow = new View();
+  chartActionsRow->setFlexDirection(FlexDirection::Row);
+  chartActionsRow->setAlignItems(YGAlignStretch);
+  chartActionsRow->setWidth(220);
+  chartActionsRow->setHeight(58);
+  chartActionsRow->setGap(10);
+
+  auto *viewerButton = new Button(0, 0, 105, 58);
+  viewerButton->setFlex(1);
+  auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   viewerButtonText->setText("Viewer");
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
@@ -1009,7 +1125,26 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButton->setStyledBorderWidth(2);
   viewerButton->setOnClickListener(
       [this]() { openChartViewerForSelection(); });
-  right->addView(viewerButton);
+  chartActionsRow->addView(viewerButton);
+
+  auto *revealButton = new Button(0, 0, 105, 58);
+  revealButton->setFlex(1);
+  auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  revealButtonText->setText("Reveal");
+  revealButtonText->setAlign(TextView::CENTER);
+  revealButtonText->setVAlign(TextView::MIDDLE);
+  revealButton->setContentView(revealButtonText);
+  revealButton->setBackgroundColors(
+      Color(31, 51, 74, 216), Color(43, 70, 100, 228),
+      Color(58, 93, 132, 236));
+  revealButton->setBorderColors(Color(106, 153, 205, 255),
+                                Color(135, 181, 229, 255),
+                                Color(167, 209, 248, 255));
+  revealButton->setStyledBorderWidth(2);
+  revealButton->setOnClickListener(
+      [this]() { revealSelectedChartInFileManager(); });
+  chartActionsRow->addView(revealButton);
+  right->addView(chartActionsRow);
 
   right->addView(replayButtonSlot);
   right->addView(replayStatusText);
@@ -1516,6 +1651,30 @@ void MainMenuScene::openChartViewerForSelection() {
       new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
                            chartRandomValues),
       true);
+}
+
+void MainMenuScene::revealSelectedChartInFileManager() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.unavailable || record.meta.BmsPath.empty()) {
+    return;
+  }
+
+  std::string errorMessage;
+  if (!revealPathInFileManager(record.meta.BmsPath, errorMessage)) {
+    SDL_Log("Failed to reveal chart file %s: %s",
+            path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)).c_str(),
+            errorMessage.c_str());
+  }
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {

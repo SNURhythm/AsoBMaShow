@@ -24,6 +24,7 @@ constexpr int kIOSReplayChannels = 2;
 constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
 constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
+UIDocumentInteractionController *gIOSRevealFileController = nil;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -1436,6 +1437,69 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     }
 
     body = std::string([text UTF8String]);
+    return true;
+  }
+}
+
+bool RevealIOSFileInFiles(const std::string &filePath,
+                          std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    NSString *path = NSStringFromUtf8(filePath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "Chart file path is empty";
+      return false;
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+      errorMessage = "Chart file does not exist";
+      return false;
+    }
+
+    NSURL *fileURL = [NSURL fileURLWithPath:path];
+    if (fileURL == nil) {
+      errorMessage = "Invalid chart file URL";
+      return false;
+    }
+
+    BOOL (^presentBlock)(void) = ^BOOL {
+      @autoreleasepool {
+        UIWindow *window = FindActiveWindow();
+        UIViewController *presenting =
+            window != nil ? TopViewController(window.rootViewController) : nil;
+        UIView *presentingView = presenting.view;
+        if (presenting == nil || presentingView == nil) {
+          return NO;
+        }
+
+        gIOSRevealFileController =
+            [UIDocumentInteractionController interactionControllerWithURL:fileURL];
+        if (gIOSRevealFileController == nil) {
+          return NO;
+        }
+
+        const CGRect sourceRect =
+            CGRectMake(CGRectGetMidX(presentingView.bounds),
+                       CGRectGetMidY(presentingView.bounds), 1.0, 1.0);
+        return [gIOSRevealFileController presentOptionsMenuFromRect:sourceRect
+                                                            inView:presentingView
+                                                          animated:YES];
+      }
+    };
+
+    if ([NSThread isMainThread]) {
+      if (!presentBlock()) {
+        errorMessage = "Could not open the Files options menu";
+        return false;
+      }
+      return true;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!presentBlock()) {
+        SDL_Log("Could not open the Files options menu for %s",
+                filePath.c_str());
+      }
+    });
     return true;
   }
 }

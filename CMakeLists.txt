@@ -264,6 +264,10 @@ target_link_libraries(main
     yogacore
 )
 
+if (WIN32)
+    target_link_libraries(main PRIVATE shell32 ole32)
+endif()
+
 # Platform specific system libs for macOS
 if (PLATFORM_MACOS)
     find_library(FOUNDATION Foundation)
