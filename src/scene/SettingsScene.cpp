@@ -1,6 +1,7 @@
 #include "SettingsScene.h"
 #include "../context.h"
 #include "../rendering/Color.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -519,6 +520,15 @@ std::string formatChartEntrySource(const ChartEntry &entry) {
   return pathText;
 }
 
+std::string formatImportProgressText(int current, int total) {
+  if (total <= 0) {
+    return "Preparing";
+  }
+  const int safeCurrent = std::clamp(current, 0, total);
+  return std::to_string(safeCurrent) + " / " + std::to_string(total) +
+         (total == 1 ? " table" : " tables");
+}
+
 AppSettings::BgaDisplayMode
 nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
@@ -767,8 +777,21 @@ void SettingsScene::requestDifficultyTableStatus(const std::string &text,
   pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
 }
 
+void SettingsScene::requestDifficultyTableImportProgress(
+    int current, int total, const std::string &tableName,
+    const std::string &statusText, bool finished) {
+  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
+  pendingDifficultyTableImportProgress = true;
+  pendingDifficultyTableImportCurrent = current;
+  pendingDifficultyTableImportTotal = total;
+  pendingDifficultyTableImportName = tableName;
+  pendingDifficultyTableImportStatusText = statusText;
+  pendingDifficultyTableImportFinished = finished;
+}
+
 void SettingsScene::applyPendingDifficultyTableUpdates() {
   bool shouldReload = false;
+  bool shouldRefreshImportModal = false;
   {
     std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
     if (pendingDifficultyTableStatus) {
@@ -780,6 +803,17 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
       }
       pendingDifficultyTableStatus = false;
     }
+    if (pendingDifficultyTableImportProgress) {
+      difficultyTableImportCurrent = pendingDifficultyTableImportCurrent;
+      difficultyTableImportTotal = pendingDifficultyTableImportTotal;
+      difficultyTableImportName = pendingDifficultyTableImportName;
+      difficultyTableImportStatusMessage =
+          pendingDifficultyTableImportStatusText;
+      difficultyTableImportFinished = pendingDifficultyTableImportFinished;
+      difficultyTableImportModalVisible = true;
+      pendingDifficultyTableImportProgress = false;
+      shouldRefreshImportModal = true;
+    }
     shouldReload = pendingDifficultyTableReload;
     pendingDifficultyTableReload = false;
   }
@@ -789,6 +823,75 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
     loadChartEntries();
     lastLayoutWidth = -1;
   }
+  if (shouldRefreshImportModal) {
+    refreshDifficultyTableImportModal();
+  }
+}
+
+void SettingsScene::refreshDifficultyTableImportModal() {
+  if (difficultyTableImportModalRoot == nullptr) {
+    return;
+  }
+
+  difficultyTableImportModalRoot->setSize(rendering::window_width,
+                                          rendering::window_height);
+  difficultyTableImportModalRoot->setVisible(difficultyTableImportModalVisible);
+  if (!difficultyTableImportModalVisible) {
+    return;
+  }
+
+  const bool finished = difficultyTableImportFinished;
+  const int total = std::max(0, difficultyTableImportTotal);
+  const int current = total > 0
+                          ? std::clamp(difficultyTableImportCurrent, 0, total)
+                          : 0;
+  const float progressPercent =
+      total > 0 ? (static_cast<float>(current) / static_cast<float>(total)) *
+                      100.0f
+                : 0.0f;
+
+  if (difficultyTableImportTitleText != nullptr) {
+    difficultyTableImportTitleText->setText(
+        finished ? "Import Complete" : "Importing Difficulty Tables");
+  }
+  if (difficultyTableImportStatusText != nullptr) {
+    if (!difficultyTableImportStatusMessage.empty()) {
+      difficultyTableImportStatusText->setText(
+          difficultyTableImportStatusMessage);
+    } else {
+      difficultyTableImportStatusText->setText(
+          finished ? "Import finished." : "Downloading and importing tables...");
+    }
+  }
+  if (difficultyTableImportTableText != nullptr) {
+    difficultyTableImportTableText->setText(
+        difficultyTableImportName.empty()
+            ? "Current table: Resolving table URL"
+            : "Current table: " + difficultyTableImportName);
+  }
+  if (difficultyTableImportProgressText != nullptr) {
+    difficultyTableImportProgressText->setText(
+        formatImportProgressText(current, total));
+  }
+  if (difficultyTableImportProgressFill != nullptr) {
+    difficultyTableImportProgressFill->setWidthPercent(progressPercent);
+  }
+  if (difficultyTableImportCloseButton != nullptr) {
+    const bool canClose = finished && !difficultyTableJobRunning.load();
+    difficultyTableImportCloseButton->setVisible(canClose);
+    difficultyTableImportCloseButton->setWidth(canClose ? 160.0f : 0.0f);
+    difficultyTableImportCloseButton->setHeight(canClose ? 60.0f : 0.0f);
+  }
+
+  difficultyTableImportModalRoot->applyYogaLayout();
+}
+
+void SettingsScene::hideDifficultyTableImportModal() {
+  if (difficultyTableJobRunning.load()) {
+    return;
+  }
+  difficultyTableImportModalVisible = false;
+  refreshDifficultyTableImportModal();
 }
 
 void SettingsScene::addDifficultyTableFromUrl() {
@@ -817,10 +920,17 @@ void SettingsScene::addDifficultyTableFromUrl() {
   pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = "Adding table...";
   difficultyTableStatusColor = {239, 244, 251, 255};
+  difficultyTableImportModalVisible = true;
+  difficultyTableImportFinished = false;
+  difficultyTableImportCurrent = 0;
+  difficultyTableImportTotal = 1;
+  difficultyTableImportName = url;
+  difficultyTableImportStatusMessage = "Preparing import...";
   if (difficultyTableStatusText != nullptr) {
     difficultyTableStatusText->setText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
+  refreshDifficultyTableImportModal();
 
   difficultyTableJobThread =
       std::jthread([this, url](const std::stop_token &token) {
@@ -828,17 +938,31 @@ void SettingsScene::addDifficultyTableFromUrl() {
         sqlite3 *settingsDb = dbHelper.Connect();
         if (settingsDb == nullptr) {
           if (!token.stop_requested()) {
+            difficultyTableJobRunning = false;
+            requestDifficultyTableImportProgress(
+                0, 1, url, "Could not open chart database.", true);
             requestDifficultyTableStatus("Could not open chart database.",
                                          {255, 177, 170, 255});
-            difficultyTableJobRunning = false;
           }
           return;
         }
 
         dbHelper.CreateDifficultyTableTables(settingsDb);
         std::string errorMessage;
+        DifficultyTableImportProgress lastProgress{0, 1, url};
+        auto progressCallback =
+            [this, &lastProgress,
+             &token](const DifficultyTableImportProgress &progress) {
+              if (token.stop_requested()) {
+                return;
+              }
+              lastProgress = progress;
+              requestDifficultyTableImportProgress(
+                  progress.current, progress.total, progress.tableName,
+                  "Downloading and importing tables...", false);
+            };
         const bool imported = dbHelper.ImportDifficultyTableFromUrl(
-            settingsDb, url, &errorMessage);
+            settingsDb, url, &errorMessage, progressCallback);
         dbHelper.Close(settingsDb);
 
         if (token.stop_requested()) {
@@ -846,13 +970,17 @@ void SettingsScene::addDifficultyTableFromUrl() {
           return;
         }
 
-        requestDifficultyTableStatus(
-            imported ? "Table added." : (errorMessage.empty() ? "Add failed."
-                                                              : errorMessage),
-            imported ? SDL_Color{181, 228, 165, 255}
-                     : SDL_Color{255, 177, 170, 255},
-            imported);
         difficultyTableJobRunning = false;
+        const std::string finalMessage =
+            imported ? (errorMessage.empty() ? "Table added." : errorMessage)
+                     : (errorMessage.empty() ? "Add failed." : errorMessage);
+        requestDifficultyTableImportProgress(
+            lastProgress.current, lastProgress.total, lastProgress.tableName,
+            finalMessage, true);
+        requestDifficultyTableStatus(finalMessage,
+                                     imported ? SDL_Color{181, 228, 165, 255}
+                                              : SDL_Color{255, 177, 170, 255},
+                                     imported);
       });
 }
 
@@ -1111,6 +1239,13 @@ void SettingsScene::resetViewState() {
   laneLengthInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  difficultyTableImportModalRoot = nullptr;
+  difficultyTableImportProgressFill = nullptr;
+  difficultyTableImportTitleText = nullptr;
+  difficultyTableImportStatusText = nullptr;
+  difficultyTableImportTableText = nullptr;
+  difficultyTableImportProgressText = nullptr;
+  difficultyTableImportCloseButton = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -2350,9 +2485,9 @@ void SettingsScene::initView() {
 
     cardsColumn->addView(makeCard(
         metrics, "Add Difficulty Table",
-        metrics.compact ? "Import a bmstable page or header JSON URL."
+        metrics.compact ? "Import a bmstable page, header, or table list URL."
                         : "Import a bmstable page URL or a direct header JSON "
-                          "URL. The stored source URL is used for updates.",
+                          "URL. Table-list JSON URLs import each listed table.",
         addControls, metrics.modeCardHeight, metrics.cardsWidth));
 
     auto *folderList = new View();
@@ -2526,8 +2661,90 @@ void SettingsScene::initView() {
   content->addView(scrollView);
   rootLayout->addView(content);
 
+  difficultyTableImportModalRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  difficultyTableImportModalRoot->setPositionType(YGPositionTypeAbsolute);
+  difficultyTableImportModalRoot->setPosition(Edge::Left, 0);
+  difficultyTableImportModalRoot->setPosition(Edge::Top, 0);
+  difficultyTableImportModalRoot->setZIndex(1000);
+  difficultyTableImportModalRoot->setVisible(false);
+  difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
+  difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
+  difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
+  difficultyTableImportModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *importPanel = new View();
+  importPanel->setWidth(static_cast<float>(
+                            std::min(metrics.compact ? 620 : 760,
+                                     std::max(280, metrics.contentWidth - 32))))
+      ->setMinHeight(static_cast<float>(metrics.compact ? 320 : 360))
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(metrics.compact ? 14.0f : 18.0f)
+      ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
+      ->setBackgroundColor(Color(17, 27, 42, 248))
+      ->setBorderColor(Color(88, 118, 154, 255))
+      ->setBorderWidth(2);
+
+  difficultyTableImportTitleText = makeWrappedText(
+      "Importing Difficulty Tables", metrics.sectionTitleSize,
+      Color(244, 248, 255));
+  importPanel->addView(difficultyTableImportTitleText);
+
+  difficultyTableImportStatusText = makeWrappedText(
+      "Preparing import...", metrics.bodyTextSize, Color(181, 207, 236));
+  importPanel->addView(difficultyTableImportStatusText);
+
+  difficultyTableImportTableText =
+      makeWrappedText("Current table: Resolving table URL",
+                      metrics.bodyTextSize, Color(239, 244, 251));
+  importPanel->addView(difficultyTableImportTableText);
+
+  auto *progressRow = new View();
+  progressRow->setFlexDirection(FlexDirection::Column);
+  progressRow->setGap(metrics.compact ? 8.0f : 10.0f);
+  difficultyTableImportProgressText =
+      makeText("0 / 1 table", metrics.bodyTextSize, Color(165, 185, 205));
+  progressRow->addView(difficultyTableImportProgressText);
+
+  auto *progressTrack = new View();
+  progressTrack->setHeight(static_cast<float>(metrics.compact ? 16 : 18));
+  progressTrack->setAlignSelf(YGAlignStretch);
+  progressTrack->setFlexDirection(FlexDirection::Row);
+  progressTrack->setBackgroundColor(Color(8, 14, 24, 255));
+  progressTrack->setBorderColor(Color(66, 91, 122, 255));
+  progressTrack->setBorderWidth(2);
+  difficultyTableImportProgressFill = new View();
+  difficultyTableImportProgressFill->setWidthPercent(0.0f);
+  difficultyTableImportProgressFill->setHeight(
+      static_cast<float>(metrics.compact ? 16 : 18));
+  difficultyTableImportProgressFill->setBackgroundColor(
+      Color(97, 157, 142, 255));
+  progressTrack->addView(difficultyTableImportProgressFill);
+  progressRow->addView(progressTrack);
+  importPanel->addView(progressRow);
+
+  auto *modalActions = new View();
+  modalActions->setFlexDirection(FlexDirection::Row);
+  modalActions->setJustifyContent(YGJustifyFlexEnd);
+  difficultyTableImportCloseButton = makeButton(
+      160, 60,
+      makeText("Close", metrics.bodyTextSize + 2, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+      Color(59, 98, 147, 255), Color(92, 131, 177, 255),
+      Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+  difficultyTableImportCloseButton->setOnClickListener(
+      [this]() { hideDifficultyTableImportModal(); });
+  modalActions->addView(difficultyTableImportCloseButton);
+  importPanel->addView(modalActions);
+
+  difficultyTableImportModalRoot->addView(importPanel);
+  rootLayout->addView(difficultyTableImportModalRoot);
+
   addView(rootLayout);
   rootLayout->applyYogaLayout();
+  refreshDifficultyTableImportModal();
   refreshSettingsText();
 }
 
@@ -3123,6 +3340,10 @@ void SettingsScene::renderScene() {
   if (rootLayout != nullptr) {
     rootLayout->setSize(rendering::window_width, rendering::window_height);
   }
+  if (difficultyTableImportModalRoot != nullptr) {
+    difficultyTableImportModalRoot->setSize(rendering::window_width,
+                                            rendering::window_height);
+  }
   if (previewActive && previewRenderer != nullptr) {
     previewRenderer->setVisibleTimeGreenNumber(
         context.settings.visibleTimeGreenNumber);
@@ -3146,6 +3367,8 @@ void SettingsScene::cleanupScene() {
     difficultyTableJobThread.join();
   }
   pendingDeleteChartEntryPath.clear();
+  difficultyTableImportModalVisible = false;
+  difficultyTableImportFinished = false;
   destroyPreviewRenderer();
   rootLayout = nullptr;
   scrollView = nullptr;
@@ -3189,6 +3412,13 @@ void SettingsScene::cleanupScene() {
   laneLengthInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  difficultyTableImportModalRoot = nullptr;
+  difficultyTableImportProgressFill = nullptr;
+  difficultyTableImportTitleText = nullptr;
+  difficultyTableImportStatusText = nullptr;
+  difficultyTableImportTableText = nullptr;
+  difficultyTableImportProgressText = nullptr;
+  difficultyTableImportCloseButton = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

@@ -6,6 +6,7 @@
 #include "path.h"
 #include "sqlite3.h"
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,15 @@ struct DifficultyCourseInfo {
   std::string name;
   int matchedChartCount = 0;
 };
+
+struct DifficultyTableImportProgress {
+  int current = 0;
+  int total = 0;
+  std::string tableName;
+};
+
+using DifficultyTableImportProgressCallback =
+    std::function<void(const DifficultyTableImportProgress &)>;
 /**
  *
  */
@@ -118,7 +128,9 @@ public:
                              const std::string &dataJson,
                              const std::string &sourceUrl = "");
   bool ImportDifficultyTableFromUrl(sqlite3 *db, const std::string &pageUrl,
-                                    std::string *errorMessage = nullptr);
+                                    std::string *errorMessage = nullptr,
+                                    DifficultyTableImportProgressCallback
+                                        progressCallback = nullptr);
   bool UpdateDifficultyTableFromSourceUrl(sqlite3 *db, int tableId,
                                           std::string *errorMessage = nullptr);
   bool DeleteDifficultyTable(sqlite3 *db, int tableId);

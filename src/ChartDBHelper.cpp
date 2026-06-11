@@ -6,9 +6,11 @@
 #include "path.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <codecvt>
 #include <filesystem>
+#include <future>
 #include <fstream>
 #include <iostream>
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -16,6 +18,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -96,6 +99,7 @@ constexpr const char *kDifficultyEntrySearchText =
     "COALESCE(NULLIF(cm.artist, ''), dte.artist, '') || ' ' || "
     "COALESCE(NULLIF(cm.sub_artist, ''), dte.subartist, '') || ' ' || "
     "COALESCE(cm.genre, ''))";
+constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -344,6 +348,103 @@ std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
   return resolved;
 }
 
+std::string jsonUrlAt(const json &object, const char *key) {
+  const std::string value = trimCopy(jsonStringAt(object, key));
+  if (value.starts_with("http://") || value.starts_with("https://") ||
+      value.starts_with("//") || value.starts_with("/")) {
+    return value;
+  }
+  if (value.find('/') != std::string::npos ||
+      value.find(".html") != std::string::npos ||
+      value.find(".json") != std::string::npos) {
+    return value;
+  }
+  return "";
+}
+
+bool looksLikeDifficultyTableListItem(const json &item) {
+  if (item.is_string()) {
+    const std::string url = trimCopy(item.get<std::string>());
+    return url.starts_with("http://") || url.starts_with("https://") ||
+           url.starts_with("//") || url.starts_with("/");
+  }
+  if (!item.is_object() || item.contains("md5") || item.contains("sha256")) {
+    return false;
+  }
+  if (jsonUrlAt(item, "url").empty()) {
+    return false;
+  }
+  return item.contains("name") || item.contains("symbol") ||
+         item.contains("tag1") || item.contains("tag2") ||
+         item.contains("comment");
+}
+
+struct DifficultyTableListEntry {
+  std::string name;
+  std::string url;
+};
+
+std::string difficultyTableListItemName(const json &item,
+                                        const std::string &fallbackUrl) {
+  if (!item.is_object()) {
+    return fallbackUrl;
+  }
+
+  for (const auto *key : {"name", "symbol", "comment", "url"}) {
+    const std::string value = trimCopy(jsonStringAt(item, key));
+    if (!value.empty()) {
+      return value;
+    }
+  }
+  return fallbackUrl;
+}
+
+std::vector<DifficultyTableListEntry>
+readDifficultyTableListEntries(const json &document, const std::string &url) {
+  const json *items = nullptr;
+  if (document.is_array()) {
+    items = &document;
+  } else if (document.is_object()) {
+    for (const auto *key : {"tables", "tablelist", "table_list", "list",
+                            "data"}) {
+      const auto it = document.find(key);
+      if (it != document.end() && it->is_array()) {
+        items = &(*it);
+        break;
+      }
+    }
+  }
+
+  if (items == nullptr || !items->is_array()) {
+    return {};
+  }
+
+  std::vector<DifficultyTableListEntry> entries;
+  std::unordered_set<std::string> seen;
+  for (const auto &item : *items) {
+    if (!looksLikeDifficultyTableListItem(item)) {
+      continue;
+    }
+
+    std::string tableUrl;
+    if (item.is_string()) {
+      tableUrl = trimCopy(item.get<std::string>());
+    } else {
+      tableUrl = jsonUrlAt(item, "url");
+    }
+    if (tableUrl.empty()) {
+      continue;
+    }
+
+    const std::string resolvedUrl = resolveUrl(url, tableUrl);
+    if (seen.insert(resolvedUrl).second) {
+      entries.push_back(
+          {difficultyTableListItemName(item, resolvedUrl), resolvedUrl});
+    }
+  }
+  return entries;
+}
+
 std::optional<std::string> findBmstableHeaderUrl(const std::string &html,
                                                  const std::string &pageUrl) {
   const std::regex metaPattern("<meta\\b[^>]*>", std::regex::icase);
@@ -364,6 +465,107 @@ std::optional<std::string> findBmstableHeaderUrl(const std::string &html,
     }
   }
   return std::nullopt;
+}
+
+struct DifficultyTableDownloadResult {
+  bool success = false;
+  std::string sourceUrl;
+  std::string headerJson;
+  std::string dataJson;
+  std::string tableName;
+  std::string errorMessage;
+};
+
+DifficultyTableDownloadResult
+downloadDifficultyTablePayloadFromBody(const std::string &tableUrl,
+                                       const std::string &pageBody) {
+  DifficultyTableDownloadResult result;
+  result.sourceUrl = tableUrl;
+  result.tableName = tableUrl;
+
+  std::string headerUrl;
+  std::string headerJsonText;
+
+  try {
+    json maybeHeader = json::parse(pageBody);
+    const auto nestedEntries =
+        readDifficultyTableListEntries(maybeHeader, tableUrl);
+    if (!nestedEntries.empty()) {
+      result.errorMessage = "Nested table lists are not supported";
+      return result;
+    }
+
+    if (maybeHeader.is_object() && maybeHeader.contains("name") &&
+        maybeHeader.contains("symbol") && maybeHeader.contains("data_url")) {
+      headerUrl = tableUrl;
+      headerJsonText = pageBody;
+    }
+  } catch (...) {
+  }
+
+  if (headerJsonText.empty()) {
+    auto discoveredHeaderUrl = findBmstableHeaderUrl(pageBody, tableUrl);
+    if (!discoveredHeaderUrl) {
+      result.errorMessage = "Could not find a bmstable header link";
+      return result;
+    }
+
+    headerUrl = *discoveredHeaderUrl;
+    std::string headerError;
+    auto headerBody = fetchUrlText(headerUrl, &headerError);
+    if (!headerBody) {
+      result.errorMessage =
+          headerError.empty() ? "Failed to download table header" : headerError;
+      return result;
+    }
+    headerJsonText = *headerBody;
+  }
+
+  json header;
+  try {
+    header = json::parse(headerJsonText);
+  } catch (const std::exception &e) {
+    result.errorMessage =
+        std::string("Failed to parse table header JSON: ") + e.what();
+    return result;
+  }
+
+  const std::string dataUrl = jsonStringAt(header, "data_url");
+  if (dataUrl.empty()) {
+    result.errorMessage = "Table header does not contain data_url";
+    return result;
+  }
+
+  result.tableName = jsonStringAt(header, "name", tableUrl);
+  const std::string resolvedDataUrl = resolveUrl(headerUrl, dataUrl);
+  std::string dataError;
+  auto dataBody = fetchUrlText(resolvedDataUrl, &dataError);
+  if (!dataBody) {
+    result.errorMessage =
+        dataError.empty() ? "Failed to download table data" : dataError;
+    return result;
+  }
+
+  result.headerJson = std::move(headerJsonText);
+  result.dataJson = std::move(*dataBody);
+  result.success = true;
+  return result;
+}
+
+DifficultyTableDownloadResult
+downloadDifficultyTablePayload(const std::string &tableUrl) {
+  DifficultyTableDownloadResult result;
+  result.sourceUrl = tableUrl;
+  result.tableName = tableUrl;
+
+  std::string pageError;
+  auto pageBody = fetchUrlText(tableUrl, &pageError);
+  if (!pageBody) {
+    result.errorMessage =
+        pageError.empty() ? "Failed to download table page" : pageError;
+    return result;
+  }
+  return downloadDifficultyTablePayloadFromBody(tableUrl, *pageBody);
 }
 
 struct TableChartItem {
@@ -2047,7 +2249,9 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
 
 bool ChartDBHelper::ImportDifficultyTableFromUrl(sqlite3 *db,
                                                  const std::string &pageUrl,
-                                                 std::string *errorMessage) {
+                                                 std::string *errorMessage,
+                                                 DifficultyTableImportProgressCallback
+                                                     progressCallback) {
   const std::string trimmedUrl = trimCopy(pageUrl);
   if (trimmedUrl.empty()) {
     if (errorMessage != nullptr) {
@@ -2073,6 +2277,144 @@ bool ChartDBHelper::ImportDifficultyTableFromUrl(sqlite3 *db,
 
   try {
     json maybeHeader = json::parse(*pageBody);
+    const auto tableEntries =
+        readDifficultyTableListEntries(maybeHeader, trimmedUrl);
+    if (!tableEntries.empty()) {
+      struct InFlightDownload {
+        size_t index = 0;
+        DifficultyTableListEntry entry;
+        std::future<DifficultyTableDownloadResult> future;
+      };
+
+      int imported = 0;
+      int failed = 0;
+      int skipped = 0;
+      int completed = 0;
+      std::string firstError;
+      size_t nextIndex = 0;
+      std::vector<InFlightDownload> inFlight;
+      inFlight.reserve(kMaxConcurrentDifficultyTableDownloads);
+
+      const auto total = static_cast<int>(tableEntries.size());
+      if (progressCallback) {
+        progressCallback({0, total, "Preparing table downloads"});
+      }
+
+      auto markSkipped = [&](const DifficultyTableListEntry &table,
+                             const std::string &reason) {
+        skipped++;
+        completed++;
+        if (firstError.empty() && !reason.empty()) {
+          firstError = reason;
+        }
+        if (progressCallback) {
+          progressCallback(
+              {completed, total,
+               "Skipped: " + (table.name.empty() ? table.url : table.name)});
+        }
+      };
+
+      while (nextIndex < tableEntries.size() || !inFlight.empty()) {
+        while (nextIndex < tableEntries.size() &&
+               inFlight.size() < kMaxConcurrentDifficultyTableDownloads) {
+          const auto &table = tableEntries[nextIndex];
+          const auto &tableUrl = table.url;
+          if (tableUrl == trimmedUrl) {
+            markSkipped(table, "Skipped recursive table list URL");
+            nextIndex++;
+            continue;
+          }
+
+          if (findDifficultyTableBySourceUrl(db, tableUrl) > 0) {
+            markSkipped(table, "");
+            nextIndex++;
+            continue;
+          }
+
+          if (progressCallback) {
+            progressCallback(
+                {completed, total,
+                 "Fetching: " + (table.name.empty() ? table.url : table.name)});
+          }
+          inFlight.push_back(
+              {nextIndex, table,
+               std::async(std::launch::async, [tableUrl]() {
+                 return downloadDifficultyTablePayload(tableUrl);
+               })});
+          nextIndex++;
+        }
+
+        bool drainedResult = false;
+        for (auto it = inFlight.begin(); it != inFlight.end(); ++it) {
+          if (it->future.wait_for(std::chrono::milliseconds(0)) !=
+              std::future_status::ready) {
+            continue;
+          }
+
+          DifficultyTableDownloadResult result = it->future.get();
+          const std::string displayName =
+              result.tableName.empty()
+                  ? (it->entry.name.empty() ? it->entry.url : it->entry.name)
+                  : result.tableName;
+          if (result.success) {
+            if (progressCallback) {
+              progressCallback(
+                  {completed, total, "Importing: " + displayName});
+            }
+            if (ImportDifficultyTable(db, result.headerJson, result.dataJson,
+                                      result.sourceUrl)) {
+              imported++;
+            } else {
+              failed++;
+              if (firstError.empty()) {
+                firstError = result.sourceUrl +
+                             ": downloaded table data could not be imported";
+              }
+            }
+          } else {
+            failed++;
+            if (firstError.empty()) {
+              firstError = it->entry.url +
+                           (result.errorMessage.empty()
+                                ? ""
+                                : ": " + result.errorMessage);
+            }
+          }
+
+          completed++;
+          if (progressCallback) {
+            progressCallback({completed, total, displayName});
+          }
+          inFlight.erase(it);
+          drainedResult = true;
+          break;
+        }
+
+        if (!drainedResult && !inFlight.empty()) {
+          inFlight.front().future.wait_for(std::chrono::milliseconds(50));
+        }
+      }
+
+      if (imported > 0 || skipped > 0) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Imported " + std::to_string(imported) + ", skipped " +
+                          std::to_string(skipped) + " of " +
+                          std::to_string(tableEntries.size()) + " tables.";
+          if (failed > 0) {
+            *errorMessage += " Failed " + std::to_string(failed) + ".";
+          }
+        }
+        return true;
+      }
+
+      if (errorMessage != nullptr) {
+        *errorMessage = firstError.empty()
+                            ? "Table list did not contain importable tables"
+                            : "Failed to import table list: " + firstError;
+      }
+      return false;
+    }
+
     if (maybeHeader.is_object() && maybeHeader.contains("name") &&
         maybeHeader.contains("symbol") && maybeHeader.contains("data_url")) {
       headerUrl = trimmedUrl;
@@ -2115,6 +2457,11 @@ bool ChartDBHelper::ImportDifficultyTableFromUrl(sqlite3 *db,
       *errorMessage = "Table header does not contain data_url";
     }
     return false;
+  }
+
+  if (progressCallback) {
+    const std::string name = jsonStringAt(header, "name", trimmedUrl);
+    progressCallback({1, 1, name.empty() ? trimmedUrl : name});
   }
 
   const std::string resolvedDataUrl = resolveUrl(headerUrl, dataUrl);

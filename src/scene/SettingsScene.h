@@ -79,6 +79,13 @@ private:
   TextInputBox *laneLengthInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
+  View *difficultyTableImportModalRoot = nullptr;
+  View *difficultyTableImportProgressFill = nullptr;
+  TextView *difficultyTableImportTitleText = nullptr;
+  TextView *difficultyTableImportStatusText = nullptr;
+  TextView *difficultyTableImportTableText = nullptr;
+  TextView *difficultyTableImportProgressText = nullptr;
+  Button *difficultyTableImportCloseButton = nullptr;
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;
@@ -93,10 +100,22 @@ private:
   std::mutex difficultyTableStatusMutex;
   bool pendingDifficultyTableStatus = false;
   bool pendingDifficultyTableReload = false;
+  bool pendingDifficultyTableImportProgress = false;
+  bool pendingDifficultyTableImportFinished = false;
+  int pendingDifficultyTableImportCurrent = 0;
+  int pendingDifficultyTableImportTotal = 0;
+  std::string pendingDifficultyTableImportName;
+  std::string pendingDifficultyTableImportStatusText;
   std::string pendingDifficultyTableStatusText;
   SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
+  bool difficultyTableImportModalVisible = false;
+  bool difficultyTableImportFinished = false;
+  int difficultyTableImportCurrent = 0;
+  int difficultyTableImportTotal = 0;
+  std::string difficultyTableImportName;
+  std::string difficultyTableImportStatusMessage;
   std::string tableUrlText;
   int pendingDeleteDifficultyTableId = 0;
   std::string pendingDeleteChartEntryPath;
@@ -120,7 +139,13 @@ private:
   void requestDifficultyTableStatus(const std::string &text,
                                     const SDL_Color &color,
                                     bool reloadTables = false);
+  void requestDifficultyTableImportProgress(int current, int total,
+                                            const std::string &tableName,
+                                            const std::string &statusText,
+                                            bool finished);
   void applyPendingDifficultyTableUpdates();
+  void refreshDifficultyTableImportModal();
+  void hideDifficultyTableImportModal();
   void addDifficultyTableFromUrl();
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
