@@ -12,6 +12,7 @@ enum class ReplayEventAction {
   Press = 0,
   Release = 1,
   Miss = 2,
+  Mine = 3,
 };
 
 struct ReplayEvent {

@@ -515,6 +515,12 @@ buildReplayNoteLookup(bms_parser::Chart &chart) {
         }
         lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
       }
+      for (auto *note : timeline->LandmineNotes) {
+        if (note == nullptr) {
+          continue;
+        }
+        lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+      }
     }
   }
   return lookup;
@@ -742,6 +748,16 @@ void resetChartNotes(bms_parser::Chart &chart) {
           note->Reset();
         }
       }
+      for (auto *note : timeline->InvisibleNotes) {
+        if (note != nullptr) {
+          note->Reset();
+        }
+      }
+      for (auto *note : timeline->LandmineNotes) {
+        if (note != nullptr) {
+          note->Reset();
+        }
+      }
     }
   }
 }
@@ -864,6 +880,14 @@ void applyReplayEventForVideo(
   }
   case ReplayEventAction::Miss:
     applyHud();
+    break;
+  case ReplayEventAction::Mine:
+    if (auto *note = findReplayNote(lookup, event); note != nullptr) {
+      note->IsPlayed = true;
+      note->IsDead = true;
+      note->PlayedTime = event.judgeTimeMicros;
+    }
+    renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
     break;
   }
 }
@@ -1941,6 +1965,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   BMSRenderer renderer(&chart, judge.timingWindows,
                        settings.visibleTimeGreenNumber);
   renderer.setLaneBeamClockUsesRenderTime(true);
+  renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
   const bool judgementIndicatorHudMode =
       settings.judgementIndicatorRenderMode ==
       AppSettings::JudgementIndicatorRenderMode::Hud2D;

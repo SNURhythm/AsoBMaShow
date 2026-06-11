@@ -93,6 +93,9 @@ private:
   Judge judge;
   StartOptions options;
   void checkPassedTimeline(long long time);
+  void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
+                        long long judgeTimeMicros);
+  void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
   void onJudge(const JudgeResult &judgeResult,
                bool recordTimingSample = true);
   void appendReplayEvent(ReplayEventAction action, int lane,

@@ -418,6 +418,27 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
                                  sheet.texture);
 }
 
+void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
+  if (note->IsPlayed || note->IsDead) {
+    return;
+  }
+
+  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
+                               noteRenderHeight,
+                               Color(255, 149, 36, 224).toABGR());
+}
+
+void BMSRenderer::drawLandmineNote(float y,
+                                   bms_parser::LandmineNote *const &note) {
+  if (note->IsPlayed || note->IsDead) {
+    return;
+  }
+
+  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
+                               noteRenderHeight,
+                               Color(217, 69, 58, 232).toABGR());
+}
+
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
   timelineScrollPositions.reserve(timelines.size());
@@ -665,8 +686,11 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
+  gimmickBatchRenderer.setSubmitView(rendering::main_view);
+  gimmickBatchRenderer.setSubmitDepth(kDepthNotes + 1);
   ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   simpleBatchRenderer.begin();
+  gimmickBatchRenderer.begin();
   ghostBatchRenderer.begin();
   beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
   // background
@@ -736,6 +760,12 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         if (note->IsDead) {
           return;
         }
+        if (note->IsLandmineNote()) {
+          if (timeLine->Timing >= micro) {
+            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
+          }
+          return;
+        }
         // render note
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
@@ -762,6 +792,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       } else {
         // note has passed the last hittable timing
         if (note->IsDead) {
+          return;
+        }
+        if (note->IsLandmineNote()) {
           return;
         }
         if (note->IsLongNote()) {
@@ -792,10 +825,24 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
         processNote(note);
       }
     }
-    // render landmine notes
+    for (const auto &note : timeLine->InvisibleNotes) {
+      if (note == nullptr || note->IsDead) {
+        continue;
+      }
+      if (timeLine->Timing >= micro) {
+        if (showInvisibleNotes) {
+          drawInvisibleNote(y, note);
+        }
+      } else {
+        note->IsDead = true;
+      }
+    }
     for (const auto &note : timeLine->LandmineNotes) {
-      if (note != nullptr) {
-        // render note
+      if (note == nullptr || note->IsDead) {
+        continue;
+      }
+      if (timeLine->Timing >= micro) {
+        drawLandmineNote(y, note);
       }
     }
   }
@@ -810,6 +857,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
   flushNoteTextureBatches();
+  gimmickBatchRenderer.flush();
   ghostBatchRenderer.flush();
 
   if (renderLaneBeams) {
@@ -894,6 +942,10 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
   useRenderTimeForLaneBeams = enabled;
+}
+
+void BMSRenderer::setShowInvisibleNotes(bool enabled) {
+  showInvisibleNotes = enabled;
 }
 
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,

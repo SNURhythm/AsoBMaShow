@@ -2122,6 +2122,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       timeline->Timing = static_cast<long long>(timePassed);
       timeline->BeatPosition = measureBeatPosition;
       timeline->Bpm = currentBpm;
+      timeline->Scroll = currentScroll;
       measure->TimeLines.push_back(timeline);
     }
     if (!metaOnly) {

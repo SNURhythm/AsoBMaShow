@@ -634,6 +634,7 @@ void SettingsScene::ensurePreviewRenderer() {
     previewRenderer =
         new BMSRenderer(previewChart, previewJudge.timingWindows,
                         context.settings.visibleTimeGreenNumber, false);
+    previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   }
 }
 
@@ -662,6 +663,16 @@ void SettingsScene::resetPreviewSimulation() {
         continue;
       }
       for (auto *note : timeline->Notes) {
+        if (note != nullptr) {
+          note->Reset();
+        }
+      }
+      for (auto *note : timeline->InvisibleNotes) {
+        if (note != nullptr) {
+          note->Reset();
+        }
+      }
+      for (auto *note : timeline->LandmineNotes) {
         if (note != nullptr) {
           note->Reset();
         }
@@ -925,6 +936,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
+  showInvisibleNotesModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -932,6 +944,7 @@ void SettingsScene::resetViewState() {
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;
+  showInvisibleNotesModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
@@ -1825,6 +1838,42 @@ void SettingsScene::initView() {
               "lighter render path on slower hardware.",
         bgaControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+    auto *invisibleNoteControls = new View();
+    invisibleNoteControls->setFlexDirection(FlexDirection::Column);
+    invisibleNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
+    invisibleNoteControls->setAlignItems(YGAlignFlexStart);
+    invisibleNoteControls->addView(makeWrappedText(
+        metrics.compact ? "Draw hidden notes as temporary lane markers."
+                        : "Draw invisible chart notes as temporary lane "
+                          "markers. Judgement and scoring stay unchanged.",
+        metrics.bodyTextSize, Color(150, 171, 193)));
+    showInvisibleNotesModeText =
+        makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+                 TextView::CENTER, TextView::MIDDLE);
+    showInvisibleNotesModeButton = makeButton(
+        metrics.actionButtonWidth, metrics.actionButtonHeight,
+        showInvisibleNotesModeText, Color(33, 56, 87, 255),
+        Color(43, 72, 110, 255), Color(59, 98, 147, 255),
+        Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+        Color(139, 189, 244, 255));
+    showInvisibleNotesModeButton->setOnClickListener([this]() {
+      context.settings.showInvisibleNotes =
+          !context.settings.showInvisibleNotes;
+      persistSettings();
+      if (previewRenderer != nullptr) {
+        previewRenderer->setShowInvisibleNotes(
+            context.settings.showInvisibleNotes);
+      }
+    });
+    invisibleNoteControls->addView(showInvisibleNotesModeButton);
+    cardsColumn->addView(makeCard(
+        metrics, "Show Invisible Notes",
+        metrics.compact
+            ? "Orange rectangles are placeholders until skin art exists."
+            : "Invisible notes use orange placeholder rectangles until the "
+              "skin system exposes dedicated artwork.",
+        invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
     auto *bgaDisplayControls = new View();
     bgaDisplayControls->setFlexDirection(FlexDirection::Column);
     bgaDisplayControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -2289,6 +2338,8 @@ void SettingsScene::refreshSettingsText() {
       formatLaneLengthLabel(context.settings.laneLength);
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
+  const std::string invisibleNotesLabel =
+      context.settings.showInvisibleNotes ? "Shown" : "Hidden";
   const std::string judgementIndicatorLabel =
       context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
   const std::string judgementIndicatorRenderModeLabel =
@@ -2342,6 +2393,9 @@ void SettingsScene::refreshSettingsText() {
   }
   if (notePriorityModeText != nullptr) {
     notePriorityModeText->setText(notePriorityLabel);
+  }
+  if (showInvisibleNotesModeText != nullptr) {
+    showInvisibleNotesModeText->setText(invisibleNotesLabel);
   }
   if (judgementIndicatorModeText != nullptr) {
     judgementIndicatorModeText->setText(judgementIndicatorLabel);
@@ -2413,6 +2467,24 @@ void SettingsScene::refreshSettingsText() {
       notePriorityModeButton->setBorderColors(Color(97, 157, 142, 255),
                                               Color(120, 187, 169, 255),
                                               Color(145, 214, 195, 255));
+    }
+  }
+
+  if (showInvisibleNotesModeButton != nullptr) {
+    if (context.settings.showInvisibleNotes) {
+      showInvisibleNotesModeButton->setBackgroundColors(
+          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+          Color(63, 118, 107, 255));
+      showInvisibleNotesModeButton->setBorderColors(
+          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+          Color(145, 214, 195, 255));
+    } else {
+      showInvisibleNotesModeButton->setBackgroundColors(
+          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+          Color(59, 98, 147, 255));
+      showInvisibleNotesModeButton->setBorderColors(
+          Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+          Color(139, 189, 244, 255));
     }
   }
 
@@ -2837,6 +2909,7 @@ void SettingsScene::renderScene() {
   if (previewActive && previewRenderer != nullptr) {
     previewRenderer->setVisibleTimeGreenNumber(
         context.settings.visibleTimeGreenNumber);
+    previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
         context.settings.judgementIndicatorY,

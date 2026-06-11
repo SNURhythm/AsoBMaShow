@@ -276,6 +276,8 @@ bool AppSettings::save() const {
        << (sanitized.visibleTimeUseMilliseconds ? 1 : 0) << "\n";
   file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
        << "\n";
+  file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
+       << "\n";
   file << "bga_enabled=" << (sanitized.bgaEnabled ? 1 : 0) << "\n";
   file << "bga_brightness_percent=" << sanitized.bgaBrightnessPercent << "\n";
   file << "bga_blur_strength=" << sanitized.bgaBlurStrength << "\n";
@@ -339,6 +341,11 @@ AppSettings AppSettings::load() {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {
           settings.inputKeysoundEnabled = parsed;
+        }
+      } else if (key == "show_invisible_notes") {
+        bool parsed = settings.showInvisibleNotes;
+        if (parseBool(value, parsed)) {
+          settings.showInvisibleNotes = parsed;
         }
       } else if (key == "bga_enabled") {
         bool parsed = settings.bgaEnabled;

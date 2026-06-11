@@ -118,8 +118,10 @@ private:
   bool renderHud = true;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
+  bool showInvisibleNotes = false;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
+  rendering::SimpleBatchRenderer gimmickBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
   std::vector<rendering::TexBatchRenderer> noteTextureBatchRenderers;
   std::unordered_map<uint64_t, size_t> noteTextureBatchLookup;
@@ -136,6 +138,8 @@ private:
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
+  void drawInvisibleNote(float y, bms_parser::Note *const &note);
+  void drawLandmineNote(float y, bms_parser::LandmineNote *const &note);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
@@ -183,6 +187,7 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamClockUsesRenderTime(bool enabled);
+  void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

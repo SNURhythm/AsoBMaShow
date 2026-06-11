@@ -391,6 +391,34 @@ public:
     gaugeHistory.push_back(currentGauge);
   }
 
+  void applyGaugeDelta(float delta) {
+    for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
+      const GaugeType type = gaugeTypeAtIndex(i);
+      if (!gaugeAutoShift && type != gaugeType) {
+        continue;
+      }
+      if (gaugeIsSurvival(type) && gaugeSurvivalFailed[i]) {
+        gaugeValues[i] = 0.0f;
+        continue;
+      }
+
+      if (gaugeValues[i] > 0.0f) {
+        gaugeValues[i] =
+            std::clamp(gaugeValues[i] + delta, gaugeMinimumValue(type), 100.0f);
+      }
+      if (gaugeIsSurvival(type) && gaugeValues[i] <= 0.0f) {
+        gaugeValues[i] = 0.0f;
+        gaugeSurvivalFailed[i] = true;
+      }
+    }
+
+    if (gaugeAutoShift) {
+      gaugeType = bestAdmittedGaugeType();
+    }
+    currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
+    gaugeHistory.push_back(currentGauge);
+  }
+
   [[nodiscard]] ClearType getClearType() const {
     if (!gaugeAutoShift) {
       return clearTypeForGauge(gaugeType, currentGauge,
