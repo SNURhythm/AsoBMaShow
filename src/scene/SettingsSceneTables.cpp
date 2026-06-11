@@ -173,11 +173,13 @@ void SettingsScene::refreshDifficultyTableImportModal() {
   if (difficultyTableImportCloseButton != nullptr) {
     const bool canClose = finished;
     difficultyTableImportCloseButton->setVisible(canClose);
-    difficultyTableImportCloseButton->setWidth(canClose ? 160.0f : 0.0f);
-    difficultyTableImportCloseButton->setHeight(canClose ? 60.0f : 0.0f);
   }
 
-  difficultyTableImportModalRoot->applyYogaLayout();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  } else {
+    difficultyTableImportModalRoot->applyYogaLayout();
+  }
 }
 
 void SettingsScene::hideDifficultyTableImportModal() {
