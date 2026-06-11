@@ -28,6 +28,11 @@ struct ChartMetaRecord {
   bool unavailable = false;
 };
 
+struct ChartEntry {
+  path_t path;
+  std::string iosBookmark;
+};
+
 struct DifficultyTableInfo {
   int id = 0;
   std::string name;
@@ -95,13 +100,16 @@ public:
                       std::vector<ChartMetaRecord> &chartMetas);
   int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
+  int DeleteChartMetaInDirectory(sqlite3 *db,
+                                 const std::filesystem::path &directory);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
   void BeginTransaction(sqlite3 *db);
   void CommitTransaction(sqlite3 *db);
   bool CreateEntriesTable(sqlite3 *db);
-  bool InsertEntry(sqlite3 *db, const std::filesystem::path &path);
-  std::vector<path_t> SelectAllEntries(sqlite3 *db);
+  bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
+                   const std::string &iosBookmark = "");
+  std::vector<ChartEntry> SelectAllEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
 

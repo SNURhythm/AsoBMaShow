@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -495,6 +496,29 @@ std::string formatTableSource(const std::string &sourceUrl) {
   return sourceUrl;
 }
 
+std::string formatChartEntryPath(const ChartEntry &entry) {
+  return path_t_to_utf8(entry.path);
+}
+
+std::string formatChartEntryName(const ChartEntry &entry) {
+  const std::filesystem::path path(entry.path);
+  const std::filesystem::path name = path.filename();
+  if (name.empty()) {
+    return formatChartEntryPath(entry);
+  }
+  return path_t_to_utf8(fspath_to_path_t(name));
+}
+
+std::string formatChartEntrySource(const ChartEntry &entry) {
+  const std::string pathText = formatChartEntryPath(entry);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (!entry.iosBookmark.empty()) {
+    return pathText + "\nFiles access saved for future scans.";
+  }
+#endif
+  return pathText;
+}
+
 AppSettings::BgaDisplayMode
 nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
@@ -707,6 +731,32 @@ void SettingsScene::loadDifficultyTables() {
   }
 }
 
+void SettingsScene::loadChartEntries() {
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *settingsDb = dbHelper.Connect();
+  if (settingsDb == nullptr) {
+    chartEntries.clear();
+    difficultyTableStatusMessage = "Could not open chart database.";
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    return;
+  }
+
+  dbHelper.CreateEntriesTable(settingsDb);
+  chartEntries = dbHelper.SelectAllEntries(settingsDb);
+  dbHelper.Close(settingsDb);
+
+  if (!pendingDeleteChartEntryPath.empty()) {
+    const auto it = std::find_if(
+        chartEntries.begin(), chartEntries.end(),
+        [this](const ChartEntry &entry) {
+          return formatChartEntryPath(entry) == pendingDeleteChartEntryPath;
+        });
+    if (it == chartEntries.end()) {
+      pendingDeleteChartEntryPath.clear();
+    }
+  }
+}
+
 void SettingsScene::requestDifficultyTableStatus(const std::string &text,
                                                  const SDL_Color &color,
                                                  bool reloadTables) {
@@ -736,6 +786,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
 
   if (shouldReload) {
     loadDifficultyTables();
+    loadChartEntries();
     lastLayoutWidth = -1;
   }
 }
@@ -763,6 +814,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
 
   difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
+  pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = "Adding table...";
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
@@ -815,6 +867,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 
   difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
+  pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = "Updating table...";
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
@@ -862,6 +915,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
 
   if (pendingDeleteDifficultyTableId != tableId) {
     pendingDeleteDifficultyTableId = tableId;
+    pendingDeleteChartEntryPath.clear();
     difficultyTableStatusMessage = "Tap Confirm on that table to delete it.";
     difficultyTableStatusColor = {255, 213, 151, 255};
     lastLayoutWidth = -1;
@@ -907,6 +961,103 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
             deleted ? SDL_Color{181, 228, 165, 255}
                     : SDL_Color{255, 177, 170, 255},
             deleted);
+        difficultyTableJobRunning = false;
+      });
+}
+
+void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
+  if (difficultyTableJobRunning || entryPathText.empty()) {
+    return;
+  }
+
+  if (pendingDeleteChartEntryPath != entryPathText) {
+    pendingDeleteChartEntryPath = entryPathText;
+    pendingDeleteDifficultyTableId = 0;
+    difficultyTableStatusMessage = "Tap Confirm on that folder to remove it.";
+    difficultyTableStatusColor = {255, 213, 151, 255};
+    lastLayoutWidth = -1;
+    return;
+  }
+
+  if (difficultyTableJobThread.joinable()) {
+    difficultyTableJobThread.join();
+  }
+
+  difficultyTableJobRunning = true;
+  pendingDeleteChartEntryPath.clear();
+  difficultyTableStatusMessage = "Removing folder...";
+  difficultyTableStatusColor = {239, 244, 251, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+
+  difficultyTableJobThread =
+      std::jthread([this, entryPathText](const std::stop_token &token) {
+        auto &dbHelper = ChartDBHelper::GetInstance();
+        sqlite3 *settingsDb = dbHelper.Connect();
+        if (settingsDb == nullptr) {
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Could not open chart database.",
+                                         {255, 177, 170, 255});
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        dbHelper.CreateChartMetaTable(settingsDb);
+        dbHelper.CreateEntriesTable(settingsDb);
+
+        const auto entries = dbHelper.SelectAllEntries(settingsDb);
+        const auto entryIt = std::find_if(
+            entries.begin(), entries.end(),
+            [&entryPathText](const ChartEntry &entry) {
+              return formatChartEntryPath(entry) == entryPathText;
+            });
+
+        if (entryIt == entries.end()) {
+          dbHelper.Close(settingsDb);
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Folder entry was not found.",
+                                         {255, 177, 170, 255}, true);
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        const std::filesystem::path entryPath(entryIt->path);
+        dbHelper.BeginTransaction(settingsDb);
+        const int removedChartCount =
+            dbHelper.DeleteChartMetaInDirectory(settingsDb, entryPath);
+        const bool removed =
+            removedChartCount >= 0 && dbHelper.DeleteEntry(settingsDb, entryPath);
+        if (removed) {
+          dbHelper.CommitTransaction(settingsDb);
+        } else {
+          sqlite3_exec(settingsDb, "ROLLBACK", nullptr, nullptr, nullptr);
+        }
+        dbHelper.Close(settingsDb);
+
+        if (token.stop_requested()) {
+          difficultyTableJobRunning = false;
+          return;
+        }
+
+        std::string statusText;
+        if (removed) {
+          statusText = removedChartCount == 1
+                           ? "Folder removed. Removed 1 cached chart."
+                           : "Folder removed. Removed " +
+                                 std::to_string(removedChartCount) +
+                                 " cached charts.";
+        } else {
+          statusText = "Remove failed.";
+        }
+        requestDifficultyTableStatus(
+            statusText,
+            removed ? SDL_Color{181, 228, 165, 255}
+                    : SDL_Color{255, 177, 170, 255},
+            true);
         difficultyTableJobRunning = false;
       });
 }
@@ -2148,6 +2299,7 @@ void SettingsScene::initView() {
 
   if (activeTab == SettingsTab::Tables) {
     loadDifficultyTables();
+    loadChartEntries();
 
     auto *addControls = new View();
     addControls->setFlexDirection(FlexDirection::Column);
@@ -2202,6 +2354,71 @@ void SettingsScene::initView() {
                         : "Import a bmstable page URL or a direct header JSON "
                           "URL. The stored source URL is used for updates.",
         addControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+    auto *folderList = new View();
+    folderList->setFlexDirection(FlexDirection::Column);
+    folderList->setGap(metrics.compact ? 10.0f : 12.0f);
+
+    if (chartEntries.empty()) {
+      folderList->addView(makeWrappedText(
+          "No chart folders are installed.", metrics.bodyTextSize,
+          Color(165, 185, 205)));
+    } else {
+      for (const auto &entry : chartEntries) {
+        const std::string entryPathText = formatChartEntryPath(entry);
+
+        auto *row = new View();
+        row->setFlexDirection(FlexDirection::Column);
+        row->setGap(metrics.compact ? 8.0f : 10.0f);
+        row->setPadding(Edge::All,
+                        static_cast<float>(metrics.compact ? 14 : 16));
+        row->setBackgroundColor(Color(12, 21, 34, 230));
+        row->setBorderColor(Color(63, 86, 113, 255));
+        row->setBorderWidth(2);
+
+        row->addView(makeWrappedText(formatChartEntryName(entry),
+                                     metrics.bodyTextSize + 6,
+                                     Color(244, 248, 255)));
+        row->addView(makeWrappedText(formatChartEntrySource(entry),
+                                     metrics.smallTextSize,
+                                     Color(142, 164, 189)));
+
+        auto *actions = new View();
+        actions->setFlexDirection(FlexDirection::Row);
+        actions->setFlexWrap(YGWrapWrap);
+        actions->setGap(metrics.compact ? 8.0f : 10.0f);
+
+        const int folderActionWidth = metrics.compact ? 136 : 156;
+        const bool confirmingDelete =
+            pendingDeleteChartEntryPath == entryPathText;
+        auto *deleteButton = makeButton(
+            folderActionWidth, metrics.actionButtonHeight,
+            makeText(confirmingDelete ? "Confirm" : "Delete",
+                     metrics.bodyTextSize + 2, Color(248, 241, 236),
+                     TextView::CENTER, TextView::MIDDLE),
+            confirmingDelete ? Color(130, 58, 45, 255)
+                             : Color(96, 57, 44, 255),
+            confirmingDelete ? Color(153, 75, 58, 255)
+                             : Color(117, 72, 55, 255),
+            confirmingDelete ? Color(184, 96, 74, 255)
+                             : Color(153, 96, 74, 255),
+            Color(165, 105, 79, 255), Color(193, 124, 93, 255),
+            Color(219, 145, 108, 255));
+        deleteButton->setOnClickListener(
+            [this, entryPathText]() { deleteChartEntry(entryPathText); });
+        actions->addView(deleteButton);
+
+        row->addView(actions);
+        folderList->addView(row);
+      }
+    }
+
+    cardsColumn->addView(makeCard(
+        metrics, "Chart Folders",
+        metrics.compact ? "Remove folders from library scanning."
+                        : "Remove a folder entry and cached charts under it "
+                          "from the library database.",
+        folderList, metrics.modeCardHeight, metrics.cardsWidth));
 
     auto *tableList = new View();
     tableList->setFlexDirection(FlexDirection::Column);
@@ -2928,6 +3145,7 @@ void SettingsScene::cleanupScene() {
     difficultyTableJobThread.request_stop();
     difficultyTableJobThread.join();
   }
+  pendingDeleteChartEntryPath.clear();
   destroyPreviewRenderer();
   rootLayout = nullptr;
   scrollView = nullptr;

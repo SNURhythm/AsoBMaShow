@@ -220,11 +220,14 @@ private:
                               ReplayVideoExportOptions options);
   void applyReplayVideoExportProgress();
   void applyReplayVideoExportResult();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  void addIOSFolderEntryFromFiles();
+#endif
   static void CheckEntries(const std::stop_token &stop_token,
                            ApplicationContext &context, MainMenuScene &scene);
 
   static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
-                         std::vector<path_t> &entries, MainMenuScene &scene,
+                         std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token);
   enum DiffType { Deleted, Added };
   struct Diff {

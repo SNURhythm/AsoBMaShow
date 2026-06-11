@@ -175,6 +175,38 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   return stream.str();
 }
 
+bool sqliteMessageContains(const char *message, const char *needle) {
+  return message != nullptr && std::string(message).find(needle) !=
+                                   std::string::npos;
+}
+
+bool pathIsInsideDirectory(const std::filesystem::path &path,
+                           const std::filesystem::path &directory) {
+  if (path.empty() || directory.empty()) {
+    return false;
+  }
+
+  const std::filesystem::path normalizedPath = path.lexically_normal();
+  const std::filesystem::path normalizedDirectory =
+      directory.lexically_normal();
+  if (normalizedPath == normalizedDirectory) {
+    return false;
+  }
+
+  const std::filesystem::path relative =
+      normalizedPath.lexically_relative(normalizedDirectory);
+  if (relative.empty() || relative.is_absolute()) {
+    return false;
+  }
+
+  const auto first = relative.begin();
+  if (first == relative.end()) {
+    return false;
+  }
+  return *first != std::filesystem::path("..") &&
+         *first != std::filesystem::path(".");
+}
+
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
 std::once_flag curlInitFlag;
 
@@ -897,7 +929,7 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
                "total_scratch_notes INTEGER,"
                "total_backspin_notes INTEGER"
                ")";
-  char *errMsg;
+  char *errMsg = nullptr;
   int rc = sqlite3_exec(db, query, nullptr, nullptr, &errMsg);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while creating chart meta table: " << errMsg
@@ -1540,6 +1572,57 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   return true;
 }
 
+int ChartDBHelper::DeleteChartMetaInDirectory(
+    sqlite3 *db, const std::filesystem::path &directory) {
+  if (directory.empty()) {
+    return -1;
+  }
+
+  std::filesystem::path targetDirectory = directory;
+  ToAbsolutePath(targetDirectory);
+
+  std::vector<bms_parser::ChartMeta> chartMetas;
+  SelectAllChartMeta(db, chartMetas);
+
+  auto query = "DELETE FROM chart_meta WHERE path = @path";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing statement to delete charts in "
+                 "directory: "
+              << sqlite3_errmsg(db) << "\n";
+    sqlite3_finalize(stmt);
+    return -1;
+  }
+
+  int deletedCount = 0;
+  for (const auto &chartMeta : chartMetas) {
+    if (!pathIsInsideDirectory(chartMeta.BmsPath, targetDirectory)) {
+      continue;
+    }
+
+    std::filesystem::path storedPath = chartMeta.BmsPath;
+    ToRelativePath(storedPath);
+    const std::string target = path_t_to_utf8(fspath_to_path_t(storedPath));
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, target.c_str(), -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+      std::cerr << "SQL error while deleting a chart in directory: "
+                << sqlite3_errmsg(db) << "\n";
+      sqlite3_finalize(stmt);
+      return -1;
+    }
+    if (sqlite3_changes(db) > 0) {
+      ++deletedCount;
+    }
+  }
+
+  sqlite3_finalize(stmt);
+  return deletedCount;
+}
+
 bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
   auto query = "DELETE FROM chart_meta";
   sqlite3_stmt *stmt;
@@ -1633,10 +1716,11 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
 bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
   // save paths to search for charts
   auto query = "CREATE TABLE IF NOT EXISTS entries ("
-               "path       TEXT primary key"
+               "path       TEXT primary key,"
+               "ios_bookmark TEXT DEFAULT ''"
                ")";
 
-  char *errMsg;
+  char *errMsg = nullptr;
   int rc = sqlite3_exec(db, query, nullptr, nullptr, &errMsg);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while creating entries table: "
@@ -1644,15 +1728,32 @@ bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
     sqlite3_free(errMsg);
     return false;
   }
+  sqlite3_free(errMsg);
+
+  errMsg = nullptr;
+  rc = sqlite3_exec(
+      db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
+      nullptr, nullptr, &errMsg);
+  if (rc != SQLITE_OK &&
+      !sqliteMessageContains(errMsg, "duplicate column name")) {
+    std::cerr << "SQL error while migrating entries table: "
+              << sqlite3_errmsg(db) << "\n";
+    sqlite3_free(errMsg);
+    return false;
+  }
+  sqlite3_free(errMsg);
   return true;
 }
 
 bool ChartDBHelper::InsertEntry(sqlite3 *db,
-                                const std::filesystem::path &path) {
+                                const std::filesystem::path &path,
+                                const std::string &iosBookmark) {
   auto query = "REPLACE INTO entries ("
-               "path"
+               "path,"
+               "ios_bookmark"
                ") VALUES("
-               "@path"
+               "@path,"
+               "@ios_bookmark"
                ")";
   sqlite3_stmt *stmt;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
@@ -1662,7 +1763,9 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
     sqlite3_close(db);
     return false;
   }
-  sqlite3_bind_text(stmt, 1, path.string().c_str(), -1, SQLITE_TRANSIENT);
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, iosBookmark.c_str(), -1, SQLITE_TRANSIENT);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while inserting an entry: " << sqlite3_errmsg(db)
@@ -1674,9 +1777,10 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
   return true;
 }
 
-std::vector<path_t> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
+std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
   auto query = "SELECT "
-               "path"
+               "path,"
+               "COALESCE(ios_bookmark, '')"
                " FROM entries";
   sqlite3_stmt *stmt;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
@@ -1684,14 +1788,16 @@ std::vector<path_t> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
     std::cerr << "SQL error while getting all entries: " << sqlite3_errmsg(db)
               << "\n";
     sqlite3_free(stmt);
-    return std::vector<path_t>();
+    return std::vector<ChartEntry>();
   }
-  std::vector<path_t> entries;
-  entries.reserve(sqlite3_column_count(stmt));
+  std::vector<ChartEntry> entries;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    std::filesystem::path entry = std::filesystem::path(
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0)));
-    entries.push_back(fspath_to_path_t(entry));
+    ChartEntry entry;
+    entry.path = ReadPath(stmt, 0);
+    const char *bookmark =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    entry.iosBookmark = bookmark != nullptr ? bookmark : "";
+    entries.push_back(std::move(entry));
   }
   sqlite3_finalize(stmt);
   return entries;
@@ -1700,20 +1806,21 @@ std::vector<path_t> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
 bool ChartDBHelper::DeleteEntry(sqlite3 *db,
                                 const std::filesystem::path &path) {
   auto query = "DELETE FROM entries WHERE path = @path";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing statement to delete an entry: "
               << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
-  sqlite3_bind_text(stmt, 1, path.string().c_str(), -1, SQLITE_TRANSIENT);
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while deleting an entry: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_close(db);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -2306,22 +2413,31 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
 
 void ChartDBHelper::ToRelativePath(
     [[maybe_unused]] std::filesystem::path &path) {
-  // for iOS, remove Documents
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static std::filesystem::path Documents = Utils::GetDocumentsPath("BMS/");
-  if (path.string().find(Documents.string()) != std::string::npos) {
-    path = path.string().substr(Documents.string().length());
+  if (path.empty() || path.is_relative()) {
+    return;
   }
 
+  const std::filesystem::path documentsRoot =
+      Utils::GetDocumentsPath("BMS").lexically_normal();
+  const std::filesystem::path normalizedPath = path.lexically_normal();
+  const std::string rootText = documentsRoot.string();
+  const std::string pathText = normalizedPath.string();
+  const std::string rootPrefix = rootText + "/";
+
+  if (pathText == rootText) {
+    path.clear();
+  } else if (pathText.starts_with(rootPrefix)) {
+    path = pathText.substr(rootPrefix.size());
+  }
 #endif
-  // otherwise, noop
 }
 
 void ChartDBHelper::ToAbsolutePath(
     [[maybe_unused]] std::filesystem::path &path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static std::filesystem::path Documents = Utils::GetDocumentsPath("BMS/");
-  path = Documents / path;
+  if (!path.empty() && path.is_relative()) {
+    path = Utils::GetDocumentsPath("BMS") / path;
+  }
 #endif
-  // otherwise, noop
 }

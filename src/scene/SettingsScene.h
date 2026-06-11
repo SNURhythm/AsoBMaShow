@@ -87,6 +87,7 @@ private:
   long long previewElapsedMicros = 0;
   SettingsTab activeTab = SettingsTab::Timing;
   std::vector<DifficultyTableInfo> difficultyTables;
+  std::vector<ChartEntry> chartEntries;
   std::jthread difficultyTableJobThread;
   std::atomic_bool difficultyTableJobRunning = false;
   std::mutex difficultyTableStatusMutex;
@@ -98,6 +99,7 @@ private:
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string tableUrlText;
   int pendingDeleteDifficultyTableId = 0;
+  std::string pendingDeleteChartEntryPath;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -114,6 +116,7 @@ private:
   void destroyPreviewRenderer();
   void resetPreviewSimulation();
   void loadDifficultyTables();
+  void loadChartEntries();
   void requestDifficultyTableStatus(const std::string &text,
                                     const SDL_Color &color,
                                     bool reloadTables = false);
@@ -121,6 +124,7 @@ private:
   void addDifficultyTableFromUrl();
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
+  void deleteChartEntry(const std::string &entryPathText);
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

@@ -96,6 +96,14 @@ UIWindow *FindActiveWindow() {
   return UIApplication.sharedApplication.keyWindow;
 }
 
+UIViewController *TopViewController(UIViewController *viewController) {
+  UIViewController *top = viewController;
+  while (top.presentedViewController != nil) {
+    top = top.presentedViewController;
+  }
+  return top;
+}
+
 bool IsPhotoAuthorizationAllowed(PHAuthorizationStatus status) {
   if (status == PHAuthorizationStatusAuthorized) {
     return true;
@@ -1117,6 +1125,216 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
   } else {
     dispatch_async(dispatch_get_main_queue(), hideBlock);
   }
+}
+
+@interface AsoFolderPickerDelegate : NSObject <UIDocumentPickerDelegate> {
+@private
+  dispatch_semaphore_t _semaphore;
+}
+@property(nonatomic, copy) NSString *selectedPath;
+@property(nonatomic, copy) NSString *bookmarkBase64;
+@property(nonatomic, copy) NSString *errorMessage;
+@property(nonatomic, assign) BOOL picked;
+- (instancetype)initWithSemaphore:(dispatch_semaphore_t)semaphore;
+- (void)signalFinished;
+@end
+
+@implementation AsoFolderPickerDelegate
+- (instancetype)initWithSemaphore:(dispatch_semaphore_t)semaphore {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  _semaphore = semaphore;
+  _selectedPath = @"";
+  _bookmarkBase64 = @"";
+  _errorMessage = @"";
+  _picked = NO;
+  return self;
+}
+
+- (void)signalFinished {
+  if (_semaphore != nullptr) {
+    dispatch_semaphore_signal(_semaphore);
+  }
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+  (void)controller;
+  NSURL *url = urls.firstObject;
+  if (url == nil) {
+    self.errorMessage = @"No folder was selected";
+    [self signalFinished];
+    return;
+  }
+
+  BOOL accessing = [url startAccessingSecurityScopedResource];
+  NSError *bookmarkError = nil;
+  // iOS does not expose security-scoped bookmark options; persist a regular
+  // bookmark and call startAccessingSecurityScopedResource after resolving it.
+  NSData *bookmarkData =
+      [url bookmarkDataWithOptions:0
+     includingResourceValuesForKeys:nil
+                      relativeToURL:nil
+                              error:&bookmarkError];
+
+  if (bookmarkData == nil) {
+    self.errorMessage =
+        bookmarkError.localizedDescription ?: @"Failed to create folder access";
+  } else {
+    self.selectedPath = url.path ?: @"";
+    self.bookmarkBase64 =
+        [bookmarkData base64EncodedStringWithOptions:0] ?: @"";
+    self.picked = YES;
+  }
+
+  if (accessing) {
+    [url stopAccessingSecurityScopedResource];
+  }
+  [self signalFinished];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+  (void)controller;
+  [self signalFinished];
+}
+@end
+
+@interface AsoSecurityScopedResource : NSObject
+@property(nonatomic, strong) NSURL *url;
+@property(nonatomic, assign) BOOL accessing;
+- (instancetype)initWithURL:(NSURL *)url accessing:(BOOL)accessing;
+- (void)stopAccess;
+@end
+
+@implementation AsoSecurityScopedResource
+- (instancetype)initWithURL:(NSURL *)url accessing:(BOOL)accessing {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  _url = url;
+  _accessing = accessing;
+  return self;
+}
+
+- (void)stopAccess {
+  if (_accessing) {
+    [_url stopAccessingSecurityScopedResource];
+    _accessing = NO;
+  }
+}
+
+- (void)dealloc {
+  [self stopAccess];
+}
+@end
+
+bool PickIOSFolder(std::string &path, std::string &bookmark,
+                   std::string &errorMessage) {
+  path.clear();
+  bookmark.clear();
+  errorMessage.clear();
+
+  if ([NSThread isMainThread]) {
+    errorMessage = "PickIOSFolder must be called off the main thread";
+    return false;
+  }
+
+  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+  __block AsoFolderPickerDelegate *delegate =
+      [[AsoFolderPickerDelegate alloc] initWithSemaphore:semaphore];
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      UIWindow *window = FindActiveWindow();
+      UIViewController *presenting =
+          window != nil ? TopViewController(window.rootViewController) : nil;
+      if (presenting == nil) {
+        delegate.errorMessage = @"No active view controller";
+        [delegate signalFinished];
+        return;
+      }
+
+      UIDocumentPickerViewController *picker =
+          [[UIDocumentPickerViewController alloc]
+              initWithDocumentTypes:@[ @"public.folder" ]
+                              inMode:UIDocumentPickerModeOpen];
+      picker.delegate = delegate;
+      picker.allowsMultipleSelection = NO;
+      picker.modalPresentationStyle = UIModalPresentationFormSheet;
+      [presenting presentViewController:picker animated:YES completion:nil];
+    }
+  });
+
+  dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+  const bool picked = delegate.picked == YES;
+  path = NSStringToString(delegate.selectedPath);
+  bookmark = NSStringToString(delegate.bookmarkBase64);
+  errorMessage = NSStringToString(delegate.errorMessage);
+  delegate = nil;
+  return picked;
+}
+
+void *StartIOSSecurityScopedResource(const std::string &path,
+                                      const std::string &bookmark,
+                                      std::string &resolvedPath,
+                                      std::string &errorMessage) {
+  resolvedPath = path;
+  errorMessage.clear();
+  if (bookmark.empty()) {
+    return nullptr;
+  }
+
+  @autoreleasepool {
+    NSString *bookmarkString = NSStringFromUtf8(bookmark);
+    NSData *bookmarkData =
+        [[NSData alloc] initWithBase64EncodedString:bookmarkString options:0];
+    if (bookmarkData == nil) {
+      errorMessage = "Invalid folder access bookmark";
+      return nullptr;
+    }
+
+    NSError *resolveError = nil;
+    BOOL stale = NO;
+    NSURL *url = [NSURL
+        URLByResolvingBookmarkData:bookmarkData
+                            options:0
+                      relativeToURL:nil
+                bookmarkDataIsStale:&stale
+                              error:&resolveError];
+    if (url == nil) {
+      errorMessage =
+          resolveError.localizedDescription != nil
+              ? NSStringToString(resolveError.localizedDescription)
+              : "Failed to resolve folder access";
+      return nullptr;
+    }
+
+    resolvedPath = NSStringToString(url.path);
+    BOOL accessing = [url startAccessingSecurityScopedResource];
+    if (!accessing) {
+      errorMessage = "Failed to start folder access";
+    }
+    if (stale) {
+      SDL_Log("Folder access bookmark is stale for %s",
+              resolvedPath.c_str());
+    }
+
+    AsoSecurityScopedResource *resource =
+        [[AsoSecurityScopedResource alloc] initWithURL:url accessing:accessing];
+    return (__bridge_retained void *)resource;
+  }
+}
+
+void StopIOSSecurityScopedResource(void *resource) {
+  if (resource == nullptr) {
+    return;
+  }
+  AsoSecurityScopedResource *scoped =
+      (__bridge_transfer AsoSecurityScopedResource *)resource;
+  [scoped stopAccess];
 }
 
 std::string GetIOSDocumentsPath() {

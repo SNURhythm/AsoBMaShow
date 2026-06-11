@@ -84,6 +84,51 @@ using main_menu_library::folderKeyForCourseGroup;
 using main_menu_library::folderKeyForLevel;
 using main_menu_library::folderKeyForTable;
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+std::mutex gIOSFolderAccessMutex;
+std::vector<void *> gIOSFolderAccessHandles;
+std::unordered_map<path_t, path_t> gIOSResolvedFolderPaths;
+
+void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  for (void *handle : gIOSFolderAccessHandles) {
+    StopIOSSecurityScopedResource(handle);
+  }
+  gIOSFolderAccessHandles.clear();
+  gIOSResolvedFolderPaths.clear();
+
+  for (const auto &entry : entries) {
+    if (entry.iosBookmark.empty()) {
+      continue;
+    }
+    std::string resolvedPath;
+    std::string errorMessage;
+    void *handle = StartIOSSecurityScopedResource(
+        path_t_to_utf8(entry.path), entry.iosBookmark, resolvedPath,
+        errorMessage);
+    if (!errorMessage.empty()) {
+      SDL_Log("Failed to open folder access for %s: %s",
+              path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
+    }
+    if (!resolvedPath.empty()) {
+      gIOSResolvedFolderPaths[entry.path] = utf8_to_path_t(resolvedPath);
+    }
+    if (handle != nullptr) {
+      gIOSFolderAccessHandles.push_back(handle);
+    }
+  }
+}
+
+std::filesystem::path ResolveIOSFolderEntryPath(const ChartEntry &entry) {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  const auto it = gIOSResolvedFolderPaths.find(entry.path);
+  if (it != gIOSResolvedFolderPaths.end()) {
+    return std::filesystem::path(it->second);
+  }
+  return std::filesystem::path(entry.path);
+}
+#endif
+
 int clearRankForGaugeType(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -333,11 +378,24 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
   // open folder select if no entries
   if (entries.empty()) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    auto path = Utils::GetDocumentsPath("BMS");
-    std::filesystem::create_directories(path);
-    entries.push_back(path);
-    // for iOS, not writing the entry to db is intentional, since it may change
-    // due to update with new code signing
+    std::string folder;
+    std::string bookmark;
+    std::string errorMessage;
+    if (PickIOSFolder(folder, bookmark, errorMessage)) {
+      dbHelper.InsertEntry(db, std::filesystem::path(folder), bookmark);
+      entries = dbHelper.SelectAllEntries(db);
+    } else {
+      if (!errorMessage.empty()) {
+        SDL_Log("Failed to pick iOS library folder: %s",
+                errorMessage.c_str());
+      }
+      auto path = Utils::GetDocumentsPath("BMS");
+      std::filesystem::create_directories(path);
+      entries.push_back({
+          .path = fspath_to_path_t(path),
+          .iosBookmark = "",
+      });
+    }
 #else
     char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
     std::string folder;
@@ -391,9 +449,56 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
     return;
   }
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  RefreshIOSFolderAccess(entries);
+#endif
   LoadCharts(dbHelper, db, entries, scene, stop_token);
   dbHelper.Close(db);
 }
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+void MainMenuScene::addIOSFolderEntryFromFiles() {
+  if (willStart.load() || replayExportInProgress.load()) {
+    return;
+  }
+
+  if (checkEntriesThread.joinable()) {
+    checkEntriesThread.request_stop();
+    checkEntriesThread.join();
+  }
+
+  checkEntriesThread =
+      std::jthread([this](const std::stop_token &stop_token) {
+        auto dbHelper = ChartDBHelper::GetInstance();
+        auto db = dbHelper.Connect();
+        dbHelper.CreateChartMetaTable(db);
+        dbHelper.CreateEntriesTable(db);
+        dbHelper.CreateDifficultyTableTables(db);
+
+        std::string folder;
+        std::string bookmark;
+        std::string errorMessage;
+        if (!PickIOSFolder(folder, bookmark, errorMessage)) {
+          if (!errorMessage.empty()) {
+            SDL_Log("Failed to pick iOS library folder: %s",
+                    errorMessage.c_str());
+          }
+          dbHelper.Close(db);
+          return;
+        }
+        if (stop_token.stop_requested()) {
+          dbHelper.Close(db);
+          return;
+        }
+
+        dbHelper.InsertEntry(db, std::filesystem::path(folder), bookmark);
+        auto entries = dbHelper.SelectAllEntries(db);
+        RefreshIOSFolderAccess(entries);
+        LoadCharts(dbHelper, db, entries, *this, stop_token);
+        dbHelper.Close(db);
+      });
+}
+#endif
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
@@ -631,6 +736,25 @@ void MainMenuScene::initView(ApplicationContext &context) {
   navTitle->setText("Library");
   navTitle->setColor({243, 247, 255, 255});
   nav->addView(navTitle);
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  auto *addFolderButton = new Button(0, 0, 252, 50);
+  auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  addFolderText->setText("Add Folder");
+  addFolderText->setAlign(TextView::CENTER);
+  addFolderText->setVAlign(TextView::MIDDLE);
+  addFolderButton->setContentView(addFolderText);
+  addFolderButton->setBackgroundColors(
+      Color(30, 63, 75, 216), Color(42, 83, 97, 228),
+      Color(55, 106, 123, 236));
+  addFolderButton->setBorderColors(Color(96, 169, 181, 255),
+                                   Color(121, 199, 211, 255),
+                                   Color(151, 224, 235, 255));
+  addFolderButton->setStyledBorderWidth(2);
+  addFolderButton->setOnClickListener(
+      [this]() { addIOSFolderEntryFromFiles(); });
+  nav->addView(addFolderButton);
+#endif
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
@@ -2352,7 +2476,7 @@ void MainMenuScene::cleanupScene() {
 }
 
 void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
-                               std::vector<path_t> &entries,
+                               std::vector<ChartEntry> &entries,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
   std::vector<bms_parser::ChartMeta> chartMetas;
@@ -2383,7 +2507,13 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
     if (stop_token.stop_requested()) {
       break;
     }
-    FindNewBmsFiles(diffs, oldFilesWs, entry, stop_token);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    FindNewBmsFiles(diffs, oldFilesWs, ResolveIOSFolderEntryPath(entry),
+                    stop_token);
+#else
+    FindNewBmsFiles(diffs, oldFilesWs, std::filesystem::path(entry.path),
+                    stop_token);
+#endif
   }
 
   SDL_Log("Found %zu new bms files", diffs.size());
@@ -2535,31 +2665,51 @@ void MainMenuScene::FindFilesUnix(
 
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
 void MainMenuScene::FindFilesIOS(
-    const std::filesystem::path &path, std::vector<Diff> &diffs,
+    const std::filesystem::path &directoryPath, std::vector<Diff> &diffs,
     const std::unordered_set<path_t> &oldFilesWs,
     std::vector<std::filesystem::path> &directoriesToVisit,
     const std::stop_token &stop_token) {
-  // use iosnatives
-  /* TODO: read from BMS/
-   * (or modify ChartDBHelper::ToAbsolutePath/ToRelativePath to allow document
-   * root path)
-   */
-  auto files = ListDocumentFilesRecursively();
-  SDL_Log("Found %d files", files.size());
-  for (auto &file : files) {
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      directoryPath, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  if (error) {
+    SDL_Log("Failed to open iOS directory: %s (%s)",
+            directoryPath.string().c_str(), error.message().c_str());
+    return;
+  }
+
+  for (const auto end = std::filesystem::directory_iterator();
+       iterator != end; iterator.increment(error)) {
     if (stop_token.stop_requested()) {
       break;
     }
-    // SDL_Log("File: %s", file.c_str());
-    if (file.size() > 4) {
-      std::string ext = file.substr(file.size() - 4);
-      std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (error) {
+      SDL_Log("Failed while reading iOS directory: %s (%s)",
+              directoryPath.string().c_str(), error.message().c_str());
+      error.clear();
+      continue;
+    }
+
+    const std::filesystem::directory_entry &entry = *iterator;
+    std::error_code typeError;
+    if (entry.is_regular_file(typeError)) {
+      std::string ext = entry.path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) {
+                       return static_cast<char>(std::tolower(c));
+                     });
       if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
-        path_t fullPath = GetIOSDocumentsPath() + "/" + file;
-        if (oldFilesWs.find(fullPath) == oldFilesWs.end()) {
-          diffs.push_back({fullPath, Added});
+        if (oldFilesWs.find(fspath_to_path_t(entry.path())) ==
+            oldFilesWs.end()) {
+          diffs.push_back({entry.path(), Added});
         }
       }
+    } else if (!typeError && entry.is_directory(typeError)) {
+      directoriesToVisit.push_back(entry.path());
+    } else if (typeError) {
+      SDL_Log("Failed to inspect iOS path: %s (%s)",
+              entry.path().string().c_str(), typeError.message().c_str());
     }
   }
 }

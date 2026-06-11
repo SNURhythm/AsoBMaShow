@@ -47,6 +47,13 @@ std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
 std::vector<std::string> ListDocumentFilesRecursively();
+bool PickIOSFolder(std::string &path, std::string &bookmark,
+                   std::string &errorMessage);
+void *StartIOSSecurityScopedResource(const std::string &path,
+                                      const std::string &bookmark,
+                                      std::string &resolvedPath,
+                                      std::string &errorMessage);
+void StopIOSSecurityScopedResource(void *resource);
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
