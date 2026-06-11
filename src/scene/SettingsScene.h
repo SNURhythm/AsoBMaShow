@@ -102,6 +102,7 @@ private:
   bool pendingDifficultyTableReload = false;
   bool pendingDifficultyTableImportProgress = false;
   bool pendingDifficultyTableImportFinished = false;
+  bool pendingDifficultyTableImportSucceeded = false;
   int pendingDifficultyTableImportCurrent = 0;
   int pendingDifficultyTableImportTotal = 0;
   std::string pendingDifficultyTableImportName;
@@ -112,6 +113,7 @@ private:
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;
+  bool difficultyTableImportSucceeded = false;
   int difficultyTableImportCurrent = 0;
   int difficultyTableImportTotal = 0;
   std::string difficultyTableImportName;
@@ -142,7 +144,8 @@ private:
   void requestDifficultyTableImportProgress(int current, int total,
                                             const std::string &tableName,
                                             const std::string &statusText,
-                                            bool finished);
+                                            bool finished,
+                                            bool succeeded = false);
   void applyPendingDifficultyTableUpdates();
   void refreshDifficultyTableImportModal();
   void hideDifficultyTableImportModal();

@@ -779,7 +779,7 @@ void SettingsScene::requestDifficultyTableStatus(const std::string &text,
 
 void SettingsScene::requestDifficultyTableImportProgress(
     int current, int total, const std::string &tableName,
-    const std::string &statusText, bool finished) {
+    const std::string &statusText, bool finished, bool succeeded) {
   std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
   pendingDifficultyTableImportProgress = true;
   pendingDifficultyTableImportCurrent = current;
@@ -787,6 +787,7 @@ void SettingsScene::requestDifficultyTableImportProgress(
   pendingDifficultyTableImportName = tableName;
   pendingDifficultyTableImportStatusText = statusText;
   pendingDifficultyTableImportFinished = finished;
+  pendingDifficultyTableImportSucceeded = finished && succeeded;
 }
 
 void SettingsScene::applyPendingDifficultyTableUpdates() {
@@ -810,6 +811,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
       difficultyTableImportStatusMessage =
           pendingDifficultyTableImportStatusText;
       difficultyTableImportFinished = pendingDifficultyTableImportFinished;
+      difficultyTableImportSucceeded = pendingDifficultyTableImportSucceeded;
       difficultyTableImportModalVisible = true;
       pendingDifficultyTableImportProgress = false;
       shouldRefreshImportModal = true;
@@ -841,6 +843,7 @@ void SettingsScene::refreshDifficultyTableImportModal() {
   }
 
   const bool finished = difficultyTableImportFinished;
+  const bool succeeded = difficultyTableImportSucceeded;
   const int total = std::max(0, difficultyTableImportTotal);
   const int current = total > 0
                           ? std::clamp(difficultyTableImportCurrent, 0, total)
@@ -852,7 +855,8 @@ void SettingsScene::refreshDifficultyTableImportModal() {
 
   if (difficultyTableImportTitleText != nullptr) {
     difficultyTableImportTitleText->setText(
-        finished ? "Import Complete" : "Importing Difficulty Tables");
+        !finished ? "Importing Difficulty Tables"
+                  : (succeeded ? "Import Complete" : "Import Failed"));
   }
   if (difficultyTableImportStatusText != nullptr) {
     if (!difficultyTableImportStatusMessage.empty()) {
@@ -860,7 +864,8 @@ void SettingsScene::refreshDifficultyTableImportModal() {
           difficultyTableImportStatusMessage);
     } else {
       difficultyTableImportStatusText->setText(
-          finished ? "Import finished." : "Downloading and importing tables...");
+          !finished ? "Downloading and importing tables..."
+                    : (succeeded ? "Import finished." : "Import failed."));
     }
   }
   if (difficultyTableImportTableText != nullptr) {
@@ -875,9 +880,12 @@ void SettingsScene::refreshDifficultyTableImportModal() {
   }
   if (difficultyTableImportProgressFill != nullptr) {
     difficultyTableImportProgressFill->setWidthPercent(progressPercent);
+    difficultyTableImportProgressFill->setBackgroundColor(
+        finished && !succeeded ? Color(191, 82, 92, 255)
+                               : Color(97, 157, 142, 255));
   }
   if (difficultyTableImportCloseButton != nullptr) {
-    const bool canClose = finished && !difficultyTableJobRunning.load();
+    const bool canClose = finished;
     difficultyTableImportCloseButton->setVisible(canClose);
     difficultyTableImportCloseButton->setWidth(canClose ? 160.0f : 0.0f);
     difficultyTableImportCloseButton->setHeight(canClose ? 60.0f : 0.0f);
@@ -887,7 +895,7 @@ void SettingsScene::refreshDifficultyTableImportModal() {
 }
 
 void SettingsScene::hideDifficultyTableImportModal() {
-  if (difficultyTableJobRunning.load()) {
+  if (difficultyTableJobRunning.load() && !difficultyTableImportFinished) {
     return;
   }
   difficultyTableImportModalVisible = false;
@@ -922,6 +930,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
   difficultyTableStatusColor = {239, 244, 251, 255};
   difficultyTableImportModalVisible = true;
   difficultyTableImportFinished = false;
+  difficultyTableImportSucceeded = false;
   difficultyTableImportCurrent = 0;
   difficultyTableImportTotal = 1;
   difficultyTableImportName = url;
@@ -940,7 +949,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
           if (!token.stop_requested()) {
             difficultyTableJobRunning = false;
             requestDifficultyTableImportProgress(
-                0, 1, url, "Could not open chart database.", true);
+                0, 1, url, "Could not open chart database.", true, false);
             requestDifficultyTableStatus("Could not open chart database.",
                                          {255, 177, 170, 255});
           }
@@ -976,7 +985,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
                      : (errorMessage.empty() ? "Add failed." : errorMessage);
         requestDifficultyTableImportProgress(
             lastProgress.current, lastProgress.total, lastProgress.tableName,
-            finalMessage, true);
+            finalMessage, true, imported);
         requestDifficultyTableStatus(finalMessage,
                                      imported ? SDL_Color{181, 228, 165, 255}
                                               : SDL_Color{255, 177, 170, 255},
@@ -3369,6 +3378,7 @@ void SettingsScene::cleanupScene() {
   pendingDeleteChartEntryPath.clear();
   difficultyTableImportModalVisible = false;
   difficultyTableImportFinished = false;
+  difficultyTableImportSucceeded = false;
   destroyPreviewRenderer();
   rootLayout = nullptr;
   scrollView = nullptr;
