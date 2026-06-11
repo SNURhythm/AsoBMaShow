@@ -15,6 +15,10 @@ class Button;
 class ScrollView;
 class BMSRenderer;
 
+namespace settings_scene {
+struct LayoutMetrics;
+}
+
 namespace bms_parser {
 class Chart;
 }
@@ -131,6 +135,16 @@ private:
   void initView();
   void resetViewState();
   void ensureLayoutUpToDate();
+  View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
+                                 bool includeDescription,
+                                 bool compactAdjustments);
+  void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
+  View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildTablesTab(const settings_scene::LayoutMetrics &metrics);
+  void
+  buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
   void stopLanePreview();
   void ensurePreviewRenderer();
