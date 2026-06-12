@@ -150,6 +150,7 @@ private:
   LibraryFolderItem activeFolder;
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
+  std::uint64_t libraryRevision = 0;
   std::unordered_map<std::string, int> folderClearRanks;
   std::string searchText;
   std::string difficultyText;
@@ -188,6 +189,7 @@ private:
   void reloadScoreClearRanks();
   void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
+  void refreshLibraryIfNeeded();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);

@@ -460,7 +460,10 @@ void MainMenuScene::init() {
       std::jthread(CheckEntries, std::ref(context), std::ref(*this));
 }
 
-void MainMenuScene::onResume() { refreshScoreClearRanksIfNeeded(); }
+void MainMenuScene::onResume() {
+  refreshScoreClearRanksIfNeeded();
+  refreshLibraryIfNeeded();
+}
 
 void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
                                  ApplicationContext &context,
@@ -1183,6 +1186,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
+  libraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   rootLayout->applyYogaLayout();
 }
 
@@ -1376,6 +1380,23 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   refreshScoreClearRankViews();
 }
 
+void MainMenuScene::refreshLibraryIfNeeded() {
+  const std::uint64_t revision =
+      ChartDBHelper::GetInstance().GetLibraryRevision();
+  if (libraryRevision == 0) {
+    libraryRevision = revision;
+    return;
+  }
+  if (revision == libraryRevision) {
+    return;
+  }
+
+  reloadScoreClearRanks();
+  reloadFolderItems();
+  reloadChartList();
+  libraryRevision = revision;
+}
+
 int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
   return scoreClearRanks.bestRankFor(record.meta);
 }
@@ -1401,6 +1422,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   }
   if (shouldReloadFolders || shouldReloadCharts) {
     reloadChartList();
+    libraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   }
 }
 

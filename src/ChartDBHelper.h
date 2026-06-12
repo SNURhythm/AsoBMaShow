@@ -5,6 +5,7 @@
 #include "bms_parser.hpp"
 #include "path.h"
 #include "sqlite3.h"
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -144,6 +145,7 @@ public:
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
+  [[nodiscard]] std::uint64_t GetLibraryRevision() const;
 
   static void ToRelativePath(std::filesystem::path &path);
   static void ToAbsolutePath(std::filesystem::path &path);

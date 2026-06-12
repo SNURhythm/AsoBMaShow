@@ -6,9 +6,11 @@
 #include "path.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <codecvt>
+#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <fstream>
@@ -109,6 +111,11 @@ struct DifficultyLabelCache {
 
 std::mutex gDifficultyLabelCacheMutex;
 DifficultyLabelCache gDifficultyLabelCache;
+std::atomic<std::uint64_t> gLibraryRevision{1};
+
+void bumpLibraryRevision() {
+  gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
+}
 
 std::string trimCopy(const std::string &value) {
   const auto begin =
@@ -1275,6 +1282,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
     return false;
   }
   sqlite3_finalize(stmt);
+  bumpLibraryRevision();
   return true;
 }
 
@@ -1771,6 +1779,9 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
     return false;
   }
   sqlite3_finalize(stmt);
+  if (sqlite3_changes(db) > 0) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -1822,6 +1833,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
   }
 
   sqlite3_finalize(stmt);
+  if (deletedCount > 0) {
+    bumpLibraryRevision();
+  }
   return deletedCount;
 }
 
@@ -1842,6 +1856,9 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
     return false;
   }
   sqlite3_finalize(stmt);
+  if (sqlite3_changes(db) > 0) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -1976,6 +1993,7 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
     return false;
   }
   sqlite3_finalize(stmt);
+  bumpLibraryRevision();
   return true;
 }
 
@@ -2026,6 +2044,9 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
     return false;
   }
   sqlite3_finalize(stmt);
+  if (sqlite3_changes(db) > 0) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -2046,6 +2067,9 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
     return false;
   }
   sqlite3_finalize(stmt);
+  if (sqlite3_changes(db) > 0) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -2242,6 +2266,7 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   }
 
   CommitTransaction(db);
+  bumpLibraryRevision();
   SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
           symbol.c_str(), sourceUrl.c_str());
   return true;
@@ -2534,6 +2559,7 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   }
 
   CommitTransaction(db);
+  bumpLibraryRevision();
   return true;
 }
 
@@ -2756,6 +2782,10 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
   }
   sqlite3_finalize(stmt);
   return courses;
+}
+
+std::uint64_t ChartDBHelper::GetLibraryRevision() const {
+  return gLibraryRevision.load(std::memory_order_relaxed);
 }
 
 void ChartDBHelper::ToRelativePath(
