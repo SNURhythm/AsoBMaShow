@@ -10,6 +10,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <clocale>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <regex>
 #include <set>
@@ -95,6 +97,13 @@ struct HorieCandidateSearchResult {
   std::string errorMessage;
 };
 
+struct PackageSourceLookupResult {
+  std::string sourceName;
+  std::string sourceUrl;
+  std::optional<DownloadCandidate> candidate;
+  std::string errorMessage;
+};
+
 class GoogleDriveDriver {
 public:
   static bool isHost(const ParsedUrl &url);
@@ -128,6 +137,14 @@ public:
   static std::optional<DownloadCandidate> classify(const std::string &url);
 };
 
+class IpfsDriver {
+public:
+  static std::optional<DownloadCandidate> classify(const std::string &url);
+
+private:
+  static std::optional<std::string> pathFromUrl(const std::string &url);
+};
+
 class BmsSearchDriver {
 public:
   static bool isHost(const ParsedUrl &url);
@@ -135,6 +152,30 @@ public:
                                            const std::string &html);
   static std::vector<DownloadCandidate>
   downloadCandidates(const std::string &bmsUrl, const std::string &html);
+};
+
+class GingerRushDriver {
+public:
+  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+};
+
+class KonmaiDriver {
+public:
+  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+};
+
+class WriggleDriver {
+public:
+  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+};
+
+class EndlessDreamSourcesDriver {
+public:
+  static bool tryDownloadByMd5(
+      const std::string &md5, const std::string &archiveKey,
+      const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
+      BmsSearchDownloadProgressCallback progressCallback,
+      BmsSearchResult &result);
 };
 
 class HorieYuukaDriver {
@@ -285,6 +326,27 @@ std::optional<ParsedUrl> parseUrl(const std::string &url) {
   return parsed;
 }
 
+bool hasUrlScheme(const std::string &value) {
+  const size_t colon = value.find(':');
+  if (colon == std::string::npos || colon == 0) {
+    return false;
+  }
+  const size_t firstDelimiter = value.find_first_of("/?#");
+  if (firstDelimiter != std::string::npos && firstDelimiter < colon) {
+    return false;
+  }
+  if (std::isalpha(static_cast<unsigned char>(value.front())) == 0) {
+    return false;
+  }
+  for (size_t i = 1; i < colon; ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (std::isalnum(c) == 0 && c != '+' && c != '-' && c != '.') {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string trimUrlForBase(std::string url) {
   const auto fragment = url.find('#');
   if (fragment != std::string::npos) {
@@ -298,7 +360,7 @@ std::string trimUrlForBase(std::string url) {
 }
 
 std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
-  if (link.starts_with("http://") || link.starts_with("https://")) {
+  if (hasUrlScheme(link)) {
     return link;
   }
 
@@ -1419,10 +1481,55 @@ std::optional<DownloadCandidate> DirectArchiveDriver::classify(
   return candidate;
 }
 
+std::optional<std::string> IpfsDriver::pathFromUrl(const std::string &url) {
+  const auto parsed = parseUrl(url);
+  if (!parsed) {
+    return std::nullopt;
+  }
+  if (parsed->scheme == "ipfs" && !parsed->host.empty()) {
+    std::string path = parsed->host;
+    if (!parsed->path.empty() && parsed->path != "/") {
+      path += parsed->path;
+    }
+    return path;
+  }
+  if ((parsed->scheme == "http" || parsed->scheme == "https") &&
+      parsed->path.starts_with("/ipfs/")) {
+    return urlDecode(parsed->path.substr(6));
+  }
+  return std::nullopt;
+}
+
+std::optional<DownloadCandidate> IpfsDriver::classify(const std::string &url) {
+  const auto ipfsPath = pathFromUrl(url);
+  if (!ipfsPath || trimCopy(*ipfsPath).empty()) {
+    return std::nullopt;
+  }
+
+  DownloadCandidate candidate;
+  candidate.originalUrl = url;
+  candidate.downloadUrl = "https://gateway.ipfs.io/api/v0/get?arg=" +
+                          urlEncode(*ipfsPath) +
+                          "&archive=true&compress=true";
+  const std::string shortIpfsPath =
+      ipfsPath->substr(0, std::min<size_t>(32, ipfsPath->size()));
+  candidate.archiveName = safeStorageKey("ipfs-" + shortIpfsPath) + ".tar.gz";
+  candidate.supported = isSupportedArchiveExtension(".tar.gz");
+  if (!candidate.supported) {
+    candidate.knownUnsupportedArchive = true;
+    candidate.reason = "This build cannot extract IPFS tar archives.";
+  }
+  return candidate;
+}
+
 DownloadCandidate classifyLink(const std::string &url) {
   DownloadCandidate candidate;
   candidate.originalUrl = url;
   candidate.downloadUrl = url;
+
+  if (auto ipfs = IpfsDriver::classify(url)) {
+    return *ipfs;
+  }
 
   const auto parsed = parseUrl(url);
   if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) {
@@ -1500,8 +1607,8 @@ std::vector<ExtractedLink> extractLinkRefs(const std::string &baseUrl,
     appendExtractedLink(links, seen, baseUrl, (*it)[1].str());
   }
 
-  const std::regex quotedUrlPattern(R"(["'](https?://[^"'\s<>]+)["'])",
-                                    std::regex::icase);
+  const std::regex quotedUrlPattern(
+      R"(["']((?:https?|ipfs)://[^"'\s<>]+)["'])", std::regex::icase);
   for (auto it = std::sregex_iterator(normalized.begin(), normalized.end(),
                                       quotedUrlPattern);
        it != std::sregex_iterator(); ++it) {
@@ -1832,6 +1939,53 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
 #endif
 
 #if ASOBMSHOW_HAS_LIBARCHIVE
+bool localeNameLooksUtf8(const char *localeName) {
+  if (localeName == nullptr || localeName[0] == '\0') {
+    return false;
+  }
+  const std::string lower = lowerCopy(localeName);
+  return lower.find("utf-8") != std::string::npos ||
+         lower.find("utf8") != std::string::npos;
+}
+
+bool localeNameLooksShiftJis(const char *localeName) {
+  if (localeName == nullptr || localeName[0] == '\0') {
+    return false;
+  }
+  const std::string lower = lowerCopy(localeName);
+  return lower.find("shift") != std::string::npos ||
+         lower.find("sjis") != std::string::npos ||
+         lower.find("cp932") != std::string::npos ||
+         lower.find("ms_kanji") != std::string::npos;
+}
+
+bool localeNameLooksArchiveCompatible(const char *localeName) {
+  return localeNameLooksUtf8(localeName) ||
+         localeNameLooksShiftJis(localeName);
+}
+
+void ensureArchiveFilenameLocale() {
+  static std::once_flag localeInitFlag;
+  std::call_once(localeInitFlag, []() {
+    if (localeNameLooksArchiveCompatible(std::setlocale(LC_CTYPE, nullptr))) {
+      return;
+    }
+
+    for (const char *candidate :
+         {"", "C.UTF-8", "en_US.UTF-8", "ja_JP.UTF-8", "ko_KR.UTF-8",
+          "UTF-8", "ja_JP.SJIS", "ja_JP.Shift_JIS", "ja_JP.CP932",
+          "Shift_JIS", "CP932", "SJIS"}) {
+      const char *selected = std::setlocale(LC_CTYPE, candidate);
+      if (localeNameLooksArchiveCompatible(selected)) {
+        return;
+      }
+    }
+
+    SDL_Log("Could not set UTF-8 or Shift-JIS LC_CTYPE locale for archive "
+            "filenames.");
+  });
+}
+
 std::string archiveErrorString(archive *archiveHandle,
                                const std::string &fallback) {
   if (archiveHandle == nullptr ||
@@ -1839,6 +1993,30 @@ std::string archiveErrorString(archive *archiveHandle,
     return fallback;
   }
   return archive_error_string(archiveHandle);
+}
+
+bool trySetArchiveHeaderCharset(archive *archiveHandle, const char *charset) {
+  if (archiveHandle == nullptr || charset == nullptr || charset[0] == '\0') {
+    return false;
+  }
+
+  bool applied = false;
+  for (const char *format : {"zip", "rar", "lha", "tar", "cab", "cpio"}) {
+    const int status =
+        archive_read_set_option(archiveHandle, format, "hdrcharset", charset);
+    if (status == ARCHIVE_OK || status == ARCHIVE_WARN) {
+      applied = true;
+    }
+  }
+  return applied;
+}
+
+void preferJapaneseArchiveHeaderCharset(archive *archiveHandle) {
+  for (const char *charset : {"CP932", "SHIFT_JIS", "SHIFT-JIS", "SJIS"}) {
+    if (trySetArchiveHeaderCharset(archiveHandle, charset)) {
+      return;
+    }
+  }
 }
 
 bool extractArchiveWithLibarchive(
@@ -1852,6 +2030,7 @@ bool extractArchiveWithLibarchive(
     return false;
   }
 
+  ensureArchiveFilenameLocale();
   archive *archiveHandle = archive_read_new();
   if (archiveHandle == nullptr) {
     errorMessage = "Could not initialize archive reader.";
@@ -1860,6 +2039,7 @@ bool extractArchiveWithLibarchive(
   archive_read_support_filter_all(archiveHandle);
   archive_read_support_format_all(archiveHandle);
   archive_read_support_format_raw(archiveHandle);
+  preferJapaneseArchiveHeaderCharset(archiveHandle);
 
   const std::string archiveText =
       path_t_to_utf8(fspath_to_path_t(archivePath));
@@ -1874,6 +2054,9 @@ bool extractArchiveWithLibarchive(
 
   bool ok = true;
   int extractedFiles = 0;
+  int skippedInvalidPaths = 0;
+  int skippedUnsupportedTypes = 0;
+  int directoryEntries = 0;
   std::uint64_t entryIndex = 0;
   archive_entry *entry = nullptr;
   for (;;) {
@@ -1901,16 +2084,24 @@ bool extractArchiveWithLibarchive(
 
     ++entryIndex;
     const std::string entryName = archiveEntryPathnameUtf8(entry);
+    const bool entryNameLooksDirectory =
+        !entryName.empty() &&
+        (entryName.back() == '/' || entryName.back() == '\\');
 
     std::filesystem::path relativePath;
     if (!safeArchivePath(entryName, relativePath)) {
+      ++skippedInvalidPaths;
       archive_read_data_skip(archiveHandle);
       continue;
     }
 
     const std::filesystem::path destination = outputPath / relativePath;
     const auto fileType = archive_entry_filetype(entry);
-    if (fileType == AE_IFDIR) {
+    const bool fileTypeIsSet = archive_entry_filetype_is_set(entry) != 0;
+    const bool unknownFileType = !fileTypeIsSet || fileType == 0;
+    if (fileType == AE_IFDIR ||
+        (unknownFileType && entryNameLooksDirectory)) {
+      ++directoryEntries;
       std::filesystem::create_directories(destination, fsError);
       if (fsError) {
         ok = false;
@@ -1919,7 +2110,8 @@ bool extractArchiveWithLibarchive(
       }
       continue;
     }
-    if (fileType != AE_IFREG) {
+    if (!unknownFileType && fileType != AE_IFREG) {
+      ++skippedUnsupportedTypes;
       archive_read_data_skip(archiveHandle);
       continue;
     }
@@ -1977,6 +2169,13 @@ bool extractArchiveWithLibarchive(
   }
   if (extractedFiles == 0) {
     errorMessage = "Archive did not contain extractable files.";
+    if (entryIndex > 0) {
+      errorMessage += " Entries=" + std::to_string(entryIndex) +
+                      ", folders=" + std::to_string(directoryEntries) +
+                      ", unsafe=" + std::to_string(skippedInvalidPaths) +
+                      ", unsupported=" +
+                      std::to_string(skippedUnsupportedTypes) + ".";
+    }
     return false;
   }
   return true;
@@ -1998,6 +2197,72 @@ bool extractDownloadedArchive(
   }
   return extractZipArchive(archivePath, outputPath, errorMessage,
                            progressCallback);
+#endif
+}
+
+void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
+                                  const std::filesystem::path &outputPath) {
+#if ASOBMSHOW_HAS_LIBARCHIVE
+  std::ofstream output(outputPath);
+  if (!output) {
+    return;
+  }
+
+  ensureArchiveFilenameLocale();
+  archive *archiveHandle = archive_read_new();
+  if (archiveHandle == nullptr) {
+    output << "Could not initialize archive reader.\n";
+    return;
+  }
+  archive_read_support_filter_all(archiveHandle);
+  archive_read_support_format_all(archiveHandle);
+  archive_read_support_format_raw(archiveHandle);
+  preferJapaneseArchiveHeaderCharset(archiveHandle);
+
+  const std::string archiveText =
+      path_t_to_utf8(fspath_to_path_t(archivePath));
+  int status =
+      archive_read_open_filename(archiveHandle, archiveText.c_str(), 10240);
+  if (status != ARCHIVE_OK) {
+    output << "Could not open archive: "
+           << archiveErrorString(archiveHandle, "") << '\n';
+    archive_read_free(archiveHandle);
+    return;
+  }
+
+  std::uint64_t entryIndex = 0;
+  archive_entry *entry = nullptr;
+  for (;;) {
+    status = archive_read_next_header(archiveHandle, &entry);
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
+    if (status == ARCHIVE_RETRY) {
+      continue;
+    }
+    if (status < ARCHIVE_WARN) {
+      output << "Could not read archive: "
+             << archiveErrorString(archiveHandle, "") << '\n';
+      break;
+    }
+    ++entryIndex;
+    output << entryIndex << '\t';
+    if (entry == nullptr) {
+      output << "entry=null\n";
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+    output << "name=" << archiveEntryPathnameUtf8(entry)
+           << "\ttype_set=" << archive_entry_filetype_is_set(entry)
+           << "\ttype=" << archive_entry_filetype(entry)
+           << "\tsize_set=" << archive_entry_size_is_set(entry)
+           << "\tsize=" << archive_entry_size(entry) << '\n';
+    archive_read_data_skip(archiveHandle);
+  }
+  archive_read_free(archiveHandle);
+#else
+  (void)archivePath;
+  (void)outputPath;
 #endif
 }
 
@@ -2215,6 +2480,8 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
       errorMessage = "Could not copy downloaded archive: " + fsError.message();
       return std::nullopt;
     }
+    writeArchiveEntryDiagnostics(archivePath,
+                                 debugDirectory / "archive_entries.txt");
   }
   fsError.clear();
 
@@ -2520,7 +2787,11 @@ bool downloadAndExtractArchive(
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
-    BmsSearchResult &result, const std::string &suggestedArchiveName = "") {
+    BmsSearchResult &result, const std::string &suggestedArchiveName = "",
+    bool *downloadedArchive = nullptr) {
+  if (downloadedArchive != nullptr) {
+    *downloadedArchive = false;
+  }
   result.downloadUrl = displayUrl.empty() ? downloadUrl : displayUrl;
   std::string archiveExtension = archiveExtensionFromUrl(result.downloadUrl);
   if (archiveExtension.empty()) {
@@ -2559,6 +2830,9 @@ bool downloadAndExtractArchive(
     result.message =
         downloadError.empty() ? "Download failed." : downloadError;
     return false;
+  }
+  if (downloadedArchive != nullptr) {
+    *downloadedArchive = true;
   }
 
   std::string driveWarningError;
@@ -2662,6 +2936,213 @@ bool downloadAndExtractArchive(
       foundBmsFile ? "Downloaded and extracted BMS archive."
                    : "Archive extracted, but no BMS file was found.";
   return true;
+}
+
+DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,
+                                           const std::string &archiveName,
+                                           const std::string &md5) {
+  DownloadCandidate candidate = classifyLink(downloadUrl);
+  candidate.originalUrl = downloadUrl;
+  if (!candidate.supported) {
+    candidate.downloadUrl = downloadUrl;
+    candidate.supported = true;
+    candidate.knownUnsupportedArchive = false;
+    candidate.reason.clear();
+  }
+
+  const std::string suggestedArchiveName = trimCopy(archiveName);
+  if (!suggestedArchiveName.empty() &&
+      !archiveExtensionFromName(suggestedArchiveName).empty()) {
+    candidate.archiveName = suggestedArchiveName;
+  } else if (candidate.archiveName.empty()) {
+    candidate.archiveName = md5 + ".7z";
+  }
+  return candidate;
+}
+
+PackageSourceLookupResult
+GingerRushDriver::lookupByMd5(const std::string &md5) {
+  PackageSourceLookupResult result;
+  result.sourceName = "Ginger";
+  result.sourceUrl = "https://gingerrush.com/download/package/" + md5;
+
+  std::string errorMessage;
+  const auto body = fetchUrlText(result.sourceUrl, errorMessage);
+  if (!body) {
+    result.errorMessage =
+        errorMessage.empty() ? "Ginger did not find a package." : errorMessage;
+    return result;
+  }
+
+  try {
+    const auto parsed = json::parse(*body);
+    std::string downloadUrl = jsonStringAt(parsed, "downloadURL");
+    if (downloadUrl.empty()) {
+      downloadUrl = jsonStringAt(parsed, "downloadUrl");
+    }
+    if (downloadUrl.empty()) {
+      downloadUrl = jsonStringAt(parsed, "download_url");
+    }
+    if (downloadUrl.empty()) {
+      result.errorMessage = "Ginger did not return a download URL.";
+      return result;
+    }
+    downloadUrl = resolveUrl(result.sourceUrl, downloadUrl);
+    result.candidate = packageDownloadCandidate(
+        downloadUrl, jsonStringAt(parsed, "fileName"), md5);
+  } catch (const std::exception &e) {
+    result.errorMessage =
+        std::string("Ginger returned invalid package JSON: ") + e.what();
+  }
+  return result;
+}
+
+PackageSourceLookupResult KonmaiDriver::lookupByMd5(const std::string &md5) {
+  PackageSourceLookupResult result;
+  result.sourceName = "Konmai";
+  result.sourceUrl = "https://bms.alvorna.com/api/hash?md5=" + md5;
+
+  std::string errorMessage;
+  const auto body = fetchUrlText(result.sourceUrl, errorMessage);
+  if (!body) {
+    result.errorMessage =
+        errorMessage.empty() ? "Konmai did not find a package." : errorMessage;
+    return result;
+  }
+
+  try {
+    const auto parsed = json::parse(*body);
+    const std::string status = lowerCopy(jsonStringAt(parsed, "result"));
+    if (!status.empty() && status != "success") {
+      result.errorMessage = jsonStringAt(parsed, "msg");
+      if (result.errorMessage.empty()) {
+        result.errorMessage = "Konmai did not find a package.";
+      }
+      return result;
+    }
+
+    const json *data = nullptr;
+    const auto dataIt = parsed.find("data");
+    if (dataIt != parsed.end()) {
+      if (dataIt->is_object()) {
+        data = &*dataIt;
+      } else if (dataIt->is_array() && !dataIt->empty() &&
+                 dataIt->front().is_object()) {
+        data = &dataIt->front();
+      }
+    }
+    if (data == nullptr) {
+      result.errorMessage = "Konmai did not return package metadata.";
+      return result;
+    }
+
+    std::string downloadUrl = jsonStringAt(*data, "song_url");
+    if (downloadUrl.empty()) {
+      downloadUrl = jsonStringAt(*data, "songUrl");
+    }
+    if (downloadUrl.empty()) {
+      result.errorMessage = "Konmai did not return a song URL.";
+      return result;
+    }
+    downloadUrl = resolveUrl(result.sourceUrl, downloadUrl);
+
+    std::string archiveName = jsonStringAt(*data, "song_name");
+    if (!archiveName.empty() && archiveExtensionFromName(archiveName).empty()) {
+      archiveName += ".7z";
+    }
+    result.candidate = packageDownloadCandidate(downloadUrl, archiveName, md5);
+  } catch (const std::exception &e) {
+    result.errorMessage =
+        std::string("Konmai returned invalid package JSON: ") + e.what();
+  }
+  return result;
+}
+
+PackageSourceLookupResult WriggleDriver::lookupByMd5(const std::string &md5) {
+  PackageSourceLookupResult result;
+  result.sourceName = "Wriggle";
+  result.sourceUrl = "https://bms.wrigglebug.xyz/download/package/" + md5;
+  result.candidate =
+      packageDownloadCandidate(result.sourceUrl, md5 + ".7z", md5);
+  return result;
+}
+
+bool EndlessDreamSourcesDriver::tryDownloadByMd5(
+    const std::string &md5, const std::string &archiveKey,
+    const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchResult &result) {
+  const std::string md5Hash = lowerCopy(trimCopy(md5));
+  if (!isHexStringOfLength(md5Hash, 32)) {
+    return false;
+  }
+
+  std::optional<BmsSearchResult> lastDownloadFailure;
+  std::string lastLookupError;
+  struct PackageSource {
+    const char *name;
+    PackageSourceLookupResult (*lookupByMd5)(const std::string &);
+  };
+  const std::array<PackageSource, 3> sources = {
+      PackageSource{"Ginger", GingerRushDriver::lookupByMd5},
+      PackageSource{"Konmai", KonmaiDriver::lookupByMd5},
+      PackageSource{"Wriggle", WriggleDriver::lookupByMd5},
+  };
+
+  for (const auto &source : sources) {
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Lookup cancelled.";
+      return true;
+    }
+
+    if (progressCallback) {
+      progressCallback({.message = "Searching " + std::string(source.name) +
+                                   " package source"});
+    }
+    const auto lookup = source.lookupByMd5(md5Hash);
+    if (!lookup.candidate || !lookup.candidate->supported) {
+      if (!lookup.errorMessage.empty()) {
+        lastLookupError = lookup.sourceName + ": " + lookup.errorMessage;
+        SDL_Log("BMS package source lookup failed: %s",
+                lastLookupError.c_str());
+      }
+      continue;
+    }
+
+    if (progressCallback) {
+      progressCallback({.message = "Preparing " + lookup.sourceName +
+                                   " package download"});
+    }
+
+    BmsSearchResult attempt = result;
+    if (!lookup.sourceUrl.empty()) {
+      attempt.fallbackUrl = lookup.sourceUrl;
+    }
+    bool downloadedArchive = false;
+    const bool finished = downloadAndExtractArchive(
+        lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
+        archiveKey.empty() ? md5Hash : archiveKey, libraryRoot, cancelled,
+        progressCallback, attempt, lookup.candidate->archiveName,
+        &downloadedArchive);
+    if (finished || downloadedArchive || cancelled.load()) {
+      result = std::move(attempt);
+      return true;
+    }
+
+    if (!attempt.message.empty()) {
+      attempt.message = lookup.sourceName + ": " + attempt.message;
+    }
+    lastDownloadFailure = std::move(attempt);
+  }
+
+  if (lastDownloadFailure) {
+    result = std::move(*lastDownloadFailure);
+  } else if (!lastLookupError.empty() && result.message.empty()) {
+    result.status = BmsSearchResult::Status::NotFound;
+    result.message = lastLookupError;
+  }
+  return false;
 }
 
 std::string HorieYuukaDriver::searchUrl(const std::string &folder,
@@ -2908,30 +3389,52 @@ BmsSearchResult BmsSearchService::findAndDownload(
     return result;
   }
 
-  auto tryHorieAfterBmsFailure =
+  auto preserveLookupContext = [](BmsSearchResult &target,
+                                  const BmsSearchResult &source) {
+    if (!source.fallbackUrl.empty()) {
+      target.fallbackUrl = source.fallbackUrl;
+    }
+    if (target.patternUrl.empty()) {
+      target.patternUrl = source.patternUrl;
+    }
+    if (target.bmsUrl.empty()) {
+      target.bmsUrl = source.bmsUrl;
+    }
+  };
+
+  auto tryFallbacksAfterBmsFailure =
       [&](const BmsSearchResult &bmsFailure) -> std::optional<BmsSearchResult> {
+    std::optional<BmsSearchResult> packageFailure;
+    if (!md5Hash.empty()) {
+      BmsSearchResult packageResult;
+      preserveLookupContext(packageResult, bmsFailure);
+      if (EndlessDreamSourcesDriver::tryDownloadByMd5(
+              md5Hash, archiveKey, libraryRoot, cancelled, progressCallback,
+              packageResult)) {
+        return packageResult;
+      }
+      if (!packageResult.message.empty()) {
+        packageFailure = packageResult;
+      }
+    }
+
     BmsSearchResult horieResult;
-    auto preserveBmsFallback = [&]() {
-      if (!bmsFailure.fallbackUrl.empty()) {
-        horieResult.fallbackUrl = bmsFailure.fallbackUrl;
-      }
-      if (horieResult.patternUrl.empty()) {
-        horieResult.patternUrl = bmsFailure.patternUrl;
-      }
-      if (horieResult.bmsUrl.empty()) {
-        horieResult.bmsUrl = bmsFailure.bmsUrl;
-      }
-    };
+    preserveLookupContext(horieResult, bmsFailure);
     if (HorieYuukaDriver::tryDownload(
             horieQueries, horieTerms.title, horieTerms.artist,
             !horieTerms.title.empty(), archiveKey, libraryRoot, cancelled,
             progressCallback, horieResult)) {
       return horieResult;
     }
-    preserveBmsFallback();
+    preserveLookupContext(horieResult, bmsFailure);
     if (horieResult.message.empty()) {
       horieResult.status = BmsSearchResult::Status::NotFound;
       horieResult.message = "Horie did not find a matching BMS archive.";
+    } else if (packageFailure &&
+               horieResult.status == BmsSearchResult::Status::NotFound) {
+      horieResult.message =
+          "Package sources did not produce a usable archive. " +
+          horieResult.message;
     }
     return horieResult;
   };
@@ -2941,10 +3444,11 @@ BmsSearchResult BmsSearchService::findAndDownload(
     result.message =
         "Selected entry does not have SHA256 for BMS Search lookup.";
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto horieResult = tryHorieAfterBmsFailure(result)) {
-      return *horieResult;
+    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+      return *fallbackResult;
     }
-    result.message = "Horie did not find a matching song.";
+    result.message =
+        "No package source or Horie archive found a matching song.";
     return result;
   }
 
@@ -2965,8 +3469,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
         errorMessage.empty() ? "BMS Search did not return a pattern page."
                              : errorMessage;
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto horieResult = tryHorieAfterBmsFailure(result)) {
-      return *horieResult;
+    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+      return *fallbackResult;
     }
     return result;
   }
@@ -2977,8 +3481,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
     result.status = BmsSearchResult::Status::NoDownloadLink;
     result.message = "BMS Search found the pattern, but no BMS page link.";
     result.fallbackUrl = result.patternUrl;
-    if (const auto horieResult = tryHorieAfterBmsFailure(result)) {
-      return *horieResult;
+    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+      return *fallbackResult;
     }
     return result;
   }
@@ -3004,7 +3508,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.bmsUrl = bmsUrl;
       result.fallbackUrl = bmsUrl;
     }
-    auto pageCandidates = BmsSearchDriver::downloadCandidates(bmsUrl, *bmsHtml);
+    auto pageCandidates =
+        BmsSearchDriver::downloadCandidates(bmsUrl, *bmsHtml);
     candidates.insert(candidates.end(),
                       std::make_move_iterator(pageCandidates.begin()),
                       std::make_move_iterator(pageCandidates.end()));
@@ -3016,7 +3521,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
   if (supportedIt == candidates.end()) {
     const auto externalIt = std::find_if(
         candidates.begin(), candidates.end(), [](const DownloadCandidate &c) {
-          return !c.originalUrl.empty() && c.reason != "Internal BMS Search link.";
+          return !c.originalUrl.empty() &&
+                 c.reason != "Internal BMS Search link.";
         });
     result.status = externalIt == candidates.end()
                         ? BmsSearchResult::Status::NoDownloadLink
@@ -3028,8 +3534,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto horieResult = tryHorieAfterBmsFailure(result)) {
-      return *horieResult;
+    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+      return *fallbackResult;
     }
     return result;
   }
@@ -3043,8 +3549,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto horieResult = tryHorieAfterBmsFailure(result)) {
-      return *horieResult;
+    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+      return *fallbackResult;
     }
   }
   return result;

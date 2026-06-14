@@ -191,11 +191,19 @@ double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
   if (message == "Opening BMS Search details page") {
     return std::max(previous, 0.16);
   }
+  if (messageStartsWith(message, "Searching ") &&
+      message.find(" package source") != std::string::npos) {
+    return std::max(previous, 0.22);
+  }
+  if (messageStartsWith(message, "Preparing ") &&
+      message.find(" package download") != std::string::npos) {
+    return std::max(previous, 0.30);
+  }
   if (message == "Searching Horie archive") {
-    return std::max(previous, 0.24);
+    return std::max(previous, 0.32);
   }
   if (message == "Preparing Horie archive download") {
-    return std::max(previous, 0.30);
+    return std::max(previous, 0.36);
   }
   if (message == "Downloading archive") {
     const double ratio = progressRatio(progress);
@@ -204,8 +212,8 @@ double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
                  ? std::max(previous, 0.74 + ratio * 0.16)
                  : std::min(0.90, std::max(previous + 0.005, 0.76));
     }
-    return std::max(previous, progress.totalBytes > 0 ? 0.34 + ratio * 0.38
-                                                      : 0.34);
+    return std::max(previous, progress.totalBytes > 0 ? 0.40 + ratio * 0.32
+                                                      : 0.40);
   }
   if (message == "Download complete") {
     return std::max(previous, 0.72);
@@ -2392,14 +2400,15 @@ void MainMenuScene::refreshFindBmsModal() {
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += "Automatic download failed. Open BMS Search or refresh "
+    detail += "Automatic download failed. Open the source page or refresh "
               "after downloading.";
     if (!findBmsResult.debugPath.empty()) {
       detail += "\nDebug files: " +
                 path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
     }
   } else {
-    detail += "Checking BMS Search first, then Horie archive if needed.";
+    detail +=
+        "Checking BMS Search, package sources, then Horie archive if needed.";
   }
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setText(detail);
