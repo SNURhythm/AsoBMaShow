@@ -19,6 +19,7 @@
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
 #include "../view/ReplaySummaryListView.h"
+#include "../view/ScrollView.h"
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -64,6 +65,8 @@ extern char **environ;
 
 namespace {
 constexpr int kRootPadding = 28;
+constexpr size_t kFindBmsMaxLogLines = 120;
+constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -936,6 +939,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsModalTitleText = nullptr;
   findBmsStatusText = nullptr;
   findBmsDetailText = nullptr;
+  findBmsLogScrollView = nullptr;
+  findBmsLogContent = nullptr;
+  findBmsLogText = nullptr;
   findBmsCloseButton = nullptr;
   findBmsOpenButton = nullptr;
   findBmsGoogleButton = nullptr;
@@ -965,7 +971,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
-  pendingFindBmsProgress.reset();
+  pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
   findBmsJobRunning = false;
@@ -2172,7 +2178,7 @@ void MainMenuScene::buildFindBmsModal() {
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
-      ->setHeight(480)
+      ->setHeight(560)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -2202,6 +2208,28 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsDetailText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsDetailText->setFlex(1);
   panel->addView(findBmsDetailText);
+
+  findBmsLogScrollView =
+      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 112);
+  findBmsLogScrollView->setWidth(kModalContentWidth);
+  findBmsLogScrollView->setHeight(112);
+  findBmsLogScrollView->setBackgroundColor(Color(7, 14, 24, 210));
+  findBmsLogScrollView->setBorderColor(Color(76, 105, 139, 255));
+  findBmsLogScrollView->setBorderWidth(2);
+
+  findBmsLogContent = new View();
+  findBmsLogContent->setFlexDirection(FlexDirection::Column);
+  findBmsLogContent->setAlignItems(YGAlignStretch);
+  findBmsLogContent->setPadding(Edge::All, 8);
+
+  findBmsLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  findBmsLogText->setText("Preparing lookup");
+  findBmsLogText->setColor({150, 173, 197, 255});
+  findBmsLogText->setWrap(true);
+  findBmsLogText->setOverflow(TextView::TextOverflow::Visible);
+  findBmsLogContent->addView(findBmsLogText);
+  findBmsLogScrollView->setContentView(findBmsLogContent);
+  panel->addView(findBmsLogScrollView);
 
   findBmsCandidateRecyclerView = new RecyclerView<BmsSearchCandidate>(
       [](const BmsSearchCandidate &a, const BmsSearchCandidate &b) {
@@ -2327,7 +2355,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing lookup");
   findBmsCancelled = false;
-  pendingFindBmsProgress.reset();
+  pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
@@ -2341,7 +2369,11 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
     BmsSearchService service;
     auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
       std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsProgress = progress;
+      pendingFindBmsProgressEvents.push_back(progress);
+      while (pendingFindBmsProgressEvents.size() >
+             kFindBmsMaxPendingProgressEvents) {
+        pendingFindBmsProgressEvents.pop_front();
+      }
     };
     if (stopToken.stop_requested()) {
       findBmsCancelled = true;
@@ -2378,7 +2410,7 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing Horie archive download");
   findBmsCancelled = false;
-  pendingFindBmsProgress.reset();
+  pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   findBmsJobRunning = true;
   refreshFindBmsModal();
@@ -2388,7 +2420,11 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
     BmsSearchService service;
     auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
       std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsProgress = progress;
+      pendingFindBmsProgressEvents.push_back(progress);
+      while (pendingFindBmsProgressEvents.size() >
+             kFindBmsMaxPendingProgressEvents) {
+        pendingFindBmsProgressEvents.pop_front();
+      }
     };
     if (stopToken.stop_requested()) {
       findBmsCancelled = true;
@@ -2439,6 +2475,11 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsStatusText->setColor(failed ? SDL_Color{255, 177, 170, 255}
                                        : SDL_Color{235, 243, 252, 255});
   }
+
+  const bool showCandidateList =
+      !running &&
+      findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
+      !findBmsResult.candidates.empty();
 
   std::string detail;
   if (!findBmsModalChart.meta.Title.empty()) {
@@ -2507,23 +2548,30 @@ void MainMenuScene::refreshFindBmsModal() {
     detail +=
         "Checking package sources, BMS Search, then Horie archive if needed.";
   }
-  if (!findBmsProgressLog.empty()) {
-    if (!detail.empty() && detail.back() != '\n') {
-      detail += "\n";
-    }
-    detail += "Log:\n";
-    for (const auto &line : findBmsProgressLog) {
-      detail += "- " + line + "\n";
-    }
-  }
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setText(detail);
   }
 
-  const bool showCandidateList =
-      !running &&
-      findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
-      !findBmsResult.candidates.empty();
+  if (findBmsLogScrollView != nullptr) {
+    findBmsLogScrollView->setHeight(showCandidateList ? 56.0f : 112.0f);
+  }
+  if (findBmsLogText != nullptr) {
+    std::string logText;
+    for (const auto &line : findBmsProgressLog) {
+      if (!logText.empty()) {
+        logText += "\n";
+      }
+      logText += "- " + line;
+    }
+    if (logText.empty()) {
+      logText = "- Waiting for progress";
+    }
+    findBmsLogText->setText(logText);
+  }
+  if (findBmsLogScrollView != nullptr) {
+    findBmsLogScrollView->scrollToBottom();
+  }
+
   if (findBmsCandidateRecyclerView != nullptr) {
     findBmsCandidateRecyclerView->setVisible(showCandidateList);
     const int visibleRows =
@@ -2611,36 +2659,40 @@ void MainMenuScene::refreshFindBmsModal() {
 }
 
 void MainMenuScene::applyFindBmsUpdates() {
-  std::optional<BmsSearchDownloadProgress> progress;
+  std::deque<BmsSearchDownloadProgress> progressEvents;
   std::optional<BmsSearchResult> result;
   {
     std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-    progress = std::move(pendingFindBmsProgress);
+    progressEvents = std::move(pendingFindBmsProgressEvents);
     result = std::move(pendingFindBmsResult);
-    pendingFindBmsProgress.reset();
+    pendingFindBmsProgressEvents.clear();
     pendingFindBmsResult.reset();
   }
 
-  bool shouldRefresh = false;
-  if (progress) {
-    findBmsProgressMessage = progress->message;
-    findBmsProgressCurrent = progress->downloadedBytes;
-    findBmsProgressTotal = progress->totalBytes;
-    findBmsProgressFraction =
-        findBmsProgressFractionFor(*progress, findBmsProgressFraction);
-    const std::string logLine = findBmsProgressDisplayText(*progress, true);
-    if (!logLine.empty()) {
-      if (!findBmsProgressLog.empty() &&
-          shouldReplaceFindBmsLogLine(findBmsProgressLog.back(), logLine)) {
-        findBmsProgressLog.back() = logLine;
-      } else if (findBmsProgressLog.empty() ||
-                 findBmsProgressLog.back() != logLine) {
-        findBmsProgressLog.push_back(logLine);
-      }
-      while (findBmsProgressLog.size() > 6) {
-        findBmsProgressLog.pop_front();
-      }
+  auto appendLogLine = [this](const std::string &logLine) {
+    if (logLine.empty()) {
+      return;
     }
+    if (!findBmsProgressLog.empty() &&
+        shouldReplaceFindBmsLogLine(findBmsProgressLog.back(), logLine)) {
+      findBmsProgressLog.back() = logLine;
+    } else if (findBmsProgressLog.empty() ||
+               findBmsProgressLog.back() != logLine) {
+      findBmsProgressLog.push_back(logLine);
+    }
+    while (findBmsProgressLog.size() > kFindBmsMaxLogLines) {
+      findBmsProgressLog.pop_front();
+    }
+  };
+
+  bool shouldRefresh = false;
+  for (const auto &progress : progressEvents) {
+    findBmsProgressMessage = progress.message;
+    findBmsProgressCurrent = progress.downloadedBytes;
+    findBmsProgressTotal = progress.totalBytes;
+    findBmsProgressFraction =
+        findBmsProgressFractionFor(progress, findBmsProgressFraction);
+    appendLogLine(findBmsProgressDisplayText(progress, true));
     shouldRefresh = true;
   }
   if (result) {
@@ -2652,10 +2704,7 @@ void MainMenuScene::applyFindBmsUpdates() {
     if (!findBmsResult.message.empty() &&
         (findBmsProgressLog.empty() ||
          findBmsProgressLog.back() != findBmsResult.message)) {
-      findBmsProgressLog.push_back(findBmsResult.message);
-      while (findBmsProgressLog.size() > 6) {
-        findBmsProgressLog.pop_front();
-      }
+      appendLogLine(findBmsResult.message);
     }
     if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
       startLibraryRefresh();
@@ -3590,6 +3639,9 @@ void MainMenuScene::cleanupScene() {
   findBmsModalTitleText = nullptr;
   findBmsStatusText = nullptr;
   findBmsDetailText = nullptr;
+  findBmsLogScrollView = nullptr;
+  findBmsLogContent = nullptr;
+  findBmsLogText = nullptr;
   findBmsCloseButton = nullptr;
   findBmsOpenButton = nullptr;
   findBmsGoogleButton = nullptr;
@@ -3619,7 +3671,7 @@ void MainMenuScene::cleanupScene() {
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
-  pendingFindBmsProgress.reset();
+  pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
   findBmsJobRunning = false;

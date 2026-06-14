@@ -28,6 +28,7 @@
 #include <unordered_map>
 
 class Button;
+class ScrollView;
 class View;
 
 class MainMenuScene : public Scene {
@@ -128,6 +129,9 @@ private:
   TextView *findBmsModalTitleText = nullptr;
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
+  ScrollView *findBmsLogScrollView = nullptr;
+  View *findBmsLogContent = nullptr;
+  TextView *findBmsLogText = nullptr;
   Button *findBmsCloseButton = nullptr;
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;
@@ -179,7 +183,7 @@ private:
   double findBmsProgressFraction = 0.0;
   std::deque<std::string> findBmsProgressLog;
   std::mutex findBmsUpdateMutex;
-  std::optional<BmsSearchDownloadProgress> pendingFindBmsProgress;
+  std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
   std::optional<BmsSearchResult> pendingFindBmsResult;
 
   LibraryFolderItem activeFolder;

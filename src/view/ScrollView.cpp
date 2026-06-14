@@ -43,6 +43,16 @@ void ScrollView::refreshContentLayout() {
   updateContentPosition();
 }
 
+void ScrollView::scrollToBottom() {
+  if (contentView == nullptr) {
+    return;
+  }
+  refreshContentLayout();
+  scrollOffset = std::max(
+      0.0f, static_cast<float>(contentView->getHeight() - getHeight()));
+  updateContentPosition();
+}
+
 void ScrollView::renderImpl(RenderContext &context) {
   if (contentView == nullptr) {
     return;
