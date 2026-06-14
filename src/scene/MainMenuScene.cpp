@@ -909,6 +909,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  startButton = nullptr;
+  chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
   findBmsButtonSlot = nullptr;
@@ -1034,6 +1036,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       selectedView->onSelected();
     }
     refreshReplayAvailability(&item);
+    setPlayableChartActionsVisible(!item.unavailable &&
+                                   !meta.BmsPath.empty());
     setFindBmsButtonVisible(item.unavailable &&
                             (!meta.SHA256.empty() || !meta.MD5.empty() ||
                              !meta.Title.empty()));
@@ -1345,7 +1349,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(readySettings);
   refreshReadySettingsSummary();
 
-  auto startButton = new Button(0, 0, 220, 86);
+  startButton = new Button(0, 0, 220, 86);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   startButtonText = buttonText;
   buttonText->setText("Start");
@@ -1446,7 +1450,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(jacketCard);
   right->addView(startButton);
 
-  auto *chartActionsRow = new View();
+  chartActionsRow = new View();
   chartActionsRow->setFlexDirection(FlexDirection::Row);
   chartActionsRow->setAlignItems(YGAlignStretch);
   chartActionsRow->setWidth(220);
@@ -2067,6 +2071,20 @@ void MainMenuScene::setReplayButtonVisible(bool visible) {
   }
 }
 
+void MainMenuScene::setPlayableChartActionsVisible(bool visible) {
+  if (startButton != nullptr) {
+    startButton->setVisible(visible);
+    startButton->setHeight(visible ? 86.0f : 0.0f);
+  }
+  if (chartActionsRow != nullptr) {
+    chartActionsRow->setVisible(visible);
+    chartActionsRow->setHeight(visible ? 58.0f : 0.0f);
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
 void MainMenuScene::startLibraryRefresh() {
   if (willStart.load() || replayExportInProgress.load()) {
     return;
@@ -2532,10 +2550,19 @@ void MainMenuScene::refreshFindBmsModal() {
   }
 
   const std::string manualSourceUrl = findBmsManualSourceUrl(findBmsResult);
+  const bool downloaded =
+      !running && findBmsResult.status == BmsSearchResult::Status::Downloaded;
   const bool hasSource =
       !manualSourceUrl.empty() &&
       findBmsResult.status != BmsSearchResult::Status::Downloaded &&
       findBmsResult.status != BmsSearchResult::Status::NotFound;
+  const bool hasSearchAction =
+      !downloaded &&
+      (!findBmsModalChart.meta.SHA256.empty() ||
+       !findBmsModalChart.meta.MD5.empty() ||
+       !findBmsModalChart.meta.Title.empty() ||
+       !findBmsModalChart.meta.Artist.empty());
+  const bool hasRefreshAction = !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
     findBmsCloseButtonText->setText(running ? "Cancel" : "Close");
   }
@@ -2556,17 +2583,13 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsOpenButton->setWidth((!running && hasSource) ? 180.0f : 0.0f);
   }
   if (findBmsGoogleButton != nullptr) {
-    const bool hasGoogleAction = !findBmsModalChart.meta.SHA256.empty() ||
-                                 !findBmsModalChart.meta.MD5.empty() ||
-                                 !findBmsModalChart.meta.Title.empty() ||
-                                 !findBmsModalChart.meta.Artist.empty();
-    findBmsGoogleButton->setVisible(!running && hasGoogleAction);
-    findBmsGoogleButton->setWidth((!running && hasGoogleAction) ? 150.0f
+    findBmsGoogleButton->setVisible(!running && hasSearchAction);
+    findBmsGoogleButton->setWidth((!running && hasSearchAction) ? 150.0f
                                                                 : 0.0f);
   }
   if (findBmsRefreshButton != nullptr) {
-    findBmsRefreshButton->setVisible(!running);
-    findBmsRefreshButton->setWidth(!running ? 150.0f : 0.0f);
+    findBmsRefreshButton->setVisible(hasRefreshAction);
+    findBmsRefreshButton->setWidth(hasRefreshAction ? 150.0f : 0.0f);
   }
 
   styleActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
@@ -2576,17 +2599,14 @@ void MainMenuScene::refreshFindBmsModal() {
                     !running && hasSource, Color(29, 73, 120, 224),
                     Color(40, 96, 156, 236), Color(58, 129, 204, 246),
                     Color(105, 162, 222, 255));
-  const bool hasGoogleAction = !findBmsModalChart.meta.SHA256.empty() ||
-                               !findBmsModalChart.meta.MD5.empty() ||
-                               !findBmsModalChart.meta.Title.empty() ||
-                               !findBmsModalChart.meta.Artist.empty();
   styleActionButton(findBmsGoogleButton, findBmsGoogleButtonText,
-                    !running && hasGoogleAction, Color(47, 54, 88, 224),
+                    !running && hasSearchAction, Color(47, 54, 88, 224),
                     Color(65, 75, 119, 236), Color(82, 94, 148, 246),
                     Color(126, 141, 219, 255));
-  styleActionButton(findBmsRefreshButton, findBmsRefreshButtonText, !running,
-                    Color(38, 97, 87, 232), Color(50, 121, 109, 242),
-                    Color(65, 146, 130, 250), Color(112, 212, 191, 255));
+  styleActionButton(findBmsRefreshButton, findBmsRefreshButtonText,
+                    hasRefreshAction, Color(38, 97, 87, 232),
+                    Color(50, 121, 109, 242), Color(65, 146, 130, 250),
+                    Color(112, 212, 191, 255));
   findBmsModalRoot->applyYogaLayout();
 }
 
@@ -3543,6 +3563,8 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  startButton = nullptr;
+  chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
   findBmsButtonSlot = nullptr;

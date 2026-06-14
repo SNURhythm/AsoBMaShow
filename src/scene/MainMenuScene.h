@@ -101,6 +101,8 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  Button *startButton = nullptr;
+  View *chartActionsRow = nullptr;
   View *replayButtonSlot = nullptr;
   Button *replayButton = nullptr;
   View *findBmsButtonSlot = nullptr;
@@ -238,6 +240,7 @@ private:
   void startSelectedChart();
   void openChartViewerForSelection();
   void revealSelectedChartInFileManager();
+  void setPlayableChartActionsVisible(bool visible);
   void setFindBmsButtonVisible(bool visible);
   void openFindBmsForSelection();
   void buildFindBmsModal();
