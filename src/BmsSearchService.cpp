@@ -8,9 +8,11 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -31,6 +33,13 @@
 #define ASOBMSHOW_HAS_LIBARCHIVE 1
 #else
 #define ASOBMSHOW_HAS_LIBARCHIVE 0
+#endif
+
+#if __has_include(<iconv.h>)
+#include <iconv.h>
+#define ASOBMSHOW_HAS_ICONV 1
+#else
+#define ASOBMSHOW_HAS_ICONV 0
 #endif
 
 #if !ASOBMSHOW_HAS_LIBARCHIVE
@@ -59,9 +68,15 @@ struct ParsedUrl {
 struct DownloadCandidate {
   std::string originalUrl;
   std::string downloadUrl;
+  std::string archiveName;
   bool supported = false;
   bool knownUnsupportedArchive = false;
   std::string reason;
+};
+
+struct ExtractedLink {
+  std::string url;
+  std::string label;
 };
 
 struct HorieArchiveNameParts {
@@ -80,11 +95,86 @@ struct HorieCandidateSearchResult {
   std::string errorMessage;
 };
 
+class GoogleDriveDriver {
+public:
+  static bool isHost(const ParsedUrl &url);
+  static std::optional<DownloadCandidate> classify(const std::string &url);
+  static bool resolveWarningDownload(
+      const std::string &downloadUrl, const std::string &displayUrl,
+      const std::filesystem::path &archivePath, std::atomic_bool &cancelled,
+      std::string &errorMessage,
+      BmsSearchDownloadProgressCallback progressCallback);
+
+private:
+  static std::optional<std::string> fileId(const std::string &url);
+  static std::optional<std::string> fileIdFromUrls(
+      const std::string &downloadUrl, const std::string &displayUrl);
+  static std::optional<std::string> confirmationUrl(
+      const std::string &fileId, const std::string &html,
+      const std::string &baseUrl);
+};
+
+class DropboxDriver {
+public:
+  static bool isHost(const ParsedUrl &url);
+  static std::optional<DownloadCandidate> classify(const std::string &url);
+
+private:
+  static std::string forceDownloadUrl(const std::string &url);
+};
+
+class DirectArchiveDriver {
+public:
+  static std::optional<DownloadCandidate> classify(const std::string &url);
+};
+
+class BmsSearchDriver {
+public:
+  static bool isHost(const ParsedUrl &url);
+  static std::vector<std::string> bmsLinks(const std::string &patternUrl,
+                                           const std::string &html);
+  static std::vector<DownloadCandidate>
+  downloadCandidates(const std::string &bmsUrl, const std::string &html);
+};
+
+class HorieYuukaDriver {
+public:
+  static std::vector<std::string>
+  searchQueries(const std::string &title, const std::string &artist,
+                const std::string &sha256, const std::string &md5);
+  static bool tryDownload(
+      const std::vector<std::string> &queries, const std::string &title,
+      const std::string &artist, bool requireTitleMatch,
+      const std::string &archiveKey, const std::filesystem::path &libraryRoot,
+      std::atomic_bool &cancelled,
+      BmsSearchDownloadProgressCallback progressCallback,
+      BmsSearchResult &result);
+  static bool downloadCandidateById(
+      const BmsSearchCandidate &candidate, const std::string &archiveKey,
+      const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
+      BmsSearchDownloadProgressCallback progressCallback,
+      BmsSearchResult &result);
+
+private:
+  static std::string searchUrl(const std::string &folder,
+                               const std::string &query);
+  static BmsSearchCandidate candidateFromJson(const json &item,
+                                              const std::string &query,
+                                              const std::string &sourceUrl);
+  static HorieCandidateSearchResult
+  findCandidates(const std::string &query, const std::string &title,
+                 const std::string &artist, bool requireTitleMatch,
+                 bool requireArtistMatch);
+};
+
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback);
 std::vector<std::string> extractLinks(const std::string &baseUrl,
                                       const std::string &html);
+std::vector<ExtractedLink> extractLinkRefs(const std::string &baseUrl,
+                                           const std::string &html);
+std::string urlEncode(const std::string &value);
 
 std::string trimCopy(const std::string &value) {
   const auto begin =
@@ -110,6 +200,12 @@ std::string lowerCopy(std::string value) {
 bool endsWith(std::string_view value, std::string_view suffix) {
   return value.size() >= suffix.size() &&
          value.substr(value.size() - suffix.size()) == suffix;
+}
+
+bool hostMatches(const std::string &host, std::string_view domain) {
+  return std::string_view(host) == domain ||
+         (host.size() > domain.size() &&
+          host.ends_with(std::string(".") + std::string(domain)));
 }
 
 std::string replaceAll(std::string value, std::string_view needle,
@@ -265,6 +361,70 @@ std::string queryParam(const ParsedUrl &url, const std::string &name) {
   return "";
 }
 
+std::string urlDecode(const std::string &value, bool plusAsSpace = false) {
+  std::string result;
+  result.reserve(value.size());
+  for (size_t i = 0; i < value.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    if (c == '%' && i + 2 < value.size() &&
+        std::isxdigit(static_cast<unsigned char>(value[i + 1])) != 0 &&
+        std::isxdigit(static_cast<unsigned char>(value[i + 2])) != 0) {
+      const std::string hex = value.substr(i + 1, 2);
+      result.push_back(static_cast<char>(std::strtoul(hex.c_str(), nullptr, 16)));
+      i += 2;
+    } else if (plusAsSpace && c == '+') {
+      result.push_back(' ');
+    } else {
+      result.push_back(static_cast<char>(c));
+    }
+  }
+  return result;
+}
+
+std::string setQueryParameter(std::string url, const std::string &name,
+                              const std::string &value,
+                              const std::set<std::string> &removeNames = {}) {
+  std::string fragment;
+  const size_t fragmentStart = url.find('#');
+  if (fragmentStart != std::string::npos) {
+    fragment = url.substr(fragmentStart);
+    url.erase(fragmentStart);
+  }
+
+  std::string base = url;
+  std::string query;
+  const size_t queryStart = url.find('?');
+  if (queryStart != std::string::npos) {
+    base = url.substr(0, queryStart);
+    query = url.substr(queryStart + 1);
+  }
+
+  std::vector<std::string> parts;
+  std::stringstream stream(query);
+  std::string part;
+  while (std::getline(stream, part, '&')) {
+    if (part.empty()) {
+      continue;
+    }
+    const size_t eq = part.find('=');
+    const std::string key = eq == std::string::npos ? part : part.substr(0, eq);
+    if (key == name || removeNames.contains(key)) {
+      continue;
+    }
+    parts.push_back(part);
+  }
+  parts.push_back(name + "=" + urlEncode(value));
+
+  std::string rebuilt = base + "?";
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i > 0) {
+      rebuilt += "&";
+    }
+    rebuilt += parts[i];
+  }
+  return rebuilt + fragment;
+}
+
 std::string jsonStringAt(const json &object, const char *key,
                          const std::string &fallback = "") {
   if (!object.is_object()) {
@@ -308,7 +468,16 @@ std::string fileNameFromUrl(const std::string &url) {
     return "";
   }
   std::filesystem::path path(parsed->path);
-  return lowerCopy(path.filename().string());
+  return lowerCopy(urlDecode(path.filename().string()));
+}
+
+std::string displayFileNameFromUrl(const std::string &url) {
+  const auto parsed = parseUrl(url);
+  if (!parsed) {
+    return "";
+  }
+  std::filesystem::path path(parsed->path);
+  return trimCopy(urlDecode(path.filename().string()));
 }
 
 std::string archiveExtensionFromName(std::string name) {
@@ -336,21 +505,96 @@ std::string stripArchiveExtension(std::string name) {
 
 std::string safeStorageKey(const std::string &value) {
   std::string result;
-  result.reserve(std::min<size_t>(value.size(), 96));
+  result.reserve(std::min<size_t>(value.size(), 128));
   for (unsigned char c : value) {
-    if (std::isalnum(c) || c == '-' || c == '_' || c == '.') {
+    if (c >= 0x80 || std::isalnum(c) || c == '-' || c == '_' || c == '.' ||
+        c == ' ' || c == '[' || c == ']' || c == '(' || c == ')') {
       result.push_back(static_cast<char>(c));
     } else if (!result.empty() && result.back() != '_') {
       result.push_back('_');
     }
-    if (result.size() >= 96) {
+    if (result.size() >= 128) {
       break;
     }
   }
-  while (!result.empty() && result.back() == '_') {
+  while (!result.empty() &&
+         (result.back() == '_' || result.back() == ' ' || result.back() == '.')) {
     result.pop_back();
   }
   return result.empty() ? "archive" : result;
+}
+
+std::string archiveNameFromUrl(const std::string &url) {
+  const std::string name = displayFileNameFromUrl(url);
+  return archiveExtensionFromName(name).empty() ? std::string() : name;
+}
+
+std::string preferredArchiveName(const std::string &suggestedArchiveName,
+                                 const std::string &displayUrl,
+                                 const std::string &downloadUrl,
+                                 const std::string &archiveKey,
+                                 const std::string &archiveExtension) {
+  std::string name = trimCopy(suggestedArchiveName);
+  if (archiveExtensionFromName(name).empty()) {
+    name = archiveNameFromUrl(displayUrl);
+  }
+  if (archiveExtensionFromName(name).empty()) {
+    name = archiveNameFromUrl(downloadUrl);
+  }
+
+  if (!name.empty()) {
+    return safeStorageKey(name);
+  }
+
+  std::string fallback =
+      archiveKey.empty()
+          ? std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count())
+          : archiveKey;
+  fallback = safeStorageKey(fallback);
+  return fallback + (archiveExtension.empty() ? ".archive" : archiveExtension);
+}
+
+std::string storageKeyFromArchiveName(const std::string &archiveName) {
+  std::string key = stripArchiveExtension(archiveName);
+  if (key.empty()) {
+    key = archiveName;
+  }
+  return safeStorageKey(key);
+}
+
+std::string collapseWhitespace(const std::string &value) {
+  std::string result;
+  bool lastWasSpace = true;
+  for (unsigned char c : value) {
+    if (std::isspace(c) != 0) {
+      if (!lastWasSpace) {
+        result.push_back(' ');
+      }
+      lastWasSpace = true;
+    } else {
+      result.push_back(static_cast<char>(c));
+      lastWasSpace = false;
+    }
+  }
+  return trimCopy(result);
+}
+
+std::string plainTextFromHtmlFragment(const std::string &html) {
+  static const std::regex tagPattern(R"(<[^>]*>)", std::regex::icase);
+  return collapseWhitespace(
+      htmlDecode(std::regex_replace(html, tagPattern, " ")));
+}
+
+std::string archiveNameFromText(const std::string &text) {
+  std::string cleaned = plainTextFromHtmlFragment(text);
+  for (const std::string &prefix : {"Download ", "download "}) {
+    if (cleaned.starts_with(prefix)) {
+      cleaned = trimCopy(cleaned.substr(prefix.size()));
+      break;
+    }
+  }
+  return archiveExtensionFromName(cleaned).empty() ? std::string() : cleaned;
 }
 
 HorieArchiveNameParts parseHorieArchiveName(const json &item) {
@@ -803,10 +1047,9 @@ std::vector<std::string> horieArtistQueryVariants(const std::string &artist) {
   return variants;
 }
 
-std::vector<std::string> horieSearchQueries(const std::string &title,
-                                            const std::string &artist,
-                                            const std::string &sha256,
-                                            const std::string &md5) {
+std::vector<std::string> HorieYuukaDriver::searchQueries(
+    const std::string &title, const std::string &artist,
+    const std::string &sha256, const std::string &md5) {
   std::vector<std::string> queries;
   const std::string trimmedTitle = trimCopy(title);
   const std::string minimalTitle = stripTitleDecorations(trimmedTitle);
@@ -955,18 +1198,18 @@ bool titleMatchesArchiveResult(const json &item, const std::string &title) {
   return matchedTokens >= requiredMatches;
 }
 
-bool isBmsSearchHost(const ParsedUrl &url) {
-  return url.host == "bmssearch.net" || url.host == "www.bmssearch.net";
+bool BmsSearchDriver::isHost(const ParsedUrl &url) {
+  return hostMatches(url.host, "bmssearch.net");
 }
 
-bool isGoogleDriveHost(const ParsedUrl &url) {
+bool GoogleDriveDriver::isHost(const ParsedUrl &url) {
   return url.host == "drive.google.com" || url.host == "docs.google.com" ||
          url.host == "drive.usercontent.google.com";
 }
 
-std::optional<std::string> googleDriveFileId(const std::string &url) {
+std::optional<std::string> GoogleDriveDriver::fileId(const std::string &url) {
   const auto parsed = parseUrl(url);
-  if (!parsed || !isGoogleDriveHost(*parsed)) {
+  if (!parsed || !isHost(*parsed)) {
     return std::nullopt;
   }
   if (parsed->path.starts_with("/drive/folders/")) {
@@ -988,6 +1231,43 @@ std::optional<std::string> googleDriveFileId(const std::string &url) {
   return std::nullopt;
 }
 
+bool DropboxDriver::isHost(const ParsedUrl &url) {
+  return hostMatches(url.host, "dropbox.com") ||
+         hostMatches(url.host, "dropboxusercontent.com");
+}
+
+std::string DropboxDriver::forceDownloadUrl(const std::string &url) {
+  return setQueryParameter(url, "dl", "1", {"raw"});
+}
+
+std::optional<DownloadCandidate> DropboxDriver::classify(
+    const std::string &url) {
+  const auto parsed = parseUrl(url);
+  if (!parsed || !isHost(*parsed)) {
+    return std::nullopt;
+  }
+
+  DownloadCandidate candidate;
+  candidate.originalUrl = url;
+  candidate.downloadUrl = forceDownloadUrl(url);
+  candidate.archiveName = archiveNameFromUrl(url);
+  const std::string ext = archiveExtensionFromName(candidate.archiveName);
+  if (isSupportedArchiveExtension(ext)) {
+    candidate.supported = true;
+    return candidate;
+  }
+  if (isRecognizedArchiveExtension(ext)) {
+    candidate.knownUnsupportedArchive = true;
+    candidate.reason =
+        "This build cannot extract " + ext + " archives automatically.";
+    return candidate;
+  }
+
+  candidate.reason =
+      "Dropbox link did not point to a supported archive file.";
+  return candidate;
+}
+
 std::optional<std::string> htmlAttributeValue(const std::string &tag,
                                               const std::string &attribute) {
   const std::regex attributePattern(
@@ -999,7 +1279,7 @@ std::optional<std::string> htmlAttributeValue(const std::string &tag,
   return std::nullopt;
 }
 
-std::optional<std::string> googleDriveConfirmationUrl(
+std::optional<std::string> GoogleDriveDriver::confirmationUrl(
     const std::string &fileId, const std::string &html,
     const std::string &baseUrl) {
   const std::string normalized = normalizeEmbeddedUrl(html);
@@ -1071,7 +1351,7 @@ std::optional<std::string> googleDriveConfirmationUrl(
 
   for (const auto &link : extractLinks(baseUrl, normalized)) {
     const auto parsed = parseUrl(link);
-    if (!parsed || !isGoogleDriveHost(*parsed)) {
+    if (!parsed || !isHost(*parsed)) {
       continue;
     }
     const bool looksLikeDownload =
@@ -1093,25 +1373,31 @@ std::optional<std::string> googleDriveConfirmationUrl(
   return std::nullopt;
 }
 
-DownloadCandidate classifyLink(const std::string &url) {
+std::optional<DownloadCandidate> GoogleDriveDriver::classify(
+    const std::string &url) {
+  const auto driveId = fileId(url);
+  if (!driveId) {
+    return std::nullopt;
+  }
+
+  DownloadCandidate candidate;
+  candidate.originalUrl = url;
+  candidate.archiveName = archiveNameFromUrl(url);
+  candidate.downloadUrl =
+      "https://drive.google.com/uc?export=download&id=" + *driveId;
+  candidate.supported = true;
+  return candidate;
+}
+
+std::optional<DownloadCandidate> DirectArchiveDriver::classify(
+    const std::string &url) {
   DownloadCandidate candidate;
   candidate.originalUrl = url;
   candidate.downloadUrl = url;
-
+  candidate.archiveName = archiveNameFromUrl(url);
   const auto parsed = parseUrl(url);
   if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) {
     candidate.reason = "Only HTTP and HTTPS links are supported.";
-    return candidate;
-  }
-  if (isBmsSearchHost(*parsed)) {
-    candidate.reason = "Internal BMS Search link.";
-    return candidate;
-  }
-
-  if (const auto driveId = googleDriveFileId(url)) {
-    candidate.downloadUrl =
-        "https://drive.google.com/uc?export=download&id=" + *driveId;
-    candidate.supported = true;
     return candidate;
   }
 
@@ -1129,25 +1415,89 @@ DownloadCandidate classifyLink(const std::string &url) {
   }
 
   candidate.reason =
-      "This link is not a direct archive or supported Drive file.";
+      "This link is not a direct archive or supported cloud file.";
   return candidate;
 }
 
-std::vector<std::string> extractLinks(const std::string &baseUrl,
-                                      const std::string &html) {
+DownloadCandidate classifyLink(const std::string &url) {
+  DownloadCandidate candidate;
+  candidate.originalUrl = url;
+  candidate.downloadUrl = url;
+
+  const auto parsed = parseUrl(url);
+  if (!parsed || (parsed->scheme != "http" && parsed->scheme != "https")) {
+    candidate.reason = "Only HTTP and HTTPS links are supported.";
+    return candidate;
+  }
+  if (BmsSearchDriver::isHost(*parsed)) {
+    candidate.reason = "Internal BMS Search link.";
+    return candidate;
+  }
+  if (auto dropbox = DropboxDriver::classify(url)) {
+    return *dropbox;
+  }
+  if (auto googleDrive = GoogleDriveDriver::classify(url)) {
+    return *googleDrive;
+  }
+  if (auto direct = DirectArchiveDriver::classify(url)) {
+    return *direct;
+  }
+  candidate.reason =
+      "This link is not a direct archive or supported cloud file.";
+  return candidate;
+}
+
+void appendExtractedLink(std::vector<ExtractedLink> &links,
+                         std::set<std::string> &seen,
+                         const std::string &baseUrl, const std::string &link,
+                         const std::string &label = "") {
+  const std::string trimmed = trimCopy(link);
+  if (trimmed.empty() || trimmed.starts_with("#") ||
+      trimmed.starts_with("javascript:")) {
+    return;
+  }
+  const std::string resolved = resolveUrl(baseUrl, trimmed);
+  if (!seen.insert(resolved).second) {
+    if (!label.empty()) {
+      for (auto &existing : links) {
+        if (existing.url == resolved && existing.label.empty()) {
+          existing.label = label;
+          break;
+        }
+      }
+    }
+    return;
+  }
+  links.push_back({resolved, label});
+}
+
+std::vector<ExtractedLink> extractLinkRefs(const std::string &baseUrl,
+                                           const std::string &html) {
   const std::string normalized = normalizeEmbeddedUrl(html);
-  std::set<std::string> uniqueLinks;
+  std::set<std::string> seen;
+  std::vector<ExtractedLink> links;
+
+  const std::regex anchorPattern(R"(<a\b([^>]*)>([\s\S]*?)</a>)",
+                                 std::regex::icase);
+  for (auto it = std::sregex_iterator(normalized.begin(), normalized.end(),
+                                      anchorPattern);
+       it != std::sregex_iterator(); ++it) {
+    const std::string attributes = (*it)[1].str();
+    const std::string label = plainTextFromHtmlFragment((*it)[2].str());
+    if (const auto href = htmlAttributeValue(attributes, "href")) {
+      appendExtractedLink(links, seen, baseUrl, *href, label);
+    }
+    if (const auto dataUrl = htmlAttributeValue(attributes, "data-url")) {
+      appendExtractedLink(links, seen, baseUrl, *dataUrl, label);
+    }
+  }
 
   const std::regex hrefPattern(R"((?:href|data-url)\s*=\s*["']([^"']+)["'])",
                                std::regex::icase);
   for (auto it = std::sregex_iterator(normalized.begin(), normalized.end(),
                                       hrefPattern);
        it != std::sregex_iterator(); ++it) {
-    const std::string link = trimCopy((*it)[1].str());
-    if (!link.empty() && !link.starts_with("#") &&
-        !link.starts_with("javascript:")) {
-      uniqueLinks.insert(resolveUrl(baseUrl, link));
-    }
+    appendExtractedLink(links, seen, baseUrl, (*it)[1].str());
   }
 
   const std::regex quotedUrlPattern(R"(["'](https?://[^"'\s<>]+)["'])",
@@ -1155,30 +1505,51 @@ std::vector<std::string> extractLinks(const std::string &baseUrl,
   for (auto it = std::sregex_iterator(normalized.begin(), normalized.end(),
                                       quotedUrlPattern);
        it != std::sregex_iterator(); ++it) {
-    uniqueLinks.insert(htmlDecode((*it)[1].str()));
+    appendExtractedLink(links, seen, baseUrl, htmlDecode((*it)[1].str()));
   }
 
-  return {uniqueLinks.begin(), uniqueLinks.end()};
+  return links;
 }
 
-std::vector<std::string> bmsSearchBmsLinks(const std::string &patternUrl,
-                                           const std::string &html) {
+std::vector<std::string> extractLinks(const std::string &baseUrl,
+                                      const std::string &html) {
+  std::vector<std::string> result;
+  for (const auto &link : extractLinkRefs(baseUrl, html)) {
+    result.push_back(link.url);
+  }
+  return result;
+}
+
+std::vector<std::string> BmsSearchDriver::bmsLinks(
+    const std::string &patternUrl, const std::string &html) {
   std::vector<std::string> result;
   for (const auto &link : extractLinks(patternUrl, html)) {
     const auto parsed = parseUrl(link);
-    if (parsed && isBmsSearchHost(*parsed) &&
-        parsed->path.starts_with("/bmses/")) {
+    if (parsed && isHost(*parsed) && parsed->path.starts_with("/bmses/")) {
       result.push_back(link);
     }
   }
   return result;
 }
 
-std::vector<DownloadCandidate> downloadCandidates(const std::string &bmsUrl,
-                                                  const std::string &html) {
+std::vector<DownloadCandidate> BmsSearchDriver::downloadCandidates(
+    const std::string &bmsUrl, const std::string &html) {
   std::vector<DownloadCandidate> result;
-  for (const auto &link : extractLinks(bmsUrl, html)) {
-    auto candidate = classifyLink(link);
+  for (const auto &link : extractLinkRefs(bmsUrl, html)) {
+    auto candidate = classifyLink(link.url);
+    if (candidate.archiveName.empty()) {
+      candidate.archiveName = archiveNameFromText(link.label);
+    }
+    if (!candidate.supported && !candidate.archiveName.empty()) {
+      const auto parsed = parseUrl(candidate.originalUrl);
+      const std::string ext = archiveExtensionFromName(candidate.archiveName);
+      if (parsed && DropboxDriver::isHost(*parsed) &&
+          isSupportedArchiveExtension(ext)) {
+        candidate.supported = true;
+        candidate.knownUnsupportedArchive = false;
+        candidate.reason.clear();
+      }
+    }
     if (!candidate.reason.empty() || candidate.supported) {
       result.push_back(std::move(candidate));
     }
@@ -1215,6 +1586,151 @@ bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
   outPath = relative;
   return true;
 }
+
+bool isValidUtf8(const std::string &value) {
+  const auto *bytes = reinterpret_cast<const unsigned char *>(value.data());
+  size_t i = 0;
+  while (i < value.size()) {
+    const unsigned char c = bytes[i];
+    if (c <= 0x7f) {
+      ++i;
+      continue;
+    }
+    if (c >= 0xc2 && c <= 0xdf) {
+      if (i + 1 >= value.size() || (bytes[i + 1] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 2;
+      continue;
+    }
+    if (c == 0xe0) {
+      if (i + 2 >= value.size() || bytes[i + 1] < 0xa0 ||
+          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 3;
+      continue;
+    }
+    if ((c >= 0xe1 && c <= 0xec) || c == 0xee || c == 0xef) {
+      if (i + 2 >= value.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
+          (bytes[i + 2] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 3;
+      continue;
+    }
+    if (c == 0xed) {
+      if (i + 2 >= value.size() || bytes[i + 1] < 0x80 ||
+          bytes[i + 1] > 0x9f || (bytes[i + 2] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 3;
+      continue;
+    }
+    if (c == 0xf0) {
+      if (i + 3 >= value.size() || bytes[i + 1] < 0x90 ||
+          bytes[i + 1] > 0xbf || (bytes[i + 2] & 0xc0) != 0x80 ||
+          (bytes[i + 3] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 4;
+      continue;
+    }
+    if (c >= 0xf1 && c <= 0xf3) {
+      if (i + 3 >= value.size() || (bytes[i + 1] & 0xc0) != 0x80 ||
+          (bytes[i + 2] & 0xc0) != 0x80 ||
+          (bytes[i + 3] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 4;
+      continue;
+    }
+    if (c == 0xf4) {
+      if (i + 3 >= value.size() || bytes[i + 1] < 0x80 ||
+          bytes[i + 1] > 0x8f || (bytes[i + 2] & 0xc0) != 0x80 ||
+          (bytes[i + 3] & 0xc0) != 0x80) {
+        return false;
+      }
+      i += 4;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+#if ASOBMSHOW_HAS_ICONV
+std::optional<std::string> convertTextToUtf8(const std::string &input,
+                                             const char *fromEncoding) {
+  iconv_t converter = iconv_open("UTF-8", fromEncoding);
+  if (converter == reinterpret_cast<iconv_t>(-1)) {
+    return std::nullopt;
+  }
+
+  std::string output(std::max<size_t>(input.size() * 4, 32), '\0');
+  char *inputPtr = const_cast<char *>(input.data());
+  size_t inputBytes = input.size();
+  size_t outputOffset = 0;
+
+  while (inputBytes > 0) {
+    char *outputPtr = output.data() + outputOffset;
+    size_t outputBytes = output.size() - outputOffset;
+    const size_t status =
+        iconv(converter, &inputPtr, &inputBytes, &outputPtr, &outputBytes);
+    outputOffset = output.size() - outputBytes;
+    if (status != static_cast<size_t>(-1)) {
+      continue;
+    }
+    if (errno != E2BIG) {
+      iconv_close(converter);
+      return std::nullopt;
+    }
+    output.resize(output.size() * 2);
+  }
+
+  iconv_close(converter);
+  output.resize(outputOffset);
+  if (!isValidUtf8(output)) {
+    return std::nullopt;
+  }
+  return output;
+}
+#endif
+
+#if ASOBMSHOW_HAS_LIBARCHIVE
+std::string archiveEntryPathnameUtf8(archive_entry *entry) {
+  if (entry == nullptr) {
+    return "";
+  }
+  if (const char *utf8Name = archive_entry_pathname_utf8(entry);
+      utf8Name != nullptr && utf8Name[0] != '\0') {
+    return utf8Name;
+  }
+  if (const wchar_t *wideName = archive_entry_pathname_w(entry);
+      wideName != nullptr && wideName[0] != L'\0') {
+    return ws2s_utf8(wideName);
+  }
+
+  const char *rawName = archive_entry_pathname(entry);
+  if (rawName == nullptr || rawName[0] == '\0') {
+    return "";
+  }
+
+  const std::string raw(rawName);
+  if (isValidUtf8(raw)) {
+    return raw;
+  }
+
+#if ASOBMSHOW_HAS_ICONV
+  for (const char *encoding : {"CP932", "SHIFT_JIS", "SHIFT-JIS", "SJIS"}) {
+    if (const auto converted = convertTextToUtf8(raw, encoding)) {
+      return *converted;
+    }
+  }
+#endif
+  return raw;
+}
+#endif
 
 #if !ASOBMSHOW_HAS_LIBARCHIVE
 bool hasZipSignature(const std::filesystem::path &path) {
@@ -1360,16 +1876,34 @@ bool extractArchiveWithLibarchive(
   int extractedFiles = 0;
   std::uint64_t entryIndex = 0;
   archive_entry *entry = nullptr;
-  while ((status = archive_read_next_header(archiveHandle, &entry)) ==
-         ARCHIVE_OK) {
-    ++entryIndex;
-    const char *entryName = archive_entry_pathname_utf8(entry);
-    if (entryName == nullptr || entryName[0] == '\0') {
-      entryName = archive_entry_pathname(entry);
+  for (;;) {
+    status = archive_read_next_header(archiveHandle, &entry);
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
+    if (status == ARCHIVE_RETRY) {
+      continue;
+    }
+    if (status < ARCHIVE_WARN) {
+      ok = false;
+      errorMessage =
+          "Could not read archive: " + archiveErrorString(archiveHandle, "");
+      break;
+    }
+    if (status == ARCHIVE_WARN) {
+      SDL_Log("Continuing after archive warning: %s",
+              archiveErrorString(archiveHandle, "").c_str());
+    }
+    if (entry == nullptr) {
+      archive_read_data_skip(archiveHandle);
+      continue;
     }
 
+    ++entryIndex;
+    const std::string entryName = archiveEntryPathnameUtf8(entry);
+
     std::filesystem::path relativePath;
-    if (entryName == nullptr || !safeArchivePath(entryName, relativePath)) {
+    if (!safeArchivePath(entryName, relativePath)) {
       archive_read_data_skip(archiveHandle);
       continue;
     }
@@ -1436,11 +1970,6 @@ bool extractArchiveWithLibarchive(
     ++extractedFiles;
   }
 
-  if (ok && status != ARCHIVE_EOF) {
-    ok = false;
-    errorMessage =
-        "Could not read archive: " + archiveErrorString(archiveHandle, "");
-  }
   archive_read_free(archiveHandle);
 
   if (!ok) {
@@ -1613,20 +2142,20 @@ htmlBodyFromDownloadedFile(const std::filesystem::path &path) {
   return std::nullopt;
 }
 
-std::optional<std::string> googleDriveFileIdFromUrls(
+std::optional<std::string> GoogleDriveDriver::fileIdFromUrls(
     const std::string &downloadUrl, const std::string &displayUrl) {
-  if (const auto id = googleDriveFileId(displayUrl)) {
+  if (const auto id = fileId(displayUrl)) {
     return id;
   }
-  return googleDriveFileId(downloadUrl);
+  return fileId(downloadUrl);
 }
 
-bool resolveGoogleDriveWarningDownload(
+bool GoogleDriveDriver::resolveWarningDownload(
     const std::string &downloadUrl, const std::string &displayUrl,
     const std::filesystem::path &archivePath, std::atomic_bool &cancelled,
     std::string &errorMessage,
     BmsSearchDownloadProgressCallback progressCallback) {
-  const auto fileId = googleDriveFileIdFromUrls(downloadUrl, displayUrl);
+  const auto fileId = fileIdFromUrls(downloadUrl, displayUrl);
   if (!fileId) {
     return true;
   }
@@ -1636,9 +2165,9 @@ bool resolveGoogleDriveWarningDownload(
     return true;
   }
 
-  const auto confirmationUrl =
-      googleDriveConfirmationUrl(*fileId, *htmlBody, downloadUrl);
-  if (!confirmationUrl) {
+  const auto confirmedDownloadUrl =
+      confirmationUrl(*fileId, *htmlBody, downloadUrl);
+  if (!confirmedDownloadUrl) {
     errorMessage = "Google Drive returned an HTML page instead of an archive.";
     return false;
   }
@@ -1646,8 +2175,8 @@ bool resolveGoogleDriveWarningDownload(
   if (progressCallback) {
     progressCallback({.message = "Confirming Google Drive download"});
   }
-  if (!downloadUrlToFile(*confirmationUrl, archivePath, cancelled, errorMessage,
-                         progressCallback)) {
+  if (!downloadUrlToFile(*confirmedDownloadUrl, archivePath, cancelled,
+                         errorMessage, progressCallback)) {
     return false;
   }
 
@@ -1991,15 +2520,22 @@ bool downloadAndExtractArchive(
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
-    BmsSearchResult &result, const std::string &storageKey = "") {
-  const std::string key =
-      !storageKey.empty()
-          ? safeStorageKey(storageKey)
-          : (!archiveKey.empty()
-                 ? safeStorageKey(archiveKey)
-                 : std::to_string(std::chrono::steady_clock::now()
-                                      .time_since_epoch()
-                                      .count()));
+    BmsSearchResult &result, const std::string &suggestedArchiveName = "") {
+  result.downloadUrl = displayUrl.empty() ? downloadUrl : displayUrl;
+  std::string archiveExtension = archiveExtensionFromUrl(result.downloadUrl);
+  if (archiveExtension.empty()) {
+    archiveExtension = archiveExtensionFromUrl(downloadUrl);
+  }
+  if (archiveExtension.empty()) {
+    archiveExtension = archiveExtensionFromName(suggestedArchiveName);
+  }
+  if (archiveExtension.empty()) {
+    archiveExtension = ".archive";
+  }
+  const std::string archiveName = preferredArchiveName(
+      suggestedArchiveName, result.downloadUrl, downloadUrl, archiveKey,
+      archiveExtension);
+  const std::string key = storageKeyFromArchiveName(archiveName);
   const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);
   const std::filesystem::path archiveDirectory = baseDirectory / "_archives";
   const std::filesystem::path extractDirectory = baseDirectory / key;
@@ -2011,16 +2547,7 @@ bool downloadAndExtractArchive(
     return false;
   }
 
-  result.downloadUrl = displayUrl.empty() ? downloadUrl : displayUrl;
-  std::string archiveExtension = archiveExtensionFromUrl(result.downloadUrl);
-  if (archiveExtension.empty()) {
-    archiveExtension = archiveExtensionFromUrl(downloadUrl);
-  }
-  if (archiveExtension.empty()) {
-    archiveExtension = ".archive";
-  }
-  const std::filesystem::path archivePath =
-      archiveDirectory / (key + archiveExtension);
+  const std::filesystem::path archivePath = archiveDirectory / archiveName;
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }
@@ -2035,7 +2562,7 @@ bool downloadAndExtractArchive(
   }
 
   std::string driveWarningError;
-  if (!resolveGoogleDriveWarningDownload(
+  if (!GoogleDriveDriver::resolveWarningDownload(
           downloadUrl, result.downloadUrl, archivePath, cancelled,
           driveWarningError, progressCallback)) {
     std::string debugError;
@@ -2137,15 +2664,14 @@ bool downloadAndExtractArchive(
   return true;
 }
 
-std::string horieSearchUrl(const std::string &folder,
-                           const std::string &query) {
+std::string HorieYuukaDriver::searchUrl(const std::string &folder,
+                                        const std::string &query) {
   return std::string(kHorieApiOrigin) + "/api/v1/folders/" + folder +
          "/files?limit=5&offset=0&q=" + urlEncode(query);
 }
 
-BmsSearchCandidate horieCandidateFromJson(const json &item,
-                                          const std::string &query,
-                                          const std::string &sourceUrl) {
+BmsSearchCandidate HorieYuukaDriver::candidateFromJson(
+    const json &item, const std::string &query, const std::string &sourceUrl) {
   BmsSearchCandidate candidate;
   candidate.source = BmsSearchCandidate::Source::Horie;
   candidate.id = jsonStringAt(item, "id");
@@ -2158,14 +2684,13 @@ BmsSearchCandidate horieCandidateFromJson(const json &item,
   return candidate;
 }
 
-HorieCandidateSearchResult findHorieCandidates(const std::string &query,
-                                               const std::string &title,
-                                               const std::string &artist,
-                                               bool requireTitleMatch,
-                                               bool requireArtistMatch) {
+HorieCandidateSearchResult HorieYuukaDriver::findCandidates(
+    const std::string &query, const std::string &title,
+    const std::string &artist, bool requireTitleMatch,
+    bool requireArtistMatch) {
   HorieCandidateSearchResult result;
   for (const char *folder : {"Songs"}) {
-    result.sourceUrl = horieSearchUrl(folder, query);
+    result.sourceUrl = searchUrl(folder, query);
     const auto body = fetchUrlText(result.sourceUrl, result.errorMessage);
     if (!body) {
       continue;
@@ -2213,21 +2738,13 @@ HorieCandidateSearchResult findHorieCandidates(const std::string &query,
   return result;
 }
 
-bool downloadHorieCandidateById(const BmsSearchCandidate &candidate,
-                                const std::string &archiveKey,
-                                const std::filesystem::path &libraryRoot,
-                                std::atomic_bool &cancelled,
-                                BmsSearchDownloadProgressCallback progressCallback,
-                                BmsSearchResult &result);
-
-bool tryHorieDownload(const std::vector<std::string> &queries,
-                      const std::string &title, const std::string &artist,
-                      bool requireTitleMatch,
-                      const std::string &archiveKey,
-                      const std::filesystem::path &libraryRoot,
-                      std::atomic_bool &cancelled,
-                      BmsSearchDownloadProgressCallback progressCallback,
-                      BmsSearchResult &result) {
+bool HorieYuukaDriver::tryDownload(
+    const std::vector<std::string> &queries, const std::string &title,
+    const std::string &artist, bool requireTitleMatch,
+    const std::string &archiveKey, const std::filesystem::path &libraryRoot,
+    std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchResult &result) {
   std::optional<std::string> lastError;
 
   for (const auto &query : queries) {
@@ -2248,7 +2765,7 @@ bool tryHorieDownload(const std::vector<std::string> &queries,
     const bool shouldRequireArtistMatch =
         shouldRequireTitleMatch && !trimCopy(artist).empty() &&
         titleNeedsExactCandidateMatch(title);
-    const auto searchResult = findHorieCandidates(
+    const auto searchResult = findCandidates(
         trimmedQuery, title, artist, shouldRequireTitleMatch,
         shouldRequireArtistMatch);
     if (searchResult.candidates.empty()) {
@@ -2262,7 +2779,7 @@ bool tryHorieDownload(const std::vector<std::string> &queries,
     result.candidates.clear();
     for (const auto &item : searchResult.candidates) {
       auto candidate =
-          horieCandidateFromJson(item, trimmedQuery, searchResult.sourceUrl);
+          candidateFromJson(item, trimmedQuery, searchResult.sourceUrl);
       if (candidate.id.empty() || seenFileIds.contains(candidate.id)) {
         continue;
       }
@@ -2285,9 +2802,9 @@ bool tryHorieDownload(const std::vector<std::string> &queries,
     if (progressCallback) {
       progressCallback({.message = "Preparing Horie archive download"});
     }
-    return downloadHorieCandidateById(result.candidates.front(), archiveKey,
-                                      libraryRoot, cancelled, progressCallback,
-                                      result);
+    return downloadCandidateById(result.candidates.front(), archiveKey,
+                                 libraryRoot, cancelled, progressCallback,
+                                 result);
   }
 
   result.status = BmsSearchResult::Status::NotFound;
@@ -2295,12 +2812,11 @@ bool tryHorieDownload(const std::vector<std::string> &queries,
   return false;
 }
 
-bool downloadHorieCandidateById(const BmsSearchCandidate &candidate,
-                                const std::string &archiveKey,
-                                const std::filesystem::path &libraryRoot,
-                                std::atomic_bool &cancelled,
-                                BmsSearchDownloadProgressCallback progressCallback,
-                                BmsSearchResult &result) {
+bool HorieYuukaDriver::downloadCandidateById(
+    const BmsSearchCandidate &candidate, const std::string &archiveKey,
+    const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchResult &result) {
   if (candidate.source != BmsSearchCandidate::Source::Horie ||
       candidate.id.empty()) {
     result.status = BmsSearchResult::Status::DownloadFailed;
@@ -2338,12 +2854,9 @@ bool downloadHorieCandidateById(const BmsSearchCandidate &candidate,
   }
 
   const std::string absoluteUrl = resolveUrl(kHorieApiOrigin, grantDownloadUrl);
-  const std::string candidateKey =
-      archiveKey.empty() ? "horie-" + candidate.id
-                         : archiveKey + "-horie-" + candidate.id;
   downloadAndExtractArchive(absoluteUrl, absoluteUrl, archiveKey, libraryRoot,
                             cancelled, progressCallback, result,
-                            candidateKey);
+                            candidate.name);
   result.candidates = {candidate};
   return true;
 }
@@ -2378,8 +2891,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
   const std::string archiveKey = hash.empty() ? md5Hash : hash;
   const HorieLookupTerms horieTerms =
       horieLookupTermsForMeta(titleOnly, artistOnly);
-  const auto horieQueries =
-      horieSearchQueries(horieTerms.title, horieTerms.artist, hash, md5Hash);
+  const auto horieQueries = HorieYuukaDriver::searchQueries(
+      horieTerms.title, horieTerms.artist, hash, md5Hash);
   result.patternUrl = hash.empty() ? std::string() : patternUrlForSha256(hash);
   const std::string titleSearchQuery =
       titleQuery.empty() ? (!md5Hash.empty() ? md5Hash : hash) : titleQuery;
@@ -2409,10 +2922,10 @@ BmsSearchResult BmsSearchService::findAndDownload(
         horieResult.bmsUrl = bmsFailure.bmsUrl;
       }
     };
-    if (tryHorieDownload(horieQueries, horieTerms.title, horieTerms.artist,
-                         !horieTerms.title.empty(),
-                         archiveKey, libraryRoot, cancelled, progressCallback,
-                         horieResult)) {
+    if (HorieYuukaDriver::tryDownload(
+            horieQueries, horieTerms.title, horieTerms.artist,
+            !horieTerms.title.empty(), archiveKey, libraryRoot, cancelled,
+            progressCallback, horieResult)) {
       return horieResult;
     }
     preserveBmsFallback();
@@ -2458,7 +2971,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
     return result;
   }
 
-  const auto bmsLinks = bmsSearchBmsLinks(result.patternUrl, *patternHtml);
+  const auto bmsLinks =
+      BmsSearchDriver::bmsLinks(result.patternUrl, *patternHtml);
   if (bmsLinks.empty()) {
     result.status = BmsSearchResult::Status::NoDownloadLink;
     result.message = "BMS Search found the pattern, but no BMS page link.";
@@ -2490,7 +3004,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.bmsUrl = bmsUrl;
       result.fallbackUrl = bmsUrl;
     }
-    auto pageCandidates = downloadCandidates(bmsUrl, *bmsHtml);
+    auto pageCandidates = BmsSearchDriver::downloadCandidates(bmsUrl, *bmsHtml);
     candidates.insert(candidates.end(),
                       std::make_move_iterator(pageCandidates.begin()),
                       std::make_move_iterator(pageCandidates.end()));
@@ -2523,7 +3037,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
   const std::string effectiveDownloadUrl = supportedIt->downloadUrl;
   if (!downloadAndExtractArchive(effectiveDownloadUrl, supportedIt->originalUrl,
                                  hash, libraryRoot, cancelled,
-                                 progressCallback, result)) {
+                                 progressCallback, result,
+                                 supportedIt->archiveName)) {
     if (result.fallbackUrl.empty()) {
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
@@ -2547,7 +3062,7 @@ BmsSearchResult BmsSearchService::downloadCandidate(
   if (progressCallback) {
     progressCallback({.message = "Preparing Horie archive download"});
   }
-  downloadHorieCandidateById(candidate, archiveKey, libraryRoot, cancelled,
-                             progressCallback, result);
+  HorieYuukaDriver::downloadCandidateById(candidate, archiveKey, libraryRoot,
+                                          cancelled, progressCallback, result);
   return result;
 }
