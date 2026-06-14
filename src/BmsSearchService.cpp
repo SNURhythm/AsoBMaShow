@@ -2200,6 +2200,7 @@ bool extractDownloadedArchive(
 #endif
 }
 
+#if (TARGET_OS_IOS || TARGET_OS_SIMULATOR) && defined(DEBUG)
 void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
                                   const std::filesystem::path &outputPath) {
 #if ASOBMSHOW_HAS_LIBARCHIVE
@@ -2265,6 +2266,7 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
   (void)outputPath;
 #endif
 }
+#endif
 
 bool isBmsChartPath(const std::filesystem::path &path) {
   const std::string ext = lowerCopy(path.extension().string());
@@ -2407,6 +2409,33 @@ htmlBodyFromDownloadedFile(const std::filesystem::path &path) {
   return std::nullopt;
 }
 
+class ScopedFileRemoval {
+public:
+  explicit ScopedFileRemoval(std::filesystem::path path)
+      : path(std::move(path)) {}
+
+  ~ScopedFileRemoval() {
+    if (path.empty()) {
+      return;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::exists(path, error) || error) {
+      return;
+    }
+    error.clear();
+    std::filesystem::remove(path, error);
+    if (error) {
+      SDL_Log("Could not delete downloaded archive %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+              error.message().c_str());
+    }
+  }
+
+private:
+  std::filesystem::path path;
+};
+
 std::optional<std::string> GoogleDriveDriver::fileIdFromUrls(
     const std::string &downloadUrl, const std::string &displayUrl) {
   if (const auto id = fileId(displayUrl)) {
@@ -2457,7 +2486,7 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
     const std::string &key, const std::string &downloadUrl,
     const std::string &displayUrl, const std::filesystem::path &archivePath,
     const std::filesystem::path &extractDirectory, std::string &errorMessage) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#if (TARGET_OS_IOS || TARGET_OS_SIMULATOR) && defined(DEBUG)
   const std::string attemptId =
       key + "-" +
       std::to_string(
@@ -2530,6 +2559,25 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+struct IOSDownloadProgressContext {
+  BmsSearchDownloadProgressCallback *progressCallback = nullptr;
+};
+
+void reportIOSDownloadProgress(void *context, std::uint64_t downloadedBytes,
+                               std::uint64_t totalBytes) {
+  auto *progressContext =
+      static_cast<IOSDownloadProgressContext *>(context);
+  if (progressContext == nullptr ||
+      progressContext->progressCallback == nullptr ||
+      !*progressContext->progressCallback) {
+    return;
+  }
+  (*progressContext->progressCallback)(
+      {.message = "Downloading archive",
+       .downloadedBytes = downloadedBytes,
+       .totalBytes = totalBytes});
+}
+
 std::optional<std::string> fetchUrlText(const std::string &url,
                                         std::string &errorMessage) {
   std::string body;
@@ -2559,7 +2607,10 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
     progressCallback({.message = "Downloading archive"});
   }
   std::vector<unsigned char> data;
-  if (!DownloadURLBinaryIOS(url, data, errorMessage)) {
+  IOSDownloadProgressContext progressContext{
+      .progressCallback = &progressCallback};
+  if (!DownloadURLBinaryIOS(url, data, errorMessage,
+                            reportIOSDownloadProgress, &progressContext)) {
     return false;
   }
   if (cancelled.load()) {
@@ -2819,6 +2870,7 @@ bool downloadAndExtractArchive(
   }
 
   const std::filesystem::path archivePath = archiveDirectory / archiveName;
+  ScopedFileRemoval archiveCleanup(archivePath);
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }

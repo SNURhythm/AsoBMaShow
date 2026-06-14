@@ -170,6 +170,26 @@ bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
 }
 
+std::string formatFindBmsBytes(std::uint64_t bytes) {
+  constexpr double kKib = 1024.0;
+  constexpr double kMib = kKib * 1024.0;
+  constexpr double kGib = kMib * 1024.0;
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(bytes >= 10 * 1024 ? 1 : 0);
+  if (bytes >= static_cast<std::uint64_t>(kGib)) {
+    stream << static_cast<double>(bytes) / kGib << " GB";
+  } else if (bytes >= static_cast<std::uint64_t>(kMib)) {
+    stream << static_cast<double>(bytes) / kMib << " MB";
+  } else if (bytes >= static_cast<std::uint64_t>(kKib)) {
+    stream << static_cast<double>(bytes) / kKib << " KB";
+  } else {
+    stream.str("");
+    stream.clear();
+    stream << bytes << " B";
+  }
+  return stream.str();
+}
+
 double progressRatio(const BmsSearchDownloadProgress &progress) {
   if (progress.totalBytes == 0) {
     return 0.0;
@@ -179,57 +199,108 @@ double progressRatio(const BmsSearchDownloadProgress &progress) {
                     0.0, 1.0);
 }
 
+std::string progressPercentText(double ratio) {
+  const int percent = static_cast<int>(
+      std::lround(std::clamp(ratio, 0.0, 1.0) * 100.0));
+  return std::to_string(percent) + "%";
+}
+
+std::string findBmsProgressDisplayText(const std::string &message,
+                                       std::uint64_t downloadedBytes,
+                                       std::uint64_t totalBytes,
+                                       bool includeBytes) {
+  if (message == "Downloading archive" && totalBytes > 0) {
+    const double ratio =
+        std::clamp(static_cast<double>(downloadedBytes) /
+                       static_cast<double>(totalBytes),
+                   0.0, 1.0);
+    std::string text = "Downloading archive - " + progressPercentText(ratio);
+    if (includeBytes) {
+      text += " (" + formatFindBmsBytes(downloadedBytes) + " / " +
+              formatFindBmsBytes(totalBytes) + ")";
+    }
+    return text;
+  }
+  if (message == "Downloading archive" && downloadedBytes > 0) {
+    return "Downloading archive (" + formatFindBmsBytes(downloadedBytes) + ")";
+  }
+  if (message == "Download complete" && totalBytes > 0) {
+    const double ratio =
+        std::clamp(static_cast<double>(downloadedBytes) /
+                       static_cast<double>(totalBytes),
+                   0.0, 1.0);
+    return "Download complete - " + progressPercentText(ratio);
+  }
+  return message;
+}
+
+std::string findBmsProgressDisplayText(
+    const BmsSearchDownloadProgress &progress, bool includeBytes) {
+  return findBmsProgressDisplayText(progress.message, progress.downloadedBytes,
+                                   progress.totalBytes, includeBytes);
+}
+
+bool shouldReplaceFindBmsLogLine(const std::string &previous,
+                                 const std::string &next) {
+  for (const char *prefix : {"Downloading archive", "Extracting "}) {
+    if (messageStartsWith(previous, prefix) &&
+        messageStartsWith(next, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
                                   double previous) {
   const std::string &message = progress.message;
   if (message == "Preparing lookup") {
-    return std::max(previous, 0.03);
+    return std::max(previous, 0.02);
   }
   if (message == "Opening BMS Search pattern page") {
-    return std::max(previous, 0.08);
+    return std::max(previous, 0.04);
   }
   if (message == "Opening BMS Search details page") {
-    return std::max(previous, 0.16);
+    return std::max(previous, 0.07);
   }
   if (messageStartsWith(message, "Searching ") &&
       message.find(" package source") != std::string::npos) {
-    return std::max(previous, 0.22);
+    return std::max(previous, 0.08);
   }
   if (messageStartsWith(message, "Preparing ") &&
       message.find(" package download") != std::string::npos) {
-    return std::max(previous, 0.30);
+    return std::max(previous, 0.09);
   }
   if (message == "Searching Horie archive") {
-    return std::max(previous, 0.32);
+    return std::max(previous, 0.08);
   }
   if (message == "Preparing Horie archive download") {
-    return std::max(previous, 0.36);
+    return std::max(previous, 0.09);
   }
   if (message == "Downloading archive") {
     const double ratio = progressRatio(progress);
-    if (previous >= 0.74) {
-      return progress.totalBytes > 0
-                 ? std::max(previous, 0.74 + ratio * 0.16)
-                 : std::min(0.90, std::max(previous + 0.005, 0.76));
+    if (progress.totalBytes > 0) {
+      return std::max(previous, 0.10 + ratio * 0.80);
     }
-    return std::max(previous, progress.totalBytes > 0 ? 0.40 + ratio * 0.32
-                                                      : 0.40);
+    return std::min(0.90, std::max(previous + 0.003, 0.10));
   }
   if (message == "Download complete") {
-    return std::max(previous, 0.72);
+    const double ratio = progressRatio(progress);
+    return std::max(previous, progress.totalBytes > 0 ? 0.10 + ratio * 0.80
+                                                      : 0.90);
   }
   if (message == "Confirming Google Drive download") {
-    return std::max(previous, 0.74);
+    return 0.10;
   }
   if (message == "Extracting archive") {
-    return std::max(previous, 0.78);
+    return std::max(previous, 0.92);
   }
   if (messageStartsWith(message, "Extracting ")) {
     const double ratio = progressRatio(progress);
     if (progress.totalBytes > 0) {
-      return std::max(previous, 0.78 + ratio * 0.18);
+      return std::max(previous, 0.92 + ratio * 0.06);
     }
-    return std::min(0.96, std::max(previous + 0.01, 0.80));
+    return std::min(0.98, std::max(previous + 0.005, 0.93));
   }
   return std::max(previous, 0.05);
 }
@@ -902,6 +973,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
+  findBmsProgressLog.clear();
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;
@@ -2233,7 +2305,9 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   findBmsProgressMessage = "Preparing lookup";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
-  findBmsProgressFraction = 0.03;
+  findBmsProgressFraction = 0.02;
+  findBmsProgressLog.clear();
+  findBmsProgressLog.push_back("Preparing lookup");
   findBmsCancelled = false;
   pendingFindBmsProgress.reset();
   pendingFindBmsResult.reset();
@@ -2282,7 +2356,9 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsProgressMessage = "Preparing Horie archive download";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
-  findBmsProgressFraction = 0.30;
+  findBmsProgressFraction = 0.09;
+  findBmsProgressLog.clear();
+  findBmsProgressLog.push_back("Preparing Horie archive download");
   findBmsCancelled = false;
   pendingFindBmsProgress.reset();
   pendingFindBmsResult.reset();
@@ -2327,8 +2403,11 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsModalTitleText->setText("Find BMS");
   }
 
-  std::string statusText = running ? findBmsProgressMessage
-                                   : findBmsResult.message;
+  std::string statusText =
+      running ? findBmsProgressDisplayText(findBmsProgressMessage,
+                                           findBmsProgressCurrent,
+                                           findBmsProgressTotal, false)
+              : findBmsResult.message;
   if (statusText.empty()) {
     statusText = running ? "Searching" : "Lookup finished.";
   }
@@ -2410,6 +2489,15 @@ void MainMenuScene::refreshFindBmsModal() {
     detail +=
         "Checking BMS Search, package sources, then Horie archive if needed.";
   }
+  if (!findBmsProgressLog.empty()) {
+    if (!detail.empty() && detail.back() != '\n') {
+      detail += "\n";
+    }
+    detail += "Log:\n";
+    for (const auto &line : findBmsProgressLog) {
+      detail += "- " + line + "\n";
+    }
+  }
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setText(detail);
   }
@@ -2434,7 +2522,10 @@ void MainMenuScene::refreshFindBmsModal() {
     }
   }
 
-  const double fraction = running ? findBmsProgressFraction : 1.0;
+  const double fraction =
+      (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded)
+          ? 1.0
+          : findBmsProgressFraction;
   if (findBmsProgressFill != nullptr) {
     findBmsProgressFill->setWidthPercent(
         static_cast<float>(std::clamp(fraction, 0.0, 1.0) * 100.0));
@@ -2517,12 +2608,35 @@ void MainMenuScene::applyFindBmsUpdates() {
     findBmsProgressTotal = progress->totalBytes;
     findBmsProgressFraction =
         findBmsProgressFractionFor(*progress, findBmsProgressFraction);
+    const std::string logLine = findBmsProgressDisplayText(*progress, true);
+    if (!logLine.empty()) {
+      if (!findBmsProgressLog.empty() &&
+          shouldReplaceFindBmsLogLine(findBmsProgressLog.back(), logLine)) {
+        findBmsProgressLog.back() = logLine;
+      } else if (findBmsProgressLog.empty() ||
+                 findBmsProgressLog.back() != logLine) {
+        findBmsProgressLog.push_back(logLine);
+      }
+      while (findBmsProgressLog.size() > 6) {
+        findBmsProgressLog.pop_front();
+      }
+    }
     shouldRefresh = true;
   }
   if (result) {
     findBmsJobRunning = false;
     findBmsResult = std::move(*result);
-    findBmsProgressFraction = 1.0;
+    if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
+      findBmsProgressFraction = 1.0;
+    }
+    if (!findBmsResult.message.empty() &&
+        (findBmsProgressLog.empty() ||
+         findBmsProgressLog.back() != findBmsResult.message)) {
+      findBmsProgressLog.push_back(findBmsResult.message);
+      while (findBmsProgressLog.size() > 6) {
+        findBmsProgressLog.pop_front();
+      }
+    }
     if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
       startLibraryRefresh();
     }
@@ -3493,6 +3607,7 @@ void MainMenuScene::cleanupScene() {
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
+  findBmsProgressLog.clear();
   selectedChartMediaReady.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;

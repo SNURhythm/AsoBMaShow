@@ -1232,6 +1232,74 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
 }
 @end
 
+@interface AsoBinaryDownloadDelegate : NSObject <NSURLSessionDownloadDelegate> {
+ @public
+  NSData *responseData;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  dispatch_semaphore_t semaphore;
+  IOSDownloadProgressCallback progressCallback;
+  void *progressContext;
+}
+@end
+
+@implementation AsoBinaryDownloadDelegate
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+                 didWriteData:(int64_t)bytesWritten
+            totalBytesWritten:(int64_t)totalBytesWritten
+    totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
+  (void)session;
+  (void)downloadTask;
+  (void)bytesWritten;
+  if (progressCallback == nullptr) {
+    return;
+  }
+
+  const std::uint64_t downloadedBytes =
+      totalBytesWritten > 0 ? static_cast<std::uint64_t>(totalBytesWritten) : 0;
+  const std::uint64_t totalBytes =
+      totalBytesExpectedToWrite > 0
+          ? static_cast<std::uint64_t>(totalBytesExpectedToWrite)
+          : 0;
+  progressCallback(progressContext, downloadedBytes, totalBytes);
+}
+
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+    didFinishDownloadingToURL:(NSURL *)location {
+  (void)session;
+  if (urlResponse == nil) {
+    urlResponse = downloadTask.response;
+  }
+
+  NSError *readError = nil;
+  NSData *data = [NSData dataWithContentsOfURL:location
+                                       options:0
+                                         error:&readError];
+  if (data == nil) {
+    if (requestError == nil) {
+      requestError = readError;
+    }
+    return;
+  }
+  responseData = data;
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  if (urlResponse == nil) {
+    urlResponse = task.response;
+  }
+  if (error != nil) {
+    requestError = error;
+  }
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
 bool PickIOSFolder(std::string &path, std::string &bookmark,
                    std::string &errorMessage) {
   path.clear();
@@ -1515,7 +1583,9 @@ bool PostURLTextIOS(const std::string &url, std::string &body,
 
 bool DownloadURLBinaryIOS(const std::string &url,
                           std::vector<unsigned char> &body,
-                          std::string &errorMessage) {
+                          std::string &errorMessage,
+                          IOSDownloadProgressCallback progressCallback,
+                          void *progressContext) {
   @autoreleasepool {
     NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
     NSURL *nsUrl = [NSURL URLWithString:urlString];
@@ -1530,37 +1600,39 @@ bool DownloadURLBinaryIOS(const std::string &url,
         timeoutInterval:180.0];
     [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
 
-    __block NSData *responseData = nil;
-    __block NSURLResponse *urlResponse = nil;
-    __block NSError *requestError = nil;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
-        dataTaskWithRequest:request
-          completionHandler:^(NSData *data, NSURLResponse *response,
-                              NSError *error) {
-            responseData = data;
-            urlResponse = response;
-            requestError = error;
-            dispatch_semaphore_signal(semaphore);
-          }];
+    AsoBinaryDownloadDelegate *delegate =
+        [[AsoBinaryDownloadDelegate alloc] init];
+    delegate->semaphore = semaphore;
+    delegate->progressCallback = progressCallback;
+    delegate->progressContext = progressContext;
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:nil];
+    NSURLSessionDownloadTask *task = [session downloadTaskWithRequest:request];
     [task resume];
     const long waitResult = dispatch_semaphore_wait(
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 190 * NSEC_PER_SEC));
     if (waitResult != 0) {
       [task cancel];
+      [session invalidateAndCancel];
       errorMessage = "Timed out while downloading " + url;
       return false;
     }
+    [session finishTasksAndInvalidate];
 
-    if (requestError != nil) {
+    if (delegate->requestError != nil) {
       errorMessage =
-          std::string([[requestError localizedDescription] UTF8String]);
+          std::string([[delegate->requestError localizedDescription] UTF8String]);
       return false;
     }
 
     NSHTTPURLResponse *httpResponse =
-        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
-            ? (NSHTTPURLResponse *)urlResponse
+        [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)delegate->urlResponse
             : nil;
     if (httpResponse != nil && httpResponse.statusCode >= 400) {
       errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
@@ -1568,14 +1640,14 @@ bool DownloadURLBinaryIOS(const std::string &url,
       return false;
     }
 
-    if (responseData == nil) {
+    if (delegate->responseData == nil) {
       errorMessage = "No response body while downloading " + url;
       return false;
     }
 
     const auto *bytes =
-        static_cast<const unsigned char *>(responseData.bytes);
-    body.assign(bytes, bytes + responseData.length);
+        static_cast<const unsigned char *>(delegate->responseData.bytes);
+    body.assign(bytes, bytes + delegate->responseData.length);
     return true;
   }
 }

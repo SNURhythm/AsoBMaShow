@@ -175,6 +175,7 @@ private:
   std::uint64_t findBmsProgressCurrent = 0;
   std::uint64_t findBmsProgressTotal = 0;
   double findBmsProgressFraction = 0.0;
+  std::deque<std::string> findBmsProgressLog;
   std::mutex findBmsUpdateMutex;
   std::optional<BmsSearchDownloadProgress> pendingFindBmsProgress;
   std::optional<BmsSearchResult> pendingFindBmsResult;
