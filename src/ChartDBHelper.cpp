@@ -218,6 +218,18 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
          *first != std::filesystem::path(".");
 }
 
+bool stopRequested(const std::stop_token *stopToken) {
+  return stopToken != nullptr && stopToken->stop_requested();
+}
+
+bool isBmsChartFile(const std::filesystem::path &path) {
+  std::string ext = path.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return ext == ".bms" || ext == ".bme" || ext == ".bml";
+}
+
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
 std::once_flag curlInitFlag;
 
@@ -2071,6 +2083,121 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
     bumpLibraryRevision();
   }
   return true;
+}
+
+int ChartDBHelper::ScanChartRoots(
+    sqlite3 *db, const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken) {
+  if (db == nullptr || stopRequested(stopToken)) {
+    return 0;
+  }
+
+  CreateChartMetaTable(db);
+
+  std::vector<bms_parser::ChartMeta> chartMetas;
+  SelectAllChartMeta(db, chartMetas);
+
+  struct ScanDiff {
+    std::filesystem::path path;
+    bool deleted = false;
+  };
+  std::vector<ScanDiff> diffs;
+  std::unordered_set<path_t> knownChartPaths;
+  diffs.reserve(chartMetas.size());
+
+  for (const auto &chartMeta : chartMetas) {
+    if (stopRequested(stopToken)) {
+      return 0;
+    }
+    if (std::filesystem::exists(chartMeta.BmsPath)) {
+      knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
+    } else {
+      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+    }
+  }
+
+  for (const auto &root : roots) {
+    if (stopRequested(stopToken) || root.empty()) {
+      continue;
+    }
+    std::error_code error;
+    if (!std::filesystem::exists(root, error) || error) {
+      error.clear();
+      continue;
+    }
+
+    std::filesystem::recursive_directory_iterator iterator(
+        root, std::filesystem::directory_options::skip_permission_denied,
+        error);
+    for (const auto end = std::filesystem::recursive_directory_iterator();
+         !error && iterator != end; iterator.increment(error)) {
+      if (stopRequested(stopToken)) {
+        return 0;
+      }
+      std::error_code typeError;
+      if (!iterator->is_regular_file(typeError) || typeError) {
+        continue;
+      }
+      const std::filesystem::path path = iterator->path();
+      if (!isBmsChartFile(path)) {
+        continue;
+      }
+      if (knownChartPaths.find(fspath_to_path_t(path)) ==
+          knownChartPaths.end()) {
+        diffs.push_back({.path = path, .deleted = false});
+        knownChartPaths.insert(fspath_to_path_t(path));
+      }
+    }
+    if (error) {
+      SDL_Log("Failed while scanning chart folder %s: %s",
+              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
+              error.message().c_str());
+    }
+  }
+
+  if (diffs.empty() || stopRequested(stopToken)) {
+    return 0;
+  }
+
+  int changedCount = 0;
+  BeginTransaction(db);
+  for (const auto &diff : diffs) {
+    if (stopRequested(stopToken)) {
+      break;
+    }
+    if (diff.deleted) {
+      if (DeleteChartMeta(db, diff.path)) {
+        ++changedCount;
+      }
+      continue;
+    }
+
+    bms_parser::Parser parser;
+    bms_parser::Chart *chart = nullptr;
+    std::atomic_bool cancelled(false);
+    try {
+      parser.Parse(diff.path, &chart, false, true, cancelled);
+    } catch (const std::exception &e) {
+      SDL_Log("Error parsing %s: %s",
+              path_t_to_utf8(fspath_to_path_t(diff.path)).c_str(), e.what());
+      delete chart;
+      continue;
+    }
+
+    if (chart == nullptr) {
+      continue;
+    }
+    if (InsertChartMeta(db, chart->Meta)) {
+      ++changedCount;
+    }
+    delete chart;
+  }
+  CommitTransaction(db);
+
+  if (changedCount > 0) {
+    bumpLibraryRevision();
+  }
+  return changedCount;
 }
 
 bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {

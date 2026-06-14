@@ -167,6 +167,7 @@ private:
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
   void deleteChartEntry(const std::string &entryPathText);
+  void refreshChartLibrary();
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

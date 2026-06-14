@@ -151,6 +151,15 @@ else()
     find_package(CURL REQUIRED)
     list(APPEND COMMON_LIBS CURL::libcurl)
 
+    # libarchive for BMS archive downloads (.zip, .7z, .rar, .lzh, .tar.*)
+    find_package(LibArchive REQUIRED)
+    if(TARGET LibArchive::LibArchive)
+        list(APPEND COMMON_LIBS LibArchive::LibArchive)
+    else()
+        include_directories(${LibArchive_INCLUDE_DIRS})
+        list(APPEND COMMON_LIBS ${LibArchive_LIBRARIES})
+    endif()
+
     # # Fontconfig & LibASS (Required by FFmpeg[all-gpl] static build)
     # find_package(PkgConfig REQUIRED)
     

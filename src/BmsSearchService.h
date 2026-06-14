@@ -1,0 +1,74 @@
+#pragma once
+
+#include <atomic>
+#include <filesystem>
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+
+struct BmsSearchDownloadProgress {
+  std::string message;
+  std::uint64_t downloadedBytes = 0;
+  std::uint64_t totalBytes = 0;
+};
+
+using BmsSearchDownloadProgressCallback =
+    std::function<void(const BmsSearchDownloadProgress &)>;
+
+struct BmsSearchCandidate {
+  enum class Source {
+    Horie,
+  };
+
+  Source source = Source::Horie;
+  std::string id;
+  std::string name;
+  std::string title;
+  std::string artist;
+  std::string query;
+  std::string sourceUrl;
+};
+
+struct BmsSearchResult {
+  enum class Status {
+    NotFound,
+    NoDownloadLink,
+    UnsupportedLink,
+    Downloaded,
+    HashMismatch,
+    AmbiguousCandidates,
+    DownloadFailed,
+  };
+
+  Status status = Status::NotFound;
+  std::string message;
+  std::string patternUrl;
+  std::string bmsUrl;
+  std::string downloadUrl;
+  std::string fallbackUrl;
+  std::filesystem::path outputPath;
+  std::filesystem::path debugPath;
+  std::vector<BmsSearchCandidate> candidates;
+};
+
+class BmsSearchService {
+public:
+  static constexpr const char *kBaseUrl = "https://bmssearch.net";
+
+  BmsSearchResult findAndDownload(
+      const std::string &sha256, const std::string &md5,
+      const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
+      BmsSearchDownloadProgressCallback progressCallback = nullptr,
+      const std::string &title = "", const std::string &artist = "") const;
+
+  BmsSearchResult downloadCandidate(
+      const BmsSearchCandidate &candidate, const std::string &sha256,
+      const std::string &md5, const std::filesystem::path &libraryRoot,
+      std::atomic_bool &cancelled,
+      BmsSearchDownloadProgressCallback progressCallback = nullptr) const;
+
+  static std::string patternUrlForSha256(const std::string &sha256);
+  static std::string searchUrlForText(const std::string &query);
+  static std::string googleSearchUrlForSha256(const std::string &sha256);
+};

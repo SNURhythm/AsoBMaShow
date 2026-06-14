@@ -1441,6 +1441,186 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
   }
 }
 
+bool PostURLTextIOS(const std::string &url, std::string &body,
+                    std::string &errorMessage) {
+  @autoreleasepool {
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest
+         requestWithURL:nsUrl
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:25.0];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+
+    __block NSData *responseData = nil;
+    __block NSURLResponse *urlResponse = nil;
+    __block NSError *requestError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+        dataTaskWithRequest:request
+          completionHandler:^(NSData *data, NSURLResponse *response,
+                              NSError *error) {
+            responseData = data;
+            urlResponse = response;
+            requestError = error;
+            dispatch_semaphore_signal(semaphore);
+          }];
+    [task resume];
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      [task cancel];
+      errorMessage = "Timed out while posting " + url;
+      return false;
+    }
+
+    if (requestError != nil) {
+      errorMessage =
+          std::string([[requestError localizedDescription] UTF8String]);
+      return false;
+    }
+
+    NSHTTPURLResponse *httpResponse =
+        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)urlResponse
+            : nil;
+    if (httpResponse != nil && httpResponse.statusCode >= 400) {
+      errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
+                     " while posting " + url;
+      return false;
+    }
+
+    if (responseData == nil) {
+      errorMessage = "No response body while posting " + url;
+      return false;
+    }
+
+    NSString *text = [[NSString alloc] initWithData:responseData
+                                           encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+      errorMessage = "Downloaded response is not UTF-8: " + url;
+      return false;
+    }
+
+    body = std::string([text UTF8String]);
+    return true;
+  }
+}
+
+bool DownloadURLBinaryIOS(const std::string &url,
+                          std::vector<unsigned char> &body,
+                          std::string &errorMessage) {
+  @autoreleasepool {
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest
+         requestWithURL:nsUrl
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:180.0];
+    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+
+    __block NSData *responseData = nil;
+    __block NSURLResponse *urlResponse = nil;
+    __block NSError *requestError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+        dataTaskWithRequest:request
+          completionHandler:^(NSData *data, NSURLResponse *response,
+                              NSError *error) {
+            responseData = data;
+            urlResponse = response;
+            requestError = error;
+            dispatch_semaphore_signal(semaphore);
+          }];
+    [task resume];
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 190 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      [task cancel];
+      errorMessage = "Timed out while downloading " + url;
+      return false;
+    }
+
+    if (requestError != nil) {
+      errorMessage =
+          std::string([[requestError localizedDescription] UTF8String]);
+      return false;
+    }
+
+    NSHTTPURLResponse *httpResponse =
+        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)urlResponse
+            : nil;
+    if (httpResponse != nil && httpResponse.statusCode >= 400) {
+      errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
+                     " while downloading " + url;
+      return false;
+    }
+
+    if (responseData == nil) {
+      errorMessage = "No response body while downloading " + url;
+      return false;
+    }
+
+    const auto *bytes =
+        static_cast<const unsigned char *>(responseData.bytes);
+    body.assign(bytes, bytes + responseData.length);
+    return true;
+  }
+}
+
+bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage) {
+  @autoreleasepool {
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+
+    if ([NSThread isMainThread]) {
+      [UIApplication.sharedApplication openURL:nsUrl
+                                       options:@{}
+                             completionHandler:nil];
+      return true;
+    }
+
+    __block BOOL opened = NO;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [UIApplication.sharedApplication
+                    openURL:nsUrl
+                    options:@{}
+          completionHandler:^(BOOL success) {
+            opened = success;
+            dispatch_semaphore_signal(semaphore);
+          }];
+    });
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      errorMessage = "Timed out while opening URL";
+      return false;
+    }
+    if (!opened) {
+      errorMessage = "Could not open URL";
+      return false;
+    }
+    return true;
+  }
+}
+
 bool RevealIOSFileInFiles(const std::string &filePath,
                           std::string &errorMessage) {
   errorMessage.clear();

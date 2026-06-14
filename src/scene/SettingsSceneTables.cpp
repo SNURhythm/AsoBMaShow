@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../Utils.h"
 
 using namespace settings_scene;
 
@@ -385,6 +386,124 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
                                  deleted);
     difficultyTableJobRunning = false;
   });
+}
+
+void SettingsScene::refreshChartLibrary() {
+  if (difficultyTableJobRunning) {
+    return;
+  }
+
+  if (difficultyTableJobThread.joinable()) {
+    difficultyTableJobThread.join();
+  }
+
+  difficultyTableJobRunning = true;
+  pendingDeleteDifficultyTableId = 0;
+  pendingDeleteChartEntryPath.clear();
+  difficultyTableStatusMessage = "Refreshing chart list...";
+  difficultyTableStatusColor = {239, 244, 251, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+
+  difficultyTableJobThread =
+      std::jthread([this](const std::stop_token &token) {
+        auto &dbHelper = ChartDBHelper::GetInstance();
+        sqlite3 *settingsDb = dbHelper.Connect();
+        if (settingsDb == nullptr) {
+          if (!token.stop_requested()) {
+            requestDifficultyTableStatus("Could not open chart database.",
+                                         {255, 177, 170, 255});
+            difficultyTableJobRunning = false;
+          }
+          return;
+        }
+
+        dbHelper.CreateChartMetaTable(settingsDb);
+        dbHelper.CreateEntriesTable(settingsDb);
+        auto entries = dbHelper.SelectAllEntries(settingsDb);
+        if (entries.empty()) {
+          const auto defaultPath = Utils::GetDocumentsPath("BMS");
+          std::error_code errorCode;
+          std::filesystem::create_directories(defaultPath, errorCode);
+          dbHelper.InsertEntry(settingsDb, defaultPath);
+          entries = dbHelper.SelectAllEntries(settingsDb);
+        }
+
+        std::vector<std::filesystem::path> roots;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+        std::vector<void *> accessHandles;
+        for (const auto &entry : entries) {
+          if (token.stop_requested()) {
+            break;
+          }
+          if (entry.iosBookmark.empty()) {
+            roots.emplace_back(entry.path);
+            continue;
+          }
+
+          std::string resolvedPath;
+          std::string errorMessage;
+          void *handle = StartIOSSecurityScopedResource(
+              path_t_to_utf8(entry.path), entry.iosBookmark, resolvedPath,
+              errorMessage);
+          if (!errorMessage.empty()) {
+            SDL_Log("Failed to open folder access for %s: %s",
+                    path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
+          }
+          if (!resolvedPath.empty()) {
+            roots.emplace_back(utf8_to_path_t(resolvedPath));
+          } else {
+            roots.emplace_back(entry.path);
+          }
+          if (handle != nullptr) {
+            accessHandles.push_back(handle);
+          }
+        }
+#else
+        roots.reserve(entries.size());
+        for (const auto &entry : entries) {
+          roots.emplace_back(entry.path);
+        }
+#endif
+
+        const int changedCount =
+            token.stop_requested()
+                ? -1
+                : dbHelper.ScanChartRoots(settingsDb, roots, &token);
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+        for (void *handle : accessHandles) {
+          StopIOSSecurityScopedResource(handle);
+        }
+#endif
+        dbHelper.Close(settingsDb);
+
+        if (token.stop_requested()) {
+          difficultyTableJobRunning = false;
+          return;
+        }
+
+        const bool succeeded = changedCount >= 0;
+        std::string statusText;
+        if (!succeeded) {
+          statusText = "Refresh failed.";
+        } else if (changedCount == 0) {
+          statusText = "Chart list refreshed. No changes found.";
+        } else if (changedCount == 1) {
+          statusText = "Chart list refreshed. Updated 1 chart entry.";
+        } else {
+          statusText = "Chart list refreshed. Updated " +
+                       std::to_string(changedCount) + " chart entries.";
+        }
+        requestDifficultyTableStatus(
+            statusText,
+            succeeded ? SDL_Color{181, 228, 165, 255}
+                      : SDL_Color{255, 177, 170, 255},
+            true);
+        difficultyTableJobRunning = false;
+      });
 }
 
 void SettingsScene::deleteChartEntry(const std::string &entryPathText) {

@@ -57,6 +57,12 @@ void StopIOSSecurityScopedResource(void *resource);
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
+bool PostURLTextIOS(const std::string &url, std::string &body,
+                    std::string &errorMessage);
+bool DownloadURLBinaryIOS(const std::string &url,
+                          std::vector<unsigned char> &body,
+                          std::string &errorMessage);
+bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,
