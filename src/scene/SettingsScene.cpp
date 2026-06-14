@@ -29,6 +29,8 @@ void SettingsScene::renderScene() {
   if (previewActive && previewRenderer != nullptr) {
     previewRenderer->setVisibleTimeGreenNumber(
         context.settings.visibleTimeGreenNumber);
+    previewRenderer->setVisibleTimeBpmStrategy(
+        context.settings.visibleTimeBpmStrategy);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
@@ -72,6 +74,7 @@ void SettingsScene::cleanupScene() {
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
+  visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
@@ -79,6 +82,7 @@ void SettingsScene::cleanupScene() {
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
+  visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;

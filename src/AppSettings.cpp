@@ -138,6 +138,31 @@ const char *judgementIndicatorRenderModeToString(
   return "3d";
 }
 
+AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
+    const std::string &value, AppSettings::VisibleTimeBpmStrategy fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "chart" || normalized == "chart-bpm" ||
+      normalized == "main" || normalized == "metadata") {
+    return AppSettings::VisibleTimeBpmStrategy::Chart;
+  }
+  if (normalized == "most-prevalent" || normalized == "prevalent" ||
+      normalized == "duration") {
+    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  }
+  return fallback;
+}
+
+const char *visibleTimeBpmStrategyToString(
+    AppSettings::VisibleTimeBpmStrategy strategy) {
+  switch (strategy) {
+  case AppSettings::VisibleTimeBpmStrategy::Chart:
+    return "chart";
+  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
+    return "most_prevalent";
+  }
+  return "chart";
+}
+
 std::string parseGaugeTypeId(const std::string &value,
                              const std::string &fallback) {
   if (value == "assisted_easy") {
@@ -243,6 +268,14 @@ void AppSettings::sanitize() {
     judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
     break;
   }
+  switch (visibleTimeBpmStrategy) {
+  case VisibleTimeBpmStrategy::Chart:
+  case VisibleTimeBpmStrategy::MostPrevalent:
+    break;
+  default:
+    visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+    break;
+  }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
@@ -274,6 +307,9 @@ bool AppSettings::save() const {
        << "\n";
   file << "visible_time_use_milliseconds="
        << (sanitized.visibleTimeUseMilliseconds ? 1 : 0) << "\n";
+  file << "visible_time_bpm_strategy="
+       << visibleTimeBpmStrategyToString(sanitized.visibleTimeBpmStrategy)
+       << "\n";
   file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
        << "\n";
   file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
@@ -337,6 +373,10 @@ AppSettings AppSettings::load() {
         if (parseBool(value, parsed)) {
           settings.visibleTimeUseMilliseconds = parsed;
         }
+      } else if (key == "visible_time_bpm_strategy") {
+        settings.visibleTimeBpmStrategy =
+            parseVisibleTimeBpmStrategy(value,
+                                        settings.visibleTimeBpmStrategy);
       } else if (key == "input_keysound_enabled") {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {

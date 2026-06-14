@@ -210,6 +210,8 @@ constexpr bool kShowLaneStateOverlay = false;
 void GamePlayScene::init() {
   renderer = new BMSRenderer(chart, judge.timingWindows,
                              context.settings.visibleTimeGreenNumber);
+  renderer->setVisibleTimeBpmStrategy(
+      context.settings.visibleTimeBpmStrategy);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,

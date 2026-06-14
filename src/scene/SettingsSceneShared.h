@@ -432,6 +432,17 @@ static std::string formatVisibleTimeInputValue(int greenNumber,
   return std::to_string(greenNumber);
 }
 
+static std::string formatVisibleTimeBpmStrategyLabel(
+    AppSettings::VisibleTimeBpmStrategy strategy) {
+  switch (strategy) {
+  case AppSettings::VisibleTimeBpmStrategy::Chart:
+    return "Chart BPM";
+  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
+    return "Most prevalent";
+  }
+  return "Chart BPM";
+}
+
 static std::string formatFloatValue(float value, int precision = 1) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(precision) << value;
@@ -561,6 +572,17 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
     return AppSettings::NotePriorityMode::Lowest;
   }
   return AppSettings::NotePriorityMode::Lowest;
+}
+
+static AppSettings::VisibleTimeBpmStrategy nextVisibleTimeBpmStrategy(
+    AppSettings::VisibleTimeBpmStrategy strategy) {
+  switch (strategy) {
+  case AppSettings::VisibleTimeBpmStrategy::Chart:
+    return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
+  case AppSettings::VisibleTimeBpmStrategy::MostPrevalent:
+    return AppSettings::VisibleTimeBpmStrategy::Chart;
+  }
+  return AppSettings::VisibleTimeBpmStrategy::Chart;
 }
 
 static AppSettings::JudgementIndicatorRenderMode

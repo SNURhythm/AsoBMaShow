@@ -39,6 +39,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
+  visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   notePriorityModeText = nullptr;
@@ -47,6 +48,7 @@ void SettingsScene::resetViewState() {
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   visibleTimeModeButton = nullptr;
+  visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   notePriorityModeButton = nullptr;
@@ -125,6 +127,26 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     syncVisibleTimeInputText(true);
   });
   visibleTimeControls->addView(visibleTimeModeButton);
+
+  visibleTimeBpmStrategyText =
+      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+               TextView::CENTER, TextView::MIDDLE);
+  visibleTimeBpmStrategyButton = makeButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      visibleTimeBpmStrategyText, Color(33, 56, 87, 255),
+      Color(43, 72, 110, 255), Color(59, 98, 147, 255),
+      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+      Color(139, 189, 244, 255));
+  visibleTimeBpmStrategyButton->setOnClickListener([this]() {
+    context.settings.visibleTimeBpmStrategy =
+        nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
+    persistSettings();
+    if (previewRenderer != nullptr) {
+      previewRenderer->setVisibleTimeBpmStrategy(
+          context.settings.visibleTimeBpmStrategy);
+    }
+  });
+  visibleTimeControls->addView(visibleTimeBpmStrategyButton);
 
   auto *visibleTimeValueControls = new View();
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
@@ -988,7 +1010,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "line."
           : "Controls how long notes stay visible before reaching the "
             "judgement line. Switch units if you prefer legacy green number "
-            "or direct milliseconds.",
+            "or direct milliseconds, and choose which BPM anchors that time.",
       visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
 
   auto *angleControls = new View();

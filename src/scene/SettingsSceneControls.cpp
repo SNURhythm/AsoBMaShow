@@ -11,6 +11,9 @@ void SettingsScene::refreshSettingsText() {
   const std::string visualOffsetLabel = formatOffsetLabel(visualOffsetMs);
   const std::string visibleTimeLabel = formatVisibleTimeLabel(
       visibleTimeGreenNumber, context.settings.visibleTimeUseMilliseconds);
+  const std::string visibleTimeBpmStrategyLabel =
+      formatVisibleTimeBpmStrategyLabel(
+          context.settings.visibleTimeBpmStrategy);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
   const std::string bgaLabel =
@@ -104,6 +107,10 @@ void SettingsScene::refreshSettingsText() {
                                      ? "Milliseconds"
                                      : "Green Number");
   }
+  if (visibleTimeBpmStrategyText != nullptr) {
+    visibleTimeBpmStrategyText->setText("BPM: " +
+                                        visibleTimeBpmStrategyLabel);
+  }
 
   if (visibleTimeModeButton != nullptr) {
     if (context.settings.visibleTimeUseMilliseconds) {
@@ -120,6 +127,25 @@ void SettingsScene::refreshSettingsText() {
       visibleTimeModeButton->setBorderColors(Color(92, 131, 177, 255),
                                              Color(118, 163, 217, 255),
                                              Color(139, 189, 244, 255));
+    }
+  }
+
+  if (visibleTimeBpmStrategyButton != nullptr) {
+    if (context.settings.visibleTimeBpmStrategy ==
+        AppSettings::VisibleTimeBpmStrategy::MostPrevalent) {
+      visibleTimeBpmStrategyButton->setBackgroundColors(
+          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+          Color(63, 118, 107, 255));
+      visibleTimeBpmStrategyButton->setBorderColors(
+          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+          Color(145, 214, 195, 255));
+    } else {
+      visibleTimeBpmStrategyButton->setBackgroundColors(
+          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
+          Color(59, 98, 147, 255));
+      visibleTimeBpmStrategyButton->setBorderColors(
+          Color(92, 131, 177, 255), Color(118, 163, 217, 255),
+          Color(139, 189, 244, 255));
     }
   }
 

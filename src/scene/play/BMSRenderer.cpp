@@ -132,6 +132,7 @@ BMSRenderer::BMSRenderer(
     }
   }
   buildTimelineScrollPositions();
+  mostPrevalentBpm = calculateMostPrevalentBpm();
   SpriteLoader spriteLoader(PATH("assets/img/simple_gray.png"));
   if (!spriteLoader.load()) {
     throw std::runtime_error("Failed to load simple_gray.png");
@@ -457,6 +458,62 @@ void BMSRenderer::buildTimelineScrollPositions() {
   }
 }
 
+double BMSRenderer::calculateMostPrevalentBpm() const {
+  const double chartBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
+  if (timelines.empty()) {
+    return chartBpm;
+  }
+
+  std::map<double, long long> bpmDurations;
+  std::vector<double> bpmOrder;
+  auto addDuration = [&](double bpm, long long durationMicros) {
+    if (!std::isfinite(bpm) || bpm <= 0.0 || durationMicros <= 0) {
+      return;
+    }
+    if (bpmDurations.find(bpm) == bpmDurations.end()) {
+      bpmOrder.push_back(bpm);
+    }
+    bpmDurations[bpm] += durationMicros;
+  };
+
+  addDuration(chartBpm, timelines.front()->Timing);
+  const long long chartEnd =
+      chart != nullptr
+          ? std::max({chart->Meta.TotalLength, chart->Meta.PlayLength,
+                      timelines.back()->Timing})
+          : timelines.back()->Timing;
+  for (size_t i = 0; i < timelines.size(); ++i) {
+    const auto *timeline = timelines[i];
+    const long long segmentEnd =
+        i + 1 < timelines.size() ? timelines[i + 1]->Timing : chartEnd;
+    addDuration(timeline->Bpm, segmentEnd - timeline->Timing);
+  }
+
+  double bestBpm = chartBpm;
+  long long bestDuration = 0;
+  for (double bpm : bpmOrder) {
+    const long long duration = bpmDurations[bpm];
+    if (duration > bestDuration) {
+      bestBpm = bpm;
+      bestDuration = duration;
+    }
+  }
+  return bestDuration > 0 ? bestBpm : chartBpm;
+}
+
+double BMSRenderer::visibleTimeReferenceBpm() const {
+  double referenceBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
+  if (visibleTimeBpmStrategy ==
+          AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
+      std::isfinite(mostPrevalentBpm) && mostPrevalentBpm > 0.0) {
+    referenceBpm = mostPrevalentBpm;
+  }
+  if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0) {
+    return 1.0;
+  }
+  return referenceBpm;
+}
+
 double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
   if (timelines.empty()) {
     return 0.0;
@@ -702,7 +759,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
   const float visibleTimeMs = std::max(
       1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
-  float hispeed = 240000.0f / chart->Meta.Bpm / visibleTimeMs;
+  const float hispeed =
+      240000.0f / static_cast<float>(visibleTimeReferenceBpm()) /
+      visibleTimeMs;
   float visibleLaneBottom = judgeY;
   float rxhs = (upperBound - visibleLaneBottom) * hispeed;
   float y = judgeY;
@@ -934,6 +993,11 @@ void BMSRenderer::refreshGeometry() {
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
+}
+
+void BMSRenderer::setVisibleTimeBpmStrategy(
+    AppSettings::VisibleTimeBpmStrategy strategy) {
+  visibleTimeBpmStrategy = strategy;
 }
 
 void BMSRenderer::setLaneBeamsEnabled(bool enabled) {

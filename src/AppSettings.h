@@ -23,6 +23,11 @@ public:
     Hud2D = 1,
   };
 
+  enum class VisibleTimeBpmStrategy {
+    Chart = 0,
+    MostPrevalent = 1,
+  };
+
   static constexpr int kMinAudioOffsetMs = -300;
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
@@ -56,6 +61,8 @@ public:
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;
   bool visibleTimeUseMilliseconds = false;
+  VisibleTimeBpmStrategy visibleTimeBpmStrategy =
+      VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
   bool showInvisibleNotes = false;
   bool bgaEnabled = true;
