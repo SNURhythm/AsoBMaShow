@@ -1,4 +1,5 @@
 #pragma once
+#include "../BmsSearchService.h"
 #include "../view/RecyclerView.h"
 #include "Scene.h"
 #include "../ChartDBHelper.h"
@@ -27,6 +28,8 @@
 #include <unordered_map>
 
 class Button;
+class ScrollView;
+class View;
 
 class MainMenuScene : public Scene {
 public:
@@ -47,6 +50,7 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread findBmsThread;
   std::jthread replayExportThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
@@ -98,8 +102,13 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  Button *startButton = nullptr;
+  View *chartActionsRow = nullptr;
   View *replayButtonSlot = nullptr;
   Button *replayButton = nullptr;
+  View *findBmsButtonSlot = nullptr;
+  Button *findBmsButton = nullptr;
+  TextView *findBmsButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
   View *replayModalRoot = nullptr;
@@ -114,6 +123,24 @@ private:
   TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
+  View *findBmsModalRoot = nullptr;
+  View *findBmsProgressTrack = nullptr;
+  View *findBmsProgressFill = nullptr;
+  TextView *findBmsModalTitleText = nullptr;
+  TextView *findBmsStatusText = nullptr;
+  TextView *findBmsDetailText = nullptr;
+  ScrollView *findBmsLogScrollView = nullptr;
+  View *findBmsLogContent = nullptr;
+  TextView *findBmsLogText = nullptr;
+  Button *findBmsCloseButton = nullptr;
+  Button *findBmsOpenButton = nullptr;
+  Button *findBmsGoogleButton = nullptr;
+  Button *findBmsRefreshButton = nullptr;
+  RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
+  TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsOpenButtonText = nullptr;
+  TextView *findBmsGoogleButtonText = nullptr;
+  TextView *findBmsRefreshButtonText = nullptr;
   TextView *readyGaugeText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   Button *playOptionsCloseButton = nullptr;
@@ -146,6 +173,18 @@ private:
   };
   std::mutex replayExportProgressMutex;
   std::optional<PendingReplayExportProgress> pendingReplayExportProgress;
+  std::atomic_bool findBmsJobRunning = false;
+  std::atomic_bool findBmsCancelled = false;
+  ChartMetaRecord findBmsModalChart;
+  BmsSearchResult findBmsResult;
+  std::string findBmsProgressMessage;
+  std::uint64_t findBmsProgressCurrent = 0;
+  std::uint64_t findBmsProgressTotal = 0;
+  double findBmsProgressFraction = 0.0;
+  std::deque<std::string> findBmsProgressLog;
+  std::mutex findBmsUpdateMutex;
+  std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
+  std::optional<BmsSearchResult> pendingFindBmsResult;
 
   LibraryFolderItem activeFolder;
   ScoreClearRankCache scoreClearRanks;
@@ -190,6 +229,7 @@ private:
   void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
+  void startLibraryRefresh();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);
@@ -204,6 +244,17 @@ private:
   void startSelectedChart();
   void openChartViewerForSelection();
   void revealSelectedChartInFileManager();
+  void setPlayableChartActionsVisible(bool visible);
+  void setFindBmsButtonVisible(bool visible);
+  void openFindBmsForSelection();
+  void buildFindBmsModal();
+  void showFindBmsModal(const ChartMetaRecord &record);
+  void startFindBmsCandidateDownload(size_t candidateIndex);
+  void hideFindBmsModal();
+  void refreshFindBmsModal();
+  void applyFindBmsUpdates();
+  void openFindBmsResultUrl(const std::string &url);
+  std::filesystem::path preferredBmsDownloadRoot();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildPlayOptionsModal();

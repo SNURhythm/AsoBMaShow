@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -123,6 +124,9 @@ public:
   std::vector<ChartEntry> SelectAllEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
+  int ScanChartRoots(sqlite3 *db,
+                     const std::vector<std::filesystem::path> &roots,
+                     const std::stop_token *stopToken = nullptr);
 
   bool CreateDifficultyTableTables(sqlite3 *db);
   bool ImportDifficultyTable(sqlite3 *db, const std::string &headerJson,

@@ -14,6 +14,7 @@ if vcpkg_root is None:
 # copy current path
 current_path = f"{os.path.dirname(os.path.realpath(__file__))}/.."
 tmp_path = os.path.join(current_path, "tmp")
+triplet_overlay_path = os.path.join(current_path, "vcpkg-triplets")
 shutil.rmtree(tmp_path, ignore_errors=True)
 # set pwd to vcpkg_root
 os.chdir(vcpkg_root)
@@ -22,14 +23,19 @@ os.makedirs(tmp_path, exist_ok=True)
 dependency = {
     "ffmpeg": ["libavformat", "libavcodec", "libavutil", "libswresample", "libswscale", "libavdevice", "libavfilter"],
     "libsndfile": ["libsndfile", "libFLAC", "libFLAC++", "libvorbis", "libvorbisenc", "libvorbisfile", "libmp3lame", "libmpg123", "libsyn123", "libout123", "libopus", "libogg"],
+    "libarchive": ["libarchive", "libz", "libbz2", "liblz4", "liblzma", "libzstd"],
+}
+package_specs = {
+    "libarchive": "libarchive[core,bzip2,lz4,lzma,zstd]",
 }
 triplets = ["arm64-ios", "arm64-ios-simulator"]
 
 # 1. ffmpeg, libsndfile from vcpkg with both arm64-ios and arm64-ios-simulator triplets
 def install_package(package_name):
     # join like package_name:triplet1 package_name:triplet2
-    joined_triplets = [f"{package_name}:{triplet}" for triplet in triplets]
-    subprocess.run([f"{vcpkg_root}/vcpkg", "install", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays"], check=True)
+    package_spec = package_specs.get(package_name, package_name)
+    joined_triplets = [f"{package_spec}:{triplet}" for triplet in triplets]
+    subprocess.run([f"{vcpkg_root}/vcpkg", "install", "--classic", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays", "--overlay-triplets", triplet_overlay_path], check=True)
 
 
 # 2. generate xcframeworks with xcodebuild -create-xcframework to merge iOS Device and iOS Simulator triplets
@@ -69,5 +75,12 @@ merge_all_dependents("libsndfile")
 generate_xcframework("libsndfile", True)
 copy_xcframework("libsndfile")
 copy_includes("sndfile.h")
+
+install_package("libarchive")
+merge_all_dependents("libarchive")
+generate_xcframework("libarchive", True)
+copy_xcframework("libarchive")
+copy_includes("archive.h")
+copy_includes("archive_entry.h")
 # remove tmp
 shutil.rmtree(tmp_path)

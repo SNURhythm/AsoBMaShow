@@ -34,4 +34,29 @@ bool RevealPathInFinder(const std::string &path, std::string &errorMessage) {
     return true;
   }
 }
+
+bool OpenURLInDefaultBrowser(const std::string &url, std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    NSString *urlString = [[NSString alloc] initWithBytes:url.data()
+                                                   length:url.size()
+                                                 encoding:NSUTF8StringEncoding];
+    if (urlString == nil || urlString.length == 0) {
+      errorMessage = "Invalid URL";
+      return false;
+    }
+
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL";
+      return false;
+    }
+
+    if (![[NSWorkspace sharedWorkspace] openURL:nsUrl]) {
+      errorMessage = "Could not open URL";
+      return false;
+    }
+    return true;
+  }
+}
 #endif

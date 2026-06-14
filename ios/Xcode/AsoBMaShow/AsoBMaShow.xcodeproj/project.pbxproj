@@ -27,6 +27,7 @@
 		B7CA782D2F2906130016BA21 /* libsndfile.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782B2F2906120016BA21 /* libsndfile.xcframework */; };
 		B7CA782E2F2906130016BA21 /* ffmpeg.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */; };
 		B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */; };
+		B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78322F3010010016BA21 /* libarchive.xcframework */; };
 		B7D27A9F2C7CD1F300189ED7 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */; };
 		B7D27AA12C7CD21100189ED7 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA02C7CD21100189ED7 /* libbz2.tbd */; };
 		B7D27AA32C7CD21900189ED7 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA22C7CD21900189ED7 /* libiconv.tbd */; };
@@ -636,6 +637,7 @@
 		B7CA782B2F2906120016BA21 /* libsndfile.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libsndfile.xcframework; path = lib/libsndfile.xcframework; sourceTree = "<group>"; };
 		B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = ffmpeg.xcframework; path = lib/ffmpeg.xcframework; sourceTree = "<group>"; };
 		B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libluajit.xcframework; path = lib/libluajit.xcframework; sourceTree = "<group>"; };
+		B7CA78322F3010010016BA21 /* libarchive.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libarchive.xcframework; path = lib/libarchive.xcframework; sourceTree = "<group>"; };
 		B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		B7D27AA02C7CD21100189ED7 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		B7D27AA22C7CD21900189ED7 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
@@ -704,6 +706,17 @@
 				audio/Jukebox.cpp,
 				bgfx_helper.cpp,
 				bms_parser.cpp,
+				bms_search/ArchiveSupport.cpp,
+				bms_search/BmsSearchDriver.cpp,
+				bms_search/Common.cpp,
+				bms_search/DirectArchiveDriver.cpp,
+				bms_search/DownloadSupport.cpp,
+				bms_search/DropboxDriver.cpp,
+				bms_search/GoogleDriveDriver.cpp,
+				bms_search/HorieYuukaDriver.cpp,
+				bms_search/IpfsDriver.cpp,
+				bms_search/PackageSourceDrivers.cpp,
+				BmsSearchService.cpp,
 				ChartDBHelper.cpp,
 				game/GameObject.cpp,
 				game/GameState.cpp,
@@ -797,6 +810,7 @@
 				B7D27AAD2C7CD24600189ED7 /* CoreImage.framework in Frameworks */,
 				B7D27AAB2C7CD23F00189ED7 /* AVKit.framework in Frameworks */,
 				B7D27AA92C7CD23900189ED7 /* VideoToolbox.framework in Frameworks */,
+				B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */,
 				B7CA782D2F2906130016BA21 /* libsndfile.xcframework in Frameworks */,
 				B7CA782E2F2906130016BA21 /* ffmpeg.xcframework in Frameworks */,
 				B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */,
@@ -867,6 +881,7 @@
 			isa = PBXGroup;
 			children = (
 				B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */,
+				B7CA78322F3010010016BA21 /* libarchive.xcframework */,
 				B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */,
 				B7CA782B2F2906120016BA21 /* libsndfile.xcframework */,
 				B7CA78272F28E3D70016BA21 /* libFLAC.a */,

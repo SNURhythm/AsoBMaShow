@@ -11,6 +11,7 @@ public:
 
   void setContentView(View *view);
   void refreshContentLayout();
+  void scrollToBottom();
   float getScrollOffset() const { return scrollOffset; }
 
 protected:

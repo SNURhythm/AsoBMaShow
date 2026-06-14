@@ -1180,6 +1180,16 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   folderList->setFlexDirection(FlexDirection::Column);
   folderList->setGap(metrics.compact ? 10.0f : 12.0f);
 
+  auto *refreshFoldersButton = makeButton(
+      metrics.compact ? 160 : 180, metrics.actionButtonHeight,
+      makeText("Refresh List", metrics.bodyTextSize + 2, Color(239, 244, 251),
+               TextView::CENTER, TextView::MIDDLE),
+      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
+      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+      Color(145, 214, 195, 255));
+  refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
+  folderList->addView(refreshFoldersButton);
+
   if (chartEntries.empty()) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
                                         metrics.bodyTextSize,
