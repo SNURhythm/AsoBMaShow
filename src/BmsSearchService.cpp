@@ -3454,49 +3454,59 @@ BmsSearchResult BmsSearchService::findAndDownload(
     }
   };
 
-  auto tryFallbacksAfterBmsFailure =
-      [&](const BmsSearchResult &bmsFailure) -> std::optional<BmsSearchResult> {
-    std::optional<BmsSearchResult> packageFailure;
-    if (!md5Hash.empty()) {
-      BmsSearchResult packageResult;
-      preserveLookupContext(packageResult, bmsFailure);
-      if (EndlessDreamSourcesDriver::tryDownloadByMd5(
-              md5Hash, archiveKey, libraryRoot, cancelled, progressCallback,
-              packageResult)) {
-        return packageResult;
-      }
-      if (!packageResult.message.empty()) {
-        packageFailure = packageResult;
-      }
+  std::optional<BmsSearchResult> packageFailure;
+  auto tryPackageSources = [&]() -> std::optional<BmsSearchResult> {
+    if (md5Hash.empty()) {
+      return std::nullopt;
     }
 
+    BmsSearchResult packageResult;
+    preserveLookupContext(packageResult, result);
+    if (EndlessDreamSourcesDriver::tryDownloadByMd5(
+            md5Hash, archiveKey, libraryRoot, cancelled, progressCallback,
+            packageResult)) {
+      return packageResult;
+    }
+    if (!packageResult.message.empty()) {
+      packageFailure = packageResult;
+    }
+    return std::nullopt;
+  };
+
+  auto tryHorieAfterAutomaticFailure =
+      [&](const BmsSearchResult &automaticFailure)
+      -> std::optional<BmsSearchResult> {
     BmsSearchResult horieResult;
-    preserveLookupContext(horieResult, bmsFailure);
+    preserveLookupContext(horieResult, automaticFailure);
     if (HorieYuukaDriver::tryDownload(
             horieQueries, horieTerms.title, horieTerms.artist,
             !horieTerms.title.empty(), archiveKey, libraryRoot, cancelled,
             progressCallback, horieResult)) {
       return horieResult;
     }
-    preserveLookupContext(horieResult, bmsFailure);
+    preserveLookupContext(horieResult, automaticFailure);
     if (horieResult.message.empty()) {
       horieResult.status = BmsSearchResult::Status::NotFound;
       horieResult.message = "Horie did not find a matching BMS archive.";
     } else if (packageFailure &&
                horieResult.status == BmsSearchResult::Status::NotFound) {
       horieResult.message =
-          "Package sources did not produce a usable archive. " +
+          "Automatic sources did not produce a usable archive. " +
           horieResult.message;
     }
     return horieResult;
   };
+
+  if (const auto packageResult = tryPackageSources()) {
+    return *packageResult;
+  }
 
   if (hash.empty()) {
     result.status = BmsSearchResult::Status::NotFound;
     result.message =
         "Selected entry does not have SHA256 for BMS Search lookup.";
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
       return *fallbackResult;
     }
     result.message =
@@ -3521,7 +3531,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
         errorMessage.empty() ? "BMS Search did not return a pattern page."
                              : errorMessage;
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
       return *fallbackResult;
     }
     return result;
@@ -3533,7 +3543,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
     result.status = BmsSearchResult::Status::NoDownloadLink;
     result.message = "BMS Search found the pattern, but no BMS page link.";
     result.fallbackUrl = result.patternUrl;
-    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
       return *fallbackResult;
     }
     return result;
@@ -3586,7 +3596,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
       return *fallbackResult;
     }
     return result;
@@ -3601,7 +3611,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto fallbackResult = tryFallbacksAfterBmsFailure(result)) {
+    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
       return *fallbackResult;
     }
   }

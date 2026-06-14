@@ -2487,7 +2487,7 @@ void MainMenuScene::refreshFindBmsModal() {
     }
   } else {
     detail +=
-        "Checking BMS Search, package sources, then Horie archive if needed.";
+        "Checking package sources, BMS Search, then Horie archive if needed.";
   }
   if (!findBmsProgressLog.empty()) {
     if (!detail.empty() && detail.back() != '\n') {
