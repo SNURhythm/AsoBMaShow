@@ -58,6 +58,7 @@ private:
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
+  TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
@@ -66,6 +67,7 @@ private:
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
   Button *visibleTimeModeButton = nullptr;
+  Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;

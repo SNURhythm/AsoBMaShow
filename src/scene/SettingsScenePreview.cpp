@@ -101,6 +101,8 @@ void SettingsScene::ensurePreviewRenderer() {
     previewRenderer =
         new BMSRenderer(previewChart, previewJudge.timingWindows,
                         context.settings.visibleTimeGreenNumber, false);
+    previewRenderer->setVisibleTimeBpmStrategy(
+        context.settings.visibleTimeBpmStrategy);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   }
 }

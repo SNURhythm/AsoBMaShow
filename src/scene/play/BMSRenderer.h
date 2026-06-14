@@ -6,6 +6,7 @@
 
 #include "../../ReplayData.h"
 #include "../../ReplayGhostUtils.h"
+#include "../../AppSettings.h"
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -115,6 +116,9 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
+  AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
+      AppSettings::VisibleTimeBpmStrategy::Chart;
+  double mostPrevalentBpm = 0.0;
   bool renderHud = true;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
@@ -146,6 +150,8 @@ private:
   void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
   void drawMissMarkerX(float y, const ReplayMissMarker &marker);
   void buildTimelineScrollPositions();
+  double calculateMostPrevalentBpm() const;
+  double visibleTimeReferenceBpm() const;
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText();
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
@@ -185,6 +191,8 @@ public:
   void reset();
   void refreshGeometry();
   void setVisibleTimeGreenNumber(int greenNumber);
+  void setVisibleTimeBpmStrategy(
+      AppSettings::VisibleTimeBpmStrategy strategy);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
