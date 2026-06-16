@@ -571,8 +571,7 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
           static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(noteVisibleUpperBound - judgeY) /
-          static_cast<double>(rxhs);
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -614,8 +613,7 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
           static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(noteVisibleUpperBound - judgeY) /
-          static_cast<double>(rxhs);
+      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -643,7 +641,7 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 }
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
-  if (y + noteRenderHeight < lowerBound || y > noteVisibleUpperBound) {
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -666,7 +664,7 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 }
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
-  if (y + noteRenderHeight < lowerBound || y > noteVisibleUpperBound) {
+  if (y + noteRenderHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -727,6 +725,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthBeams = 300;
+  constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
@@ -766,7 +765,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
   // render timeline
   for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y < noteVisibleUpperBound; i++) {
+       i < timelines.size() && y < upperBound; i++) {
     const auto &timeLine = timelines[i];
     if (timeLine->Timing >= micro) {
       if (y < judgeY)
@@ -901,7 +900,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(pair.second, noteVisibleUpperBound, pair.first);
+    drawLongNote(pair.second, upperBound, pair.first);
   }
   drawReplayGhosts(rxhs, micro, currentScrollPosition);
   drawReplayMissMarkers(rxhs, currentScrollPosition);
@@ -932,6 +931,12 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     }
     simpleBatchRenderer.flush();
   }
+
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
+  simpleBatchRenderer.setSubmitDepth(kDepthLaneCover);
+  simpleBatchRenderer.begin();
+  drawLaneCover();
+  simpleBatchRenderer.flush();
 
   if (judgementIndicator.isEnabled()) {
     const bool indicatorHudMode = judgementIndicator.isHudMode();
@@ -1123,6 +1128,21 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     return;
   }
   drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
+}
+
+void BMSRenderer::drawLaneCover() {
+  const float coverHeight = upperBound - noteVisibleUpperBound;
+  if (coverHeight <= 0.001f) {
+    return;
+  }
+
+  drawRect(playAreaWidth, coverHeight, playAreaLeftX, noteVisibleUpperBound,
+           Color(9, 12, 18, 255));
+
+  const float edgeHeight = std::max(0.025f, noteRenderHeight * 0.12f);
+  drawRect(playAreaWidth, edgeHeight, playAreaLeftX,
+           noteVisibleUpperBound - edgeHeight * 0.5f,
+           Color(214, 224, 236, 255));
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const {
