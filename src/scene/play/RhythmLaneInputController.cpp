@@ -2,8 +2,6 @@
 #include "BMSRenderer.h"
 
 #include <array>
-#include <cmath>
-#include <utility>
 
 namespace {
 struct PressLaneCandidate {
@@ -70,13 +68,22 @@ bool shouldPreferCandidate(const PressLaneCandidate &current,
   }
   return false;
 }
+
+void setReplayEvent(RhythmLaneInputController::Result &result,
+                    ReplayEventAction action, int lane,
+                    const bms_parser::Note *note, long long songTimeMicros,
+                    long long judgeTimeMicros,
+                    const JudgeResult &judgeResult) {
+  result.hasReplayEvent = true;
+  result.replayEvent = {action, lane, note, songTimeMicros, judgeTimeMicros,
+                        judgeResult};
+}
 } // namespace
 
 RhythmLaneInputController::RhythmLaneInputController(
     bms_parser::Chart *chart, BMSRenderer *renderer,
-    std::unordered_map<int, bool> &lanePressed, Callbacks callbacks)
+    std::unordered_map<int, bool> &lanePressed)
     : chart(chart), renderer(renderer), lanePressed(lanePressed),
-      callbacks(std::move(callbacks)),
       judge(chart != nullptr ? chart->Meta.Rank : 3) {
   if (const auto it = judge.timingWindows.find(Bad);
       it != judge.timingWindows.end()) {
@@ -85,16 +92,16 @@ RhythmLaneInputController::RhythmLaneInputController(
   resetLaneStates();
 }
 
-bms_parser::Note *RhythmLaneInputController::pressLane(int lane,
-                                                       double inputDelay) {
-  return pressLane(lane, lane, inputDelay);
+RhythmLaneInputController::Result
+RhythmLaneInputController::pressLane(int lane, const InputContext &context) {
+  return pressLane(lane, lane, context);
 }
 
-bms_parser::Note *
-RhythmLaneInputController::pressLane(int mainLane, int compensateLane,
-                                     double inputDelay) {
+RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
+    int mainLane, int compensateLane, const InputContext &context) {
+  Result result;
   if (chart == nullptr || renderer == nullptr) {
-    return nullptr;
+    return result;
   }
 
   auto mainLaneIt = lanePressed.find(mainLane);
@@ -109,12 +116,11 @@ RhythmLaneInputController::pressLane(int mainLane, int compensateLane,
     candidates[candidateCount++] = compensateLane;
   }
   if (candidateCount == 0) {
-    return nullptr;
+    return result;
   }
 
-  const long long inputTime = inputTimeMicros(inputDelay);
+  const long long inputTime = inputTimeMicros(context);
   const long long futureCutoff = latestHittableNoteTiming(judge, inputTime);
-  const AppSettings::NotePriorityMode priorityMode = notePriorityMode();
   bool hasSelectedCandidate = false;
   bool stopScanning = false;
   PressLaneCandidate selectedCandidate;
@@ -151,11 +157,11 @@ RhythmLaneInputController::pressLane(int mainLane, int compensateLane,
         const PressLaneCandidate candidate{lane, note, noteJudge};
         if (!hasSelectedCandidate ||
             shouldPreferCandidate(selectedCandidate, candidate, inputTime,
-                                  judge, priorityMode)) {
+                                  judge, context.notePriorityMode)) {
           selectedCandidate = candidate;
           hasSelectedCandidate = true;
         }
-        if (priorityMode == AppSettings::NotePriorityMode::Lowest) {
+        if (context.notePriorityMode == AppSettings::NotePriorityMode::Lowest) {
           stopScanning = true;
           break;
         }
@@ -169,43 +175,43 @@ RhythmLaneInputController::pressLane(int mainLane, int compensateLane,
     }
   }
 
-  const long long beamTime = laneBeamTimeMicros();
   if (hasSelectedCandidate) {
-    const JudgeResult judgement =
-        pressNote(selectedCandidate.note, inputTime, inputTime);
+    result = pressNote(selectedCandidate.note, inputTime, inputTime);
+    result.note = selectedCandidate.note;
     if (auto pressedIt = lanePressed.find(selectedCandidate.lane);
         pressedIt != lanePressed.end()) {
       pressedIt->second = true;
     }
-    notifyLaneStateChanged();
-    renderer->onLanePressed(selectedCandidate.lane, judgement, beamTime);
-    return selectedCandidate.note;
+    renderer->onLanePressed(selectedCandidate.lane, result.judge,
+                            context.laneBeamTimeMicros);
+    return result;
   }
 
   if (mainLaneIt != lanePressed.end()) {
     mainLaneIt->second = true;
   }
-  notifyLaneStateChanged();
-  renderer->onLanePressed(mainLane, JudgeResult(None, 0), beamTime);
-  recordReplayEvent(ReplayEventAction::Press, mainLane, nullptr, inputTime,
-                    inputTime, JudgeResult(None, 0));
-  return nullptr;
+  renderer->onLanePressed(mainLane, JudgeResult(None, 0),
+                          context.laneBeamTimeMicros);
+  setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
+                 inputTime, inputTime, JudgeResult(None, 0));
+  return result;
 }
 
-bms_parser::Note *RhythmLaneInputController::releaseLane(int lane,
-                                                         double inputDelay) {
+RhythmLaneInputController::Result
+RhythmLaneInputController::releaseLane(int lane,
+                                       const InputContext &context) {
+  Result result;
   if (chart == nullptr || renderer == nullptr) {
-    return nullptr;
+    return result;
   }
   auto laneIt = lanePressed.find(lane);
   if (laneIt == lanePressed.end() || !laneIt->second) {
-    return nullptr;
+    return result;
   }
   laneIt->second = false;
-  notifyLaneStateChanged();
-  renderer->onLaneReleased(lane, laneBeamTimeMicros());
+  renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
 
-  const long long inputTime = inputTimeMicros(inputDelay);
+  const long long inputTime = inputTimeMicros(context);
   for (const auto *measure : chart->Measures) {
     if (measure == nullptr) {
       continue;
@@ -224,18 +230,19 @@ bms_parser::Note *RhythmLaneInputController::releaseLane(int lane,
       if (note == nullptr || note->IsPlayed) {
         continue;
       }
-      const JudgeResult releaseJudge = releaseNote(note, inputTime, inputTime);
-      if (releaseJudge.judgement == None) {
-        recordReplayEvent(ReplayEventAction::Release, lane, nullptr, inputTime,
-                          inputTime, releaseJudge);
+      result = releaseNote(note, inputTime, inputTime);
+      result.note = note;
+      if (!result.hasReplayEvent) {
+        setReplayEvent(result, ReplayEventAction::Release, lane, nullptr,
+                       inputTime, inputTime, result.judge);
       }
-      return note;
+      return result;
     }
   }
 
-  recordReplayEvent(ReplayEventAction::Release, lane, nullptr, inputTime,
-                    inputTime, JudgeResult(None, 0));
-  return nullptr;
+  setReplayEvent(result, ReplayEventAction::Release, lane, nullptr, inputTime,
+                 inputTime, JudgeResult(None, 0));
+  return result;
 }
 
 void RhythmLaneInputController::resetLaneStates() {
@@ -246,93 +253,60 @@ void RhythmLaneInputController::resetLaneStates() {
   for (const auto lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
   }
-  notifyLaneStateChanged();
 }
 
-long long RhythmLaneInputController::inputTimeMicros(double inputDelay) const {
-  const long long baseTime =
-      callbacks.currentSongTimeMicros ? callbacks.currentSongTimeMicros() : 0;
-  return baseTime - static_cast<long long>(inputDelay * 1000000.0);
+long long RhythmLaneInputController::inputTimeMicros(
+    const InputContext &context) const {
+  return context.songTimeMicros -
+         static_cast<long long>(context.inputDelay * 1000000.0);
 }
 
-long long RhythmLaneInputController::laneBeamTimeMicros() const {
-  return callbacks.laneBeamTimeMicros ? callbacks.laneBeamTimeMicros()
-                                      : inputTimeMicros(0.0);
-}
-
-AppSettings::NotePriorityMode
-RhythmLaneInputController::notePriorityMode() const {
-  return callbacks.notePriorityMode ? callbacks.notePriorityMode()
-                                    : AppSettings::NotePriorityMode::Lowest;
-}
-
-bool RhythmLaneInputController::recordTimingSample() const {
-  return callbacks.recordTimingSample ? callbacks.recordTimingSample() : true;
-}
-
-void RhythmLaneInputController::notifyLaneStateChanged() const {
-  if (callbacks.onLaneStateChanged) {
-    callbacks.onLaneStateChanged();
-  }
-}
-
-void RhythmLaneInputController::recordReplayEvent(
-    ReplayEventAction action, int lane, const bms_parser::Note *note,
-    long long songTimeMicros, long long judgeTimeMicros,
-    const JudgeResult &judgeResult) const {
-  if (callbacks.recordReplayEvent) {
-    callbacks.recordReplayEvent(action, lane, note, songTimeMicros,
-                                judgeTimeMicros, judgeResult);
-  }
-}
-
-void RhythmLaneInputController::onJudge(const JudgeResult &judgeResult) const {
-  if (callbacks.onJudge) {
-    callbacks.onJudge(judgeResult, recordTimingSample());
-  }
-}
-
-JudgeResult RhythmLaneInputController::pressNote(bms_parser::Note *note,
-                                                 long long pressedTime,
-                                                 long long songTimeMicros) {
+RhythmLaneInputController::Result
+RhythmLaneInputController::pressNote(bms_parser::Note *note,
+                                     long long pressedTime,
+                                     long long songTimeMicros) {
+  Result result;
+  result.note = note;
   if (note == nullptr) {
-    return JudgeResult(None, 0);
+    return result;
   }
-  if (callbacks.playKeySound) {
-    callbacks.playKeySound(note);
-  }
+  result.keySoundNote = note;
 
   const JudgeResult judgeResult = judge.judgeNow(note, pressedTime);
+  result.judge = judgeResult;
   if (judgeResult.judgement == None) {
-    return judgeResult;
+    return result;
   }
   if (judgeResult.isNotePlayed()) {
     if (note->IsLongNote()) {
       auto *longNote = static_cast<bms_parser::LongNote *>(note);
       if (!longNote->IsTail()) {
         longNote->Press(pressedTime);
-        recordReplayEvent(ReplayEventAction::Press, note->Lane, note,
-                          songTimeMicros, pressedTime, judgeResult);
+        setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
+                       songTimeMicros, pressedTime, judgeResult);
       }
-      return judgeResult;
+      return result;
     }
     note->Press(pressedTime);
   }
-  onJudge(judgeResult);
-  recordReplayEvent(ReplayEventAction::Press, note->Lane, note, songTimeMicros,
-                    pressedTime, judgeResult);
-  return judgeResult;
+  result.hasJudge = true;
+  setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
+                 songTimeMicros, pressedTime, judgeResult);
+  return result;
 }
 
-JudgeResult RhythmLaneInputController::releaseNote(bms_parser::Note *note,
-                                                   long long releasedTime,
-                                                   long long songTimeMicros) {
+RhythmLaneInputController::Result
+RhythmLaneInputController::releaseNote(bms_parser::Note *note,
+                                       long long releasedTime,
+                                       long long songTimeMicros) {
+  Result result;
+  result.note = note;
   if (note == nullptr || !note->IsLongNote()) {
-    return JudgeResult(None, 0);
+    return result;
   }
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
   if (!longNote->IsTail() || !longNote->IsHolding) {
-    return JudgeResult(None, 0);
+    return result;
   }
 
   longNote->Release(releasedTime);
@@ -344,8 +318,9 @@ JudgeResult RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   } else {
     appliedJudge = judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
   }
-  onJudge(appliedJudge);
-  recordReplayEvent(ReplayEventAction::Release, note->Lane, note,
-                    songTimeMicros, releasedTime, appliedJudge);
-  return appliedJudge;
+  result.judge = appliedJudge;
+  result.hasJudge = true;
+  setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,
+                 songTimeMicros, releasedTime, appliedJudge);
+  return result;
 }

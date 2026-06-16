@@ -4,8 +4,6 @@
 #include "play/BMSRenderer.h"
 #include "play/RhythmLaneInputController.h"
 
-#include <utility>
-
 using namespace settings_scene;
 
 namespace {
@@ -139,32 +137,8 @@ void SettingsScene::ensurePreviewInputHandler() {
     return;
   }
   if (previewLaneController == nullptr) {
-    RhythmLaneInputController::Callbacks callbacks;
-    callbacks.currentSongTimeMicros = [this]() { return previewElapsedMicros; };
-    callbacks.laneBeamTimeMicros = [this]() { return previewElapsedMicros; };
-    callbacks.onJudge = [this](const JudgeResult &judgeResult,
-                               bool recordTimingSample) {
-      if (judgeResult.judgement == None || previewRenderer == nullptr) {
-        return;
-      }
-      if (judgeResult.isComboBreak()) {
-        previewCombo = 0;
-      } else if (judgeResult.judgement != Kpoor) {
-        previewCombo++;
-      }
-      if (!judgeResult.isComboBreak() && judgeResult.judgement != Kpoor) {
-        previewScore += 2;
-      }
-      previewRenderer->onJudge(judgeResult, previewCombo, previewScore,
-                               previewElapsedMicros, recordTimingSample);
-    };
-    callbacks.notePriorityMode = [this]() {
-      return context.settings.notePriorityMode;
-    };
-    callbacks.recordTimingSample = []() { return true; };
     previewLaneController = new RhythmLaneInputController(
-        previewChart, previewRenderer, previewLanePressed,
-        std::move(callbacks));
+        previewChart, previewRenderer, previewLanePressed);
   }
   if (previewInputHandler == nullptr) {
     previewInputHandler = new RhythmInputHandler(
@@ -262,7 +236,7 @@ bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
   if (!previewActive || previewLaneController == nullptr) {
     return nullptr;
   }
-  return previewLaneController->pressLane(lane, inputDelay);
+  return pressLane(lane, lane, inputDelay);
 }
 
 bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
@@ -270,14 +244,53 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
   if (!previewActive || previewLaneController == nullptr) {
     return nullptr;
   }
-  return previewLaneController->pressLane(mainLane, compensateLane, inputDelay);
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = previewElapsedMicros,
+      .laneBeamTimeMicros = previewElapsedMicros,
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result =
+      previewLaneController->pressLane(mainLane, compensateLane, inputContext);
+  if (result.hasJudge && previewRenderer != nullptr) {
+    if (result.judge.isComboBreak()) {
+      previewCombo = 0;
+    } else if (result.judge.judgement != Kpoor) {
+      previewCombo++;
+    }
+    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
+      previewScore += 2;
+    }
+    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
+                             previewElapsedMicros, true);
+  }
+  return result.note;
 }
 
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay) {
   if (!previewActive || previewLaneController == nullptr) {
     return nullptr;
   }
-  return previewLaneController->releaseLane(lane, inputDelay);
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = previewElapsedMicros,
+      .laneBeamTimeMicros = previewElapsedMicros,
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result = previewLaneController->releaseLane(lane, inputContext);
+  if (result.hasJudge && previewRenderer != nullptr) {
+    if (result.judge.isComboBreak()) {
+      previewCombo = 0;
+    } else if (result.judge.judgement != Kpoor) {
+      previewCombo++;
+    }
+    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
+      previewScore += 2;
+    }
+    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
+                             previewElapsedMicros, true);
+  }
+  return result.note;
 }
 
 void SettingsScene::resetPreviewSimulation() {

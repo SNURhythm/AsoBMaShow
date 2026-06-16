@@ -18,7 +18,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 
 namespace {
 long long nowMicros() {
@@ -179,38 +178,8 @@ void GamePlayScene::init() {
     lanePressed[lane] = false;
   }
 
-  RhythmLaneInputController::Callbacks laneCallbacks;
-  laneCallbacks.currentSongTimeMicros = [this]() {
-    return getGameplayTimeMicros(context.jukebox.getTimeMicros());
-  };
-  laneCallbacks.laneBeamTimeMicros = []() { return nowMicros(); };
-  laneCallbacks.playKeySound = [this](bms_parser::Note *note) {
-    if (note != nullptr && note->Wav != bms_parser::Parser::NoWav &&
-        !options.autoKeySound && !isReplayPlayback()) {
-      context.jukebox.playKeySound(note->Wav);
-    }
-  };
-  laneCallbacks.onJudge = [this](const JudgeResult &judgeResult,
-                                 bool recordTimingSample) {
-    onJudge(judgeResult, recordTimingSample);
-  };
-  laneCallbacks.recordReplayEvent =
-      [this](ReplayEventAction action, int lane, const bms_parser::Note *note,
-             long long songTimeMicros, long long judgeTimeMicros,
-             const JudgeResult &judgeResult) {
-        appendReplayEvent(action, lane, note, songTimeMicros, judgeTimeMicros,
-                          judgeResult);
-      };
-  laneCallbacks.onLaneStateChanged = [this]() { updateLaneStateText(); };
-  laneCallbacks.notePriorityMode = [this]() {
-    return context.settings.notePriorityMode;
-  };
-  laneCallbacks.recordTimingSample = [this]() {
-    return !options.autoPlay || isReplayPlayback();
-  };
   laneInputController =
-      new RhythmLaneInputController(chart, renderer, lanePressed,
-                                    std::move(laneCallbacks));
+      new RhythmLaneInputController(chart, renderer, lanePressed);
 
   if constexpr (kShowLaneStateOverlay) {
     laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
@@ -306,6 +275,7 @@ void GamePlayScene::reset() {
   renderer->reset();
   if (laneInputController != nullptr) {
     laneInputController->resetLaneStates();
+    updateLaneStateText();
   }
   // reset all notes
   for (const auto &measure : chart->Measures) {
@@ -673,7 +643,30 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (laneInputController == nullptr) {
     return nullptr;
   }
-  return laneInputController->pressLane(mainLane, compensateLane, inputDelay);
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .laneBeamTimeMicros = nowMicros(),
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result =
+      laneInputController->pressLane(mainLane, compensateLane, inputContext);
+  updateLaneStateText();
+  if (result.keySoundNote != nullptr &&
+      result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
+      !options.autoKeySound && !isReplayPlayback()) {
+    context.jukebox.playKeySound(result.keySoundNote->Wav);
+  }
+  if (result.hasJudge) {
+    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
+  }
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    appendReplayEvent(event.action, event.lane, event.note,
+                      event.songTimeMicros, event.judgeTimeMicros,
+                      event.judge);
+  }
+  return result.note;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   if (isGamePaused || state == nullptr || !state->isPlaying ||
@@ -683,7 +676,24 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   if (laneInputController == nullptr) {
     return nullptr;
   }
-  return laneInputController->releaseLane(lane, inputDelay);
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .laneBeamTimeMicros = nowMicros(),
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result = laneInputController->releaseLane(lane, inputContext);
+  updateLaneStateText();
+  if (result.hasJudge) {
+    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
+  }
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    appendReplayEvent(event.action, event.lane, event.note,
+                      event.songTimeMicros, event.judgeTimeMicros,
+                      event.judge);
+  }
+  return result.note;
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
   const auto &measures = chart->Measures;
