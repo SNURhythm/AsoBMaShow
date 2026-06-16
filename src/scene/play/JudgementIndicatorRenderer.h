@@ -18,6 +18,8 @@ public:
   struct Geometry {
     float judgeY = 0.0f;
     float upperBound = 10.0f;
+    float playAreaLeftX = 0.0f;
+    float playAreaWidth = 8.0f;
     float noteRenderWidth = 1.0f;
     float noteRenderHeight = 1.0f;
   };

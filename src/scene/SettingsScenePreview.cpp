@@ -103,6 +103,8 @@ void SettingsScene::ensurePreviewRenderer() {
                         context.settings.visibleTimeGreenNumber, false);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    previewRenderer->setPlayAreaWidth(
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
     previewRenderer->setLaneBeamLengthPercent(
         context.settings.laneBeamLengthPercent);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);

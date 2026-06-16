@@ -293,10 +293,10 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     return indicatorLayout;
   }
 
-  indicatorLayout.width =
-      gameplay_geometry::kPlayAreaWidth * kWorldWidthRatio * widthScale;
-  indicatorLayout.x =
-      gameplay_geometry::kPlayAreaCenterX - indicatorLayout.width * 0.5f;
+  indicatorLayout.width = geometry.playAreaWidth * kWorldWidthRatio *
+                          widthScale;
+  indicatorLayout.x = geometry.playAreaLeftX + geometry.playAreaWidth * 0.5f -
+                      indicatorLayout.width * 0.5f;
   const float laneHeight = std::max(0.1f, geometry.upperBound - geometry.judgeY);
   indicatorLayout.centerY = geometry.judgeY + laneHeight * normalizedY;
   indicatorLayout.barHeight =

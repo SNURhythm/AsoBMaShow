@@ -31,6 +31,10 @@ void SettingsScene::renderScene() {
         context.settings.visibleTimeGreenNumber);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    if (previewChart != nullptr) {
+      previewRenderer->setPlayAreaWidth(
+          context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+    }
     previewRenderer->setLaneBeamLengthPercent(
         context.settings.laneBeamLengthPercent);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);

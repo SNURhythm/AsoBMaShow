@@ -212,6 +212,8 @@ void GamePlayScene::init() {
                              context.settings.visibleTimeGreenNumber);
   renderer->setVisibleTimeBpmStrategy(
       context.settings.visibleTimeBpmStrategy);
+  renderer->setPlayAreaWidth(
+      context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
   renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
@@ -225,7 +227,9 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback()) {
-    inputHandler = new RhythmInputHandler(this, chart->Meta);
+    inputHandler = new RhythmInputHandler(
+        this, chart->Meta,
+        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler->discardPendingTouchEvents();
     inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)

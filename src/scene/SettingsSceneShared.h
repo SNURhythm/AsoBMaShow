@@ -354,6 +354,14 @@ static int clampLaneBeamLengthPercent(int value) {
                     AppSettings::kMaxLaneBeamLengthPercent);
 }
 
+static float clampPlayAreaWidth(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultPlayAreaWidth;
+  }
+  return std::clamp(value, AppSettings::kMinPlayAreaWidth,
+                    AppSettings::kMaxPlayAreaWidth);
+}
+
 static float clampJudgementIndicatorY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorY;
@@ -472,6 +480,10 @@ static std::string formatLaneLengthLabel(float length) {
 
 static std::string formatLaneBeamLengthLabel(int percent) {
   return std::to_string(clampLaneBeamLengthPercent(percent)) + "%";
+}
+
+static std::string formatPlayAreaWidthLabel(float width) {
+  return formatFloatValue(clampPlayAreaWidth(width), 1);
 }
 
 static std::string formatJudgementIndicatorRenderModeLabel(

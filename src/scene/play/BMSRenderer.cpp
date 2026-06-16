@@ -139,15 +139,8 @@ BMSRenderer::BMSRenderer(
   }
   constexpr int width = 128;
   constexpr int height = 40;
-  noteRenderWidth =
-      laneOrder.empty()
-          ? gameplay_geometry::kStandardNoteWidth
-          : gameplay_geometry::kPlayAreaWidth /
-                static_cast<float>(laneOrder.size());
   noteImageHeight = height;
   noteImageWidth = width;
-  noteRenderHeight = static_cast<float>(noteImageHeight) /
-                     static_cast<float>(noteImageWidth) * noteRenderWidth;
   if (!laneOrder.empty()) {
     const int maxLane = *std::max_element(laneOrder.begin(), laneOrder.end());
     if (maxLane >= 0) {
@@ -159,7 +152,6 @@ BMSRenderer::BMSRenderer(
           continue;
         }
         const size_t laneIndex = static_cast<size_t>(lane);
-        laneXLookup[laneIndex] = computeLaneX(lane);
         if (isScratch(lane)) {
           laneSheetLookup[laneIndex] = &scratchSheet;
         } else {
@@ -171,13 +163,7 @@ BMSRenderer::BMSRenderer(
       }
     }
   }
-  float offImageHeight = 12.0f;
-  float onImageHeight = 24.0f;
-
-  longBodyRenderHeightOff = static_cast<float>(offImageHeight) /
-                            static_cast<float>(width) * noteRenderWidth;
-  longBodyRenderHeightOn = static_cast<float>(onImageHeight) /
-                           static_cast<float>(width) * noteRenderWidth;
+  rebuildPlayAreaGeometry();
 
   SpriteLoader spriteLoader2(PATH("assets/img/simple_blue.png"));
   if (!spriteLoader2.load()) {
@@ -751,10 +737,10 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   ghostBatchRenderer.begin();
   beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
   // background
-  drawRect(gameplay_geometry::kPlayAreaWidth, upperBound - judgeY, 0.0f,
+  drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
            judgeY, Color(20, 20, 20, 122));
   // judge line
-  drawRect(gameplay_geometry::kPlayAreaWidth, noteRenderHeight, 0.0f, judgeY,
+  drawRect(playAreaWidth, noteRenderHeight, playAreaLeftX, judgeY,
            Color(255, 255, 255, 255));
   // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
   const float visibleTimeMs = std::max(
@@ -798,7 +784,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
       if (timeLine->IsFirstInMeasure) {
         // render measure line
-        drawRect(gameplay_geometry::kPlayAreaWidth, 0.05f, 0.0f, y,
+        drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                  Color(255, 255, 255, 128));
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
@@ -951,6 +937,8 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     judgementIndicator.render(simpleBatchRenderer, micro,
                               {.judgeY = judgeY,
                                .upperBound = upperBound,
+                               .playAreaLeftX = playAreaLeftX,
+                               .playAreaWidth = playAreaWidth,
                                .noteRenderWidth = noteRenderWidth,
                                .noteRenderHeight = noteRenderHeight});
     simpleBatchRenderer.flush();
@@ -998,6 +986,20 @@ void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
 void BMSRenderer::setVisibleTimeBpmStrategy(
     AppSettings::VisibleTimeBpmStrategy strategy) {
   visibleTimeBpmStrategy = strategy;
+}
+
+void BMSRenderer::setPlayAreaWidth(float width) {
+  if (!std::isfinite(width)) {
+    width = AppSettings::kDefaultPlayAreaWidth;
+  }
+  const float sanitized =
+      std::clamp(width, AppSettings::kMinPlayAreaWidth,
+                 AppSettings::kMaxPlayAreaWidth);
+  if (std::abs(sanitized - playAreaWidth) <= 0.001f) {
+    return;
+  }
+  playAreaWidth = sanitized;
+  rebuildPlayAreaGeometry();
 }
 
 void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
@@ -1118,13 +1120,38 @@ inline bool BMSRenderer::isRightScratch(int lane) const {
 inline bool BMSRenderer::isScratch(int lane) const {
   return isLeftScratch(lane) || isRightScratch(lane);
 }
+void BMSRenderer::rebuildPlayAreaGeometry() {
+  playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
+  noteRenderWidth =
+      laneOrder.empty()
+          ? gameplay_geometry::standardNoteWidth(playAreaWidth)
+          : playAreaWidth / static_cast<float>(laneOrder.size());
+  if (noteImageWidth > 0.0f) {
+    noteRenderHeight = static_cast<float>(noteImageHeight) /
+                       static_cast<float>(noteImageWidth) * noteRenderWidth;
+    constexpr float kLongBodyOffImageHeight = 12.0f;
+    constexpr float kLongBodyOnImageHeight = 24.0f;
+    longBodyRenderHeightOff =
+        kLongBodyOffImageHeight / static_cast<float>(noteImageWidth) *
+        noteRenderWidth;
+    longBodyRenderHeightOn =
+        kLongBodyOnImageHeight / static_cast<float>(noteImageWidth) *
+        noteRenderWidth;
+  }
+  for (int lane : laneOrder) {
+    if (lane < 0 || static_cast<size_t>(lane) >= laneXLookup.size()) {
+      continue;
+    }
+    laneXLookup[static_cast<size_t>(lane)] = computeLaneX(lane);
+  }
+}
 inline float BMSRenderer::computeLaneX(int lane) const {
   if (const auto it = laneToOrderIndex.find(lane);
       it != laneToOrderIndex.end()) {
-    return static_cast<float>(it->second) * noteRenderWidth;
+    return playAreaLeftX + static_cast<float>(it->second) * noteRenderWidth;
   }
 
-  return 0.0f;
+  return playAreaLeftX;
 }
 inline float BMSRenderer::laneToX(int lane) const {
   if (lane >= 0 && static_cast<size_t>(lane) < laneXLookup.size()) {

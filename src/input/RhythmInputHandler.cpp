@@ -273,14 +273,15 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
     position = {nearPoint.x + ray.x * t, nearPoint.y + ray.y * t,
                 nearPoint.z + ray.z * t};
   }
-  int line = static_cast<int>(position.x * totalLaneCount /
-                              gameplay_geometry::kPlayAreaWidth);
+  int line = static_cast<int>((position.x - playAreaLeftX) * totalLaneCount /
+                              playAreaWidth);
   line = clampLane(line);
   SDL_Log("Touch to lane: %d", line);
   return line;
 }
 RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
-                                       const bms_parser::ChartMeta &meta)
+                                       const bms_parser::ChartMeta &meta,
+                                       float configuredPlayAreaWidth)
     : control(control) {
   std::map<int, std::map<SDL_Keycode, int>> DefaultKeyMap = {
       {7,
@@ -369,4 +370,10 @@ RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
+  if (!std::isfinite(configuredPlayAreaWidth) ||
+      configuredPlayAreaWidth <= 0.001f) {
+    configuredPlayAreaWidth = gameplay_geometry::kDefaultPlayAreaWidth;
+  }
+  playAreaWidth = configuredPlayAreaWidth;
+  playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
 }

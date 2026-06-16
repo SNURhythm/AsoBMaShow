@@ -106,6 +106,8 @@ private:
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int scratchLaneCount = 0;
+  float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
+  float playAreaLeftX = 0.0f;
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
 
@@ -163,6 +165,7 @@ private:
   bool isRightScratch(int lane) const;
   bool isScratch(int lane) const;
   float computeLaneX(int lane) const;
+  void rebuildPlayAreaGeometry();
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
   rendering::TexBatchRenderer &noteTextureBatch(bgfx::TextureHandle texture,
@@ -194,6 +197,7 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setVisibleTimeBpmStrategy(
       AppSettings::VisibleTimeBpmStrategy strategy);
+  void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamLengthPercent(int percent);
   void setLaneBeamClockUsesRenderTime(bool enabled);

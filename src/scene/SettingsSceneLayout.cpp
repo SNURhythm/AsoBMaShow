@@ -1114,6 +1114,91 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
                         "top of the screen.",
       lengthControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
+  auto *playAreaWidthControls = new View();
+  playAreaWidthControls->setFlexDirection(FlexDirection::Column);
+  playAreaWidthControls->setGap(metrics.compact ? 10.0f : 12.0f);
+  playAreaWidthControls->setAlignItems(YGAlignFlexStart);
+
+  auto makePlayAreaWidthRow = [this, &metrics](int keyMode) {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setGap(metrics.compact ? 8.0f : 10.0f);
+    row->setAlignItems(YGAlignCenter);
+
+    auto *label =
+        makeText(std::to_string(keyMode) + "K", metrics.bodyTextSize + 4,
+                 Color(244, 248, 255), TextView::CENTER, TextView::MIDDLE);
+    label->setWidth(metrics.compact ? 54.0f : 64.0f);
+    label->setHeight(static_cast<float>(metrics.actionButtonHeight));
+    row->addView(label);
+
+    auto *input = makeNumericInput(metrics);
+    auto syncInput = [this, keyMode, input]() {
+      input->setEditingText(formatPlayAreaWidthLabel(
+          context.settings.playAreaWidthForKeyMode(keyMode)));
+    };
+    auto applyWidth = [this, keyMode, input](float width) {
+      context.settings.setPlayAreaWidthForKeyMode(keyMode,
+                                                  clampPlayAreaWidth(width));
+      persistSettings();
+      input->setEditingText(formatPlayAreaWidthLabel(
+          context.settings.playAreaWidthForKeyMode(keyMode)));
+    };
+
+    auto *minusWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
+    minusWidth->setOnClickListener([this, keyMode, applyWidth]() {
+      applyWidth(context.settings.playAreaWidthForKeyMode(keyMode) - 0.5f);
+    });
+    row->addView(minusWidth);
+
+    input->onEditingFinished([this, keyMode, input,
+                              applyWidth](const std::string &) {
+      const std::string rawText = input->getText();
+      if (rawText.empty()) {
+        input->setEditingText(formatPlayAreaWidthLabel(
+            context.settings.playAreaWidthForKeyMode(keyMode)));
+        return;
+      }
+      try {
+        applyWidth(std::stof(rawText));
+      } catch (const std::exception &) {
+        input->setEditingText(formatPlayAreaWidthLabel(
+            context.settings.playAreaWidthForKeyMode(keyMode)));
+      }
+    });
+    row->addView(makeInputFrame(metrics, input));
+
+    auto *plusWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
+    plusWidth->setOnClickListener([this, keyMode, applyWidth]() {
+      applyWidth(context.settings.playAreaWidthForKeyMode(keyMode) + 0.5f);
+    });
+    row->addView(plusWidth);
+
+    auto *resetWidth = makeResetButton(metrics);
+    resetWidth->setOnClickListener([applyWidth]() {
+      applyWidth(AppSettings::kDefaultPlayAreaWidth);
+    });
+    row->addView(resetWidth);
+
+    syncInput();
+    return row;
+  };
+
+  for (int keyMode : {4, 5, 6, 7, 8, 10, 14}) {
+    playAreaWidthControls->addView(makePlayAreaWidthRow(keyMode));
+  }
+  cardsColumn->addView(makeCard(
+      metrics, "Play Area Width",
+      metrics.compact
+          ? "Set lane width separately for each key mode."
+          : "Set the centered lane area width separately for each key mode. "
+            "Touch input uses the same width as the rendered lanes.",
+      playAreaWidthControls, metrics.visibleTimeCardHeight,
+      metrics.cardsWidth));
+
   auto *beamControls = new View();
   beamControls->setFlexDirection(FlexDirection::Row);
   beamControls->setFlexWrap(YGWrapWrap);

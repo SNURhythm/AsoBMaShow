@@ -213,6 +213,12 @@ std::string parsePlayOptionId(const std::string &value,
   }
   return fallback;
 }
+
+float sanitizePlayAreaWidth(float width) {
+  return sanitizeFloat(width, AppSettings::kDefaultPlayAreaWidth,
+                       AppSettings::kMinPlayAreaWidth,
+                       AppSettings::kMaxPlayAreaWidth);
+}
 } // namespace
 
 std::filesystem::path AppSettings::configPath() {
@@ -247,6 +253,13 @@ void AppSettings::sanitize() {
   laneBeamLengthPercent =
       std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
                  kMaxLaneBeamLengthPercent);
+  playAreaWidth4K = sanitizePlayAreaWidth(playAreaWidth4K);
+  playAreaWidth5K = sanitizePlayAreaWidth(playAreaWidth5K);
+  playAreaWidth6K = sanitizePlayAreaWidth(playAreaWidth6K);
+  playAreaWidth7K = sanitizePlayAreaWidth(playAreaWidth7K);
+  playAreaWidth8K = sanitizePlayAreaWidth(playAreaWidth8K);
+  playAreaWidth10K = sanitizePlayAreaWidth(playAreaWidth10K);
+  playAreaWidth14K = sanitizePlayAreaWidth(playAreaWidth14K);
   judgementIndicatorY = sanitizeFloat(
       judgementIndicatorY, kDefaultJudgementIndicatorY,
       kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
@@ -282,6 +295,56 @@ void AppSettings::sanitize() {
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
+}
+
+float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
+  switch (keyMode) {
+  case 4:
+    return playAreaWidth4K;
+  case 5:
+    return playAreaWidth5K;
+  case 6:
+    return playAreaWidth6K;
+  case 7:
+    return playAreaWidth7K;
+  case 8:
+    return playAreaWidth8K;
+  case 10:
+    return playAreaWidth10K;
+  case 14:
+    return playAreaWidth14K;
+  default:
+    return kDefaultPlayAreaWidth;
+  }
+}
+
+void AppSettings::setPlayAreaWidthForKeyMode(int keyMode, float width) {
+  const float sanitized = sanitizePlayAreaWidth(width);
+  switch (keyMode) {
+  case 4:
+    playAreaWidth4K = sanitized;
+    break;
+  case 5:
+    playAreaWidth5K = sanitized;
+    break;
+  case 6:
+    playAreaWidth6K = sanitized;
+    break;
+  case 7:
+    playAreaWidth7K = sanitized;
+    break;
+  case 8:
+    playAreaWidth8K = sanitized;
+    break;
+  case 10:
+    playAreaWidth10K = sanitized;
+    break;
+  case 14:
+    playAreaWidth14K = sanitized;
+    break;
+  default:
+    break;
+  }
 }
 
 bool AppSettings::save() const {
@@ -326,6 +389,13 @@ bool AppSettings::save() const {
   file << "lane_length=" << sanitized.laneLength << "\n";
   file << "lane_beam_length_percent=" << sanitized.laneBeamLengthPercent
        << "\n";
+  file << "play_area_width_4k=" << sanitized.playAreaWidth4K << "\n";
+  file << "play_area_width_5k=" << sanitized.playAreaWidth5K << "\n";
+  file << "play_area_width_6k=" << sanitized.playAreaWidth6K << "\n";
+  file << "play_area_width_7k=" << sanitized.playAreaWidth7K << "\n";
+  file << "play_area_width_8k=" << sanitized.playAreaWidth8K << "\n";
+  file << "play_area_width_10k=" << sanitized.playAreaWidth10K << "\n";
+  file << "play_area_width_14k=" << sanitized.playAreaWidth14K << "\n";
   file << "note_priority_mode="
        << notePriorityModeToString(sanitized.notePriorityMode) << "\n";
   file << "judgement_indicator_enabled="
@@ -410,6 +480,20 @@ AppSettings AppSettings::load() {
         settings.laneLength = std::stof(value);
       } else if (key == "lane_beam_length_percent") {
         settings.laneBeamLengthPercent = std::stoi(value);
+      } else if (key == "play_area_width_4k") {
+        settings.playAreaWidth4K = std::stof(value);
+      } else if (key == "play_area_width_5k") {
+        settings.playAreaWidth5K = std::stof(value);
+      } else if (key == "play_area_width_6k") {
+        settings.playAreaWidth6K = std::stof(value);
+      } else if (key == "play_area_width_7k") {
+        settings.playAreaWidth7K = std::stof(value);
+      } else if (key == "play_area_width_8k") {
+        settings.playAreaWidth8K = std::stof(value);
+      } else if (key == "play_area_width_10k") {
+        settings.playAreaWidth10K = std::stof(value);
+      } else if (key == "play_area_width_14k") {
+        settings.playAreaWidth14K = std::stof(value);
       } else if (key == "note_priority_mode") {
         settings.notePriorityMode =
             parseNotePriorityMode(value, settings.notePriorityMode);
