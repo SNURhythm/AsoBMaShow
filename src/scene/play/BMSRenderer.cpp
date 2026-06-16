@@ -986,6 +986,14 @@ void BMSRenderer::applyPendingHudText() {
 void BMSRenderer::reset() {
   state.reset();
   judgementIndicator.clear();
+  {
+    std::lock_guard<std::mutex> lock(laneMutex);
+    for (auto &laneState : laneStatesByOrder) {
+      laneState.lastStateTime = -1;
+      laneState.isPressed = false;
+      laneState.lastPressedJudge = JudgeResult(None, 0);
+    }
+  }
 }
 
 void BMSRenderer::refreshGeometry() {

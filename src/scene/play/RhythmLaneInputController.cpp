@@ -243,12 +243,8 @@ void RhythmLaneInputController::resetLaneStates() {
   if (chart == nullptr) {
     return;
   }
-  const long long beamTime = laneBeamTimeMicros();
   for (const auto lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
-    if (renderer != nullptr) {
-      renderer->onLaneReleased(lane, beamTime);
-    }
   }
   notifyLaneStateChanged();
 }
