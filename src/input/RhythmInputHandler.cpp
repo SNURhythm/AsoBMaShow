@@ -243,6 +243,16 @@ void RhythmInputHandler::pumpPendingTouchEvents() {
 #endif
   releaseExpiredCancelledTouches();
 }
+
+void RhythmInputHandler::setPlayAreaWidth(float configuredPlayAreaWidth) {
+  if (!std::isfinite(configuredPlayAreaWidth) ||
+      configuredPlayAreaWidth <= 0.001f) {
+    configuredPlayAreaWidth = gameplay_geometry::kDefaultPlayAreaWidth;
+  }
+  playAreaWidth = configuredPlayAreaWidth;
+  playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
+}
+
 int RhythmInputHandler::clampLane(int lane) const {
   if (laneOrder.empty()) {
     return 0;

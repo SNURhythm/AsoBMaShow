@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class View;
@@ -14,6 +15,8 @@ class TextInputBox;
 class Button;
 class ScrollView;
 class BMSRenderer;
+class RhythmInputHandler;
+class RhythmLaneInputController;
 
 namespace settings_scene {
 struct LayoutMetrics;
@@ -21,9 +24,12 @@ struct LayoutMetrics;
 
 namespace bms_parser {
 class Chart;
+class Note;
 }
 
-class SettingsScene : public Scene {
+#include "../input/IRhythmControl.h"
+
+class SettingsScene : public Scene, public IRhythmControl {
 public:
   explicit SettingsScene(ApplicationContext &context) : Scene(context) {}
 
@@ -31,6 +37,11 @@ public:
   void update(float dt) override;
   void renderScene() override;
   void cleanupScene() override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
+  bms_parser::Note *pressLane(int lane, double inputDelay = 0) override;
+  bms_parser::Note *pressLane(int mainLane, int compensateLane,
+                              double inputDelay = 0) override;
+  bms_parser::Note *releaseLane(int lane, double inputDelay = 0) override;
 
 private:
   enum class SettingsTab {
@@ -103,7 +114,12 @@ private:
   int previewPanelPage = 0;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
+  RhythmInputHandler *previewInputHandler = nullptr;
+  RhythmLaneInputController *previewLaneController = nullptr;
+  std::unordered_map<int, bool> previewLanePressed;
   long long previewElapsedMicros = 0;
+  int previewCombo = 0;
+  int previewScore = 0;
   SettingsTab activeTab = SettingsTab::Timing;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
@@ -157,6 +173,10 @@ private:
   void stopLanePreview();
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
+  void ensurePreviewInputHandler();
+  void destroyPreviewInputHandler();
+  void forwardPreviewInputEvent(SDL_Event &event);
+  void syncPreviewInputPlayAreaWidth();
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();

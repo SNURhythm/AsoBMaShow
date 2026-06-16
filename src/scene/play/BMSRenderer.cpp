@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
@@ -345,7 +346,7 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     judgeLine.push_back(' ');
     judgeLine += std::to_string(combo);
   }
-  {
+  if (renderHud && judgeText != nullptr && scoreText != nullptr) {
     std::lock_guard<std::mutex> lock(hudMutex);
     pendingJudgeText = std::move(judgeLine);
     pendingScore = score;

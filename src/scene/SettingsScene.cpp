@@ -8,6 +8,8 @@ void SettingsScene::init() { ensureLayoutUpToDate(); }
 void SettingsScene::update(float dt) {
   if (previewActive) {
     ensurePreviewRenderer();
+    ensurePreviewInputHandler();
+    syncPreviewInputPlayAreaWidth();
     previewElapsedMicros +=
         static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
     if (previewElapsedMicros >= kPreviewLoopMicros) {
@@ -52,6 +54,20 @@ void SettingsScene::renderScene() {
   }
 }
 
+EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
+  bool handledByView = false;
+  for (auto *view : views) {
+    if (!view->handleEvents(event)) {
+      handledByView = true;
+      break;
+    }
+  }
+  if (previewActive && !handledByView) {
+    forwardPreviewInputEvent(event);
+  }
+  return {};
+}
+
 void SettingsScene::cleanupScene() {
   if (difficultyTableJobThread.joinable()) {
     SDL_Log("Joining difficultyTableJobThread");
@@ -62,7 +78,11 @@ void SettingsScene::cleanupScene() {
   difficultyTableImportModalVisible = false;
   difficultyTableImportFinished = false;
   difficultyTableImportSucceeded = false;
+  destroyPreviewInputHandler();
   destroyPreviewRenderer();
+  previewLanePressed.clear();
+  previewCombo = 0;
+  previewScore = 0;
   rootLayout = nullptr;
   scrollView = nullptr;
   offsetInput = nullptr;

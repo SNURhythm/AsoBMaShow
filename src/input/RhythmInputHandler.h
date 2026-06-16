@@ -53,5 +53,6 @@ public:
   void discardPendingTouchEvents();
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
+  void setPlayAreaWidth(float configuredPlayAreaWidth);
   std::map<SDL_Keycode, int> keyMap;
 };
