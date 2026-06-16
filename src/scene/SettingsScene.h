@@ -54,6 +54,7 @@ private:
   TextView *summaryBgaDisplayValueText = nullptr;
   TextView *summaryLaneAngleValueText = nullptr;
   TextView *summaryLaneLengthValueText = nullptr;
+  TextView *summaryLaneBeamLengthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
@@ -83,6 +84,7 @@ private:
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
   TextInputBox *laneLengthInput = nullptr;
+  TextInputBox *laneBeamLengthInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
   View *difficultyTableImportModalRoot = nullptr;
@@ -179,6 +181,7 @@ private:
   void syncBgaBlurInputText(bool force = false);
   void syncLaneAngleInputText(bool force = false);
   void syncLaneLengthInputText(bool force = false);
+  void syncLaneBeamLengthInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
   void commitOffsetInput();
@@ -188,6 +191,7 @@ private:
   void commitBgaBlurInput();
   void commitLaneAngleInput();
   void commitLaneLengthInput();
+  void commitLaneBeamLengthInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();
 };

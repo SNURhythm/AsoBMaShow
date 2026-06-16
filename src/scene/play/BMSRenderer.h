@@ -123,6 +123,7 @@ private:
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
+  int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -194,6 +195,7 @@ public:
   void setVisibleTimeBpmStrategy(
       AppSettings::VisibleTimeBpmStrategy strategy);
   void setLaneBeamsEnabled(bool enabled);
+  void setLaneBeamLengthPercent(int percent);
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,

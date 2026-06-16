@@ -212,6 +212,7 @@ void GamePlayScene::init() {
                              context.settings.visibleTimeGreenNumber);
   renderer->setVisibleTimeBpmStrategy(
       context.settings.visibleTimeBpmStrategy);
+  renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,

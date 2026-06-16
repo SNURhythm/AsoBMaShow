@@ -35,6 +35,7 @@ void SettingsScene::resetViewState() {
   summaryBgaDisplayValueText = nullptr;
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
+  summaryLaneBeamLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
@@ -64,6 +65,7 @@ void SettingsScene::resetViewState() {
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
+  laneBeamLengthInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
@@ -1111,6 +1113,58 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
                       : "Adjust how far the visible lane reaches toward the "
                         "top of the screen.",
       lengthControls, metrics.offsetCardHeight, metrics.cardsWidth));
+
+  auto *beamControls = new View();
+  beamControls->setFlexDirection(FlexDirection::Row);
+  beamControls->setFlexWrap(YGWrapWrap);
+  beamControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  beamControls->setAlignItems(YGAlignFlexStart);
+  auto updateLaneBeamLength = [this](int deltaPercent) {
+    context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
+        context.settings.laneBeamLengthPercent + deltaPercent);
+    persistSettings();
+    syncLaneBeamLengthInputText(true);
+  };
+  auto *minusBeamLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+  minusBeamLarge->setOnClickListener(
+      [updateLaneBeamLength]() { updateLaneBeamLength(-10); });
+  beamControls->addView(minusBeamLarge);
+  auto *minusBeamSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
+  minusBeamSmall->setOnClickListener(
+      [updateLaneBeamLength]() { updateLaneBeamLength(-1); });
+  beamControls->addView(minusBeamSmall);
+  laneBeamLengthInput = makeNumericInput(metrics);
+  laneBeamLengthInput->onEditingFinished(
+      [this](const std::string &) { commitLaneBeamLengthInput(); });
+  beamControls->addView(makeInputFrame(metrics, laneBeamLengthInput));
+  auto *plusBeamSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
+  plusBeamSmall->setOnClickListener(
+      [updateLaneBeamLength]() { updateLaneBeamLength(1); });
+  beamControls->addView(plusBeamSmall);
+  auto *plusBeamLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+  plusBeamLarge->setOnClickListener(
+      [updateLaneBeamLength]() { updateLaneBeamLength(10); });
+  beamControls->addView(plusBeamLarge);
+  auto *resetBeam = makeResetButton(metrics);
+  resetBeam->setOnClickListener([this]() {
+    context.settings.laneBeamLengthPercent =
+        AppSettings::kDefaultLaneBeamLengthPercent;
+    persistSettings();
+    syncLaneBeamLengthInputText(true);
+  });
+  beamControls->addView(resetBeam);
+  cardsColumn->addView(makeCard(
+      metrics, "Lane Beam Length",
+      metrics.compact
+          ? "Scale press beams from the judgement line upward."
+          : "Scale the press feedback beam height from the judgement line "
+            "toward the top of the lane. 100% keeps the original full lane "
+            "beam.",
+      beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *previewControls = new View();
   previewControls->setFlexDirection(FlexDirection::Column);

@@ -48,6 +48,9 @@ public:
   static constexpr float kMinLaneLength = 5.0f;
   static constexpr float kMaxLaneLength = 12.0f;
   static constexpr float kDefaultLaneLength = 8.0f;
+  static constexpr int kMinLaneBeamLengthPercent = 0;
+  static constexpr int kMaxLaneBeamLengthPercent = 100;
+  static constexpr int kDefaultLaneBeamLengthPercent = 100;
   static constexpr float kMinJudgementIndicatorY = 0.0f;
   static constexpr float kMaxJudgementIndicatorY = 1.0f;
   static constexpr float kDefaultJudgementIndicatorY = 0.5f;
@@ -71,6 +74,7 @@ public:
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
+  int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;

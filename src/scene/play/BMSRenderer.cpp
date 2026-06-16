@@ -1004,6 +1004,12 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
   renderLaneBeams = enabled;
 }
 
+void BMSRenderer::setLaneBeamLengthPercent(int percent) {
+  laneBeamLengthPercent =
+      std::clamp(percent, AppSettings::kMinLaneBeamLengthPercent,
+                 AppSettings::kMaxLaneBeamLengthPercent);
+}
+
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
   useRenderTimeForLaneBeams = enabled;
 }
@@ -1095,7 +1101,8 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
-  const float beamHeight = std::max(0.0f, upperBound - judgeY);
+  const float beamScale = static_cast<float>(laneBeamLengthPercent) / 100.0f;
+  const float beamHeight = std::max(0.0f, upperBound - judgeY) * beamScale;
   if (beamHeight <= 0.0f) {
     return;
   }

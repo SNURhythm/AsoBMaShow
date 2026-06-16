@@ -244,6 +244,9 @@ void AppSettings::sanitize() {
                                    kMinLaneAngleDegrees, kMaxLaneAngleDegrees);
   laneLength = sanitizeFloat(laneLength, kDefaultLaneLength, kMinLaneLength,
                              kMaxLaneLength);
+  laneBeamLengthPercent =
+      std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
+                 kMaxLaneBeamLengthPercent);
   judgementIndicatorY = sanitizeFloat(
       judgementIndicatorY, kDefaultJudgementIndicatorY,
       kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
@@ -321,6 +324,8 @@ bool AppSettings::save() const {
        << bgaDisplayModeToString(sanitized.bgaDisplayMode) << "\n";
   file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
   file << "lane_length=" << sanitized.laneLength << "\n";
+  file << "lane_beam_length_percent=" << sanitized.laneBeamLengthPercent
+       << "\n";
   file << "note_priority_mode="
        << notePriorityModeToString(sanitized.notePriorityMode) << "\n";
   file << "judgement_indicator_enabled="
@@ -403,6 +408,8 @@ AppSettings AppSettings::load() {
         settings.laneAngleDegrees = std::stof(value);
       } else if (key == "lane_length") {
         settings.laneLength = std::stof(value);
+      } else if (key == "lane_beam_length_percent") {
+        settings.laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_priority_mode") {
         settings.notePriorityMode =
             parseNotePriorityMode(value, settings.notePriorityMode);

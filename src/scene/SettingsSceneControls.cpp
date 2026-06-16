@@ -28,6 +28,8 @@ void SettingsScene::refreshSettingsText() {
       formatLaneAngleLabel(context.settings.laneAngleDegrees);
   const std::string laneLengthLabel =
       formatLaneLengthLabel(context.settings.laneLength);
+  const std::string laneBeamLengthLabel =
+      formatLaneBeamLengthLabel(context.settings.laneBeamLengthPercent);
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
@@ -74,6 +76,10 @@ void SettingsScene::refreshSettingsText() {
   syncLaneLengthInputText();
   if (summaryLaneLengthValueText != nullptr) {
     summaryLaneLengthValueText->setText(laneLengthLabel);
+  }
+  syncLaneBeamLengthInputText();
+  if (summaryLaneBeamLengthValueText != nullptr) {
+    summaryLaneBeamLengthValueText->setText(laneBeamLengthLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
@@ -381,6 +387,17 @@ void SettingsScene::syncLaneLengthInputText(bool force) {
       formatFloatValue(context.settings.laneLength));
 }
 
+void SettingsScene::syncLaneBeamLengthInputText(bool force) {
+  if (laneBeamLengthInput == nullptr) {
+    return;
+  }
+  if (!force && laneBeamLengthInput->getSelected()) {
+    return;
+  }
+  laneBeamLengthInput->setEditingText(
+      std::to_string(context.settings.laneBeamLengthPercent));
+}
+
 void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
   if (judgementIndicatorYInput == nullptr) {
     return;
@@ -552,6 +569,27 @@ void SettingsScene::commitLaneLengthInput() {
     syncLaneLengthInputText(true);
   } catch (const std::exception &) {
     syncLaneLengthInputText(true);
+  }
+}
+
+void SettingsScene::commitLaneBeamLengthInput() {
+  if (laneBeamLengthInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = laneBeamLengthInput->getText();
+  if (rawText.empty()) {
+    syncLaneBeamLengthInputText(true);
+    return;
+  }
+
+  try {
+    context.settings.laneBeamLengthPercent =
+        clampLaneBeamLengthPercent(std::stoi(rawText));
+    persistSettings();
+    syncLaneBeamLengthInputText(true);
+  } catch (const std::exception &) {
+    syncLaneBeamLengthInputText(true);
   }
 }
 

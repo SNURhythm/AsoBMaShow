@@ -349,6 +349,11 @@ static float clampLaneLength(float value) {
                     AppSettings::kMaxLaneLength);
 }
 
+static int clampLaneBeamLengthPercent(int value) {
+  return std::clamp(value, AppSettings::kMinLaneBeamLengthPercent,
+                    AppSettings::kMaxLaneBeamLengthPercent);
+}
+
 static float clampJudgementIndicatorY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorY;
@@ -463,6 +468,10 @@ static std::string formatLaneAngleLabel(float degrees) {
 
 static std::string formatLaneLengthLabel(float length) {
   return formatFloatValue(length, 1);
+}
+
+static std::string formatLaneBeamLengthLabel(int percent) {
+  return std::to_string(clampLaneBeamLengthPercent(percent)) + "%";
 }
 
 static std::string formatJudgementIndicatorRenderModeLabel(

@@ -31,6 +31,8 @@ void SettingsScene::renderScene() {
         context.settings.visibleTimeGreenNumber);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    previewRenderer->setLaneBeamLengthPercent(
+        context.settings.laneBeamLengthPercent);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
@@ -70,6 +72,7 @@ void SettingsScene::cleanupScene() {
   summaryBgaDisplayValueText = nullptr;
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
+  summaryLaneBeamLengthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
@@ -97,6 +100,7 @@ void SettingsScene::cleanupScene() {
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
+  laneBeamLengthInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
