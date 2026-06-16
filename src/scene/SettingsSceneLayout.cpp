@@ -36,6 +36,7 @@ void SettingsScene::resetViewState() {
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
   summaryLaneBeamLengthValueText = nullptr;
+  summaryNoteStartPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
@@ -66,6 +67,7 @@ void SettingsScene::resetViewState() {
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
   laneBeamLengthInput = nullptr;
+  noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
@@ -1014,6 +1016,60 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "judgement line. Switch units if you prefer legacy green number "
             "or direct milliseconds, and choose which BPM anchors that time.",
       visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
+
+  auto *noteStartControls = new View();
+  noteStartControls->setFlexDirection(FlexDirection::Row);
+  noteStartControls->setFlexWrap(YGWrapWrap);
+  noteStartControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  noteStartControls->setAlignItems(YGAlignFlexStart);
+  auto updateNoteStartPosition = [this](int deltaPercent) {
+    context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
+        context.settings.noteStartPositionPercent + deltaPercent);
+    persistSettings();
+    syncNoteStartPositionInputText(true);
+  };
+  auto *minusNoteStartLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+  minusNoteStartLarge->setOnClickListener(
+      [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+  noteStartControls->addView(minusNoteStartLarge);
+  auto *minusNoteStartSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
+  minusNoteStartSmall->setOnClickListener(
+      [updateNoteStartPosition]() { updateNoteStartPosition(-1); });
+  noteStartControls->addView(minusNoteStartSmall);
+  noteStartPositionInput = makeNumericInput(metrics);
+  noteStartPositionInput->onEditingFinished(
+      [this](const std::string &) { commitNoteStartPositionInput(); });
+  noteStartControls->addView(makeInputFrame(metrics, noteStartPositionInput));
+  auto *plusNoteStartSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
+  plusNoteStartSmall->setOnClickListener(
+      [updateNoteStartPosition]() { updateNoteStartPosition(1); });
+  noteStartControls->addView(plusNoteStartSmall);
+  auto *plusNoteStartLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+  plusNoteStartLarge->setOnClickListener(
+      [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+  noteStartControls->addView(plusNoteStartLarge);
+  auto *resetNoteStart = makeResetButton(metrics);
+  resetNoteStart->setOnClickListener([this]() {
+    context.settings.noteStartPositionPercent =
+        AppSettings::kDefaultNoteStartPositionPercent;
+    persistSettings();
+    syncNoteStartPositionInputText(true);
+  });
+  noteStartControls->addView(resetNoteStart);
+  cardsColumn->addView(makeCard(
+      metrics, "Note Start Position",
+      metrics.compact
+          ? "Higher values make notes appear lower while preserving visible "
+            "time."
+          : "Move the note appearance point downward like a HIDDEN start "
+            "position. The renderer scales scroll distance so the current "
+            "green number still describes the time from appearance to the "
+            "judgement line.",
+      noteStartControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);

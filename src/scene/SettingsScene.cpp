@@ -37,6 +37,8 @@ void SettingsScene::renderScene() {
     }
     previewRenderer->setLaneBeamLengthPercent(
         context.settings.laneBeamLengthPercent);
+    previewRenderer->setNoteStartPositionPercent(
+        context.settings.noteStartPositionPercent);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
@@ -77,6 +79,7 @@ void SettingsScene::cleanupScene() {
   summaryLaneAngleValueText = nullptr;
   summaryLaneLengthValueText = nullptr;
   summaryLaneBeamLengthValueText = nullptr;
+  summaryNoteStartPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
@@ -105,6 +108,7 @@ void SettingsScene::cleanupScene() {
   laneAngleInput = nullptr;
   laneLengthInput = nullptr;
   laneBeamLengthInput = nullptr;
+  noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;

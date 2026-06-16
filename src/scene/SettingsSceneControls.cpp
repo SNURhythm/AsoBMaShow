@@ -30,6 +30,8 @@ void SettingsScene::refreshSettingsText() {
       formatLaneLengthLabel(context.settings.laneLength);
   const std::string laneBeamLengthLabel =
       formatLaneBeamLengthLabel(context.settings.laneBeamLengthPercent);
+  const std::string noteStartPositionLabel =
+      formatNoteStartPositionLabel(context.settings.noteStartPositionPercent);
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
@@ -80,6 +82,10 @@ void SettingsScene::refreshSettingsText() {
   syncLaneBeamLengthInputText();
   if (summaryLaneBeamLengthValueText != nullptr) {
     summaryLaneBeamLengthValueText->setText(laneBeamLengthLabel);
+  }
+  syncNoteStartPositionInputText();
+  if (summaryNoteStartPositionValueText != nullptr) {
+    summaryNoteStartPositionValueText->setText(noteStartPositionLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
@@ -398,6 +404,17 @@ void SettingsScene::syncLaneBeamLengthInputText(bool force) {
       std::to_string(context.settings.laneBeamLengthPercent));
 }
 
+void SettingsScene::syncNoteStartPositionInputText(bool force) {
+  if (noteStartPositionInput == nullptr) {
+    return;
+  }
+  if (!force && noteStartPositionInput->getSelected()) {
+    return;
+  }
+  noteStartPositionInput->setEditingText(
+      std::to_string(context.settings.noteStartPositionPercent));
+}
+
 void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
   if (judgementIndicatorYInput == nullptr) {
     return;
@@ -590,6 +607,27 @@ void SettingsScene::commitLaneBeamLengthInput() {
     syncLaneBeamLengthInputText(true);
   } catch (const std::exception &) {
     syncLaneBeamLengthInputText(true);
+  }
+}
+
+void SettingsScene::commitNoteStartPositionInput() {
+  if (noteStartPositionInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = noteStartPositionInput->getText();
+  if (rawText.empty()) {
+    syncNoteStartPositionInputText(true);
+    return;
+  }
+
+  try {
+    context.settings.noteStartPositionPercent =
+        clampNoteStartPositionPercent(std::stoi(rawText));
+    persistSettings();
+    syncNoteStartPositionInputText(true);
+  } catch (const std::exception &) {
+    syncNoteStartPositionInputText(true);
   }
 }
 

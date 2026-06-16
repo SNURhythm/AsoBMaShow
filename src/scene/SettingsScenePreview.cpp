@@ -107,6 +107,8 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
     previewRenderer->setLaneBeamLengthPercent(
         context.settings.laneBeamLengthPercent);
+    previewRenderer->setNoteStartPositionPercent(
+        context.settings.noteStartPositionPercent);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   }
 }

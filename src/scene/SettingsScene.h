@@ -55,6 +55,7 @@ private:
   TextView *summaryLaneAngleValueText = nullptr;
   TextView *summaryLaneLengthValueText = nullptr;
   TextView *summaryLaneBeamLengthValueText = nullptr;
+  TextView *summaryNoteStartPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
@@ -85,6 +86,7 @@ private:
   TextInputBox *laneAngleInput = nullptr;
   TextInputBox *laneLengthInput = nullptr;
   TextInputBox *laneBeamLengthInput = nullptr;
+  TextInputBox *noteStartPositionInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
   View *difficultyTableImportModalRoot = nullptr;
@@ -182,6 +184,7 @@ private:
   void syncLaneAngleInputText(bool force = false);
   void syncLaneLengthInputText(bool force = false);
   void syncLaneBeamLengthInputText(bool force = false);
+  void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
   void commitOffsetInput();
@@ -192,6 +195,7 @@ private:
   void commitLaneAngleInput();
   void commitLaneLengthInput();
   void commitLaneBeamLengthInput();
+  void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();
 };

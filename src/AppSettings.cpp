@@ -253,6 +253,9 @@ void AppSettings::sanitize() {
   laneBeamLengthPercent =
       std::clamp(laneBeamLengthPercent, kMinLaneBeamLengthPercent,
                  kMaxLaneBeamLengthPercent);
+  noteStartPositionPercent =
+      std::clamp(noteStartPositionPercent, kMinNoteStartPositionPercent,
+                 kMaxNoteStartPositionPercent);
   playAreaWidth4K = sanitizePlayAreaWidth(playAreaWidth4K);
   playAreaWidth5K = sanitizePlayAreaWidth(playAreaWidth5K);
   playAreaWidth6K = sanitizePlayAreaWidth(playAreaWidth6K);
@@ -389,6 +392,8 @@ bool AppSettings::save() const {
   file << "lane_length=" << sanitized.laneLength << "\n";
   file << "lane_beam_length_percent=" << sanitized.laneBeamLengthPercent
        << "\n";
+  file << "note_start_position_percent="
+       << sanitized.noteStartPositionPercent << "\n";
   file << "play_area_width_4k=" << sanitized.playAreaWidth4K << "\n";
   file << "play_area_width_5k=" << sanitized.playAreaWidth5K << "\n";
   file << "play_area_width_6k=" << sanitized.playAreaWidth6K << "\n";
@@ -480,6 +485,8 @@ AppSettings AppSettings::load() {
         settings.laneLength = std::stof(value);
       } else if (key == "lane_beam_length_percent") {
         settings.laneBeamLengthPercent = std::stoi(value);
+      } else if (key == "note_start_position_percent") {
+        settings.noteStartPositionPercent = std::stoi(value);
       } else if (key == "play_area_width_4k") {
         settings.playAreaWidth4K = std::stof(value);
       } else if (key == "play_area_width_5k") {

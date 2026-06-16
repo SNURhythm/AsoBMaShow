@@ -215,6 +215,8 @@ void GamePlayScene::init() {
   renderer->setPlayAreaWidth(
       context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
   renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
+  renderer->setNoteStartPositionPercent(
+      context.settings.noteStartPositionPercent);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,

@@ -115,6 +115,7 @@ private:
   float longBodyRenderHeightOn = 1.0f;
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
+  float noteVisibleUpperBound = 10.0f;
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
@@ -126,6 +127,8 @@ private:
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
+  int noteStartPositionPercent =
+      AppSettings::kDefaultNoteStartPositionPercent;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -200,6 +203,7 @@ public:
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneBeamLengthPercent(int percent);
+  void setNoteStartPositionPercent(int percent);
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,

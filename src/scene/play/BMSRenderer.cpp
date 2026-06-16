@@ -571,7 +571,8 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
           static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
+      static_cast<double>(noteVisibleUpperBound - judgeY) /
+          static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -613,7 +614,8 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
           static_cast<double>(rxhs);
   double lastVisibleScrollPosition =
       currentScrollPosition +
-      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
+      static_cast<double>(noteVisibleUpperBound - judgeY) /
+          static_cast<double>(rxhs);
   if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
     std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
   }
@@ -641,7 +643,7 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 }
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  if (y + noteRenderHeight < lowerBound || y > noteVisibleUpperBound) {
     return;
   }
 
@@ -664,7 +666,7 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 }
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  if (y + noteRenderHeight < lowerBound || y > noteVisibleUpperBound) {
     return;
   }
 
@@ -748,8 +750,13 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   const float hispeed =
       240000.0f / static_cast<float>(visibleTimeReferenceBpm()) /
       visibleTimeMs;
-  float visibleLaneBottom = judgeY;
-  float rxhs = (upperBound - visibleLaneBottom) * hispeed;
+  const float laneHeight = std::max(0.001f, upperBound - judgeY);
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0f;
+  noteVisibleUpperBound = judgeY + laneHeight * (1.0f - hiddenRatio);
+  const float visibleTravelHeight =
+      std::max(0.001f, noteVisibleUpperBound - judgeY);
+  float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(micro);
   auto &longNoteLookahead = longNoteLookaheadScratch;
@@ -759,7 +766,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
   // render timeline
   for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y < upperBound; i++) {
+       i < timelines.size() && y < noteVisibleUpperBound; i++) {
     const auto &timeLine = timelines[i];
     if (timeLine->Timing >= micro) {
       if (y < judgeY)
@@ -894,7 +901,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(pair.second, upperBound, pair.first);
+    drawLongNote(pair.second, noteVisibleUpperBound, pair.first);
   }
   drawReplayGhosts(rxhs, micro, currentScrollPosition);
   drawReplayMissMarkers(rxhs, currentScrollPosition);
@@ -977,6 +984,7 @@ void BMSRenderer::reset() {
 
 void BMSRenderer::refreshGeometry() {
   upperBound = calculateLanePlaneScreenTopIntersection();
+  noteVisibleUpperBound = upperBound;
 }
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
@@ -1010,6 +1018,12 @@ void BMSRenderer::setLaneBeamLengthPercent(int percent) {
   laneBeamLengthPercent =
       std::clamp(percent, AppSettings::kMinLaneBeamLengthPercent,
                  AppSettings::kMaxLaneBeamLengthPercent);
+}
+
+void BMSRenderer::setNoteStartPositionPercent(int percent) {
+  noteStartPositionPercent =
+      std::clamp(percent, AppSettings::kMinNoteStartPositionPercent,
+                 AppSettings::kMaxNoteStartPositionPercent);
 }
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
