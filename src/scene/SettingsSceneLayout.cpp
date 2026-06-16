@@ -37,6 +37,7 @@ void SettingsScene::resetViewState() {
   summaryLaneLengthValueText = nullptr;
   summaryLaneBeamLengthValueText = nullptr;
   summaryNoteStartPositionValueText = nullptr;
+  summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
@@ -233,6 +234,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setAlignItems(YGAlignFlexStart);
 
   const int foldButtonSize = metrics.compact ? 54 : 58;
+  constexpr int previewPanelPageCount = 2;
+  if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
+    previewPanelPage = 0;
+  }
   const int panelWidth =
       previewPanelFolded
           ? foldButtonSize
@@ -280,67 +285,186 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
       makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
-  previewHeader->addView(makeFoldButton(">"));
-  previewPanel->addView(previewHeader);
-  previewPanel->addView(
-      makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
-  previewPanel->addView(buildVisibleTimeControls(metrics, false, true));
-  previewPanel->addView(
-      makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
-  auto *angleControls = new View();
-  angleControls->setFlexDirection(FlexDirection::Row);
-  angleControls->setFlexWrap(YGWrapWrap);
-  angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  auto updateLaneAngle = [this](float delta) {
-    context.settings.laneAngleDegrees =
-        clampLaneAngle(context.settings.laneAngleDegrees + delta);
-    persistSettings();
-  };
-  auto *minusAngle =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
-  minusAngle->setOnClickListener(
-      [updateLaneAngle]() { updateLaneAngle(-1.0f); });
-  angleControls->addView(minusAngle);
-  auto *plusAngle =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
-  plusAngle->setOnClickListener([updateLaneAngle]() { updateLaneAngle(1.0f); });
-  angleControls->addView(plusAngle);
-  auto *resetAngle = makeResetButton(metrics);
-  resetAngle->setOnClickListener([this]() {
-    context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
-    persistSettings();
-  });
-  angleControls->addView(resetAngle);
-  previewPanel->addView(angleControls);
 
-  previewPanel->addView(
-      makeSummaryRow(metrics, "Lane Length", &summaryLaneLengthValueText));
-  auto *lengthControls = new View();
-  lengthControls->setFlexDirection(FlexDirection::Row);
-  lengthControls->setFlexWrap(YGWrapWrap);
-  lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  auto updateLaneLength = [this](float delta) {
-    context.settings.laneLength =
-        clampLaneLength(context.settings.laneLength + delta);
-    persistSettings();
-  };
-  auto *minusLength =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
-  minusLength->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(-0.5f); });
-  lengthControls->addView(minusLength);
-  auto *plusLength =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
-  plusLength->setOnClickListener(
-      [updateLaneLength]() { updateLaneLength(0.5f); });
-  lengthControls->addView(plusLength);
-  auto *resetLength = makeResetButton(metrics);
-  resetLength->setOnClickListener([this]() {
-    context.settings.laneLength = AppSettings::kDefaultLaneLength;
-    persistSettings();
+  auto *previewHeaderActions = new View();
+  previewHeaderActions->setFlexDirection(FlexDirection::Row);
+  previewHeaderActions->setGap(metrics.compact ? 8.0f : 10.0f);
+  previewHeaderActions->setAlignItems(YGAlignCenter);
+  auto *pageButton = makeButton(
+      metrics.compact ? 78 : 88, foldButtonSize,
+      makeText(std::to_string(previewPanelPage + 1) + "/2",
+               metrics.smallTextSize, Color(239, 244, 251), TextView::CENTER,
+               TextView::MIDDLE),
+      Color(22, 33, 49, 190), Color(31, 46, 67, 220),
+      Color(53, 78, 110, 240), Color(96, 121, 156, 230),
+      Color(120, 151, 190, 245), Color(148, 186, 231, 255));
+  pageButton->setOnClickListener([this]() {
+    previewPanelPage = (previewPanelPage + 1) % 2;
+    lastLayoutWidth = -1;
   });
-  lengthControls->addView(resetLength);
-  previewPanel->addView(lengthControls);
+  previewHeaderActions->addView(pageButton);
+  previewHeaderActions->addView(makeFoldButton(">"));
+  previewHeader->addView(previewHeaderActions);
+  previewPanel->addView(previewHeader);
+
+  if (previewPanelPage == 0) {
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
+    previewPanel->addView(buildVisibleTimeControls(metrics, false, true));
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
+    auto *angleControls = new View();
+    angleControls->setFlexDirection(FlexDirection::Row);
+    angleControls->setFlexWrap(YGWrapWrap);
+    angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateLaneAngle = [this](float delta) {
+      context.settings.laneAngleDegrees =
+          clampLaneAngle(context.settings.laneAngleDegrees + delta);
+      persistSettings();
+    };
+    auto *minusAngle =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
+    minusAngle->setOnClickListener(
+        [updateLaneAngle]() { updateLaneAngle(-1.0f); });
+    angleControls->addView(minusAngle);
+    auto *plusAngle =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
+    plusAngle->setOnClickListener(
+        [updateLaneAngle]() { updateLaneAngle(1.0f); });
+    angleControls->addView(plusAngle);
+    auto *resetAngle = makeResetButton(metrics);
+    resetAngle->setOnClickListener([this]() {
+      context.settings.laneAngleDegrees =
+          AppSettings::kDefaultLaneAngleDegrees;
+      persistSettings();
+    });
+    angleControls->addView(resetAngle);
+    previewPanel->addView(angleControls);
+
+    previewPanel->addView(
+        makeSummaryRow(metrics, "Lane Length", &summaryLaneLengthValueText));
+    auto *lengthControls = new View();
+    lengthControls->setFlexDirection(FlexDirection::Row);
+    lengthControls->setFlexWrap(YGWrapWrap);
+    lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateLaneLength = [this](float delta) {
+      context.settings.laneLength =
+          clampLaneLength(context.settings.laneLength + delta);
+      persistSettings();
+    };
+    auto *minusLength =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
+    minusLength->setOnClickListener(
+        [updateLaneLength]() { updateLaneLength(-0.5f); });
+    lengthControls->addView(minusLength);
+    auto *plusLength =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
+    plusLength->setOnClickListener(
+        [updateLaneLength]() { updateLaneLength(0.5f); });
+    lengthControls->addView(plusLength);
+    auto *resetLength = makeResetButton(metrics);
+    resetLength->setOnClickListener([this]() {
+      context.settings.laneLength = AppSettings::kDefaultLaneLength;
+      persistSettings();
+    });
+    lengthControls->addView(resetLength);
+    previewPanel->addView(lengthControls);
+  } else {
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Note Start", &summaryNoteStartPositionValueText));
+    auto *noteStartControls = new View();
+    noteStartControls->setFlexDirection(FlexDirection::Row);
+    noteStartControls->setFlexWrap(YGWrapWrap);
+    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateNoteStartPosition = [this](int deltaPercent) {
+      context.settings.noteStartPositionPercent =
+          clampNoteStartPositionPercent(
+              context.settings.noteStartPositionPercent + deltaPercent);
+      persistSettings();
+    };
+    auto *minusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+    noteStartControls->addView(minusNoteStart);
+    auto *plusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+    noteStartControls->addView(plusNoteStart);
+    auto *resetNoteStart = makeResetButton(metrics);
+    resetNoteStart->setOnClickListener([this]() {
+      context.settings.noteStartPositionPercent =
+          AppSettings::kDefaultNoteStartPositionPercent;
+      persistSettings();
+    });
+    noteStartControls->addView(resetNoteStart);
+    previewPanel->addView(noteStartControls);
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Beam Length", &summaryLaneBeamLengthValueText));
+    auto *beamControls = new View();
+    beamControls->setFlexDirection(FlexDirection::Row);
+    beamControls->setFlexWrap(YGWrapWrap);
+    beamControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updateLaneBeamLength = [this](int deltaPercent) {
+      context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
+          context.settings.laneBeamLengthPercent + deltaPercent);
+      persistSettings();
+    };
+    auto *minusBeam =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusBeam->setOnClickListener(
+        [updateLaneBeamLength]() { updateLaneBeamLength(-10); });
+    beamControls->addView(minusBeam);
+    auto *plusBeam =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusBeam->setOnClickListener(
+        [updateLaneBeamLength]() { updateLaneBeamLength(10); });
+    beamControls->addView(plusBeam);
+    auto *resetBeam = makeResetButton(metrics);
+    resetBeam->setOnClickListener([this]() {
+      context.settings.laneBeamLengthPercent =
+          AppSettings::kDefaultLaneBeamLengthPercent;
+      persistSettings();
+    });
+    beamControls->addView(resetBeam);
+    previewPanel->addView(beamControls);
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Play Width 7K", &summaryPreviewPlayAreaWidthValueText));
+    auto *playAreaWidthControls = new View();
+    playAreaWidthControls->setFlexDirection(FlexDirection::Row);
+    playAreaWidthControls->setFlexWrap(YGWrapWrap);
+    playAreaWidthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    auto updatePreviewPlayAreaWidth = [this](float delta) {
+      constexpr int previewKeyMode = 7;
+      context.settings.setPlayAreaWidthForKeyMode(
+          previewKeyMode,
+          clampPlayAreaWidth(
+              context.settings.playAreaWidthForKeyMode(previewKeyMode) +
+              delta));
+      persistSettings();
+    };
+    auto *minusWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-0.5");
+    minusWidth->setOnClickListener(
+        [updatePreviewPlayAreaWidth]() { updatePreviewPlayAreaWidth(-0.5f); });
+    playAreaWidthControls->addView(minusWidth);
+    auto *plusWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+0.5");
+    plusWidth->setOnClickListener(
+        [updatePreviewPlayAreaWidth]() { updatePreviewPlayAreaWidth(0.5f); });
+    playAreaWidthControls->addView(plusWidth);
+    auto *resetWidth = makeResetButton(metrics);
+    resetWidth->setOnClickListener([this]() {
+      context.settings.setPlayAreaWidthForKeyMode(
+          7, AppSettings::kDefaultPlayAreaWidth);
+      persistSettings();
+    });
+    playAreaWidthControls->addView(resetWidth);
+    previewPanel->addView(playAreaWidthControls);
+  }
 
   auto *restartButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,

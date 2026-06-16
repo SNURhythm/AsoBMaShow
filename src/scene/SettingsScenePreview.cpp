@@ -81,6 +81,7 @@ bms_parser::Chart *makePreviewChart() {
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
+  previewPanelPage = 0;
   resetPreviewSimulation();
   ensurePreviewRenderer();
   lastLayoutWidth = -1;

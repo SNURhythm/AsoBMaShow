@@ -56,6 +56,7 @@ private:
   TextView *summaryLaneLengthValueText = nullptr;
   TextView *summaryLaneBeamLengthValueText = nullptr;
   TextView *summaryNoteStartPositionValueText = nullptr;
+  TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
@@ -99,6 +100,7 @@ private:
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;
+  int previewPanelPage = 0;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
   long long previewElapsedMicros = 0;

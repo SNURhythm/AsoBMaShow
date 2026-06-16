@@ -32,6 +32,8 @@ void SettingsScene::refreshSettingsText() {
       formatLaneBeamLengthLabel(context.settings.laneBeamLengthPercent);
   const std::string noteStartPositionLabel =
       formatNoteStartPositionLabel(context.settings.noteStartPositionPercent);
+  const std::string previewPlayAreaWidthLabel =
+      formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
@@ -86,6 +88,9 @@ void SettingsScene::refreshSettingsText() {
   syncNoteStartPositionInputText();
   if (summaryNoteStartPositionValueText != nullptr) {
     summaryNoteStartPositionValueText->setText(noteStartPositionLabel);
+  }
+  if (summaryPreviewPlayAreaWidthValueText != nullptr) {
+    summaryPreviewPlayAreaWidthValueText->setText(previewPlayAreaWidthLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);

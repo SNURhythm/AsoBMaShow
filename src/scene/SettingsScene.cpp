@@ -80,6 +80,7 @@ void SettingsScene::cleanupScene() {
   summaryLaneLengthValueText = nullptr;
   summaryLaneBeamLengthValueText = nullptr;
   summaryNoteStartPositionValueText = nullptr;
+  summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
