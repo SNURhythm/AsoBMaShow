@@ -106,6 +106,8 @@ private:
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int scratchLaneCount = 0;
+  float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
+  float playAreaLeftX = 0.0f;
   float noteRenderWidth = 1.0f;
   float noteRenderHeight = 1.0f;
 
@@ -113,6 +115,7 @@ private:
   float longBodyRenderHeightOn = 1.0f;
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
+  float noteVisibleUpperBound = 10.0f;
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
@@ -123,6 +126,9 @@ private:
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
+  int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
+  int noteStartPositionPercent =
+      AppSettings::kDefaultNoteStartPositionPercent;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -134,6 +140,7 @@ private:
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
+  void drawLaneCover();
   void drawTitle(RenderContext &context) const;
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
@@ -162,6 +169,7 @@ private:
   bool isRightScratch(int lane) const;
   bool isScratch(int lane) const;
   float computeLaneX(int lane) const;
+  void rebuildPlayAreaGeometry();
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
   rendering::TexBatchRenderer &noteTextureBatch(bgfx::TextureHandle texture,
@@ -193,7 +201,10 @@ public:
   void setVisibleTimeGreenNumber(int greenNumber);
   void setVisibleTimeBpmStrategy(
       AppSettings::VisibleTimeBpmStrategy strategy);
+  void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
+  void setLaneBeamLengthPercent(int percent);
+  void setNoteStartPositionPercent(int percent);
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,

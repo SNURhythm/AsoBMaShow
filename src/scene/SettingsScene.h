@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class View;
@@ -14,6 +15,8 @@ class TextInputBox;
 class Button;
 class ScrollView;
 class BMSRenderer;
+class RhythmInputHandler;
+class RhythmLaneInputController;
 
 namespace settings_scene {
 struct LayoutMetrics;
@@ -21,9 +24,12 @@ struct LayoutMetrics;
 
 namespace bms_parser {
 class Chart;
+class Note;
 }
 
-class SettingsScene : public Scene {
+#include "../input/IRhythmControl.h"
+
+class SettingsScene : public Scene, public IRhythmControl {
 public:
   explicit SettingsScene(ApplicationContext &context) : Scene(context) {}
 
@@ -31,6 +37,11 @@ public:
   void update(float dt) override;
   void renderScene() override;
   void cleanupScene() override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
+  bms_parser::Note *pressLane(int lane, double inputDelay = 0) override;
+  bms_parser::Note *pressLane(int mainLane, int compensateLane,
+                              double inputDelay = 0) override;
+  bms_parser::Note *releaseLane(int lane, double inputDelay = 0) override;
 
 private:
   enum class SettingsTab {
@@ -54,6 +65,9 @@ private:
   TextView *summaryBgaDisplayValueText = nullptr;
   TextView *summaryLaneAngleValueText = nullptr;
   TextView *summaryLaneLengthValueText = nullptr;
+  TextView *summaryLaneBeamLengthValueText = nullptr;
+  TextView *summaryNoteStartPositionValueText = nullptr;
+  TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
@@ -83,6 +97,8 @@ private:
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
   TextInputBox *laneLengthInput = nullptr;
+  TextInputBox *laneBeamLengthInput = nullptr;
+  TextInputBox *noteStartPositionInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
   View *difficultyTableImportModalRoot = nullptr;
@@ -95,9 +111,15 @@ private:
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;
+  int previewPanelPage = 0;
   bms_parser::Chart *previewChart = nullptr;
   BMSRenderer *previewRenderer = nullptr;
+  RhythmInputHandler *previewInputHandler = nullptr;
+  RhythmLaneInputController *previewLaneController = nullptr;
+  std::unordered_map<int, bool> previewLanePressed;
   long long previewElapsedMicros = 0;
+  int previewCombo = 0;
+  int previewScore = 0;
   SettingsTab activeTab = SettingsTab::Timing;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
@@ -151,6 +173,10 @@ private:
   void stopLanePreview();
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
+  void ensurePreviewInputHandler();
+  void destroyPreviewInputHandler();
+  void forwardPreviewInputEvent(SDL_Event &event);
+  void syncPreviewInputPlayAreaWidth();
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();
@@ -179,6 +205,8 @@ private:
   void syncBgaBlurInputText(bool force = false);
   void syncLaneAngleInputText(bool force = false);
   void syncLaneLengthInputText(bool force = false);
+  void syncLaneBeamLengthInputText(bool force = false);
+  void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
   void commitOffsetInput();
@@ -188,6 +216,8 @@ private:
   void commitBgaBlurInput();
   void commitLaneAngleInput();
   void commitLaneLengthInput();
+  void commitLaneBeamLengthInput();
+  void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();
 };

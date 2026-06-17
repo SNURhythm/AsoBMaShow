@@ -6,6 +6,7 @@
 #include "../../PlayOptionUtils.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
+#include "RhythmLaneInputController.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../targets.h"
 #include "../../view/Button.h"
@@ -13,7 +14,6 @@
 #include "../ResultScene.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -28,21 +28,6 @@ long long nowMicros() {
 
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
   return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
-}
-
-struct PressLaneCandidate {
-  int lane = 0;
-  bms_parser::Note *note = nullptr;
-  JudgeResult judge = JudgeResult(None, 0);
-};
-
-long long noteTimingMicros(const bms_parser::Note *note) {
-  return note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
-                                                      : 0;
-}
-
-long long absoluteTimeDistance(long long a, long long b) {
-  return a > b ? a - b : b - a;
 }
 
 void markPracticeSkippedNote(bms_parser::Note *note, long long startTime) {
@@ -68,56 +53,6 @@ void markPracticeSkippedNote(bms_parser::Note *note, long long startTime) {
       longNote->Head->IsHolding = false;
     }
   }
-}
-
-long long latestHittableNoteTiming(const Judge &judge, long long inputTime) {
-  bool hasWindow = false;
-  long long earliestWindow = 0;
-  for (const auto &entry : judge.timingWindows) {
-    if (!hasWindow || entry.second.first < earliestWindow) {
-      earliestWindow = entry.second.first;
-      hasWindow = true;
-    }
-  }
-  return hasWindow ? inputTime - earliestWindow : inputTime;
-}
-
-bool preferByTimingWindow(const PressLaneCandidate &current,
-                          const PressLaneCandidate &next,
-                          long long inputTime, const Judge &judge,
-                          Judgement threshold) {
-  if (next.note == nullptr || next.note->IsPlayed) {
-    return false;
-  }
-  const auto windowIt = judge.timingWindows.find(threshold);
-  if (windowIt == judge.timingWindows.end()) {
-    return false;
-  }
-
-  const auto &window = windowIt->second;
-  const long long currentTiming = noteTimingMicros(current.note);
-  const long long nextTiming = noteTimingMicros(next.note);
-  return currentTiming < inputTime - window.second &&
-         nextTiming <= inputTime - window.first;
-}
-
-bool shouldPreferCandidate(const PressLaneCandidate &current,
-                           const PressLaneCandidate &next,
-                           long long inputTime, const Judge &judge,
-                           AppSettings::NotePriorityMode mode) {
-  switch (mode) {
-  case AppSettings::NotePriorityMode::Combo:
-    return preferByTimingWindow(current, next, inputTime, judge, Good);
-  case AppSettings::NotePriorityMode::Duration:
-    return next.note != nullptr && !next.note->IsPlayed &&
-           absoluteTimeDistance(noteTimingMicros(current.note), inputTime) >
-               absoluteTimeDistance(noteTimingMicros(next.note), inputTime);
-  case AppSettings::NotePriorityMode::Score:
-    return preferByTimingWindow(current, next, inputTime, judge, Great);
-  case AppSettings::NotePriorityMode::Lowest:
-    return false;
-  }
-  return false;
 }
 
 bool laneIsPressed(const std::unordered_map<int, bool> &lanePressed,
@@ -212,6 +147,11 @@ void GamePlayScene::init() {
                              context.settings.visibleTimeGreenNumber);
   renderer->setVisibleTimeBpmStrategy(
       context.settings.visibleTimeBpmStrategy);
+  renderer->setPlayAreaWidth(
+      context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
+  renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
+  renderer->setNoteStartPositionPercent(
+      context.settings.noteStartPositionPercent);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,
@@ -224,7 +164,9 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback()) {
-    inputHandler = new RhythmInputHandler(this, chart->Meta);
+    inputHandler = new RhythmInputHandler(
+        this, chart->Meta,
+        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler->discardPendingTouchEvents();
     inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
@@ -235,6 +177,9 @@ void GamePlayScene::init() {
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
     lanePressed[lane] = false;
   }
+
+  laneInputController =
+      new RhythmLaneInputController(chart, renderer, lanePressed);
 
   if constexpr (kShowLaneStateOverlay) {
     laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
@@ -328,6 +273,10 @@ void GamePlayScene::reset() {
     state = nullptr;
   }
   renderer->reset();
+  if (laneInputController != nullptr) {
+    laneInputController->resetLaneStates();
+    updateLaneStateText();
+  }
   // reset all notes
   for (const auto &measure : chart->Measures) {
     for (const auto &timeline : measure->TimeLines) {
@@ -662,6 +611,8 @@ void GamePlayScene::cleanupScene() {
     delete inputHandler;
     inputHandler = nullptr;
   }
+  delete laneInputController;
+  laneInputController = nullptr;
   delete renderer;
   renderer = nullptr;
   delete state;
@@ -675,6 +626,9 @@ void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaned up GamePlayScene");
 }
 bms_parser::Note *GamePlayScene::pressLane(int lane, double inputDelay) {
+  if (laneInputController == nullptr) {
+    return nullptr;
+  }
   return pressLane(lane, lane, inputDelay);
 }
 bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
@@ -686,149 +640,60 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       state->isEnding) {
     return nullptr;
   }
-  auto mainLaneIt = lanePressed.find(mainLane);
-  std::array<int, 2> candidates{};
-  size_t candidateCount = 0;
-  if (mainLaneIt != lanePressed.end() && !mainLaneIt->second) {
-    candidates[candidateCount++] = mainLane;
-  }
-  auto compensateLaneIt = lanePressed.find(compensateLane);
-  if (compensateLane != mainLane && compensateLaneIt != lanePressed.end() &&
-      !compensateLaneIt->second) {
-    candidates[candidateCount++] = compensateLane;
-  }
-  if (candidateCount == 0) {
+  if (laneInputController == nullptr) {
     return nullptr;
   }
-
-  const auto &measures = chart->Measures;
-  const long long rawSongTime = context.jukebox.getTimeMicros();
-  const long long gameplayTime = getGameplayTimeMicros(rawSongTime);
-  const long long inputSongTime =
-      getInputSongTimeMicros(gameplayTime, inputDelay);
-  const long long pressedTime = inputSongTime;
-  const long long futureCutoff = latestHittableNoteTiming(judge, pressedTime);
-  const AppSettings::NotePriorityMode priorityMode =
-      context.settings.notePriorityMode;
-  bool hasSelectedCandidate = false;
-  bool stopScanning = false;
-  PressLaneCandidate selectedCandidate;
-
-  for (size_t i = state->passedMeasureCount;
-       i < measures.size() && !stopScanning; i++) {
-    const bool isFirstMeasure = i == state->passedMeasureCount;
-    const auto &measure = measures[i];
-
-    for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
-         j < measure->TimeLines.size() && !stopScanning; j++) {
-      const auto &timeline = measure->TimeLines[j];
-      if (timeline->Timing < pressedTime - latePoorTiming) {
-        continue;
-      }
-      if (timeline->Timing > futureCutoff) {
-        stopScanning = true;
-        break;
-      }
-      for (size_t candidateIdx = 0; candidateIdx < candidateCount;
-           ++candidateIdx) {
-        const int lane = candidates[candidateIdx];
-        const auto &note = timeline->Notes[lane];
-        if (note == nullptr) {
-          continue;
-        }
-        if (note->IsPlayed) {
-          continue;
-        }
-        if (note->IsLandmineNote()) {
-          continue;
-        }
-        const JudgeResult noteJudge = judge.judgeNow(note, pressedTime);
-        if (noteJudge.judgement == None) {
-          continue;
-        }
-        const PressLaneCandidate candidate{lane, note, noteJudge};
-        if (!hasSelectedCandidate ||
-            shouldPreferCandidate(selectedCandidate, candidate, pressedTime,
-                                  judge, priorityMode)) {
-          selectedCandidate = candidate;
-          hasSelectedCandidate = true;
-        }
-        if (priorityMode == AppSettings::NotePriorityMode::Lowest) {
-          stopScanning = true;
-          break;
-        }
-      }
-    }
-  }
-  if (hasSelectedCandidate) {
-    const JudgeResult judgement =
-        pressNote(selectedCandidate.note, pressedTime,
-                  &selectedCandidate.judge, inputSongTime);
-    if (const auto pressedIt = lanePressed.find(selectedCandidate.lane);
-        pressedIt != lanePressed.end()) {
-      pressedIt->second = true;
-    }
-    updateLaneStateText();
-    renderer->onLanePressed(selectedCandidate.lane, judgement, nowMicros());
-    return selectedCandidate.note;
-  }
-  if (mainLaneIt != lanePressed.end()) {
-    mainLaneIt->second = true;
-  }
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .laneBeamTimeMicros = nowMicros(),
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result =
+      laneInputController->pressLane(mainLane, compensateLane, inputContext);
   updateLaneStateText();
-  renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
-  appendReplayEvent(ReplayEventAction::Press, mainLane, nullptr, inputSongTime,
-                    pressedTime, JudgeResult(None, 0));
-  return nullptr;
+  if (result.keySoundNote != nullptr &&
+      result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
+      !options.autoKeySound && !isReplayPlayback()) {
+    context.jukebox.playKeySound(result.keySoundNote->Wav);
+  }
+  if (result.hasJudge) {
+    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
+  }
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    appendReplayEvent(event.action, event.lane, event.note,
+                      event.songTimeMicros, event.judgeTimeMicros,
+                      event.judge);
+  }
+  return result.note;
 }
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
   if (isGamePaused || state == nullptr || !state->isPlaying ||
       state->isEnding) {
     return nullptr;
   }
-  auto laneIt = lanePressed.find(lane);
-  if (laneIt == lanePressed.end() || !laneIt->second) {
+  if (laneInputController == nullptr) {
     return nullptr;
   }
-  laneIt->second = false;
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .laneBeamTimeMicros = nowMicros(),
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result = laneInputController->releaseLane(lane, inputContext);
   updateLaneStateText();
-  renderer->onLaneReleased(lane, nowMicros());
-  const long long rawSongTime = context.jukebox.getTimeMicros();
-  const long long gameplayTime = getGameplayTimeMicros(rawSongTime);
-  const long long inputSongTime =
-      getInputSongTimeMicros(gameplayTime, inputDelay);
-  const long long releasedTime = inputSongTime;
-
-  const auto &Measures = chart->Measures;
-
-  for (size_t i = state->passedMeasureCount; i < Measures.size(); i++) {
-    const bool isFirstMeasure = i == state->passedMeasureCount;
-    const auto &measure = Measures[i];
-    for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
-         j < measure->TimeLines.size(); j++) {
-      const auto &Timeline = measure->TimeLines[j];
-      if (Timeline->Timing < releasedTime - latePoorTiming) {
-        continue;
-      }
-      const auto &note = Timeline->Notes[lane];
-      if (note == nullptr) {
-        continue;
-      }
-      if (note->IsPlayed) {
-        continue;
-      }
-      const JudgeResult releaseJudge =
-          releaseNote(note, releasedTime, nullptr, inputSongTime);
-      if (releaseJudge.judgement == None) {
-        appendReplayEvent(ReplayEventAction::Release, lane, nullptr,
-                          inputSongTime, releasedTime, releaseJudge);
-      }
-      return note;
-    }
+  if (result.hasJudge) {
+    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
   }
-  appendReplayEvent(ReplayEventAction::Release, lane, nullptr, inputSongTime,
-                    releasedTime, JudgeResult(None, 0));
-  return nullptr;
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    appendReplayEvent(event.action, event.lane, event.note,
+                      event.songTimeMicros, event.judgeTimeMicros,
+                      event.judge);
+  }
+  return result.note;
 }
 void GamePlayScene::checkPassedTimeline(long long time) {
   const auto &measures = chart->Measures;

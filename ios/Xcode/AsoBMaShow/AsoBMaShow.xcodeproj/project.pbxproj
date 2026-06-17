@@ -753,6 +753,7 @@
 				scene/play/GamePlayScene.cpp,
 				scene/play/JudgementIndicatorRenderer.cpp,
 				scene/play/Judge.cpp,
+				scene/play/RhythmLaneInputController.cpp,
 				scene/SceneManager.cpp,
 				SDL_uikit_main.c,
 				ReplayDBHelper.cpp,

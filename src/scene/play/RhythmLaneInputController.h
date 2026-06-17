@@ -1,0 +1,61 @@
+#pragma once
+
+#include "../../AppSettings.h"
+#include "../../ReplayData.h"
+#include "../../bms_parser.hpp"
+#include "Judge.h"
+
+#include <unordered_map>
+
+class BMSRenderer;
+
+class RhythmLaneInputController {
+public:
+  struct InputContext {
+    long long songTimeMicros = 0;
+    long long laneBeamTimeMicros = 0;
+    double inputDelay = 0.0;
+    AppSettings::NotePriorityMode notePriorityMode =
+        AppSettings::NotePriorityMode::Lowest;
+  };
+
+  struct ReplayEventResult {
+    ReplayEventAction action = ReplayEventAction::Press;
+    int lane = -1;
+    const bms_parser::Note *note = nullptr;
+    long long songTimeMicros = 0;
+    long long judgeTimeMicros = 0;
+    JudgeResult judge = JudgeResult(None, 0);
+  };
+
+  struct Result {
+    bms_parser::Note *note = nullptr;
+    bms_parser::Note *keySoundNote = nullptr;
+    bool hasJudge = false;
+    JudgeResult judge = JudgeResult(None, 0);
+    bool hasReplayEvent = false;
+    ReplayEventResult replayEvent;
+  };
+
+  RhythmLaneInputController(bms_parser::Chart *chart, BMSRenderer *renderer,
+                            std::unordered_map<int, bool> &lanePressed);
+
+  Result pressLane(int lane, const InputContext &context);
+  Result pressLane(int mainLane, int compensateLane,
+                   const InputContext &context);
+  Result releaseLane(int lane, const InputContext &context);
+  void resetLaneStates();
+
+private:
+  bms_parser::Chart *chart = nullptr;
+  BMSRenderer *renderer = nullptr;
+  std::unordered_map<int, bool> &lanePressed;
+  Judge judge;
+  long long latePoorTiming = 0;
+
+  long long inputTimeMicros(const InputContext &context) const;
+  Result pressNote(bms_parser::Note *note, long long pressedTime,
+                   long long songTimeMicros);
+  Result releaseNote(bms_parser::Note *note, long long releasedTime,
+                     long long songTimeMicros);
+};

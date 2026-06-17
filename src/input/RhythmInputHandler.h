@@ -24,6 +24,8 @@ private:
   IInputSource *touchInputSource = nullptr;
   int totalLaneCount;
   int scratchLaneCount;
+  float playAreaWidth = 8.0f;
+  float playAreaLeftX = 0.0f;
   std::vector<int> laneOrder;
   std::map<SDL_FingerID, int> fingerToLane;
   int clampLane(int lane) const;
@@ -36,7 +38,8 @@ private:
 public:
   IRhythmControl *control;
   RhythmInputHandler(IRhythmControl *control,
-                     const bms_parser::ChartMeta &meta);
+                     const bms_parser::ChartMeta &meta,
+                     float playAreaWidth = 8.0f);
   void onKeyDown(int keyCode, KeySource keySource) override;
   void onKeyUp(int KeyCode, KeySource Source) override;
   void onFingerDown(SDL_FingerID fingerIndex,
@@ -50,5 +53,6 @@ public:
   void discardPendingTouchEvents();
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
+  void setPlayAreaWidth(float configuredPlayAreaWidth);
   std::map<SDL_Keycode, int> keyMap;
 };

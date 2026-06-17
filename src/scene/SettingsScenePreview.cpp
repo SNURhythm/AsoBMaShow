@@ -1,5 +1,8 @@
 #include "SettingsSceneShared.h"
+#include "../input/RhythmInputHandler.h"
+#include "../rendering/common.h"
 #include "play/BMSRenderer.h"
+#include "play/RhythmLaneInputController.h"
 
 using namespace settings_scene;
 
@@ -81,6 +84,7 @@ bms_parser::Chart *makePreviewChart() {
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
+  previewPanelPage = 0;
   resetPreviewSimulation();
   ensurePreviewRenderer();
   lastLayoutWidth = -1;
@@ -88,6 +92,7 @@ void SettingsScene::startLanePreview() {
 
 void SettingsScene::stopLanePreview() {
   previewActive = false;
+  destroyPreviewInputHandler();
   destroyPreviewRenderer();
   lastLayoutWidth = -1;
 }
@@ -103,11 +108,19 @@ void SettingsScene::ensurePreviewRenderer() {
                         context.settings.visibleTimeGreenNumber, false);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    previewRenderer->setPlayAreaWidth(
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+    previewRenderer->setLaneBeamLengthPercent(
+        context.settings.laneBeamLengthPercent);
+    previewRenderer->setNoteStartPositionPercent(
+        context.settings.noteStartPositionPercent);
+    previewRenderer->setLaneBeamClockUsesRenderTime(true);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   }
 }
 
 void SettingsScene::destroyPreviewRenderer() {
+  destroyPreviewInputHandler();
   delete previewRenderer;
   previewRenderer = nullptr;
   delete previewChart;
@@ -115,8 +128,178 @@ void SettingsScene::destroyPreviewRenderer() {
   previewElapsedMicros = 0;
 }
 
+void SettingsScene::ensurePreviewInputHandler() {
+  if (!previewActive) {
+    return;
+  }
+  ensurePreviewRenderer();
+  if (previewChart == nullptr || previewRenderer == nullptr) {
+    return;
+  }
+  if (previewLaneController == nullptr) {
+    previewLaneController = new RhythmLaneInputController(
+        previewChart, previewRenderer, previewLanePressed);
+  }
+  if (previewInputHandler == nullptr) {
+    previewInputHandler = new RhythmInputHandler(
+        this, previewChart->Meta,
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+    previewInputHandler->discardPendingTouchEvents();
+  }
+}
+
+void SettingsScene::destroyPreviewInputHandler() {
+  if (previewInputHandler != nullptr) {
+    previewInputHandler->stopListen();
+    delete previewInputHandler;
+    previewInputHandler = nullptr;
+  }
+  delete previewLaneController;
+  previewLaneController = nullptr;
+  previewLanePressed.clear();
+  previewCombo = 0;
+  previewScore = 0;
+}
+
+void SettingsScene::syncPreviewInputPlayAreaWidth() {
+  if (previewInputHandler == nullptr || previewChart == nullptr) {
+    return;
+  }
+  previewInputHandler->setPlayAreaWidth(
+      context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+}
+
+void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
+  if (previewInputHandler == nullptr) {
+    return;
+  }
+  switch (event.type) {
+  case SDL_KEYDOWN:
+    previewInputHandler->onKeyDown(event.key.keysym.scancode, ScanCode);
+    break;
+  case SDL_KEYUP:
+    previewInputHandler->onKeyUp(event.key.keysym.scancode, ScanCode);
+    break;
+  case SDL_FINGERDOWN:
+  case SDL_FINGERUP:
+  case SDL_FINGERMOTION: {
+    float uiNormX = 0.0f;
+    float uiNormY = 0.0f;
+    rendering::normalizedToUiNormalized(event.tfinger.x, event.tfinger.y,
+                                        uiNormX, uiNormY);
+    const Vector3 location(uiNormX, uiNormY, 0.0f);
+    if (event.type == SDL_FINGERDOWN) {
+      previewInputHandler->onFingerDown(event.tfinger.fingerId, location);
+    } else if (event.type == SDL_FINGERUP) {
+      previewInputHandler->onFingerUp(event.tfinger.fingerId, location);
+    } else {
+      previewInputHandler->onFingerMove(event.tfinger.fingerId, location);
+    }
+    break;
+  }
+  case SDL_MOUSEBUTTONDOWN:
+  case SDL_MOUSEBUTTONUP: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return;
+    }
+    float uiNormX = 0.0f;
+    float uiNormY = 0.0f;
+    rendering::screenToUiNormalized(
+        static_cast<float>(event.button.x) * rendering::widthScale,
+        static_cast<float>(event.button.y) * rendering::heightScale, uiNormX,
+        uiNormY);
+    const Vector3 location(uiNormX, uiNormY, 0.0f);
+    if (event.type == SDL_MOUSEBUTTONDOWN) {
+      previewInputHandler->onFingerDown(0, location);
+    } else {
+      previewInputHandler->onFingerUp(0, location);
+    }
+    break;
+  }
+  case SDL_MOUSEMOTION: {
+    float uiNormX = 0.0f;
+    float uiNormY = 0.0f;
+    rendering::screenToUiNormalized(
+        static_cast<float>(event.motion.x) * rendering::widthScale,
+        static_cast<float>(event.motion.y) * rendering::heightScale, uiNormX,
+        uiNormY);
+    previewInputHandler->onFingerMove(0, Vector3(uiNormX, uiNormY, 0.0f));
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
+  if (!previewActive || previewLaneController == nullptr) {
+    return nullptr;
+  }
+  return pressLane(lane, lane, inputDelay);
+}
+
+bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
+                                           double inputDelay) {
+  if (!previewActive || previewLaneController == nullptr) {
+    return nullptr;
+  }
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = previewElapsedMicros,
+      .laneBeamTimeMicros = previewElapsedMicros,
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result =
+      previewLaneController->pressLane(mainLane, compensateLane, inputContext);
+  if (result.hasJudge && previewRenderer != nullptr) {
+    if (result.judge.isComboBreak()) {
+      previewCombo = 0;
+    } else if (result.judge.judgement != Kpoor) {
+      previewCombo++;
+    }
+    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
+      previewScore += 2;
+    }
+    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
+                             previewElapsedMicros, true);
+  }
+  return result.note;
+}
+
+bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay) {
+  if (!previewActive || previewLaneController == nullptr) {
+    return nullptr;
+  }
+  const RhythmLaneInputController::InputContext inputContext{
+      .songTimeMicros = previewElapsedMicros,
+      .laneBeamTimeMicros = previewElapsedMicros,
+      .inputDelay = inputDelay,
+      .notePriorityMode = context.settings.notePriorityMode,
+  };
+  auto result = previewLaneController->releaseLane(lane, inputContext);
+  if (result.hasJudge && previewRenderer != nullptr) {
+    if (result.judge.isComboBreak()) {
+      previewCombo = 0;
+    } else if (result.judge.judgement != Kpoor) {
+      previewCombo++;
+    }
+    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
+      previewScore += 2;
+    }
+    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
+                             previewElapsedMicros, true);
+  }
+  return result.note;
+}
+
 void SettingsScene::resetPreviewSimulation() {
   previewElapsedMicros = 0;
+  previewCombo = 0;
+  previewScore = 0;
+  if (previewLaneController != nullptr) {
+    previewLaneController->resetLaneStates();
+  }
   if (previewRenderer != nullptr) {
     previewRenderer->reset();
   }

@@ -48,6 +48,15 @@ public:
   static constexpr float kMinLaneLength = 5.0f;
   static constexpr float kMaxLaneLength = 12.0f;
   static constexpr float kDefaultLaneLength = 8.0f;
+  static constexpr int kMinLaneBeamLengthPercent = 0;
+  static constexpr int kMaxLaneBeamLengthPercent = 100;
+  static constexpr int kDefaultLaneBeamLengthPercent = 100;
+  static constexpr int kMinNoteStartPositionPercent = 0;
+  static constexpr int kMaxNoteStartPositionPercent = 90;
+  static constexpr int kDefaultNoteStartPositionPercent = 0;
+  static constexpr float kMinPlayAreaWidth = 4.0f;
+  static constexpr float kMaxPlayAreaWidth = 12.0f;
+  static constexpr float kDefaultPlayAreaWidth = 8.0f;
   static constexpr float kMinJudgementIndicatorY = 0.0f;
   static constexpr float kMaxJudgementIndicatorY = 1.0f;
   static constexpr float kDefaultJudgementIndicatorY = 0.5f;
@@ -71,6 +80,15 @@ public:
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
+  int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
+  int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
+  float playAreaWidth4K = kDefaultPlayAreaWidth;
+  float playAreaWidth5K = kDefaultPlayAreaWidth;
+  float playAreaWidth6K = kDefaultPlayAreaWidth;
+  float playAreaWidth7K = kDefaultPlayAreaWidth;
+  float playAreaWidth8K = kDefaultPlayAreaWidth;
+  float playAreaWidth10K = kDefaultPlayAreaWidth;
+  float playAreaWidth14K = kDefaultPlayAreaWidth;
   NotePriorityMode notePriorityMode = NotePriorityMode::Lowest;
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
@@ -81,6 +99,8 @@ public:
   std::string selectedPlayOption = kDefaultPlayOption;
 
   void sanitize();
+  float playAreaWidthForKeyMode(int keyMode) const;
+  void setPlayAreaWidthForKeyMode(int keyMode, float width);
   bool save() const;
   static AppSettings load();
 

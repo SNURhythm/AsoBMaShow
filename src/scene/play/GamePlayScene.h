@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 class Button;
+class RhythmLaneInputController;
 struct StartOptions {
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
@@ -111,6 +112,7 @@ private:
                           bool recordEvent = true);
   RhythmState *state = nullptr;
   BMSRenderer *renderer = nullptr;
+  RhythmLaneInputController *laneInputController = nullptr;
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;

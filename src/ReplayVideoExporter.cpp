@@ -1965,6 +1965,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   BMSRenderer renderer(&chart, judge.timingWindows,
                        settings.visibleTimeGreenNumber);
   renderer.setVisibleTimeBpmStrategy(settings.visibleTimeBpmStrategy);
+  renderer.setPlayAreaWidth(
+      settings.playAreaWidthForKeyMode(chart.Meta.KeyMode));
+  renderer.setLaneBeamLengthPercent(settings.laneBeamLengthPercent);
+  renderer.setNoteStartPositionPercent(settings.noteStartPositionPercent);
   renderer.setLaneBeamClockUsesRenderTime(true);
   renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
   const bool judgementIndicatorHudMode =

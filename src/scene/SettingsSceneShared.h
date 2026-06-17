@@ -349,6 +349,24 @@ static float clampLaneLength(float value) {
                     AppSettings::kMaxLaneLength);
 }
 
+static int clampLaneBeamLengthPercent(int value) {
+  return std::clamp(value, AppSettings::kMinLaneBeamLengthPercent,
+                    AppSettings::kMaxLaneBeamLengthPercent);
+}
+
+static int clampNoteStartPositionPercent(int value) {
+  return std::clamp(value, AppSettings::kMinNoteStartPositionPercent,
+                    AppSettings::kMaxNoteStartPositionPercent);
+}
+
+static float clampPlayAreaWidth(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultPlayAreaWidth;
+  }
+  return std::clamp(value, AppSettings::kMinPlayAreaWidth,
+                    AppSettings::kMaxPlayAreaWidth);
+}
+
 static float clampJudgementIndicatorY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorY;
@@ -463,6 +481,18 @@ static std::string formatLaneAngleLabel(float degrees) {
 
 static std::string formatLaneLengthLabel(float length) {
   return formatFloatValue(length, 1);
+}
+
+static std::string formatLaneBeamLengthLabel(int percent) {
+  return std::to_string(clampLaneBeamLengthPercent(percent)) + "%";
+}
+
+static std::string formatNoteStartPositionLabel(int percent) {
+  return std::to_string(clampNoteStartPositionPercent(percent)) + "%";
+}
+
+static std::string formatPlayAreaWidthLabel(float width) {
+  return formatFloatValue(clampPlayAreaWidth(width), 1);
 }
 
 static std::string formatJudgementIndicatorRenderModeLabel(
