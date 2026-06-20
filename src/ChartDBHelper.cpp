@@ -224,23 +224,15 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-std::filesystem::path pathFromComponents(
-    const std::vector<std::string> &components, std::size_t start) {
-  std::filesystem::path result;
-  for (std::size_t i = start; i < components.size(); ++i) {
-    if (components[i].empty() || components[i] == "/" ||
-        components[i] == ".") {
-      continue;
-    }
-    result /= components[i];
-  }
-  return result;
-}
-
 std::optional<std::filesystem::path>
-relativeToCurrentDocumentsPath(const std::filesystem::path &normalizedPath) {
+relativeToCurrentDocumentsPath(const std::filesystem::path &path) {
+  if (path.empty() || !path.is_absolute()) {
+    return std::nullopt;
+  }
+
   const std::filesystem::path documentsRoot =
       Utils::GetDocumentsPath().lexically_normal();
+  const std::filesystem::path normalizedPath = path.lexically_normal();
   const std::string rootText = documentsRoot.generic_string();
   const std::string pathText = normalizedPath.generic_string();
   const std::string rootPrefix = rootText + "/";
@@ -250,31 +242,6 @@ relativeToCurrentDocumentsPath(const std::filesystem::path &normalizedPath) {
   }
   if (pathText.starts_with(rootPrefix)) {
     return std::filesystem::path(pathText.substr(rootPrefix.size()));
-  }
-  return std::nullopt;
-}
-
-std::optional<std::filesystem::path>
-relativeToAnyAppDocumentsPath(const std::filesystem::path &path) {
-  if (path.empty() || !path.is_absolute()) {
-    return std::nullopt;
-  }
-
-  const std::filesystem::path normalizedPath = path.lexically_normal();
-  if (auto relative = relativeToCurrentDocumentsPath(normalizedPath)) {
-    return relative;
-  }
-
-  std::vector<std::string> components;
-  for (const auto &part : normalizedPath) {
-    components.push_back(part.generic_string());
-  }
-  for (std::size_t i = 0; i + 4 < components.size(); ++i) {
-    if (components[i] == "Containers" && components[i + 1] == "Data" &&
-        components[i + 2] == "Application" &&
-        !components[i + 3].empty() && components[i + 4] == "Documents") {
-      return pathFromComponents(components, i + 5);
-    }
   }
   return std::nullopt;
 }
@@ -4333,7 +4300,7 @@ void ChartDBHelper::ToRelativePath(
     return;
   }
 
-  if (auto relative = relativeToAnyAppDocumentsPath(path)) {
+  if (auto relative = relativeToCurrentDocumentsPath(path)) {
     path = storedDocumentsPath(*relative);
   }
 #endif
@@ -4347,7 +4314,7 @@ void ChartDBHelper::ToAbsolutePath(
   }
 
   if (path.is_absolute()) {
-    if (auto relative = relativeToAnyAppDocumentsPath(path)) {
+    if (auto relative = relativeToCurrentDocumentsPath(path)) {
       path = Utils::GetDocumentsPath() / *relative;
     }
     return;
