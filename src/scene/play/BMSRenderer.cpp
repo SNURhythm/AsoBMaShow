@@ -52,6 +52,19 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   }
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
 }
+
+void destroyTextureHandle(bgfx::TextureHandle &texture) {
+  if (bgfx::isValid(texture)) {
+    bgfx::destroy(texture);
+    texture = BGFX_INVALID_HANDLE;
+  }
+}
+
+void destroyNoteSheet(NoteSheet &sheet) {
+  destroyTextureHandle(sheet.texture);
+  destroyTextureHandle(sheet.longBodyOffTexture);
+  destroyTextureHandle(sheet.longBodyOnTexture);
+}
 } // namespace
 
 BMSRenderer::BMSRenderer(
@@ -62,6 +75,17 @@ BMSRenderer::BMSRenderer(
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
+  struct TextureConstructionGuard {
+    BMSRenderer *renderer = nullptr;
+    bool active = true;
+
+    ~TextureConstructionGuard() {
+      if (active && renderer != nullptr) {
+        renderer->destroyNoteSheetTextures();
+      }
+    }
+  } textureGuard{this};
+
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
@@ -238,6 +262,7 @@ BMSRenderer::BMSRenderer(
   playOptionText->setVisible(false);
 
   refreshGeometry();
+  textureGuard.active = false;
 }
 
 bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
@@ -1271,32 +1296,11 @@ void BMSRendererState::reset() {
   latestCombo = 0;
   latestScore = 0;
 }
-BMSRenderer::~BMSRenderer() {
-  if (bgfx::isValid(graySheet.texture)) {
-    bgfx::destroy(graySheet.texture);
-  }
-  if (bgfx::isValid(graySheet.longBodyOffTexture)) {
-    bgfx::destroy(graySheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(graySheet.longBodyOnTexture)) {
-    bgfx::destroy(graySheet.longBodyOnTexture);
-  }
-  if (bgfx::isValid(blueSheet.texture)) {
-    bgfx::destroy(blueSheet.texture);
-  }
-  if (bgfx::isValid(blueSheet.longBodyOffTexture)) {
-    bgfx::destroy(blueSheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(blueSheet.longBodyOnTexture)) {
-    bgfx::destroy(blueSheet.longBodyOnTexture);
-  }
-  if (bgfx::isValid(scratchSheet.texture)) {
-    bgfx::destroy(scratchSheet.texture);
-  }
-  if (bgfx::isValid(scratchSheet.longBodyOffTexture)) {
-    bgfx::destroy(scratchSheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(scratchSheet.longBodyOnTexture)) {
-    bgfx::destroy(scratchSheet.longBodyOnTexture);
-  }
+
+void BMSRenderer::destroyNoteSheetTextures() {
+  destroyNoteSheet(graySheet);
+  destroyNoteSheet(blueSheet);
+  destroyNoteSheet(scratchSheet);
 }
+
+BMSRenderer::~BMSRenderer() { destroyNoteSheetTextures(); }

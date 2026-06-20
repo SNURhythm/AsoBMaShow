@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace {
 long long nowMicros() {
@@ -142,9 +143,20 @@ constexpr bool kShowLaneStateOverlay = false;
 #endif
 } // namespace
 
+GamePlayScene::GamePlayScene(ApplicationContext &context,
+                             bms_parser::Chart *chart, StartOptions options)
+    : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
+      chart(options.ownsChart ? ownedChart.get() : chart),
+      judge(chart->Meta.Rank), options(std::move(options)) {
+  latePoorTiming = judge.timingWindows[Bad].second;
+}
+
+GamePlayScene::~GamePlayScene() = default;
+
 void GamePlayScene::init() {
-  renderer = new BMSRenderer(chart, judge.timingWindows,
-                             context.settings.visibleTimeGreenNumber);
+  ownedRenderer = std::make_unique<BMSRenderer>(
+      chart, judge.timingWindows, context.settings.visibleTimeGreenNumber);
+  renderer = ownedRenderer.get();
   renderer->setVisibleTimeBpmStrategy(
       context.settings.visibleTimeBpmStrategy);
   renderer->setPlayAreaWidth(
@@ -164,9 +176,10 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback()) {
-    inputHandler = new RhythmInputHandler(
+    ownedInputHandler = std::make_unique<RhythmInputHandler>(
         this, chart->Meta,
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
+    inputHandler = ownedInputHandler.get();
     inputHandler->discardPendingTouchEvents();
     inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
@@ -178,11 +191,14 @@ void GamePlayScene::init() {
     lanePressed[lane] = false;
   }
 
-  laneInputController =
-      new RhythmLaneInputController(chart, renderer, lanePressed);
+  ownedLaneInputController =
+      std::make_unique<RhythmLaneInputController>(chart, renderer, lanePressed);
+  laneInputController = ownedLaneInputController.get();
 
   if constexpr (kShowLaneStateOverlay) {
-    laneStateText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+    ownedLaneStateText =
+        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
+    laneStateText = ownedLaneStateText.get();
     laneStateText->setPosition(100, 100);
     updateLaneStateText();
   }
@@ -268,10 +284,8 @@ void GamePlayScene::init() {
 }
 
 void GamePlayScene::reset() {
-  if (state != nullptr) {
-    delete state;
-    state = nullptr;
-  }
+  ownedState.reset();
+  state = nullptr;
   renderer->reset();
   if (laneInputController != nullptr) {
     laneInputController->resetLaneStates();
@@ -313,7 +327,8 @@ void GamePlayScene::reset() {
   if (audioSeekPosition > 0) {
     context.jukebox.seek(audioSeekPosition);
   }
-  state = new RhythmState(chart, false);
+  ownedState = std::make_unique<RhythmState>(chart, false);
+  state = ownedState.get();
   const GaugeType initialGaugeType = isReplayPlayback()
                                          ? options.replayData->initialGaugeType
                                          : options.gaugeType;
@@ -608,21 +623,19 @@ void GamePlayScene::cleanupScene() {
   SDL_Log("Stopping input handler");
   if (inputHandler != nullptr) {
     inputHandler->stopListen();
-    delete inputHandler;
-    inputHandler = nullptr;
   }
-  delete laneInputController;
+  ownedInputHandler.reset();
+  inputHandler = nullptr;
+  ownedLaneInputController.reset();
   laneInputController = nullptr;
-  delete renderer;
+  ownedRenderer.reset();
   renderer = nullptr;
-  delete state;
+  ownedState.reset();
   state = nullptr;
-  delete laneStateText;
+  ownedLaneStateText.reset();
   laneStateText = nullptr;
-  if (options.ownsChart) {
-    delete chart;
-    chart = nullptr;
-  }
+  ownedChart.reset();
+  chart = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
 }
 bms_parser::Note *GamePlayScene::pressLane(int lane, double inputDelay) {

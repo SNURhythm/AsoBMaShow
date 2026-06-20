@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -80,6 +81,15 @@ unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
     return nullptr;
   }
   return decodeImageBytes(bytes, width, height, channels, requestedChannels);
+}
+
+bool decodedImageDimensionsAreValid(int width, int height) {
+  return width > 0 && height > 0 &&
+         width <= std::numeric_limits<std::uint16_t>::max() &&
+         height <= std::numeric_limits<std::uint16_t>::max() &&
+         static_cast<std::uint64_t>(width) *
+                 static_cast<std::uint64_t>(height) <=
+             std::numeric_limits<std::uint32_t>::max() / 4;
 }
 
 struct ArchiveAssetBatch {
@@ -330,6 +340,48 @@ bool readArchiveBatchEntries(
   return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
                                           files, errorMessage);
 }
+
+void replaceVideoPlayerLocked(
+    std::unordered_map<int, VideoPlayer *> &table, int id,
+    std::unique_ptr<VideoPlayer> videoPlayer) {
+  const auto existing = table.find(id);
+  if (existing != table.end()) {
+    delete existing->second;
+    existing->second = videoPlayer.release();
+    return;
+  }
+  table.emplace(id, videoPlayer.get());
+  videoPlayer.release();
+}
+
+void destroyImageTexture(ImageData &image) {
+  if (bgfx::isValid(image.texture)) {
+    bgfx::destroy(image.texture);
+    image.texture = BGFX_INVALID_HANDLE;
+  }
+}
+
+void replaceImageLocked(std::unordered_map<int, ImageData> &table, int id,
+                        ImageData image) {
+  const auto existing = table.find(id);
+  if (existing != table.end()) {
+    destroyImageTexture(existing->second);
+    existing->second = image;
+    return;
+  }
+  table.emplace(id, image);
+}
+
+struct ImageTextureGuard {
+  ImageData *image = nullptr;
+  bool active = true;
+
+  ~ImageTextureGuard() {
+    if (active && image != nullptr) {
+      destroyImageTexture(*image);
+    }
+  }
+};
 } // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
@@ -448,22 +500,22 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
-  auto videoPlayer = new VideoPlayer(stopwatch);
+  auto videoPlayer = std::make_unique<VideoPlayer>(stopwatch);
   const path_t playablePath = fspath_to_path_t(materializedPath);
 
   if (videoPlayer->loadVideo(path_t_to_utf8(playablePath), isCancelled)) {
+    auto *loadedVideoPlayer = videoPlayer.get();
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-    videoPlayerTable[id] = videoPlayer;
+    replaceVideoPlayerLocked(videoPlayerTable, id, std::move(videoPlayer));
 
-    SDL_Log("video width: %f, video height: %f", videoPlayer->viewWidth,
-            videoPlayer->viewHeight);
+    SDL_Log("video width: %f, video height: %f", loadedVideoPlayer->viewWidth,
+            loadedVideoPlayer->viewHeight);
     SDL_Log("Loaded video to id: %d", id);
     return true;
   }
 
   SDL_Log("Failed to load video: %s",
           path_t_to_utf8(fspath_to_path_t(displayPath)).c_str());
-  delete videoPlayer;
   return false;
 }
 
@@ -484,24 +536,37 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
-  unsigned char *data = decodeImageBytes(bytes, &width, &height, &channels, 4);
+  std::unique_ptr<unsigned char, decltype(&stbi_image_free)> data(
+      decodeImageBytes(bytes, &width, &height, &channels, 4), stbi_image_free);
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
   }
+  if (!decodedImageDimensionsAreValid(width, height)) {
+    SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
+            height);
+    return false;
+  }
+  const auto texture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(data.get(), width * height * 4));
+  if (!bgfx::isValid(texture)) {
+    SDL_Log("Failed to create image texture: %s", utf8Path.c_str());
+    return false;
+  }
   SDL_Log("Loaded image: %s", utf8Path.c_str());
+  ImageData image{
+      .texture = texture,
+      .width = width,
+      .height = height,
+      .channels = channels,
+  };
+  ImageTextureGuard textureGuard{&image};
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
-    imageTable[id] = {
-        .texture = bgfx::createTexture2D(
-            width, height, false, 1, bgfx::TextureFormat::RGBA8,
-            BGFX_TEXTURE_NONE, bgfx::copy(data, width * height * 4)),
-        .width = width,
-        .height = height,
-        .channels = channels,
-    };
+    replaceImageLocked(imageTable, id, image);
+    textureGuard.active = false;
   }
-  stbi_image_free(data);
   return true;
 }
 
@@ -509,24 +574,37 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
-  unsigned char *data = loadImageFile(path, &width, &height, &channels, 4);
+  std::unique_ptr<unsigned char, decltype(&stbi_image_free)> data(
+      loadImageFile(path, &width, &height, &channels, 4), stbi_image_free);
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
   }
+  if (!decodedImageDimensionsAreValid(width, height)) {
+    SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
+            height);
+    return false;
+  }
+  const auto texture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(data.get(), width * height * 4));
+  if (!bgfx::isValid(texture)) {
+    SDL_Log("Failed to create image texture: %s", utf8Path.c_str());
+    return false;
+  }
   SDL_Log("Loaded image: %s", utf8Path.c_str());
+  ImageData image{
+      .texture = texture,
+      .width = width,
+      .height = height,
+      .channels = channels,
+  };
+  ImageTextureGuard textureGuard{&image};
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
-    imageTable[id] = {
-        .texture = bgfx::createTexture2D(
-            width, height, false, 1, bgfx::TextureFormat::RGBA8,
-            BGFX_TEXTURE_NONE, bgfx::copy(data, width * height * 4)),
-        .width = width,
-        .height = height,
-        .channels = channels,
-    };
+    replaceImageLocked(imageTable, id, image);
+    textureGuard.active = false;
   }
-  stbi_image_free(data);
   return true;
 }
 
@@ -1360,7 +1438,7 @@ void Jukebox::clearVisualResources() {
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
     for (auto &image : imageTable) {
-      bgfx::destroy(image.second.texture);
+      destroyImageTexture(image.second);
     }
     imageTable.clear();
   }

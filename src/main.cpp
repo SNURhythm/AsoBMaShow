@@ -387,6 +387,7 @@ int main(int argv, char **args) {
                : 0));
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
+    SDL_Quit();
     return EXIT_FAILURE;
   }
   s_window = win;
@@ -405,6 +406,13 @@ int main(int argv, char **args) {
 #if TARGET_OS_IPHONE
   s_renderer = SDL_CreateRenderer(
       win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+  if (s_renderer == nullptr) {
+    cerr << "SDL_CreateRenderer Error: " << SDL_GetError() << endl;
+    SDL_DestroyWindow(win);
+    s_window = nullptr;
+    SDL_Quit();
+    return EXIT_FAILURE;
+  }
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
   int rw = 0, rh = 0;
   SDL_GetRendererOutputSize(s_renderer, &rw, &rh);
@@ -439,7 +447,14 @@ int main(int argv, char **args) {
   if (!SDL_GetWindowWMInfo(win, &wmi)) {
     printf("SDL_SysWMinfo could not be retrieved. SDL_Error: %s\n",
            SDL_GetError());
-    return 1;
+    if (s_renderer != nullptr) {
+      SDL_DestroyRenderer(s_renderer);
+      s_renderer = nullptr;
+    }
+    SDL_DestroyWindow(win);
+    s_window = nullptr;
+    SDL_Quit();
+    return EXIT_FAILURE;
   }
 #endif // !BX_PLATFORM_EMSCRIPTEN
 

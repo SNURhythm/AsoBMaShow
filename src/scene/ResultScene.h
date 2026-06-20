@@ -5,6 +5,7 @@
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -32,7 +33,7 @@ public:
               bool shouldSaveScore = true,
               const ReplayData *retrySource = nullptr,
               ResultPracticeOptions practiceOptions = {});
-  ~ResultScene() override;
+  ~ResultScene() override = default;
 
   void init() override;
   void update(float dt) override;
@@ -54,7 +55,7 @@ private:
   ResultPracticeOptions practiceOptions;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
-  ISkin *skin = nullptr;
+  std::unique_ptr<ISkin> skin;
   bool shouldSaveScore = true;
   bool replayResult = false;
   bool scoreSaved = false;

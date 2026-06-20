@@ -180,6 +180,7 @@ private:
                                                 bool isHolding);
   void beginNoteTextureBatches(uint32_t bodyDepth, uint32_t sheetDepth);
   void flushNoteTextureBatches();
+  void destroyNoteSheetTextures();
   float calculateLanePlaneScreenTopIntersection();
   NoteSheet graySheet;
   NoteSheet blueSheet;

@@ -18,7 +18,6 @@
 #include <iostream>
 #include "../yoga/lib/nlohmann/json.hpp"
 #include <limits>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -4080,14 +4079,11 @@ int ChartDBHelper::ScanChartRoots(
       [&](const std::filesystem::path &path,
           const std::vector<unsigned char> *bytes) -> bool {
     bms_parser::Parser parser;
-    bms_parser::Chart *rawChart = nullptr;
-    std::unique_ptr<bms_parser::Chart> chart;
+    bms_parser::Chart *chart = nullptr;
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &rawChart, false, false, cancelled);
-        chart.reset(rawChart);
-        rawChart = nullptr;
+        parser.Parse(*bytes, &chart, false, false, cancelled);
         if (chart != nullptr) {
           chart->Meta.BmsPath = path;
           std::filesystem::path archivePath;
@@ -4099,10 +4095,8 @@ int ChartDBHelper::ScanChartRoots(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &rawChart, false, false,
+        archive_file::parseChart(parser, path, &chart, false, false,
                                  cancelled);
-        chart.reset(rawChart);
-        rawChart = nullptr;
       }
     } catch (const std::exception &e) {
       SDL_Log("Error parsing %s: %s",
@@ -4110,7 +4104,7 @@ int ChartDBHelper::ScanChartRoots(
       archive_file::appendDebugLogLine(
           "DB parse failed: " + path_t_to_utf8(fspath_to_path_t(path)) +
           ": " + e.what());
-      delete rawChart;
+      delete chart;
       return false;
     }
 
@@ -4127,9 +4121,11 @@ int ChartDBHelper::ScanChartRoots(
           " measures=" + std::to_string(chart->Measures.size()) +
           " md5=" + chart->Meta.MD5 +
           " sha256=" + chart->Meta.SHA256);
+      delete chart;
       return false;
     }
     const bool inserted = InsertChartMeta(db, chart->Meta);
+    delete chart;
     return inserted;
   };
 

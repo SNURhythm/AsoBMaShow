@@ -74,10 +74,8 @@ ResultScene::ResultScene(ApplicationContext &context,
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled) {
-  skin = new DefaultSkin();
+  skin = std::make_unique<DefaultSkin>();
 }
-
-ResultScene::~ResultScene() { delete skin; }
 
 void ResultScene::saveScore() {
   if (scoreSaved || !shouldSaveScore) {

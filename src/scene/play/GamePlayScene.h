@@ -37,7 +37,8 @@ class RhythmInputHandler;
 class BMSRenderer;
 class GamePlayScene : public Scene, public IRhythmControl {
 private:
-  bms_parser::Chart *chart;
+  std::unique_ptr<bms_parser::Chart> ownedChart;
+  bms_parser::Chart *chart = nullptr;
   bool isGamePaused = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
@@ -46,11 +47,8 @@ public:
   GamePlayScene() = delete;
 
   explicit GamePlayScene(ApplicationContext &context, bms_parser::Chart *chart,
-                         StartOptions options)
-      : Scene(context), judge(chart->Meta.Rank), options(options) {
-    this->chart = chart;
-    latePoorTiming = judge.timingWindows[Bad].second;
-  };
+                         StartOptions options);
+  ~GamePlayScene() override;
   void init() override;
   void update(float dt) override;
   void renderScene() override;
@@ -110,9 +108,13 @@ private:
                           const JudgeResult *precomputedJudge = nullptr,
                           long long songTimeMicros = -1,
                           bool recordEvent = true);
+  std::unique_ptr<RhythmState> ownedState;
   RhythmState *state = nullptr;
+  std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
+  std::unique_ptr<RhythmLaneInputController> ownedLaneInputController;
   RhythmLaneInputController *laneInputController = nullptr;
+  std::unique_ptr<RhythmInputHandler> ownedInputHandler;
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
@@ -120,6 +122,7 @@ private:
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   bool practiceGhostPublished = false;
+  std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();
   void updateLaneStateText();

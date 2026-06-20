@@ -1642,6 +1642,9 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
 
+using ArchiveReadHandle =
+    std::unique_ptr<archive, decltype(&archive_read_free)>;
+
 bool isValidUtf8(const std::string &value) {
   const auto *bytes = reinterpret_cast<const unsigned char *>(value.data());
   size_t i = 0;
@@ -1903,15 +1906,16 @@ void configureArchiveReader(archive *archiveHandle) {
   }
 }
 
-archive *openArchive(const std::filesystem::path &archivePath,
-                     std::string *errorMessage) {
+ArchiveReadHandle openArchive(const std::filesystem::path &archivePath,
+                              std::string *errorMessage) {
   ensureArchiveFilenameLocale();
-  archive *archiveHandle = archive_read_new();
+  ArchiveReadHandle archiveStorage(archive_read_new(), archive_read_free);
+  archive *archiveHandle = archiveStorage.get();
   if (archiveHandle == nullptr) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not initialize archive reader.";
     }
-    return nullptr;
+    return archiveStorage;
   }
   configureArchiveReader(archiveHandle);
 
@@ -1923,10 +1927,10 @@ archive *openArchive(const std::filesystem::path &archivePath,
       *errorMessage =
           "Could not open archive: " + archiveErrorString(archiveHandle, "");
     }
-    archive_read_free(archiveHandle);
-    return nullptr;
+    archiveStorage.reset();
+    return archiveStorage;
   }
-  return archiveHandle;
+  return archiveStorage;
 }
 
 bool listEntriesUncached(const std::filesystem::path &archivePath,
@@ -1937,15 +1941,15 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
-  archive *archiveHandle = openArchive(archivePath, errorMessage);
-  if (archiveHandle == nullptr) {
+  auto archiveStorage = openArchive(archivePath, errorMessage);
+  if (archiveStorage == nullptr) {
     return false;
   }
+  archive *archiveHandle = archiveStorage.get();
 
   archive_entry *entry = nullptr;
   for (;;) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      archive_read_free(archiveHandle);
       entries.clear();
       return false;
     }
@@ -1961,7 +1965,6 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
         *errorMessage =
             "Could not read archive: " + archiveErrorString(archiveHandle, "");
       }
-      archive_read_free(archiveHandle);
       return false;
     }
     if (entry == nullptr) {
@@ -1984,7 +1987,6 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
     archive_read_data_skip(archiveHandle);
   }
 
-  archive_read_free(archiveHandle);
   return true;
 }
 
@@ -2002,15 +2004,15 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
     return false;
   }
 
-  archive *archiveHandle = openArchive(archivePath, errorMessage);
-  if (archiveHandle == nullptr) {
+  auto archiveStorage = openArchive(archivePath, errorMessage);
+  if (archiveStorage == nullptr) {
     return false;
   }
+  archive *archiveHandle = archiveStorage.get();
 
   archive_entry *entry = nullptr;
   for (;;) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      archive_read_free(archiveHandle);
       return false;
     }
     const int status = archive_read_next_header(archiveHandle, &entry);
@@ -2025,7 +2027,6 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
         *errorMessage =
             "Could not read archive: " + archiveErrorString(archiveHandle, "");
       }
-      archive_read_free(archiveHandle);
       return false;
     }
     if (entry == nullptr) {
@@ -2049,13 +2050,11 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
     std::array<unsigned char, 64 * 1024> buffer{};
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-        archive_read_free(archiveHandle);
         return false;
       }
       const la_ssize_t count =
           archive_read_data(archiveHandle, buffer.data(), buffer.size());
       if (count == 0) {
-        archive_read_free(archiveHandle);
         return true;
       }
       if (count < 0) {
@@ -2063,7 +2062,6 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
           *errorMessage = "Could not read archive entry: " +
                           archiveErrorString(archiveHandle, "");
         }
-        archive_read_free(archiveHandle);
         return false;
       }
       bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + count);
@@ -2073,7 +2071,6 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
   if (errorMessage != nullptr) {
     *errorMessage = "Archive entry not found: " + target;
   }
-  archive_read_free(archiveHandle);
   return false;
 }
 
@@ -2098,17 +2095,17 @@ bool readArchiveEntriesUncached(
     return true;
   }
 
-  archive *archiveHandle = openArchive(archivePath, errorMessage);
-  if (archiveHandle == nullptr) {
+  auto archiveStorage = openArchive(archivePath, errorMessage);
+  if (archiveStorage == nullptr) {
     return false;
   }
+  archive *archiveHandle = archiveStorage.get();
 
   archive_entry *entry = nullptr;
   std::array<unsigned char, 64 * 1024> buffer{};
   std::size_t entryOrder = 0;
   while (!targets.empty()) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      archive_read_free(archiveHandle);
       files.clear();
       return false;
     }
@@ -2124,7 +2121,6 @@ bool readArchiveEntriesUncached(
         *errorMessage =
             "Could not read archive: " + archiveErrorString(archiveHandle, "");
       }
-      archive_read_free(archiveHandle);
       return false;
     }
     if (entry == nullptr) {
@@ -2170,7 +2166,6 @@ bool readArchiveEntriesUncached(
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-        archive_read_free(archiveHandle);
         files.clear();
         return false;
       }
@@ -2184,7 +2179,6 @@ bool readArchiveEntriesUncached(
           *errorMessage = "Could not read archive entry: " +
                           archiveErrorString(archiveHandle, "");
         }
-        archive_read_free(archiveHandle);
         return false;
       }
       file.bytes.insert(file.bytes.end(), buffer.begin(),
@@ -2195,7 +2189,6 @@ bool readArchiveEntriesUncached(
     targets.erase(targetIt);
   }
 
-  archive_read_free(archiveHandle);
   return true;
 }
 
@@ -2206,10 +2199,11 @@ bool extractArchiveFullyWithLibarchive(
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
     std::string *errorMessage) {
-  archive *archiveHandle = openArchive(archivePath, errorMessage);
-  if (archiveHandle == nullptr) {
+  auto archiveStorage = openArchive(archivePath, errorMessage);
+  if (archiveStorage == nullptr) {
     return false;
   }
+  archive *archiveHandle = archiveStorage.get();
 
   std::uint64_t totalFiles = 0;
   if (index != nullptr) {
@@ -2225,7 +2219,6 @@ bool extractArchiveFullyWithLibarchive(
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
-    archive_read_free(archiveHandle);
     return false;
   };
 
@@ -2307,7 +2300,6 @@ bool extractArchiveFullyWithLibarchive(
                         completedFiles, totalFiles, "Unzipping archive");
   }
 
-  archive_read_free(archiveHandle);
   appendDebugLogLineImpl("Finished full libarchive unzip: " +
                          pathForLog(archivePath) +
                          " files=" + std::to_string(completedFiles));
@@ -2586,17 +2578,17 @@ bool readArchiveEntriesByCachedOrder(
                             }),
                 targets.end());
 
-  archive *archiveHandle = openArchive(archivePath, errorMessage);
-  if (archiveHandle == nullptr) {
+  auto archiveStorage = openArchive(archivePath, errorMessage);
+  if (archiveStorage == nullptr) {
     return false;
   }
+  archive *archiveHandle = archiveStorage.get();
 
   auto fail = [&](const std::string &message) {
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
     files.clear();
-    archive_read_free(archiveHandle);
     return false;
   };
 
@@ -2606,7 +2598,6 @@ bool readArchiveEntriesByCachedOrder(
   std::size_t targetIndex = 0;
   while (targetIndex < targets.size()) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      archive_read_free(archiveHandle);
       files.clear();
       return false;
     }
@@ -2660,7 +2651,6 @@ bool readArchiveEntriesByCachedOrder(
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-        archive_read_free(archiveHandle);
         files.clear();
         return false;
       }
@@ -2681,7 +2671,6 @@ bool readArchiveEntriesByCachedOrder(
     ++targetIndex;
   }
 
-  archive_read_free(archiveHandle);
   return targetIndex == targets.size();
 }
 #endif

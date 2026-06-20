@@ -1176,7 +1176,17 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
 void MainMenuScene::runLibraryRefreshTask(
     const LibraryTaskRequest &task, const std::stop_token &stopToken) {
   auto &dbHelper = ChartDBHelper::GetInstance();
-  auto taskDb = dbHelper.Connect();
+  auto closeTaskDb = [&dbHelper](sqlite3 *database) {
+    if (database != nullptr) {
+      dbHelper.Close(database);
+    }
+  };
+  std::unique_ptr<sqlite3, decltype(closeTaskDb)> taskDbHandle(
+      dbHelper.Connect(), closeTaskDb);
+  sqlite3 *taskDb = taskDbHandle.get();
+  if (taskDb == nullptr) {
+    throw std::runtime_error("Failed to open chart database");
+  }
   dbHelper.CreateChartMetaTable(taskDb);
   dbHelper.CreateSolidArchiveTable(taskDb);
   dbHelper.CreateEntriesTable(taskDb);
@@ -1186,7 +1196,6 @@ void MainMenuScene::runLibraryRefreshTask(
     return waitForLibraryTaskResume(task.id, stopToken);
   };
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
@@ -1199,7 +1208,6 @@ void MainMenuScene::runLibraryRefreshTask(
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
                       "Importing difficulty tables");
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
   const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
@@ -1210,7 +1218,6 @@ void MainMenuScene::runLibraryRefreshTask(
   auto entries = dbHelper.SelectAllEntries(taskDb);
 
   if (stopToken.stop_requested()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
@@ -1218,7 +1225,6 @@ void MainMenuScene::runLibraryRefreshTask(
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.04, 0, 0,
                         "Waiting for library folder");
     if (!pauseTask()) {
-      dbHelper.Close(taskDb);
       return;
     }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1250,7 +1256,6 @@ void MainMenuScene::runLibraryRefreshTask(
 
       while (folder.empty()) {
         if (stopToken.stop_requested()) {
-          dbHelper.Close(taskDb);
           return;
         }
 
@@ -1272,7 +1277,6 @@ void MainMenuScene::runLibraryRefreshTask(
       }
 
       if (folder.empty()) {
-        dbHelper.Close(taskDb);
         return;
       }
     } else {
@@ -1285,14 +1289,12 @@ void MainMenuScene::runLibraryRefreshTask(
   }
 
   if (stopToken.stop_requested()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.06, 0, 0,
                       "Refreshing folder access");
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1305,7 +1307,6 @@ void MainMenuScene::runLibraryRefreshTask(
              [this, taskId = task.id, &stopToken]() {
                return waitForLibraryTaskResume(taskId, stopToken);
              });
-  dbHelper.Close(taskDb);
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -2998,34 +2999,45 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       result.message = "Unzip cancelled";
     } else {
       auto dbHelper = ChartDBHelper::GetInstance();
-      auto unzipDb = dbHelper.Connect();
-      dbHelper.CreateChartMetaTable(unzipDb);
-      dbHelper.CreateSolidArchiveTable(unzipDb);
-      dbHelper.CreateDifficultyTableTables(unzipDb);
-      std::vector<std::filesystem::path> roots{scanRoot};
-      postProgress(archive_file::UnzipProgress{
-          .fraction = 0.98, .message = "Refreshing library"});
-      const int changedCount =
-          dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
-      if (!stopToken.stop_requested()) {
-        std::vector<bms_parser::ChartMeta> chartMetas;
-        dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
-        for (const auto &meta : chartMetas) {
-          if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
-            result.chartPath = meta.BmsPath;
-            break;
+      auto closeUnzipDb = [&dbHelper](sqlite3 *database) {
+        if (database != nullptr) {
+          dbHelper.Close(database);
+        }
+      };
+      std::unique_ptr<sqlite3, decltype(closeUnzipDb)> unzipDbHandle(
+          dbHelper.Connect(), closeUnzipDb);
+      sqlite3 *unzipDb = unzipDbHandle.get();
+      if (unzipDb == nullptr) {
+        result.success = false;
+        result.message = "Unzipped archive. Failed to refresh library.";
+      } else {
+        dbHelper.CreateChartMetaTable(unzipDb);
+        dbHelper.CreateSolidArchiveTable(unzipDb);
+        dbHelper.CreateDifficultyTableTables(unzipDb);
+        std::vector<std::filesystem::path> roots{scanRoot};
+        postProgress(archive_file::UnzipProgress{
+            .fraction = 0.98, .message = "Refreshing library"});
+        const int changedCount =
+            dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
+        if (!stopToken.stop_requested()) {
+          std::vector<bms_parser::ChartMeta> chartMetas;
+          dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
+          for (const auto &meta : chartMetas) {
+            if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
+              result.chartPath = meta.BmsPath;
+              break;
+            }
           }
         }
-      }
-      dbHelper.Close(unzipDb);
 
-      result.success = true;
-      result.message =
-          changedCount > 0
-              ? "Unzipped archive. Library refreshed."
-              : "Unzipped archive. Library already current.";
-      if (!stopToken.stop_requested()) {
-        requestLibraryReload(true);
+        result.success = true;
+        result.message =
+            changedCount > 0
+                ? "Unzipped archive. Library refreshed."
+                : "Unzipped archive. Library already current.";
+        if (!stopToken.stop_requested()) {
+          requestLibraryReload(true);
+        }
       }
     }
 
@@ -3242,10 +3254,16 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
   }
 
   auto dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *deleteDb = dbHelper.Connect();
+  auto closeDeleteDb = [&dbHelper](sqlite3 *database) {
+    if (database != nullptr) {
+      dbHelper.Close(database);
+    }
+  };
+  std::unique_ptr<sqlite3, decltype(closeDeleteDb)> deleteDbHandle(
+      dbHelper.Connect(), closeDeleteDb);
+  sqlite3 *deleteDb = deleteDbHandle.get();
   if (deleteDb != nullptr) {
     dbHelper.DeleteArchiveRecords(deleteDb, archivePath);
-    dbHelper.Close(deleteDb);
   }
   requestLibraryReload(true);
   unzipDeleteCandidatePath.reset();

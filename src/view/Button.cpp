@@ -91,6 +91,10 @@ void Button::setOnClickListener(std::function<void()> listener) {
 }
 
 void Button::setContentView(View *view) {
+  if (contentView == view) {
+    return;
+  }
+  delete contentView;
   this->contentView = view;
   syncContentFrame(*this, contentView, true);
 }

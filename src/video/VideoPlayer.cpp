@@ -48,6 +48,7 @@ void VideoPlayer::unloadVideo() {
       avcodec_free_context(&codecContext);
       codecContext = nullptr;
     }
+    videoStreamIndex = -1;
   }
   {
     std::lock_guard<std::mutex> lock(recycleMutex);
@@ -64,15 +65,26 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
   {
     std::lock_guard<std::mutex> videoLock(videoMutex);
     AVFormatContext *tempFormatContext = avformat_alloc_context();
+    if (tempFormatContext == nullptr) {
+      return false;
+    }
+    auto fail = [&]() {
+      if (codecContext != nullptr) {
+        avcodec_free_context(&codecContext);
+      }
+      if (tempFormatContext != nullptr) {
+        avformat_close_input(&tempFormatContext);
+      }
+      return false;
+    };
     // genpts
     tempFormatContext->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_SORT_DTS;
     if (avformat_open_input(&tempFormatContext, videoPath.c_str(), nullptr,
                             nullptr) < 0) {
-      return false;
+      return fail();
     }
     if (avformat_find_stream_info(tempFormatContext, nullptr) < 0) {
-      avformat_close_input(&tempFormatContext);
-      return false;
+      return fail();
     }
 
     for (unsigned i = 0; i < tempFormatContext->nb_streams; i++) {
@@ -84,35 +96,38 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     }
 
     if (videoStreamIndex == -1) {
-      avformat_close_input(&tempFormatContext);
-      return false;
+      return fail();
     }
     auto videoStream = tempFormatContext->streams[videoStreamIndex];
     const AVCodec *codec =
         avcodec_find_decoder(videoStream->codecpar->codec_id);
     if (!codec) {
-      avformat_close_input(&tempFormatContext);
-      return false;
+      return fail();
     }
     codecContext = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(codecContext, videoStream->codecpar);
+    if (codecContext == nullptr ||
+        avcodec_parameters_to_context(codecContext, videoStream->codecpar) <
+            0) {
+      return fail();
+    }
 
     // Fix missing extradata (SPS/PPS)
     if (!codecContext->extradata || codecContext->extradata_size <= 0) {
       SDL_Log("Fixing missing SPS/PPS extradata");
       AVCodecParameters *codecParams = videoStream->codecpar;
       if (codecParams->extradata_size > 0 && codecParams->extradata) {
-        codecContext->extradata = (uint8_t *)av_mallocz(
-            codecParams->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
-        memcpy(codecContext->extradata, codecParams->extradata,
-               codecParams->extradata_size);
+        auto *extraData = static_cast<uint8_t *>(av_mallocz(
+            codecParams->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE));
+        if (extraData == nullptr) {
+          return fail();
+        }
+        memcpy(extraData, codecParams->extradata, codecParams->extradata_size);
+        codecContext->extradata = extraData;
         codecContext->extradata_size = codecParams->extradata_size;
       }
     }
     if (avcodec_open2(codecContext, codec, nullptr) < 0) {
-      avcodec_free_context(&codecContext);
-      avformat_close_input(&tempFormatContext);
-      return false;
+      return fail();
     }
     startPTS = videoStream->start_time;
     if (startPTS == AV_NOPTS_VALUE) {
@@ -122,6 +137,9 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
                                 codecContext->pix_fmt, codecContext->width,
                                 codecContext->height, AV_PIX_FMT_YUV420P,
                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (swsContext == nullptr) {
+      return fail();
+    }
     // auto num = videoStream->avg_frame_rate.num;
     // auto den = videoStream->avg_frame_rate.den;
     // if (den == 0) {
