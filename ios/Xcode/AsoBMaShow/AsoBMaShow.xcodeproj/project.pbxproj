@@ -701,6 +701,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppSettings.cpp,
+				ArchiveFile.cpp,
 				audio/AudioWrapper.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
@@ -728,6 +729,7 @@
 				iOSNatives.mm,
 				MacNatives.mm,
 				main.cpp,
+				MinizBridge.c,
 				math/Quaternion.cpp,
 				math/Vector3.cpp,
 				path.cpp,

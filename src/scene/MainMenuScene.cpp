@@ -1,5 +1,6 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
+#include "../ArchiveFile.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -339,6 +340,11 @@ bool revealPathInFileManager(const std::filesystem::path &path,
       targetPath = absolutePath;
     }
     errorCode.clear();
+  }
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (archive_file::splitVirtualPath(targetPath, archivePath, innerPath)) {
+    targetPath = archivePath;
   }
 
   if (!std::filesystem::exists(targetPath, errorCode) || errorCode) {
@@ -1060,7 +1066,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
     if (!meta.StageFile.empty()) {
-      jacketView->setImage(meta.Folder / meta.StageFile);
+      jacketView->setImageAsync(meta.Folder / meta.StageFile);
     } else {
       jacketView->freeImage();
     }
@@ -1078,21 +1084,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       context.jukebox.stop();
-      bms_parser::Parser parser;
-      bms_parser::Chart *parsedChart = nullptr;
-
-      try {
-        SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
-        parser.Parse(meta.BmsPath, &parsedChart, false, false,
-                     previewLoadCancelled);
-        SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
-      } catch (std::exception &e) {
-        delete parsedChart;
-        SDL_Log("Error parsing %s: %s", path_t_to_utf8(meta.BmsPath).c_str(),
-                e.what());
-        return;
-      }
-      std::unique_ptr<bms_parser::Chart> chart(parsedChart);
+      SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      std::unique_ptr<bms_parser::Chart> chart =
+          play_options::parseChart(meta.BmsPath, previewLoadCancelled,
+                                   "preview");
+      SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         return;
@@ -3702,90 +3698,29 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                std::vector<ChartEntry> &entries,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token) {
-  std::vector<bms_parser::ChartMeta> chartMetas;
-  dbHelper.SelectAllChartMeta(db, chartMetas);
-  // sort by title
-  std::sort(chartMetas.begin(), chartMetas.end(),
-            [](bms_parser::ChartMeta &a, bms_parser::ChartMeta &b) {
-              return a.Title < b.Title;
-            });
-  std::vector<Diff> diffs;
-  SDL_Log("Finding new bms files");
-  std::unordered_set<path_t> oldFilesWs;
-
-  for (auto &chartMeta : chartMetas) {
-    if (stop_token.stop_requested()) {
-      break;
-    }
-    // check file exists
-    if (!std::filesystem::exists(chartMeta.BmsPath)) {
-      diffs.push_back({chartMeta.BmsPath, DiffType::Deleted});
-      continue;
-    }
-    oldFilesWs.insert(fspath_to_path_t(chartMeta.BmsPath));
-    // std::cout << "Old file: " << chartMeta.BmsPath << std::endl;
-    // std::cout << "Folder: " << chartMeta.Folder << std::endl;
-  }
+  std::vector<std::filesystem::path> roots;
+  roots.reserve(entries.size());
   for (auto &entry : entries) {
     if (stop_token.stop_requested()) {
       break;
     }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    FindNewBmsFiles(diffs, oldFilesWs, ResolveIOSFolderEntryPath(entry),
-                    stop_token);
+    roots.push_back(ResolveIOSFolderEntryPath(entry));
 #else
-    FindNewBmsFiles(diffs, oldFilesWs, std::filesystem::path(entry.path),
-                    stop_token);
+    roots.emplace_back(entry.path);
 #endif
   }
 
-  SDL_Log("Found %zu new bms files", diffs.size());
-  if (diffs.empty())
+  if (stop_token.stop_requested()) {
     return;
-  std::atomic_bool is_committing(false);
-  std::atomic_int success_count(0);
-  dbHelper.BeginTransaction(db);
-  parallel_for(diffs.size(), [&](int start, int end) {
-    for (int i = start; i < end; i++) {
-      if (stop_token.stop_requested()) {
-        break;
-      }
-      auto &diff = diffs[i];
-      if (diff.type == Added) {
-        bms_parser::Parser parser;
-        bms_parser::Chart *chart;
-        std::atomic_bool cancel(false);
-        bms_parser::ChartMeta chartMeta;
-        // try {
-        parser.Parse(diffs[i].path, &chart, false, true, cancel);
-        // } catch (std::exception &e) {
-        //   delete chart;
-        //   SDL_Log("Error parsing %s:",
-        //   path_t_to_utf8(diffs[i].path).c_str()); std::cerr << "Error parsing
-        //   " << diffs[i].path << ": " << e.what()
-        //             << std::endl;
-        //   continue;
-        // }
+  }
 
-        if (chart == nullptr)
-          continue;
-        ++success_count;
-        if (success_count % 1000 == 0 && !is_committing) {
-          is_committing = true;
-          dbHelper.CommitTransaction(db);
-          dbHelper.BeginTransaction(db);
-          is_committing = false;
-        }
-        dbHelper.InsertChartMeta(db, chart->Meta);
-        delete chart;
-      } else {
-        dbHelper.DeleteChartMeta(db, diff.path);
-      }
-    }
-  });
-  dbHelper.CommitTransaction(db);
-  SDL_Log("Inserted %d new charts", success_count.load());
-  scene.requestLibraryReload(true);
+  SDL_Log("Refreshing chart library");
+  const int changedCount = dbHelper.ScanChartRoots(db, roots, &stop_token);
+  SDL_Log("Chart library refresh changed %d entries", changedCount);
+  if (changedCount > 0) {
+    scene.requestLibraryReload(true);
+  }
 }
 
 #ifdef _WIN32

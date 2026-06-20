@@ -1,5 +1,6 @@
 #include "ReplayVideoExporter.h"
 
+#include "ArchiveFile.h"
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "path.h"
@@ -51,6 +52,7 @@ extern "C" {
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -490,18 +492,12 @@ resolveSoundPath(const bms_parser::Chart &chart, int wav) {
   }
 
   const std::filesystem::path basePath = chart.Meta.Folder / wavIt->second;
-  if (std::filesystem::exists(basePath)) {
-    return basePath;
-  }
-
+  std::vector<std::string_view> extensions;
+  extensions.reserve(kAudioExtensions.size());
   for (const auto &ext : kAudioExtensions) {
-    std::filesystem::path path = basePath;
-    path.replace_extension(ext);
-    if (std::filesystem::exists(path)) {
-      return path;
-    }
+    extensions.emplace_back(ext);
   }
-  return std::nullopt;
+  return archive_file::findFileWithExtensions(basePath, extensions);
 }
 
 std::unordered_map<std::string, bms_parser::Note *>

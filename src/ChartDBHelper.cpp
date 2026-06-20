@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "ChartDBHelper.h"
+#include "ArchiveFile.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
 #include "path.h"
@@ -228,6 +229,40 @@ bool isBmsChartFile(const std::filesystem::path &path) {
     return static_cast<char>(std::tolower(c));
   });
   return ext == ".bms" || ext == ".bme" || ext == ".bml";
+}
+
+void addDiscoveredChartPath(std::vector<std::filesystem::path> &paths,
+                            std::unordered_set<path_t> &knownChartPaths,
+                            const std::filesystem::path &path) {
+  const path_t key = fspath_to_path_t(path);
+  if (knownChartPaths.find(key) != knownChartPaths.end()) {
+    return;
+  }
+  paths.push_back(path);
+  knownChartPaths.insert(key);
+}
+
+void scanArchiveForChartPaths(const std::filesystem::path &archivePath,
+                              std::vector<std::filesystem::path> &paths,
+                              std::unordered_set<path_t> &knownChartPaths) {
+  std::vector<archive_file::Entry> entries;
+  std::string errorMessage;
+  if (!archive_file::listEntries(archivePath, entries, &errorMessage)) {
+    if (!errorMessage.empty()) {
+      SDL_Log("Failed to scan archive %s: %s",
+              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
+              errorMessage.c_str());
+    }
+    return;
+  }
+  for (const auto &entry : entries) {
+    if (entry.directory || !isBmsChartFile(entry.path)) {
+      continue;
+    }
+    addDiscoveredChartPath(paths, knownChartPaths,
+                           archive_file::makeVirtualPath(archivePath,
+                                                         entry.path));
+  }
 }
 
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
@@ -2109,7 +2144,7 @@ int ChartDBHelper::ScanChartRoots(
     if (stopRequested(stopToken)) {
       return 0;
     }
-    if (std::filesystem::exists(chartMeta.BmsPath)) {
+    if (archive_file::exists(chartMeta.BmsPath)) {
       knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
     } else {
       diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
@@ -2126,6 +2161,25 @@ int ChartDBHelper::ScanChartRoots(
       continue;
     }
 
+    std::error_code rootTypeError;
+    if (std::filesystem::is_regular_file(root, rootTypeError) &&
+        !rootTypeError) {
+      if (isBmsChartFile(root)) {
+        const path_t key = fspath_to_path_t(root);
+        if (knownChartPaths.find(key) == knownChartPaths.end()) {
+          diffs.push_back({.path = root, .deleted = false});
+          knownChartPaths.insert(key);
+        }
+      } else if (archive_file::hasSupportedArchiveExtension(root)) {
+        std::vector<std::filesystem::path> archiveChartPaths;
+        scanArchiveForChartPaths(root, archiveChartPaths, knownChartPaths);
+        for (const auto &path : archiveChartPaths) {
+          diffs.push_back({.path = path, .deleted = false});
+        }
+      }
+      continue;
+    }
+
     std::filesystem::recursive_directory_iterator iterator(
         root, std::filesystem::directory_options::skip_permission_denied,
         error);
@@ -2139,13 +2193,20 @@ int ChartDBHelper::ScanChartRoots(
         continue;
       }
       const std::filesystem::path path = iterator->path();
-      if (!isBmsChartFile(path)) {
+      if (isBmsChartFile(path)) {
+        const path_t key = fspath_to_path_t(path);
+        if (knownChartPaths.find(key) == knownChartPaths.end()) {
+          diffs.push_back({.path = path, .deleted = false});
+          knownChartPaths.insert(key);
+        }
         continue;
       }
-      if (knownChartPaths.find(fspath_to_path_t(path)) ==
-          knownChartPaths.end()) {
-        diffs.push_back({.path = path, .deleted = false});
-        knownChartPaths.insert(fspath_to_path_t(path));
+      if (archive_file::hasSupportedArchiveExtension(path)) {
+        std::vector<std::filesystem::path> archiveChartPaths;
+        scanArchiveForChartPaths(path, archiveChartPaths, knownChartPaths);
+        for (const auto &chartPath : archiveChartPaths) {
+          diffs.push_back({.path = chartPath, .deleted = false});
+        }
       }
     }
     if (error) {
@@ -2159,9 +2220,82 @@ int ChartDBHelper::ScanChartRoots(
     return 0;
   }
 
+  struct ArchiveParseBatch {
+    std::filesystem::path archivePath;
+    std::vector<std::filesystem::path> innerPaths;
+  };
+  std::vector<ScanDiff> individualDiffs;
+  std::vector<path_t> archiveBatchOrder;
+  std::unordered_map<path_t, ArchiveParseBatch> archiveBatches;
+  individualDiffs.reserve(diffs.size());
+  for (const auto &diff : diffs) {
+    if (diff.deleted) {
+      individualDiffs.push_back(diff);
+      continue;
+    }
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (!archive_file::splitVirtualPath(diff.path, archivePath, innerPath)) {
+      individualDiffs.push_back(diff);
+      continue;
+    }
+
+    const path_t archiveKey = fspath_to_path_t(archivePath);
+    auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      archiveBatchOrder.push_back(archiveKey);
+      batchIt = archiveBatches
+                    .emplace(archiveKey, ArchiveParseBatch{
+                                             .archivePath = archivePath,
+                                             .innerPaths = {},
+                                         })
+                    .first;
+    }
+    batchIt->second.innerPaths.push_back(innerPath);
+  }
+
   int changedCount = 0;
   BeginTransaction(db);
-  for (const auto &diff : diffs) {
+
+  auto parseAndInsertChart =
+      [&](const std::filesystem::path &path,
+          const std::vector<unsigned char> *bytes) -> bool {
+    bms_parser::Parser parser;
+    bms_parser::Chart *chart = nullptr;
+    std::atomic_bool cancelled(false);
+    try {
+      if (bytes != nullptr) {
+        parser.Parse(*bytes, &chart, false, true, cancelled);
+        if (chart != nullptr) {
+          chart->Meta.BmsPath = path;
+          std::filesystem::path archivePath;
+          std::filesystem::path innerPath;
+          if (archive_file::splitVirtualPath(path, archivePath, innerPath)) {
+            chart->Meta.Folder =
+                archive_file::makeVirtualPath(archivePath,
+                                              innerPath.parent_path());
+          }
+        }
+      } else {
+        archive_file::parseChart(parser, path, &chart, false, true,
+                                 cancelled);
+      }
+    } catch (const std::exception &e) {
+      SDL_Log("Error parsing %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+      delete chart;
+      return false;
+    }
+
+    if (chart == nullptr) {
+      return false;
+    }
+    const bool inserted = InsertChartMeta(db, chart->Meta);
+    delete chart;
+    return inserted;
+  };
+
+  for (const auto &diff : individualDiffs) {
     if (stopRequested(stopToken)) {
       break;
     }
@@ -2172,25 +2306,41 @@ int ChartDBHelper::ScanChartRoots(
       continue;
     }
 
-    bms_parser::Parser parser;
-    bms_parser::Chart *chart = nullptr;
-    std::atomic_bool cancelled(false);
-    try {
-      parser.Parse(diff.path, &chart, false, true, cancelled);
-    } catch (const std::exception &e) {
-      SDL_Log("Error parsing %s: %s",
-              path_t_to_utf8(fspath_to_path_t(diff.path)).c_str(), e.what());
-      delete chart;
-      continue;
-    }
-
-    if (chart == nullptr) {
-      continue;
-    }
-    if (InsertChartMeta(db, chart->Meta)) {
+    if (parseAndInsertChart(diff.path, nullptr)) {
       ++changedCount;
     }
-    delete chart;
+  }
+
+  for (const auto &archiveKey : archiveBatchOrder) {
+    if (stopRequested(stopToken)) {
+      break;
+    }
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      continue;
+    }
+    const ArchiveParseBatch &batch = batchIt->second;
+    std::vector<archive_file::FileData> files;
+    std::string errorMessage;
+    if (!archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
+                                          files, &errorMessage)) {
+      if (!errorMessage.empty()) {
+        SDL_Log("Failed to read charts from archive %s: %s",
+                path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+                errorMessage.c_str());
+      }
+      continue;
+    }
+    for (const auto &file : files) {
+      if (stopRequested(stopToken)) {
+        break;
+      }
+      const std::filesystem::path chartPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      if (parseAndInsertChart(chartPath, &file.bytes)) {
+        ++changedCount;
+      }
+    }
   }
   CommitTransaction(db);
 

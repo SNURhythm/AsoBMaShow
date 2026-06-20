@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ArchiveFile.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 
@@ -285,7 +286,8 @@ parseChart(const std::filesystem::path &path,
   }
 
   bms_parser::Chart *parsedChart = nullptr;
-  parser.Parse(path, &parsedChart, false, false, cancelled);
+  archive_file::parseChart(parser, path, &parsedChart, false, false,
+                           cancelled);
   return std::unique_ptr<bms_parser::Chart>(parsedChart);
 }
 

@@ -1,5 +1,6 @@
 #include "ChartViewerScene.h"
 
+#include "../ArchiveFile.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
@@ -3538,19 +3539,10 @@ ChartViewerScene::scanActiveRandomOptions() const {
     return options;
   }
 
-  std::ifstream file(record.meta.BmsPath, std::ios::binary);
-  if (!file) {
+  std::vector<unsigned char> bytes;
+  if (!archive_file::readFile(record.meta.BmsPath, bytes) || bytes.empty()) {
     return options;
   }
-  file.seekg(0, std::ios::end);
-  const auto size = file.tellg();
-  if (size <= 0) {
-    return options;
-  }
-  file.seekg(0, std::ios::beg);
-  std::vector<unsigned char> bytes(static_cast<size_t>(size));
-  file.read(reinterpret_cast<char *>(bytes.data()),
-            static_cast<std::streamsize>(bytes.size()));
 
   std::string content;
   bms_parser::ShiftJISConverter::BytesToUTF8(bytes.data(), bytes.size(),

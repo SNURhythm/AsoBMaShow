@@ -885,26 +885,58 @@ bool AudioWrapper::loadSound(const path_t &path,
 
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  auto soundData = std::make_shared<SoundData>();
   bool result = decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
   }
-  if (isCancelled)
+  return loadDecodedSound(path, std::move(pcmData), sfInfo.channels,
+                          sfInfo.samplerate, isCancelled);
+}
+
+bool AudioWrapper::loadSoundFromMemory(
+    const path_t &path, const std::vector<unsigned char> &bytes,
+    std::atomic<bool> &isCancelled) {
+  {
+    std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+  }
+
+  std::vector<short> pcmData;
+  SF_INFO sfInfo;
+  bool result = decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo,
+                                      isCancelled);
+  if (!result) {
+    SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
+  }
+  return loadDecodedSound(path, std::move(pcmData), sfInfo.channels,
+                          sfInfo.samplerate, isCancelled);
+}
+
+bool AudioWrapper::loadDecodedSound(const path_t &path,
+                                    std::vector<short> pcmData, int channels,
+                                    int sampleRate,
+                                    std::atomic<bool> &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
+
+  auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
-  soundData->channels = sfInfo.channels;
-  soundData->originalSampleRate = sfInfo.samplerate;
+  soundData->channels = channels;
+  soundData->originalSampleRate = sampleRate;
   soundData->playing = false;
 
   updateCurrentSampleRate();
   int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
   SDL_Log("Target sample rate: %d, File sample rate: %d", targetSampleRate,
-          sfInfo.samplerate);
+          sampleRate);
 
-  if (targetSampleRate == sfInfo.samplerate) {
+  if (targetSampleRate == sampleRate) {
     // Optimization: Skip resampling
     soundData->isResampled = false;
     soundData->resampledData = std::move(pcmData);
@@ -913,11 +945,11 @@ bool AudioWrapper::loadSound(const path_t &path,
     SDL_Log("Loaded sound without resampling (Rate: %d)", targetSampleRate);
   } else {
     // Initialize the resampler
-    SDL_Log("Resampling audio data from %d Hz to %d Hz", sfInfo.samplerate,
+    SDL_Log("Resampling audio data from %d Hz to %d Hz", sampleRate,
             targetSampleRate);
     soundData->isResampled = true;
     ma_resampler_config resamplerConfig = ma_resampler_config_init(
-        ma_format_s16, sfInfo.channels, sfInfo.samplerate, targetSampleRate,
+        ma_format_s16, channels, sampleRate, targetSampleRate,
         ma_resample_algorithm_linear);
     if (ma_resampler_init(&resamplerConfig, nullptr, &soundData->resampler) !=
         MA_SUCCESS) {
@@ -930,9 +962,9 @@ bool AudioWrapper::loadSound(const path_t &path,
     // Resample the audio data to target rate
 
     ma_uint64 resampledFrameCount =
-        (ma_uint64)((double)pcmData.size() / sfInfo.channels *
-                    targetSampleRate / sfInfo.samplerate);
-    soundData->resampledData.resize(resampledFrameCount * sfInfo.channels);
+        (ma_uint64)((double)pcmData.size() / channels * targetSampleRate /
+                    sampleRate);
+    soundData->resampledData.resize(resampledFrameCount * channels);
     ma_uint64 size = (ma_uint64)pcmData.size();
     if (isCancelled)
       return false;

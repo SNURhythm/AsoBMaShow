@@ -138,7 +138,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   keyModeView->setText(unavailable ? "MISSING"
                                    : keyModeDescription(meta.KeyMode));
   if (!unavailable && !meta.StageFile.empty()) {
-    jacketImage->setImage(meta.Folder / meta.StageFile);
+    jacketImage->setImageAsync(meta.Folder / meta.StageFile);
   } else {
     jacketImage->freeImage();
   }
