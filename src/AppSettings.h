@@ -74,6 +74,7 @@ public:
       VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
   bool showInvisibleNotes = false;
+  bool archiveChartPreviewEnabled = true;
   bool bgaEnabled = true;
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;

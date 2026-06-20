@@ -59,6 +59,39 @@ struct FolderClearAggregate {
   }
 };
 
+constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+
+std::string chartSourcePriorityExpr(const std::string &alias) {
+  return "COALESCE(" + alias + ".source_priority, 3)";
+}
+
+std::string chartSourceArchiveSizeExpr(const std::string &alias) {
+  return "COALESCE(" + alias + ".source_archive_size, " +
+         kMaxSqlIntegerText + ")";
+}
+
+std::string preferredChartPredicate(const std::string &alias) {
+  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
+  const std::string currentPriority = chartSourcePriorityExpr(alias);
+  const std::string betterArchiveSize =
+      chartSourceArchiveSizeExpr("cm_better");
+  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
+
+  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
+         "cm_better.path != " +
+         alias + ".path AND ((" + alias +
+         ".sha256 != '' AND cm_better.sha256 = " + alias +
+         ".sha256) OR (" + alias +
+         ".sha256 = '' AND " + alias +
+         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
+         betterPriority + " < " + currentPriority + " OR (" +
+         betterPriority + " = " + currentPriority + " AND " +
+         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
+         betterPriority + " = " + currentPriority + " AND " +
+         betterArchiveSize + " = " + currentArchiveSize +
+         " AND cm_better.path < " + alias + ".path)))";
+}
+
 void addFolderChart(
     std::unordered_map<std::string, FolderClearAggregate> &aggregates,
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
@@ -91,10 +124,12 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
     stmt = nullptr;
   };
 
-  runQuery("SELECT sha256, md5, path FROM chart_meta", [&](sqlite3_stmt *row) {
-    addFolderChart(aggregates, scoreRanks, "all", columnText(row, 0),
-                   columnText(row, 1), columnText(row, 2));
-  });
+  runQuery("SELECT cm.sha256, cm.md5, cm.path FROM chart_meta cm WHERE " +
+               preferredChartPredicate("cm"),
+           [&](sqlite3_stmt *row) {
+             addFolderChart(aggregates, scoreRanks, "all", columnText(row, 0),
+                            columnText(row, 1), columnText(row, 2));
+           });
 
   int currentTableId = 0;
   std::string currentTableKey;
@@ -138,7 +173,9 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
       "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "JOIN chart_meta cm ON "
       "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm.md5 = dce.md5))",
+      "OR (dce.md5 != '' AND cm.md5 = dce.md5)) "
+      "WHERE " +
+          preferredChartPredicate("cm"),
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);

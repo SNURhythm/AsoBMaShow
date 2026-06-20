@@ -38,6 +38,8 @@ void SettingsScene::refreshSettingsText() {
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
       context.settings.showInvisibleNotes ? "Shown" : "Hidden";
+  const std::string archiveChartPreviewLabel =
+      context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
   const std::string judgementIndicatorLabel =
       context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
   const std::string judgementIndicatorRenderModeLabel =
@@ -105,6 +107,9 @@ void SettingsScene::refreshSettingsText() {
   }
   if (showInvisibleNotesModeText != nullptr) {
     showInvisibleNotesModeText->setText(invisibleNotesLabel);
+  }
+  if (archiveChartPreviewModeText != nullptr) {
+    archiveChartPreviewModeText->setText(archiveChartPreviewLabel);
   }
   if (judgementIndicatorModeText != nullptr) {
     judgementIndicatorModeText->setText(judgementIndicatorLabel);
@@ -221,6 +226,24 @@ void SettingsScene::refreshSettingsText() {
     }
   }
 
+  if (archiveChartPreviewModeButton != nullptr) {
+    if (context.settings.archiveChartPreviewEnabled) {
+      archiveChartPreviewModeButton->setBackgroundColors(
+          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
+          Color(63, 118, 107, 255));
+      archiveChartPreviewModeButton->setBorderColors(
+          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+          Color(145, 214, 195, 255));
+    } else {
+      archiveChartPreviewModeButton->setBackgroundColors(
+          Color(56, 42, 40, 255), Color(75, 55, 52, 255),
+          Color(104, 75, 71, 255));
+      archiveChartPreviewModeButton->setBorderColors(
+          Color(141, 103, 98, 255), Color(176, 127, 121, 255),
+          Color(209, 150, 143, 255));
+    }
+  }
+
   if (judgementIndicatorModeButton != nullptr) {
     if (context.settings.judgementIndicatorEnabled) {
       judgementIndicatorModeButton->setBackgroundColors(
@@ -299,6 +322,7 @@ void SettingsScene::refreshSettingsText() {
   applyTabStyle(timingTabButton, SettingsTab::Timing);
   applyTabStyle(visualTabButton, SettingsTab::Visual);
   applyTabStyle(laneTabButton, SettingsTab::Lane);
+  applyTabStyle(miscTabButton, SettingsTab::Misc);
   applyTabStyle(tablesTabButton, SettingsTab::Tables);
 
   if (rootLayout != nullptr) {

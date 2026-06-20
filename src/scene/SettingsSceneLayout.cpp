@@ -45,6 +45,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
+  archiveChartPreviewModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -54,6 +55,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
+  archiveChartPreviewModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
@@ -62,6 +64,7 @@ void SettingsScene::resetViewState() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  miscTabButton = nullptr;
   tablesTabButton = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
@@ -1460,6 +1463,44 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   return cardsColumn;
 }
 
+View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
+  auto *cardsColumn = makeCardsColumn(metrics);
+
+  auto *archivePreviewControls = new View();
+  archivePreviewControls->setFlexDirection(FlexDirection::Column);
+  archivePreviewControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  archivePreviewControls->setAlignItems(YGAlignFlexStart);
+  archivePreviewControls->addView(makeWrappedText(
+      metrics.compact ? "Preview selected charts inside non-solid archives."
+                      : "Preview selected charts inside non-solid archives "
+                        "from the song select screen.",
+      metrics.bodyTextSize, Color(150, 171, 193)));
+  archiveChartPreviewModeText =
+      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+               TextView::CENTER, TextView::MIDDLE);
+  archiveChartPreviewModeButton = makeButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      archiveChartPreviewModeText, Color(35, 68, 62, 255),
+      Color(45, 88, 80, 255), Color(63, 118, 107, 255),
+      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
+      Color(145, 214, 195, 255));
+  archiveChartPreviewModeButton->setOnClickListener([this]() {
+    context.settings.archiveChartPreviewEnabled =
+        !context.settings.archiveChartPreviewEnabled;
+    persistSettings();
+  });
+  archivePreviewControls->addView(archiveChartPreviewModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Archive Chart Preview",
+      metrics.compact ? "Disable this if archive previews make selection feel "
+                        "heavy."
+                      : "Disable this if archive previews make song selection "
+                        "feel heavy on large packs.",
+      archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  return cardsColumn;
+}
+
 View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
@@ -1898,10 +1939,12 @@ void SettingsScene::initView() {
   timingTabButton = makeTabButton(SettingsTab::Timing, "Timing");
   visualTabButton = makeTabButton(SettingsTab::Visual, "Visual");
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane");
+  miscTabButton = makeTabButton(SettingsTab::Misc, "Misc");
   tablesTabButton = makeTabButton(SettingsTab::Tables, "Tables");
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
+  tabControls->addView(miscTabButton);
   tabControls->addView(tablesTabButton);
   content->addView(tabControls);
 
@@ -1922,6 +1965,9 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::Lane:
     cardsColumn = buildLaneTab(metrics);
+    break;
+  case SettingsTab::Misc:
+    cardsColumn = buildMiscTab(metrics);
     break;
   case SettingsTab::Tables:
     cardsColumn = buildTablesTab(metrics);

@@ -48,6 +48,7 @@ private:
     Timing,
     Visual,
     Lane,
+    Misc,
     Tables,
   };
 
@@ -75,6 +76,7 @@ private:
   TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
+  TextView *archiveChartPreviewModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
@@ -84,6 +86,7 @@ private:
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
+  Button *archiveChartPreviewModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;
@@ -92,6 +95,7 @@ private:
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
+  Button *miscTabButton = nullptr;
   Button *tablesTabButton = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
@@ -167,6 +171,7 @@ private:
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
   View *buildTablesTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);

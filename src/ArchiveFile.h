@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +33,26 @@ struct EntryRange {
 struct FileData {
   std::filesystem::path path;
   std::vector<unsigned char> bytes;
+};
+
+struct SourcePreference {
+  int priority = 0;
+  std::uint64_t archiveSize = 0;
+};
+
+struct UnzipProgress {
+  double fraction = 0.0;
+  std::uint64_t current = 0;
+  std::uint64_t total = 0;
+  std::string message;
+};
+
+using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
+
+struct UnzipArchiveResult {
+  std::filesystem::path outputFolder;
+  std::uint64_t fileCount = 0;
+  std::uint64_t uncompressedSize = 0;
 };
 
 bool isArchiveSupportAvailable();
@@ -64,10 +86,24 @@ bool exists(const std::filesystem::path &path);
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes,
               std::string *errorMessage = nullptr);
+bool isInSolidArchiveFolder(const std::filesystem::path &path);
+SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);
 std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions);
+std::optional<std::filesystem::path>
+unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
+                           const std::filesystem::path &destinationRoot,
+                           std::string *errorMessage = nullptr,
+                           const std::stop_token *stopToken = nullptr,
+                           UnzipProgressCallback progressCallback = nullptr);
+std::optional<UnzipArchiveResult>
+unzipArchiveFully(const std::filesystem::path &archivePath,
+                  const std::filesystem::path &destinationRoot,
+                  std::string *errorMessage = nullptr,
+                  const std::stop_token *stopToken = nullptr,
+                  UnzipProgressCallback progressCallback = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr);

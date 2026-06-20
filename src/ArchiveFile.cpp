@@ -70,6 +70,11 @@
 namespace archive_file {
 namespace {
 
+bool stopRequested(const std::stop_token *stopToken);
+void reportUnzipProgress(const UnzipProgressCallback &callback,
+                         double fraction, std::uint64_t current,
+                         std::uint64_t total, std::string message);
+
 std::string lowerCopy(std::string value) {
   std::transform(
       value.begin(), value.end(), value.begin(),
@@ -864,6 +869,71 @@ private:
   ULONG refCount_ = 0;
 };
 
+class SevenZipFileOutStream final : public ISequentialOutStream {
+public:
+  SevenZipFileOutStream(const std::filesystem::path &path,
+                        const std::stop_token *stopToken)
+      : stopToken_(stopToken) {
+    file_.open(path, std::ios::binary | std::ios::trunc);
+  }
+
+  bool isOpen() const { return file_.is_open(); }
+
+  STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
+    if (outObject == nullptr) {
+      return E_FAIL;
+    }
+    *outObject = nullptr;
+    if (iid == IID_IUnknown || iid == IID_ISequentialOutStream) {
+      *outObject = static_cast<ISequentialOutStream *>(this);
+    } else {
+      return E_NOINTERFACE;
+    }
+    AddRef();
+    return S_OK;
+  }
+
+  STDMETHOD_(ULONG, AddRef)() throw() override { return ++refCount_; }
+
+  STDMETHOD_(ULONG, Release)() throw() override {
+    const ULONG refCount = --refCount_;
+    if (refCount == 0) {
+      delete this;
+    }
+    return refCount;
+  }
+
+  STDMETHOD(Write)(const void *data, UInt32 size,
+                   UInt32 *processedSize) throw() override {
+    if (processedSize != nullptr) {
+      *processedSize = 0;
+    }
+    if (stopRequested(stopToken_)) {
+      return E_ABORT;
+    }
+    if (size == 0) {
+      return S_OK;
+    }
+    if (data == nullptr || !file_) {
+      return E_FAIL;
+    }
+    file_.write(static_cast<const char *>(data),
+                static_cast<std::streamsize>(size));
+    if (!file_) {
+      return E_FAIL;
+    }
+    if (processedSize != nullptr) {
+      *processedSize = size;
+    }
+    return S_OK;
+  }
+
+private:
+  std::ofstream file_;
+  const std::stop_token *stopToken_ = nullptr;
+  ULONG refCount_ = 0;
+};
+
 class SevenZipExtractCallback final : public IArchiveExtractCallback {
 public:
   explicit SevenZipExtractCallback(
@@ -943,6 +1013,142 @@ private:
   FileData *currentTarget_ = nullptr;
   ULONG refCount_ = 0;
   bool failed_ = false;
+  Int32 operationResult_ = NArchive::NExtract::NOperationResult::kOK;
+};
+
+class SevenZipFullExtractCallback final : public IArchiveExtractCallback {
+public:
+  SevenZipFullExtractCallback(std::filesystem::path outputFolder,
+                              std::unordered_map<UInt32, Entry> entries,
+                              std::uint64_t totalFiles,
+                              const std::stop_token *stopToken,
+                              UnzipProgressCallback progressCallback)
+      : outputFolder_(std::move(outputFolder)), entries_(std::move(entries)),
+        totalFiles_(std::max<std::uint64_t>(totalFiles, 1)),
+        stopToken_(stopToken), progressCallback_(std::move(progressCallback)) {}
+
+  STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
+    if (outObject == nullptr) {
+      return E_FAIL;
+    }
+    *outObject = nullptr;
+    if (iid == IID_IUnknown || iid == IID_IArchiveExtractCallback) {
+      *outObject = static_cast<IArchiveExtractCallback *>(this);
+    } else if (iid == IID_IProgress) {
+      *outObject = static_cast<IProgress *>(this);
+    } else {
+      return E_NOINTERFACE;
+    }
+    AddRef();
+    return S_OK;
+  }
+
+  STDMETHOD_(ULONG, AddRef)() throw() override { return ++refCount_; }
+
+  STDMETHOD_(ULONG, Release)() throw() override {
+    const ULONG refCount = --refCount_;
+    if (refCount == 0) {
+      delete this;
+    }
+    return refCount;
+  }
+
+  STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
+
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+    if (stopRequested(stopToken_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
+
+  STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
+                       Int32 askExtractMode) throw() override {
+    if (outStream == nullptr) {
+      return E_FAIL;
+    }
+    *outStream = nullptr;
+    currentEntry_ = nullptr;
+    if (stopRequested(stopToken_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    if (askExtractMode != NArchive::NExtract::NAskMode::kExtract) {
+      return S_OK;
+    }
+    const auto it = entries_.find(index);
+    if (it == entries_.end() || it->second.directory) {
+      return S_OK;
+    }
+
+    std::error_code error;
+    const std::filesystem::path outputPath = outputFolder_ / it->second.path;
+    std::filesystem::create_directories(outputPath.parent_path(), error);
+    if (error) {
+      failed_ = true;
+      return E_FAIL;
+    }
+
+    auto *stream = new SevenZipFileOutStream(outputPath, stopToken_);
+    if (!stream->isOpen()) {
+      delete stream;
+      failed_ = true;
+      return E_FAIL;
+    }
+
+    currentEntry_ = &it->second;
+    ISequentialOutStream *streamInterface = stream;
+    streamInterface->AddRef();
+    *outStream = streamInterface;
+    return S_OK;
+  }
+
+  STDMETHOD(PrepareOperation)(Int32) throw() override {
+    if (stopRequested(stopToken_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
+
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+    if (currentEntry_ != nullptr) {
+      if (opRes != NArchive::NExtract::NOperationResult::kOK) {
+        failed_ = true;
+        operationResult_ = opRes;
+      } else {
+        ++completedFiles_;
+        reportUnzipProgress(
+            progressCallback_,
+            0.08 + 0.88 * (static_cast<double>(completedFiles_) /
+                           static_cast<double>(totalFiles_)),
+            completedFiles_, totalFiles_, "Unzipping archive");
+      }
+    }
+    currentEntry_ = nullptr;
+    if (stopRequested(stopToken_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
+
+  bool failed() const { return failed_; }
+  bool cancelled() const { return cancelled_; }
+  Int32 operationResult() const { return operationResult_; }
+
+private:
+  std::filesystem::path outputFolder_;
+  std::unordered_map<UInt32, Entry> entries_;
+  std::uint64_t totalFiles_ = 1;
+  const std::stop_token *stopToken_ = nullptr;
+  UnzipProgressCallback progressCallback_;
+  const Entry *currentEntry_ = nullptr;
+  std::uint64_t completedFiles_ = 0;
+  ULONG refCount_ = 0;
+  bool failed_ = false;
+  bool cancelled_ = false;
   Int32 operationResult_ = NArchive::NExtract::NOperationResult::kOK;
 };
 
@@ -1786,6 +1992,121 @@ bool readArchiveEntriesUncached(
   }
 
   archive_read_free(archiveHandle);
+  return true;
+}
+
+bool extractArchiveFullyWithLibarchive(
+    const std::filesystem::path &archivePath,
+    const std::filesystem::path &outputFolder,
+    const std::shared_ptr<const CachedIndex> &index,
+    const std::stop_token *stopToken,
+    const UnzipProgressCallback &progressCallback,
+    std::string *errorMessage) {
+  archive *archiveHandle = openArchive(archivePath, errorMessage);
+  if (archiveHandle == nullptr) {
+    return false;
+  }
+
+  std::uint64_t totalFiles = 0;
+  if (index != nullptr) {
+    for (const Entry &entry : index->entries) {
+      if (!entry.directory) {
+        ++totalFiles;
+      }
+    }
+  }
+  totalFiles = std::max<std::uint64_t>(totalFiles, 1);
+
+  auto fail = [&](const std::string &message) {
+    if (errorMessage != nullptr) {
+      *errorMessage = message;
+    }
+    archive_read_free(archiveHandle);
+    return false;
+  };
+
+  archive_entry *entry = nullptr;
+  std::array<unsigned char, 64 * 1024> buffer{};
+  std::uint64_t completedFiles = 0;
+  for (;;) {
+    if (stopRequested(stopToken)) {
+      return fail("Unzip cancelled");
+    }
+    const int status = archive_read_next_header(archiveHandle, &entry);
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
+    if (status == ARCHIVE_RETRY) {
+      continue;
+    }
+    if (status < ARCHIVE_WARN) {
+      return fail("Could not read archive: " +
+                  archiveErrorString(archiveHandle, ""));
+    }
+    if (entry == nullptr) {
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+
+    ArchiveEntryInfo info;
+    if (!archiveEntryInfo(entry, entryPathnameUtf8(entry), info)) {
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+
+    const std::filesystem::path outputPath = outputFolder / info.relativePath;
+    std::error_code error;
+    if (info.directory) {
+      std::filesystem::create_directories(outputPath, error);
+      if (error) {
+        return fail("Could not create unzip folder: " + error.message());
+      }
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+    if (!info.regular) {
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+
+    std::filesystem::create_directories(outputPath.parent_path(), error);
+    if (error) {
+      return fail("Could not create unzip subfolder: " + error.message());
+    }
+    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    if (!output) {
+      return fail("Could not write unzipped file: " + outputPath.string());
+    }
+    for (;;) {
+      if (stopRequested(stopToken)) {
+        return fail("Unzip cancelled");
+      }
+      const la_ssize_t count =
+          archive_read_data(archiveHandle, buffer.data(), buffer.size());
+      if (count == 0) {
+        break;
+      }
+      if (count < 0) {
+        return fail("Could not read archive entry: " +
+                    archiveErrorString(archiveHandle, ""));
+      }
+      output.write(reinterpret_cast<const char *>(buffer.data()), count);
+      if (!output) {
+        return fail("Failed while writing unzipped file: " +
+                    outputPath.string());
+      }
+    }
+    ++completedFiles;
+    reportUnzipProgress(progressCallback,
+                        0.08 + 0.88 * (static_cast<double>(completedFiles) /
+                                      static_cast<double>(totalFiles)),
+                        completedFiles, totalFiles, "Unzipping archive");
+  }
+
+  archive_read_free(archiveHandle);
+  appendDebugLogLineImpl("Finished full libarchive unzip: " +
+                         pathForLog(archivePath) +
+                         " files=" + std::to_string(completedFiles));
   return true;
 }
 
@@ -2943,6 +3264,116 @@ bool readSevenZipEntriesByIndex(
                          " extractMs=" + std::to_string(extractMs));
   return true;
 }
+
+bool extractSevenZipArchiveFully(
+    const std::filesystem::path &archivePath,
+    const std::filesystem::path &outputFolder,
+    const std::shared_ptr<const CachedIndex> &index,
+    const std::stop_token *stopToken,
+    const UnzipProgressCallback &progressCallback,
+    std::string *errorMessage) {
+  if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
+      index->sevenZipFormat == 0) {
+    return false;
+  }
+  bool archiveCacheHit = false;
+  long long openMs = 0;
+  const auto archiveState = openCachedSevenZipArchive(
+      archivePath, index->sevenZipFormat, &archiveCacheHit, &openMs,
+      errorMessage);
+  if (archiveState == nullptr) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  IInArchive *archive = archiveState->archive.Interface();
+  if (archive == nullptr) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Cached 7-Zip archive is unavailable.";
+    }
+    return false;
+  }
+
+  UInt32 itemCount = 0;
+  HRESULT result = archive->GetNumberOfItems(&itemCount);
+  if (result != S_OK) {
+    if (errorMessage != nullptr) {
+      *errorMessage = sevenZipResultMessage(result);
+    }
+    return false;
+  }
+
+  std::unordered_map<UInt32, Entry> entries;
+  entries.reserve(index->entries.size());
+  std::uint64_t fileCount = 0;
+  for (const Entry &entry : index->entries) {
+    if (entry.order > std::numeric_limits<UInt32>::max()) {
+      continue;
+    }
+    const auto itemIndex = static_cast<UInt32>(entry.order);
+    if (itemIndex >= itemCount) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "7-Zip archive index is out of range.";
+      }
+      return false;
+    }
+    if (entry.directory) {
+      std::error_code error;
+      std::filesystem::create_directories(outputFolder / entry.path, error);
+      if (error) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not create unzip folder: " + error.message();
+        }
+        return false;
+      }
+    } else {
+      ++fileCount;
+    }
+    entries.emplace(itemIndex, entry);
+  }
+
+  auto *callback = new SevenZipFullExtractCallback(
+      outputFolder, std::move(entries), fileCount, stopToken, progressCallback);
+  IArchiveExtractCallback *callbackInterface = callback;
+  callbackInterface->AddRef();
+  CMyComPtr<IArchiveExtractCallback> callbackHandle;
+  callbackHandle.Attach(callbackInterface);
+
+  appendDebugLogLineImpl("Starting full 7-Zip unzip: " +
+                         pathForLog(archivePath) +
+                         " files=" + std::to_string(fileCount) +
+                         " archiveCache=" +
+                         (archiveCacheHit ? "hit" : "miss") +
+                         " openMs=" + std::to_string(openMs));
+  using Clock = std::chrono::steady_clock;
+  const auto extractStart = Clock::now();
+  result = archive->Extract(nullptr, static_cast<UInt32>(-1), 0,
+                            callbackHandle);
+  const auto extractMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                            extractStart)
+          .count();
+  if (result != S_OK || callback->failed() || callback->cancelled()) {
+    if (errorMessage != nullptr) {
+      if (callback->cancelled() || stopRequested(stopToken)) {
+        *errorMessage = "Unzip cancelled";
+      } else if (result != S_OK) {
+        *errorMessage = sevenZipResultMessage(result);
+      } else {
+        *errorMessage =
+            "7-Zip archive extraction failed with operation result: " +
+            std::to_string(callback->operationResult());
+      }
+    }
+    return false;
+  }
+
+  appendDebugLogLineImpl("Finished full 7-Zip unzip: " +
+                         pathForLog(archivePath) +
+                         " files=" + std::to_string(fileCount) +
+                         " extractMs=" + std::to_string(extractMs));
+  return true;
+}
 #endif
 
 std::optional<std::filesystem::path>
@@ -2976,6 +3407,62 @@ std::string hex64(std::uint64_t value) {
     value >>= 4;
   }
   return out;
+}
+
+bool stopRequested(const std::stop_token *stopToken) {
+  return stopToken != nullptr && stopToken->stop_requested();
+}
+
+void reportUnzipProgress(const UnzipProgressCallback &callback,
+                         double fraction, std::uint64_t current,
+                         std::uint64_t total, std::string message) {
+  if (!callback) {
+    return;
+  }
+  callback(UnzipProgress{.fraction = std::clamp(fraction, 0.0, 1.0),
+                         .current = current,
+                         .total = total,
+                         .message = std::move(message)});
+}
+
+std::string readableUnzipFolderName(const std::filesystem::path &archivePath,
+                                    const std::filesystem::path &folderPath) {
+  std::string name;
+  if (!folderPath.empty()) {
+    name = folderPath.filename().generic_string();
+  }
+  if (name.empty() || name == "." || name == "..") {
+    name = archivePath.stem().generic_string();
+  }
+  if (name.empty()) {
+    name = "Unzipped Chart";
+  }
+
+  for (char &ch : name) {
+    const unsigned char byte = static_cast<unsigned char>(ch);
+    if (byte < 32 || ch == '/' || ch == '\\' || ch == ':' || ch == '*' ||
+        ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|') {
+      ch = '_';
+    }
+  }
+  while (!name.empty() && (name.back() == ' ' || name.back() == '.')) {
+    name.pop_back();
+  }
+  if (name.empty()) {
+    name = "Unzipped Chart";
+  }
+  return name;
+}
+
+bool unzipMarkerMatches(const std::filesystem::path &markerPath,
+                        const std::string &key) {
+  std::ifstream marker(markerPath, std::ios::binary);
+  if (!marker) {
+    return false;
+  }
+  std::string firstLine;
+  std::getline(marker, firstLine);
+  return firstLine == key;
 }
 
 std::filesystem::path archiveCacheRoot() {
@@ -3381,6 +3868,89 @@ bool exists(const std::filesystem::path &path) {
   return resolveInnerPath(archivePath, innerPath).has_value();
 }
 
+bool isInSolidArchiveFolder(const std::filesystem::path &path) {
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!splitVirtualPath(path, archivePath, innerPath)) {
+    return false;
+  }
+
+  const auto index = cachedIndexForArchive(archivePath, nullptr);
+  if (index == nullptr || index->entries.empty()) {
+    return false;
+  }
+
+  const std::filesystem::path virtualFolder =
+      makeVirtualPath(archivePath, innerPath.parent_path());
+  const auto range = entryRangeForFolder(virtualFolder);
+  if (!range.has_value()) {
+    if (const Entry *entry = findIndexedEntry(*index, innerPath)) {
+      return entry->solid;
+    }
+    return false;
+  }
+
+  for (const Entry &entry : index->entries) {
+    if (entry.order < range->start || entry.order > range->end) {
+      continue;
+    }
+    if (!entry.directory && entry.solid) {
+      return true;
+    }
+  }
+  return false;
+}
+
+SourcePreference sourcePreferenceForPath(const std::filesystem::path &path) {
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!splitVirtualPath(path, archivePath, innerPath)) {
+    return {};
+  }
+
+  std::uintmax_t archiveSize = 0;
+  std::filesystem::file_time_type mtime{};
+  if (!fileState(archivePath, archiveSize, mtime)) {
+    return {.priority = 3, .archiveSize = 0};
+  }
+
+  SourcePreference preference{
+      .priority = 1,
+      .archiveSize = static_cast<std::uint64_t>(
+          std::min<std::uintmax_t>(
+              archiveSize, std::numeric_limits<std::uint64_t>::max())),
+  };
+
+  const auto index = cachedIndexForArchive(archivePath, nullptr);
+  if (index == nullptr || index->entries.empty()) {
+    preference.priority = 3;
+    return preference;
+  }
+
+  const std::filesystem::path virtualFolder =
+      makeVirtualPath(archivePath, innerPath.parent_path());
+  const auto range = entryRangeForFolder(virtualFolder);
+  if (!range.has_value()) {
+    if (const Entry *entry = findIndexedEntry(*index, innerPath)) {
+      preference.priority = entry->solid ? 2 : 1;
+      return preference;
+    }
+    preference.priority = 3;
+    return preference;
+  }
+
+  for (const Entry &entry : index->entries) {
+    if (entry.order < range->start || entry.order > range->end) {
+      continue;
+    }
+    if (!entry.directory && entry.solid) {
+      preference.priority = 2;
+      return preference;
+    }
+  }
+  return preference;
+}
+
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes, std::string *errorMessage) {
   std::filesystem::path archivePath;
@@ -3484,6 +4054,450 @@ std::string cacheKeyForPath(const std::filesystem::path &path) {
   key += "|file:";
   key += fileStateKey(normalized);
   return key;
+}
+
+std::optional<std::filesystem::path>
+unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
+                           const std::filesystem::path &destinationRoot,
+                           std::string *errorMessage,
+                           const std::stop_token *stopToken,
+                           UnzipProgressCallback progressCallback) {
+  reportUnzipProgress(progressCallback, 0.02, 0, 0, "Preparing unzip");
+  std::filesystem::path archivePath;
+  std::filesystem::path chartInnerPath;
+  if (!splitVirtualPath(chartPath, archivePath, chartInnerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Selected chart is not inside an archive.";
+    }
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  const std::filesystem::path folderInnerPath = chartInnerPath.parent_path();
+  const std::filesystem::path virtualFolder =
+      makeVirtualPath(archivePath, folderInnerPath);
+  reportUnzipProgress(progressCallback, 0.04, 0, 0,
+                      "Reading archive index");
+  const auto range = entryRangeForFolder(virtualFolder);
+  if (!range.has_value()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not locate archive folder for selected chart.";
+    }
+    return std::nullopt;
+  }
+
+  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  if (index == nullptr) {
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  const Entry *chartEntry = findIndexedEntry(*index, chartInnerPath);
+  if (chartEntry == nullptr || chartEntry->directory) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Selected chart was not found in the archive.";
+    }
+    return std::nullopt;
+  }
+
+  std::vector<std::filesystem::path> innerPaths;
+  innerPaths.reserve(range->end - range->start + 1);
+  for (const Entry &entry : index->entries) {
+    if (entry.order < range->start || entry.order > range->end ||
+        entry.directory) {
+      continue;
+    }
+    if (!folderInnerPath.empty() &&
+        !pathIsInsideFolder(entry.path, folderInnerPath)) {
+      continue;
+    }
+    innerPaths.push_back(entry.path);
+  }
+
+  if (innerPaths.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive folder does not contain files to unzip.";
+    }
+    return std::nullopt;
+  }
+  reportUnzipProgress(progressCallback, 0.08, 0, innerPaths.size(),
+                      "Preparing output folder");
+
+  std::error_code error;
+  std::filesystem::create_directories(destinationRoot, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not create unzip folder: " + error.message();
+    }
+    return std::nullopt;
+  }
+
+  const std::string key = cacheKeyForPath(virtualFolder);
+
+  auto relativePathForEntry =
+      [&folderInnerPath](const std::filesystem::path &entryPath)
+      -> std::optional<std::filesystem::path> {
+    const std::string entryName = normalizeEntryName(entryPath.generic_string());
+    const std::string folderName =
+        normalizeEntryName(folderInnerPath.generic_string());
+    std::string relative = entryName;
+    if (!folderName.empty()) {
+      if (entryName.size() <= folderName.size() ||
+          entryName.compare(0, folderName.size(), folderName) != 0 ||
+          entryName[folderName.size()] != '/') {
+        return std::nullopt;
+      }
+      relative = entryName.substr(folderName.size() + 1);
+    }
+
+    std::filesystem::path safePath;
+    if (!safeEntryPath(relative, safePath)) {
+      return std::nullopt;
+    }
+    return safePath;
+  };
+
+  const auto chartRelative = relativePathForEntry(chartEntry->path);
+  if (!chartRelative.has_value()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Selected chart path is not safe to unzip.";
+    }
+    return std::nullopt;
+  }
+
+  const std::string baseName =
+      readableUnzipFolderName(archivePath, folderInnerPath);
+  std::filesystem::path outputFolder;
+  std::filesystem::path outputChartPath;
+  std::filesystem::path markerPath;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const std::string folderName =
+        attempt == 0 ? baseName : baseName + " " + std::to_string(attempt + 1);
+    const std::filesystem::path candidate = destinationRoot / folderName;
+    const std::filesystem::path candidateMarker =
+        candidate / ".asobmashow_unzip_complete";
+    const std::filesystem::path candidateChart = candidate / *chartRelative;
+
+    error.clear();
+    const bool candidateExists = std::filesystem::exists(candidate, error);
+    if (!candidateExists || error) {
+      outputFolder = candidate;
+      outputChartPath = candidateChart;
+      markerPath = candidateMarker;
+      break;
+    }
+
+    if (unzipMarkerMatches(candidateMarker, key) &&
+        std::filesystem::exists(candidateChart, error) && !error) {
+      reportUnzipProgress(progressCallback, 1.0, innerPaths.size(),
+                          innerPaths.size(), "Using existing unzipped folder");
+      appendDebugLogLineImpl("Using existing unzipped archive folder: " +
+                             pathForLog(candidate));
+      return candidateChart;
+    }
+  }
+
+  if (outputFolder.empty()) {
+    outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
+    outputChartPath = outputFolder / *chartRelative;
+    markerPath = outputFolder / ".asobmashow_unzip_complete";
+  }
+  error.clear();
+  if (std::filesystem::exists(outputFolder, error) && !error) {
+    std::filesystem::remove_all(outputFolder, error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not replace incomplete unzip folder: " +
+                        error.message();
+      }
+      return std::nullopt;
+    }
+  }
+  std::filesystem::create_directories(outputFolder, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not create unzip output folder: " +
+                      error.message();
+    }
+    return std::nullopt;
+  }
+
+  appendDebugLogLineImpl("Unzipping archive folder: " +
+                         pathForLog(virtualFolder) + " files=" +
+                         std::to_string(innerPaths.size()) + " output=" +
+                         pathForLog(outputFolder));
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+  reportUnzipProgress(progressCallback, 0.12, 0, innerPaths.size(),
+                      "Reading archive files");
+  std::vector<FileData> files;
+  if (!readArchiveEntriesInRange(archivePath, innerPaths, *range, files,
+                                 errorMessage)) {
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  std::uint64_t writtenCount = 0;
+  for (const FileData &file : files) {
+    if (stopRequested(stopToken)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Unzip cancelled";
+      }
+      return std::nullopt;
+    }
+    reportUnzipProgress(progressCallback,
+                        0.35 + 0.6 * (static_cast<double>(writtenCount) /
+                                      std::max<std::size_t>(files.size(), 1)),
+                        writtenCount, files.size(), "Writing unzipped files");
+    const auto relative = relativePathForEntry(file.path);
+    if (!relative.has_value()) {
+      continue;
+    }
+    const std::filesystem::path outputPath = outputFolder / *relative;
+    std::filesystem::create_directories(outputPath.parent_path(), error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not create unzip subfolder: " +
+                        error.message();
+      }
+      return std::nullopt;
+    }
+    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    if (!output) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not write unzipped file: " +
+                        outputPath.string();
+      }
+      return std::nullopt;
+    }
+    if (!file.bytes.empty()) {
+      output.write(reinterpret_cast<const char *>(file.bytes.data()),
+                   static_cast<std::streamsize>(file.bytes.size()));
+    }
+    if (!output) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Failed while writing unzipped file: " +
+                        outputPath.string();
+      }
+      return std::nullopt;
+    }
+    ++writtenCount;
+  }
+  reportUnzipProgress(progressCallback, 0.96, files.size(), files.size(),
+                      "Finalizing unzip");
+
+  std::ofstream marker(markerPath, std::ios::binary | std::ios::trunc);
+  if (!marker) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not finalize unzip folder: " +
+                      markerPath.string();
+    }
+    return std::nullopt;
+  }
+  marker << key << '\n' << pathForLog(chartPath) << '\n';
+  appendDebugLogLineImpl("Finished unzipping archive folder: " +
+                         pathForLog(outputFolder) + " files=" +
+                         std::to_string(files.size()));
+  reportUnzipProgress(progressCallback, 1.0, files.size(), files.size(),
+                      "Unzip complete");
+  return outputChartPath;
+}
+
+std::optional<UnzipArchiveResult>
+unzipArchiveFully(const std::filesystem::path &archivePath,
+                  const std::filesystem::path &destinationRoot,
+                  std::string *errorMessage,
+                  const std::stop_token *stopToken,
+                  UnzipProgressCallback progressCallback) {
+  reportUnzipProgress(progressCallback, 0.02, 0, 0, "Preparing unzip");
+  if (archivePath.empty() || !hasSupportedArchiveExtension(archivePath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Selected item is not a supported archive.";
+    }
+    return std::nullopt;
+  }
+
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Selected archive path is not a file.";
+    }
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  reportUnzipProgress(progressCallback, 0.04, 0, 0,
+                      "Reading archive index");
+  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  if (index == nullptr) {
+    return std::nullopt;
+  }
+
+  std::uint64_t fileCount = 0;
+  std::uint64_t uncompressedSize = 0;
+  for (const Entry &entry : index->entries) {
+    if (entry.directory) {
+      continue;
+    }
+    ++fileCount;
+    const std::uint64_t remaining =
+        std::numeric_limits<std::uint64_t>::max() - uncompressedSize;
+    uncompressedSize += std::min(entry.size, remaining);
+  }
+  if (fileCount == 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive does not contain files to unzip.";
+    }
+    return std::nullopt;
+  }
+
+  reportUnzipProgress(progressCallback, 0.06, 0, fileCount,
+                      "Preparing output folder");
+  std::filesystem::create_directories(destinationRoot, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not create unzip folder: " + error.message();
+    }
+    return std::nullopt;
+  }
+
+  const std::string key = cacheKeyForPath(archivePath);
+  const std::string baseName = readableUnzipFolderName(archivePath, {});
+  std::filesystem::path outputFolder;
+  std::filesystem::path markerPath;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const std::string folderName =
+        attempt == 0 ? baseName : baseName + " " + std::to_string(attempt + 1);
+    const std::filesystem::path candidate = destinationRoot / folderName;
+    const std::filesystem::path candidateMarker =
+        candidate / ".asobmashow_unzip_complete";
+
+    error.clear();
+    const bool candidateExists = std::filesystem::exists(candidate, error);
+    if (!candidateExists || error) {
+      outputFolder = candidate;
+      markerPath = candidateMarker;
+      break;
+    }
+    if (unzipMarkerMatches(candidateMarker, key)) {
+      reportUnzipProgress(progressCallback, 1.0, fileCount, fileCount,
+                          "Using existing unzipped folder");
+      appendDebugLogLineImpl("Using existing full unzip folder: " +
+                             pathForLog(candidate));
+      return UnzipArchiveResult{.outputFolder = candidate,
+                                .fileCount = fileCount,
+                                .uncompressedSize = uncompressedSize};
+    }
+  }
+
+  if (outputFolder.empty()) {
+    outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
+    markerPath = outputFolder / ".asobmashow_unzip_complete";
+  }
+  error.clear();
+  if (std::filesystem::exists(outputFolder, error) && !error) {
+    std::filesystem::remove_all(outputFolder, error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not replace incomplete unzip folder: " +
+                        error.message();
+      }
+      return std::nullopt;
+    }
+  }
+  std::filesystem::create_directories(outputFolder, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not create unzip output folder: " +
+                      error.message();
+    }
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  appendDebugLogLineImpl("Full unzip requested: " + pathForLog(archivePath) +
+                         " output=" + pathForLog(outputFolder) +
+                         " files=" + std::to_string(fileCount) +
+                         " estimatedUnpacked=" +
+                         byteCountForLog(uncompressedSize));
+  bool extracted = false;
+#if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
+  if (index->backend == ArchiveIndexBackend::SevenZip) {
+    extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
+                                            stopToken, progressCallback,
+                                            errorMessage);
+  }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
+  if (!extracted && !stopRequested(stopToken) &&
+      index->backend == ArchiveIndexBackend::LibArchive) {
+    extracted = extractArchiveFullyWithLibarchive(
+        archivePath, outputFolder, index, stopToken, progressCallback,
+        errorMessage);
+  }
+#endif
+  if (!extracted) {
+    if (errorMessage != nullptr && errorMessage->empty()) {
+      *errorMessage = stopRequested(stopToken)
+                          ? "Unzip cancelled"
+                          : "Full unzip is not available for this archive.";
+    }
+    return std::nullopt;
+  }
+  if (stopRequested(stopToken)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return std::nullopt;
+  }
+
+  reportUnzipProgress(progressCallback, 0.98, fileCount, fileCount,
+                      "Finalizing unzip");
+  std::ofstream marker(markerPath, std::ios::binary | std::ios::trunc);
+  if (!marker) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not finalize unzip folder: " +
+                      markerPath.string();
+    }
+    return std::nullopt;
+  }
+  marker << key << '\n' << pathForLog(archivePath) << '\n';
+  reportUnzipProgress(progressCallback, 1.0, fileCount, fileCount,
+                      "Unzip complete");
+  appendDebugLogLineImpl("Finished full unzip: " + pathForLog(outputFolder) +
+                         " files=" + std::to_string(fileCount));
+  return UnzipArchiveResult{.outputFolder = outputFolder,
+                            .fileCount = fileCount,
+                            .uncompressedSize = uncompressedSize};
 }
 
 std::optional<std::filesystem::path>

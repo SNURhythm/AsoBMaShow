@@ -194,6 +194,27 @@ std::string formatFindBmsBytes(std::uint64_t bytes) {
   return stream.str();
 }
 
+bool pathIsInsideDirectoryForMenu(const std::filesystem::path &path,
+                                  const std::filesystem::path &directory) {
+  if (path.empty() || directory.empty()) {
+    return false;
+  }
+  const std::filesystem::path normalizedPath = path.lexically_normal();
+  const std::filesystem::path normalizedDirectory =
+      directory.lexically_normal();
+  if (normalizedPath == normalizedDirectory) {
+    return false;
+  }
+  const std::filesystem::path relative =
+      normalizedPath.lexically_relative(normalizedDirectory);
+  if (relative.empty() || relative.is_absolute()) {
+    return false;
+  }
+  const auto first = relative.begin();
+  return first != relative.end() && *first != std::filesystem::path("..") &&
+         *first != std::filesystem::path(".");
+}
+
 double progressRatio(const BmsSearchDownloadProgress &progress) {
   if (progress.totalBytes == 0) {
     return 0.0;
@@ -770,6 +791,7 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
   auto dbHelper = ChartDBHelper::GetInstance();
   auto db = dbHelper.Connect();
   dbHelper.CreateChartMetaTable(db);
+  dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateEntriesTable(db);
   dbHelper.CreateDifficultyTableTables(db);
   const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
@@ -882,6 +904,7 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         auto dbHelper = ChartDBHelper::GetInstance();
         auto db = dbHelper.Connect();
         dbHelper.CreateChartMetaTable(db);
+        dbHelper.CreateSolidArchiveTable(db);
         dbHelper.CreateEntriesTable(db);
         dbHelper.CreateDifficultyTableTables(db);
 
@@ -925,6 +948,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonSlot = nullptr;
   findBmsButton = nullptr;
   findBmsButtonText = nullptr;
+  unzipButtonSlot = nullptr;
+  unzipButton = nullptr;
+  unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
   replayButtonText = nullptr;
@@ -941,6 +967,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  unzipModalRoot = nullptr;
+  unzipProgressTrack = nullptr;
+  unzipProgressFill = nullptr;
+  unzipModalTitleText = nullptr;
+  unzipProgressMessageText = nullptr;
+  unzipProgressPercentText = nullptr;
+  unzipProgressDetailText = nullptr;
+  unzipDeleteArchiveButton = nullptr;
+  unzipCancelButton = nullptr;
+  unzipDeleteArchiveButtonText = nullptr;
+  unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   parseLogScrollView = nullptr;
   parseLogContent = nullptr;
@@ -985,9 +1022,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
+  pendingUnzipResult.reset();
+  pendingUnzipProgress.reset();
+  pendingSelectChartPath.reset();
+  suppressPreviewForChartPath.reset();
+  unzipDeleteCandidatePath.reset();
+  unzipEstimatedUncompressedSize = 0;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
+  unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
   findBmsResult = {};
@@ -1019,7 +1063,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
         return a.meta.SHA256 == b.meta.SHA256 && a.meta.MD5 == b.meta.MD5 &&
                a.meta.BmsPath == b.meta.BmsPath &&
                a.difficultyTableLabels == b.difficultyTableLabels &&
-               a.unavailable == b.unavailable;
+               a.unavailable == b.unavailable &&
+               a.solidArchive == b.solidArchive &&
+               a.archiveSize == b.archiveSize &&
+               a.archiveUncompressedSize == b.archiveUncompressedSize &&
+               a.archiveFileCount == b.archiveFileCount;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
@@ -1027,6 +1075,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       });
   auto dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateChartMetaTable(db);
+  dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateDifficultyTableTables(db);
 
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
@@ -1056,9 +1105,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
       selectedView->onSelected();
     }
     refreshReplayAvailability(&item);
+    if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+      replayStatusText->setText("");
+    }
     setPlayableChartActionsVisible(!item.unavailable &&
+                                   !item.solidArchive &&
                                    !meta.BmsPath.empty());
+    refreshUnzipButtonForSelection(&item);
     setFindBmsButtonVisible(item.unavailable &&
+                            !item.solidArchive &&
                             (!meta.SHA256.empty() || !meta.MD5.empty() ||
                              !meta.Title.empty()));
     previewLoadCancelled = true;
@@ -1073,10 +1128,57 @@ void MainMenuScene::initView(ApplicationContext &context) {
       context.jukebox.stop();
       return;
     }
+    if (item.solidArchive) {
+      jacketView->freeImage();
+      context.jukebox.stop();
+      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+        replayStatusText->setText(
+            "Skipped solid archive. Estimated unzip: " +
+            formatFindBmsBytes(item.archiveUncompressedSize));
+      }
+      archive_file::appendDebugLogLine(
+          "Solid archive selected without chart probing: " +
+          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) +
+          " files=" + std::to_string(item.archiveFileCount) +
+          " estimatedUnpacked=" +
+          std::to_string(item.archiveUncompressedSize));
+      return;
+    }
+    if (archive_file::isVirtualPath(meta.BmsPath) &&
+        !context.settings.archiveChartPreviewEnabled) {
+      jacketView->freeImage();
+      context.jukebox.stop();
+      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+        replayStatusText->setText("Archive preview disabled");
+      }
+      archive_file::appendDebugLogLine(
+          "Preview skipped by archive chart preview setting: " +
+          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+      return;
+    }
+    bool suppressPreview = false;
+    if (suppressPreviewForChartPath.has_value()) {
+      const path_t suppressPath =
+          fspath_to_path_t(suppressPreviewForChartPath.value());
+      suppressPreview = suppressPath == fspath_to_path_t(meta.BmsPath);
+    }
+    if (suppressPreview) {
+      suppressPreviewForChartPath.reset();
+    }
     if (!meta.StageFile.empty()) {
       jacketView->setImageAsync(meta.Folder / meta.StageFile);
     } else {
       jacketView->freeImage();
+    }
+    if (suppressPreview) {
+      context.jukebox.stop();
+      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+        replayStatusText->setText("Unzipped chart selected");
+      }
+      archive_file::appendDebugLogLine(
+          "Preview suppressed for auto-selected unzipped chart: " +
+          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+      return;
     }
     previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
@@ -1409,7 +1511,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto selected = recyclerView->selectedIndex;
     if (selected >= 0 && selected < recyclerView->size()) {
       const auto &selectedMeta = recyclerView->get(selected);
-      if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+      if (selectedMeta.solidArchive || selectedMeta.unavailable ||
+          selectedMeta.meta.BmsPath.empty()) {
         return;
       }
       startSelectedChart();
@@ -1441,7 +1544,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
     const auto &selectedMeta = recyclerView->get(selected);
-    if (selectedMeta.unavailable || selectedMeta.meta.BmsPath.empty()) {
+    if (selectedMeta.solidArchive || selectedMeta.unavailable ||
+        selectedMeta.meta.BmsPath.empty()) {
       return;
     }
 
@@ -1469,6 +1573,28 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButton->setStyledBorderWidth(2);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
+
+  unzipButtonSlot = new View();
+  unzipButtonSlot->setWidth(220)->setHeight(0);
+  unzipButtonSlot->setVisible(false);
+  unzipButtonSlot->setAlignItems(YGAlignStretch);
+
+  unzipButton = new Button(0, 0, 220, 58);
+  unzipButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  unzipButtonText->setText("Unzip");
+  unzipButtonText->setAlign(TextView::CENTER);
+  unzipButtonText->setVAlign(TextView::MIDDLE);
+  unzipButton->setContentView(unzipButtonText);
+  unzipButton->setBackgroundColors(
+      Color(76, 61, 30, 216), Color(103, 82, 40, 228),
+      Color(132, 106, 53, 236));
+  unzipButton->setBorderColors(Color(188, 157, 87, 255),
+                               Color(220, 188, 112, 255),
+                               Color(244, 214, 143, 255));
+  unzipButton->setStyledBorderWidth(2);
+  unzipButton->setOnClickListener(
+      [this]() { startUnzipSelectedArchiveFolder(); });
+  unzipButtonSlot->addView(unzipButton);
 
   replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   replayStatusText->setText("");
@@ -1535,6 +1661,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(chartActionsRow);
 
   right->addView(replayButtonSlot);
+  right->addView(unzipButtonSlot);
   right->addView(findBmsButtonSlot);
   right->addView(replayStatusText);
 
@@ -1570,6 +1697,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildReplayModal();
   buildParseLogModal();
   buildFindBmsModal();
+  buildUnzipProgressModal();
   addView(rootLayout);
   reloadScoreClearRanks();
   reloadFolderItems();
@@ -1596,6 +1724,17 @@ void MainMenuScene::reloadFolderItems() {
       .depth = 0,
       .count = allSongCount,
   });
+
+  const int solidArchiveCount = dbHelper.CountSolidArchives(db);
+  if (solidArchiveCount > 0) {
+    folders.push_back({
+        .key = "solid-archives",
+        .label = "Solid Archive",
+        .type = LibraryFolderItem::Type::SolidArchives,
+        .depth = 0,
+        .count = solidArchiveCount,
+    });
+  }
 
   const auto tables = dbHelper.SelectDifficultyTables(db);
   for (const auto &table : tables) {
@@ -1711,6 +1850,9 @@ void MainMenuScene::reloadChartList() {
   query.difficultyText = difficultyText;
 
   switch (activeFolder.type) {
+  case LibraryFolderItem::Type::SolidArchives:
+    query.solidArchivesOnly = true;
+    break;
   case LibraryFolderItem::Type::DifficultyTable:
     query.tableId = activeFolder.tableId;
     break;
@@ -1786,6 +1928,9 @@ void MainMenuScene::refreshLibraryIfNeeded() {
 }
 
 int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
+  if (record.solidArchive) {
+    return kNoClearTypeRank;
+  }
   return scoreClearRanks.bestRankFor(record.meta);
 }
 
@@ -1811,6 +1956,63 @@ void MainMenuScene::applyPendingUiUpdates() {
   if (shouldReloadFolders || shouldReloadCharts) {
     reloadChartList();
     libraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
+  }
+  if ((shouldReloadFolders || shouldReloadCharts) &&
+      pendingSelectChartPath.has_value()) {
+    const std::filesystem::path path = *pendingSelectChartPath;
+    pendingSelectChartPath.reset();
+    selectChartByPathAfterReload(path);
+  }
+}
+
+void MainMenuScene::selectChartByPathAfterReload(
+    const std::filesystem::path &path) {
+  if (recyclerView == nullptr || path.empty()) {
+    return;
+  }
+  const path_t target = fspath_to_path_t(path);
+  for (int i = 0; i < recyclerView->size(); ++i) {
+    const ChartMetaRecord &record = chartListCache.get(i);
+    if (fspath_to_path_t(record.meta.BmsPath) != target) {
+      continue;
+    }
+
+    const int previous = recyclerView->selectedIndex;
+    if (previous >= 0 && previous < recyclerView->size() &&
+        previous != i && recyclerView->onUnselected) {
+      recyclerView->onUnselected(recyclerView->get(previous), previous);
+    }
+    recyclerView->selectedIndex = i;
+    const float selectedY = static_cast<float>(i * recyclerView->itemHeight);
+    const float viewportHeight = static_cast<float>(recyclerView->getHeight());
+    const float itemHeight = static_cast<float>(recyclerView->itemHeight);
+    const float centeredOffset =
+        selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
+    const float maxOffset = std::max(
+        0.0f, static_cast<float>(
+                  std::max(1, recyclerView->size()) * recyclerView->itemHeight -
+                  recyclerView->getHeight()));
+    recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+    recyclerView->rebindVisibleItems();
+    suppressPreviewForChartPath = record.meta.BmsPath;
+    if (recyclerView->onSelected) {
+      recyclerView->onSelected(record, i);
+    }
+    archive_file::appendDebugLogLine(
+        "Selected unzipped chart: " +
+        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+    return;
+  }
+
+  if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
+    activeFolder = {
+        .key = "all",
+        .label = "All songs",
+        .type = LibraryFolderItem::Type::AllSongs,
+    };
+    reloadFolderItems();
+    reloadChartList();
+    selectChartByPathAfterReload(path);
   }
 }
 
@@ -1902,18 +2104,31 @@ void MainMenuScene::refreshReadySettingsSummary() {
 }
 
 void MainMenuScene::startSelectedChart() {
-  if (willStart.exchange(true)) {
+  if (willStart.load() || unzipInProgress.load() ||
+      pendingSelectChartPath.has_value() ||
+      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      recyclerView == nullptr) {
     return;
   }
 
   int selected = recyclerView != nullptr ? recyclerView->selectedIndex : -1;
   if (recyclerView == nullptr || selected < 0 ||
       selected >= recyclerView->size()) {
-    willStart.store(false);
     return;
   }
   const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+    return;
+  }
+  startChartDirect(record);
+}
+
+void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
+  if (willStart.exchange(true)) {
+    return;
+  }
+
+  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
     willStart.store(false);
     return;
   }
@@ -2063,7 +2278,9 @@ void MainMenuScene::startSelectedChart() {
 
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportInProgress.load() ||
-      recyclerView == nullptr) {
+      unzipInProgress.load() || pendingSelectChartPath.has_value() ||
+      chartListReloadRequested.load() ||
+      folderItemsReloadRequested.load() || recyclerView == nullptr) {
     return;
   }
 
@@ -2073,7 +2290,15 @@ void MainMenuScene::openChartViewerForSelection() {
   }
 
   const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+    return;
+  }
+  openChartViewerDirect(record);
+}
+
+void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
+  if (willStart.load() || replayExportInProgress.load() ||
+      record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
     return;
   }
 
@@ -2131,7 +2356,7 @@ void MainMenuScene::revealSelectedChartInFileManager() {
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   replaySummaries.clear();
   selectedReplayIndex = -1;
-  if (record == nullptr || record->unavailable ||
+  if (record == nullptr || record->solidArchive || record->unavailable ||
       record->meta.BmsPath.empty()) {
     setReplayButtonVisible(false);
     return;
@@ -2165,6 +2390,499 @@ void MainMenuScene::setPlayableChartActionsVisible(bool visible) {
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
+}
+
+void MainMenuScene::setUnzipButtonVisible(bool visible) {
+  if (unzipButtonSlot == nullptr) {
+    return;
+  }
+
+  const bool show = visible || unzipInProgress.load();
+  unzipButtonSlot->setVisible(show);
+  unzipButtonSlot->setHeight(show ? 58.0f : 0.0f);
+  if (unzipButtonText != nullptr && unzipInProgress.load()) {
+    unzipButtonText->setText("Unzipping...");
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::refreshUnzipButtonForSelection(
+    const ChartMetaRecord *record) {
+  bool visible = false;
+  if (record != nullptr && !record->unavailable &&
+      !record->meta.BmsPath.empty()) {
+    visible = record->solidArchive;
+  }
+  if (unzipButtonText != nullptr && !unzipInProgress.load()) {
+    unzipButtonText->setText("Unzip");
+  }
+  setUnzipButtonVisible(visible);
+}
+
+void MainMenuScene::startUnzipSelectedArchiveFolder() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      unzipInProgress.load() || pendingSelectChartPath.has_value() ||
+      chartListReloadRequested.load() ||
+      folderItemsReloadRequested.load() || recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  startUnzipArchiveFolder(record);
+}
+
+void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
+  const bool fullArchiveUnzip =
+      record.solidArchive && !archive_file::isVirtualPath(record.meta.BmsPath);
+  if (willStart.load() || replayExportInProgress.load() ||
+      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
+      folderItemsReloadRequested.load() || record.unavailable ||
+      record.meta.BmsPath.empty() || !fullArchiveUnzip) {
+    return;
+  }
+  if (unzipInProgress.exchange(true)) {
+    return;
+  }
+
+  if (unzipThread.joinable()) {
+    unzipThread.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(unzipResultMutex);
+    pendingUnzipResult.reset();
+  }
+  {
+    std::lock_guard<std::mutex> lock(unzipProgressMutex);
+    pendingUnzipProgress.reset();
+  }
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  selectedChartMediaReady.store(false);
+  delete selectedChart.exchange(nullptr);
+  context.jukebox.stop();
+  unzipEstimatedUncompressedSize =
+      fullArchiveUnzip ? record.archiveUncompressedSize : 0;
+
+  if (unzipButtonText != nullptr) {
+    unzipButtonText->setText("Unzipping...");
+  }
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText("Unzipping full archive...");
+  }
+  setUnzipButtonVisible(true);
+  showUnzipProgressModal();
+
+  const std::filesystem::path sourceArchivePath = record.meta.BmsPath;
+
+  const std::filesystem::path outputRoot =
+      Utils::GetDocumentsPath("Unzipped Archives");
+  archive_file::appendDebugLogLine(
+      "Unzip requested: " +
+      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + " outputRoot=" +
+      path_t_to_utf8(fspath_to_path_t(outputRoot)) + " mode=full-archive");
+
+  unzipThread = std::jthread([this, record, outputRoot, fullArchiveUnzip,
+                              sourceArchivePath](
+                                 const std::stop_token &stopToken) {
+    PendingUnzipResult result;
+    result.rootPath = outputRoot;
+    result.archivePath = sourceArchivePath;
+    result.canDeleteArchive = fullArchiveUnzip;
+    auto postProgress = [this](const archive_file::UnzipProgress &progress) {
+      std::lock_guard<std::mutex> lock(unzipProgressMutex);
+      pendingUnzipProgress = PendingUnzipProgress{
+          .fraction = progress.fraction,
+          .current = progress.current,
+          .total = progress.total,
+          .message = progress.message,
+      };
+    };
+
+    std::string errorMessage;
+    std::filesystem::path scanRoot = outputRoot;
+    const auto unzippedArchive = archive_file::unzipArchiveFully(
+        record.meta.BmsPath, outputRoot, &errorMessage, &stopToken,
+        postProgress);
+    if (unzippedArchive.has_value()) {
+      result.outputFolder = unzippedArchive->outputFolder;
+      scanRoot = unzippedArchive->outputFolder;
+    }
+
+    if (result.outputFolder.empty()) {
+      result.success = false;
+      result.message = stopToken.stop_requested()
+                           ? "Unzip cancelled"
+                           : (errorMessage.empty()
+                                  ? "Unzip failed"
+                                  : "Unzip failed: " + errorMessage);
+    } else if (stopToken.stop_requested()) {
+      result.success = false;
+      result.message = "Unzip cancelled";
+    } else {
+      auto dbHelper = ChartDBHelper::GetInstance();
+      auto unzipDb = dbHelper.Connect();
+      dbHelper.CreateChartMetaTable(unzipDb);
+      dbHelper.CreateSolidArchiveTable(unzipDb);
+      dbHelper.CreateEntriesTable(unzipDb);
+      dbHelper.CreateDifficultyTableTables(unzipDb);
+      dbHelper.InsertEntry(unzipDb, outputRoot);
+      std::vector<std::filesystem::path> roots{scanRoot};
+      postProgress(archive_file::UnzipProgress{
+          .fraction = 0.98, .message = "Refreshing library"});
+      const int changedCount =
+          dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
+      if (!stopToken.stop_requested()) {
+        std::vector<bms_parser::ChartMeta> chartMetas;
+        dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
+        for (const auto &meta : chartMetas) {
+          if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
+            result.chartPath = meta.BmsPath;
+            break;
+          }
+        }
+      }
+      dbHelper.Close(unzipDb);
+
+      result.success = true;
+      result.message =
+          changedCount > 0
+              ? "Unzipped archive. Library refreshed."
+              : "Unzipped archive. Library already current.";
+      if (!stopToken.stop_requested()) {
+        requestLibraryReload(true);
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(unzipResultMutex);
+      pendingUnzipResult = std::move(result);
+    }
+  });
+}
+
+void MainMenuScene::buildUnzipProgressModal() {
+  constexpr float kModalPanelWidth = 700.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalContentWidth =
+      kModalPanelWidth - kModalPanelPadding * 2.0f;
+
+  unzipModalRoot =
+      new BlockingOverlayView(0, 0, rendering::window_width,
+                              rendering::window_height);
+  unzipModalRoot->setPositionType(YGPositionTypeAbsolute);
+  unzipModalRoot->setPosition(Edge::Left, 0);
+  unzipModalRoot->setPosition(Edge::Top, 0);
+  unzipModalRoot->setZIndex(1000);
+  unzipModalRoot->setVisible(false);
+  unzipModalRoot->setFlexDirection(FlexDirection::Column);
+  unzipModalRoot->setAlignItems(YGAlignCenter);
+  unzipModalRoot->setJustifyContent(YGJustifyCenter);
+  unzipModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setGap(14)
+      ->setPadding(Edge::All, kModalPanelPadding)
+      ->setBackgroundColor(Color(16, 25, 39, 244))
+      ->setBorderColor(Color(93, 123, 160, 255))
+      ->setBorderWidth(2);
+
+  unzipModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  unzipModalTitleText->setText("Unzip");
+  unzipModalTitleText->setColor({245, 249, 255, 255});
+  unzipModalTitleText->setHeight(42);
+  panel->addView(unzipModalTitleText);
+
+  unzipProgressMessageText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  unzipProgressMessageText->setColor({222, 234, 247, 255});
+  unzipProgressMessageText->setHeight(32);
+  panel->addView(unzipProgressMessageText);
+
+  unzipProgressTrack = new View();
+  unzipProgressTrack->setWidth(kModalContentWidth)
+      ->setHeight(24)
+      ->setBackgroundColor(Color(8, 14, 23, 230))
+      ->setBorderColor(Color(74, 101, 132, 255))
+      ->setBorderWidth(2);
+  unzipProgressFill = new View();
+  unzipProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
+      Color(74, 157, 224, 240));
+  unzipProgressTrack->addView(unzipProgressFill);
+  panel->addView(unzipProgressTrack);
+
+  unzipProgressPercentText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  unzipProgressPercentText->setColor({173, 193, 216, 255});
+  unzipProgressPercentText->setHeight(28);
+  panel->addView(unzipProgressPercentText);
+
+  unzipProgressDetailText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  unzipProgressDetailText->setColor({143, 161, 184, 255});
+  unzipProgressDetailText->setHeight(54);
+  panel->addView(unzipProgressDetailText);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(58);
+
+  unzipDeleteArchiveButton =
+      makeModalButton("Delete Archive", 18, &unzipDeleteArchiveButtonText);
+  unzipDeleteArchiveButton->setVisible(false);
+  unzipDeleteArchiveButton->setWidth(0)->setHeight(0);
+  unzipDeleteArchiveButton->setOnClickListener(
+      [this]() { deleteUnzippedSourceArchive(); });
+  footer->addView(unzipDeleteArchiveButton);
+
+  unzipCancelButton = makeModalButton("Cancel", 20, &unzipCancelButtonText);
+  unzipCancelButton->setWidth(130);
+  unzipCancelButton->setOnClickListener([this]() {
+    if (unzipInProgress.load()) {
+      if (unzipThread.joinable()) {
+        unzipThread.request_stop();
+      }
+      updateUnzipProgressUi(0.0, "Cancelling...", 0, 0);
+      return;
+    }
+    hideUnzipProgressModal();
+  });
+  footer->addView(unzipCancelButton);
+  panel->addView(footer);
+
+  unzipModalRoot->addView(panel);
+  rootLayout->addView(unzipModalRoot);
+}
+
+void MainMenuScene::showUnzipProgressModal() {
+  if (unzipModalRoot == nullptr) {
+    return;
+  }
+  unzipModalRoot->setSize(rendering::window_width, rendering::window_height);
+  unzipModalRoot->setVisible(true);
+  if (unzipModalTitleText != nullptr) {
+    unzipModalTitleText->setText("Unzip");
+  }
+  if (unzipCancelButtonText != nullptr) {
+    unzipCancelButtonText->setText("Cancel");
+  }
+  setUnzipDeleteArchiveButtonVisible(false);
+  unzipDeleteCandidatePath.reset();
+  updateUnzipProgressUi(0.0, "Preparing unzip", 0, 0);
+  unzipModalRoot->applyYogaLayout();
+}
+
+void MainMenuScene::hideUnzipProgressModal() {
+  if (unzipModalRoot != nullptr) {
+    unzipModalRoot->setVisible(false);
+  }
+  if (!unzipInProgress.load()) {
+    unzipEstimatedUncompressedSize = 0;
+    unzipDeleteCandidatePath.reset();
+    setUnzipDeleteArchiveButtonVisible(false);
+  }
+}
+
+void MainMenuScene::updateUnzipProgressUi(double fraction,
+                                          const std::string &message,
+                                          std::uint64_t current,
+                                          std::uint64_t total) {
+  fraction = std::clamp(fraction, 0.0, 1.0);
+  if (unzipProgressMessageText != nullptr) {
+    unzipProgressMessageText->setText(message);
+  }
+  if (unzipProgressFill != nullptr && unzipProgressTrack != nullptr) {
+    unzipProgressFill->setWidth(
+        std::max(0.0f, (unzipProgressTrack->getWidth() - 4.0f) *
+                           static_cast<float>(fraction)));
+  }
+  if (unzipProgressPercentText != nullptr) {
+    std::ostringstream text;
+    text << std::fixed << std::setprecision(0) << (fraction * 100.0) << "%";
+    if (total > 0) {
+      text << " (" << current << "/" << total << ")";
+    }
+    unzipProgressPercentText->setText(text.str());
+  }
+  if (unzipProgressDetailText != nullptr) {
+    std::string detail =
+        total > 0 ? "Processing files" : "Working on archive";
+    if (unzipEstimatedUncompressedSize > 0) {
+      detail += "\nEstimated unzipped size: " +
+                formatFindBmsBytes(unzipEstimatedUncompressedSize);
+    }
+    unzipProgressDetailText->setText(detail);
+  }
+  if (unzipModalRoot != nullptr && unzipModalRoot->getVisible()) {
+    unzipModalRoot->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::setUnzipDeleteArchiveButtonVisible(bool visible) {
+  if (unzipDeleteArchiveButton == nullptr) {
+    return;
+  }
+  unzipDeleteArchiveButton->setVisible(visible);
+  unzipDeleteArchiveButton->setWidth(visible ? 210.0f : 0.0f);
+  unzipDeleteArchiveButton->setHeight(visible ? 58.0f : 0.0f);
+  if (unzipDeleteArchiveButtonText != nullptr) {
+    unzipDeleteArchiveButtonText->setText("Delete Archive");
+  }
+  if (unzipModalRoot != nullptr && unzipModalRoot->getVisible()) {
+    unzipModalRoot->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::deleteUnzippedSourceArchive() {
+  if (unzipInProgress.load() || !unzipDeleteCandidatePath.has_value()) {
+    return;
+  }
+
+  const std::filesystem::path archivePath = *unzipDeleteCandidatePath;
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+    updateUnzipProgressUi(1.0, "Archive is already unavailable", 0, 0);
+    setUnzipDeleteArchiveButtonVisible(false);
+    unzipDeleteCandidatePath.reset();
+    return;
+  }
+
+  const bool removed = std::filesystem::remove(archivePath, error);
+  if (error || !removed) {
+    updateUnzipProgressUi(
+        1.0,
+        "Could not delete archive" +
+            (error ? std::string(": ") + error.message() : std::string()),
+        0, 0);
+    archive_file::appendDebugLogLine(
+        "Failed to delete source archive: " +
+        path_t_to_utf8(fspath_to_path_t(archivePath)) +
+        (error ? ": " + error.message() : ""));
+    return;
+  }
+
+  auto dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *deleteDb = dbHelper.Connect();
+  if (deleteDb != nullptr) {
+    dbHelper.DeleteArchiveRecords(deleteDb, archivePath);
+    dbHelper.Close(deleteDb);
+  }
+  requestLibraryReload(true);
+  unzipDeleteCandidatePath.reset();
+  setUnzipDeleteArchiveButtonVisible(false);
+  if (unzipModalTitleText != nullptr) {
+    unzipModalTitleText->setText("Archive Deleted");
+  }
+  if (unzipCancelButtonText != nullptr) {
+    unzipCancelButtonText->setText("Close");
+  }
+  updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
+  archive_file::appendDebugLogLine(
+      "Deleted source archive after unzip: " +
+      path_t_to_utf8(fspath_to_path_t(archivePath)));
+}
+
+void MainMenuScene::applyUnzipProgress() {
+  std::optional<PendingUnzipProgress> progress;
+  {
+    std::lock_guard<std::mutex> lock(unzipProgressMutex);
+    if (!pendingUnzipProgress.has_value()) {
+      return;
+    }
+    progress = std::move(pendingUnzipProgress);
+    pendingUnzipProgress.reset();
+  }
+  updateUnzipProgressUi(progress->fraction, progress->message,
+                        progress->current, progress->total);
+}
+
+void MainMenuScene::applyUnzipResult() {
+  std::optional<PendingUnzipResult> result;
+  {
+    std::lock_guard<std::mutex> lock(unzipResultMutex);
+    if (!pendingUnzipResult.has_value()) {
+      return;
+    }
+    result = std::move(pendingUnzipResult);
+    pendingUnzipResult.reset();
+  }
+
+  if (unzipThread.joinable()) {
+    unzipThread.join();
+  }
+  unzipInProgress.store(false);
+  if (unzipButtonText != nullptr) {
+    unzipButtonText->setText(result->success ? "Unzipped" : "Unzip");
+  }
+  if (unzipModalTitleText != nullptr) {
+    unzipModalTitleText->setText(result->success ? "Unzip Complete"
+                                                 : "Unzip Failed");
+  }
+  updateUnzipProgressUi(result->success ? 1.0 : 0.0, result->message, 0, 0);
+  std::error_code archiveStateError;
+  const bool canDeleteArchive =
+      result->success && result->canDeleteArchive &&
+      !result->archivePath.empty() &&
+      std::filesystem::is_regular_file(result->archivePath, archiveStateError) &&
+      !archiveStateError;
+  if (canDeleteArchive) {
+    unzipDeleteCandidatePath = result->archivePath;
+    setUnzipDeleteArchiveButtonVisible(true);
+    if (unzipCancelButtonText != nullptr) {
+      unzipCancelButtonText->setText("Keep Archive");
+    }
+    if (unzipProgressDetailText != nullptr) {
+      unzipProgressDetailText->setText(
+          "Choose whether to keep or delete the original archive.");
+    }
+  } else {
+    unzipDeleteCandidatePath.reset();
+    setUnzipDeleteArchiveButtonVisible(false);
+    if (unzipCancelButtonText != nullptr) {
+      unzipCancelButtonText->setText("Close");
+    }
+  }
+  if (result->success && !result->chartPath.empty()) {
+    pendingSelectChartPath = result->chartPath;
+    requestLibraryReload(true);
+  }
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText(result->message);
+  }
+  archive_file::appendDebugLogLine(
+      result->message +
+      (result->chartPath.empty()
+           ? ""
+           : ": " + path_t_to_utf8(fspath_to_path_t(result->chartPath))));
+
+  defer(
+      [this, hideModal = result->success && !canDeleteArchive]() {
+        if (!unzipInProgress.load() && replayStatusText != nullptr) {
+          replayStatusText->setText("");
+        }
+        if (!unzipInProgress.load() && unzipButtonText != nullptr) {
+          unzipButtonText->setText("Unzip");
+        }
+        if (hideModal && !unzipInProgress.load() && unzipModalRoot != nullptr &&
+            unzipModalRoot->getVisible()) {
+          hideUnzipProgressModal();
+        }
+        return true;
+      },
+      result->success ? 900 : 1800, true);
 }
 
 void MainMenuScene::startLibraryRefresh() {
@@ -2203,7 +2921,7 @@ void MainMenuScene::openFindBmsForSelection() {
   }
 
   const ChartMetaRecord record = recyclerView->get(selected);
-  if (!record.unavailable ||
+  if (record.solidArchive || !record.unavailable ||
       (record.meta.SHA256.empty() && record.meta.MD5.empty() &&
        record.meta.Title.empty())) {
     return;
@@ -3721,7 +4439,7 @@ void MainMenuScene::applyReplayVideoExportResult() {
         if (!replayExportInProgress.load() && replayStatusText != nullptr) {
           replayStatusText->setText("");
         }
-        return false;
+        return true;
       },
       result->success ? 1800 : 1400, true);
 }
@@ -3732,6 +4450,8 @@ void MainMenuScene::update(float dt) {
   refreshScoreClearRanksIfNeeded();
   applyPendingUiUpdates();
   applyFindBmsUpdates();
+  applyUnzipProgress();
+  applyUnzipResult();
   applyReplayVideoExportProgress();
   applyReplayVideoExportResult();
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
@@ -3767,6 +4487,9 @@ void MainMenuScene::renderScene() {
     findBmsModalRoot->setSize(rendering::window_width,
                               rendering::window_height);
   }
+  if (unzipModalRoot != nullptr) {
+    unzipModalRoot->setSize(rendering::window_width, rendering::window_height);
+  }
   if (layoutChanged) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
@@ -3801,7 +4524,11 @@ void MainMenuScene::cleanupScene() {
     findBmsThread.request_stop();
     findBmsThread.join();
   }
-
+  if (unzipThread.joinable()) {
+    SDL_Log("Joining unzipThread");
+    unzipThread.request_stop();
+    unzipThread.join();
+  }
   if (loadThread.joinable()) {
     SDL_Log("Joining loadThread");
     loadThread.join();
@@ -3822,6 +4549,9 @@ void MainMenuScene::cleanupScene() {
   findBmsButtonSlot = nullptr;
   findBmsButton = nullptr;
   findBmsButtonText = nullptr;
+  unzipButtonSlot = nullptr;
+  unzipButton = nullptr;
+  unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
   replayButtonText = nullptr;
@@ -3838,6 +4568,17 @@ void MainMenuScene::cleanupScene() {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  unzipModalRoot = nullptr;
+  unzipProgressTrack = nullptr;
+  unzipProgressFill = nullptr;
+  unzipModalTitleText = nullptr;
+  unzipProgressMessageText = nullptr;
+  unzipProgressPercentText = nullptr;
+  unzipProgressDetailText = nullptr;
+  unzipDeleteArchiveButton = nullptr;
+  unzipCancelButton = nullptr;
+  unzipDeleteArchiveButtonText = nullptr;
+  unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   parseLogScrollView = nullptr;
   parseLogContent = nullptr;
@@ -3882,9 +4623,16 @@ void MainMenuScene::cleanupScene() {
   replayResolutionFullButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
+  pendingUnzipResult.reset();
+  pendingUnzipProgress.reset();
+  pendingSelectChartPath.reset();
+  suppressPreviewForChartPath.reset();
+  unzipDeleteCandidatePath.reset();
+  unzipEstimatedUncompressedSize = 0;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
+  unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
   findBmsResult = {};
