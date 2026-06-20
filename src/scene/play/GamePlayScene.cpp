@@ -323,12 +323,13 @@ void GamePlayScene::init() {
   pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   pauseButton->setContentView(pauseText);
   pauseButton->setSize(52, 52);
+  pauseButton->setCornerRadius(ui_theme::controlRadius());
   pauseButton->setBackgroundColors(Color(236, 253, 255, 42),
                                    Color(70, 230, 224, 88),
                                    Color(255, 204, 81, 120));
   pauseButton->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
                                ui_theme::amber());
-  pauseButton->setStyledBorderWidth(2);
+  pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
     context.jukebox.pause();
     pauseLayout->setVisible(true);

@@ -129,7 +129,8 @@ public:
     setJustifyContent(YGJustifyCenter);
     setPadding(Edge::Left, 14);
     setPadding(Edge::Right, 14);
-    setBorderWidth(2);
+    setCornerRadius(ui_theme::controlRadius());
+    setBorderWidth(1);
 
     label = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
     label->setWrap(true);
@@ -1749,7 +1750,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   addFolderButton->setBorderColors(Color(96, 169, 181, 255),
                                    Color(121, 199, 211, 255),
                                    Color(151, 224, 235, 255));
-  addFolderButton->setStyledBorderWidth(2);
+  addFolderButton->setCornerRadius(ui_theme::controlRadius());
+  addFolderButton->setStyledBorderWidth(1);
   addFolderButton->setOnClickListener(
       [this]() { addIOSFolderEntryFromFiles(); });
   nav->addView(addFolderButton);
@@ -1944,7 +1946,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButton->setBorderColors(ui_theme::cyan(),
                                      Color(142, 255, 248, 255),
                                      Color(255, 255, 255, 255));
-  playOptionsButton->setStyledBorderWidth(2);
+  playOptionsButton->setCornerRadius(ui_theme::controlRadius());
+  playOptionsButton->setStyledBorderWidth(1);
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
   readySettings->addView(playOptionsButton);
   right->addView(readySettings);
@@ -1963,7 +1966,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setBorderColors(ui_theme::cyan(),
                                Color(142, 255, 248, 255),
                                Color(255, 255, 255, 255));
-  startButton->setStyledBorderWidth(2);
+  startButton->setCornerRadius(ui_theme::controlRadius());
+  startButton->setStyledBorderWidth(1);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
@@ -1994,7 +1998,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButton->setBorderColors(Color(91, 174, 184, 255),
                                 Color(116, 204, 214, 255),
                                 Color(145, 232, 241, 255));
-  replayButton->setStyledBorderWidth(2);
+  replayButton->setCornerRadius(ui_theme::controlRadius());
+  replayButton->setStyledBorderWidth(1);
   replayButton->setOnClickListener([this]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -2030,7 +2035,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButton->setBorderColors(Color(94, 181, 153, 255),
                                  Color(119, 210, 180, 255),
                                  Color(148, 235, 204, 255));
-  findBmsButton->setStyledBorderWidth(2);
+  findBmsButton->setCornerRadius(ui_theme::controlRadius());
+  findBmsButton->setStyledBorderWidth(1);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -2051,7 +2057,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButton->setBorderColors(Color(188, 157, 87, 255),
                                Color(220, 188, 112, 255),
                                Color(244, 214, 143, 255));
-  unzipButton->setStyledBorderWidth(2);
+  unzipButton->setCornerRadius(ui_theme::controlRadius());
+  unzipButton->setStyledBorderWidth(1);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
@@ -2068,8 +2075,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
   jacketCard->setBackgroundColor(kSurfaceFill);
+  jacketCard->setCornerRadius(ui_theme::panelRadius());
   jacketCard->setBorderColor(ui_theme::hairline());
-  jacketCard->setBorderWidth(2);
+  jacketCard->setBorderWidth(1);
   jacketView->setWidth(200)->setHeight(200);
   jacketCard->addView(jacketView);
   startButton->setHeight(86);
@@ -2096,7 +2104,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButton->setBorderColors(Color(106, 153, 205, 255),
                                 Color(135, 181, 229, 255),
                                 Color(167, 209, 248, 255));
-  viewerButton->setStyledBorderWidth(2);
+  viewerButton->setCornerRadius(ui_theme::controlRadius());
+  viewerButton->setStyledBorderWidth(1);
   viewerButton->setOnClickListener(
       [this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
@@ -2114,7 +2123,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButton->setBorderColors(Color(106, 153, 205, 255),
                                 Color(135, 181, 229, 255),
                                 Color(167, 209, 248, 255));
-  revealButton->setStyledBorderWidth(2);
+  revealButton->setCornerRadius(ui_theme::controlRadius());
+  revealButton->setStyledBorderWidth(1);
   revealButton->setOnClickListener(
       [this]() { revealSelectedChartInFileManager(); });
   chartActionsRow->addView(revealButton);
@@ -2142,7 +2152,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsButton->setBorderColors(ui_theme::coral(),
                                   Color(255, 143, 118, 255),
                                   Color(255, 225, 198, 255));
-  settingsButton->setStyledBorderWidth(2);
+  settingsButton->setCornerRadius(ui_theme::controlRadius());
+  settingsButton->setStyledBorderWidth(1);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -3093,7 +3104,7 @@ void MainMenuScene::buildUnzipProgressModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setBackgroundColor(Color(16, 25, 39, 244))
       ->setBorderColor(Color(93, 123, 160, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   unzipModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   unzipModalTitleText->setText("Unzip");
@@ -3112,7 +3123,7 @@ void MainMenuScene::buildUnzipProgressModal() {
       ->setHeight(24)
       ->setBackgroundColor(Color(8, 14, 23, 230))
       ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
   unzipProgressFill = new View();
   unzipProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
       Color(74, 157, 224, 240));
@@ -3472,7 +3483,7 @@ void MainMenuScene::buildParseLogModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setBackgroundColor(Color(13, 22, 35, 242))
       ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Parsing Logs");
@@ -3486,7 +3497,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogScrollView->setFlex(1);
   parseLogScrollView->setBackgroundColor(Color(7, 14, 24, 230));
   parseLogScrollView->setBorderColor(Color(76, 105, 139, 255));
-  parseLogScrollView->setBorderWidth(2);
+  parseLogScrollView->setBorderWidth(1);
 
   parseLogContent = new View();
   parseLogContent->setFlexDirection(FlexDirection::Column);
@@ -3592,7 +3603,7 @@ void MainMenuScene::buildTasksModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setBackgroundColor(Color(13, 22, 35, 242))
       ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Tasks");
@@ -3606,7 +3617,7 @@ void MainMenuScene::buildTasksModal() {
   tasksScrollView->setFlex(1);
   tasksScrollView->setBackgroundColor(Color(7, 14, 24, 230));
   tasksScrollView->setBorderColor(Color(76, 105, 139, 255));
-  tasksScrollView->setBorderWidth(2);
+  tasksScrollView->setBorderWidth(1);
 
   tasksContent = new View();
   tasksContent->setFlexDirection(FlexDirection::Column);
@@ -3799,7 +3810,7 @@ void MainMenuScene::buildFindBmsModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setBackgroundColor(Color(13, 22, 35, 242))
       ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   findBmsModalTitleText->setText("Find BMS");
@@ -3829,7 +3840,7 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsLogScrollView->setHeight(112);
   findBmsLogScrollView->setBackgroundColor(Color(7, 14, 24, 210));
   findBmsLogScrollView->setBorderColor(Color(76, 105, 139, 255));
-  findBmsLogScrollView->setBorderWidth(2);
+  findBmsLogScrollView->setBorderWidth(1);
 
   findBmsLogContent = new View();
   findBmsLogContent->setFlexDirection(FlexDirection::Column);
@@ -3855,7 +3866,7 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsCandidateRecyclerView->setHeight(0);
   findBmsCandidateRecyclerView->setBackgroundColor(Color(7, 14, 24, 210));
   findBmsCandidateRecyclerView->setBorderColor(Color(76, 105, 139, 255));
-  findBmsCandidateRecyclerView->setBorderWidth(2);
+  findBmsCandidateRecyclerView->setBorderWidth(1);
   findBmsCandidateRecyclerView->setVisible(false);
   findBmsCandidateRecyclerView->onCreateView = [](const BmsSearchCandidate &) {
     return new FindBmsCandidateItemView();
@@ -3880,7 +3891,7 @@ void MainMenuScene::buildFindBmsModal() {
       ->setHeight(24)
       ->setBackgroundColor(Color(8, 14, 23, 230))
       ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
   findBmsProgressFill = new View();
   findBmsProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
       Color(62, 168, 145, 240));
@@ -4370,7 +4381,7 @@ void MainMenuScene::buildPlayOptionsModal() {
       ->setPadding(Edge::All, 22)
       ->setBackgroundColor(Color(13, 22, 35, 242))
       ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Play Options");
@@ -4508,7 +4519,7 @@ void MainMenuScene::buildReplayModal() {
       ->setPadding(Edge::All, 22)
       ->setBackgroundColor(Color(13, 22, 35, 242))
       ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
 
   replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   replayModalTitleText->setText("Replay");
@@ -4539,7 +4550,7 @@ void MainMenuScene::buildReplayModal() {
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
   replayListView->setBorderColor(Color(55, 76, 102, 255));
-  replayListView->setBorderWidth(2);
+  replayListView->setBorderWidth(1);
   replayListContent->addView(replayListView);
   replayModalContentFrame->addView(replayListContent);
 
@@ -4630,7 +4641,7 @@ void MainMenuScene::buildReplayModal() {
       ->setHeight(24)
       ->setBackgroundColor(Color(8, 14, 23, 230))
       ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setBorderWidth(1);
   replayExportProgressFill = new View();
   replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
       Color(62, 168, 145, 240));
