@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #ifdef _WIN32
 #define sf_open sf_wchar_open
 #endif
@@ -72,6 +73,7 @@ sf_count_t memoryFileTell(void *userData) {
 bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
                      std::vector<short> &buffer, SF_INFO &fileInfo,
                      std::atomic<bool> &isCancelled) {
+  std::unique_ptr<SNDFILE, decltype(&sf_close)> fileHandle(file, sf_close);
   if (!file) {
     SDL_Log("Failed to open audio file %s, error: %s",
             path_t_to_utf8(displayPath).c_str(), sf_strerror(file));
@@ -79,7 +81,6 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   }
 
   if (isCancelled) {
-    sf_close(file);
     return false;
   }
   // Prepare a buffer to hold the PCM data
@@ -87,19 +88,17 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   // Read the audio data into the buffer
   std::vector<double> tempBuffer(fileInfo.frames * fileInfo.channels);
   if (isCancelled) {
-    sf_close(file);
     return false;
   }
   sf_count_t numFrames =
-      sf_readf_double(file, tempBuffer.data(), fileInfo.frames);
+      sf_readf_double(fileHandle.get(), tempBuffer.data(), fileInfo.frames);
   if (isCancelled) {
-    sf_close(file);
     return false;
   }
   if (numFrames < 0) {
     SDL_Log("Failed to read audio data from file %s, error: %s",
-            path_t_to_utf8(displayPath).c_str(), sf_strerror(file));
-    sf_close(file);
+            path_t_to_utf8(displayPath).c_str(),
+            sf_strerror(fileHandle.get()));
     return false;
   }
   // Convert the double buffer to short
@@ -108,7 +107,6 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
         return static_cast<short>(std::clamp(val, -1.0, 1.0) * 32767);
       });
   if (isCancelled) {
-    sf_close(file);
     return false;
   }
 
@@ -119,8 +117,6 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
     std::fill(buffer.begin() + numFrames * fileInfo.channels, buffer.end(), 0);
   }
 
-  // Close the file
-  sf_close(file);
   return true;
 }
 } // namespace

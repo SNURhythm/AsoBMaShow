@@ -79,11 +79,11 @@ void addUniquePath(std::vector<std::string> &paths, std::string path) {
 }
 
 bool canReadFile(const std::string &path) {
-  SDL_RWops *rw = SDL_RWFromFile(path.c_str(), "rb");
+  std::unique_ptr<SDL_RWops, decltype(&SDL_RWclose)> rw(
+      SDL_RWFromFile(path.c_str(), "rb"), SDL_RWclose);
   if (rw == nullptr) {
     return false;
   }
-  SDL_RWclose(rw);
   return true;
 }
 

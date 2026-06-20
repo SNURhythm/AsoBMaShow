@@ -3,6 +3,7 @@
 #include "../ChartDBHelper.h"
 #include "Scene.h"
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -31,7 +32,8 @@ class Note;
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
-  explicit SettingsScene(ApplicationContext &context) : Scene(context) {}
+  explicit SettingsScene(ApplicationContext &context);
+  ~SettingsScene() override;
 
   void init() override;
   void update(float dt) override;
@@ -116,10 +118,10 @@ private:
   bool previewActive = false;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
-  bms_parser::Chart *previewChart = nullptr;
-  BMSRenderer *previewRenderer = nullptr;
-  RhythmInputHandler *previewInputHandler = nullptr;
-  RhythmLaneInputController *previewLaneController = nullptr;
+  std::unique_ptr<bms_parser::Chart> previewChart;
+  std::unique_ptr<BMSRenderer> previewRenderer;
+  std::unique_ptr<RhythmInputHandler> previewInputHandler;
+  std::unique_ptr<RhythmLaneInputController> previewLaneController;
   std::unordered_map<int, bool> previewLanePressed;
   long long previewElapsedMicros = 0;
   int previewCombo = 0;
