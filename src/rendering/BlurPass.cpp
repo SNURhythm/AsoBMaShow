@@ -118,17 +118,17 @@ void BlurPass::createFrameBuffers() {
   tex_scene_color_ =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
                             bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_scene_ = bgfx::createFrameBuffer(1, &tex_scene_color_, true);
+  fb_scene_ = bgfx::createFrameBuffer(1, &tex_scene_color_, false);
 
   tex_blur_a_ =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
                             bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_blur_a_ = bgfx::createFrameBuffer(1, &tex_blur_a_, true);
+  fb_blur_a_ = bgfx::createFrameBuffer(1, &tex_blur_a_, false);
 
   tex_blur_b_ =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
                             bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_blur_b_ = bgfx::createFrameBuffer(1, &tex_blur_b_, true);
+  fb_blur_b_ = bgfx::createFrameBuffer(1, &tex_blur_b_, false);
 
   for (const auto view : input_views_) {
     bgfx::setViewFrameBuffer(view, fb_scene_);

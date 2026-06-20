@@ -9,11 +9,44 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+struct SqliteStatementDeleter {
+  void operator()(sqlite3_stmt *stmt) const {
+    if (stmt != nullptr) {
+      sqlite3_finalize(stmt);
+    }
+  }
+};
+
+using SqliteStatementHandle =
+    std::unique_ptr<sqlite3_stmt, SqliteStatementDeleter>;
+
+class ReplayDbConnection {
+public:
+  ReplayDbConnection(ReplayDBHelper &helper, sqlite3 *db)
+      : helper_(helper), db_(db) {}
+
+  ReplayDbConnection(const ReplayDbConnection &) = delete;
+  ReplayDbConnection &operator=(const ReplayDbConnection &) = delete;
+
+  ~ReplayDbConnection() {
+    if (db_ != nullptr) {
+      helper_.Close(db_);
+    }
+  }
+
+  sqlite3 *get() const { return db_; }
+
+private:
+  ReplayDBHelper &helper_;
+  sqlite3 *db_ = nullptr;
+};
+
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   static const std::filesystem::path documents =
@@ -67,23 +100,23 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 bool tableHasColumn(sqlite3 *db, const char *tableName,
                     const char *columnName) {
   const std::string query = std::string("PRAGMA table_info(") + tableName + ")";
-  sqlite3_stmt *stmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while reading replay schema: %s", sqlite3_errmsg(db));
     return false;
   }
 
   bool found = false;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
     if (text != nullptr && std::string(text) == columnName) {
       found = true;
       break;
     }
   }
-  sqlite3_finalize(stmt);
   return found;
 }
 
@@ -391,14 +424,14 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
-  sqlite3 *db = Connect();
+  ReplayDbConnection dbHandle(*this, Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return std::nullopt;
   }
 
   if (!CreateReplayTables(db) ||
       !execSql(db, "BEGIN IMMEDIATE TRANSACTION", "starting replay save")) {
-    Close(db);
     return std::nullopt;
   }
 
@@ -415,55 +448,57 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "@play_option, @play_option_seed, @play_option2, @play_option2_seed"
       ")";
 
-  sqlite3_stmt *replayStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, replayInsert, -1, &replayStmt, nullptr);
+  sqlite3_stmt *rawReplayStmt = nullptr;
+  int rc =
+      sqlite3_prepare_v2(db, replayInsert, -1, &rawReplayStmt, nullptr);
+  SqliteStatementHandle replayStmt(rawReplayStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
     execSql(db, "ROLLBACK", "rolling back replay save");
-    Close(db);
     return std::nullopt;
   }
 
   const auto chartPath = path_t_to_utf8(
       fspath_to_path_t(toStoredChartPath(replay.chartMeta.BmsPath)));
   int bindIndex = 1;
-  bindText(replayStmt, bindIndex++, chartPath);
-  bindText(replayStmt, bindIndex++, replay.chartMeta.MD5);
-  bindText(replayStmt, bindIndex++, replay.chartMeta.SHA256);
-  bindText(replayStmt, bindIndex++, replay.chartMeta.Title);
-  bindText(replayStmt, bindIndex++, replay.chartMeta.Artist);
-  sqlite3_bind_int(replayStmt, bindIndex++,
+  bindText(replayStmt.get(), bindIndex++, chartPath);
+  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
+  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
+  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
+  sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
-  sqlite3_bind_int(replayStmt, bindIndex++, replay.gaugeAutoShift ? 1 : 0);
-  sqlite3_bind_int(replayStmt, bindIndex++, replay.finalScore);
-  sqlite3_bind_double(replayStmt, bindIndex++, replay.finalGauge);
-  sqlite3_bind_int(replayStmt, bindIndex++, replay.clearType);
+  sqlite3_bind_int(replayStmt.get(), bindIndex++,
+                   replay.gaugeAutoShift ? 1 : 0);
+  sqlite3_bind_int(replayStmt.get(), bindIndex++, replay.finalScore);
+  sqlite3_bind_double(replayStmt.get(), bindIndex++, replay.finalGauge);
+  sqlite3_bind_int(replayStmt.get(), bindIndex++, replay.clearType);
   if (replay.randomSeed.has_value()) {
-    sqlite3_bind_int64(replayStmt, bindIndex++,
+    sqlite3_bind_int64(replayStmt.get(), bindIndex++,
                        static_cast<sqlite3_int64>(*replay.randomSeed));
   } else {
-    sqlite3_bind_null(replayStmt, bindIndex++);
+    sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
   if (replay.randomPrng.has_value()) {
-    bindText(replayStmt, bindIndex++, *replay.randomPrng);
+    bindText(replayStmt.get(), bindIndex++, *replay.randomPrng);
   } else if (replay.randomSeed.has_value()) {
-    bindText(replayStmt, bindIndex++, bms_parser::Parser::RandomPrngId);
+    bindText(replayStmt.get(), bindIndex++,
+             bms_parser::Parser::RandomPrngId);
   } else {
-    sqlite3_bind_null(replayStmt, bindIndex++);
+    sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
-  bindOptionalText(replayStmt, bindIndex++,
+  bindOptionalText(replayStmt.get(), bindIndex++,
                    serializeRandomValues(replay.randomValues));
-  bindOptionalText(replayStmt, bindIndex++, replay.playOption);
-  bindOptionalInt64(replayStmt, bindIndex++, replay.playOptionSeed);
-  bindOptionalText(replayStmt, bindIndex++, replay.playOption2);
-  bindOptionalInt64(replayStmt, bindIndex++, replay.playOption2Seed);
+  bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption);
+  bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
+  bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
+  bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
 
-  rc = sqlite3_step(replayStmt);
-  sqlite3_finalize(replayStmt);
+  rc = sqlite3_step(replayStmt.get());
+  replayStmt.reset();
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving replay: %s", sqlite3_errmsg(db));
     execSql(db, "ROLLBACK", "rolling back replay save");
-    Close(db);
     return std::nullopt;
   }
 
@@ -475,47 +510,45 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "gauge, gauge_type, combo, score"
       ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-  sqlite3_stmt *eventStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, eventInsert, -1, &eventStmt, nullptr);
+  sqlite3_stmt *rawEventStmt = nullptr;
+  rc = sqlite3_prepare_v2(db, eventInsert, -1, &rawEventStmt, nullptr);
+  SqliteStatementHandle eventStmt(rawEventStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event insert: %s",
             sqlite3_errmsg(db));
     execSql(db, "ROLLBACK", "rolling back replay save");
-    Close(db);
     return std::nullopt;
   }
 
   bool eventOk = true;
   for (size_t i = 0; i < replay.events.size(); ++i) {
-    if (!insertReplayEvent(eventStmt, replayId, static_cast<int>(i),
+    if (!insertReplayEvent(eventStmt.get(), replayId, static_cast<int>(i),
                            replay.events[i])) {
       SDL_Log("SQL error while saving replay event: %s", sqlite3_errmsg(db));
       eventOk = false;
       break;
     }
   }
-  sqlite3_finalize(eventStmt);
+  eventStmt.reset();
 
   if (!eventOk || !execSql(db, "COMMIT", "committing replay save")) {
     execSql(db, "ROLLBACK", "rolling back replay save");
-    Close(db);
     return std::nullopt;
   }
 
-  Close(db);
   return replayId;
 }
 
 std::vector<ReplaySummary>
 ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   std::vector<ReplaySummary> replays;
-  sqlite3 *db = Connect();
+  ReplayDbConnection dbHandle(*this, Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return replays;
   }
 
   if (!CreateReplayTables(db)) {
-    Close(db);
     return replays;
   }
 
@@ -537,35 +570,33 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "GROUP BY r.id "
       "ORDER BY r.id DESC LIMIT ?";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay list: %s", sqlite3_errmsg(db));
-    Close(db);
     return replays;
   }
 
-  int bindIndex = bindReplayChartMatch(stmt, 1, match);
-  sqlite3_bind_int(stmt, bindIndex++, limit);
+  int bindIndex = bindReplayChartMatch(stmt.get(), 1, match);
+  sqlite3_bind_int(stmt.get(), bindIndex++, limit);
 
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    replays.push_back(readReplaySummary(stmt, 16));
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    replays.push_back(readReplaySummary(stmt.get(), 16));
   }
-  sqlite3_finalize(stmt);
-  Close(db);
   return replays;
 }
 
 std::optional<ReplayData>
 ReplayDBHelper::LoadReplay(int replayId,
                            const bms_parser::ChartMeta &chartMeta) {
-  sqlite3 *db = Connect();
+  ReplayDbConnection dbHandle(*this, Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return std::nullopt;
   }
 
   if (!CreateReplayTables(db)) {
-    Close(db);
     return std::nullopt;
   }
 
@@ -581,65 +612,66 @@ ReplayDBHelper::LoadReplay(int replayId,
       "(? != '' AND chart_md5 = ?) OR "
       "(? != '' AND chart_path = ?))";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay load: %s", sqlite3_errmsg(db));
-    Close(db);
     return std::nullopt;
   }
 
-  sqlite3_bind_int(stmt, 1, replayId);
-  bindReplayChartMatch(stmt, 2, match);
+  sqlite3_bind_int(stmt.get(), 1, replayId);
+  bindReplayChartMatch(stmt.get(), 2, match);
   std::optional<ReplayData> replay;
-  if (sqlite3_step(stmt) == SQLITE_ROW) {
+  if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     ReplayData loaded;
-    loaded.id = sqlite3_column_int(stmt, 0);
+    loaded.id = sqlite3_column_int(stmt.get(), 0);
     loaded.chartMeta = chartMeta;
-    loaded.chartMeta.BmsPath = readText(stmt, 1);
-    loaded.chartMeta.MD5 = readText(stmt, 2);
-    loaded.chartMeta.SHA256 = readText(stmt, 3);
-    loaded.chartMeta.Title = readText(stmt, 4);
-    loaded.chartMeta.Artist = readText(stmt, 5);
-    loaded.initialGaugeType = gaugeTypeFromInt(sqlite3_column_int(stmt, 6));
-    loaded.gaugeAutoShift = sqlite3_column_int(stmt, 7) != 0;
-    loaded.finalScore = sqlite3_column_int(stmt, 8);
-    loaded.finalGauge = static_cast<float>(sqlite3_column_double(stmt, 9));
-    loaded.clearType = sqlite3_column_int(stmt, 10);
-    loaded.createdAt = readText(stmt, 11);
-    if (sqlite3_column_type(stmt, 12) != SQLITE_NULL) {
+    loaded.chartMeta.BmsPath = readText(stmt.get(), 1);
+    loaded.chartMeta.MD5 = readText(stmt.get(), 2);
+    loaded.chartMeta.SHA256 = readText(stmt.get(), 3);
+    loaded.chartMeta.Title = readText(stmt.get(), 4);
+    loaded.chartMeta.Artist = readText(stmt.get(), 5);
+    loaded.initialGaugeType =
+        gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 6));
+    loaded.gaugeAutoShift = sqlite3_column_int(stmt.get(), 7) != 0;
+    loaded.finalScore = sqlite3_column_int(stmt.get(), 8);
+    loaded.finalGauge =
+        static_cast<float>(sqlite3_column_double(stmt.get(), 9));
+    loaded.clearType = sqlite3_column_int(stmt.get(), 10);
+    loaded.createdAt = readText(stmt.get(), 11);
+    if (sqlite3_column_type(stmt.get(), 12) != SQLITE_NULL) {
       loaded.randomSeed =
-          static_cast<unsigned int>(sqlite3_column_int64(stmt, 12));
+          static_cast<unsigned int>(sqlite3_column_int64(stmt.get(), 12));
       loaded.chartMeta.RandomSeed = loaded.randomSeed;
     }
-    if (sqlite3_column_type(stmt, 13) != SQLITE_NULL) {
-      loaded.randomPrng = readText(stmt, 13);
+    if (sqlite3_column_type(stmt.get(), 13) != SQLITE_NULL) {
+      loaded.randomPrng = readText(stmt.get(), 13);
     } else if (loaded.randomSeed.has_value()) {
       loaded.randomPrng = bms_parser::Parser::RandomPrngId;
     }
     loaded.chartMeta.RandomPrng = loaded.randomPrng;
-    if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
-      loaded.randomValues = parseRandomValues(readText(stmt, 14));
+    if (sqlite3_column_type(stmt.get(), 14) != SQLITE_NULL) {
+      loaded.randomValues = parseRandomValues(readText(stmt.get(), 14));
     }
     loaded.chartMeta.RandomValues = loaded.randomValues;
-    if (sqlite3_column_type(stmt, 15) != SQLITE_NULL) {
-      loaded.playOption = readText(stmt, 15);
+    if (sqlite3_column_type(stmt.get(), 15) != SQLITE_NULL) {
+      loaded.playOption = readText(stmt.get(), 15);
     }
-    if (sqlite3_column_type(stmt, 16) != SQLITE_NULL) {
-      loaded.playOptionSeed = sqlite3_column_int64(stmt, 16);
+    if (sqlite3_column_type(stmt.get(), 16) != SQLITE_NULL) {
+      loaded.playOptionSeed = sqlite3_column_int64(stmt.get(), 16);
     }
-    if (sqlite3_column_type(stmt, 17) != SQLITE_NULL) {
-      loaded.playOption2 = readText(stmt, 17);
+    if (sqlite3_column_type(stmt.get(), 17) != SQLITE_NULL) {
+      loaded.playOption2 = readText(stmt.get(), 17);
     }
-    if (sqlite3_column_type(stmt, 18) != SQLITE_NULL) {
-      loaded.playOption2Seed = sqlite3_column_int64(stmt, 18);
+    if (sqlite3_column_type(stmt.get(), 18) != SQLITE_NULL) {
+      loaded.playOption2Seed = sqlite3_column_int64(stmt.get(), 18);
     }
     replay = std::move(loaded);
   }
-  sqlite3_finalize(stmt);
+  stmt.reset();
 
   if (!replay.has_value()) {
-    Close(db);
     return std::nullopt;
   }
 
@@ -647,34 +679,33 @@ ReplayDBHelper::LoadReplay(int replayId,
       "SELECT action, lane, note_time_micros, song_time_micros,"
       "judge_time_micros, judgement, diff_micros, gauge, gauge_type, combo,"
       "score FROM replay_events WHERE replay_id = ? ORDER BY event_index";
-  sqlite3_stmt *eventStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, eventQuery, -1, &eventStmt, nullptr);
+  sqlite3_stmt *rawEventStmt = nullptr;
+  rc = sqlite3_prepare_v2(db, eventQuery, -1, &rawEventStmt, nullptr);
+  SqliteStatementHandle eventStmt(rawEventStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event load: %s",
             sqlite3_errmsg(db));
-    Close(db);
     return std::nullopt;
   }
-  sqlite3_bind_int(eventStmt, 1, replay->id);
+  sqlite3_bind_int(eventStmt.get(), 1, replay->id);
 
-  while (sqlite3_step(eventStmt) == SQLITE_ROW) {
+  while (sqlite3_step(eventStmt.get()) == SQLITE_ROW) {
     ReplayEvent event;
-    event.action = actionFromInt(sqlite3_column_int(eventStmt, 0));
-    event.lane = sqlite3_column_int(eventStmt, 1);
-    event.noteTimeMicros = sqlite3_column_int64(eventStmt, 2);
-    event.songTimeMicros = sqlite3_column_int64(eventStmt, 3);
-    event.judgeTimeMicros = sqlite3_column_int64(eventStmt, 4);
-    event.judgement = judgementFromInt(sqlite3_column_int(eventStmt, 5));
-    event.diffMicros = sqlite3_column_int64(eventStmt, 6);
-    event.gauge = static_cast<float>(sqlite3_column_double(eventStmt, 7));
-    event.gaugeType = gaugeTypeFromInt(sqlite3_column_int(eventStmt, 8));
-    event.combo = sqlite3_column_int(eventStmt, 9);
-    event.score = sqlite3_column_int(eventStmt, 10);
+    event.action = actionFromInt(sqlite3_column_int(eventStmt.get(), 0));
+    event.lane = sqlite3_column_int(eventStmt.get(), 1);
+    event.noteTimeMicros = sqlite3_column_int64(eventStmt.get(), 2);
+    event.songTimeMicros = sqlite3_column_int64(eventStmt.get(), 3);
+    event.judgeTimeMicros = sqlite3_column_int64(eventStmt.get(), 4);
+    event.judgement = judgementFromInt(sqlite3_column_int(eventStmt.get(), 5));
+    event.diffMicros = sqlite3_column_int64(eventStmt.get(), 6);
+    event.gauge =
+        static_cast<float>(sqlite3_column_double(eventStmt.get(), 7));
+    event.gaugeType = gaugeTypeFromInt(sqlite3_column_int(eventStmt.get(), 8));
+    event.combo = sqlite3_column_int(eventStmt.get(), 9);
+    event.score = sqlite3_column_int(eventStmt.get(), 10);
     replay->events.push_back(event);
   }
-  sqlite3_finalize(eventStmt);
 
-  Close(db);
   return replay;
 }
 

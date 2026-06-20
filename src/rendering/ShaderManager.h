@@ -5,6 +5,9 @@
 #include <SDL2/SDL.h>
 #include <unordered_map>
 #include <filesystem>
+#include <cstdint>
+#include <limits>
+#include <memory>
 namespace rendering {
 // singleton
 class ShaderManager {
@@ -40,19 +43,26 @@ private:
     }
 
     std::string path = (shaderPath / FILENAME).string();
-    SDL_RWops *rw = SDL_RWFromFile(path.c_str(), "rb");
+    std::unique_ptr<SDL_RWops, decltype(&SDL_RWclose)> rw(
+        SDL_RWFromFile(path.c_str(), "rb"), SDL_RWclose);
     if (rw == nullptr) {
       throw std::runtime_error("Failed to open shader file: " + path);
     }
-    size_t size = SDL_RWsize(rw);
-    void *data = SDL_malloc(size);
-    if (SDL_RWread(rw, data, 1, size) != size) {
-      SDL_free(data);
-      SDL_RWclose(rw);
+    const Sint64 fileSize = SDL_RWsize(rw.get());
+    if (fileSize <= 0 ||
+        fileSize > static_cast<Sint64>(std::numeric_limits<uint32_t>::max())) {
+      throw std::runtime_error("Invalid shader file size: " + path);
+    }
+    const auto size = static_cast<uint32_t>(fileSize);
+    std::unique_ptr<void, decltype(&SDL_free)> data(SDL_malloc(size),
+                                                    SDL_free);
+    if (data == nullptr) {
+      throw std::runtime_error("Failed to allocate shader buffer: " + path);
+    }
+    if (SDL_RWread(rw.get(), data.get(), 1, size) != size) {
       throw std::runtime_error("Failed to read shader file: " + path);
     }
-    SDL_RWclose(rw);
-    return bgfx::createShader(bgfx::copy(data, size));
+    return bgfx::createShader(bgfx::copy(data.get(), size));
   }
 
 public:
