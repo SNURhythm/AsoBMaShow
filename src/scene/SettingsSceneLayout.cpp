@@ -124,13 +124,11 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   }
 
   visibleTimeModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeModeButton = makeButton(
+  visibleTimeModeButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-      Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-      Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+      visibleTimeModeText);
   visibleTimeModeButton->setOnClickListener([this]() {
     context.settings.visibleTimeUseMilliseconds =
         !context.settings.visibleTimeUseMilliseconds;
@@ -140,14 +138,11 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeControls->addView(visibleTimeModeButton);
 
   visibleTimeBpmStrategyText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeBpmStrategyButton = makeButton(
+  visibleTimeBpmStrategyButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeBpmStrategyText, Color(33, 56, 87, 255),
-      Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+      visibleTimeBpmStrategyText);
   visibleTimeBpmStrategyButton->setOnClickListener([this]() {
     context.settings.visibleTimeBpmStrategy =
         nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
@@ -257,18 +252,17 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->setFlexDirection(FlexDirection::Column);
   previewPanel->setAlignItems(previewPanelFolded ? YGAlignFlexEnd
                                                  : YGAlignStretch);
-  previewPanel->setBackgroundColor(Color(12, 20, 32, 184));
-  previewPanel->setBorderColor(Color(78, 105, 140, 220));
-  previewPanel->setBorderWidth(2);
+  previewPanel->setBackgroundColor(ui_theme::panel());
+  previewPanel->setCornerRadius(ui_theme::panelRadius());
+  previewPanel->setShadow(ui_theme::shadow(), 0, 10, 18);
+  previewPanel->setBorderColor(ui_theme::hairline());
+  previewPanel->setBorderWidth(1);
 
   auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
-    auto *button =
-        makeButton(foldButtonSize, foldButtonSize,
-                   makeText(label, 28, Color(239, 244, 251), TextView::CENTER,
-                            TextView::MIDDLE),
-                   Color(22, 33, 49, 190), Color(31, 46, 67, 220),
-                   Color(53, 78, 110, 240), Color(96, 121, 156, 230),
-                   Color(120, 151, 190, 245), Color(148, 186, 231, 255));
+    auto *button = makeControlButton(
+        foldButtonSize, foldButtonSize,
+        makeText(label, 28, ui_theme::textPrimary(), TextView::CENTER,
+                 TextView::MIDDLE));
     button->setOnClickListener([this]() {
       previewPanelFolded = !previewPanelFolded;
       lastLayoutWidth = -1;
@@ -653,14 +647,11 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
 
   judgementIndicatorModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  judgementIndicatorModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 judgementIndicatorModeText, Color(35, 68, 62, 255),
-                 Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-                 Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-                 Color(145, 214, 195, 255));
+  judgementIndicatorModeButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      judgementIndicatorModeText, ui_theme::lime());
   judgementIndicatorModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorEnabled =
         !context.settings.judgementIndicatorEnabled;
@@ -669,14 +660,11 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
 
   judgementIndicatorRenderModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  judgementIndicatorRenderModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 judgementIndicatorRenderModeText, Color(33, 56, 87, 255),
-                 Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-                 Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-                 Color(139, 189, 244, 255));
+  judgementIndicatorRenderModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      judgementIndicatorRenderModeText);
   judgementIndicatorRenderModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorRenderMode =
         nextJudgementIndicatorRenderMode(
@@ -824,13 +812,10 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
             "the right.",
       metrics.bodyTextSize, Color(150, 171, 193)));
   keysoundModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  keysoundModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText,
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+  keysoundModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText);
   keysoundModeButton->setOnClickListener([this]() {
     context.settings.inputKeysoundEnabled =
         !context.settings.inputKeysoundEnabled;
@@ -857,13 +842,11 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
             "multiple notes are inside the input window.",
       metrics.bodyTextSize, Color(150, 171, 193)));
   notePriorityModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  notePriorityModeButton = makeButton(
+  notePriorityModeButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      notePriorityModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-      Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-      Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+      notePriorityModeText);
   notePriorityModeButton->setOnClickListener([this]() {
     context.settings.notePriorityMode =
         nextNotePriorityMode(context.settings.notePriorityMode);
@@ -894,13 +877,10 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
                       : "Tap to switch BGA rendering on or off for future "
                         "previews and charts.",
       metrics.bodyTextSize, Color(150, 171, 193)));
-  bgaModeText = makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+  bgaModeText = makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
-  bgaModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 bgaModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-                 Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-                 Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+  bgaModeButton = makeControlButton(metrics.actionButtonWidth,
+                                    metrics.actionButtonHeight, bgaModeText);
   bgaModeButton->setOnClickListener([this]() {
     context.settings.bgaEnabled = !context.settings.bgaEnabled;
     persistSettings();
@@ -925,14 +905,11 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
                         "markers. Judgement and scoring stay unchanged.",
       metrics.bodyTextSize, Color(150, 171, 193)));
   showInvisibleNotesModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  showInvisibleNotesModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 showInvisibleNotesModeText, Color(33, 56, 87, 255),
-                 Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-                 Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-                 Color(139, 189, 244, 255));
+  showInvisibleNotesModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      showInvisibleNotesModeText);
   showInvisibleNotesModeButton->setOnClickListener([this]() {
     context.settings.showInvisibleNotes = !context.settings.showInvisibleNotes;
     persistSettings();
@@ -963,13 +940,11 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
             "preserving aspect.",
       metrics.bodyTextSize, Color(150, 171, 193)));
   bgaDisplayModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  bgaDisplayModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, bgaDisplayModeText,
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+  bgaDisplayModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      bgaDisplayModeText);
   bgaDisplayModeButton->setOnClickListener([this]() {
     context.settings.bgaDisplayMode =
         nextBgaDisplayMode(context.settings.bgaDisplayMode);
@@ -1395,13 +1370,11 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "same lane renderer, camera, viewport, and note textures as "
             "gameplay.",
       metrics.bodyTextSize, Color(150, 171, 193)));
-  auto *previewButton = makeButton(
+  auto *previewButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Preview", metrics.bodyTextSize + 4, Color(239, 244, 251),
+      makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+      ui_theme::lime());
   previewButton->setOnClickListener([this]() { startLanePreview(); });
   previewControls->addView(previewButton);
   cardsColumn->addView(makeCard(
@@ -1428,11 +1401,9 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   uiThemeModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  uiThemeModeButton = makeButton(
+  uiThemeModeButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight, uiThemeModeText,
-      Color(23, 151, 143, 255), Color(34, 196, 187, 255),
-      Color(63, 228, 217, 255), ui_theme::cyan(),
-      Color(142, 255, 248, 255), Color(255, 255, 255, 255));
+      ui_theme::cyan());
   uiThemeModeButton->setOnClickListener([this]() {
     context.settings.uiThemeMode =
         nextUiThemeMode(context.settings.uiThemeMode);
@@ -1458,14 +1429,11 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
                         "from the song select screen.",
       metrics.bodyTextSize, Color(150, 171, 193)));
   archiveChartPreviewModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  archiveChartPreviewModeButton = makeButton(
+  archiveChartPreviewModeButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      archiveChartPreviewModeText, Color(35, 68, 62, 255),
-      Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+      archiveChartPreviewModeText, ui_theme::lime());
   archiveChartPreviewModeButton->setOnClickListener([this]() {
     context.settings.archiveChartPreviewEnabled =
         !context.settings.archiveChartPreviewEnabled;
@@ -1517,13 +1485,11 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   });
   urlRow->addView(tableUrlInput);
 
-  auto *addButton = makeButton(
+  auto *addButton = makeAccentButton(
       addButtonWidth, metrics.actionButtonHeight,
-      makeText("Add Table", metrics.bodyTextSize + 4, Color(239, 244, 251),
+      makeText("Add Table", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+      ui_theme::lime());
   addButton->setOnClickListener([this]() { addDifficultyTableFromUrl(); });
   urlRow->addView(addButton);
   addControls->addView(urlRow);
@@ -1545,13 +1511,12 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   folderList->setFlexDirection(FlexDirection::Column);
   folderList->setGap(metrics.compact ? 10.0f : 12.0f);
 
-  auto *refreshFoldersButton = makeButton(
+  auto *refreshFoldersButton = makeAccentButton(
       metrics.compact ? 160 : 180, metrics.actionButtonHeight,
-      makeText("Refresh List", metrics.bodyTextSize + 2, Color(239, 244, 251),
+      makeText("Refresh List", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+      ui_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
   folderList->addView(refreshFoldersButton);
 
@@ -1567,16 +1532,17 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(Color(12, 21, 34, 230));
-      row->setBorderColor(Color(63, 86, 113, 255));
-      row->setBorderWidth(2);
+      row->setBackgroundColor(ui_theme::panelSubtle());
+      row->setCornerRadius(ui_theme::controlRadius());
+      row->setBorderColor(ui_theme::hairline());
+      row->setBorderWidth(1);
 
       row->addView(makeWrappedText(formatChartEntryName(entry),
                                    metrics.bodyTextSize + 6,
-                                   Color(244, 248, 255)));
+                                   ui_theme::textPrimary()));
       row->addView(makeWrappedText(formatChartEntrySource(entry),
                                    metrics.smallTextSize,
-                                   Color(142, 164, 189)));
+                                   ui_theme::textMuted()));
 
       auto *actions = new View();
       actions->setFlexDirection(FlexDirection::Row);
@@ -1586,16 +1552,12 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       const int folderActionWidth = metrics.compact ? 136 : 156;
       const bool confirmingDelete =
           pendingDeleteChartEntryPath == entryPathText;
-      auto *deleteButton = makeButton(
+      auto *deleteButton = makeAccentButton(
           folderActionWidth, metrics.actionButtonHeight,
           makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, Color(248, 241, 236),
+                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          confirmingDelete ? Color(130, 58, 45, 255) : Color(96, 57, 44, 255),
-          confirmingDelete ? Color(153, 75, 58, 255) : Color(117, 72, 55, 255),
-          confirmingDelete ? Color(184, 96, 74, 255) : Color(153, 96, 74, 255),
-          Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-          Color(219, 145, 108, 255));
+          ui_theme::coral());
       deleteButton->setOnClickListener(
           [this, entryPathText]() { deleteChartEntry(entryPathText); });
       actions->addView(deleteButton);
@@ -1607,20 +1569,13 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
           backupStatusIt != chartEntryICloudBackupExcluded.end() &&
           backupStatusIt->second;
       const int backupActionWidth = metrics.compact ? 224 : 260;
-      auto *backupButton = makeButton(
+      auto *backupButton = makeAccentButton(
           backupActionWidth, metrics.actionButtonHeight,
           makeText(backupExcluded ? "Enable iCloud Backup"
                                   : "Disable iCloud Backup",
-                   metrics.smallTextSize, Color(239, 244, 251),
+                   metrics.smallTextSize, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          backupExcluded ? Color(33, 56, 87, 255) : Color(35, 68, 62, 255),
-          backupExcluded ? Color(43, 72, 110, 255) : Color(45, 88, 80, 255),
-          backupExcluded ? Color(59, 98, 147, 255) : Color(63, 118, 107, 255),
-          backupExcluded ? Color(92, 131, 177, 255) : Color(97, 157, 142, 255),
-          backupExcluded ? Color(118, 163, 217, 255)
-                         : Color(120, 187, 169, 255),
-          backupExcluded ? Color(139, 189, 244, 255)
-                         : Color(145, 214, 195, 255));
+          backupExcluded ? ui_theme::cyan() : ui_theme::lime());
       backupButton->setOnClickListener([this, entryPathText]() {
         toggleChartEntryICloudBackup(entryPathText);
       });
@@ -1653,9 +1608,10 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(Color(12, 21, 34, 230));
-      row->setBorderColor(Color(63, 86, 113, 255));
-      row->setBorderWidth(2);
+      row->setBackgroundColor(ui_theme::panelSubtle());
+      row->setCornerRadius(ui_theme::controlRadius());
+      row->setBorderColor(ui_theme::hairline());
+      row->setBorderWidth(1);
 
       auto *titleRow = new View();
       titleRow->setFlexDirection(FlexDirection::Row);
@@ -1663,16 +1619,17 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
       titleRow->setAlignItems(YGAlignCenter);
       titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
-                                        Color(244, 248, 255)));
+                                        ui_theme::textPrimary()));
       titleRow->addView(
-          makeText(table.symbol, metrics.bodyTextSize, Color(181, 207, 236)));
+          makeText(table.symbol, metrics.bodyTextSize, ui_theme::cyan()));
       titleRow->addView(makeText(formatTableCount(table.chartCount),
-                                 metrics.bodyTextSize, Color(165, 185, 205)));
+                                 metrics.bodyTextSize,
+                                 ui_theme::textSecondary()));
       row->addView(titleRow);
 
       row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
                                    metrics.smallTextSize,
-                                   Color(142, 164, 189)));
+                                   ui_theme::textMuted()));
 
       auto *actions = new View();
       actions->setFlexDirection(FlexDirection::Row);
@@ -1680,29 +1637,23 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int smallActionWidth = metrics.compact ? 136 : 156;
-      auto *updateButton = makeButton(
+      auto *updateButton = makeControlButton(
           smallActionWidth, metrics.actionButtonHeight,
-          makeText("Update", metrics.bodyTextSize + 2, Color(239, 244, 251),
-                   TextView::CENTER, TextView::MIDDLE),
-          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-          Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-          Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+          makeText("Update", metrics.bodyTextSize + 2,
+                   ui_theme::textPrimary(), TextView::CENTER,
+                   TextView::MIDDLE));
       updateButton->setOnClickListener([this, tableId = table.id]() {
         updateDifficultyTableFromSource(tableId);
       });
       actions->addView(updateButton);
 
       const bool confirmingDelete = pendingDeleteDifficultyTableId == table.id;
-      auto *deleteButton = makeButton(
+      auto *deleteButton = makeAccentButton(
           smallActionWidth, metrics.actionButtonHeight,
           makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, Color(248, 241, 236),
+                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          confirmingDelete ? Color(130, 58, 45, 255) : Color(96, 57, 44, 255),
-          confirmingDelete ? Color(153, 75, 58, 255) : Color(117, 72, 55, 255),
-          confirmingDelete ? Color(184, 96, 74, 255) : Color(153, 96, 74, 255),
-          Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-          Color(219, 145, 108, 255));
+          ui_theme::coral());
       deleteButton->setOnClickListener(
           [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
       actions->addView(deleteButton);
@@ -1733,7 +1684,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
   difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
   difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
-  difficultyTableImportModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  difficultyTableImportModalRoot->setBackgroundColor(Color(2, 5, 9, 174));
 
   auto *importPanel = new View();
   importPanel
@@ -1745,44 +1696,46 @@ void SettingsScene::buildDifficultyTableImportModal(
       ->setAlignItems(YGAlignStretch)
       ->setGap(metrics.compact ? 14.0f : 18.0f)
       ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
-      ->setBackgroundColor(Color(17, 27, 42, 248))
-      ->setBorderColor(Color(88, 118, 154, 255))
-      ->setBorderWidth(2);
+      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setShadow(ui_theme::shadow(), 0, 18, 28)
+      ->setBorderColor(ui_theme::hairline())
+      ->setBorderWidth(1);
 
   difficultyTableImportTitleText =
       makeWrappedText("Importing Difficulty Tables", metrics.sectionTitleSize,
-                      Color(244, 248, 255));
+                      ui_theme::textPrimary());
   importPanel->addView(difficultyTableImportTitleText);
 
   difficultyTableImportStatusText = makeWrappedText(
-      "Preparing import...", metrics.bodyTextSize, Color(181, 207, 236));
+      "Preparing import...", metrics.bodyTextSize, ui_theme::textSecondary());
   importPanel->addView(difficultyTableImportStatusText);
 
   difficultyTableImportTableText =
       makeWrappedText("Current table: Resolving table URL",
-                      metrics.bodyTextSize, Color(239, 244, 251));
+                      metrics.bodyTextSize, ui_theme::textPrimary());
   importPanel->addView(difficultyTableImportTableText);
 
   auto *progressRow = new View();
   progressRow->setFlexDirection(FlexDirection::Column);
   progressRow->setGap(metrics.compact ? 8.0f : 10.0f);
   difficultyTableImportProgressText =
-      makeText("0 / 1 table", metrics.bodyTextSize, Color(165, 185, 205));
+      makeText("0 / 1 table", metrics.bodyTextSize, ui_theme::textMuted());
   progressRow->addView(difficultyTableImportProgressText);
 
   auto *progressTrack = new View();
   progressTrack->setHeight(static_cast<float>(metrics.compact ? 16 : 18));
   progressTrack->setAlignSelf(YGAlignStretch);
   progressTrack->setFlexDirection(FlexDirection::Row);
-  progressTrack->setBackgroundColor(Color(8, 14, 24, 255));
-  progressTrack->setBorderColor(Color(66, 91, 122, 255));
-  progressTrack->setBorderWidth(2);
+  progressTrack->setBackgroundColor(ui_theme::control());
+  progressTrack->setCornerRadius(ui_theme::controlRadius());
+  progressTrack->setBorderColor(ui_theme::hairline());
+  progressTrack->setBorderWidth(1);
   difficultyTableImportProgressFill = new View();
   difficultyTableImportProgressFill->setWidthPercent(0.0f);
   difficultyTableImportProgressFill->setHeight(
       static_cast<float>(metrics.compact ? 16 : 18));
-  difficultyTableImportProgressFill->setBackgroundColor(
-      Color(97, 157, 142, 255));
+  difficultyTableImportProgressFill->setBackgroundColor(ui_theme::lime());
   progressTrack->addView(difficultyTableImportProgressFill);
   progressRow->addView(progressTrack);
   importPanel->addView(progressRow);
@@ -1790,13 +1743,10 @@ void SettingsScene::buildDifficultyTableImportModal(
   auto *modalActions = new View();
   modalActions->setFlexDirection(FlexDirection::Row);
   modalActions->setJustifyContent(YGJustifyFlexEnd);
-  difficultyTableImportCloseButton = makeButton(
+  difficultyTableImportCloseButton = makeControlButton(
       160, 60,
-      makeText("Close", metrics.bodyTextSize + 2, Color(239, 244, 251),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+      makeText("Close", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE));
   difficultyTableImportCloseButton->setOnClickListener(
       [this]() { hideDifficultyTableImportModal(); });
   modalActions->addView(difficultyTableImportCloseButton);
@@ -1949,14 +1899,15 @@ void SettingsScene::initView() {
 
   auto *footer = new View();
   footer->setPadding(Edge::All, static_cast<float>(metrics.cardPadding - 4));
-  footer->setBackgroundColor(Color(14, 22, 34, 220));
-  footer->setBorderColor(Color(59, 80, 108, 255));
-  footer->setBorderWidth(2);
+  footer->setBackgroundColor(ui_theme::panelSubtle());
+  footer->setCornerRadius(ui_theme::panelRadius());
+  footer->setBorderColor(ui_theme::hairline());
+  footer->setBorderWidth(1);
   footer->addView(makeWrappedText(
       metrics.compact
           ? "Settings save automatically in the app documents directory."
           : "Settings are saved automatically in the app documents directory.",
-      metrics.bodyTextSize, Color(165, 185, 205)));
+      metrics.bodyTextSize, ui_theme::textMuted()));
   scrollContent->addView(footer);
 
   scrollView->setContentView(scrollContent);

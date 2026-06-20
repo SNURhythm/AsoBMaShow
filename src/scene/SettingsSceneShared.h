@@ -205,25 +205,40 @@ static Button *makeButton(int width, int height, TextView *label,
   return button;
 }
 
+static Button *makeControlButton(int width, int height, TextView *label) {
+  return makeButton(width, height, label, ui_theme::control(),
+                    ui_theme::controlHover(), ui_theme::controlPressed(),
+                    ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+}
+
+static Button *makeAccentButton(int width, int height, TextView *label,
+                                const Color &accent) {
+  const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+  const uint8_t normalAlpha = light ? 54 : 82;
+  const uint8_t hoverAlpha = light ? 74 : 108;
+  const uint8_t pressedAlpha = light ? 100 : 136;
+  return makeButton(width, height, label,
+                    Color(accent.r, accent.g, accent.b, normalAlpha),
+                    Color(accent.r, accent.g, accent.b, hoverAlpha),
+                    Color(accent.r, accent.g, accent.b, pressedAlpha),
+                    Color(accent.r, accent.g, accent.b, 178),
+                    Color(accent.r, accent.g, accent.b, 216), accent);
+}
+
 static Button *makeStepButton(const LayoutMetrics &metrics, int width,
                               const std::string &label) {
-  return makeButton(width, metrics.actionButtonHeight,
-                    makeText(label, metrics.bodyTextSize + 4,
-                             ui_theme::textPrimary(), TextView::CENTER,
-                             TextView::MIDDLE),
-                    ui_theme::control(), ui_theme::controlHover(),
-                    ui_theme::controlPressed(), ui_theme::hairline(),
-                    ui_theme::cyan(), ui_theme::cyan());
+  return makeControlButton(width, metrics.actionButtonHeight,
+                           makeText(label, metrics.bodyTextSize + 4,
+                                    ui_theme::textPrimary(), TextView::CENTER,
+                                    TextView::MIDDLE));
 }
 
 static Button *makeResetButton(const LayoutMetrics &metrics) {
-  return makeButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
-                    makeText("Reset", metrics.bodyTextSize + 4,
-                             ui_theme::textPrimary(), TextView::CENTER,
-                             TextView::MIDDLE),
-                    Color(100, 58, 48, 238), Color(122, 70, 58, 248),
-                    Color(148, 84, 67, 255), ui_theme::coral(),
-                    ui_theme::coral(), ui_theme::coral());
+  return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
+                          makeText("Reset", metrics.bodyTextSize + 4,
+                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   TextView::MIDDLE),
+                          ui_theme::coral());
 }
 
 static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
