@@ -16,17 +16,29 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
 
 VideoPlayer::~VideoPlayer() {
 
-  bgfx::destroy(s_texY);
-  bgfx::destroy(s_texU);
-  bgfx::destroy(s_texV);
+  if (bgfx::isValid(s_texY)) {
+    bgfx::destroy(s_texY);
+    s_texY = BGFX_INVALID_HANDLE;
+  }
+  if (bgfx::isValid(s_texU)) {
+    bgfx::destroy(s_texU);
+    s_texU = BGFX_INVALID_HANDLE;
+  }
+  if (bgfx::isValid(s_texV)) {
+    bgfx::destroy(s_texV);
+    s_texV = BGFX_INVALID_HANDLE;
+  }
   if (bgfx::isValid(videoTextureY)) {
     bgfx::destroy(videoTextureY);
+    videoTextureY = BGFX_INVALID_HANDLE;
   }
   if (bgfx::isValid(videoTextureU)) {
     bgfx::destroy(videoTextureU);
+    videoTextureU = BGFX_INVALID_HANDLE;
   }
   if (bgfx::isValid(videoTextureV)) {
     bgfx::destroy(videoTextureV);
+    videoTextureV = BGFX_INVALID_HANDLE;
   }
   unloadVideo();
 }
@@ -69,12 +81,19 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
       return false;
     }
     auto fail = [&]() {
+      if (swsContext != nullptr) {
+        sws_freeContext(swsContext);
+        swsContext = nullptr;
+      }
       if (codecContext != nullptr) {
         avcodec_free_context(&codecContext);
       }
-      if (tempFormatContext != nullptr) {
+      if (formatContext != nullptr) {
+        avformat_close_input(&formatContext);
+      } else if (tempFormatContext != nullptr) {
         avformat_close_input(&tempFormatContext);
       }
+      videoStreamIndex = -1;
       return false;
     };
     // genpts
@@ -151,8 +170,14 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     updateVideoTexture(codecContext->width, codecContext->height);
 
     formatContext = tempFormatContext;
+    tempFormatContext = nullptr;
     predecodingActive = true;
-    predecodeThread = std::thread(&VideoPlayer::predecodeFrames, this);
+    try {
+      predecodeThread = std::thread(&VideoPlayer::predecodeFrames, this);
+    } catch (...) {
+      predecodingActive = false;
+      return fail();
+    }
     return true;
   }
 }
