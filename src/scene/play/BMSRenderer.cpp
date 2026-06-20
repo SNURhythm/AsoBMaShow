@@ -11,6 +11,7 @@
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
 #include "../../view/ClearLampColors.h"
+#include "../../view/UiTheme.h"
 
 #include <assert.h>
 #include <algorithm>
@@ -234,24 +235,29 @@ BMSRenderer::BMSRenderer(
 
   titleText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
   titleText->setText(chart->Meta.Title);
-  titleText->setPosition(10, 10);
+  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   titleText->setAlign(TextView::LEFT);
+  titleText->setVAlign(TextView::MIDDLE);
+  titleText->setOverflow(TextView::TextOverflow::Marquee);
   judgeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
-  judgeText->setPosition(rendering::window_width / 2,
-                         rendering::window_height / 2);
   judgeText->setAlign(TextView::CENTER);
+  judgeText->setVAlign(TextView::MIDDLE);
+  judgeText->setColor({255, 255, 255, 248});
   scoreText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
-  scoreText->setPosition(0, rendering::window_height - 50);
   scoreText->setAlign(TextView::LEFT);
-  scoreText->setText("Score: 0");
+  scoreText->setVAlign(TextView::MIDDLE);
+  scoreText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  scoreText->setText("SCORE 0");
   gaugeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 24);
-  gaugeText->setPosition(10, 50);
+  gaugeText->setAlign(TextView::RIGHT);
+  gaugeText->setVAlign(TextView::MIDDLE);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
   playOptionText =
       std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 22);
-  playOptionText->setPosition(10, 82);
-  playOptionText->setColor({255, 205, 37, 255});
+  playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
+  playOptionText->setVAlign(TextView::MIDDLE);
   playOptionText->setVisible(false);
+  layoutHudText();
 
   refreshGeometry();
   textureGuard.dismiss();
@@ -320,6 +326,102 @@ void BMSRenderer::drawGauge(RenderContext &context) const {
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
+}
+
+void BMSRenderer::layoutHudText() {
+  if (hudLayoutWidth == rendering::window_width &&
+      hudLayoutHeight == rendering::window_height) {
+    return;
+  }
+
+  hudLayoutWidth = rendering::window_width;
+  hudLayoutHeight = rendering::window_height;
+
+  const int margin = 36;
+  const int titleWidth = std::max(260, std::min(980, hudLayoutWidth - 620));
+  titleText->setPosition(margin + 22, 18);
+  titleText->setSize(titleWidth, 48);
+
+  playOptionText->setPosition(margin + 22, 64);
+  playOptionText->setSize(std::max(260, std::min(860, hudLayoutWidth - 720)),
+                          32);
+
+  const int gaugeWidth = std::max(260, std::min(420, hudLayoutWidth - 72));
+  gaugeText->setPosition(std::max(margin, hudLayoutWidth - gaugeWidth - margin),
+                         24);
+  gaugeText->setSize(gaugeWidth, 40);
+
+  scoreText->setPosition(margin + 18, hudLayoutHeight - 80);
+  scoreText->setSize(std::max(260, std::min(420, hudLayoutWidth - 72)), 48);
+
+  const int judgeWidth = std::max(360, std::min(720, hudLayoutWidth - 80));
+  judgeText->setPosition((hudLayoutWidth - judgeWidth) / 2,
+                         hudLayoutHeight / 2 - 92);
+  judgeText->setSize(judgeWidth, 96);
+}
+
+void BMSRenderer::drawHudChrome() {
+  hudBatchRenderer.setSubmitView(rendering::ui_view);
+  hudBatchRenderer.setSubmitDepth(0);
+  hudBatchRenderer.begin();
+
+  const float w = static_cast<float>(rendering::window_width);
+  const float h = static_cast<float>(rendering::window_height);
+  const float margin = 36.0f;
+
+  hudBatchRenderer.addRectVerticalGradient(
+      0.0f, 0.0f, w, 118.0f, Color(9, 28, 42, 172).toABGR(),
+      Color(10, 74, 78, 34).toABGR());
+  hudBatchRenderer.addRect(0.0f, 0.0f, w, 3.0f,
+                           Color(ui_theme::cyan().r, ui_theme::cyan().g,
+                                 ui_theme::cyan().b, 210)
+                               .toABGR());
+
+  hudBatchRenderer.addRectVerticalGradient(
+      margin, 18.0f, std::max(280.0f, std::min(1040.0f, w - 700.0f)), 76.0f,
+      Color(243, 255, 250, 46).toABGR(), Color(37, 202, 185, 38).toABGR());
+  hudBatchRenderer.addRect(margin, 18.0f, 5.0f, 76.0f,
+                           ui_theme::coral().toABGR());
+
+  const float gaugeWidth = std::max(260.0f, std::min(420.0f, w - 72.0f));
+  const float gaugeX = std::max(margin, w - gaugeWidth - margin);
+  hudBatchRenderer.addRectVerticalGradient(
+      gaugeX, 20.0f, gaugeWidth, 56.0f, Color(246, 255, 250, 52).toABGR(),
+      Color(112, 246, 206, 54).toABGR());
+  hudBatchRenderer.addRect(gaugeX, 76.0f, gaugeWidth, 3.0f,
+                           ui_theme::lime().toABGR());
+
+  hudBatchRenderer.addRectVerticalGradient(
+      0.0f, h - 104.0f, w, 104.0f, Color(6, 20, 31, 12).toABGR(),
+      Color(8, 48, 52, 164).toABGR());
+  hudBatchRenderer.addRect(margin, h - 80.0f, 5.0f, 48.0f,
+                           ui_theme::cyan().toABGR());
+
+  if (state.latestJudgeResult.judgement != None) {
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now() - state.latestJudgeResultTime)
+            .count();
+    if (elapsedMs >= 0 && elapsedMs < 900) {
+      const float panelWidth = std::max(380.0f, std::min(760.0f, w - 80.0f));
+      const float panelX = (w - panelWidth) * 0.5f;
+      const float panelY = h * 0.5f - 104.0f;
+      const float alpha =
+          1.0f - std::clamp(static_cast<float>(elapsedMs) / 900.0f, 0.0f, 1.0f);
+      const auto fade = [alpha](Color color) {
+        color.a = static_cast<uint8_t>(static_cast<float>(color.a) * alpha);
+        return color;
+      };
+      hudBatchRenderer.addRectVerticalGradient(
+          panelX, panelY, panelWidth, 104.0f,
+          fade(Color(244, 255, 251, 44)).toABGR(),
+          fade(Color(42, 218, 190, 36)).toABGR());
+      hudBatchRenderer.addRect(panelX, panelY + 101.0f, panelWidth, 3.0f,
+                               fade(ui_theme::coral()).toABGR());
+    }
+  }
+
+  hudBatchRenderer.end();
 }
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
@@ -756,12 +858,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   gimmickBatchRenderer.begin();
   ghostBatchRenderer.begin();
   beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
-  // background
-  drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
-           judgeY, Color(20, 20, 20, 122));
-  // judge line
-  drawRect(playAreaWidth, noteRenderHeight, playAreaLeftX, judgeY,
-           Color(255, 255, 255, 255));
+  drawPlayfieldBackdrop();
   // Green number is the legacy BMS visible-time unit: 600 green = 1000 ms.
   const float visibleTimeMs = std::max(
       1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
@@ -810,7 +907,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
       if (timeLine->IsFirstInMeasure) {
         // render measure line
         drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
-                 Color(255, 255, 255, 128));
+                 Color(191, 255, 240, 94));
       }
     } else if (timeLine->Timing >= micro - latePoorTiming) {
       y = judgeY + (micro - timeLine->Timing) /
@@ -976,7 +1073,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
 
-  if (renderHud) {
+  if (renderHud && !hudSuppressed) {
+    layoutHudText();
+    drawHudChrome();
     drawTitle(context);
     drawJudgement(context);
     drawScore(context);
@@ -998,7 +1097,7 @@ void BMSRenderer::applyPendingHudText() {
     hudDirty = false;
   }
   judgeText->setText(judgeLine);
-  scoreText->setText("Score: " + std::to_string(score));
+  scoreText->setText("SCORE " + std::to_string(score));
 }
 
 void BMSRenderer::reset() {
@@ -1071,6 +1170,10 @@ void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
   judgementIndicator.configure(enabled, y, widthScale, hudMode);
 }
 
+void BMSRenderer::setHudSuppressed(bool suppressed) {
+  hudSuppressed = suppressed;
+}
+
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                                  float currentGauge) {
   if (gaugeText == nullptr) {
@@ -1078,7 +1181,7 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
   }
 
   char text[96];
-  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
+  std::snprintf(text, sizeof(text), "%s %s %.1f%%",
                 gaugeAutoShift ? "GAS" : "Gauge",
                 gaugeTypeToShortLabel(gaugeType), currentGauge);
   gaugeText->setText(text);
@@ -1120,6 +1223,81 @@ void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
+
+void BMSRenderer::drawGradientRect(float width, float height, float x, float y,
+                                   Color startColor, Color endColor) {
+  simpleBatchRenderer.addRectVerticalGradient(x, y, width, height,
+                                              startColor.toABGR(),
+                                              endColor.toABGR());
+}
+
+void BMSRenderer::drawFrame(float x, float y, float width, float height,
+                            float thickness, Color color) {
+  if (width <= 0.0f || height <= 0.0f || thickness <= 0.0f ||
+      color.a == 0) {
+    return;
+  }
+
+  const float inset = std::min(thickness, std::min(width, height) * 0.5f);
+  drawRect(width, inset, x, y, color);
+  drawRect(width, inset, x, y + height - inset, color);
+  const float sideHeight = height - inset * 2.0f;
+  if (sideHeight > 0.0f) {
+    drawRect(inset, sideHeight, x, y + inset, color);
+    drawRect(inset, sideHeight, x + width - inset, y + inset, color);
+  }
+}
+
+void BMSRenderer::drawPlayfieldBackdrop() {
+  const float laneHeight = upperBound - judgeY;
+  if (laneHeight <= 0.001f || playAreaWidth <= 0.001f) {
+    return;
+  }
+
+  drawGradientRect(playAreaWidth, laneHeight, playAreaLeftX, judgeY,
+                   Color(12, 76, 83, 156), Color(4, 8, 16, 226));
+
+  const float railWidth = std::max(0.035f, noteRenderWidth * 0.08f);
+  drawGradientRect(railWidth, laneHeight, playAreaLeftX - railWidth, judgeY,
+                   Color(255, 111, 91, 210), Color(255, 188, 83, 92));
+  drawGradientRect(railWidth, laneHeight, playAreaLeftX + playAreaWidth, judgeY,
+                   Color(71, 231, 224, 210), Color(183, 246, 92, 92));
+
+  for (size_t i = 0; i < laneOrder.size(); ++i) {
+    const int lane = laneOrder[i];
+    const float laneX = playAreaLeftX + static_cast<float>(i) * noteRenderWidth;
+    const bool scratch = isScratch(lane);
+    const bool blue = !scratch && ((i & 1U) != 0);
+    Color laneColor = scratch ? Color(255, 177, 78, 42)
+                              : (blue ? Color(66, 221, 226, 34)
+                                      : Color(230, 252, 244, 18));
+    drawGradientRect(noteRenderWidth, laneHeight, laneX, judgeY, laneColor,
+                     Color(laneColor.r, laneColor.g, laneColor.b,
+                           static_cast<uint8_t>(laneColor.a / 3)));
+  }
+
+  const float separatorWidth = std::max(0.006f, noteRenderWidth * 0.018f);
+  for (size_t i = 0; i <= laneOrder.size(); ++i) {
+    const float x = playAreaLeftX + static_cast<float>(i) * noteRenderWidth -
+                    separatorWidth * 0.5f;
+    drawRect(separatorWidth, laneHeight, x, judgeY, Color(210, 255, 246, 42));
+  }
+
+  drawFrame(playAreaLeftX, judgeY, playAreaWidth, laneHeight,
+            std::max(0.01f, noteRenderWidth * 0.02f),
+            Color(169, 255, 242, 124));
+
+  const float receptorGlow = std::max(0.05f, noteRenderHeight * 0.28f);
+  drawGradientRect(playAreaWidth, receptorGlow, playAreaLeftX,
+                   judgeY - receptorGlow * 0.5f, Color(63, 235, 222, 48),
+                   Color(255, 111, 91, 36));
+  drawRect(playAreaWidth, std::max(0.018f, noteRenderHeight * 0.08f),
+           playAreaLeftX, judgeY, Color(250, 255, 246, 238));
+  drawRect(playAreaWidth, std::max(0.008f, noteRenderHeight * 0.035f),
+           playAreaLeftX, judgeY + noteRenderHeight * 0.24f,
+           Color(255, 112, 90, 190));
+}
+
 void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                const long long time) {
   if (laneState.lastStateTime == -1) {
@@ -1139,22 +1317,24 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   if (alpha > 1.0) {
     alpha = 1.0;
   }
-  auto color = Color(255, 255, 255, 255 * alpha);
+  auto color = Color(230, 255, 246, 255 * alpha);
 
   if (laneState.lastPressedJudge.judgement == PGreat) {
-    color = Color(255, 128, 0, 255 * alpha);
+    color = Color(255, 205, 81, 255 * alpha);
   } else if (laneState.lastPressedJudge.judgement == None) {
-    color = Color(255, 255, 255, 255 * alpha);
+    color = Color(230, 255, 246, 255 * alpha);
   } else {
-    color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
-                                                : Color(0, 0, 255, 255 * alpha);
+    color = laneState.lastPressedJudge.Diff > 0
+                ? Color(255, 104, 88, 255 * alpha)
+                : Color(70, 230, 224, 255 * alpha);
   }
   const float beamScale = static_cast<float>(laneBeamLengthPercent) / 100.0f;
   const float beamHeight = std::max(0.0f, upperBound - judgeY) * beamScale;
   if (beamHeight <= 0.0f) {
     return;
   }
-  drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
+  drawGradientRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color,
+                   Color(color.r, color.g, color.b, 0));
 }
 
 void BMSRenderer::drawLaneCover() {
@@ -1163,13 +1343,14 @@ void BMSRenderer::drawLaneCover() {
     return;
   }
 
-  drawRect(playAreaWidth, coverHeight, playAreaLeftX, noteVisibleUpperBound,
-           Color(9, 12, 18, 255));
+  drawGradientRect(playAreaWidth, coverHeight, playAreaLeftX,
+                   noteVisibleUpperBound, Color(9, 26, 35, 245),
+                   Color(35, 13, 32, 238));
 
   const float edgeHeight = std::max(0.025f, noteRenderHeight * 0.12f);
   drawRect(playAreaWidth, edgeHeight, playAreaLeftX,
            noteVisibleUpperBound - edgeHeight * 0.5f,
-           Color(214, 224, 236, 255));
+           Color(255, 204, 81, 235));
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const {

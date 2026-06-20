@@ -295,6 +295,8 @@ public:
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
   View *setBackgroundColor(const Color &color);
+  View *setBackgroundGradient(const Color &topColor,
+                              const Color &bottomColor);
   View *clearBackgroundColor();
   View *setBorderColor(const Color &color);
   View *clearBorderColor();
@@ -383,11 +385,14 @@ private:
 
   Color dbgColor;
   Color backgroundColor;
+  Color backgroundGradientTopColor;
+  Color backgroundGradientBottomColor;
   Color borderColor;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view
   bool hasBackground = false;
+  bool hasGradientBackground = false;
   bool hasBorder = false;
   int borderWidth = 0;
   YGNodeRef node;

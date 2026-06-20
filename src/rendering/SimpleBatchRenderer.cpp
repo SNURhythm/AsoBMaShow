@@ -23,6 +23,22 @@ void SimpleBatchRenderer::end() { flush(); }
 
 void SimpleBatchRenderer::addRect(float x, float y, float width, float height,
                                   uint32_t color) {
+  addRectColors(x, y, width, height, color, color, color, color);
+}
+
+void SimpleBatchRenderer::addRectVerticalGradient(float x, float y, float width,
+                                                  float height,
+                                                  uint32_t topColor,
+                                                  uint32_t bottomColor) {
+  addRectColors(x, y, width, height, topColor, topColor, bottomColor,
+                bottomColor);
+}
+
+void SimpleBatchRenderer::addRectColors(float x, float y, float width,
+                                        float height, uint32_t topLeftColor,
+                                        uint32_t topRightColor,
+                                        uint32_t bottomRightColor,
+                                        uint32_t bottomLeftColor) {
   // 4 vertices and 6 indices per rect.
   if (vertices.size() + 4 > kMaxBatchVertices ||
       indices.size() + 6 > kMaxBatchIndices) {
@@ -31,10 +47,10 @@ void SimpleBatchRenderer::addRect(float x, float y, float width, float height,
 
   uint16_t baseIndex = static_cast<uint16_t>(vertices.size());
 
-  vertices.push_back({x, y, 0.0f, color});
-  vertices.push_back({x + width, y, 0.0f, color});
-  vertices.push_back({x + width, y + height, 0.0f, color});
-  vertices.push_back({x, y + height, 0.0f, color});
+  vertices.push_back({x, y, 0.0f, topLeftColor});
+  vertices.push_back({x + width, y, 0.0f, topRightColor});
+  vertices.push_back({x + width, y + height, 0.0f, bottomRightColor});
+  vertices.push_back({x, y + height, 0.0f, bottomLeftColor});
 
   indices.push_back(baseIndex + 0);
   indices.push_back(baseIndex + 1);

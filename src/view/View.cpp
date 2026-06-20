@@ -21,6 +21,50 @@ void submitColoredRect(const RenderContext &context, int x, int y, int width,
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::submit(rendering::ui_view, kSimpleProgram);
 }
+
+void submitGradientRect(const RenderContext &context, int x, int y, int width,
+                        int height, const Color &topColor,
+                        const Color &bottomColor) {
+  if (width <= 0 || height <= 0 ||
+      (topColor.a == 0 && bottomColor.a == 0)) {
+    return;
+  }
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  bgfx::allocTransientVertexBuffer(&tvb, 4,
+                                   rendering::PosColorVertex::ms_decl);
+  bgfx::allocTransientIndexBuffer(&tib, 6);
+
+  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
+  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+  const uint32_t top = topColor.toABGR();
+  const uint32_t bottom = bottomColor.toABGR();
+
+  vertices[0] = {static_cast<float>(x), static_cast<float>(y), 0.0f, top};
+  vertices[1] = {static_cast<float>(x + width), static_cast<float>(y), 0.0f,
+                 top};
+  vertices[2] = {static_cast<float>(x + width), static_cast<float>(y + height),
+                 0.0f, bottom};
+  vertices[3] = {static_cast<float>(x), static_cast<float>(y + height), 0.0f,
+                 bottom};
+
+  indices[0] = 0;
+  indices[1] = 1;
+  indices[2] = 2;
+  indices[3] = 2;
+  indices[4] = 3;
+  indices[5] = 0;
+
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  static const bgfx::ProgramHandle kSimpleProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  bgfx::submit(rendering::ui_view, kSimpleProgram);
+}
 } // namespace
 
 void View::eraseInactiveTemporaryEventListeners() {
@@ -183,11 +227,22 @@ View *View::setDirection(YGDirection direction) {
 View *View::setBackgroundColor(const Color &color) {
   backgroundColor = color;
   hasBackground = true;
+  hasGradientBackground = false;
+  return this;
+}
+
+View *View::setBackgroundGradient(const Color &topColor,
+                                  const Color &bottomColor) {
+  backgroundGradientTopColor = topColor;
+  backgroundGradientBottomColor = bottomColor;
+  hasBackground = true;
+  hasGradientBackground = true;
   return this;
 }
 
 View *View::clearBackgroundColor() {
   hasBackground = false;
+  hasGradientBackground = false;
   return this;
 }
 
@@ -271,8 +326,18 @@ void View::renderBoxDecoration(RenderContext &context) const {
   }
 
   if (hasBackground) {
-    submitColoredRect(context, x + inset, y + inset, width - inset * 2,
-                      height - inset * 2, backgroundColor);
+    const int backgroundX = x + inset;
+    const int backgroundY = y + inset;
+    const int backgroundWidth = width - inset * 2;
+    const int backgroundHeight = height - inset * 2;
+    if (hasGradientBackground) {
+      submitGradientRect(context, backgroundX, backgroundY, backgroundWidth,
+                         backgroundHeight, backgroundGradientTopColor,
+                         backgroundGradientBottomColor);
+    } else {
+      submitColoredRect(context, backgroundX, backgroundY, backgroundWidth,
+                        backgroundHeight, backgroundColor);
+    }
   }
 }
 

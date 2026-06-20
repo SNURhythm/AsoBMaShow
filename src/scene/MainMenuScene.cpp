@@ -22,6 +22,7 @@
 #include "../view/ClearLampColors.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
+#include "../view/UiTheme.h"
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -1486,15 +1487,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
 
-  const Color kBackdropTint(10, 18, 30, 112);
-  const Color kPanelFill(17, 27, 42, 196);
-  const Color kSurfaceFill(11, 18, 30, 168);
-  const Color kPrimaryButtonNormal(29, 73, 120, 216);
-  const Color kPrimaryButtonHover(40, 96, 156, 228);
-  const Color kPrimaryButtonPressed(58, 129, 204, 236);
-  const Color kSecondaryButtonNormal(76, 49, 36, 208);
-  const Color kSecondaryButtonHover(101, 65, 47, 220);
-  const Color kSecondaryButtonPressed(133, 87, 63, 232);
+  const Color kPanelTop = ui_theme::glassTop();
+  const Color kPanelBottom = ui_theme::glassBottom();
+  const Color kSurfaceFill = ui_theme::surfaceTint();
+  const Color kPrimaryButtonNormal(23, 151, 143, 218);
+  const Color kPrimaryButtonHover(34, 196, 187, 232);
+  const Color kPrimaryButtonPressed(63, 228, 217, 242);
+  const Color kSecondaryButtonNormal(149, 51, 47, 218);
+  const Color kSecondaryButtonHover(195, 67, 58, 232);
+  const Color kSecondaryButtonPressed(226, 88, 75, 242);
 
   recyclerView = new RecyclerView<ChartMetaRecord>(
       [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
@@ -1711,7 +1712,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
-  rootLayout->setBackgroundColor(kBackdropTint);
+  rootLayout->setBackgroundGradient(ui_theme::backdropTop(),
+                                    ui_theme::backdropBottom());
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1719,13 +1721,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setWidth(280);
   nav->setGap(12);
   nav->setPadding(Edge::All, 14);
-  nav->setBackgroundColor(kPanelFill);
-  nav->setBorderColor(Color(70, 95, 124, 255));
+  nav->setBackgroundGradient(kPanelTop, kPanelBottom);
+  nav->setBorderColor(ui_theme::hairline());
   nav->setBorderWidth(2);
 
   auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   navTitle->setText("Library");
-  navTitle->setColor({243, 247, 255, 255});
+  navTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   nav->addView(navTitle);
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1749,7 +1751,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
-  folderRecyclerView->setBorderColor(Color(63, 86, 113, 255));
+  folderRecyclerView->setBorderColor(ui_theme::hairline());
   folderRecyclerView->setBorderWidth(2);
   nav->addView(folderRecyclerView);
   rootLayout->addView(nav);
@@ -1760,8 +1762,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setBackgroundColor(kPanelFill);
-  left->setBorderColor(Color(70, 95, 124, 255));
+  left->setBackgroundGradient(kPanelTop, kPanelBottom);
+  left->setBorderColor(ui_theme::hairline());
   left->setBorderWidth(2);
 
   auto *libraryHeader = new View();
@@ -1772,7 +1774,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
   libraryTitle->setText("Song Select");
-  libraryTitle->setColor({243, 247, 255, 255});
+  libraryTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   libraryTitle->setVAlign(TextView::MIDDLE);
   libraryTitle->setFlex(1);
   libraryHeader->addView(libraryTitle);
@@ -1799,7 +1801,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   librarySubtitle->setText(
       "Search your library and preview charts before starting.");
-  librarySubtitle->setColor({157, 177, 200, 255});
+  librarySubtitle->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   left->addView(librarySubtitle);
 
   auto *filterRow = new View();
@@ -1812,10 +1814,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->setHeight(56);
   searchBox->setFlex(1);
   searchBox->setBackgroundColor(kSurfaceFill);
-  searchBox->setBorderColor(Color(88, 115, 149, 255));
+  searchBox->setBorderColor(ui_theme::cyan());
   searchBox->setBorderWidth(2);
   searchBox->setVAlign(TextView::MIDDLE);
-  searchBox->setColor({239, 244, 251, 255});
+  searchBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   auto onSearchChanged = [this](const std::string &text) {
     searchText = text;
     reloadChartList();
@@ -1829,10 +1831,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   difficultyFilterBox->setHeight(56);
   difficultyFilterBox->setWidth(180);
   difficultyFilterBox->setBackgroundColor(kSurfaceFill);
-  difficultyFilterBox->setBorderColor(Color(88, 115, 149, 255));
+  difficultyFilterBox->setBorderColor(ui_theme::cyan());
   difficultyFilterBox->setBorderWidth(2);
   difficultyFilterBox->setVAlign(TextView::MIDDLE);
-  difficultyFilterBox->setColor({239, 244, 251, 255});
+  difficultyFilterBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   auto onDifficultyChanged = [this](const std::string &text) {
     difficultyText = text;
     reloadChartList();
@@ -1843,13 +1845,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   filterLabel->setText("Search / Difficulty");
-  filterLabel->setColor({157, 177, 200, 255});
+  filterLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   left->addView(filterLabel);
   left->addView(filterRow);
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
-  recyclerView->setBorderColor(Color(63, 86, 113, 255));
+  recyclerView->setBorderColor(ui_theme::hairline());
   recyclerView->setBorderWidth(2);
   left->addView(recyclerView);
   rootLayout->addView(left);
@@ -1860,20 +1862,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setPadding(Edge::All, 20);
   right->setGap(12);
   right->setWidth(300);
-  right->setBackgroundColor(kPanelFill);
-  right->setBorderColor(Color(70, 95, 124, 255));
+  right->setBackgroundGradient(kPanelTop, kPanelBottom);
+  right->setBorderColor(ui_theme::hairline());
   right->setBorderWidth(2);
 
   auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
   rightTitle->setText("Ready");
-  rightTitle->setColor({243, 247, 255, 255});
+  rightTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   rightTitle->setAlign(TextView::CENTER);
   rightTitle->setHeight(42);
   right->addView(rightTitle);
 
   auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   rightSubtitle->setText("Preview, tweak, and start.");
-  rightSubtitle->setColor({157, 177, 200, 255});
+  rightSubtitle->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   rightSubtitle->setAlign(TextView::CENTER);
   rightSubtitle->setHeight(28);
   right->addView(rightSubtitle);
@@ -1894,7 +1896,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto makeReadyStatusText = []() {
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     text->setHeight(28);
-    text->setColor({222, 234, 247, 255});
+    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
     return text;
   };
   auto *readyGaugeRow = new View();
@@ -1920,12 +1922,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButtonText->setText("Options");
   playOptionsButtonText->setAlign(TextView::CENTER);
   playOptionsButtonText->setVAlign(TextView::MIDDLE);
+  playOptionsButtonText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   playOptionsButton->setContentView(playOptionsButtonText);
   playOptionsButton->setBackgroundColors(
-      Color(30, 63, 75, 216), Color(42, 83, 97, 228), Color(55, 106, 123, 236));
-  playOptionsButton->setBorderColors(Color(96, 169, 181, 255),
-                                     Color(121, 199, 211, 255),
-                                     Color(151, 224, 235, 255));
+      Color(23, 151, 143, 218), Color(34, 196, 187, 232),
+      Color(63, 228, 217, 242));
+  playOptionsButton->setBorderColors(ui_theme::cyan(),
+                                     Color(142, 255, 248, 255),
+                                     Color(255, 255, 255, 255));
   playOptionsButton->setStyledBorderWidth(2);
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
   readySettings->addView(playOptionsButton);
@@ -1938,12 +1942,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buttonText->setText("Start");
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
+  buttonText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   startButton->setContentView(buttonText);
   startButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
                                    kPrimaryButtonPressed);
-  startButton->setBorderColors(Color(105, 162, 222, 255),
-                               Color(133, 190, 244, 255),
-                               Color(162, 212, 255, 255));
+  startButton->setBorderColors(ui_theme::cyan(),
+                               Color(142, 255, 248, 255),
+                               Color(255, 255, 255, 255));
   startButton->setStyledBorderWidth(2);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
@@ -2039,7 +2044,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   replayStatusText->setText("");
-  replayStatusText->setColor({157, 177, 200, 255});
+  replayStatusText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   replayStatusText->setAlign(TextView::CENTER);
   replayStatusText->setHeight(20);
 
@@ -2049,7 +2054,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
   jacketCard->setBackgroundColor(kSurfaceFill);
-  jacketCard->setBorderColor(Color(88, 115, 149, 255));
+  jacketCard->setBorderColor(ui_theme::hairline());
   jacketCard->setBorderWidth(2);
   jacketView->setWidth(200)->setHeight(200);
   jacketCard->addView(jacketView);
@@ -2116,12 +2121,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsText->setText("Settings");
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
+  settingsText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   settingsButton->setContentView(settingsText);
   settingsButton->setBackgroundColors(
       kSecondaryButtonNormal, kSecondaryButtonHover, kSecondaryButtonPressed);
-  settingsButton->setBorderColors(Color(174, 124, 91, 255),
-                                  Color(207, 146, 105, 255),
-                                  Color(232, 169, 122, 255));
+  settingsButton->setBorderColors(ui_theme::coral(),
+                                  Color(255, 143, 118, 255),
+                                  Color(255, 225, 198, 255));
   settingsButton->setStyledBorderWidth(2);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportInProgress.load()) {

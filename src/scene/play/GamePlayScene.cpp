@@ -10,6 +10,7 @@
 #include "../../input/RhythmInputHandler.h"
 #include "../../targets.h"
 #include "../../view/Button.h"
+#include "../../view/UiTheme.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
 
@@ -219,36 +220,62 @@ void GamePlayScene::init() {
   addView(pauseLayout);
   pauseLayout->setFlexDirection(FlexDirection::Column);
   pauseLayout->setAlignItems(YGAlignCenter);
+  pauseLayout->setJustifyContent(YGJustifyCenter);
+  pauseLayout->setBackgroundGradient(Color(4, 16, 25, 202),
+                                     Color(45, 18, 39, 214));
   {
     auto pauseScreen = new View();
-    pauseScreen->setFlex(1);
+    pauseScreen->setWidth(520);
+    pauseScreen->setHeight(430);
     pauseScreen->setFlexDirection(FlexDirection::Column);
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
+    pauseScreen->setGap(14);
+    pauseScreen->setPadding(Edge::All, 28);
+    pauseScreen->setBackgroundGradient(ui_theme::glassStrongTop(),
+                                       ui_theme::glassStrongBottom());
+    pauseScreen->setBorderColor(ui_theme::hairline());
+    pauseScreen->setBorderWidth(2);
     {
-      auto makePauseButton = [](const std::string &label, int width, int height,
-                                auto onClick) {
+      auto makePauseButton = [](const std::string &label, const Color &normal,
+                                const Color &hover, const Color &pressed,
+                                const Color &border, auto onClick) {
         auto button = new Button();
-        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
         text->setText(label);
         text->setAlign(TextView::CENTER);
+        text->setVAlign(TextView::MIDDLE);
+        text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
         button->setContentView(text);
         button->setOnClickListener(onClick);
-        button->setSize(width, height);
+        button->setSize(360, 64);
+        button->setBackgroundColors(normal, hover, pressed);
+        button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
+                                Color(255, 255, 255, 255));
+        button->setStyledBorderWidth(2);
         return button;
       };
 
-      auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      pauseText->setSize(200, 100);
-      pauseText->setText("Paused");
+      auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+      pauseText->setSize(420, 72);
+      pauseText->setText("PAUSED");
       pauseText->setAlign(TextView::CENTER);
+      pauseText->setVAlign(TextView::MIDDLE);
+      pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
-      pauseScreen->addView(makePauseButton("Resume", 200, 100, [this]() {
+      pauseScreen->addView(makePauseButton(
+          "Resume", Color(23, 151, 143, 218), Color(34, 196, 187, 232),
+          Color(63, 228, 217, 242), ui_theme::cyan(), [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(true);
+        }
       }));
       pauseScreen->addView(makePauseButton(
-          isReplayPlayback() ? "Replay" : "Retry", 260, 90, [this]() {
+          isReplayPlayback() ? "Replay" : "Retry", Color(69, 128, 41, 218),
+          Color(92, 164, 55, 232), Color(128, 203, 72, 242),
+          ui_theme::lime(), [this]() {
             if (isReplayPlayback() || options.practiceMode) {
               restartCurrentPattern();
             } else {
@@ -257,9 +284,14 @@ void GamePlayScene::init() {
           }));
       if (!isReplayPlayback() && !options.practiceMode) {
         pauseScreen->addView(makePauseButton(
-            "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
+            "Retry Same", Color(67, 96, 132, 218), Color(82, 124, 164, 232),
+            Color(101, 153, 196, 242), Color(137, 211, 245, 255),
+            [this]() { restartCurrentPattern(); }));
       }
-      pauseScreen->addView(makePauseButton("Exit", 200, 100, [this]() {
+      pauseScreen->addView(makePauseButton("Exit", Color(149, 51, 47, 218),
+                                           Color(195, 67, 58, 232),
+                                           Color(226, 88, 75, 242),
+                                           ui_theme::coral(), [this]() {
         finishReplayRecording();
         publishPracticeGhost();
         context.jukebox.stop();
@@ -283,13 +315,23 @@ void GamePlayScene::init() {
   /* pause button */
   pauseButton = new Button(rendering::window_width - 70, 50, 40, 40);
   addView(pauseButton);
-  auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  pauseText->setText("| |");
+  auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  pauseText->setText("||");
   pauseText->setAlign(TextView::CENTER);
+  pauseText->setVAlign(TextView::MIDDLE);
+  pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   pauseButton->setContentView(pauseText);
+  pauseButton->setSize(52, 52);
+  pauseButton->setBackgroundColors(Color(236, 253, 255, 42),
+                                   Color(70, 230, 224, 88),
+                                   Color(255, 204, 81, 120));
+  pauseButton->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
+                               ui_theme::amber());
+  pauseButton->setStyledBorderWidth(2);
   pauseButton->setOnClickListener([this]() {
     context.jukebox.pause();
     pauseLayout->setVisible(true);
+    pauseButton->setVisible(false);
   });
 }
 
@@ -622,7 +664,10 @@ void GamePlayScene::update(float dt) {
 void GamePlayScene::renderScene() {
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
-  // pauseButton->setPosition(rendering::window_width - 40, 10);
+  if (pauseButton != nullptr) {
+    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+  }
+  renderer->setHudSuppressed(pauseLayout != nullptr && pauseLayout->getVisible());
   renderer->render(renderContext, getVisualTimeMicros(getGameplayTimeMicros(
                                       context.jukebox.getTimeMicros())));
   if (laneStateText != nullptr) {
@@ -1171,9 +1216,15 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
       if (context.jukebox.isPaused()) {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(true);
+        }
       } else {
         context.jukebox.pause();
         pauseLayout->setVisible(true);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(false);
+        }
       }
     }
   }

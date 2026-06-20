@@ -134,12 +134,23 @@ private:
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
+  rendering::SimpleBatchRenderer hudBatchRenderer;
   std::vector<rendering::TexBatchRenderer> noteTextureBatchRenderers;
   std::unordered_map<uint64_t, size_t> noteTextureBatchLookup;
   uint32_t longBodySubmitDepth = 0;
   uint32_t noteSheetSubmitDepth = 0;
+  bool hudSuppressed = false;
+  int hudLayoutWidth = 0;
+  int hudLayoutHeight = 0;
 
   void drawRect(float width, float height, float x, float y, Color color);
+  void drawGradientRect(float width, float height, float x, float y,
+                        Color startColor, Color endColor);
+  void drawFrame(float x, float y, float width, float height, float thickness,
+                 Color color);
+  void drawPlayfieldBackdrop();
+  void drawHudChrome();
+  void layoutHudText();
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawLaneCover();
   void drawTitle(RenderContext &context) const;
@@ -211,6 +222,7 @@ public:
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
+  void setHudSuppressed(bool suppressed);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);
