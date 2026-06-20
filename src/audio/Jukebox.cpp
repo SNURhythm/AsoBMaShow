@@ -1177,27 +1177,6 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
         if (isCancelled)
           return;
         path = *resolvedVideoPath;
-        // calculate hash of base path
-        // auto pathHash = bms_parser::md5(basePath.string());
-        // auto fileName = pathHash + "-" + std::to_string(bmp->first) + ".mp4";
-        // auto transcodedPath =
-        //     (Utils::GetDocumentsPath("temp") / fileName).string();
-        // if (!std::filesystem::exists(transcodedPath)) {
-        //   // mkdir
-        //   std::filesystem::create_directories(Utils::GetDocumentsPath("temp"));
-        //   int result = transcode(path.string().c_str(),
-        //   transcodedPath.c_str(),
-        //                          &isCancelled);
-        //   if (isCancelled) {
-        //     // delete transcoded file
-        //     std::filesystem::remove(transcodedPath);
-        //     return;
-        //   }
-        //   if (result != 0) {
-        //     SDL_Log("Failed to transcode video: %ls", path.c_str());
-        //     continue;
-        //   }
-        // }
         found = loadVideoPath(bmp->first, path, isCancelled);
       }
 

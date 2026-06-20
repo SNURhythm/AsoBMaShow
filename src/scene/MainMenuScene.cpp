@@ -13,7 +13,6 @@
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
 #include "../targets.h"
-#include "../video/transcode.h"
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"

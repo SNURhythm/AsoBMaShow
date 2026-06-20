@@ -1,1 +1,1 @@
-target_sources(main PRIVATE transcode.c VideoPlayer.cpp)
+target_sources(main PRIVATE VideoPlayer.cpp)
