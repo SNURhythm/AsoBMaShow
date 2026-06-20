@@ -18,6 +18,7 @@
 #include <iostream>
 #include "../yoga/lib/nlohmann/json.hpp"
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -2266,13 +2267,11 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "@source_priority,"
                "@source_archive_size"
                ")";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
-    std::string err = std::string(sqlite3_errmsg(db));
-    // UE_LOG(LogTemp, Error, TEXT("SQL error while preparing statement to
-    // insert a chart: %s"), *err);
-    sqlite3_close(db);
+    SDL_Log("SQL error while preparing statement to insert a chart: %s",
+            sqlite3_errmsg(db));
     return false;
   }
   const archive_file::SourcePreference sourcePreference =
@@ -2329,7 +2328,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while inserting a chart: %s", sqlite3_errmsg(db));
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -2342,12 +2341,12 @@ void ChartDBHelper::SelectAllChartMeta(
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm ORDER BY cm.title";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while getting all charts: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return;
   }
 
@@ -2367,7 +2366,7 @@ int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return 0;
   }
   int count = 0;
@@ -2406,12 +2405,12 @@ void ChartDBHelper::SearchChartMeta(
            "@text AND ";
   query += preferredChartPredicate("cm");
   query += " ORDER BY cm.title";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while searching for charts: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return;
   }
   // %text%
@@ -2531,7 +2530,7 @@ void ChartDBHelper::QueryChartMeta(
     if (rc != SQLITE_OK) {
       std::cerr << "SQL error while querying difficulty entries: "
                 << sqlite3_errmsg(db) << "\n";
-      sqlite3_free(stmt);
+      sqlite3_finalize(stmt);
       return;
     }
 
@@ -2651,7 +2650,7 @@ void ChartDBHelper::QueryChartMeta(
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while querying charts: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return;
   }
 
@@ -2762,7 +2761,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     if (rc != SQLITE_OK) {
       std::cerr << "SQL error while counting difficulty entries: "
                 << sqlite3_errmsg(db) << "\n";
-      sqlite3_free(stmt);
+      sqlite3_finalize(stmt);
       return 0;
     }
 
@@ -2873,7 +2872,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return 0;
   }
 
@@ -2918,12 +2917,12 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   // std::cout << "Deleting chart: " << path.string() << std::endl;
   ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cout << "SQL error while preparing statement to delete a chart: "
               << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   const auto target = path_t_to_utf8(fspath_to_path_t(path));
@@ -2933,7 +2932,7 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   if (rc != SQLITE_DONE) {
     std::cout << "SQL error while deleting a chart: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_close(db);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -3061,18 +3060,18 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
   createChartScanCheckpointTable(db);
 
   auto query = "DELETE FROM chart_meta";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
 
     std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -3214,12 +3213,11 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
                "@path,"
                "@ios_bookmark"
                ")";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing statement to insert an entry: "
               << sqlite3_errmsg(db) << "\n";
-    sqlite3_close(db);
     return false;
   }
   std::filesystem::path storedPath = path;
@@ -3231,7 +3229,7 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while inserting an entry: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -3245,12 +3243,12 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
                "path,"
                "COALESCE(ios_bookmark, '')"
                " FROM entries";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while getting all entries: " << sqlite3_errmsg(db)
               << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return std::vector<ChartEntry>();
   }
   std::vector<ChartEntry> entries;
@@ -3304,18 +3302,18 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
 bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
-  sqlite3_stmt *stmt;
+  sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
 
     std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_free(stmt);
+    sqlite3_finalize(stmt);
     return false;
   }
   sqlite3_finalize(stmt);
@@ -4082,11 +4080,14 @@ int ChartDBHelper::ScanChartRoots(
       [&](const std::filesystem::path &path,
           const std::vector<unsigned char> *bytes) -> bool {
     bms_parser::Parser parser;
-    bms_parser::Chart *chart = nullptr;
+    bms_parser::Chart *rawChart = nullptr;
+    std::unique_ptr<bms_parser::Chart> chart;
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &chart, false, false, cancelled);
+        parser.Parse(*bytes, &rawChart, false, false, cancelled);
+        chart.reset(rawChart);
+        rawChart = nullptr;
         if (chart != nullptr) {
           chart->Meta.BmsPath = path;
           std::filesystem::path archivePath;
@@ -4098,8 +4099,10 @@ int ChartDBHelper::ScanChartRoots(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &chart, false, false,
+        archive_file::parseChart(parser, path, &rawChart, false, false,
                                  cancelled);
+        chart.reset(rawChart);
+        rawChart = nullptr;
       }
     } catch (const std::exception &e) {
       SDL_Log("Error parsing %s: %s",
@@ -4107,7 +4110,7 @@ int ChartDBHelper::ScanChartRoots(
       archive_file::appendDebugLogLine(
           "DB parse failed: " + path_t_to_utf8(fspath_to_path_t(path)) +
           ": " + e.what());
-      delete chart;
+      delete rawChart;
       return false;
     }
 
@@ -4124,11 +4127,9 @@ int ChartDBHelper::ScanChartRoots(
           " measures=" + std::to_string(chart->Measures.size()) +
           " md5=" + chart->Meta.MD5 +
           " sha256=" + chart->Meta.SHA256);
-      delete chart;
       return false;
     }
     const bool inserted = InsertChartMeta(db, chart->Meta);
-    delete chart;
     return inserted;
   };
 

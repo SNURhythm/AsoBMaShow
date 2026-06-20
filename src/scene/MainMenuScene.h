@@ -22,6 +22,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -47,7 +48,8 @@ private:
   sqlite3 *db;
   std::atomic_bool previewLoadCancelled = false;
   std::atomic_bool willStart = false;
-  std::atomic<bms_parser::Chart *> selectedChart{nullptr};
+  std::unique_ptr<bms_parser::Chart> selectedChart;
+  mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
 
   std::thread loadThread;
@@ -93,6 +95,7 @@ private:
   std::condition_variable_any libraryTaskPauseCv;
   std::atomic<std::uint64_t> nextLibraryTaskId{1};
   std::uint64_t libraryTasksRevision = 0;
+  std::atomic<int> libraryActiveTaskCount{0};
   std::uint64_t displayedLibraryTasksRevision = 0;
   std::atomic<std::uint64_t> libraryProgressRevision{0};
   std::atomic<std::uint64_t> libraryProgressTaskId{0};
@@ -362,6 +365,7 @@ private:
   void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
                            double fraction, int current, int total,
                            const std::string &detail);
+  void bumpLibraryTasksRevisionLocked();
   void updateLibraryTaskProgress(std::uint64_t id,
                                  const ChartScanProgress &progress);
   LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
@@ -380,6 +384,9 @@ private:
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();
   void refreshReadySettingsSummary();
+  bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+                                      bool mediaReady);
+  void clearSelectedChart();
   bms_parser::Chart *loadedSelectedChart() const;
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
