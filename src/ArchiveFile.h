@@ -48,6 +48,8 @@ struct UnzipProgress {
 };
 
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
+using PauseCallback = std::function<bool()>;
+using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
 
 struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
@@ -57,6 +59,7 @@ struct UnzipArchiveResult {
 
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
+void setCachePathNormalizer(CachePathNormalizer normalizer);
 void appendDebugLogLine(const std::string &message);
 std::uint64_t debugLogRevision();
 std::string debugLogText();
@@ -69,17 +72,20 @@ std::filesystem::path makeVirtualPath(const std::filesystem::path &archivePath,
 
 bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,
-                 std::string *errorMessage = nullptr);
+                 std::string *errorMessage = nullptr,
+                 PauseCallback pauseCallback = nullptr);
 bool readArchiveEntries(const std::filesystem::path &archivePath,
                         const std::vector<std::filesystem::path> &innerPaths,
                         std::vector<FileData> &files,
-                        std::string *errorMessage = nullptr);
+                        std::string *errorMessage = nullptr,
+                        PauseCallback pauseCallback = nullptr);
 bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const EntryRange &range,
     std::vector<FileData> &files,
-    std::string *errorMessage = nullptr);
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
 std::optional<EntryRange>
 entryRangeForFolder(const std::filesystem::path &folderPath);
 bool exists(const std::filesystem::path &path);

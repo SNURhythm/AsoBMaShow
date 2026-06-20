@@ -71,6 +71,8 @@ namespace archive_file {
 namespace {
 
 bool stopRequested(const std::stop_token *stopToken);
+bool pauseIfNeeded(const PauseCallback &pauseCallback,
+                   std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                          double fraction, std::uint64_t current,
                          std::uint64_t total, std::string message);
@@ -347,8 +349,29 @@ std::size_t filterSystemEntries(std::vector<Entry> &entries) {
   return before - entries.size();
 }
 
+std::mutex gCachePathNormalizerMutex;
+CachePathNormalizer gCachePathNormalizer;
+
+std::filesystem::path cacheNormalizedPath(const std::filesystem::path &path) {
+  std::filesystem::path normalized = path.lexically_normal();
+  CachePathNormalizer normalizer;
+  {
+    std::lock_guard<std::mutex> lock(gCachePathNormalizerMutex);
+    normalizer = gCachePathNormalizer;
+  }
+  if (normalizer) {
+    normalizer(normalized);
+    normalized = normalized.lexically_normal();
+  }
+  return normalized;
+}
+
+std::string cachePathKey(const std::filesystem::path &path) {
+  return path_t_to_utf8(fspath_to_path_t(cacheNormalizedPath(path)));
+}
+
 std::string archiveKey(const std::filesystem::path &path) {
-  return path_t_to_utf8(fspath_to_path_t(path.lexically_normal()));
+  return cachePathKey(path);
 }
 
 bool fileState(const std::filesystem::path &path, std::uintmax_t &size,
@@ -594,7 +617,8 @@ bool openUnarrRarArchive(const std::filesystem::path &archivePath,
 bool listUnarrRarEntries(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          bool &containsSolidEntries,
-                         std::string *errorMessage) {
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
   entries.clear();
   containsSolidEntries = false;
 
@@ -615,6 +639,10 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
 
   std::size_t order = 0;
   while (ar_parse_entry(archive.archive)) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      entries.clear();
+      return false;
+    }
     const char *entryName = ar_entry_get_name(archive.archive);
     if (entryName == nullptr || entryName[0] == '\0') {
       continue;
@@ -795,8 +823,10 @@ std::uint64_t sevenZipUInt64Property(IInArchive *archive, UInt32 index,
 
 class SevenZipInFileStream final : public IInStream, public IStreamGetSize {
 public:
-  SevenZipInFileStream(const std::filesystem::path &path, std::uintmax_t size)
-      : size_(static_cast<UInt64>(size)) {
+  SevenZipInFileStream(const std::filesystem::path &path, std::uintmax_t size,
+                       PauseCallback pauseCallback)
+      : size_(static_cast<UInt64>(size)),
+        pauseCallback_(std::move(pauseCallback)) {
     file_.rdbuf()->pubsetbuf(buffer_.data(),
                              static_cast<std::streamsize>(buffer_.size()));
     file_.open(path, std::ios::binary);
@@ -841,6 +871,9 @@ public:
     if (size == 0) {
       return S_OK;
     }
+    if (!pauseIfNeeded(pauseCallback_)) {
+      return E_ABORT;
+    }
     if (data == nullptr || !file_) {
       return E_FAIL;
     }
@@ -861,6 +894,9 @@ public:
                   UInt64 *newPosition) throw() override {
     if (!file_) {
       return E_FAIL;
+    }
+    if (!pauseIfNeeded(pauseCallback_)) {
+      return E_ABORT;
     }
 
     std::ios_base::seekdir direction = std::ios::beg;
@@ -900,13 +936,15 @@ private:
   std::array<char, kInputBufferSize> buffer_{};
   std::ifstream file_;
   UInt64 size_ = 0;
+  PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
 };
 
 class SevenZipMemoryOutStream final : public ISequentialOutStream {
 public:
-  explicit SevenZipMemoryOutStream(std::vector<unsigned char> &bytes)
-      : bytes_(bytes) {}
+  SevenZipMemoryOutStream(std::vector<unsigned char> &bytes,
+                          PauseCallback pauseCallback)
+      : bytes_(bytes), pauseCallback_(std::move(pauseCallback)) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -940,6 +978,9 @@ public:
     if (size == 0) {
       return S_OK;
     }
+    if (!pauseIfNeeded(pauseCallback_)) {
+      return E_ABORT;
+    }
     if (data == nullptr) {
       return E_FAIL;
     }
@@ -953,6 +994,7 @@ public:
 
 private:
   std::vector<unsigned char> &bytes_;
+  PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
 };
 
@@ -1024,8 +1066,10 @@ private:
 class SevenZipExtractCallback final : public IArchiveExtractCallback {
 public:
   explicit SevenZipExtractCallback(
-      std::unordered_map<UInt32, FileData *> targets)
-      : targets_(std::move(targets)) {}
+      std::unordered_map<UInt32, FileData *> targets,
+      PauseCallback pauseCallback)
+      : targets_(std::move(targets)),
+        pauseCallback_(std::move(pauseCallback)) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -1054,7 +1098,13 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override { return S_OK; }
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
                        Int32 askExtractMode) throw() override {
@@ -1063,6 +1113,10 @@ public:
     }
     *outStream = nullptr;
     currentTarget_ = nullptr;
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
     if (askExtractMode != NArchive::NExtract::NAskMode::kExtract) {
       return S_OK;
     }
@@ -1073,14 +1127,21 @@ public:
 
     currentTarget_ = it->second;
     currentTarget_->bytes.clear();
-    auto *stream = new SevenZipMemoryOutStream(currentTarget_->bytes);
+    auto *stream =
+        new SevenZipMemoryOutStream(currentTarget_->bytes, pauseCallback_);
     ISequentialOutStream *streamInterface = stream;
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override { return S_OK; }
+  STDMETHOD(PrepareOperation)(Int32) throw() override {
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
 
   STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
     if (currentTarget_ != nullptr &&
@@ -1093,13 +1154,16 @@ public:
   }
 
   bool failed() const { return failed_; }
+  bool cancelled() const { return cancelled_; }
   Int32 operationResult() const { return operationResult_; }
 
 private:
   std::unordered_map<UInt32, FileData *> targets_;
+  PauseCallback pauseCallback_;
   FileData *currentTarget_ = nullptr;
   ULONG refCount_ = 0;
   bool failed_ = false;
+  bool cancelled_ = false;
   Int32 operationResult_ = NArchive::NExtract::NOperationResult::kOK;
 };
 
@@ -1266,18 +1330,21 @@ bool openSevenZipArchive(const std::filesystem::path &archivePath,
                          CMyComPtr<IInArchive> &archive,
                          CMyComPtr<IInStream> &stream,
                          SevenZipFormat &formatUsed,
-                         std::string *errorMessage);
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback = nullptr);
 bool openSevenZipArchive(const std::filesystem::path &archivePath,
                          unsigned char formatId,
                          CMyComPtr<IInArchive> &archive,
                          CMyComPtr<IInStream> &stream,
-                         std::string *errorMessage);
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback = nullptr);
 
 bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
                                    SevenZipFormat format,
                                    CMyComPtr<IInArchive> &archive,
                                    CMyComPtr<IInStream> &stream,
-                                   std::string *errorMessage) {
+                                   std::string *errorMessage,
+                                   const PauseCallback &pauseCallback) {
   archive.Release();
   stream.Release();
 
@@ -1304,7 +1371,8 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
     return false;
   }
 
-  auto *fileStream = new SevenZipInFileStream(archivePath, archiveSize);
+  auto *fileStream =
+      new SevenZipInFileStream(archivePath, archiveSize, pauseCallback);
   if (!fileStream->isOpen()) {
     delete fileStream;
     if (errorMessage != nullptr) {
@@ -1355,7 +1423,8 @@ void trimSevenZipArchiveCacheLocked() {
 
 std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
     const std::filesystem::path &archivePath, unsigned char requestedFormatId,
-    bool *cacheHit, long long *openMs, std::string *errorMessage) {
+    bool *cacheHit, long long *openMs, std::string *errorMessage,
+    const PauseCallback &pauseCallback = nullptr) {
   if (cacheHit != nullptr) {
     *cacheHit = false;
   }
@@ -1398,9 +1467,9 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   const bool opened =
       requestedFormatId == 0
           ? openSevenZipArchive(archivePath, archive, stream, formatUsed,
-                                errorMessage)
+                                errorMessage, pauseCallback)
           : openSevenZipArchive(archivePath, requestedFormatId, archive, stream,
-                                errorMessage);
+                                errorMessage, pauseCallback);
   const auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
                                                             start)
@@ -1433,7 +1502,8 @@ bool openSevenZipArchive(const std::filesystem::path &archivePath,
                          CMyComPtr<IInArchive> &archive,
                          CMyComPtr<IInStream> &stream,
                          SevenZipFormat &formatUsed,
-                         std::string *errorMessage) {
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
   const auto candidates = sevenZipFormatCandidates(archivePath);
   if (candidates.empty()) {
     return false;
@@ -1443,7 +1513,7 @@ bool openSevenZipArchive(const std::filesystem::path &archivePath,
   for (SevenZipFormat format : candidates) {
     std::string currentError;
     if (openSevenZipArchiveWithFormat(archivePath, format, archive, stream,
-                                      &currentError)) {
+                                      &currentError, pauseCallback)) {
       formatUsed = format;
       return true;
     }
@@ -1461,21 +1531,26 @@ bool openSevenZipArchive(const std::filesystem::path &archivePath,
                          unsigned char formatId,
                          CMyComPtr<IInArchive> &archive,
                          CMyComPtr<IInStream> &stream,
-                         std::string *errorMessage) {
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
   return openSevenZipArchiveWithFormat(
       archivePath, static_cast<SevenZipFormat>(formatId), archive, stream,
-      errorMessage);
+      errorMessage, pauseCallback);
 }
 
 bool listSevenZipEntries(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          unsigned char &formatUsed,
-                         std::string *errorMessage) {
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
   entries.clear();
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
 
   long long openMs = 0;
   const auto archiveState = openCachedSevenZipArchive(
-      archivePath, 0, nullptr, &openMs, errorMessage);
+      archivePath, 0, nullptr, &openMs, errorMessage, pauseCallback);
   if (archiveState == nullptr) {
     return false;
   }
@@ -1499,6 +1574,10 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
   std::size_t skippedEncrypted = 0;
   std::size_t solidEntries = 0;
   for (UInt32 index = 0; index < itemCount; ++index) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      entries.clear();
+      return false;
+    }
     auto entryName = sevenZipStringProperty(archive, index, kpidPath);
     if (!entryName.has_value() || entryName->empty()) {
       entryName = sevenZipStringProperty(archive, index, kpidName);
@@ -1852,8 +1931,12 @@ archive *openArchive(const std::filesystem::path &archivePath,
 
 bool listEntriesUncached(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
-                         std::string *errorMessage) {
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
   entries.clear();
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
   archive *archiveHandle = openArchive(archivePath, errorMessage);
   if (archiveHandle == nullptr) {
     return false;
@@ -1861,6 +1944,11 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
 
   archive_entry *entry = nullptr;
   for (;;) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      archive_read_free(archiveHandle);
+      entries.clear();
+      return false;
+    }
     const int status = archive_read_next_header(archiveHandle, &entry);
     if (status == ARCHIVE_EOF) {
       break;
@@ -1903,7 +1991,8 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
 bool readArchiveEntry(const std::filesystem::path &archivePath,
                       const std::filesystem::path &innerPath,
                       std::vector<unsigned char> &bytes,
-                      std::string *errorMessage) {
+                      std::string *errorMessage,
+                      const PauseCallback &pauseCallback = nullptr) {
   bytes.clear();
   const std::string target = normalizeEntryName(innerPath.generic_string());
   if (target.empty()) {
@@ -1920,6 +2009,10 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
 
   archive_entry *entry = nullptr;
   for (;;) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      archive_read_free(archiveHandle);
+      return false;
+    }
     const int status = archive_read_next_header(archiveHandle, &entry);
     if (status == ARCHIVE_EOF) {
       break;
@@ -1955,6 +2048,10 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
     }
     std::array<unsigned char, 64 * 1024> buffer{};
     for (;;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        archive_read_free(archiveHandle);
+        return false;
+      }
       const la_ssize_t count =
           archive_read_data(archiveHandle, buffer.data(), buffer.size());
       if (count == 0) {
@@ -1984,7 +2081,7 @@ bool readArchiveEntriesUncached(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
@@ -2010,6 +2107,11 @@ bool readArchiveEntriesUncached(
   std::array<unsigned char, 64 * 1024> buffer{};
   std::size_t entryOrder = 0;
   while (!targets.empty()) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      archive_read_free(archiveHandle);
+      files.clear();
+      return false;
+    }
     const int status = archive_read_next_header(archiveHandle, &entry);
     if (status == ARCHIVE_EOF) {
       break;
@@ -2067,6 +2169,11 @@ bool readArchiveEntriesUncached(
       file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
     }
     for (;;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        archive_read_free(archiveHandle);
+        files.clear();
+        return false;
+      }
       const la_ssize_t count =
           archive_read_data(archiveHandle, buffer.data(), buffer.size());
       if (count == 0) {
@@ -2211,14 +2318,16 @@ bool extractArchiveFullyWithLibarchive(
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
 bool listZipEntries(const std::filesystem::path &archivePath,
-                    std::vector<Entry> &entries, std::string *errorMessage);
+                    std::vector<Entry> &entries, std::string *errorMessage,
+                    const PauseCallback &pauseCallback);
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
 bool listUnarrRarEntries(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          bool &containsSolidEntries,
-                         std::string *errorMessage);
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback);
 #endif
 
 void buildIndexLookups(CachedIndex &index) {
@@ -2261,7 +2370,8 @@ cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
 
 std::shared_ptr<const CachedIndex>
 cachedIndexForArchive(const std::filesystem::path &archivePath,
-                      std::string *errorMessage) {
+                      std::string *errorMessage,
+                      const PauseCallback &pauseCallback = nullptr) {
   std::uintmax_t size = 0;
   std::filesystem::file_time_type mtime{};
   if (!fileState(archivePath, size, mtime)) {
@@ -2293,10 +2403,14 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   loaded->size = size;
   loaded->mtime = mtime;
   bool loadedEntries = false;
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return nullptr;
+  }
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   std::string zipError;
   if (hasZipArchiveExtension(archivePath) &&
-      listZipEntries(archivePath, loaded->entries, &zipError)) {
+      listZipEntries(archivePath, loaded->entries, &zipError,
+                     pauseCallback)) {
     loaded->backend = ArchiveIndexBackend::MinizZip;
     loadedEntries = true;
   } else if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
@@ -2312,7 +2426,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
       std::vector<Entry> unarrEntries;
       bool containsSolidEntries = false;
       if (listUnarrRarEntries(archivePath, unarrEntries, containsSolidEntries,
-                              &unarrError)) {
+                              &unarrError, pauseCallback)) {
         if (!containsSolidEntries) {
           loaded->entries = std::move(unarrEntries);
           loaded->backend = ArchiveIndexBackend::UnarrRar;
@@ -2340,7 +2454,8 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::string sevenZipError;
   if (!loadedEntries && hasSevenZipArchiveExtension(archivePath) &&
       listSevenZipEntries(archivePath, loaded->entries,
-                          loaded->sevenZipFormat, &sevenZipError)) {
+                          loaded->sevenZipFormat, &sevenZipError,
+                          pauseCallback)) {
     loaded->backend = ArchiveIndexBackend::SevenZip;
     loadedEntries = true;
   } else if (!loadedEntries && hasSevenZipArchiveExtension(archivePath) &&
@@ -2355,7 +2470,8 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   std::string libarchiveError;
   if (!loadedEntries &&
-      listEntriesUncached(archivePath, loaded->entries, &libarchiveError)) {
+      listEntriesUncached(archivePath, loaded->entries, &libarchiveError,
+                          pauseCallback)) {
     loaded->backend = ArchiveIndexBackend::LibArchive;
     loadedEntries = true;
   } else if (!loadedEntries && !libarchiveError.empty()) {
@@ -2425,10 +2541,13 @@ bool readArchiveEntriesByCachedOrder(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
+  }
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
   }
 
   const auto index = cachedIndexForArchiveIfFresh(archivePath);
@@ -2486,6 +2605,11 @@ bool readArchiveEntriesByCachedOrder(
   std::size_t entryOrder = 0;
   std::size_t targetIndex = 0;
   while (targetIndex < targets.size()) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      archive_read_free(archiveHandle);
+      files.clear();
+      return false;
+    }
     const int status = archive_read_next_header(archiveHandle, &entry);
     if (status == ARCHIVE_EOF) {
       break;
@@ -2535,6 +2659,11 @@ bool readArchiveEntriesByCachedOrder(
       file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
     }
     for (;;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        archive_read_free(archiveHandle);
+        files.clear();
+        return false;
+      }
       const la_ssize_t count =
           archive_read_data(archiveHandle, buffer.data(), buffer.size());
       if (count == 0) {
@@ -2637,8 +2766,12 @@ ZipNameMatch compareZipEntryName(const std::string &filename,
 }
 
 bool listZipEntries(const std::filesystem::path &archivePath,
-                    std::vector<Entry> &entries, std::string *errorMessage) {
+                    std::vector<Entry> &entries, std::string *errorMessage,
+                    const PauseCallback &pauseCallback) {
   entries.clear();
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
@@ -2664,6 +2797,9 @@ bool listZipEntries(const std::filesystem::path &archivePath,
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
   entries.reserve(fileCount);
   for (mz_uint fileIndex = 0; fileIndex < fileCount; ++fileIndex) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return fail("Operation cancelled");
+    }
     const auto filename = minizFilename(&archive, fileIndex);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
@@ -2696,7 +2832,11 @@ bool listZipEntries(const std::filesystem::path &archivePath,
 
 bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
                              const std::filesystem::path &entryPath,
-                             FileData &file, std::string *errorMessage) {
+                             FileData &file, std::string *errorMessage,
+                             const PauseCallback &pauseCallback) {
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
   mz_zip_archive_file_stat stat{};
   if (!mz_zip_reader_file_stat(archive, fileIndex, &stat)) {
     if (errorMessage != nullptr) {
@@ -2720,6 +2860,9 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
 
   file.path = entryPath;
   file.bytes.resize(static_cast<std::size_t>(stat.m_uncomp_size));
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
   if (!mz_zip_reader_extract_to_mem(archive, fileIndex, file.bytes.data(),
                                     file.bytes.size(), 0)) {
     if (errorMessage != nullptr) {
@@ -2733,7 +2876,8 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
 bool readZipEntriesByName(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
-    std::vector<FileData> &files, std::string *errorMessage) {
+    std::vector<FileData> &files, std::string *errorMessage,
+    const PauseCallback &pauseCallback = nullptr) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
@@ -2781,6 +2925,9 @@ bool readZipEntriesByName(
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
   for (mz_uint fileIndex = 0; fileIndex < fileCount && !exactTargets.empty();
        ++fileIndex) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return fail("Operation cancelled");
+    }
     const auto filename = minizFilename(&archive, fileIndex);
     if (!filename.has_value()) {
       continue;
@@ -2827,10 +2974,14 @@ bool readZipEntriesByName(
   }
 
   for (const ZipReadTarget &target : readTargets) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return fail("Operation cancelled");
+    }
     FileData file;
     std::string readError;
     if (!readZipEntryByFileIndex(&archive, static_cast<mz_uint>(target.order),
-                                 target.entryPath, file, &readError)) {
+                                 target.entryPath, file, &readError,
+                                 pauseCallback)) {
       return fail(readError.empty() ? "Could not extract ZIP entry by name."
                                     : readError);
     }
@@ -2845,7 +2996,7 @@ bool readZipEntriesByIndex(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
@@ -2862,7 +3013,8 @@ bool readZipEntriesByIndex(
     return true;
   }
 
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr) {
     return false;
   }
@@ -2918,6 +3070,9 @@ bool readZipEntriesByIndex(
 
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
   for (const ZipReadTarget &target : readTargets) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return fail("Operation cancelled");
+    }
     if (target.order >= static_cast<std::size_t>(fileCount)) {
       return fail("ZIP index is out of range.");
     }
@@ -2974,13 +3129,14 @@ bool readUnarrRarEntriesByOffset(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
   }
 
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr || index->backend != ArchiveIndexBackend::UnarrRar) {
     return false;
   }
@@ -3044,6 +3200,10 @@ bool readUnarrRarEntriesByOffset(
 
   files.reserve(readTargets.size());
   for (const UnarrRarReadTarget &target : readTargets) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      files.clear();
+      return false;
+    }
     if (!ar_parse_entry_at(archive.archive,
                            static_cast<off64_t>(target.offset))) {
       if (errorMessage != nullptr) {
@@ -3077,6 +3237,10 @@ bool readUnarrRarEntriesByOffset(
     FileData file;
     file.path = target.entryPath;
     file.bytes.resize(entrySize);
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      files.clear();
+      return false;
+    }
     if (entrySize > 0 &&
         !ar_entry_uncompress(archive.archive, file.bytes.data(), entrySize)) {
       if (errorMessage != nullptr) {
@@ -3169,13 +3333,14 @@ bool readSevenZipEntriesByIndex(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
   }
 
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
       index->sevenZipFormat == 0) {
     return false;
@@ -3184,6 +3349,10 @@ bool readSevenZipEntriesByIndex(
   std::vector<SevenZipReadTarget> readTargets;
   readTargets.reserve(innerPaths.size());
   for (const auto &innerPath : innerPaths) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      files.clear();
+      return false;
+    }
     const Entry *entry = findIndexedEntry(*index, innerPath);
     if (entry == nullptr || entry->directory) {
       continue;
@@ -3228,7 +3397,7 @@ bool readSevenZipEntriesByIndex(
   long long openMs = 0;
   const auto archiveState = openCachedSevenZipArchive(
       archivePath, index->sevenZipFormat, &archiveCacheHit, &openMs,
-      errorMessage);
+      errorMessage, pauseCallback);
   if (archiveState == nullptr) {
     return false;
   }
@@ -3258,6 +3427,10 @@ bool readSevenZipEntriesByIndex(
   std::size_t solidTargets = 0;
 
   for (const SevenZipReadTarget &target : readTargets) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      files.clear();
+      return false;
+    }
     const auto itemIndex = static_cast<UInt32>(target.order);
     if (itemIndex >= itemCount) {
       if (errorMessage != nullptr) {
@@ -3315,7 +3488,8 @@ bool readSevenZipEntriesByIndex(
     outputTargets.emplace(itemIndex, &files.back());
   }
 
-  auto *callback = new SevenZipExtractCallback(std::move(outputTargets));
+  auto *callback =
+      new SevenZipExtractCallback(std::move(outputTargets), pauseCallback);
   IArchiveExtractCallback *callbackInterface = callback;
   callbackInterface->AddRef();
   CMyComPtr<IArchiveExtractCallback> callbackHandle;
@@ -3351,10 +3525,12 @@ bool readSevenZipEntriesByIndex(
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
                                                             extractStart)
           .count();
-  if (result != S_OK || callback->failed()) {
+  if (result != S_OK || callback->failed() || callback->cancelled()) {
     if (errorMessage != nullptr) {
       *errorMessage =
-          result != S_OK
+          callback->cancelled()
+              ? "Operation cancelled"
+              : result != S_OK
               ? sevenZipResultMessage(result)
               : "7-Zip archive extraction failed with operation result: " +
                     std::to_string(callback->operationResult());
@@ -3519,6 +3695,17 @@ bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
 
+bool pauseIfNeeded(const PauseCallback &pauseCallback,
+                   std::string *errorMessage) {
+  if (pauseCallback == nullptr || pauseCallback()) {
+    return true;
+  }
+  if (errorMessage != nullptr && errorMessage->empty()) {
+    *errorMessage = "Operation cancelled";
+  }
+  return false;
+}
+
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                          double fraction, std::uint64_t current,
                          std::uint64_t total, std::string message) {
@@ -3582,6 +3769,11 @@ bool isArchiveSupportAvailable() {
          ASOBMSHOW_ARCHIVEFILE_HAS_UNARR != 0 ||
          ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE != 0 ||
          ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP != 0;
+}
+
+void setCachePathNormalizer(CachePathNormalizer normalizer) {
+  std::lock_guard<std::mutex> lock(gCachePathNormalizerMutex);
+  gCachePathNormalizer = std::move(normalizer);
 }
 
 bool hasSupportedArchiveExtension(const std::filesystem::path &path) {
@@ -3662,7 +3854,8 @@ std::filesystem::path makeVirtualPath(const std::filesystem::path &archivePath,
 }
 
 bool listEntries(const std::filesystem::path &archivePath,
-                 std::vector<Entry> &entries, std::string *errorMessage) {
+                 std::vector<Entry> &entries, std::string *errorMessage,
+                 PauseCallback pauseCallback) {
   entries.clear();
   if (!isArchiveSupportAvailable() || !hasSupportedArchiveExtension(archivePath)) {
     if (errorMessage != nullptr) {
@@ -3671,7 +3864,8 @@ bool listEntries(const std::filesystem::path &archivePath,
     return false;
   }
 
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr) {
     return false;
   }
@@ -3681,8 +3875,8 @@ bool listEntries(const std::filesystem::path &archivePath,
 
 bool readArchiveEntries(const std::filesystem::path &archivePath,
                         const std::vector<std::filesystem::path> &innerPaths,
-                        std::vector<FileData> &files,
-                        std::string *errorMessage) {
+                        std::vector<FileData> &files, std::string *errorMessage,
+                        PauseCallback pauseCallback) {
   files.clear();
   if (!isArchiveSupportAvailable() || !hasSupportedArchiveExtension(archivePath)) {
     if (errorMessage != nullptr) {
@@ -3708,7 +3902,7 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   std::string zipError;
   if (hasZipArchiveExtension(archivePath) &&
       readZipEntriesByIndex(archivePath, innerPaths, std::nullopt, files,
-                            &zipError)) {
+                            &zipError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive batch via miniz ZIP: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3725,7 +3919,7 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   std::string unarrError;
   if (hasRarArchiveExtension(archivePath) &&
       readUnarrRarEntriesByOffset(archivePath, innerPaths, std::nullopt, files,
-                                  &unarrError)) {
+                                  &unarrError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive batch via unarr RAR random access: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3742,7 +3936,7 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   std::string sevenZipError;
   if (hasSevenZipArchiveExtension(archivePath) &&
       readSevenZipEntriesByIndex(archivePath, innerPaths, std::nullopt, files,
-                                 &sevenZipError)) {
+                                 &sevenZipError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive batch via 7-Zip SDK: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3758,7 +3952,8 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   std::string cachedOrderError;
   if (readArchiveEntriesByCachedOrder(archivePath, innerPaths, std::nullopt,
-                                      files, &cachedOrderError)) {
+                                      files, &cachedOrderError,
+                                      pauseCallback)) {
     appendDebugLogLineImpl("Read archive batch via cached libarchive order: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3772,7 +3967,7 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   files.clear();
   const bool read =
       readArchiveEntriesUncached(archivePath, innerPaths, std::nullopt, files,
-                                 errorMessage);
+                                 errorMessage, pauseCallback);
   appendDebugLogLineImpl(
       std::string(read ? "Read archive batch via libarchive scan: "
                        : "Archive batch read failed: ") +
@@ -3797,7 +3992,7 @@ bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const EntryRange &range, std::vector<FileData> &files,
-    std::string *errorMessage) {
+    std::string *errorMessage, PauseCallback pauseCallback) {
   files.clear();
   if (range.end < range.start) {
     return true;
@@ -3825,8 +4020,8 @@ bool readArchiveEntriesInRange(
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   std::string zipError;
   if (hasZipArchiveExtension(archivePath) &&
-      readZipEntriesByIndex(archivePath, innerPaths, std::nullopt, files,
-                            &zipError)) {
+      readZipEntriesByIndex(archivePath, innerPaths, range, files, &zipError,
+                            pauseCallback)) {
     appendDebugLogLineImpl("Read archive range via miniz ZIP: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3844,8 +4039,8 @@ bool readArchiveEntriesInRange(
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
   std::string unarrError;
   if (hasRarArchiveExtension(archivePath) &&
-      readUnarrRarEntriesByOffset(archivePath, innerPaths, std::nullopt, files,
-                                  &unarrError)) {
+      readUnarrRarEntriesByOffset(archivePath, innerPaths, range, files,
+                                  &unarrError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive range via unarr RAR random access: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3863,8 +4058,8 @@ bool readArchiveEntriesInRange(
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
   std::string sevenZipError;
   if (hasSevenZipArchiveExtension(archivePath) &&
-      readSevenZipEntriesByIndex(archivePath, innerPaths, std::nullopt, files,
-                                 &sevenZipError)) {
+      readSevenZipEntriesByIndex(archivePath, innerPaths, range, files,
+                                 &sevenZipError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive range via 7-Zip SDK: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3882,7 +4077,7 @@ bool readArchiveEntriesInRange(
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   std::string cachedOrderError;
   if (readArchiveEntriesByCachedOrder(archivePath, innerPaths, range, files,
-                                      &cachedOrderError)) {
+                                      &cachedOrderError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive range via cached libarchive order: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -3898,7 +4093,7 @@ bool readArchiveEntriesInRange(
   files.clear();
   const bool read =
       readArchiveEntriesUncached(archivePath, innerPaths, range, files,
-                                 errorMessage);
+                                 errorMessage, pauseCallback);
   appendDebugLogLineImpl(
       std::string(read ? "Read archive range via libarchive scan: "
                        : "Archive ranged read failed: ") +
@@ -4098,7 +4293,7 @@ bool readFile(const std::filesystem::path &path,
   if (hasZipArchiveExtension(archivePath)) {
     std::vector<FileData> files;
     if (readZipEntriesByIndex(archivePath, {*resolvedInner}, std::nullopt,
-                              files, nullptr) &&
+                              files, nullptr, nullptr) &&
         !files.empty()) {
       bytes = std::move(files.front().bytes);
       return true;
@@ -4109,7 +4304,7 @@ bool readFile(const std::filesystem::path &path,
   if (hasRarArchiveExtension(archivePath)) {
     std::vector<FileData> files;
     if (readUnarrRarEntriesByOffset(archivePath, {*resolvedInner}, std::nullopt,
-                                    files, nullptr) &&
+                                    files, nullptr, nullptr) &&
         !files.empty()) {
       bytes = std::move(files.front().bytes);
       return true;
@@ -4120,7 +4315,7 @@ bool readFile(const std::filesystem::path &path,
   if (hasSevenZipArchiveExtension(archivePath)) {
     std::vector<FileData> files;
     if (readSevenZipEntriesByIndex(archivePath, {*resolvedInner}, std::nullopt,
-                                   files, nullptr) &&
+                                   files, nullptr, nullptr) &&
         !files.empty()) {
       bytes = std::move(files.front().bytes);
       return true;
@@ -4152,7 +4347,7 @@ bool readFile(const std::filesystem::path &path,
 
 std::string cacheKeyForPath(const std::filesystem::path &path) {
   const std::filesystem::path normalized = path.lexically_normal();
-  std::string key = path_t_to_utf8(fspath_to_path_t(normalized));
+  std::string key = cachePathKey(normalized);
 
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;

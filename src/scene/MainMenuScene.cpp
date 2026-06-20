@@ -711,6 +711,24 @@ Button *makeModalButton(const std::string &label, int fontSize,
   return button;
 }
 
+const char *chartScanProgressStageText(ChartScanProgressStage stage) {
+  switch (stage) {
+  case ChartScanProgressStage::Preparing:
+    return "Preparing library scan";
+  case ChartScanProgressStage::ScanningRoots:
+    return "Scanning folders";
+  case ChartScanProgressStage::PreparingUpdates:
+    return "Preparing chart updates";
+  case ChartScanProgressStage::RemovingDeleted:
+    return "Removing deleted charts";
+  case ChartScanProgressStage::ParsingCharts:
+    return "Parsing charts";
+  case ChartScanProgressStage::ReadingArchive:
+    return "Reading archive entries";
+  }
+  return "Refreshing library";
+}
+
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
@@ -776,46 +794,429 @@ void MainMenuScene::init() {
   db = ChartDBHelper::GetInstance().Connect();
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
-  checkEntriesThread =
-      std::jthread(CheckEntries, std::ref(context), std::ref(*this));
+  startLibraryTaskWorker();
+  enqueueLibraryRefreshTask("Refresh Library");
+}
+
+void MainMenuScene::onPause() {
+  pauseLibraryTaskWorker();
 }
 
 void MainMenuScene::onResume() {
+  resumeLibraryTaskWorker();
+  startLibraryTaskWorker();
   refreshScoreClearRanksIfNeeded();
   refreshLibraryIfNeeded();
 }
 
-void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
-                                 ApplicationContext &context,
-                                 MainMenuScene &scene) {
-  auto dbHelper = ChartDBHelper::GetInstance();
-  auto db = dbHelper.Connect();
-  dbHelper.CreateChartMetaTable(db);
-  dbHelper.CreateSolidArchiveTable(db);
-  dbHelper.CreateEntriesTable(db);
-  dbHelper.CreateDifficultyTableTables(db);
-  const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
-      db, Utils::GetDocumentsPath("tables"));
-  if (importedTables > 0 && !stop_token.stop_requested()) {
-    scene.requestLibraryReload(true);
+void MainMenuScene::startLibraryTaskWorker() {
+  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
+  if (libraryTaskWorkerPaused.load()) {
+    return;
   }
-  auto entries = dbHelper.SelectAllEntries(db);
+  if (checkEntriesThread.joinable()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    bool changed = false;
+    for (auto &task : libraryTasks) {
+      if (task.status != LibraryTaskStatus::Paused) {
+        continue;
+      }
+      const auto queuedIt =
+          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
+                       [&task](const auto &queuedTask) {
+                         return queuedTask.id == task.id;
+                       });
+      if (queuedIt != libraryTaskQueue.end()) {
+        task.status = LibraryTaskStatus::Queued;
+        task.detail = "Waiting";
+        changed = true;
+      }
+    }
+    if (changed) {
+      ++libraryTasksRevision;
+    }
+  }
+  checkEntriesThread = std::jthread(
+      [this](const std::stop_token &stopToken) { libraryTaskLoop(stopToken); });
+}
 
-  // Check for stop request before proceeding
-  if (stop_token.stop_requested()) {
-    dbHelper.Close(db);
+void MainMenuScene::stopLibraryTaskWorker() {
+  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
+  if (!checkEntriesThread.joinable()) {
+    return;
+  }
+  SDL_Log("Joining library task worker");
+  checkEntriesThread.request_stop();
+  libraryTaskWorkerPaused = false;
+  libraryTaskPauseCv.notify_all();
+  libraryTaskCv.notify_all();
+  checkEntriesThread.join();
+}
+
+void MainMenuScene::pauseLibraryTaskWorker() {
+  libraryTaskWorkerPaused = true;
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    for (auto &task : libraryTasks) {
+      if (task.status == LibraryTaskStatus::Queued ||
+          task.status == LibraryTaskStatus::Running) {
+        task.status = LibraryTaskStatus::Paused;
+        task.detail = "Paused";
+        changed = true;
+      }
+    }
+    if (changed) {
+      ++libraryTasksRevision;
+    }
+  }
+  libraryTaskCv.notify_all();
+}
+
+void MainMenuScene::resumeLibraryTaskWorker() {
+  libraryTaskWorkerPaused = false;
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    for (auto &task : libraryTasks) {
+      if (task.status != LibraryTaskStatus::Paused) {
+        continue;
+      }
+      const auto queuedIt =
+          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
+                       [&task](const auto &queuedTask) {
+                         return queuedTask.id == task.id;
+                       });
+      task.status = queuedIt != libraryTaskQueue.end()
+                        ? LibraryTaskStatus::Queued
+                        : LibraryTaskStatus::Running;
+      task.detail = queuedIt != libraryTaskQueue.end() ? "Waiting" : "Resuming";
+      changed = true;
+    }
+    if (changed) {
+      ++libraryTasksRevision;
+    }
+  }
+  libraryTaskPauseCv.notify_all();
+  libraryTaskCv.notify_all();
+}
+
+bool MainMenuScene::waitForLibraryTaskResume(
+    std::uint64_t id, const std::stop_token &stopToken) {
+  if (!libraryTaskWorkerPaused.load()) {
+    return !stopToken.stop_requested();
+  }
+
+  const LibraryTaskProgressSnapshot snapshot = readLibraryTaskProgress();
+  const double fraction =
+      snapshot.valid && snapshot.taskId == id
+          ? static_cast<double>(snapshot.basisPoints) / 10000.0
+          : 0.0;
+  const int current =
+      snapshot.valid && snapshot.taskId == id ? snapshot.current : 0;
+  const int total = snapshot.valid && snapshot.taskId == id ? snapshot.total : 0;
+  setLibraryTaskState(id, LibraryTaskStatus::Paused, fraction, current, total,
+                      "Paused");
+
+  std::unique_lock<std::mutex> lock(libraryTaskPauseMutex);
+  libraryTaskPauseCv.wait(lock, stopToken, [this]() {
+    return !libraryTaskWorkerPaused.load();
+  });
+  if (stopToken.stop_requested()) {
+    return false;
+  }
+  setLibraryTaskState(id, LibraryTaskStatus::Running, fraction, current, total,
+                      "Resuming");
+  return true;
+}
+
+void MainMenuScene::enqueueLibraryRefreshTask(
+    const std::string &title, const std::filesystem::path &folderToAdd,
+    const std::string &iosBookmark) {
+  startLibraryTaskWorker();
+  const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    libraryTaskQueue.push_back(LibraryTaskRequest{
+        .id = id,
+        .title = title,
+        .folderToAdd = folderToAdd,
+        .iosBookmark = iosBookmark,
+    });
+    libraryTasks.push_back(LibraryTaskInfo{
+        .id = id,
+        .title = title,
+        .status = LibraryTaskStatus::Queued,
+        .fraction = 0.0,
+        .current = 0,
+        .total = 0,
+        .detail = "Waiting",
+    });
+    constexpr std::size_t kMaxTaskHistory = 24;
+    while (libraryTasks.size() > kMaxTaskHistory) {
+      const auto removable = std::find_if(
+          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
+            return task.status == LibraryTaskStatus::Complete ||
+                   task.status == LibraryTaskStatus::Failed ||
+                   task.status == LibraryTaskStatus::Paused;
+          });
+      if (removable == libraryTasks.end()) {
+        break;
+      }
+      libraryTasks.erase(removable);
+    }
+    ++libraryTasksRevision;
+  }
+  libraryTaskCv.notify_one();
+}
+
+void MainMenuScene::setLibraryTaskState(std::uint64_t id,
+                                        LibraryTaskStatus status,
+                                        double fraction, int current,
+                                        int total,
+                                        const std::string &detail) {
+  std::lock_guard<std::mutex> lock(libraryTaskMutex);
+  auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
+                             [id](const auto &task) { return task.id == id; });
+  if (taskIt == libraryTasks.end()) {
+    return;
+  }
+  taskIt->status = status;
+  taskIt->fraction = std::clamp(fraction, 0.0, 1.0);
+  taskIt->current = std::max(0, current);
+  taskIt->total = std::max(0, total);
+  taskIt->detail = detail;
+  ++libraryTasksRevision;
+}
+
+void MainMenuScene::updateLibraryTaskProgress(
+    std::uint64_t id, const ChartScanProgress &progress) {
+  const int total = std::max(0, progress.total);
+  const int current =
+      total > 0 ? std::clamp(progress.current, 0, total)
+                : std::max(0, progress.current);
+  const int basisPoints =
+      total > 0 ? static_cast<int>((static_cast<std::int64_t>(current) *
+                                    10000) /
+                                   std::max(1, total))
+                : 0;
+  std::uint64_t revision =
+      libraryProgressRevision.load(std::memory_order_relaxed);
+  if ((revision & 1U) != 0) {
+    ++revision;
+  }
+  libraryProgressRevision.store(revision + 1, std::memory_order_release);
+  libraryProgressTaskId.store(id, std::memory_order_relaxed);
+  libraryProgressCurrent.store(current, std::memory_order_relaxed);
+  libraryProgressTotal.store(total, std::memory_order_relaxed);
+  libraryProgressBasisPoints.store(std::clamp(basisPoints, 0, 10000),
+                                   std::memory_order_relaxed);
+  libraryProgressStage.store(static_cast<int>(progress.stage),
+                             std::memory_order_relaxed);
+  libraryProgressRevision.store(revision + 2, std::memory_order_release);
+}
+
+MainMenuScene::LibraryTaskProgressSnapshot
+MainMenuScene::readLibraryTaskProgress() const {
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    const std::uint64_t before =
+        libraryProgressRevision.load(std::memory_order_acquire);
+    if ((before & 1U) != 0) {
+      continue;
+    }
+    LibraryTaskProgressSnapshot snapshot;
+    snapshot.valid = before != 0;
+    snapshot.revision = before;
+    snapshot.taskId = libraryProgressTaskId.load(std::memory_order_relaxed);
+    snapshot.current = libraryProgressCurrent.load(std::memory_order_relaxed);
+    snapshot.total = libraryProgressTotal.load(std::memory_order_relaxed);
+    snapshot.basisPoints =
+        libraryProgressBasisPoints.load(std::memory_order_relaxed);
+    snapshot.stage = static_cast<ChartScanProgressStage>(
+        libraryProgressStage.load(std::memory_order_relaxed));
+    const std::uint64_t after =
+        libraryProgressRevision.load(std::memory_order_acquire);
+    if (before == after && (after & 1U) == 0) {
+      return snapshot;
+    }
+  }
+  return {};
+}
+
+int MainMenuScene::activeLibraryTaskCount() {
+  std::lock_guard<std::mutex> lock(libraryTaskMutex);
+  return static_cast<int>(std::count_if(
+      libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
+        return task.status == LibraryTaskStatus::Queued ||
+               task.status == LibraryTaskStatus::Running ||
+               task.status == LibraryTaskStatus::Paused;
+      }));
+}
+
+void MainMenuScene::requestLibraryScanFlush() {
+  if (activeLibraryTaskCount() > 0) {
+    libraryScanFlushRequested.fetch_add(1, std::memory_order_release);
+  }
+  requestLibraryReload(true);
+}
+
+std::uint64_t MainMenuScene::pendingLibraryScanFlushRequest() const {
+  const std::uint64_t requested =
+      libraryScanFlushRequested.load(std::memory_order_acquire);
+  const std::uint64_t completed =
+      libraryScanFlushCompleted.load(std::memory_order_acquire);
+  return requested > completed ? requested : 0;
+}
+
+void MainMenuScene::completeLibraryScanFlush(std::uint64_t request) {
+  if (request == 0) {
+    return;
+  }
+  std::uint64_t completed =
+      libraryScanFlushCompleted.load(std::memory_order_relaxed);
+  while (completed < request &&
+         !libraryScanFlushCompleted.compare_exchange_weak(
+             completed, request, std::memory_order_release,
+             std::memory_order_relaxed)) {
+  }
+  requestLibraryReload(true);
+}
+
+void MainMenuScene::refreshTasksButton() {
+  if (tasksButtonText == nullptr) {
+    return;
+  }
+  const int count = activeLibraryTaskCount();
+  std::string label = std::to_string(count);
+  label += count == 1 ? " Task" : " Tasks";
+  if (label == displayedLibraryTasksButtonText) {
+    return;
+  }
+  displayedLibraryTasksButtonText = label;
+  tasksButtonText->setText(label);
+}
+
+void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
+  std::optional<LibraryTaskRequest> pausedTask;
+  while (!stopToken.stop_requested()) {
+    LibraryTaskRequest task;
+    {
+      std::unique_lock<std::mutex> lock(libraryTaskMutex);
+      libraryTaskCv.wait(lock, stopToken, [this]() {
+        return !libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty();
+      });
+      if (stopToken.stop_requested()) {
+        break;
+      }
+      task = libraryTaskQueue.front();
+      libraryTaskQueue.pop_front();
+    }
+
+    if (!waitForLibraryTaskResume(task.id, stopToken)) {
+      pausedTask = task;
+      break;
+    }
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
+                        "Starting");
+    try {
+      runLibraryRefreshTask(task, stopToken);
+      if (stopToken.stop_requested()) {
+        setLibraryTaskState(task.id, LibraryTaskStatus::Paused, 0.0, 0, 0,
+                            "Paused");
+        pausedTask = task;
+      } else {
+        setLibraryTaskState(task.id, LibraryTaskStatus::Complete, 1.0, 1, 1,
+                            "Complete");
+      }
+    } catch (const std::exception &e) {
+      setLibraryTaskState(task.id, LibraryTaskStatus::Failed, 0.0, 0, 0,
+                          e.what());
+      archive_file::appendDebugLogLine("Library task failed: " + task.title +
+                                       ": " + e.what());
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    if (pausedTask.has_value()) {
+      const auto queuedIt =
+          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
+                       [&pausedTask](const auto &task) {
+                         return task.id == pausedTask->id;
+                       });
+      if (queuedIt == libraryTaskQueue.end()) {
+        libraryTaskQueue.push_front(*pausedTask);
+      }
+    }
+    for (auto &task : libraryTasks) {
+      if (task.status == LibraryTaskStatus::Queued ||
+          task.status == LibraryTaskStatus::Running) {
+        task.status = LibraryTaskStatus::Paused;
+        task.detail = "Paused";
+      }
+    }
+    ++libraryTasksRevision;
+  }
+}
+
+void MainMenuScene::runLibraryRefreshTask(
+    const LibraryTaskRequest &task, const std::stop_token &stopToken) {
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  auto taskDb = dbHelper.Connect();
+  dbHelper.CreateChartMetaTable(taskDb);
+  dbHelper.CreateSolidArchiveTable(taskDb);
+  dbHelper.CreateEntriesTable(taskDb);
+  dbHelper.CreateDifficultyTableTables(taskDb);
+
+  auto pauseTask = [&]() {
+    return waitForLibraryTaskResume(task.id, stopToken);
+  };
+  if (!pauseTask()) {
+    dbHelper.Close(taskDb);
     return;
   }
 
-  // open folder select if no entries
+  if (!task.folderToAdd.empty()) {
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
+                        "Adding folder");
+    dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark);
+  }
+
+  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
+                      "Importing difficulty tables");
+  if (!pauseTask()) {
+    dbHelper.Close(taskDb);
+    return;
+  }
+  const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
+      taskDb, Utils::GetDocumentsPath("tables"));
+  if (importedTables > 0 && !stopToken.stop_requested()) {
+    requestLibraryReload(true);
+  }
+  auto entries = dbHelper.SelectAllEntries(taskDb);
+
+  if (stopToken.stop_requested()) {
+    dbHelper.Close(taskDb);
+    return;
+  }
+
   if (entries.empty()) {
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.04, 0, 0,
+                        "Waiting for library folder");
+    if (!pauseTask()) {
+      dbHelper.Close(taskDb);
+      return;
+    }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     std::string folder;
     std::string bookmark;
     std::string errorMessage;
     if (PickIOSFolder(folder, bookmark, errorMessage)) {
-      dbHelper.InsertEntry(db, std::filesystem::path(folder), bookmark);
-      entries = dbHelper.SelectAllEntries(db);
+      dbHelper.InsertEntry(taskDb, std::filesystem::path(folder), bookmark);
+      entries = dbHelper.SelectAllEntries(taskDb);
     } else {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to pick iOS library folder: %s",
@@ -834,13 +1235,11 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
     if (folder_c == nullptr) {
       std::cerr << "tinyfd_selectFolderDialog error: " << strerror(errno)
                 << std::endl;
-      // get input from stdin
       std::cout << "Failed to open folder select dialog.\n";
 
       while (folder.empty()) {
-        // Check for stop request during user input
-        if (stop_token.stop_requested()) {
-          dbHelper.Close(db);
+        if (stopToken.stop_requested()) {
+          dbHelper.Close(taskDb);
           return;
         }
 
@@ -853,7 +1252,6 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
           continue;
         }
 
-        // replace ~ with home directory
         if (folder[0] == '~') {
           folder.replace(0, 1, getenv("HOME"));
         }
@@ -863,50 +1261,61 @@ void MainMenuScene::CheckEntries(const std::stop_token &stop_token,
       }
 
       if (folder.empty()) {
-        dbHelper.Close(db);
+        dbHelper.Close(taskDb);
         return;
       }
     } else {
       folder = folder_c;
     }
     std::filesystem::path path(folder);
-    dbHelper.InsertEntry(db, path);
-    entries = dbHelper.SelectAllEntries(db);
+    dbHelper.InsertEntry(taskDb, path);
+    entries = dbHelper.SelectAllEntries(taskDb);
 #endif
   }
 
-  // Check for stop request before loading charts
-  if (stop_token.stop_requested()) {
-    dbHelper.Close(db);
+  if (stopToken.stop_requested()) {
+    dbHelper.Close(taskDb);
     return;
   }
 
+  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.06, 0, 0,
+                      "Refreshing folder access");
+  if (!pauseTask()) {
+    dbHelper.Close(taskDb);
+    return;
+  }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   RefreshIOSFolderAccess(entries);
 #endif
-  LoadCharts(dbHelper, db, entries, scene, stop_token);
-  dbHelper.Close(db);
+  LoadCharts(dbHelper, taskDb, entries, *this, stopToken,
+             [this, taskId = task.id](const ChartScanProgress &progress) {
+               updateLibraryTaskProgress(taskId, progress);
+             },
+             [this, taskId = task.id, &stopToken]() {
+               return waitForLibraryTaskResume(taskId, stopToken);
+             });
+  dbHelper.Close(taskDb);
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 void MainMenuScene::addIOSFolderEntryFromFiles() {
-  if (willStart.load() || replayExportInProgress.load()) {
+  if (willStart.load() || replayExportInProgress.load() ||
+      addFolderPickerInProgress.load()) {
+    return;
+  }
+  if (addFolderPickerThread.joinable()) {
+    addFolderPickerThread.join();
+  }
+  if (addFolderPickerInProgress.exchange(true)) {
     return;
   }
 
-  if (checkEntriesThread.joinable()) {
-    checkEntriesThread.request_stop();
-    checkEntriesThread.join();
-  }
-
-  checkEntriesThread =
-      std::jthread([this](const std::stop_token &stop_token) {
-        auto dbHelper = ChartDBHelper::GetInstance();
-        auto db = dbHelper.Connect();
-        dbHelper.CreateChartMetaTable(db);
-        dbHelper.CreateSolidArchiveTable(db);
-        dbHelper.CreateEntriesTable(db);
-        dbHelper.CreateDifficultyTableTables(db);
+  addFolderPickerThread = std::jthread(
+      [this](const std::stop_token &stopToken) {
+        struct PickerFlagReset {
+          std::atomic_bool &flag;
+          ~PickerFlagReset() { flag.store(false); }
+        } reset{addFolderPickerInProgress};
 
         std::string folder;
         std::string bookmark;
@@ -916,19 +1325,22 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
             SDL_Log("Failed to pick iOS library folder: %s",
                     errorMessage.c_str());
           }
-          dbHelper.Close(db);
           return;
         }
-        if (stop_token.stop_requested()) {
-          dbHelper.Close(db);
+        if (stopToken.stop_requested()) {
           return;
         }
 
-        dbHelper.InsertEntry(db, std::filesystem::path(folder), bookmark);
-        auto entries = dbHelper.SelectAllEntries(db);
-        RefreshIOSFolderAccess(entries);
-        LoadCharts(dbHelper, db, entries, *this, stop_token);
-        dbHelper.Close(db);
+        std::filesystem::path folderPath(folder);
+        std::string folderName =
+            !folderPath.filename().empty()
+                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
+                : path_t_to_utf8(fspath_to_path_t(folderPath));
+        if (folderName.empty()) {
+          folderName = "Folder";
+        }
+        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
+                                  bookmark);
       });
 }
 #endif
@@ -953,6 +1365,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
+  tasksButton = nullptr;
+  tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
@@ -979,11 +1393,19 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipDeleteArchiveButtonText = nullptr;
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
+  tasksModalRoot = nullptr;
   parseLogScrollView = nullptr;
   parseLogContent = nullptr;
   parseLogText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
+  tasksScrollView = nullptr;
+  tasksContent = nullptr;
+  tasksText = nullptr;
+  tasksRefreshButton = nullptr;
+  tasksRefreshButtonText = nullptr;
+  tasksCloseButton = nullptr;
+  tasksCloseButtonText = nullptr;
   findBmsModalRoot = nullptr;
   findBmsProgressTrack = nullptr;
   findBmsProgressFill = nullptr;
@@ -1353,6 +1775,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
                     Color(22, 34, 51, 220), Color(32, 48, 70, 232),
                     Color(44, 65, 94, 242), Color(83, 109, 140, 220));
   libraryHeader->addView(parseLogButton);
+
+  tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
+  tasksButton->setWidth(142);
+  tasksButton->setHeight(50);
+  tasksButton->setOnClickListener([this]() { showTasksModal(); });
+  styleActionButton(tasksButton, tasksButtonText, true,
+                    Color(22, 34, 51, 220), Color(32, 48, 70, 232),
+                    Color(44, 65, 94, 242), Color(83, 109, 140, 220));
+  libraryHeader->addView(tasksButton);
   left->addView(libraryHeader);
 
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
@@ -1696,6 +2127,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildPlayOptionsModal();
   buildReplayModal();
   buildParseLogModal();
+  buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();
   addView(rootLayout);
@@ -1706,11 +2138,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->applyYogaLayout();
 }
 
-void MainMenuScene::reloadFolderItems() {
+void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   if (folderRecyclerView == nullptr) {
     return;
   }
 
+  const float previousScrollOffset = preserveViewState
+                                         ? folderRecyclerView->scrollOffset
+                                         : 0.0f;
   auto dbHelper = ChartDBHelper::GetInstance();
   std::vector<LibraryFolderItem> folders;
 
@@ -1832,17 +2267,39 @@ void MainMenuScene::reloadFolderItems() {
     activeIndex = 0;
   }
 
+  const int folderCount = static_cast<int>(folders.size());
   folderRecyclerView->setItems(std::move(folders));
   folderRecyclerView->selectedIndex = activeIndex;
+  if (preserveViewState) {
+    const float maxOffset = std::max(
+        0.0f, static_cast<float>(
+                  std::max(1, folderCount) * folderRecyclerView->itemHeight -
+                  folderRecyclerView->getHeight()));
+    folderRecyclerView->scrollOffset =
+        std::clamp(previousScrollOffset, 0.0f, maxOffset);
+    folderRecyclerView->rebindVisibleItems();
+  }
   auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
   if (selectedView != nullptr) {
     selectedView->onSelected();
   }
 }
 
-void MainMenuScene::reloadChartList() {
+void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr) {
     return;
+  }
+
+  const float previousScrollOffset = preserveViewState
+                                         ? recyclerView->scrollOffset
+                                         : 0.0f;
+  const int previousSelectedIndex =
+      preserveViewState ? recyclerView->selectedIndex : -1;
+  path_t previousSelectedPath;
+  if (preserveViewState && previousSelectedIndex >= 0 &&
+      previousSelectedIndex < recyclerView->size()) {
+    previousSelectedPath =
+        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
   }
 
   ChartMetaQuery query;
@@ -1877,11 +2334,57 @@ void MainMenuScene::reloadChartList() {
 
   const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   chartListCache.reset(db, query, count);
-  refreshReplayAvailability(nullptr);
+  if (!preserveViewState || previousSelectedPath.empty()) {
+    refreshReplayAvailability(nullptr);
+  }
   recyclerView->setItemProvider(count,
                                 [this](int index) -> const ChartMetaRecord & {
                                   return chartListCache.get(index);
                                 });
+  if (!preserveViewState) {
+    return;
+  }
+
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(std::max(1, count) * recyclerView->itemHeight -
+                                recyclerView->getHeight()));
+  recyclerView->scrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
+
+  int restoredSelectedIndex = -1;
+  auto pathMatchesPreviousSelection = [&](int index) {
+    if (index < 0 || index >= count || previousSelectedPath.empty()) {
+      return false;
+    }
+    return fspath_to_path_t(chartListCache.get(index).meta.BmsPath) ==
+           previousSelectedPath;
+  };
+
+  if (pathMatchesPreviousSelection(previousSelectedIndex)) {
+    restoredSelectedIndex = previousSelectedIndex;
+  } else if (!previousSelectedPath.empty()) {
+    const int visibleStart =
+        std::max(0, static_cast<int>(previousScrollOffset /
+                                     std::max(1, recyclerView->itemHeight)) -
+                        chartListCache.pageSize);
+    const int visibleEnd =
+        std::min(count, visibleStart + chartListCache.pageSize * 3);
+    for (int i = visibleStart; i < visibleEnd; ++i) {
+      if (pathMatchesPreviousSelection(i)) {
+        restoredSelectedIndex = i;
+        break;
+      }
+    }
+  }
+
+  recyclerView->selectedIndex = restoredSelectedIndex;
+  if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
+    refreshReplayAvailability(nullptr);
+    setPlayableChartActionsVisible(false);
+    setUnzipButtonVisible(false);
+    setFindBmsButtonVisible(false);
+  }
+  recyclerView->rebindVisibleItems();
 }
 
 void MainMenuScene::reloadScoreClearRanks() {
@@ -1922,8 +2425,8 @@ void MainMenuScene::refreshLibraryIfNeeded() {
   }
 
   reloadScoreClearRanks();
-  reloadFolderItems();
-  reloadChartList();
+  reloadFolderItems(true);
+  reloadChartList(true);
   libraryRevision = revision;
 }
 
@@ -1951,10 +2454,10 @@ void MainMenuScene::applyPendingUiUpdates() {
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
   if (shouldReloadFolders) {
     reloadScoreClearRanks();
-    reloadFolderItems();
+    reloadFolderItems(true);
   }
   if (shouldReloadFolders || shouldReloadCharts) {
-    reloadChartList();
+    reloadChartList(true);
     libraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   }
   if ((shouldReloadFolders || shouldReloadCharts) &&
@@ -2889,12 +3392,7 @@ void MainMenuScene::startLibraryRefresh() {
   if (willStart.load() || replayExportInProgress.load()) {
     return;
   }
-  if (checkEntriesThread.joinable()) {
-    checkEntriesThread.request_stop();
-    checkEntriesThread.join();
-  }
-  checkEntriesThread =
-      std::jthread(CheckEntries, std::ref(context), std::ref(*this));
+  enqueueLibraryRefreshTask("Refresh Library");
 }
 
 void MainMenuScene::setFindBmsButtonVisible(bool visible) {
@@ -3066,6 +3564,213 @@ void MainMenuScene::refreshParseLogModal() {
   if (parseLogScrollView != nullptr) {
     parseLogScrollView->scrollToBottom();
   }
+}
+
+void MainMenuScene::buildTasksModal() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  constexpr float kModalPanelWidth = 760.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalContentWidth =
+      kModalPanelWidth - kModalPanelPadding * 2.0f;
+
+  tasksModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                           rendering::window_height);
+  tasksModalRoot->setPositionType(YGPositionTypeAbsolute);
+  tasksModalRoot->setPosition(Edge::Left, 0);
+  tasksModalRoot->setPosition(Edge::Top, 0);
+  tasksModalRoot->setZIndex(1000);
+  tasksModalRoot->setVisible(false);
+  tasksModalRoot->setFlexDirection(FlexDirection::Column);
+  tasksModalRoot->setAlignItems(YGAlignCenter);
+  tasksModalRoot->setJustifyContent(YGJustifyCenter);
+  tasksModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setHeight(560)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, kModalPanelPadding)
+      ->setBackgroundColor(Color(13, 22, 35, 242))
+      ->setBorderColor(Color(86, 118, 153, 255))
+      ->setBorderWidth(2);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Tasks");
+  title->setColor({245, 249, 255, 255});
+  title->setHeight(42);
+  panel->addView(title);
+
+  tasksScrollView =
+      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
+  tasksScrollView->setWidth(kModalContentWidth);
+  tasksScrollView->setFlex(1);
+  tasksScrollView->setBackgroundColor(Color(7, 14, 24, 230));
+  tasksScrollView->setBorderColor(Color(76, 105, 139, 255));
+  tasksScrollView->setBorderWidth(2);
+
+  tasksContent = new View();
+  tasksContent->setFlexDirection(FlexDirection::Column);
+  tasksContent->setAlignItems(YGAlignStretch);
+  tasksContent->setPadding(Edge::All, 12);
+
+  tasksText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  tasksText->setText(tasksModalTextSnapshot());
+  tasksText->setColor({205, 222, 241, 255});
+  tasksText->setWrap(true);
+  tasksText->setOverflow(TextView::TextOverflow::Visible);
+  tasksContent->addView(tasksText);
+  tasksScrollView->setContentView(tasksContent);
+  panel->addView(tasksScrollView);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(58);
+
+  tasksRefreshButton =
+      makeModalButton("Refresh List", 18, &tasksRefreshButtonText);
+  tasksRefreshButton->setWidth(150);
+  tasksRefreshButton->setOnClickListener([this]() {
+    requestLibraryScanFlush();
+    applyPendingUiUpdates();
+    hideTasksModal();
+  });
+  styleActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
+                    Color(38, 97, 87, 232), Color(50, 121, 109, 242),
+                    Color(65, 146, 130, 250), Color(112, 212, 191, 255));
+
+  tasksCloseButton = makeModalButton("Close", 20, &tasksCloseButtonText);
+  tasksCloseButton->setWidth(130);
+  tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
+  styleActionButton(tasksCloseButton, tasksCloseButtonText, true,
+                    Color(38, 64, 95, 232), Color(50, 84, 123, 242),
+                    Color(64, 103, 148, 250), Color(116, 161, 210, 255));
+
+  footer->addView(tasksRefreshButton);
+  footer->addView(tasksCloseButton);
+  panel->addView(footer);
+
+  tasksModalRoot->addView(panel);
+  rootLayout->addView(tasksModalRoot);
+  displayedLibraryTasksRevision = 0;
+  displayedLibraryProgressRevision = 0;
+  refreshTasksModal();
+}
+
+void MainMenuScene::showTasksModal() {
+  if (tasksModalRoot == nullptr) {
+    return;
+  }
+  tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
+  tasksModalRoot->setVisible(true);
+  displayedLibraryTasksRevision = 0;
+  displayedLibraryProgressRevision = 0;
+  refreshTasksModal();
+}
+
+void MainMenuScene::hideTasksModal() {
+  if (tasksModalRoot != nullptr) {
+    tasksModalRoot->setVisible(false);
+  }
+}
+
+void MainMenuScene::refreshTasksModal() {
+  if (tasksModalRoot == nullptr || tasksText == nullptr) {
+    return;
+  }
+
+  std::uint64_t tasksRevision = 0;
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    tasksRevision = libraryTasksRevision;
+  }
+  const LibraryTaskProgressSnapshot progressSnapshot =
+      readLibraryTaskProgress();
+  if (tasksRevision == displayedLibraryTasksRevision &&
+      progressSnapshot.revision == displayedLibraryProgressRevision) {
+    return;
+  }
+  displayedLibraryTasksRevision = tasksRevision;
+  displayedLibraryProgressRevision = progressSnapshot.revision;
+  tasksText->setText(tasksModalTextSnapshot());
+}
+
+std::string MainMenuScene::tasksModalTextSnapshot() {
+  const LibraryTaskProgressSnapshot progressSnapshot =
+      readLibraryTaskProgress();
+  std::vector<LibraryTaskInfo> activeTasks;
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    activeTasks.reserve(libraryTasks.size());
+    for (const auto &task : libraryTasks) {
+      if (task.status == LibraryTaskStatus::Queued ||
+          task.status == LibraryTaskStatus::Running ||
+          task.status == LibraryTaskStatus::Paused) {
+        activeTasks.push_back(task);
+      }
+    }
+  }
+
+  if (activeTasks.empty()) {
+    return "No parsing tasks.";
+  }
+
+  std::ostringstream text;
+  text << activeTasks.size()
+       << (activeTasks.size() == 1 ? " task" : " tasks") << "\n\n";
+  for (const auto &task : activeTasks) {
+    std::string statusText;
+    switch (task.status) {
+    case LibraryTaskStatus::Queued:
+      statusText = "Queued";
+      break;
+    case LibraryTaskStatus::Running:
+      statusText = "Running";
+      break;
+    case LibraryTaskStatus::Complete:
+      statusText = "Complete";
+      break;
+    case LibraryTaskStatus::Failed:
+      statusText = "Failed";
+      break;
+    case LibraryTaskStatus::Paused:
+      statusText = "Paused";
+      break;
+    }
+
+    text << task.title << "\n";
+    text << statusText;
+    if (task.status == LibraryTaskStatus::Running) {
+      if (progressSnapshot.valid && progressSnapshot.taskId == task.id) {
+        text << " - " << (progressSnapshot.basisPoints / 100) << "%";
+        if (progressSnapshot.total > 0) {
+          text << " (" << progressSnapshot.current << " / "
+               << progressSnapshot.total << ")";
+        }
+        text << "\n" << chartScanProgressStageText(progressSnapshot.stage);
+      } else {
+        text << " - " << static_cast<int>(std::round(task.fraction * 100.0))
+             << "%";
+        if (task.total > 0) {
+          text << " (" << task.current << " / " << task.total << ")";
+        }
+        if (!task.detail.empty()) {
+          text << "\n" << task.detail;
+        }
+      }
+    } else if (!task.detail.empty()) {
+      text << "\n" << task.detail;
+    }
+    text << "\n\n";
+  }
+  return text.str();
 }
 
 void MainMenuScene::buildFindBmsModal() {
@@ -4448,6 +5153,7 @@ void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   refreshScoreClearRanksIfNeeded();
+  refreshTasksButton();
   applyPendingUiUpdates();
   applyFindBmsUpdates();
   applyUnzipProgress();
@@ -4456,6 +5162,9 @@ void MainMenuScene::update(float dt) {
   applyReplayVideoExportResult();
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
+  }
+  if (tasksModalRoot != nullptr && tasksModalRoot->getVisible()) {
+    refreshTasksModal();
   }
 }
 
@@ -4483,6 +5192,9 @@ void MainMenuScene::renderScene() {
     parseLogModalRoot->setSize(rendering::window_width,
                                rendering::window_height);
   }
+  if (tasksModalRoot != nullptr) {
+    tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
+  }
   if (findBmsModalRoot != nullptr) {
     findBmsModalRoot->setSize(rendering::window_width,
                               rendering::window_height);
@@ -4508,16 +5220,19 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
+  libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
     replayExportThread.request_stop();
     replayExportThread.join();
   }
-  if (checkEntriesThread.joinable()) {
-    SDL_Log("Joining checkEntriesThread");
-    checkEntriesThread.request_stop();
-    checkEntriesThread.join();
+  if (addFolderPickerThread.joinable()) {
+    SDL_Log("Joining addFolderPickerThread");
+    addFolderPickerThread.request_stop();
+    addFolderPickerThread.join();
   }
+  addFolderPickerInProgress = false;
+  stopLibraryTaskWorker();
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");
     findBmsCancelled = true;
@@ -4554,6 +5269,8 @@ void MainMenuScene::cleanupScene() {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
+  tasksButton = nullptr;
+  tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
@@ -4580,11 +5297,19 @@ void MainMenuScene::cleanupScene() {
   unzipDeleteArchiveButtonText = nullptr;
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
+  tasksModalRoot = nullptr;
   parseLogScrollView = nullptr;
   parseLogContent = nullptr;
   parseLogText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
+  tasksScrollView = nullptr;
+  tasksContent = nullptr;
+  tasksText = nullptr;
+  tasksRefreshButton = nullptr;
+  tasksRefreshButtonText = nullptr;
+  tasksCloseButton = nullptr;
+  tasksCloseButtonText = nullptr;
   findBmsModalRoot = nullptr;
   findBmsProgressTrack = nullptr;
   findBmsProgressFill = nullptr;
@@ -4641,6 +5366,22 @@ void MainMenuScene::cleanupScene() {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    libraryTaskQueue.clear();
+    libraryTasks.clear();
+    ++libraryTasksRevision;
+  }
+  libraryProgressRevision.store(0, std::memory_order_release);
+  libraryProgressTaskId.store(0, std::memory_order_relaxed);
+  libraryProgressCurrent.store(0, std::memory_order_relaxed);
+  libraryProgressTotal.store(0, std::memory_order_relaxed);
+  libraryProgressBasisPoints.store(0, std::memory_order_relaxed);
+  libraryProgressStage.store(static_cast<int>(ChartScanProgressStage::Preparing),
+                             std::memory_order_relaxed);
+  displayedLibraryTasksRevision = 0;
+  displayedLibraryProgressRevision = 0;
+  displayedLibraryTasksButtonText.clear();
   selectedChartMediaReady.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;
@@ -4660,7 +5401,9 @@ void MainMenuScene::cleanupScene() {
 void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                                std::vector<ChartEntry> &entries,
                                MainMenuScene &scene,
-                               const std::stop_token &stop_token) {
+                               const std::stop_token &stop_token,
+                               ChartScanProgressCallback progressCallback,
+                               ChartScanPauseCallback pauseCallback) {
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
   for (auto &entry : entries) {
@@ -4679,7 +5422,15 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
   }
 
   SDL_Log("Refreshing chart library");
-  const int changedCount = dbHelper.ScanChartRoots(db, roots, &stop_token);
+  const int changedCount =
+      dbHelper.ScanChartRoots(db, roots, &stop_token, progressCallback,
+                              pauseCallback,
+                              [&scene]() {
+                                return scene.pendingLibraryScanFlushRequest();
+                              },
+                              [&scene](std::uint64_t request) {
+                                scene.completeLibraryScanFlush(request);
+                              });
   SDL_Log("Chart library refresh changed %d entries", changedCount);
   if (changedCount > 0) {
     scene.requestLibraryReload(true);
