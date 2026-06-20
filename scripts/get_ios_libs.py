@@ -24,9 +24,11 @@ dependency = {
     "ffmpeg": ["libavformat", "libavcodec", "libavutil", "libswresample", "libswscale", "libavdevice", "libavfilter"],
     "libsndfile": ["libsndfile", "libFLAC", "libFLAC++", "libvorbis", "libvorbisenc", "libvorbisfile", "libmp3lame", "libmpg123", "libsyn123", "libout123", "libopus", "libogg"],
     "libarchive": ["libarchive", "libz", "libbz2", "liblz4", "liblzma", "libzstd"],
+    "lib7zip": ["lib7zip"],
 }
 package_specs = {
     "libarchive": "libarchive[core,bzip2,lz4,lzma,zstd]",
+    "lib7zip": "7zip",
 }
 triplets = ["arm64-ios", "arm64-ios-simulator"]
 
@@ -58,6 +60,11 @@ def copy_xcframework(package_name):
 def copy_includes(package_name, is_dir=False):
     subprocess.run(["cp", "-r" if is_dir else "-f", f"{vcpkg_root}/installed/arm64-ios/include/{package_name}", f"{current_path}/ios/Xcode/AsoBMaShow/include"], check=True)
 
+def copy_license(package_name, output_name):
+    output_dir = f"{current_path}/assets/legal"
+    os.makedirs(output_dir, exist_ok=True)
+    shutil.copyfile(f"{vcpkg_root}/installed/arm64-ios/share/{package_name}/copyright", f"{output_dir}/{output_name}")
+
 def merge_all_dependents(package_name):
     for triplet in triplets:
         libtool_merge_list= [f"{vcpkg_root}/installed/{triplet}/lib/{dep}.a" for dep in dependency[package_name]]
@@ -82,5 +89,12 @@ generate_xcframework("libarchive", True)
 copy_xcframework("libarchive")
 copy_includes("archive.h")
 copy_includes("archive_entry.h")
+
+install_package("lib7zip")
+merge_all_dependents("lib7zip")
+generate_xcframework("lib7zip", True)
+copy_xcframework("lib7zip")
+copy_includes("7zip", True)
+copy_license("7zip", "7zip.txt")
 # remove tmp
 shutil.rmtree(tmp_path)

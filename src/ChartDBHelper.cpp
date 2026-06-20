@@ -231,6 +231,27 @@ bool isBmsChartFile(const std::filesystem::path &path) {
   return ext == ".bms" || ext == ".bme" || ext == ".bml";
 }
 
+bool hashLooksComplete(const std::string &value, size_t expectedLength) {
+  if (value.size() != expectedLength) {
+    return false;
+  }
+  return std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+    return std::isxdigit(ch) != 0;
+  });
+}
+
+bool parsedChartMetaHasStableIdentity(const bms_parser::ChartMeta &meta) {
+  const std::string md5 = normalizedHash(meta.MD5);
+  const std::string sha256 = normalizedHash(meta.SHA256);
+  return !meta.BmsPath.empty() && hashLooksComplete(md5, 32) &&
+         hashLooksComplete(sha256, 64);
+}
+
+bool parsedChartLooksInsertable(const bms_parser::Chart &chart) {
+  return parsedChartMetaHasStableIdentity(chart.Meta) &&
+         !chart.Measures.empty();
+}
+
 void addDiscoveredChartPath(std::vector<std::filesystem::path> &paths,
                             std::unordered_set<path_t> &knownChartPaths,
                             const std::filesystem::path &path) {
@@ -247,14 +268,22 @@ void scanArchiveForChartPaths(const std::filesystem::path &archivePath,
                               std::unordered_set<path_t> &knownChartPaths) {
   std::vector<archive_file::Entry> entries;
   std::string errorMessage;
+  archive_file::appendDebugLogLine(
+      "Scanning archive for BMS charts: " +
+      path_t_to_utf8(fspath_to_path_t(archivePath)));
   if (!archive_file::listEntries(archivePath, entries, &errorMessage)) {
     if (!errorMessage.empty()) {
       SDL_Log("Failed to scan archive %s: %s",
               path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
               errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to scan archive: " +
+          path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
+          errorMessage);
     }
     return;
   }
+  const size_t before = paths.size();
   for (const auto &entry : entries) {
     if (entry.directory || !isBmsChartFile(entry.path)) {
       continue;
@@ -263,6 +292,11 @@ void scanArchiveForChartPaths(const std::filesystem::path &archivePath,
                            archive_file::makeVirtualPath(archivePath,
                                                          entry.path));
   }
+  archive_file::appendDebugLogLine(
+      "Archive chart scan complete: " +
+      path_t_to_utf8(fspath_to_path_t(archivePath)) +
+      " charts=" + std::to_string(paths.size() - before) +
+      " entries=" + std::to_string(entries.size()));
 }
 
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
@@ -2144,7 +2178,9 @@ int ChartDBHelper::ScanChartRoots(
     if (stopRequested(stopToken)) {
       return 0;
     }
-    if (archive_file::exists(chartMeta.BmsPath)) {
+    if (!parsedChartMetaHasStableIdentity(chartMeta)) {
+      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+    } else if (archive_file::exists(chartMeta.BmsPath)) {
       knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
     } else {
       diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
@@ -2265,7 +2301,7 @@ int ChartDBHelper::ScanChartRoots(
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &chart, false, true, cancelled);
+        parser.Parse(*bytes, &chart, false, false, cancelled);
         if (chart != nullptr) {
           chart->Meta.BmsPath = path;
           std::filesystem::path archivePath;
@@ -2277,17 +2313,33 @@ int ChartDBHelper::ScanChartRoots(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &chart, false, true,
+        archive_file::parseChart(parser, path, &chart, false, false,
                                  cancelled);
       }
     } catch (const std::exception &e) {
       SDL_Log("Error parsing %s: %s",
               path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+      archive_file::appendDebugLogLine(
+          "DB parse failed: " + path_t_to_utf8(fspath_to_path_t(path)) +
+          ": " + e.what());
       delete chart;
       return false;
     }
 
     if (chart == nullptr) {
+      archive_file::appendDebugLogLine(
+          "DB parse returned null: " + path_t_to_utf8(fspath_to_path_t(path)));
+      return false;
+    }
+    if (!parsedChartLooksInsertable(*chart)) {
+      SDL_Log("Skipping chart without measures or stable identity: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+      archive_file::appendDebugLogLine(
+          "DB skipped chart: " + path_t_to_utf8(fspath_to_path_t(path)) +
+          " measures=" + std::to_string(chart->Measures.size()) +
+          " md5=" + chart->Meta.MD5 +
+          " sha256=" + chart->Meta.SHA256);
+      delete chart;
       return false;
     }
     const bool inserted = InsertChartMeta(db, chart->Meta);
@@ -2328,9 +2380,18 @@ int ChartDBHelper::ScanChartRoots(
         SDL_Log("Failed to read charts from archive %s: %s",
                 path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
                 errorMessage.c_str());
+        archive_file::appendDebugLogLine(
+            "Failed to read DB chart batch: " +
+            path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+            errorMessage);
       }
       continue;
     }
+    archive_file::appendDebugLogLine(
+        "Parsing DB chart batch: " +
+        path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+        " requested=" + std::to_string(batch.innerPaths.size()) +
+        " files=" + std::to_string(files.size()));
     for (const auto &file : files) {
       if (stopRequested(stopToken)) {
         break;

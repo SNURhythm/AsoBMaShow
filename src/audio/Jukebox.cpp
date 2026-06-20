@@ -10,6 +10,7 @@
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <iterator>
 #include <limits>
@@ -87,6 +88,21 @@ struct ArchiveAssetBatch {
   std::unordered_map<path_t, std::vector<int>> idsByPath;
 };
 
+enum class ArchiveChartAssetKind {
+  Sound,
+  Video,
+  Image,
+};
+
+struct ArchiveChartAssetBatch {
+  std::filesystem::path archivePath;
+  std::vector<std::filesystem::path> innerPaths;
+  std::unordered_set<path_t> uniquePaths;
+  std::unordered_map<path_t, std::vector<int>> soundIdsByPath;
+  std::unordered_map<path_t, std::vector<int>> videoIdsByPath;
+  std::unordered_map<path_t, std::vector<int>> imageIdsByPath;
+};
+
 bool addArchiveAssetTarget(
     std::unordered_map<path_t, ArchiveAssetBatch> &batches,
     std::vector<path_t> &batchOrder, const std::filesystem::path &path,
@@ -117,6 +133,53 @@ bool addArchiveAssetTarget(
     batchIt->second.innerPaths.push_back(innerPath);
   }
   ids.push_back(id);
+  return true;
+}
+
+bool addArchiveChartAssetTarget(
+    std::unordered_map<path_t, ArchiveChartAssetBatch> &batches,
+    std::vector<path_t> &batchOrder, const std::filesystem::path &path, int id,
+    ArchiveChartAssetKind kind) {
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!archive_file::splitVirtualPath(path, archivePath, innerPath)) {
+    return false;
+  }
+
+  const path_t archiveKey = fspath_to_path_t(archivePath);
+  auto batchIt = batches.find(archiveKey);
+  if (batchIt == batches.end()) {
+    batchOrder.push_back(archiveKey);
+    batchIt =
+        batches
+            .emplace(archiveKey, ArchiveChartAssetBatch{
+                                     .archivePath = archivePath,
+                                     .innerPaths = {},
+                                     .uniquePaths = {},
+                                     .soundIdsByPath = {},
+                                     .videoIdsByPath = {},
+                                     .imageIdsByPath = {},
+                                 })
+            .first;
+  }
+
+  ArchiveChartAssetBatch &batch = batchIt->second;
+  const path_t pathKey = fspath_to_path_t(path);
+  if (batch.uniquePaths.insert(pathKey).second) {
+    batch.innerPaths.push_back(innerPath);
+  }
+
+  switch (kind) {
+  case ArchiveChartAssetKind::Sound:
+    batch.soundIdsByPath[pathKey].push_back(id);
+    break;
+  case ArchiveChartAssetKind::Video:
+    batch.videoIdsByPath[pathKey].push_back(id);
+    break;
+  case ArchiveChartAssetKind::Image:
+    batch.imageIdsByPath[pathKey].push_back(id);
+    break;
+  }
   return true;
 }
 
@@ -226,6 +289,9 @@ ArchiveEntryLookup *getArchiveLookup(
   if (!it->second.load(archivePath, &errorMessage)) {
     SDL_Log("Failed to index archive %s: %s",
             path_t_to_utf8(archiveKey).c_str(), errorMessage.c_str());
+    archive_file::appendDebugLogLine("Failed to index archive for assets: " +
+                                     path_t_to_utf8(archiveKey) + ": " +
+                                     errorMessage);
     lookups.erase(it);
     return nullptr;
   }
@@ -637,32 +703,44 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
       SDL_Log("Failed to read sounds from archive %s: %s",
               path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
               errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to read sound batch from archive: " +
+          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          errorMessage);
       continue;
     }
 
+    std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedPaths;
-    for (const auto &file : files) {
-      if (isCancelled) {
-        return true;
-      }
-      const std::filesystem::path virtualPath =
-          archive_file::makeVirtualPath(batch.archivePath, file.path);
-      const path_t soundPath = fspath_to_path_t(virtualPath);
-      const auto idsIt = batch.idsByPath.find(soundPath);
-      if (idsIt == batch.idsByPath.end()) {
-        continue;
-      }
+    parallel_for(files.size(), [&](int start, int end) {
+      for (int i = start; i < end; ++i) {
+        if (isCancelled) {
+          return;
+        }
+        const auto &file = files[static_cast<size_t>(i)];
+        const std::filesystem::path virtualPath =
+            archive_file::makeVirtualPath(batch.archivePath, file.path);
+        const path_t soundPath = fspath_to_path_t(virtualPath);
+        const auto idsIt = batch.idsByPath.find(soundPath);
+        if (idsIt == batch.idsByPath.end()) {
+          continue;
+        }
 
-      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-        continue;
+        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+          continue;
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(loadedPathsMutex);
+          loadedPaths.insert(soundPath);
+          for (const int wavId : idsIt->second) {
+            wavTableAbs[wavId] = soundPath;
+            SDL_Log("Loaded sound %d: %s", wavId,
+                    path_t_to_utf8(soundPath).c_str());
+          }
+        }
       }
-      loadedPaths.insert(soundPath);
-      for (const int wavId : idsIt->second) {
-        wavTableAbs[wavId] = soundPath;
-        SDL_Log("Loaded sound %d: %s", wavId,
-                path_t_to_utf8(soundPath).c_str());
-      }
-    }
+    });
 
     for (const auto &[soundPath, ids] : batch.idsByPath) {
       if (loadedPaths.contains(soundPath)) {
@@ -676,6 +754,329 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
   }
   return true;
 }
+
+bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
+                                      bool loadVisualAssets,
+                                      std::atomic_bool &isCancelled) {
+  using Clock = std::chrono::steady_clock;
+
+  bool hasVirtualAssetBase = false;
+  for (const auto &wav : chart.WavTable) {
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / wav.second,
+                                       archivePath, innerPath)) {
+      hasVirtualAssetBase = true;
+      break;
+    }
+  }
+  if (!hasVirtualAssetBase && loadVisualAssets) {
+    for (const auto &bmp : chart.BmpTable) {
+      std::filesystem::path archivePath;
+      std::filesystem::path innerPath;
+      if (archive_file::splitVirtualPath(chart.Meta.Folder / bmp.second,
+                                         archivePath, innerPath)) {
+        hasVirtualAssetBase = true;
+        break;
+      }
+    }
+  }
+  if (!hasVirtualAssetBase) {
+    return false;
+  }
+
+  const auto audioExtensionViews =
+      toExtensionViews(audioExtensions, std::size(audioExtensions));
+  const auto imageExtensionViews =
+      toExtensionViews(imageExtensions, std::size(imageExtensions));
+  const std::vector<std::string_view> noExtensions;
+
+  std::unordered_map<path_t, ArchiveChartAssetBatch> archiveBatches;
+  std::vector<path_t> archiveBatchOrder;
+  std::vector<std::pair<int, path_t>> regularSounds;
+  std::vector<std::pair<int, std::filesystem::path>> regularVideos;
+  std::vector<std::pair<int, std::filesystem::path>> regularImages;
+  std::unordered_map<path_t, ArchiveEntryLookup> lookups;
+
+  wavTableAbs.clear();
+
+  for (const auto &wav : chart.WavTable) {
+    if (isCancelled) {
+      return true;
+    }
+
+    const std::filesystem::path basePath = chart.Meta.Folder / wav.second;
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    std::optional<std::filesystem::path> resolvedPath;
+    if (archive_file::splitVirtualPath(basePath, archivePath, innerPath)) {
+      if (ArchiveEntryLookup *lookup = getArchiveLookup(archivePath, lookups)) {
+        if (const auto resolvedInner =
+                lookup->find(innerPath, audioExtensionViews)) {
+          resolvedPath =
+              archive_file::makeVirtualPath(archivePath, *resolvedInner);
+        }
+      }
+    } else {
+      resolvedPath =
+          archive_file::findFileWithExtensions(basePath, audioExtensionViews);
+    }
+
+    if (!resolvedPath.has_value()) {
+      SDL_Log("Failed to load sound for all extensions: %s",
+              path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+      continue;
+    }
+
+    if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
+                                    *resolvedPath, wav.first,
+                                    ArchiveChartAssetKind::Sound)) {
+      const std::filesystem::path resolvedSoundPath = *resolvedPath;
+      regularSounds.emplace_back(wav.first,
+                                 fspath_to_path_t(resolvedSoundPath));
+    }
+  }
+
+  if (loadVisualAssets) {
+    for (const auto &bmp : chart.BmpTable) {
+      if (isCancelled) {
+        return true;
+      }
+
+      const std::filesystem::path basePath = chart.Meta.Folder / bmp.second;
+      std::filesystem::path archivePath;
+      std::filesystem::path innerPath;
+      const bool baseIsVirtual =
+          archive_file::splitVirtualPath(basePath, archivePath, innerPath);
+
+      std::optional<std::filesystem::path> resolvedVideoPath;
+      if (baseIsVirtual) {
+        if (ArchiveEntryLookup *lookup =
+                getArchiveLookup(archivePath, lookups)) {
+          if (const auto resolvedInner = lookup->findReplacedExtensions(
+                  innerPath, videoExtensions, std::size(videoExtensions))) {
+            resolvedVideoPath =
+                archive_file::makeVirtualPath(archivePath, *resolvedInner);
+          }
+        }
+      } else {
+        resolvedVideoPath = findWithReplacedExtensions(
+            basePath, videoExtensions, std::size(videoExtensions));
+      }
+
+      if (resolvedVideoPath.has_value()) {
+        if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
+                                        *resolvedVideoPath, bmp.first,
+                                        ArchiveChartAssetKind::Video)) {
+          regularVideos.emplace_back(bmp.first, *resolvedVideoPath);
+        }
+        continue;
+      }
+
+      bool found = false;
+      for (const auto &ext : imageExtensionViews) {
+        if (isCancelled) {
+          return true;
+        }
+
+        std::filesystem::path path = basePath;
+        path.replace_extension(std::string(ext));
+        std::optional<std::filesystem::path> resolvedImagePath;
+        if (baseIsVirtual) {
+          if (ArchiveEntryLookup *lookup =
+                  getArchiveLookup(archivePath, lookups)) {
+            std::filesystem::path candidateInner = innerPath;
+            candidateInner.replace_extension(std::string(ext));
+            if (const auto resolvedInner =
+                    lookup->find(candidateInner, noExtensions)) {
+              resolvedImagePath =
+                  archive_file::makeVirtualPath(archivePath, *resolvedInner);
+            }
+          }
+        } else {
+          resolvedImagePath = archive_file::findFileWithExtensions(path, {});
+        }
+
+        if (!resolvedImagePath.has_value()) {
+          continue;
+        }
+        if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
+                                        *resolvedImagePath, bmp.first,
+                                        ArchiveChartAssetKind::Image)) {
+          regularImages.emplace_back(bmp.first, *resolvedImagePath);
+        }
+        found = true;
+        break;
+      }
+      if (!found) {
+        SDL_Log("Failed to load image or video for all extensions: %s",
+                path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+      }
+    }
+  }
+
+  if (archiveBatchOrder.empty()) {
+    return false;
+  }
+
+  archive_file::appendDebugLogLine(
+      "Loading archived chart assets with combined batches: archives=" +
+      std::to_string(archiveBatchOrder.size()) +
+      " regularSounds=" + std::to_string(regularSounds.size()) +
+      " regularVideos=" + std::to_string(regularVideos.size()) +
+      " regularImages=" + std::to_string(regularImages.size()));
+
+  std::unordered_set<path_t> regularLoadedSounds;
+  for (const auto &[wavId, soundPath] : regularSounds) {
+    if (isCancelled) {
+      return true;
+    }
+    const bool alreadyLoaded = regularLoadedSounds.contains(soundPath);
+    if (!alreadyLoaded && !audio.loadSound(soundPath, isCancelled)) {
+      continue;
+    }
+    regularLoadedSounds.insert(soundPath);
+    wavTableAbs[wavId] = soundPath;
+    SDL_Log("Loaded sound %d: %s", wavId,
+            path_t_to_utf8(soundPath).c_str());
+  }
+
+  if (loadVisualAssets) {
+    for (const auto &[id, path] : regularVideos) {
+      if (isCancelled) {
+        return true;
+      }
+      loadVideoPath(id, path, isCancelled);
+    }
+    for (const auto &[id, path] : regularImages) {
+      if (isCancelled) {
+        return true;
+      }
+      loadImagePath(id, path);
+    }
+  }
+
+  for (const auto &archiveKey : archiveBatchOrder) {
+    if (isCancelled) {
+      return true;
+    }
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      continue;
+    }
+
+    const ArchiveChartAssetBatch &batch = batchIt->second;
+    ArchiveAssetBatch readBatch{
+        .archivePath = batch.archivePath,
+        .innerPaths = batch.innerPaths,
+        .idsByPath = {},
+    };
+    std::vector<archive_file::FileData> files;
+    std::string errorMessage;
+    const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
+
+    const auto readStart = Clock::now();
+    if (!readArchiveBatchEntries(readBatch, entryRange, files, &errorMessage)) {
+      SDL_Log("Failed to read chart assets from archive %s: %s",
+              path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+              errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to read combined chart asset batch from archive: " +
+          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          errorMessage);
+      continue;
+    }
+    const auto readMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            Clock::now() - readStart)
+                            .count();
+    archive_file::appendDebugLogLine(
+        "Read combined chart asset batch: " +
+        path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+        " targets=" + std::to_string(batch.innerPaths.size()) +
+        " files=" + std::to_string(files.size()) +
+        " ms=" + std::to_string(readMs));
+
+    std::mutex loadedPathsMutex;
+    std::unordered_set<path_t> loadedSoundPaths;
+    parallel_for(files.size(), [&](int start, int end) {
+      for (int i = start; i < end; ++i) {
+        if (isCancelled) {
+          return;
+        }
+
+        const auto &file = files[static_cast<size_t>(i)];
+        const std::filesystem::path virtualPath =
+            archive_file::makeVirtualPath(batch.archivePath, file.path);
+        const path_t soundPath = fspath_to_path_t(virtualPath);
+        const auto idsIt = batch.soundIdsByPath.find(soundPath);
+        if (idsIt == batch.soundIdsByPath.end()) {
+          continue;
+        }
+
+        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+          continue;
+        }
+
+        std::lock_guard<std::mutex> lock(loadedPathsMutex);
+        loadedSoundPaths.insert(soundPath);
+        for (const int wavId : idsIt->second) {
+          wavTableAbs[wavId] = soundPath;
+          SDL_Log("Loaded sound %d: %s", wavId,
+                  path_t_to_utf8(soundPath).c_str());
+        }
+      }
+    });
+
+    for (const auto &[soundPath, ids] : batch.soundIdsByPath) {
+      if (loadedSoundPaths.contains(soundPath)) {
+        continue;
+      }
+      for (const int wavId : ids) {
+        SDL_Log("Failed to load sound %d: %s", wavId,
+                path_t_to_utf8(soundPath).c_str());
+      }
+    }
+
+    if (!loadVisualAssets) {
+      continue;
+    }
+
+    for (const auto &file : files) {
+      if (isCancelled) {
+        return true;
+      }
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t pathKey = fspath_to_path_t(virtualPath);
+
+      if (const auto idsIt = batch.videoIdsByPath.find(pathKey);
+          idsIt != batch.videoIdsByPath.end()) {
+        std::string materializeError;
+        const auto playablePath = archive_file::materializeFileBytes(
+            virtualPath, file.bytes, &materializeError);
+        if (!playablePath.has_value()) {
+          SDL_Log("Failed to materialize video: %s",
+                  materializeError.c_str());
+        } else {
+          for (const int id : idsIt->second) {
+            loadMaterializedVideoPath(id, *playablePath, virtualPath,
+                                      isCancelled);
+          }
+        }
+      }
+
+      if (const auto idsIt = batch.imageIdsByPath.find(pathKey);
+          idsIt != batch.imageIdsByPath.end()) {
+        for (const int id : idsIt->second) {
+          loadImageBytes(id, virtualPath, file.bytes);
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
 void Jukebox::loadBMPs(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled) {
   if (loadArchivedBMPs(chart, isCancelled)) {
@@ -869,6 +1270,10 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
       SDL_Log("Failed to read videos from archive %s: %s",
               path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
               errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to read video batch from archive: " +
+          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          errorMessage);
       continue;
     }
 
@@ -916,6 +1321,10 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
       SDL_Log("Failed to read images from archive %s: %s",
               path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
               errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to read image batch from archive: " +
+          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          errorMessage);
       continue;
     }
 
@@ -1009,10 +1418,20 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   clearVisualResources();
   if (isCancelled)
     return;
+
+  const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
+  if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
+    if (isCancelled)
+      return;
+    schedule(chart, scheduleNotes, isCancelled);
+    SDL_Log("Chart loaded");
+    return;
+  }
+
   SDL_Log("Loading sounds");
   std::thread loadSoundThread(
       [this, &chart, &isCancelled] { loadSounds(chart, isCancelled); });
-  if (visualsEnabled.load(std::memory_order_relaxed)) {
+  if (loadVisualAssets) {
     SDL_Log("Loading videos");
     loadBMPs(chart, isCancelled);
   }

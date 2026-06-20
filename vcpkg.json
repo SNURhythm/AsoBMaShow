@@ -22,6 +22,11 @@
                 "zstd"
             ]
         },
+        "7zip",
+        {
+            "name": "unarr",
+            "platform": "!ios"
+        },
         "lua",
         "luajit",
         {

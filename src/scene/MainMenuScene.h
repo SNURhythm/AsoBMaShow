@@ -109,6 +109,8 @@ private:
   View *findBmsButtonSlot = nullptr;
   Button *findBmsButton = nullptr;
   TextView *findBmsButtonText = nullptr;
+  Button *parseLogButton = nullptr;
+  TextView *parseLogButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
   View *replayModalRoot = nullptr;
@@ -123,6 +125,12 @@ private:
   TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
+  View *parseLogModalRoot = nullptr;
+  ScrollView *parseLogScrollView = nullptr;
+  View *parseLogContent = nullptr;
+  TextView *parseLogText = nullptr;
+  Button *parseLogCloseButton = nullptr;
+  TextView *parseLogCloseButtonText = nullptr;
   View *findBmsModalRoot = nullptr;
   View *findBmsProgressTrack = nullptr;
   View *findBmsProgressFill = nullptr;
@@ -221,6 +229,7 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
+  std::uint64_t parseLogDisplayedRevision = 0;
 
   void initView(ApplicationContext &context);
   void reloadFolderItems();
@@ -247,6 +256,10 @@ private:
   void setPlayableChartActionsVisible(bool visible);
   void setFindBmsButtonVisible(bool visible);
   void openFindBmsForSelection();
+  void buildParseLogModal();
+  void showParseLogModal();
+  void hideParseLogModal();
+  void refreshParseLogModal();
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void startFindBmsCandidateDownload(size_t candidateIndex);

@@ -84,6 +84,8 @@ private:
   void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   bool loadArchivedSounds(bms_parser::Chart &chart,
                           std::atomic_bool &isCancelled);
+  bool loadArchivedChartAssets(bms_parser::Chart &chart, bool loadVisualAssets,
+                               std::atomic_bool &isCancelled);
   void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   bool loadArchivedBMPs(bms_parser::Chart &chart,
                         std::atomic_bool &isCancelled);

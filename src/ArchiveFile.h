@@ -19,6 +19,8 @@ struct Entry {
   bool directory = false;
   std::uint64_t size = 0;
   std::size_t order = 0;
+  std::int64_t offset = -1;
+  bool solid = false;
 };
 
 struct EntryRange {
@@ -33,6 +35,9 @@ struct FileData {
 
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
+void appendDebugLogLine(const std::string &message);
+std::uint64_t debugLogRevision();
+std::string debugLogText();
 bool isVirtualPath(const std::filesystem::path &path);
 bool splitVirtualPath(const std::filesystem::path &path,
                       std::filesystem::path &archivePath,

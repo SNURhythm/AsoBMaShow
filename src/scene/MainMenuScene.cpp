@@ -925,6 +925,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonSlot = nullptr;
   findBmsButton = nullptr;
   findBmsButtonText = nullptr;
+  parseLogButton = nullptr;
+  parseLogButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
@@ -939,6 +941,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  parseLogModalRoot = nullptr;
+  parseLogScrollView = nullptr;
+  parseLogContent = nullptr;
+  parseLogText = nullptr;
+  parseLogCloseButton = nullptr;
+  parseLogCloseButtonText = nullptr;
   findBmsModalRoot = nullptr;
   findBmsProgressTrack = nullptr;
   findBmsProgressFill = nullptr;
@@ -1085,12 +1093,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       context.jukebox.stop();
       SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
-      std::unique_ptr<bms_parser::Chart> chart =
-          play_options::parseChart(meta.BmsPath, previewLoadCancelled,
-                                   "preview");
+      std::unique_ptr<bms_parser::Chart> chart;
+      try {
+        chart = play_options::parseChart(meta.BmsPath, previewLoadCancelled,
+                                         "preview");
+      } catch (const std::exception &e) {
+        SDL_Log("Preview parse failed %s: %s",
+                path_t_to_utf8(meta.BmsPath).c_str(), e.what());
+        archive_file::appendDebugLogLine(
+            "Preview parse exception: " +
+            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + ": " + e.what());
+        return;
+      }
       SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
+        archive_file::appendDebugLogLine(
+            "Preview chart is null: " +
+            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
         return;
       }
 
@@ -1210,10 +1230,28 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setBorderColor(Color(70, 95, 124, 255));
   left->setBorderWidth(2);
 
+  auto *libraryHeader = new View();
+  libraryHeader->setFlexDirection(FlexDirection::Row);
+  libraryHeader->setAlignItems(YGAlignCenter);
+  libraryHeader->setGap(12);
+  libraryHeader->setHeight(58);
+
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
   libraryTitle->setText("Song Select");
   libraryTitle->setColor({243, 247, 255, 255});
-  left->addView(libraryTitle);
+  libraryTitle->setVAlign(TextView::MIDDLE);
+  libraryTitle->setFlex(1);
+  libraryHeader->addView(libraryTitle);
+
+  parseLogButton = makeModalButton("Log", 20, &parseLogButtonText);
+  parseLogButton->setWidth(112);
+  parseLogButton->setHeight(50);
+  parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
+  styleActionButton(parseLogButton, parseLogButtonText, true,
+                    Color(22, 34, 51, 220), Color(32, 48, 70, 232),
+                    Color(44, 65, 94, 242), Color(83, 109, 140, 220));
+  libraryHeader->addView(parseLogButton);
+  left->addView(libraryHeader);
 
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   librarySubtitle->setText(
@@ -1530,6 +1568,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->addView(right);
   buildPlayOptionsModal();
   buildReplayModal();
+  buildParseLogModal();
   buildFindBmsModal();
   addView(rootLayout);
   reloadScoreClearRanks();
@@ -1888,6 +1927,10 @@ void MainMenuScene::startSelectedChart() {
   const bool gaugeAutoShift = selectedGaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = selectedPlayOption;
+  const std::string normalizedPlayOption =
+      play_options::normalizePlayOption(playOption);
+  const bool canReusePreviewForStart =
+      normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
   std::optional<unsigned int> chartRandomSeed;
   std::optional<std::string> chartRandomPrng;
   std::optional<std::vector<int>> chartRandomValues;
@@ -1901,10 +1944,40 @@ void MainMenuScene::startSelectedChart() {
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       chartRandomSeed, chartRandomPrng, chartRandomValues]() {
-        previewLoadCancelled = true;
+       canReusePreviewForStart, chartRandomSeed, chartRandomPrng,
+       chartRandomValues]() {
+        if (!canReusePreviewForStart) {
+          previewLoadCancelled = true;
+        }
         if (loadThread.joinable()) {
           loadThread.join();
+        }
+
+        if (canReusePreviewForStart && selectedChartMediaReady.load()) {
+          if (auto *readyChart = selectedChart.load();
+              readyChart != nullptr &&
+              fspath_to_path_t(readyChart->Meta.BmsPath) ==
+                  fspath_to_path_t(record.meta.BmsPath)) {
+            archive_file::appendDebugLogLine(
+                "Start reusing loaded preview chart: " +
+                path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+            context.jukebox.stop();
+            context.sceneManager->changeScene(
+                new GamePlayScene(context, readyChart,
+                                  {
+                                      .startPosition = 0,
+                                      .autoKeySound = autoKeySound,
+                                      .autoPlay = false,
+                                      .gaugeType = gaugeType,
+                                      .gaugeAutoShift = gaugeAutoShift,
+                                  }),
+                true);
+            willStart.store(false);
+            if (startButtonText != nullptr) {
+              startButtonText->setText("Start");
+            }
+            return true;
+          }
         }
 
         selectedChartMediaReady.store(false);
@@ -1918,6 +1991,10 @@ void MainMenuScene::startSelectedChart() {
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+          archive_file::appendDebugLogLine(
+              "Start parse exception: " +
+              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
+              e.what());
         }
         if (preparedChart != nullptr && !parseCancelled) {
           play_options::PlayOptionReplayInfo playInfo =
@@ -2017,6 +2094,9 @@ void MainMenuScene::openChartViewerForSelection() {
   if (loadThread.joinable()) {
     loadThread.join();
   }
+  archive_file::appendDebugLogLine(
+      "Open chart viewer: " +
+      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
   context.jukebox.stop();
   context.sceneManager->changeScene(
       new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
@@ -2148,6 +2228,126 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
 #else
   return std::filesystem::path(entries.front().path);
 #endif
+}
+
+void MainMenuScene::buildParseLogModal() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  constexpr float kModalPanelWidth = 900.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+  constexpr float kModalContentWidth =
+      kModalPanelWidth - kModalPanelPadding * 2.0f;
+
+  parseLogModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                              rendering::window_height);
+  parseLogModalRoot->setPositionType(YGPositionTypeAbsolute);
+  parseLogModalRoot->setPosition(Edge::Left, 0);
+  parseLogModalRoot->setPosition(Edge::Top, 0);
+  parseLogModalRoot->setZIndex(1000);
+  parseLogModalRoot->setVisible(false);
+  parseLogModalRoot->setFlexDirection(FlexDirection::Column);
+  parseLogModalRoot->setAlignItems(YGAlignCenter);
+  parseLogModalRoot->setJustifyContent(YGJustifyCenter);
+  parseLogModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setHeight(640)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, kModalPanelPadding)
+      ->setBackgroundColor(Color(13, 22, 35, 242))
+      ->setBorderColor(Color(86, 118, 153, 255))
+      ->setBorderWidth(2);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Parsing Logs");
+  title->setColor({245, 249, 255, 255});
+  title->setHeight(42);
+  panel->addView(title);
+
+  parseLogScrollView =
+      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 480);
+  parseLogScrollView->setWidth(kModalContentWidth);
+  parseLogScrollView->setFlex(1);
+  parseLogScrollView->setBackgroundColor(Color(7, 14, 24, 230));
+  parseLogScrollView->setBorderColor(Color(76, 105, 139, 255));
+  parseLogScrollView->setBorderWidth(2);
+
+  parseLogContent = new View();
+  parseLogContent->setFlexDirection(FlexDirection::Column);
+  parseLogContent->setAlignItems(YGAlignStretch);
+  parseLogContent->setPadding(Edge::All, 10);
+
+  parseLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  parseLogText->setText(archive_file::debugLogText());
+  parseLogText->setColor({181, 203, 225, 255});
+  parseLogText->setWrap(true);
+  parseLogText->setOverflow(TextView::TextOverflow::Visible);
+  parseLogContent->addView(parseLogText);
+  parseLogScrollView->setContentView(parseLogContent);
+  panel->addView(parseLogScrollView);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(58);
+
+  parseLogCloseButton =
+      makeModalButton("Close", 20, &parseLogCloseButtonText);
+  parseLogCloseButton->setWidth(130);
+  parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
+  styleActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
+                    Color(38, 64, 95, 232), Color(50, 84, 123, 242),
+                    Color(64, 103, 148, 250), Color(116, 161, 210, 255));
+
+  footer->addView(parseLogCloseButton);
+  panel->addView(footer);
+
+  parseLogModalRoot->addView(panel);
+  rootLayout->addView(parseLogModalRoot);
+  parseLogDisplayedRevision = 0;
+  refreshParseLogModal();
+}
+
+void MainMenuScene::showParseLogModal() {
+  if (parseLogModalRoot == nullptr) {
+    return;
+  }
+  parseLogModalRoot->setSize(rendering::window_width, rendering::window_height);
+  parseLogModalRoot->setVisible(true);
+  parseLogDisplayedRevision = 0;
+  refreshParseLogModal();
+  if (parseLogScrollView != nullptr) {
+    parseLogScrollView->scrollToBottom();
+  }
+}
+
+void MainMenuScene::hideParseLogModal() {
+  if (parseLogModalRoot != nullptr) {
+    parseLogModalRoot->setVisible(false);
+  }
+}
+
+void MainMenuScene::refreshParseLogModal() {
+  if (parseLogModalRoot == nullptr || parseLogText == nullptr) {
+    return;
+  }
+
+  const std::uint64_t revision = archive_file::debugLogRevision();
+  if (revision == parseLogDisplayedRevision) {
+    return;
+  }
+  parseLogDisplayedRevision = revision;
+  parseLogText->setText(archive_file::debugLogText());
+  if (parseLogScrollView != nullptr) {
+    parseLogScrollView->scrollToBottom();
+  }
 }
 
 void MainMenuScene::buildFindBmsModal() {
@@ -3534,6 +3734,9 @@ void MainMenuScene::update(float dt) {
   applyFindBmsUpdates();
   applyReplayVideoExportProgress();
   applyReplayVideoExportResult();
+  if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
+    refreshParseLogModal();
+  }
 }
 
 void MainMenuScene::renderScene() {
@@ -3555,6 +3758,10 @@ void MainMenuScene::renderScene() {
   if (playOptionsModalRoot != nullptr) {
     playOptionsModalRoot->setSize(rendering::window_width,
                                   rendering::window_height);
+  }
+  if (parseLogModalRoot != nullptr) {
+    parseLogModalRoot->setSize(rendering::window_width,
+                               rendering::window_height);
   }
   if (findBmsModalRoot != nullptr) {
     findBmsModalRoot->setSize(rendering::window_width,
@@ -3615,6 +3822,8 @@ void MainMenuScene::cleanupScene() {
   findBmsButtonSlot = nullptr;
   findBmsButton = nullptr;
   findBmsButtonText = nullptr;
+  parseLogButton = nullptr;
+  parseLogButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
   replayModalRoot = nullptr;
@@ -3629,6 +3838,12 @@ void MainMenuScene::cleanupScene() {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  parseLogModalRoot = nullptr;
+  parseLogScrollView = nullptr;
+  parseLogContent = nullptr;
+  parseLogText = nullptr;
+  parseLogCloseButton = nullptr;
+  parseLogCloseButtonText = nullptr;
   findBmsModalRoot = nullptr;
   findBmsProgressTrack = nullptr;
   findBmsProgressFill = nullptr;

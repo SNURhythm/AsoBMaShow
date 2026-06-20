@@ -259,6 +259,83 @@ randomValuesOrNull(const std::vector<int> &randomValues) {
   return randomValues;
 }
 
+inline void assignParsedChartPathMetadata(bms_parser::Chart &chart,
+                                          const std::filesystem::path &path) {
+  chart.Meta.BmsPath = path;
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (archive_file::splitVirtualPath(path, archivePath, innerPath)) {
+    chart.Meta.Folder =
+        archive_file::makeVirtualPath(archivePath, innerPath.parent_path());
+  } else {
+    chart.Meta.Folder = path.parent_path();
+  }
+}
+
+inline bool configureParserRandom(
+    bms_parser::Parser &parser, const std::optional<unsigned int> &randomSeed,
+    const std::optional<std::string> &randomPrng,
+    const std::optional<std::vector<int>> &randomValues,
+    std::string_view logContext) {
+  if (randomPrng.has_value() && !parser.SetRandomPrng(*randomPrng)) {
+    SDL_Log("Unsupported %.*s random PRNG: %s",
+            static_cast<int>(logContext.size()), logContext.data(),
+            randomPrng->c_str());
+    archive_file::appendDebugLogLine("Unsupported " + std::string(logContext) +
+                                     " random PRNG: " + *randomPrng);
+    return false;
+  }
+  if (randomSeed.has_value()) {
+    parser.SetRandomSeed(*randomSeed);
+  }
+  if (randomValues.has_value()) {
+    parser.SetRandomValues(*randomValues);
+  }
+  return true;
+}
+
+inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
+    const std::filesystem::path &path, const std::vector<unsigned char> &bytes,
+    const std::optional<unsigned int> &randomSeed,
+    const std::optional<std::string> &randomPrng,
+    const std::optional<std::vector<int>> &randomValues,
+    std::atomic_bool &cancelled, std::string_view logContext = "chart") {
+  if (path.empty()) {
+    SDL_Log("Cannot parse %.*s: chart path is empty",
+            static_cast<int>(logContext.size()), logContext.data());
+    archive_file::appendDebugLogLine(
+        "Cannot parse " + std::string(logContext) + ": chart path is empty");
+    return nullptr;
+  }
+
+  bms_parser::Parser parser;
+  if (!configureParserRandom(parser, randomSeed, randomPrng, randomValues,
+                             logContext)) {
+    return nullptr;
+  }
+
+  bms_parser::Chart *parsedChart = nullptr;
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  archive_file::appendDebugLogLine("Parse " + std::string(logContext) +
+                                   " from bytes: " + pathText);
+  parser.Parse(bytes, &parsedChart, false, false, cancelled);
+  if (parsedChart != nullptr) {
+    assignParsedChartPathMetadata(*parsedChart, path);
+    archive_file::appendDebugLogLine(
+        "Parse complete " + std::string(logContext) + ": " + pathText +
+        " measures=" + std::to_string(parsedChart->Measures.size()));
+  } else if (cancelled.load()) {
+    archive_file::appendDebugLogLine("Parse cancelled " +
+                                     std::string(logContext) + ": " +
+                                     pathText);
+  } else {
+    archive_file::appendDebugLogLine("Parse returned null " +
+                                     std::string(logContext) + ": " +
+                                     pathText);
+  }
+  return std::unique_ptr<bms_parser::Chart>(parsedChart);
+}
+
 inline std::unique_ptr<bms_parser::Chart>
 parseChart(const std::filesystem::path &path,
            const std::optional<unsigned int> &randomSeed,
@@ -268,26 +345,36 @@ parseChart(const std::filesystem::path &path,
   if (path.empty()) {
     SDL_Log("Cannot parse %.*s: chart path is empty",
             static_cast<int>(logContext.size()), logContext.data());
+    archive_file::appendDebugLogLine(
+        "Cannot parse " + std::string(logContext) + ": chart path is empty");
     return nullptr;
   }
 
   bms_parser::Parser parser;
-  if (randomPrng.has_value() && !parser.SetRandomPrng(*randomPrng)) {
-    SDL_Log("Unsupported %.*s random PRNG: %s",
-            static_cast<int>(logContext.size()), logContext.data(),
-            randomPrng->c_str());
+  if (!configureParserRandom(parser, randomSeed, randomPrng, randomValues,
+                             logContext)) {
     return nullptr;
-  }
-  if (randomSeed.has_value()) {
-    parser.SetRandomSeed(*randomSeed);
-  }
-  if (randomValues.has_value()) {
-    parser.SetRandomValues(*randomValues);
   }
 
   bms_parser::Chart *parsedChart = nullptr;
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  archive_file::appendDebugLogLine("Parse " + std::string(logContext) + ": " +
+                                   pathText);
   archive_file::parseChart(parser, path, &parsedChart, false, false,
                            cancelled);
+  if (parsedChart != nullptr) {
+    archive_file::appendDebugLogLine(
+        "Parse complete " + std::string(logContext) + ": " + pathText +
+        " measures=" + std::to_string(parsedChart->Measures.size()));
+  } else if (cancelled.load()) {
+    archive_file::appendDebugLogLine("Parse cancelled " +
+                                     std::string(logContext) + ": " +
+                                     pathText);
+  } else {
+    archive_file::appendDebugLogLine("Parse returned null " +
+                                     std::string(logContext) + ": " +
+                                     pathText);
+  }
   return std::unique_ptr<bms_parser::Chart>(parsedChart);
 }
 
