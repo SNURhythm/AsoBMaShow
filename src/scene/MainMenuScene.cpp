@@ -2483,8 +2483,10 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
 
   const std::filesystem::path sourceArchivePath = record.meta.BmsPath;
 
-  const std::filesystem::path outputRoot =
-      Utils::GetDocumentsPath("Unzipped Archives");
+  std::filesystem::path outputRoot = sourceArchivePath.parent_path();
+  if (outputRoot.empty()) {
+    outputRoot = ".";
+  }
   archive_file::appendDebugLogLine(
       "Unzip requested: " +
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + " outputRoot=" +
@@ -2532,9 +2534,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       auto unzipDb = dbHelper.Connect();
       dbHelper.CreateChartMetaTable(unzipDb);
       dbHelper.CreateSolidArchiveTable(unzipDb);
-      dbHelper.CreateEntriesTable(unzipDb);
       dbHelper.CreateDifficultyTableTables(unzipDb);
-      dbHelper.InsertEntry(unzipDb, outputRoot);
       std::vector<std::filesystem::path> roots{scanRoot};
       postProgress(archive_file::UnzipProgress{
           .fraction = 0.98, .message = "Refreshing library"});

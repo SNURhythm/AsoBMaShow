@@ -263,6 +263,90 @@ bool pathIsInsideFolder(const std::filesystem::path &path,
           normalized[folder.size()] == '/');
 }
 
+bool isSystemDirectoryComponent(const std::string &lowerComponent) {
+  // Archives may come from any OS; do not gate this list on the current build
+  // target. Keep this to names that are very unlikely to be user chart folders.
+  if (lowerComponent.empty()) {
+    return false;
+  }
+  switch (lowerComponent.front()) {
+  case '_':
+    return lowerComponent == "__macosx";
+  case '.':
+    return lowerComponent == ".appledouble" ||
+           lowerComponent == ".documentrevisions-v100" ||
+           lowerComponent == ".fseventsd" ||
+           lowerComponent == ".spotlight-v100" ||
+           lowerComponent == ".temporaryitems" ||
+           lowerComponent == ".trashes" || lowerComponent == ".trash" ||
+           lowerComponent.starts_with(".trash-");
+  case '$':
+    return lowerComponent == "$recycle.bin";
+  case 's':
+    return lowerComponent == "system volume information";
+  default:
+    return false;
+  }
+}
+
+bool isSystemFileComponent(const std::string &component,
+                           const std::string &lowerComponent) {
+  if (component.starts_with("._")) {
+    return true;
+  }
+  if (lowerComponent.empty()) {
+    return false;
+  }
+  switch (lowerComponent.front()) {
+  case '.':
+    return lowerComponent == ".com.apple.timemachine.donotpresent" ||
+           lowerComponent == ".ds_store" || lowerComponent == ".localized" ||
+           lowerComponent == ".volumeicon.icns";
+  case 'd':
+    return lowerComponent == "desktop.ini";
+  case 'e':
+    return lowerComponent == "ehthumbs.db";
+  case 'i':
+    return lowerComponent == "icon\r";
+  case 't':
+    return lowerComponent == "thumbs.db" ||
+           lowerComponent == "thumbs.db:encryptable";
+  default:
+    return false;
+  }
+}
+
+bool isSystemEntryPath(const std::filesystem::path &path) {
+  const std::string normalized = normalizeEntryName(path.generic_string());
+  if (normalized.empty()) {
+    return false;
+  }
+
+  std::filesystem::path relative(normalized);
+  for (const auto &part : relative) {
+    const std::string component = part.generic_string();
+    if (component.empty() || component == "." || component == "..") {
+      continue;
+    }
+    const std::string lower = lowerCopy(component);
+    if (isSystemDirectoryComponent(lower) ||
+        isSystemFileComponent(component, lower)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::size_t filterSystemEntries(std::vector<Entry> &entries) {
+  const std::size_t before = entries.size();
+  entries.erase(std::remove_if(entries.begin(), entries.end(),
+                               [](const Entry &entry) {
+                                 return isSystemEntryPath(entry.path);
+                               }),
+                entries.end());
+  return before - entries.size();
+}
+
 std::string archiveKey(const std::filesystem::path &path) {
   return path_t_to_utf8(fspath_to_path_t(path.lexically_normal()));
 }
@@ -538,6 +622,9 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
 
     std::filesystem::path relativePath;
     if (!safeEntryPath(entryName, relativePath)) {
+      continue;
+    }
+    if (isSystemEntryPath(relativePath)) {
       continue;
     }
 
@@ -1408,6 +1495,7 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
   entries.reserve(itemCount);
   std::size_t skippedUnnamed = 0;
   std::size_t skippedUnsafe = 0;
+  std::size_t skippedSystem = 0;
   std::size_t skippedEncrypted = 0;
   std::size_t solidEntries = 0;
   for (UInt32 index = 0; index < itemCount; ++index) {
@@ -1423,6 +1511,10 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
     std::filesystem::path relativePath;
     if (!safeEntryPath(*entryName, relativePath)) {
       ++skippedUnsafe;
+      continue;
+    }
+    if (isSystemEntryPath(relativePath)) {
+      ++skippedSystem;
       continue;
     }
 
@@ -1455,11 +1547,13 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
                          " solidEntries=" + std::to_string(solidEntries) +
                          " formatId=" + std::to_string(formatUsed) +
                          " openMs=" + std::to_string(openMs));
-  if (skippedUnnamed > 0 || skippedUnsafe > 0 || skippedEncrypted > 0) {
+  if (skippedUnnamed > 0 || skippedUnsafe > 0 || skippedSystem > 0 ||
+      skippedEncrypted > 0) {
     appendDebugLogLineImpl(
         "7-Zip skipped entries while indexing " + pathForLog(archivePath) +
         ": unnamed=" + std::to_string(skippedUnnamed) +
         " unsafe=" + std::to_string(skippedUnsafe) +
+        " system=" + std::to_string(skippedSystem) +
         " encrypted=" + std::to_string(skippedEncrypted));
   }
   return true;
@@ -1634,6 +1728,9 @@ bool archiveEntryInfo(archive_entry *entry, const std::string &entryName,
 
   std::filesystem::path relativePath;
   if (!safeEntryPath(entryName, relativePath)) {
+    return false;
+  }
+  if (isSystemEntryPath(relativePath)) {
     return false;
   }
 
@@ -2274,6 +2371,12 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                            pathForLog(archivePath));
     return nullptr;
   }
+  const std::size_t skippedSystemEntries = filterSystemEntries(loaded->entries);
+  if (skippedSystemEntries > 0) {
+    appendDebugLogLineImpl("Skipped system archive entries: " +
+                           pathForLog(archivePath) + " count=" +
+                           std::to_string(skippedSystemEntries));
+  }
   buildIndexLookups(*loaded);
   appendDebugLogLineImpl("Indexed archive with " + backendName(loaded->backend) +
                          ": " + pathForLog(archivePath) + " entries=" +
@@ -2568,6 +2671,9 @@ bool listZipEntries(const std::filesystem::path &archivePath,
 
     const auto normalized = normalizedZipEntryName(*filename, nullptr);
     if (!normalized.has_value() || normalized->empty()) {
+      continue;
+    }
+    if (isSystemEntryPath(std::filesystem::path(*normalized))) {
       continue;
     }
 
@@ -3957,6 +4063,13 @@ bool readFile(const std::filesystem::path &path,
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
     return readRegularFile(path, bytes, errorMessage);
+  }
+  if (isSystemEntryPath(innerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry is system metadata: " +
+                      innerPath.generic_string();
+    }
+    return false;
   }
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
