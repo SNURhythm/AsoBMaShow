@@ -31,6 +31,7 @@
 
 class Button;
 class ScrollView;
+struct StartOptions;
 class View;
 
 class MainMenuScene : public Scene {
@@ -116,6 +117,11 @@ private:
     int total = 0;
     int basisPoints = 0;
     ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
+  };
+  struct SelectedChartRandomInfo {
+    std::optional<unsigned int> seed;
+    std::optional<std::string> prng;
+    std::optional<std::vector<int>> values;
   };
   struct LibraryFolderItem {
     enum class Type {
@@ -362,6 +368,8 @@ private:
   void libraryTaskLoop(const std::stop_token &stopToken);
   void runLibraryRefreshTask(const LibraryTaskRequest &task,
                              const std::stop_token &stopToken);
+  static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
+  static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
   void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
                            double fraction, int current, int total,
                            const std::string &detail);
@@ -387,7 +395,14 @@ private:
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
                                       bool mediaReady);
   void clearSelectedChart();
-  bms_parser::Chart *loadedSelectedChart() const;
+  void stopAndClearSelectedChart();
+  SelectedChartRandomInfo
+  selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
+  bms_parser::Chart *
+  loadedSelectedChartForPath(const std::filesystem::path &path) const;
+  void resetStartLoadingUi();
+  void resetReplayWatchLoadingUi();
+  void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
   void openChartViewerForSelection();

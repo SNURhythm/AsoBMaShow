@@ -862,8 +862,7 @@ void MainMenuScene::pauseLibraryTaskWorker() {
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     for (auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running) {
+      if (isPauseableLibraryTaskStatus(task.status)) {
         task.status = LibraryTaskStatus::Paused;
         task.detail = "Paused";
         changed = true;
@@ -973,6 +972,16 @@ void MainMenuScene::enqueueLibraryRefreshTask(
   libraryTaskCv.notify_one();
 }
 
+bool MainMenuScene::isPauseableLibraryTaskStatus(LibraryTaskStatus status) {
+  return status == LibraryTaskStatus::Queued ||
+         status == LibraryTaskStatus::Running;
+}
+
+bool MainMenuScene::isActiveLibraryTaskStatus(LibraryTaskStatus status) {
+  return isPauseableLibraryTaskStatus(status) ||
+         status == LibraryTaskStatus::Paused;
+}
+
 void MainMenuScene::setLibraryTaskState(std::uint64_t id,
                                         LibraryTaskStatus status,
                                         double fraction, int current,
@@ -996,9 +1005,7 @@ void MainMenuScene::bumpLibraryTasksRevisionLocked() {
   ++libraryTasksRevision;
   const int activeCount = static_cast<int>(std::count_if(
       libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-        return task.status == LibraryTaskStatus::Queued ||
-               task.status == LibraryTaskStatus::Running ||
-               task.status == LibraryTaskStatus::Paused;
+        return isActiveLibraryTaskStatus(task.status);
       }));
   libraryActiveTaskCount.store(activeCount, std::memory_order_release);
 }
@@ -1157,8 +1164,7 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
       }
     }
     for (auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running) {
+      if (isPauseableLibraryTaskStatus(task.status)) {
         task.status = LibraryTaskStatus::Paused;
         task.detail = "Paused";
       }
@@ -1548,8 +1554,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
-    context.jukebox.stop();
-    clearSelectedChart();
+    stopAndClearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
       return;
@@ -2631,7 +2636,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   }
 
   if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
-    willStart.store(false);
+    resetStartLoadingUi();
     return;
   }
 
@@ -2648,24 +2653,16 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       play_options::normalizePlayOption(playOption);
   const bool canReusePreviewForStart =
       normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
-  std::optional<unsigned int> chartRandomSeed;
-  std::optional<std::string> chartRandomPrng;
-  std::optional<std::vector<int>> chartRandomValues;
-  {
-    std::lock_guard<std::mutex> lock(selectedChartMutex);
-    if (auto *currentChart = selectedChart.get(); currentChart != nullptr) {
-      chartRandomSeed = currentChart->Meta.RandomSeed;
-      chartRandomPrng = currentChart->Meta.RandomPrng;
-      if (!currentChart->Meta.RandomValues.empty()) {
-        chartRandomValues = currentChart->Meta.RandomValues;
-      }
-    }
-  }
+  const SelectedChartRandomInfo chartRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       canReusePreviewForStart, chartRandomSeed, chartRandomPrng,
-       chartRandomValues]() {
+       canReusePreviewForStart, chartRandomInfo]() {
+        auto finishStart = [this]() {
+          resetStartLoadingUi();
+          return true;
+        };
         if (!canReusePreviewForStart) {
           previewLoadCancelled = true;
         }
@@ -2675,33 +2672,22 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
-          std::lock_guard<std::mutex> lock(selectedChartMutex);
-          if (selectedChartMediaReady.load() && selectedChart != nullptr &&
-              fspath_to_path_t(selectedChart->Meta.BmsPath) ==
-                  fspath_to_path_t(record.meta.BmsPath)) {
-            readyChart = selectedChart.get();
-          }
+          readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
         }
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
               path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
           context.jukebox.stop();
-          context.sceneManager->changeScene(
-              new GamePlayScene(context, readyChart,
+          changeToGameplayScene(readyChart,
                                 {
                                     .startPosition = 0,
                                     .autoKeySound = autoKeySound,
                                     .autoPlay = false,
                                     .gaugeType = gaugeType,
                                     .gaugeAutoShift = gaugeAutoShift,
-                                }),
-              true);
-          willStart.store(false);
-          if (startButtonText != nullptr) {
-            startButtonText->setText("Start");
-          }
-          return true;
+                                });
+          return finishStart();
         }
 
         selectedChartMediaReady.store(false);
@@ -2709,9 +2695,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         std::unique_ptr<bms_parser::Chart> preparedChart;
         try {
           preparedChart =
-              play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
-                                       chartRandomPrng, chartRandomValues,
-                                       parseCancelled);
+              play_options::parseChart(record.meta.BmsPath,
+                                       chartRandomInfo.seed,
+                                       chartRandomInfo.prng,
+                                       chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
@@ -2733,8 +2720,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           if (parseCancelled) {
             preparedChart.reset();
           } else {
-            context.sceneManager->changeScene(
-                new GamePlayScene(context, loadedChart,
+            changeToGameplayScene(loadedChart,
                                   {
                                       .startPosition = 0,
                                       .autoKeySound = autoKeySound,
@@ -2745,41 +2731,26 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .playOptionSeed = playInfo.seed,
                                       .playOption2 = playInfo.option2,
                                       .playOption2Seed = playInfo.seed2,
-                                  }),
-                true);
-            willStart.store(false);
-            if (startButtonText != nullptr) {
-              startButtonText->setText("Start");
-            }
-            return true;
+                                  });
+            return finishStart();
           }
         }
 
-        auto *chart = loadedSelectedChart();
+        auto *chart = loadedSelectedChartForPath(record.meta.BmsPath);
         if (chart == nullptr) {
-          willStart.store(false);
-          if (startButtonText != nullptr) {
-            startButtonText->setText("Start");
-          }
-          return true;
+          return finishStart();
         }
 
         context.jukebox.stop();
-        context.sceneManager->changeScene(
-            new GamePlayScene(context, chart,
+        changeToGameplayScene(chart,
                               {
                                   .startPosition = 0,
                                   .autoKeySound = autoKeySound,
                                   .autoPlay = false,
                                   .gaugeType = gaugeType,
                                   .gaugeAutoShift = gaugeAutoShift,
-                              }),
-            true);
-        willStart.store(false);
-        if (startButtonText != nullptr) {
-          startButtonText->setText("Start");
-        }
-        return true;
+                              });
+        return finishStart();
       },
       0, true);
 }
@@ -2810,21 +2781,8 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
     return;
   }
 
-  std::optional<unsigned int> chartRandomSeed;
-  std::optional<std::string> chartRandomPrng;
-  std::optional<std::vector<int>> chartRandomValues;
-  {
-    std::lock_guard<std::mutex> lock(selectedChartMutex);
-    if (auto *currentChart = selectedChart.get();
-        currentChart != nullptr &&
-        currentChart->Meta.BmsPath == record.meta.BmsPath) {
-      chartRandomSeed = currentChart->Meta.RandomSeed;
-      chartRandomPrng = currentChart->Meta.RandomPrng;
-      if (!currentChart->Meta.RandomValues.empty()) {
-        chartRandomValues = currentChart->Meta.RandomValues;
-      }
-    }
-  }
+  const SelectedChartRandomInfo chartRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   previewLoadCancelled = true;
   if (loadThread.joinable()) {
@@ -2835,8 +2793,8 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
   context.jukebox.stop();
   context.sceneManager->changeScene(
-      new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
-                           chartRandomValues),
+      new ChartViewerScene(context, record, chartRandomInfo.seed,
+                           chartRandomInfo.prng, chartRandomInfo.values),
       true);
 }
 
@@ -2977,8 +2935,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   if (loadThread.joinable()) {
     loadThread.join();
   }
-  context.jukebox.stop();
-  clearSelectedChart();
+  stopAndClearSelectedChart();
   unzipEstimatedUncompressedSize =
       fullArchiveUnzip ? record.archiveUncompressedSize : 0;
 
@@ -4903,6 +4860,10 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
 
   defer(
       [this, record, replayId]() {
+        auto failReplayLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          return true;
+        };
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -4910,10 +4871,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         auto replay =
             ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
         if (!replay.has_value()) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
+          resetReplayWatchLoadingUi();
           refreshReplayAvailability(&record);
           return true;
         }
@@ -4922,38 +4880,25 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         auto replayChart = play_options::prepareReplayChart(
             record.meta.BmsPath, replay.value(), parseCancelled);
         if (replayChart == nullptr || parseCancelled) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
         context.jukebox.stop();
         context.jukebox.loadChart(*replayChart, true, parseCancelled);
         if (parseCancelled) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
         auto *chart = setSelectedChart(std::move(replayChart), true);
         if (chart == nullptr) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
         auto replayData =
             std::make_shared<ReplayData>(std::move(replay.value()));
         context.jukebox.stop();
         hideReplayModal();
-        context.sceneManager->changeScene(
-            new GamePlayScene(context, chart,
+        changeToGameplayScene(chart,
                               {
                                   .startPosition = 0,
                                   .autoKeySound = false,
@@ -4961,8 +4906,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                   .gaugeType = replayData->initialGaugeType,
                                   .gaugeAutoShift = replayData->gaugeAutoShift,
                                   .replayData = replayData,
-                              }),
-            true);
+                              });
         willStart.store(false);
         return true;
       },
@@ -4992,12 +4936,56 @@ void MainMenuScene::clearSelectedChart() {
   }
 }
 
-bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
+void MainMenuScene::stopAndClearSelectedChart() {
+  context.jukebox.stop();
+  clearSelectedChart();
+}
+
+MainMenuScene::SelectedChartRandomInfo
+MainMenuScene::selectedChartRandomInfoForPath(
+    const std::filesystem::path &path) const {
+  SelectedChartRandomInfo info;
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (!selectedChartMediaReady.load()) {
+  if (selectedChart == nullptr ||
+      fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
+    return info;
+  }
+  info.seed = selectedChart->Meta.RandomSeed;
+  info.prng = selectedChart->Meta.RandomPrng;
+  if (!selectedChart->Meta.RandomValues.empty()) {
+    info.values = selectedChart->Meta.RandomValues;
+  }
+  return info;
+}
+
+bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
+    const std::filesystem::path &path) const {
+  std::lock_guard<std::mutex> lock(selectedChartMutex);
+  if (!selectedChartMediaReady.load() || selectedChart == nullptr ||
+      fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
   return selectedChart.get();
+}
+
+void MainMenuScene::resetStartLoadingUi() {
+  willStart.store(false);
+  if (startButtonText != nullptr) {
+    startButtonText->setText("Start");
+  }
+}
+
+void MainMenuScene::resetReplayWatchLoadingUi() {
+  willStart.store(false);
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Watch");
+  }
+}
+
+void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
+                                          StartOptions options) {
+  context.sceneManager->changeScene(
+      new GamePlayScene(context, chart, std::move(options)), true);
 }
 
 void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
@@ -5275,8 +5263,7 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
-  context.jukebox.stop();
-  clearSelectedChart();
+  stopAndClearSelectedChart();
   ChartDBHelper::GetInstance().Close(db);
   db = nullptr;
   recyclerView = nullptr;
