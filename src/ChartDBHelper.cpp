@@ -390,6 +390,7 @@ struct ArchiveScanCacheRecord {
   bool solid = false;
   std::uint64_t uncompressedSize = 0;
   int fileCount = 0;
+  int chartCount = -1;
 };
 
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
@@ -1193,9 +1194,17 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
       "solid INTEGER NOT NULL DEFAULT 0,"
       "uncompressed_size INTEGER NOT NULL DEFAULT 0,"
       "file_count INTEGER NOT NULL DEFAULT 0,"
+      "chart_count INTEGER NOT NULL DEFAULT -1,"
       "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating archive scan cache table")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE archive_scan_cache "
+          "ADD COLUMN chart_count INTEGER NOT NULL DEFAULT -1",
+          "migrating archive scan cache chart count")) {
     return false;
   }
 
@@ -1221,8 +1230,8 @@ ArchiveScanCacheRecord selectArchiveScanCache(
   ArchiveScanCacheRecord record;
   const std::string pathText = archivePathTextForDb(archivePath);
   const char *query =
-      "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count "
-      "FROM archive_scan_cache WHERE path = ?";
+      "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
+      "chart_count FROM archive_scan_cache WHERE path = ?";
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
@@ -1240,6 +1249,7 @@ ArchiveScanCacheRecord selectArchiveScanCache(
     record.uncompressedSize = static_cast<std::uint64_t>(
         std::max<sqlite3_int64>(0, sqlite3_column_int64(stmt, 3)));
     record.fileCount = std::max(0, sqlite3_column_int(stmt, 4));
+    record.chartCount = sqlite3_column_int(stmt, 5);
   }
   sqlite3_finalize(stmt);
   return record;
@@ -1271,13 +1281,13 @@ bool archiveScanCacheMatches(const ArchiveScanCacheRecord &record,
                              sqlite3_int64 archiveSize,
                              sqlite3_int64 mtimeNs) {
   return record.found && record.archiveSize == archiveSize &&
-         record.mtimeNs == mtimeNs;
+         record.mtimeNs == mtimeNs && record.chartCount >= 0;
 }
 
 bool upsertArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath,
                             bool solid, std::uint64_t uncompressedSize,
-                            int fileCount) {
+                            int fileCount, int chartCount) {
   sqlite3_int64 archiveSize = 0;
   sqlite3_int64 mtimeNs = 0;
   if (!archiveFileStateForDb(archivePath, archiveSize, mtimeNs)) {
@@ -1288,19 +1298,22 @@ bool upsertArchiveScanCache(sqlite3 *db,
   const char *query =
       "INSERT INTO archive_scan_cache "
       "(path, archive_size, mtime_ns, solid, uncompressed_size, file_count, "
-      "updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) "
+      "chart_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "
+      "CURRENT_TIMESTAMP) "
       "ON CONFLICT(path) DO UPDATE SET "
       "archive_size = excluded.archive_size,"
       "mtime_ns = excluded.mtime_ns,"
       "solid = excluded.solid,"
       "uncompressed_size = excluded.uncompressed_size,"
       "file_count = excluded.file_count,"
+      "chart_count = excluded.chart_count,"
       "updated_at = CURRENT_TIMESTAMP "
       "WHERE archive_scan_cache.archive_size != excluded.archive_size "
       "OR archive_scan_cache.mtime_ns != excluded.mtime_ns "
       "OR archive_scan_cache.solid != excluded.solid "
       "OR archive_scan_cache.uncompressed_size != excluded.uncompressed_size "
-      "OR archive_scan_cache.file_count != excluded.file_count";
+      "OR archive_scan_cache.file_count != excluded.file_count "
+      "OR archive_scan_cache.chart_count != excluded.chart_count";
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
   if (rc != SQLITE_OK) {
@@ -1315,6 +1328,7 @@ bool upsertArchiveScanCache(sqlite3 *db,
   sqlite3_bind_int(stmt, 4, solid ? 1 : 0);
   sqlite3_bind_int64(stmt, 5, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt, 6, std::max(0, fileCount));
+  sqlite3_bind_int(stmt, 7, std::max(0, chartCount));
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while upserting archive scan cache: "
@@ -3145,12 +3159,15 @@ int ChartDBHelper::ScanChartRoots(
     bool solid = false;
     std::uint64_t uncompressedSize = 0;
     int fileCount = 0;
+    int chartCount = 0;
   };
   std::vector<SolidArchiveDiff> solidArchiveDiffs;
   std::vector<ArchiveCacheDiff> archiveCacheDiffs;
+  std::unordered_map<path_t, ArchiveCacheDiff> pendingArchiveCacheDiffs;
   std::vector<std::filesystem::path> staleSolidArchives;
   std::vector<std::filesystem::path> reindexedArchives;
   std::unordered_set<path_t> knownChartPaths;
+  std::unordered_map<path_t, int> knownArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
   diffs.reserve(chartMetas.size());
   sourcePreferenceRefreshPaths.reserve(chartMetas.size());
@@ -3193,6 +3210,8 @@ int ChartDBHelper::ScanChartRoots(
     std::filesystem::path innerPath;
     if (archive_file::splitVirtualPath(chartMeta.BmsPath, archivePath,
                                        innerPath)) {
+      const path_t archiveKey = fspath_to_path_t(archivePath);
+      ++knownArchiveChartCounts[archiveKey];
       const ArchiveKnownState &archiveState = archiveStateForPath(archivePath);
       if (archiveState.fileAvailable &&
           archiveScanCacheMatches(archiveState.cache, archiveState.archiveSize,
@@ -3239,20 +3258,33 @@ int ChartDBHelper::ScanChartRoots(
     const ArchiveScanCacheRecord cache =
         selectArchiveScanCache(db, archivePath);
     if (archiveScanCacheMatches(cache, archiveSize, mtimeNs)) {
-      archive_file::appendDebugLogLine(
-          "Using cached archive scan: " +
-          path_t_to_utf8(fspath_to_path_t(archivePath)) +
-          " files=" + std::to_string(cache.fileCount) +
-          " solid=" + std::string(cache.solid ? "yes" : "no") +
-          " estimatedUnpacked=" +
-          std::to_string(cache.uncompressedSize));
-      solidArchiveDiffs.push_back({
-          .path = archivePath,
-          .solid = cache.solid,
-          .uncompressedSize = cache.uncompressedSize,
-          .fileCount = cache.fileCount,
-      });
-      return;
+      const int knownChartCount =
+          knownArchiveChartCounts.contains(archiveKey)
+              ? knownArchiveChartCounts.at(archiveKey)
+              : 0;
+      if (!cache.solid && knownChartCount < cache.chartCount) {
+        archive_file::appendDebugLogLine(
+            "Archive scan cache incomplete; rescanning: " +
+            path_t_to_utf8(fspath_to_path_t(archivePath)) +
+            " cachedCharts=" + std::to_string(cache.chartCount) +
+            " dbCharts=" + std::to_string(knownChartCount));
+      } else {
+        archive_file::appendDebugLogLine(
+            "Using cached archive scan: " +
+            path_t_to_utf8(fspath_to_path_t(archivePath)) +
+            " files=" + std::to_string(cache.fileCount) +
+            " charts=" + std::to_string(cache.chartCount) +
+            " solid=" + std::string(cache.solid ? "yes" : "no") +
+            " estimatedUnpacked=" +
+            std::to_string(cache.uncompressedSize));
+        solidArchiveDiffs.push_back({
+            .path = archivePath,
+            .solid = cache.solid,
+            .uncompressedSize = cache.uncompressedSize,
+            .fileCount = cache.fileCount,
+        });
+        return;
+      }
     }
     if (cache.found) {
       archive_file::appendDebugLogLine(
@@ -3266,13 +3298,15 @@ int ChartDBHelper::ScanChartRoots(
       return;
     }
     reindexedArchives.push_back(archivePath);
-    archiveCacheDiffs.push_back({
+    ArchiveCacheDiff cacheDiff{
         .path = archivePath,
         .solid = archiveScan.solid,
         .uncompressedSize = archiveScan.uncompressedSize,
         .fileCount = archiveScan.fileCount,
-    });
+        .chartCount = static_cast<int>(archiveScan.chartPaths.size()),
+    };
     if (archiveScan.solid) {
+      archiveCacheDiffs.push_back(cacheDiff);
       solidArchiveDiffs.push_back({
           .path = archivePath,
           .solid = true,
@@ -3286,6 +3320,11 @@ int ChartDBHelper::ScanChartRoots(
         .path = archivePath,
         .solid = false,
     });
+    if (archiveScan.chartPaths.empty()) {
+      archiveCacheDiffs.push_back(cacheDiff);
+    } else {
+      pendingArchiveCacheDiffs[archiveKey] = cacheDiff;
+    }
     for (const auto &chartPath : archiveScan.chartPaths) {
       diffs.push_back({.path = chartPath, .deleted = false});
     }
@@ -3350,8 +3389,8 @@ int ChartDBHelper::ScanChartRoots(
 
   if ((diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
        cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
-       archiveCacheDiffs.empty() && staleSolidArchives.empty() &&
-       reindexedArchives.empty()) ||
+       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
+       staleSolidArchives.empty() && reindexedArchives.empty()) ||
       stopRequested(stopToken)) {
     return 0;
   }
@@ -3438,7 +3477,8 @@ int ChartDBHelper::ScanChartRoots(
       break;
     }
     if (upsertArchiveScanCache(db, diff.path, diff.solid,
-                               diff.uncompressedSize, diff.fileCount)) {
+                               diff.uncompressedSize, diff.fileCount,
+                               diff.chartCount)) {
       ++changedCount;
     }
   }
@@ -3559,8 +3599,10 @@ int ChartDBHelper::ScanChartRoots(
         path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
         " requested=" + std::to_string(batch.innerPaths.size()) +
         " files=" + std::to_string(files.size()));
+    bool parsedFullBatch = files.size() == batch.innerPaths.size();
     for (const auto &file : files) {
       if (stopRequested(stopToken)) {
+        parsedFullBatch = false;
         break;
       }
       const std::filesystem::path chartPath =
@@ -3568,6 +3610,25 @@ int ChartDBHelper::ScanChartRoots(
       if (parseAndInsertChart(chartPath, &file.bytes)) {
         ++changedCount;
       }
+    }
+    if (parsedFullBatch && !stopRequested(stopToken)) {
+      const auto cacheIt =
+          pendingArchiveCacheDiffs.find(fspath_to_path_t(batch.archivePath));
+      if (cacheIt != pendingArchiveCacheDiffs.end()) {
+        const ArchiveCacheDiff &diff = cacheIt->second;
+        if (upsertArchiveScanCache(db, diff.path, diff.solid,
+                                   diff.uncompressedSize, diff.fileCount,
+                                   diff.chartCount)) {
+          ++changedCount;
+        }
+      }
+    } else {
+      archive_file::appendDebugLogLine(
+          "Skipped archive scan cache write because chart batch did not "
+          "complete: " +
+          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+          " requested=" + std::to_string(batch.innerPaths.size()) +
+          " files=" + std::to_string(files.size()));
     }
   }
   CommitTransaction(db);
