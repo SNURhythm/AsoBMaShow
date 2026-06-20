@@ -30,15 +30,15 @@ struct Palette {
 
 inline const Palette &darkPalette() {
   static const Palette palette{
-      Color(7, 20, 34, 236),    Color(39, 19, 42, 236),
-      Color(236, 253, 255, 58), Color(39, 186, 180, 76),
-      Color(238, 255, 252, 82), Color(49, 205, 186, 112),
-      Color(19, 72, 82, 154),   Color(5, 9, 16, 220),
-      Color(22, 111, 114, 170), Color(70, 230, 224, 255),
-      Color(255, 104, 88, 255), Color(183, 246, 92, 255),
-      Color(255, 204, 81, 255), Color(248, 253, 255, 255),
+      Color(7, 20, 34, 236),     Color(39, 19, 42, 236),
+      Color(236, 253, 255, 58),  Color(39, 186, 180, 76),
+      Color(238, 255, 252, 82),  Color(49, 205, 186, 112),
+      Color(19, 72, 82, 154),    Color(5, 9, 16, 220),
+      Color(18, 92, 100, 156),   Color(86, 210, 202, 255),
+      Color(255, 104, 88, 255),  Color(183, 246, 92, 255),
+      Color(255, 204, 81, 255),  Color(248, 253, 255, 255),
       Color(198, 226, 230, 255), Color(141, 181, 188, 255),
-      Color(8, 18, 24, 255),    Color(157, 252, 241, 178)};
+      Color(8, 18, 24, 255),     Color(102, 151, 156, 112)};
   return palette;
 }
 
@@ -48,11 +48,11 @@ inline const Palette &lightPalette() {
       Color(255, 255, 255, 212), Color(212, 250, 245, 206),
       Color(255, 255, 255, 238), Color(225, 255, 247, 228),
       Color(202, 245, 239, 210), Color(220, 245, 244, 230),
-      Color(183, 238, 232, 210), Color(0, 166, 177, 255),
+      Color(183, 238, 232, 210), Color(0, 145, 156, 255),
       Color(238, 76, 66, 255),   Color(97, 176, 34, 255),
       Color(222, 143, 34, 255),  Color(8, 25, 32, 255),
       Color(52, 88, 96, 255),    Color(104, 138, 145, 255),
-      Color(8, 18, 24, 255),     Color(0, 174, 174, 160)};
+      Color(8, 18, 24, 255),     Color(56, 118, 126, 132)};
   return palette;
 }
 
@@ -87,6 +87,31 @@ inline Color textSecondary() { return activePalette().textSecondary; }
 inline Color textMuted() { return activePalette().textMuted; }
 inline Color darkText() { return activePalette().darkText; }
 inline Color hairline() { return activePalette().hairline; }
+
+inline Color withAlpha(Color color, uint8_t alpha) {
+  color.a = alpha;
+  return color;
+}
+
+inline Color hairlineSubtle() {
+  return activeMode() == ThemeMode::Light ? withAlpha(hairline(), 84)
+                                          : withAlpha(hairline(), 56);
+}
+
+inline Color hairlineStrong() {
+  return activeMode() == ThemeMode::Light ? withAlpha(hairline(), 148)
+                                          : withAlpha(hairline(), 118);
+}
+
+inline Color accentBorder() {
+  return activeMode() == ThemeMode::Light ? Color(0, 145, 156, 138)
+                                          : Color(86, 210, 202, 126);
+}
+
+inline Color accentBorderStrong() {
+  return activeMode() == ThemeMode::Light ? Color(0, 145, 156, 192)
+                                          : Color(105, 224, 216, 174);
+}
 
 inline Color backdrop() {
   return activeMode() == ThemeMode::Light ? Color(235, 239, 244, 255)

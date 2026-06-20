@@ -77,11 +77,11 @@ public:
     titleText->setText(summary.createdAt.empty()
                            ? "Replay #" + std::to_string(summary.id)
                            : summary.createdAt);
-    std::string detail =
-        replay_summary_ui::gaugeLabel(summary.initialGaugeType,
-                                      summary.gaugeAutoShift) +
-        "  Gauge " + replay_summary_ui::formatGauge(summary.finalGauge) +
-        "  Events " + std::to_string(summary.eventCount);
+    std::string detail = replay_summary_ui::gaugeLabel(summary.initialGaugeType,
+                                                       summary.gaugeAutoShift) +
+                         "  Gauge " +
+                         replay_summary_ui::formatGauge(summary.finalGauge) +
+                         "  Events " + std::to_string(summary.eventCount);
     const std::string optionLabel = replay_summary_ui::playOptionLabel(summary);
     if (!optionLabel.empty()) {
       detail += "  " + optionLabel;
@@ -99,7 +99,7 @@ public:
   void onSelected() override {
     setBackgroundColor(ui_theme::panelStrong());
     setCornerRadius(ui_theme::controlRadius());
-    setBorderColor(ui_theme::cyan());
+    setBorderColor(ui_theme::accentBorderStrong());
     setBorderWidth(1);
     titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
     detailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
@@ -109,12 +109,12 @@ public:
   void onUnselected() override {
     setBackgroundColor(ui_theme::panelSubtle());
     setCornerRadius(ui_theme::controlRadius());
-    setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
-                         ui_theme::hairline().b, 96));
+    setBorderColor(ui_theme::hairlineSubtle());
     setBorderWidth(1);
     titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
     detailText->setColor(ui_theme::sdl(ui_theme::textMuted()));
-    scoreText->setColor(ui_theme::sdl(ui_theme::cyan()));
+    scoreText->setColor(
+        ui_theme::sdl(ui_theme::withAlpha(ui_theme::cyan(), 218)));
   }
 
 private:
@@ -128,10 +128,10 @@ private:
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {
 public:
   ReplaySummaryListView()
-      : RecyclerView<ReplaySummary>([](const ReplaySummary &a,
-                                       const ReplaySummary &b) {
-          return a.id == b.id;
-        }) {
+      : RecyclerView<ReplaySummary>(
+            [](const ReplaySummary &a, const ReplaySummary &b) {
+              return a.id == b.id;
+            }) {
     itemHeight = 74;
     onCreateView = [](const ReplaySummary &) {
       return new ReplaySummaryListItemView();

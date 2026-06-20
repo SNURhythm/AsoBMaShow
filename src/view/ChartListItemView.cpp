@@ -68,7 +68,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setJustifyContent(YGJustifyCenter)
       ->setBackgroundColor(ui_theme::panelSubtle())
       ->setCornerRadius(ui_theme::controlRadius())
-      ->setBorderColor(ui_theme::hairline())
+      ->setBorderColor(ui_theme::hairlineSubtle())
       ->setBorderWidth(1);
   jacketImage->setWidth(78)->setHeight(78);
   artworkFrame->addView(jacketImage);
@@ -166,32 +166,29 @@ void ChartListItemView::setClearRank(int clearRank) {
 void ChartListItemView::onSelected() {
   setBackgroundColor(ui_theme::panelStrong());
   setCornerRadius(ui_theme::controlRadius());
-  setBorderColor(ui_theme::cyan());
+  setBorderColor(ui_theme::accentBorderStrong());
   setBorderWidth(1);
   artworkFrame->setBackgroundColor(ui_theme::controlHover());
-  artworkFrame->setBorderColor(ui_theme::cyan());
+  artworkFrame->setBorderColor(ui_theme::accentBorder());
   applyTextColors(true);
 }
 
 void ChartListItemView::onUnselected() {
   setBackgroundColor(ui_theme::panelSubtle());
   setCornerRadius(ui_theme::controlRadius());
-  setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
-                       ui_theme::hairline().b, 96));
+  setBorderColor(ui_theme::hairlineSubtle());
   setBorderWidth(1);
   artworkFrame->setBackgroundColor(ui_theme::control());
-  artworkFrame->setBorderColor(Color(ui_theme::hairline().r,
-                                     ui_theme::hairline().g,
-                                     ui_theme::hairline().b, 132));
+  artworkFrame->setBorderColor(ui_theme::hairlineStrong());
   applyTextColors(false);
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
   if (solidArchive) {
-    titleView->setColor(ui_theme::sdl(selected ? ui_theme::amber()
-                                                : Color(226, 181, 82, 255)));
+    titleView->setColor(
+        ui_theme::sdl(selected ? ui_theme::amber() : Color(226, 181, 82, 255)));
     artistView->setColor(ui_theme::sdl(selected ? ui_theme::textSecondary()
-                                                 : ui_theme::textMuted()));
+                                                : ui_theme::textMuted()));
     levelView->setColor(ui_theme::sdl(ui_theme::amber()));
     keyModeView->setColor(ui_theme::sdl(selected ? ui_theme::textSecondary()
                                                  : ui_theme::textMuted()));
@@ -205,15 +202,16 @@ void ChartListItemView::applyTextColors(bool selected) {
     levelView->setColor(ui_theme::sdl(selected ? Color(255, 218, 208, 255)
                                                : Color(240, 132, 116, 255)));
     keyModeView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
-                                                : Color(211, 91, 84, 255)));
+                                                 : Color(211, 91, 84, 255)));
     return;
   }
 
   titleView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   artistView->setColor(ui_theme::sdl(selected ? ui_theme::textSecondary()
                                               : ui_theme::textMuted()));
-  levelView->setColor(ui_theme::sdl(selected ? ui_theme::lime()
-                                             : ui_theme::cyan()));
+  levelView->setColor(
+      ui_theme::sdl(selected ? ui_theme::lime()
+                             : ui_theme::withAlpha(ui_theme::cyan(), 218)));
   keyModeView->setColor(ui_theme::sdl(selected ? ui_theme::textSecondary()
                                                : ui_theme::textMuted()));
 }

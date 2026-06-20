@@ -668,15 +668,17 @@ void styleActionButton(Button *button, TextView *text, bool enabled,
   button->setCornerRadius(ui_theme::controlRadius());
   if (enabled) {
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(border, Color(border.r, border.g, border.b, 230),
-                            ui_theme::hairline());
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
     text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   } else {
     button->setBackgroundColors(ui_theme::panelSubtle(),
                                 ui_theme::panelSubtle(),
                                 ui_theme::panelSubtle());
-    button->setBorderColors(ui_theme::hairline(), ui_theme::hairline(),
-                            ui_theme::hairline());
+    button->setBorderColors(ui_theme::hairlineSubtle(),
+                            ui_theme::hairlineSubtle(),
+                            ui_theme::hairlineSubtle());
     text->setColor(ui_theme::sdl(ui_theme::textMuted()));
   }
 }
@@ -688,11 +690,11 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
                             ui_theme::fieldTeal().b, 226),
                       Color(ui_theme::cyan().r, ui_theme::cyan().g,
                             ui_theme::cyan().b, 214),
-                      ui_theme::cyan());
+                      ui_theme::accentBorderStrong());
   } else {
     styleActionButton(button, text, true, ui_theme::control(),
                       ui_theme::controlHover(), ui_theme::controlPressed(),
-                      ui_theme::hairline());
+                      ui_theme::hairlineStrong());
   }
 }
 
@@ -1496,12 +1498,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   const Color kPanelFill = ui_theme::panel();
   const Color kSurfaceFill = ui_theme::control();
-  const Color kPrimaryButtonNormal(23, 151, 143, 218);
-  const Color kPrimaryButtonHover(34, 196, 187, 232);
-  const Color kPrimaryButtonPressed(63, 228, 217, 242);
-  const Color kSecondaryButtonNormal(149, 51, 47, 218);
-  const Color kSecondaryButtonHover(195, 67, 58, 232);
-  const Color kSecondaryButtonPressed(226, 88, 75, 242);
+  const Color kPrimaryButtonNormal(20, 127, 123, 222);
+  const Color kPrimaryButtonHover(26, 154, 148, 232);
+  const Color kPrimaryButtonPressed(38, 181, 172, 242);
+  const Color kSecondaryButtonNormal(126, 47, 44, 222);
+  const Color kSecondaryButtonHover(157, 58, 52, 232);
+  const Color kSecondaryButtonPressed(190, 75, 65, 242);
 
   recyclerView = new RecyclerView<ChartMetaRecord>(
       [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
@@ -1759,7 +1761,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
-  folderRecyclerView->setBorderColor(ui_theme::hairline());
+  folderRecyclerView->setBorderColor(ui_theme::hairlineSubtle());
   folderRecyclerView->setBorderWidth(1);
   folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
@@ -1826,7 +1828,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->setFlex(1);
   searchBox->setBackgroundColor(kSurfaceFill);
   searchBox->setCornerRadius(ui_theme::controlRadius());
-  searchBox->setBorderColor(ui_theme::hairline());
+  searchBox->setBorderColor(ui_theme::hairlineSubtle());
   searchBox->setBorderWidth(1);
   searchBox->setVAlign(TextView::MIDDLE);
   searchBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -1844,7 +1846,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   difficultyFilterBox->setWidth(180);
   difficultyFilterBox->setBackgroundColor(kSurfaceFill);
   difficultyFilterBox->setCornerRadius(ui_theme::controlRadius());
-  difficultyFilterBox->setBorderColor(ui_theme::hairline());
+  difficultyFilterBox->setBorderColor(ui_theme::hairlineSubtle());
   difficultyFilterBox->setBorderWidth(1);
   difficultyFilterBox->setVAlign(TextView::MIDDLE);
   difficultyFilterBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -1864,7 +1866,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
-  recyclerView->setBorderColor(ui_theme::hairline());
+  recyclerView->setBorderColor(ui_theme::hairlineSubtle());
   recyclerView->setBorderWidth(1);
   recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
@@ -1941,11 +1943,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButtonText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   playOptionsButton->setContentView(playOptionsButtonText);
   playOptionsButton->setBackgroundColors(
-      Color(23, 151, 143, 218), Color(34, 196, 187, 232),
-      Color(63, 228, 217, 242));
-  playOptionsButton->setBorderColors(ui_theme::cyan(),
-                                     Color(142, 255, 248, 255),
-                                     Color(255, 255, 255, 255));
+      kPrimaryButtonNormal, kPrimaryButtonHover, kPrimaryButtonPressed);
+  playOptionsButton->setBorderColors(
+      ui_theme::accentBorder(), ui_theme::accentBorderStrong(),
+      ui_theme::withAlpha(ui_theme::cyan(), 220));
   playOptionsButton->setCornerRadius(ui_theme::controlRadius());
   playOptionsButton->setStyledBorderWidth(1);
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
@@ -1963,9 +1964,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButton->setContentView(buttonText);
   startButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
                                    kPrimaryButtonPressed);
-  startButton->setBorderColors(ui_theme::cyan(),
-                               Color(142, 255, 248, 255),
-                               Color(255, 255, 255, 255));
+  startButton->setBorderColors(ui_theme::accentBorder(),
+                               ui_theme::accentBorderStrong(),
+                               ui_theme::withAlpha(ui_theme::cyan(), 220));
   startButton->setCornerRadius(ui_theme::controlRadius());
   startButton->setStyledBorderWidth(1);
   startButton->setOnClickListener([this]() {
@@ -1994,10 +1995,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
   replayButton->setBackgroundColors(
-      Color(25, 58, 65, 216), Color(35, 82, 92, 228), Color(48, 111, 124, 236));
-  replayButton->setBorderColors(Color(91, 174, 184, 255),
-                                Color(116, 204, 214, 255),
-                                Color(145, 232, 241, 255));
+      Color(24, 54, 61, 216), Color(32, 70, 80, 228), Color(43, 91, 103, 236));
+  replayButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::cyan(), 118),
+      ui_theme::withAlpha(ui_theme::cyan(), 154),
+      ui_theme::withAlpha(ui_theme::cyan(), 190));
   replayButton->setCornerRadius(ui_theme::controlRadius());
   replayButton->setStyledBorderWidth(1);
   replayButton->setOnClickListener([this]() {
@@ -2032,9 +2034,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButton->setBackgroundColors(
       Color(32, 74, 62, 216), Color(45, 99, 83, 228),
       Color(61, 132, 109, 236));
-  findBmsButton->setBorderColors(Color(94, 181, 153, 255),
-                                 Color(119, 210, 180, 255),
-                                 Color(148, 235, 204, 255));
+  findBmsButton->setBorderColors(Color(94, 181, 153, 122),
+                                 Color(119, 210, 180, 164),
+                                 Color(148, 235, 204, 198));
   findBmsButton->setCornerRadius(ui_theme::controlRadius());
   findBmsButton->setStyledBorderWidth(1);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
@@ -2054,9 +2056,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButton->setBackgroundColors(
       Color(76, 61, 30, 216), Color(103, 82, 40, 228),
       Color(132, 106, 53, 236));
-  unzipButton->setBorderColors(Color(188, 157, 87, 255),
-                               Color(220, 188, 112, 255),
-                               Color(244, 214, 143, 255));
+  unzipButton->setBorderColors(Color(188, 157, 87, 122),
+                               Color(220, 188, 112, 164),
+                               Color(244, 214, 143, 198));
   unzipButton->setCornerRadius(ui_theme::controlRadius());
   unzipButton->setStyledBorderWidth(1);
   unzipButton->setOnClickListener(
@@ -2076,7 +2078,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setJustifyContent(YGJustifyCenter);
   jacketCard->setBackgroundColor(kSurfaceFill);
   jacketCard->setCornerRadius(ui_theme::panelRadius());
-  jacketCard->setBorderColor(ui_theme::hairline());
+  jacketCard->setBorderColor(ui_theme::hairlineSubtle());
   jacketCard->setBorderWidth(1);
   jacketView->setWidth(200)->setHeight(200);
   jacketCard->addView(jacketView);
@@ -2101,9 +2103,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButton->setBackgroundColors(
       Color(31, 51, 74, 216), Color(43, 70, 100, 228),
       Color(58, 93, 132, 236));
-  viewerButton->setBorderColors(Color(106, 153, 205, 255),
-                                Color(135, 181, 229, 255),
-                                Color(167, 209, 248, 255));
+  viewerButton->setBorderColors(Color(106, 153, 205, 118),
+                                Color(135, 181, 229, 154),
+                                Color(167, 209, 248, 190));
   viewerButton->setCornerRadius(ui_theme::controlRadius());
   viewerButton->setStyledBorderWidth(1);
   viewerButton->setOnClickListener(
@@ -2120,9 +2122,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButton->setBackgroundColors(
       Color(31, 51, 74, 216), Color(43, 70, 100, 228),
       Color(58, 93, 132, 236));
-  revealButton->setBorderColors(Color(106, 153, 205, 255),
-                                Color(135, 181, 229, 255),
-                                Color(167, 209, 248, 255));
+  revealButton->setBorderColors(Color(106, 153, 205, 118),
+                                Color(135, 181, 229, 154),
+                                Color(167, 209, 248, 190));
   revealButton->setCornerRadius(ui_theme::controlRadius());
   revealButton->setStyledBorderWidth(1);
   revealButton->setOnClickListener(
@@ -2149,9 +2151,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsButton->setContentView(settingsText);
   settingsButton->setBackgroundColors(
       kSecondaryButtonNormal, kSecondaryButtonHover, kSecondaryButtonPressed);
-  settingsButton->setBorderColors(ui_theme::coral(),
-                                  Color(255, 143, 118, 255),
-                                  Color(255, 225, 198, 255));
+  settingsButton->setBorderColors(ui_theme::withAlpha(ui_theme::coral(), 132),
+                                  Color(255, 143, 118, 176),
+                                  Color(255, 179, 148, 212));
   settingsButton->setCornerRadius(ui_theme::controlRadius());
   settingsButton->setStyledBorderWidth(1);
   settingsButton->setOnClickListener([this, &context]() {
