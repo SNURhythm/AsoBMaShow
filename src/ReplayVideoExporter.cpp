@@ -674,10 +674,12 @@ bool writeWavFile(const std::filesystem::path &path,
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
 #ifdef _WIN32
-  SNDFILE *file = sf_wchar_open(path.wstring().c_str(), SFM_WRITE, &outputInfo);
+  SNDFILE *rawFile =
+      sf_wchar_open(path.wstring().c_str(), SFM_WRITE, &outputInfo);
 #else
-  SNDFILE *file = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
+  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
 #endif
+  std::unique_ptr<SNDFILE, decltype(&sf_close)> file(rawFile, sf_close);
   if (file == nullptr) {
     errorMessage = std::string("Failed to open replay audio output: ") +
                    sf_strerror(nullptr);
@@ -694,8 +696,7 @@ bool writeWavFile(const std::filesystem::path &path,
   const sf_count_t framesToWrite =
       static_cast<sf_count_t>(pcm.size() / kExportChannels);
   const sf_count_t framesWritten =
-      sf_writef_short(file, pcm.data(), framesToWrite);
-  sf_close(file);
+      sf_writef_short(file.get(), pcm.data(), framesToWrite);
 
   if (framesWritten != framesToWrite) {
     errorMessage = "Failed to write complete replay audio track";

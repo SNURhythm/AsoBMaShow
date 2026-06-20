@@ -5532,12 +5532,12 @@ void MainMenuScene::FindFilesUnix(
     const std::unordered_set<path_t> &oldFiles,
     std::vector<std::filesystem::path> &directoriesToVisit,
     const std::stop_token &stop_token) {
-  DIR *dir = opendir(directoryPath.c_str());
+  std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(directoryPath.c_str()),
+                                                closedir);
   if (dir) {
     struct dirent *entry;
-    while ((entry = readdir(dir)) != nullptr) {
+    while ((entry = readdir(dir.get())) != nullptr) {
       if (stop_token.stop_requested()) {
-        closedir(dir);
         break;
       }
       resolveDType(directoryPath, entry);
@@ -5562,7 +5562,6 @@ void MainMenuScene::FindFilesUnix(
         SDL_Log("Unknown file type: %s", entry->d_name);
       }
     }
-    closedir(dir);
   } else {
     SDL_Log("Failed to open directory: %s", directoryPath.c_str());
   }

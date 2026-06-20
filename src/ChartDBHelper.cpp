@@ -4796,16 +4796,16 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   }
 
   auto query = "DELETE FROM difficulty_tables WHERE id = @id";
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
-  sqlite3_bind_int(stmt, 1, tableId);
-  rc = sqlite3_step(stmt);
+  sqlite3_bind_int(stmt.get(), 1, tableId);
+  rc = sqlite3_step(stmt.get());
   const bool deleted = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
-  sqlite3_finalize(stmt);
   if (!deleted) {
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
@@ -4906,8 +4906,9 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "GROUP BY dt.id "
                "ORDER BY dt.name COLLATE NOCASE";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty tables: "
               << sqlite3_errmsg(db) << "\n";
@@ -4915,16 +4916,15 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
   }
 
   std::vector<DifficultyTableInfo> tables;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     DifficultyTableInfo table;
-    table.id = columnInt(stmt, 0);
-    table.name = columnString(stmt, 1);
-    table.symbol = columnString(stmt, 2);
-    table.sourceUrl = columnString(stmt, 3);
-    table.chartCount = columnInt(stmt, 4);
+    table.id = columnInt(stmt.get(), 0);
+    table.name = columnString(stmt.get(), 1);
+    table.symbol = columnString(stmt.get(), 2);
+    table.sourceUrl = columnString(stmt.get(), 3);
+    table.chartCount = columnInt(stmt.get(), 4);
     tables.push_back(std::move(table));
   }
-  sqlite3_finalize(stmt);
   return tables;
 }
 
@@ -4937,26 +4937,26 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "WHERE dte.table_id = @table_id "
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty levels: "
               << sqlite3_errmsg(db) << "\n";
     return {};
   }
-  sqlite3_bind_int(stmt, 1, tableId);
+  sqlite3_bind_int(stmt.get(), 1, tableId);
 
   std::vector<DifficultyLevelInfo> levels;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     DifficultyLevelInfo level;
-    level.tableId = columnInt(stmt, 0);
-    level.tableName = columnString(stmt, 1);
-    level.tableSymbol = columnString(stmt, 2);
-    level.level = columnString(stmt, 3);
-    level.chartCount = columnInt(stmt, 4);
+    level.tableId = columnInt(stmt.get(), 0);
+    level.tableName = columnString(stmt.get(), 1);
+    level.tableSymbol = columnString(stmt.get(), 2);
+    level.level = columnString(stmt.get(), 3);
+    level.chartCount = columnInt(stmt.get(), 4);
     levels.push_back(std::move(level));
   }
-  sqlite3_finalize(stmt);
   return levels;
 }
 
@@ -4974,8 +4974,9 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "GROUP BY dc.table_id, dc.group_name "
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty course groups: "
               << sqlite3_errmsg(db) << "\n";
@@ -4983,15 +4984,14 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
   }
 
   std::vector<DifficultyCourseGroupInfo> groups;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     DifficultyCourseGroupInfo group;
-    group.tableId = columnInt(stmt, 0);
-    group.tableName = columnString(stmt, 1);
-    group.groupName = columnString(stmt, 2);
-    group.matchedChartCount = columnInt(stmt, 3);
+    group.tableId = columnInt(stmt.get(), 0);
+    group.tableName = columnString(stmt.get(), 1);
+    group.groupName = columnString(stmt.get(), 2);
+    group.matchedChartCount = columnInt(stmt.get(), 3);
     groups.push_back(std::move(group));
   }
-  sqlite3_finalize(stmt);
   return groups;
 }
 
@@ -5011,29 +5011,29 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "GROUP BY dc.id "
       "ORDER BY dc.sort_order";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty courses: "
               << sqlite3_errmsg(db) << "\n";
     return {};
   }
-  sqlite3_bind_int(stmt, 1, tableId);
-  bindText(stmt, 2, groupName);
+  sqlite3_bind_int(stmt.get(), 1, tableId);
+  bindText(stmt.get(), 2, groupName);
 
   std::vector<DifficultyCourseInfo> courses;
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     DifficultyCourseInfo course;
-    course.id = columnInt(stmt, 0);
-    course.tableId = columnInt(stmt, 1);
-    course.tableName = columnString(stmt, 2);
-    course.groupName = columnString(stmt, 3);
-    course.level = columnString(stmt, 4);
-    course.name = columnString(stmt, 5);
-    course.matchedChartCount = columnInt(stmt, 6);
+    course.id = columnInt(stmt.get(), 0);
+    course.tableId = columnInt(stmt.get(), 1);
+    course.tableName = columnString(stmt.get(), 2);
+    course.groupName = columnString(stmt.get(), 3);
+    course.level = columnString(stmt.get(), 4);
+    course.name = columnString(stmt.get(), 5);
+    course.matchedChartCount = columnInt(stmt.get(), 6);
     courses.push_back(std::move(course));
   }
-  sqlite3_finalize(stmt);
   return courses;
 }
 
