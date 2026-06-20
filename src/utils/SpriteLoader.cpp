@@ -8,6 +8,10 @@
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
 
+void SpriteLoader::ImageDataDeleter::operator()(unsigned char *ptr) const {
+  stbi_image_free(ptr);
+}
+
 SpriteLoader::SpriteLoader(const path_t& path) {
   if (path.empty()) {
     return;
@@ -15,11 +19,7 @@ SpriteLoader::SpriteLoader(const path_t& path) {
   this->path = path;
 }
 
-SpriteLoader::~SpriteLoader() {
-  if (data) {
-    free(data);
-  }
-}
+SpriteLoader::~SpriteLoader() = default;
 
 bool SpriteLoader::load() {
   if (data) {
@@ -28,8 +28,8 @@ bool SpriteLoader::load() {
   }
   const std::string utf8Path = path_t_to_utf8(path);
   constexpr int kRequestedChannels = 4;
-  data = stbi_load(utf8Path.c_str(), &width, &height, &channels,
-                   kRequestedChannels);
+  data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
+                       kRequestedChannels));
   if (!data) {
     SDL_Log("Failed to load image: %s", SDL_GetError());
     return false;
@@ -57,18 +57,18 @@ bool SpriteLoader::load() {
 }
 
 void SpriteLoader::unload() {
-  if (data) {
-    free(data);
-    data = nullptr;
-  }
+  data.reset();
 }
 bool SpriteLoader::isLoaded() const { return data != nullptr; }
 int SpriteLoader::getWidth() const { return width; }
 int SpriteLoader::getHeight() const { return height; }
 int SpriteLoader::getChannels() const { return channels; }
-unsigned char *SpriteLoader::getData() const { return data; }
+unsigned char *SpriteLoader::getData() const { return data.get(); }
 unsigned char *SpriteLoader::crop(const int x, const int y, const int w,
                                   const int h) const {
+  if (data == nullptr) {
+    return nullptr;
+  }
   if (x < 0 || y < 0 || w < 0 || h < 0) {
     return nullptr;
   }
@@ -80,7 +80,8 @@ unsigned char *SpriteLoader::crop(const int x, const int y, const int w,
     return nullptr;
   }
   for (int row = 0; row < h; ++row) {
-    const unsigned char* src_ptr = data + ((y + row) * width + x) * channels;
+    const unsigned char* src_ptr =
+        data.get() + ((y + row) * width + x) * channels;
     unsigned char* dst_ptr = newData + row * w * channels;
     SDL_memcpy(dst_ptr, src_ptr, w * channels);
   }

@@ -6,6 +6,8 @@
 
 
 #include "../path.h"
+#include <memory>
+
 class SpriteLoader {
   public:
     explicit SpriteLoader(const path_t& path);
@@ -21,10 +23,15 @@ class SpriteLoader {
     [[nodiscard]] unsigned char *crop(int x, int y, int w, int h) const;
 
 private:
+  struct ImageDataDeleter {
+    void operator()(unsigned char *ptr) const;
+  };
+  using ImageDataPtr = std::unique_ptr<unsigned char, ImageDataDeleter>;
+
   int channels = 0;
   int width = 0;
   int height = 0;
-  unsigned char *data = nullptr;
+  ImageDataPtr data;
   path_t path;
 
 };

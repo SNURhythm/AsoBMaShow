@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -1880,40 +1881,35 @@ void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,
                                  std::string &errorMessage) {
-  IOSReplayVideoWriter *writer = nullptr;
+  auto cancelAndDeleteWriter = [](IOSReplayVideoWriter *writer) {
+    if (writer != nullptr) {
+      writer->cancel();
+      delete writer;
+    }
+  };
+  std::unique_ptr<IOSReplayVideoWriter, decltype(cancelAndDeleteWriter)> writer(
+      nullptr, cancelAndDeleteWriter);
   try {
     @try {
-      writer = new IOSReplayVideoWriter();
+      writer.reset(new IOSReplayVideoWriter());
       if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
                         errorMessage)) {
-        delete writer;
+        delete writer.release();
         return nullptr;
       }
-      return writer;
+      return writer.release();
     } @catch (NSException *exception) {
-      if (writer != nullptr) {
-        writer->cancel();
-        delete writer;
-      }
       errorMessage =
           "Replay video writer setup exception: " +
           NSExceptionMessage(exception, "Objective-C exception");
       return nullptr;
     }
   } catch (const std::exception &exception) {
-    if (writer != nullptr) {
-      writer->cancel();
-      delete writer;
-    }
     errorMessage =
         std::string("Replay video writer setup exception: ") +
         exception.what();
     return nullptr;
   } catch (...) {
-    if (writer != nullptr) {
-      writer->cancel();
-      delete writer;
-    }
     errorMessage = "Replay video writer setup exception";
     return nullptr;
   }
