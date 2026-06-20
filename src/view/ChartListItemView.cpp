@@ -56,6 +56,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setGap(12);
 
   clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
+  clearLamp->setCornerRadius(3.0f);
   this->addView(clearLamp);
 
   // Stage file jacket
@@ -65,7 +66,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setPadding(Edge::All, 3)
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
-      ->setBackgroundGradient(ui_theme::glassTop(), ui_theme::glassBottom())
+      ->setBackgroundColor(ui_theme::panelSubtle())
+      ->setCornerRadius(ui_theme::controlRadius())
       ->setBorderColor(ui_theme::hairline())
       ->setBorderWidth(1);
   jacketImage->setWidth(78)->setHeight(78);
@@ -162,26 +164,22 @@ void ChartListItemView::setClearRank(int clearRank) {
 }
 
 void ChartListItemView::onSelected() {
-  setBackgroundGradient(ui_theme::glassStrongTop(),
-                        ui_theme::glassStrongBottom());
+  setBackgroundColor(ui_theme::panelStrong());
+  setCornerRadius(ui_theme::controlRadius());
   setBorderColor(ui_theme::cyan());
   setBorderWidth(1);
-  artworkFrame->setBackgroundGradient(ui_theme::glassStrongTop(),
-                                      ui_theme::glassStrongBottom());
+  artworkFrame->setBackgroundColor(ui_theme::controlHover());
   artworkFrame->setBorderColor(ui_theme::cyan());
   applyTextColors(true);
 }
 
 void ChartListItemView::onUnselected() {
-  setBackgroundGradient(Color(ui_theme::fieldInk().r, ui_theme::fieldInk().g,
-                              ui_theme::fieldInk().b, 96),
-                        Color(ui_theme::fieldTeal().r, ui_theme::fieldTeal().g,
-                              ui_theme::fieldTeal().b, 52));
+  setBackgroundColor(ui_theme::panelSubtle());
+  setCornerRadius(ui_theme::controlRadius());
   setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
                        ui_theme::hairline().b, 96));
   setBorderWidth(1);
-  artworkFrame->setBackgroundGradient(ui_theme::glassTop(),
-                                      ui_theme::glassBottom());
+  artworkFrame->setBackgroundColor(ui_theme::control());
   artworkFrame->setBorderColor(Color(ui_theme::hairline().r,
                                      ui_theme::hairline().g,
                                      ui_theme::hairline().b, 132));

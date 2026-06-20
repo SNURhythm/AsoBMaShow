@@ -143,207 +143,83 @@ void SettingsScene::refreshSettingsText() {
                                         visibleTimeBpmStrategyLabel);
   }
 
-  if (visibleTimeModeButton != nullptr) {
-    if (context.settings.visibleTimeUseMilliseconds) {
-      visibleTimeModeButton->setBackgroundColors(Color(35, 68, 62, 255),
-                                                 Color(45, 88, 80, 255),
-                                                 Color(63, 118, 107, 255));
-      visibleTimeModeButton->setBorderColors(Color(97, 157, 142, 255),
-                                             Color(120, 187, 169, 255),
-                                             Color(145, 214, 195, 255));
-    } else {
-      visibleTimeModeButton->setBackgroundColors(Color(33, 56, 87, 255),
-                                                 Color(43, 72, 110, 255),
-                                                 Color(59, 98, 147, 255));
-      visibleTimeModeButton->setBorderColors(Color(92, 131, 177, 255),
-                                             Color(118, 163, 217, 255),
-                                             Color(139, 189, 244, 255));
+  auto applyTonalStyle = [](Button *button, const Color &accent) {
+    if (button == nullptr) {
+      return;
     }
-  }
+    const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+    const uint8_t normalAlpha = light ? 54 : 82;
+    const uint8_t hoverAlpha = light ? 74 : 108;
+    const uint8_t pressedAlpha = light ? 100 : 136;
+    button->setBackgroundColors(Color(accent.r, accent.g, accent.b, normalAlpha),
+                                Color(accent.r, accent.g, accent.b, hoverAlpha),
+                                Color(accent.r, accent.g, accent.b,
+                                      pressedAlpha));
+    button->setBorderColors(Color(accent.r, accent.g, accent.b, 178),
+                            Color(accent.r, accent.g, accent.b, 216),
+                            accent);
+  };
 
-  if (visibleTimeBpmStrategyButton != nullptr) {
-    if (context.settings.visibleTimeBpmStrategy ==
-        AppSettings::VisibleTimeBpmStrategy::MostPrevalent) {
-      visibleTimeBpmStrategyButton->setBackgroundColors(
-          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
-          Color(63, 118, 107, 255));
-      visibleTimeBpmStrategyButton->setBorderColors(
-          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-          Color(145, 214, 195, 255));
-    } else {
-      visibleTimeBpmStrategyButton->setBackgroundColors(
-          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-          Color(59, 98, 147, 255));
-      visibleTimeBpmStrategyButton->setBorderColors(
-          Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-          Color(139, 189, 244, 255));
+  auto applyNeutralStyle = [](Button *button) {
+    if (button == nullptr) {
+      return;
     }
-  }
+    button->setBackgroundColors(ui_theme::control(), ui_theme::controlHover(),
+                                ui_theme::controlPressed());
+    button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
+                            ui_theme::cyan());
+  };
 
-  if (keysoundModeButton != nullptr) {
-    if (context.settings.inputKeysoundEnabled) {
-      keysoundModeButton->setBackgroundColors(Color(33, 56, 87, 255),
-                                              Color(43, 72, 110, 255),
-                                              Color(59, 98, 147, 255));
-      keysoundModeButton->setBorderColors(Color(92, 131, 177, 255),
-                                          Color(118, 163, 217, 255),
-                                          Color(139, 189, 244, 255));
-    } else {
-      keysoundModeButton->setBackgroundColors(Color(73, 56, 35, 255),
-                                              Color(96, 72, 45, 255),
-                                              Color(127, 95, 59, 255));
-      keysoundModeButton->setBorderColors(Color(165, 120, 74, 255),
-                                          Color(194, 141, 88, 255),
-                                          Color(224, 163, 103, 255));
-    }
-  }
+  applyTonalStyle(visibleTimeModeButton,
+                  context.settings.visibleTimeUseMilliseconds
+                      ? ui_theme::lime()
+                      : ui_theme::cyan());
+  applyTonalStyle(visibleTimeBpmStrategyButton,
+                  context.settings.visibleTimeBpmStrategy ==
+                          AppSettings::VisibleTimeBpmStrategy::MostPrevalent
+                      ? ui_theme::lime()
+                      : ui_theme::cyan());
+  applyTonalStyle(keysoundModeButton,
+                  context.settings.inputKeysoundEnabled ? ui_theme::cyan()
+                                                        : ui_theme::amber());
+  applyTonalStyle(notePriorityModeButton,
+                  context.settings.notePriorityMode ==
+                          AppSettings::NotePriorityMode::Lowest
+                      ? ui_theme::cyan()
+                      : ui_theme::lime());
+  applyTonalStyle(showInvisibleNotesModeButton,
+                  context.settings.showInvisibleNotes ? ui_theme::lime()
+                                                      : ui_theme::cyan());
+  applyTonalStyle(archiveChartPreviewModeButton,
+                  context.settings.archiveChartPreviewEnabled
+                      ? ui_theme::lime()
+                      : ui_theme::coral());
+  applyTonalStyle(judgementIndicatorModeButton,
+                  context.settings.judgementIndicatorEnabled
+                      ? ui_theme::lime()
+                      : ui_theme::coral());
+  applyTonalStyle(judgementIndicatorRenderModeButton,
+                  context.settings.judgementIndicatorRenderMode ==
+                          AppSettings::JudgementIndicatorRenderMode::Hud2D
+                      ? ui_theme::lime()
+                      : ui_theme::cyan());
+  applyTonalStyle(bgaModeButton,
+                  context.settings.bgaEnabled ? ui_theme::lime()
+                                              : ui_theme::coral());
+  applyTonalStyle(uiThemeModeButton,
+                  context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark
+                      ? ui_theme::cyan()
+                      : ui_theme::amber());
 
-  if (notePriorityModeButton != nullptr) {
-    if (context.settings.notePriorityMode ==
-        AppSettings::NotePriorityMode::Lowest) {
-      notePriorityModeButton->setBackgroundColors(Color(33, 56, 87, 255),
-                                                  Color(43, 72, 110, 255),
-                                                  Color(59, 98, 147, 255));
-      notePriorityModeButton->setBorderColors(Color(92, 131, 177, 255),
-                                              Color(118, 163, 217, 255),
-                                              Color(139, 189, 244, 255));
-    } else {
-      notePriorityModeButton->setBackgroundColors(Color(35, 68, 62, 255),
-                                                  Color(45, 88, 80, 255),
-                                                  Color(63, 118, 107, 255));
-      notePriorityModeButton->setBorderColors(Color(97, 157, 142, 255),
-                                              Color(120, 187, 169, 255),
-                                              Color(145, 214, 195, 255));
-    }
-  }
-
-  if (showInvisibleNotesModeButton != nullptr) {
-    if (context.settings.showInvisibleNotes) {
-      showInvisibleNotesModeButton->setBackgroundColors(
-          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
-          Color(63, 118, 107, 255));
-      showInvisibleNotesModeButton->setBorderColors(Color(97, 157, 142, 255),
-                                                    Color(120, 187, 169, 255),
-                                                    Color(145, 214, 195, 255));
-    } else {
-      showInvisibleNotesModeButton->setBackgroundColors(
-          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-          Color(59, 98, 147, 255));
-      showInvisibleNotesModeButton->setBorderColors(Color(92, 131, 177, 255),
-                                                    Color(118, 163, 217, 255),
-                                                    Color(139, 189, 244, 255));
-    }
-  }
-
-  if (archiveChartPreviewModeButton != nullptr) {
-    if (context.settings.archiveChartPreviewEnabled) {
-      archiveChartPreviewModeButton->setBackgroundColors(
-          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
-          Color(63, 118, 107, 255));
-      archiveChartPreviewModeButton->setBorderColors(
-          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-          Color(145, 214, 195, 255));
-    } else {
-      archiveChartPreviewModeButton->setBackgroundColors(
-          Color(56, 42, 40, 255), Color(75, 55, 52, 255),
-          Color(104, 75, 71, 255));
-      archiveChartPreviewModeButton->setBorderColors(
-          Color(141, 103, 98, 255), Color(176, 127, 121, 255),
-          Color(209, 150, 143, 255));
-    }
-  }
-
-  if (judgementIndicatorModeButton != nullptr) {
-    if (context.settings.judgementIndicatorEnabled) {
-      judgementIndicatorModeButton->setBackgroundColors(
-          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
-          Color(63, 118, 107, 255));
-      judgementIndicatorModeButton->setBorderColors(Color(97, 157, 142, 255),
-                                                    Color(120, 187, 169, 255),
-                                                    Color(145, 214, 195, 255));
-    } else {
-      judgementIndicatorModeButton->setBackgroundColors(
-          Color(56, 42, 40, 255), Color(75, 55, 52, 255),
-          Color(104, 75, 71, 255));
-      judgementIndicatorModeButton->setBorderColors(Color(141, 103, 98, 255),
-                                                    Color(176, 127, 121, 255),
-                                                    Color(209, 150, 143, 255));
-    }
-  }
-
-  if (judgementIndicatorRenderModeButton != nullptr) {
-    if (context.settings.judgementIndicatorRenderMode ==
-        AppSettings::JudgementIndicatorRenderMode::Hud2D) {
-      judgementIndicatorRenderModeButton->setBackgroundColors(
-          Color(35, 68, 62, 255), Color(45, 88, 80, 255),
-          Color(63, 118, 107, 255));
-      judgementIndicatorRenderModeButton->setBorderColors(
-          Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-          Color(145, 214, 195, 255));
-    } else {
-      judgementIndicatorRenderModeButton->setBackgroundColors(
-          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-          Color(59, 98, 147, 255));
-      judgementIndicatorRenderModeButton->setBorderColors(
-          Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-          Color(139, 189, 244, 255));
-    }
-  }
-
-  if (bgaModeButton != nullptr) {
-    if (context.settings.bgaEnabled) {
-      bgaModeButton->setBackgroundColors(Color(35, 68, 62, 255),
-                                         Color(45, 88, 80, 255),
-                                         Color(63, 118, 107, 255));
-      bgaModeButton->setBorderColors(Color(97, 157, 142, 255),
-                                     Color(120, 187, 169, 255),
-                                     Color(145, 214, 195, 255));
-    } else {
-      bgaModeButton->setBackgroundColors(Color(56, 42, 40, 255),
-                                         Color(75, 55, 52, 255),
-                                         Color(104, 75, 71, 255));
-      bgaModeButton->setBorderColors(Color(141, 103, 98, 255),
-                                     Color(176, 127, 121, 255),
-                                     Color(209, 150, 143, 255));
-    }
-  }
-
-  if (uiThemeModeButton != nullptr) {
-    if (context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark) {
-      uiThemeModeButton->setBackgroundColors(Color(23, 151, 143, 255),
-                                             Color(34, 196, 187, 255),
-                                             Color(63, 228, 217, 255));
-      uiThemeModeButton->setBorderColors(ui_theme::cyan(),
-                                         Color(142, 255, 248, 255),
-                                         Color(255, 255, 255, 255));
-    } else {
-      uiThemeModeButton->setBackgroundColors(Color(238, 246, 244, 255),
-                                             Color(225, 255, 248, 255),
-                                             Color(201, 247, 240, 255));
-      uiThemeModeButton->setBorderColors(Color(0, 174, 174, 190),
-                                         Color(0, 190, 190, 220),
-                                         Color(238, 76, 66, 255));
-    }
-  }
-
-  auto applyTabStyle = [this](Button *button, SettingsTab tab) {
+  auto applyTabStyle = [this, &applyTonalStyle,
+                        &applyNeutralStyle](Button *button, SettingsTab tab) {
     if (button == nullptr) {
       return;
     }
     if (activeTab == tab) {
-      button->setBackgroundColors(Color(35, 68, 62, 255),
-                                  Color(45, 88, 80, 255),
-                                  Color(63, 118, 107, 255));
-      button->setBorderColors(Color(97, 157, 142, 255),
-                              Color(120, 187, 169, 255),
-                              Color(145, 214, 195, 255));
+      applyTonalStyle(button, ui_theme::cyan());
     } else {
-      button->setBackgroundColors(Color(28, 40, 58, 255),
-                                  Color(36, 52, 75, 255),
-                                  Color(61, 87, 118, 255));
-      button->setBorderColors(Color(84, 107, 139, 255),
-                              Color(108, 136, 174, 255),
-                              Color(139, 172, 217, 255));
+      applyNeutralStyle(button);
     }
   };
   applyTabStyle(timingTabButton, SettingsTab::Timing);

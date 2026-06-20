@@ -192,11 +192,12 @@ static Button *makeButton(int width, int height, TextView *label,
                           const Color &hoverBackground,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
-                          const Color &pressedBorder, int borderWidth = 2) {
+                          const Color &pressedBorder, int borderWidth = 1) {
   auto *button = new Button(0, 0, width, height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
   button->setContentView(label);
+  button->setCornerRadius(ui_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
   button->setBorderColors(normalBorder, hoverBorder, pressedBorder);
@@ -208,21 +209,21 @@ static Button *makeStepButton(const LayoutMetrics &metrics, int width,
                               const std::string &label) {
   return makeButton(width, metrics.actionButtonHeight,
                     makeText(label, metrics.bodyTextSize + 4,
-                             Color(239, 244, 251), TextView::CENTER,
+                             ui_theme::textPrimary(), TextView::CENTER,
                              TextView::MIDDLE),
-                    Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                    Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                    Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+                    ui_theme::control(), ui_theme::controlHover(),
+                    ui_theme::controlPressed(), ui_theme::hairline(),
+                    ui_theme::cyan(), ui_theme::cyan());
 }
 
 static Button *makeResetButton(const LayoutMetrics &metrics) {
   return makeButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
                     makeText("Reset", metrics.bodyTextSize + 4,
-                             Color(248, 241, 236), TextView::CENTER,
+                             ui_theme::textPrimary(), TextView::CENTER,
                              TextView::MIDDLE),
-                    Color(96, 57, 44, 255), Color(117, 72, 55, 255),
-                    Color(153, 96, 74, 255), Color(165, 105, 79, 255),
-                    Color(193, 124, 93, 255), Color(219, 145, 108, 255));
+                    Color(100, 58, 48, 238), Color(122, 70, 58, 248),
+                    Color(148, 84, 67, 255), ui_theme::coral(),
+                    ui_theme::coral(), ui_theme::coral());
 }
 
 static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
@@ -241,9 +242,10 @@ static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
   input->setText("");
   input->setSize(minWidth, metrics.actionButtonHeight);
-  input->setBackgroundColor(Color(10, 17, 28, 255));
-  input->setBorderColor(Color(78, 105, 140, 255));
-  input->setBorderWidth(2);
+  input->setBackgroundColor(ui_theme::control());
+  input->setCornerRadius(ui_theme::controlRadius());
+  input->setBorderColor(ui_theme::hairline());
+  input->setBorderWidth(1);
   input->setVAlign(TextView::MIDDLE);
   input->setColor({244, 248, 255, 255});
   return input;
@@ -253,9 +255,10 @@ static View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
   value->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  value->setBackgroundColor(Color(10, 17, 28, 255));
-  value->setBorderColor(Color(78, 105, 140, 255));
-  value->setBorderWidth(2);
+  value->setBackgroundColor(ui_theme::control());
+  value->setCornerRadius(ui_theme::controlRadius());
+  value->setBorderColor(ui_theme::hairline());
+  value->setBorderWidth(1);
   value->addView(input);
   return value;
 }
@@ -267,9 +270,11 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setBackgroundGradient(ui_theme::glassTop(), ui_theme::glassBottom());
+  card->setBackgroundColor(ui_theme::panel());
+  card->setCornerRadius(ui_theme::panelRadius());
+  card->setShadow(ui_theme::shadow(), 0, 10, 16);
   card->setBorderColor(ui_theme::hairline());
-  card->setBorderWidth(2);
+  card->setBorderWidth(1);
   card->setMinHeight(static_cast<float>(minHeight));
   if (width > 0) {
     card->setWidth(static_cast<float>(width));

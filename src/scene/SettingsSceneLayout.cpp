@@ -473,21 +473,21 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
   auto *restartButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Restart", metrics.bodyTextSize + 4, Color(239, 244, 251),
+      makeText("Restart", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-      Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-      Color(139, 172, 217, 255));
+      ui_theme::control(), ui_theme::controlHover(),
+      ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
+      ui_theme::cyan());
   restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
   previewPanel->addView(restartButton);
 
   auto *doneButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Done", metrics.bodyTextSize + 4, Color(237, 243, 252),
+      makeText("Done", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(22, 33, 49, 255), Color(31, 46, 67, 255), Color(53, 78, 110, 255),
-      Color(96, 121, 156, 255), Color(120, 151, 190, 255),
-      Color(148, 186, 231, 255));
+      ui_theme::control(), ui_theme::controlHover(),
+      ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
+      ui_theme::cyan());
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
   previewPanel->addView(doneButton);
 
@@ -513,31 +513,22 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
   minusTen->setOnClickListener([updateOffset]() { updateOffset(-10); });
   offsetControls->addView(minusTen);
 
   auto *minusOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
   minusOne->setOnClickListener([updateOffset]() { updateOffset(-1); });
   offsetControls->addView(minusOne);
 
   auto *offsetValue = new View();
   offsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   offsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  offsetValue->setBackgroundColor(Color(10, 17, 28, 255));
-  offsetValue->setBorderColor(Color(78, 105, 140, 255));
-  offsetValue->setBorderWidth(2);
+  offsetValue->setBackgroundColor(ui_theme::control());
+  offsetValue->setCornerRadius(ui_theme::controlRadius());
+  offsetValue->setBorderColor(ui_theme::hairline());
+  offsetValue->setBorderWidth(1);
   offsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   offsetInput->setText("");
   offsetInput->setSize(metrics.offsetValueWidth, metrics.actionButtonHeight);
@@ -551,33 +542,16 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetValue->addView(offsetInput);
   offsetControls->addView(offsetValue);
 
-  auto *plusOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  auto *plusOne = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
   plusOne->setOnClickListener([updateOffset]() { updateOffset(1); });
   offsetControls->addView(plusOne);
 
   auto *plusTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
   plusTen->setOnClickListener([updateOffset]() { updateOffset(10); });
   offsetControls->addView(plusTen);
 
-  auto *resetOffset = makeButton(
-      metrics.resetButtonWidth, metrics.actionButtonHeight,
-      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(96, 57, 44, 255), Color(117, 72, 55, 255), Color(153, 96, 74, 255),
-      Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-      Color(219, 145, 108, 255));
+  auto *resetOffset = makeResetButton(metrics);
   resetOffset->setOnClickListener([this]() {
     context.settings.audioOffsetMs = 0;
     persistSettings();
@@ -607,23 +581,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusVisualTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
   minusVisualTen->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(-10); });
   visualOffsetControls->addView(minusVisualTen);
 
   auto *minusVisualOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
   minusVisualOne->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(-1); });
   visualOffsetControls->addView(minusVisualOne);
@@ -631,9 +595,10 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *visualOffsetValue = new View();
   visualOffsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   visualOffsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  visualOffsetValue->setBackgroundColor(Color(10, 17, 28, 255));
-  visualOffsetValue->setBorderColor(Color(78, 105, 140, 255));
-  visualOffsetValue->setBorderWidth(2);
+  visualOffsetValue->setBackgroundColor(ui_theme::control());
+  visualOffsetValue->setCornerRadius(ui_theme::controlRadius());
+  visualOffsetValue->setBorderColor(ui_theme::hairline());
+  visualOffsetValue->setBorderWidth(1);
   visualOffsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   visualOffsetInput->setText("");
   visualOffsetInput->setSize(metrics.offsetValueWidth,
@@ -649,34 +614,18 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetControls->addView(visualOffsetValue);
 
   auto *plusVisualOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
   plusVisualOne->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(1); });
   visualOffsetControls->addView(plusVisualOne);
 
   auto *plusVisualTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
   plusVisualTen->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(10); });
   visualOffsetControls->addView(plusVisualTen);
 
-  auto *resetVisualOffset = makeButton(
-      metrics.resetButtonWidth, metrics.actionButtonHeight,
-      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(96, 57, 44, 255), Color(117, 72, 55, 255), Color(153, 96, 74, 255),
-      Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-      Color(219, 145, 108, 255));
+  auto *resetVisualOffset = makeResetButton(metrics);
   resetVisualOffset->setOnClickListener([this]() {
     context.settings.visualOffsetMs = 0;
     persistSettings();
@@ -1884,24 +1833,7 @@ void SettingsScene::initView() {
     return;
   }
 
-  rootLayout->setBackgroundGradient(ui_theme::backdropTop(),
-                                    ui_theme::backdropBottom());
-
-  if (!metrics.compact) {
-    auto *accentA = new View(110, 86, 480, 180);
-    accentA->setPositionType(YGPositionTypeAbsolute);
-    accentA->setBackgroundColor(Color(ui_theme::cyan().r, ui_theme::cyan().g,
-                                      ui_theme::cyan().b, 70));
-    rootLayout->addView(accentA);
-
-    auto *accentB = new View(rendering::window_width - 520,
-                             rendering::window_height - 250, 420, 160);
-    accentB->setPositionType(YGPositionTypeAbsolute);
-    accentB->setBackgroundColor(Color(ui_theme::coral().r,
-                                      ui_theme::coral().g,
-                                      ui_theme::coral().b, 64));
-    rootLayout->addView(accentB);
-  }
+  rootLayout->setBackgroundColor(ui_theme::backdrop());
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -1922,13 +1854,13 @@ void SettingsScene::initView() {
   header->addView(headerText);
 
   auto *backLabel =
-      makeText("Back", metrics.bodyTextSize + 6, Color(237, 243, 252),
+      makeText("Back", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   auto *backButton =
       makeButton(metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
-                 Color(22, 33, 49, 255), Color(31, 46, 67, 255),
-                 Color(53, 78, 110, 255), Color(96, 121, 156, 255),
-                 Color(120, 151, 190, 255), Color(148, 186, 231, 255));
+                 ui_theme::control(), ui_theme::controlHover(),
+                 ui_theme::controlPressed(), ui_theme::hairline(),
+                 ui_theme::cyan(), ui_theme::cyan());
   backButton->setOnClickListener(
       [this]() { context.sceneManager->changeScene("MainMenu"); });
   header->addView(backButton);
@@ -1960,11 +1892,11 @@ void SettingsScene::initView() {
   auto makeTabButton = [&](SettingsTab tab, const std::string &label) {
     auto *button = makeButton(
         tabColumnWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.bodyTextSize + 4, Color(239, 244, 251),
+        makeText(label, metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
+        ui_theme::control(), ui_theme::controlHover(),
+        ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
+        ui_theme::cyan());
     button->setOnClickListener([this, tab]() {
       if (activeTab == tab) {
         return;

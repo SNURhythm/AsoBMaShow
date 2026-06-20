@@ -664,36 +664,41 @@ void styleActionButton(Button *button, TextView *text, bool enabled,
     return;
   }
 
+  button->setCornerRadius(ui_theme::controlRadius());
   if (enabled) {
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
-                            Color(235, 246, 255, 255));
-    text->setColor({242, 247, 255, 255});
+    button->setBorderColors(border, Color(border.r, border.g, border.b, 230),
+                            ui_theme::hairline());
+    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   } else {
-    button->setBackgroundColors(Color(25, 31, 39, 154), Color(25, 31, 39, 154),
-                                Color(25, 31, 39, 154));
-    button->setBorderColors(Color(76, 88, 102, 120), Color(76, 88, 102, 120),
-                            Color(76, 88, 102, 120));
-    text->setColor({129, 143, 160, 255});
+    button->setBackgroundColors(ui_theme::panelSubtle(),
+                                ui_theme::panelSubtle(),
+                                ui_theme::panelSubtle());
+    button->setBorderColors(ui_theme::hairline(), ui_theme::hairline(),
+                            ui_theme::hairline());
+    text->setColor(ui_theme::sdl(ui_theme::textMuted()));
   }
 }
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleActionButton(button, text, true, Color(38, 97, 87, 232),
-                      Color(50, 121, 109, 242), Color(65, 146, 130, 250),
-                      Color(112, 212, 191, 255));
+    styleActionButton(button, text, true, ui_theme::fieldTeal(),
+                      Color(ui_theme::fieldTeal().r, ui_theme::fieldTeal().g,
+                            ui_theme::fieldTeal().b, 226),
+                      Color(ui_theme::cyan().r, ui_theme::cyan().g,
+                            ui_theme::cyan().b, 214),
+                      ui_theme::cyan());
   } else {
-    styleActionButton(button, text, true, Color(22, 34, 51, 220),
-                      Color(32, 48, 70, 232), Color(44, 65, 94, 242),
-                      Color(83, 109, 140, 220));
+    styleActionButton(button, text, true, ui_theme::control(),
+                      ui_theme::controlHover(), ui_theme::controlPressed(),
+                      ui_theme::hairline());
   }
 }
 
 TextView *makeModalLabel(const std::string &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   label->setText(text);
-  label->setColor({173, 193, 216, 255});
+  label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   label->setHeight(28);
   return label;
 }
@@ -715,7 +720,8 @@ Button *makeModalButton(const std::string &label, int fontSize,
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
-  button->setStyledBorderWidth(2);
+  button->setStyledBorderWidth(1);
+  button->setCornerRadius(ui_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -1487,9 +1493,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
 
-  const Color kPanelTop = ui_theme::glassTop();
-  const Color kPanelBottom = ui_theme::glassBottom();
-  const Color kSurfaceFill = ui_theme::surfaceTint();
+  const Color kPanelFill = ui_theme::panel();
+  const Color kSurfaceFill = ui_theme::control();
   const Color kPrimaryButtonNormal(23, 151, 143, 218);
   const Color kPrimaryButtonHover(34, 196, 187, 232);
   const Color kPrimaryButtonPressed(63, 228, 217, 242);
@@ -1712,8 +1717,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
-  rootLayout->setBackgroundGradient(ui_theme::backdropTop(),
-                                    ui_theme::backdropBottom());
+  rootLayout->setBackgroundColor(ui_theme::backdrop());
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1721,9 +1725,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setWidth(280);
   nav->setGap(12);
   nav->setPadding(Edge::All, 14);
-  nav->setBackgroundGradient(kPanelTop, kPanelBottom);
+  nav->setBackgroundColor(kPanelFill);
+  nav->setCornerRadius(ui_theme::panelRadius());
+  nav->setShadow(ui_theme::shadow(), 0, 12, 20);
   nav->setBorderColor(ui_theme::hairline());
-  nav->setBorderWidth(2);
+  nav->setBorderWidth(1);
 
   auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   navTitle->setText("Library");
@@ -1752,7 +1758,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
   folderRecyclerView->setBorderColor(ui_theme::hairline());
-  folderRecyclerView->setBorderWidth(2);
+  folderRecyclerView->setBorderWidth(1);
+  folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
   rootLayout->addView(nav);
 
@@ -1762,9 +1769,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setBackgroundGradient(kPanelTop, kPanelBottom);
+  left->setBackgroundColor(kPanelFill);
+  left->setCornerRadius(ui_theme::panelRadius());
+  left->setShadow(ui_theme::shadow(), 0, 12, 20);
   left->setBorderColor(ui_theme::hairline());
-  left->setBorderWidth(2);
+  left->setBorderWidth(1);
 
   auto *libraryHeader = new View();
   libraryHeader->setFlexDirection(FlexDirection::Row);
@@ -1814,8 +1823,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->setHeight(56);
   searchBox->setFlex(1);
   searchBox->setBackgroundColor(kSurfaceFill);
-  searchBox->setBorderColor(ui_theme::cyan());
-  searchBox->setBorderWidth(2);
+  searchBox->setCornerRadius(ui_theme::controlRadius());
+  searchBox->setBorderColor(ui_theme::hairline());
+  searchBox->setBorderWidth(1);
   searchBox->setVAlign(TextView::MIDDLE);
   searchBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   auto onSearchChanged = [this](const std::string &text) {
@@ -1831,8 +1841,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   difficultyFilterBox->setHeight(56);
   difficultyFilterBox->setWidth(180);
   difficultyFilterBox->setBackgroundColor(kSurfaceFill);
-  difficultyFilterBox->setBorderColor(ui_theme::cyan());
-  difficultyFilterBox->setBorderWidth(2);
+  difficultyFilterBox->setCornerRadius(ui_theme::controlRadius());
+  difficultyFilterBox->setBorderColor(ui_theme::hairline());
+  difficultyFilterBox->setBorderWidth(1);
   difficultyFilterBox->setVAlign(TextView::MIDDLE);
   difficultyFilterBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   auto onDifficultyChanged = [this](const std::string &text) {
@@ -1852,7 +1863,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
   recyclerView->setBorderColor(ui_theme::hairline());
-  recyclerView->setBorderWidth(2);
+  recyclerView->setBorderWidth(1);
+  recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
   rootLayout->addView(left);
 
@@ -1862,9 +1874,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setPadding(Edge::All, 20);
   right->setGap(12);
   right->setWidth(300);
-  right->setBackgroundGradient(kPanelTop, kPanelBottom);
+  right->setBackgroundColor(kPanelFill);
+  right->setCornerRadius(ui_theme::panelRadius());
+  right->setShadow(ui_theme::shadow(), 0, 12, 20);
   right->setBorderColor(ui_theme::hairline());
-  right->setBorderWidth(2);
+  right->setBorderWidth(1);
 
   auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
   rightTitle->setText("Ready");

@@ -221,8 +221,7 @@ void GamePlayScene::init() {
   pauseLayout->setFlexDirection(FlexDirection::Column);
   pauseLayout->setAlignItems(YGAlignCenter);
   pauseLayout->setJustifyContent(YGJustifyCenter);
-  pauseLayout->setBackgroundGradient(Color(4, 16, 25, 202),
-                                     Color(45, 18, 39, 214));
+  pauseLayout->setBackgroundColor(Color(2, 5, 9, 198));
   {
     auto pauseScreen = new View();
     pauseScreen->setWidth(520);
@@ -232,10 +231,11 @@ void GamePlayScene::init() {
     pauseScreen->setJustifyContent(YGJustifyCenter);
     pauseScreen->setGap(14);
     pauseScreen->setPadding(Edge::All, 28);
-    pauseScreen->setBackgroundGradient(ui_theme::glassStrongTop(),
-                                       ui_theme::glassStrongBottom());
+    pauseScreen->setBackgroundColor(ui_theme::panelStrong());
+    pauseScreen->setCornerRadius(ui_theme::panelRadius());
+    pauseScreen->setShadow(ui_theme::shadow(), 0, 18, 28);
     pauseScreen->setBorderColor(ui_theme::hairline());
-    pauseScreen->setBorderWidth(2);
+    pauseScreen->setBorderWidth(1);
     {
       auto makePauseButton = [](const std::string &label, const Color &normal,
                                 const Color &hover, const Color &pressed,
@@ -249,10 +249,11 @@ void GamePlayScene::init() {
         button->setContentView(text);
         button->setOnClickListener(onClick);
         button->setSize(360, 64);
+        button->setCornerRadius(ui_theme::controlRadius());
         button->setBackgroundColors(normal, hover, pressed);
         button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
                                 Color(255, 255, 255, 255));
-        button->setStyledBorderWidth(2);
+        button->setStyledBorderWidth(1);
         return button;
       };
 
@@ -264,8 +265,8 @@ void GamePlayScene::init() {
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
       pauseScreen->addView(makePauseButton(
-          "Resume", Color(23, 151, 143, 218), Color(34, 196, 187, 232),
-          Color(63, 228, 217, 242), ui_theme::cyan(), [this]() {
+          "Resume", Color(22, 132, 126, 238), Color(28, 151, 144, 248),
+          Color(40, 173, 164, 255), ui_theme::cyan(), [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
         if (pauseButton != nullptr) {
@@ -273,8 +274,8 @@ void GamePlayScene::init() {
         }
       }));
       pauseScreen->addView(makePauseButton(
-          isReplayPlayback() ? "Replay" : "Retry", Color(69, 128, 41, 218),
-          Color(92, 164, 55, 232), Color(128, 203, 72, 242),
+          isReplayPlayback() ? "Replay" : "Retry", Color(57, 105, 42, 238),
+          Color(72, 127, 51, 248), Color(91, 153, 61, 255),
           ui_theme::lime(), [this]() {
             if (isReplayPlayback() || options.practiceMode) {
               restartCurrentPattern();
@@ -284,13 +285,13 @@ void GamePlayScene::init() {
           }));
       if (!isReplayPlayback() && !options.practiceMode) {
         pauseScreen->addView(makePauseButton(
-            "Retry Same", Color(67, 96, 132, 218), Color(82, 124, 164, 232),
-            Color(101, 153, 196, 242), Color(137, 211, 245, 255),
+            "Retry Same", ui_theme::control(), ui_theme::controlHover(),
+            ui_theme::controlPressed(), ui_theme::hairline(),
             [this]() { restartCurrentPattern(); }));
       }
-      pauseScreen->addView(makePauseButton("Exit", Color(149, 51, 47, 218),
-                                           Color(195, 67, 58, 232),
-                                           Color(226, 88, 75, 242),
+      pauseScreen->addView(makePauseButton("Exit", Color(119, 45, 46, 238),
+                                           Color(145, 53, 51, 248),
+                                           Color(174, 64, 57, 255),
                                            ui_theme::coral(), [this]() {
         finishReplayRecording();
         publishPracticeGhost();

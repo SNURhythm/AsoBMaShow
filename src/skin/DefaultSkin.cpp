@@ -21,8 +21,7 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   rootLayout->setJustifyContent(YGJustifyCenter);
   rootLayout->setPadding(Edge::All, 48);
   rootLayout->setGap(18);
-  rootLayout->setBackgroundGradient(ui_theme::backdropTop(),
-                                    ui_theme::backdropBottom());
+  rootLayout->setBackgroundColor(ui_theme::backdrop());
 
   auto makeLabel = [](const std::string &text, int size, Color color) {
     auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", size);
@@ -32,11 +31,13 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
     return label;
   };
 
-  auto makePanel = [](Color top, Color bottom, Color border) {
+  auto makePanel = [](Color fill, Color border) {
     auto *panel = new View();
-    panel->setBackgroundGradient(top, bottom);
+    panel->setBackgroundColor(fill);
+    panel->setCornerRadius(ui_theme::panelRadius());
+    panel->setShadow(ui_theme::shadow(), 0, 10, 16);
     panel->setBorderColor(border);
-    panel->setBorderWidth(2);
+    panel->setBorderWidth(1);
     return panel;
   };
 
@@ -94,8 +95,9 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   titleStack->addView(artistText);
   header->addView(titleStack);
 
-  auto *clearBadge = makePanel(Color(255, 204, 81, 42),
-                               Color(255, 104, 88, 52), ui_theme::amber());
+  auto *clearBadge = makePanel(
+      Color(ui_theme::amber().r, ui_theme::amber().g, ui_theme::amber().b, 42),
+      ui_theme::amber());
   clearBadge->setWidth(260);
   clearBadge->setHeight(70);
   clearBadge->setPadding(Edge::All, 12);
@@ -114,9 +116,7 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   scoreContainer->setHeight(230);
   scoreContainer->setName("scoreContainer");
 
-  auto *gradePanel =
-      makePanel(Color(255, 255, 244, 68), Color(255, 126, 87, 66),
-                ui_theme::coral());
+  auto *gradePanel = makePanel(ui_theme::panelStrong(), ui_theme::coral());
   gradePanel->setWidth(360);
   gradePanel->setFlexDirection(FlexDirection::Column);
   gradePanel->setAlignItems(YGAlignCenter);
@@ -134,9 +134,7 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   gradePanel->addView(gradeText);
   scoreContainer->addView(gradePanel);
 
-  auto *scoreDetailView =
-      makePanel(ui_theme::glassStrongTop(), ui_theme::glassStrongBottom(),
-                ui_theme::hairline());
+  auto *scoreDetailView = makePanel(ui_theme::panel(), ui_theme::hairline());
   scoreDetailView->setFlex(1);
   scoreDetailView->setFlexDirection(FlexDirection::Column);
   scoreDetailView->setJustifyContent(YGJustifyCenter);
@@ -168,8 +166,7 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
 
   auto addMetric = [&](const std::string &label, int count, Color accent,
                        const std::string &id) {
-    auto *tile = makePanel(ui_theme::glassTop(), Color(accent.r, accent.g,
-                                                       accent.b, 42),
+    auto *tile = makePanel(ui_theme::panelSubtle(),
                            Color(accent.r, accent.g, accent.b, 190));
     tile->setWidth(190);
     tile->setHeight(82);
@@ -200,10 +197,11 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   auto graphPlaceHolder = new View();
   graphPlaceHolder->setHeight(210);
   graphPlaceHolder->setWidthPercent(100);
-  graphPlaceHolder->setBackgroundGradient(Color(8, 26, 38, 148),
-                                          Color(30, 95, 88, 72));
+  graphPlaceHolder->setBackgroundColor(ui_theme::panelSubtle());
+  graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
+  graphPlaceHolder->setShadow(ui_theme::shadow(), 0, 10, 16);
   graphPlaceHolder->setBorderColor(ui_theme::hairline());
-  graphPlaceHolder->setBorderWidth(2);
+  graphPlaceHolder->setBorderWidth(1);
   graphPlaceHolder->setName("graph");
   rootLayout->addView(graphPlaceHolder);
 
@@ -216,12 +214,13 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   btn->setContentView(btnText);
   btn->setName("backButton");
   btn->setSize(300, 64);
-  btn->setBackgroundColors(Color(23, 151, 143, 218),
-                           Color(34, 196, 187, 232),
-                           Color(63, 228, 217, 242));
-  btn->setBorderColors(ui_theme::cyan(), Color(142, 255, 248, 255),
+  btn->setCornerRadius(ui_theme::controlRadius());
+  btn->setBackgroundColors(Color(22, 132, 126, 238),
+                           Color(28, 151, 144, 248),
+                           Color(40, 173, 164, 255));
+  btn->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
                        Color(255, 255, 255, 255));
-  btn->setStyledBorderWidth(2);
+  btn->setStyledBorderWidth(1);
   btn->setOnClickListener([&context]() {
     context.sceneManager->changeScene("MainMenu");
   });

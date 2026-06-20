@@ -49,6 +49,7 @@ public:
         ->setGap(12);
 
     clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
+    clearLamp->setCornerRadius(3.0f);
     addView(clearLamp);
 
     textColumn->setFlexDirection(FlexDirection::Column)
@@ -96,8 +97,8 @@ public:
   }
 
   void onSelected() override {
-    setBackgroundGradient(ui_theme::glassStrongTop(),
-                          ui_theme::glassStrongBottom());
+    setBackgroundColor(ui_theme::panelStrong());
+    setCornerRadius(ui_theme::controlRadius());
     setBorderColor(ui_theme::cyan());
     setBorderWidth(1);
     titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -106,11 +107,8 @@ public:
   }
 
   void onUnselected() override {
-    setBackgroundGradient(Color(ui_theme::fieldInk().r, ui_theme::fieldInk().g,
-                                ui_theme::fieldInk().b, 96),
-                          Color(ui_theme::fieldTeal().r,
-                                ui_theme::fieldTeal().g,
-                                ui_theme::fieldTeal().b, 42));
+    setBackgroundColor(ui_theme::panelSubtle());
+    setCornerRadius(ui_theme::controlRadius());
     setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
                          ui_theme::hairline().b, 96));
     setBorderWidth(1);

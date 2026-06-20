@@ -20,6 +20,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
 
   clearLamp = new View();
   clearLamp->setWidth(5)->setHeight(26)->setFlexShrink(0);
+  clearLamp->setCornerRadius(3.0f);
   addView(clearLamp);
 
   labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
@@ -56,8 +57,8 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
-  setBackgroundGradient(ui_theme::glassStrongTop(),
-                        ui_theme::glassStrongBottom());
+  setBackgroundColor(ui_theme::panelStrong());
+  setCornerRadius(ui_theme::controlRadius());
   setBorderColor(ui_theme::cyan());
   setBorderWidth(1);
   labelView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -65,10 +66,8 @@ void LibraryFolderItemView::onSelected() {
 }
 
 void LibraryFolderItemView::onUnselected() {
-  setBackgroundGradient(Color(ui_theme::fieldInk().r, ui_theme::fieldInk().g,
-                              ui_theme::fieldInk().b, 72),
-                        Color(ui_theme::fieldTeal().r, ui_theme::fieldTeal().g,
-                              ui_theme::fieldTeal().b, 34));
+  setBackgroundColor(ui_theme::panelSubtle());
+  setCornerRadius(ui_theme::controlRadius());
   setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
                        ui_theme::hairline().b, 78));
   setBorderWidth(1);
