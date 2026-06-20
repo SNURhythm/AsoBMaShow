@@ -16,6 +16,8 @@ public:
   void addRect(float x, float y, float width, float height, uint32_t color);
   void addRectVerticalGradient(float x, float y, float width, float height,
                                uint32_t topColor, uint32_t bottomColor);
+  void addRoundedRect(float x, float y, float width, float height, float radius,
+                      uint32_t color);
   void addRectColors(float x, float y, float width, float height,
                      uint32_t topLeftColor, uint32_t topRightColor,
                      uint32_t bottomRightColor, uint32_t bottomLeftColor);

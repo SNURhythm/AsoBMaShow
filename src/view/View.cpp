@@ -1,8 +1,19 @@
 #include "View.h"
 
+#include <cmath>
 #include <utility>
 
 namespace {
+constexpr float kPi = 3.14159265358979323846f;
+
+Color colorWithAlphaScale(Color color, float alphaScale) {
+  color.a = static_cast<uint8_t>(
+      std::clamp(static_cast<int>(std::lround(
+                     static_cast<float>(color.a) * alphaScale)),
+                 0, 255));
+  return color;
+}
+
 void submitColoredRect(const RenderContext &context, int x, int y, int width,
                        int height, const Color &color) {
   if (width <= 0 || height <= 0 || color.a == 0) {
@@ -17,6 +28,83 @@ void submitColoredRect(const RenderContext &context, int x, int y, int width,
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  static const bgfx::ProgramHandle kSimpleProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  bgfx::submit(rendering::ui_view, kSimpleProgram);
+}
+
+void submitRoundedRect(const RenderContext &context, int x, int y, int width,
+                       int height, float radius, const Color &color) {
+  if (width <= 0 || height <= 0 || color.a == 0) {
+    return;
+  }
+
+  radius = std::clamp(radius, 0.0f,
+                      static_cast<float>(std::min(width, height)) * 0.5f);
+  if (radius <= 0.5f) {
+    submitColoredRect(context, x, y, width, height, color);
+    return;
+  }
+
+  const int segments = std::clamp(static_cast<int>(std::ceil(radius / 4.0f)),
+                                  4, 12);
+  const uint16_t ringVertexCount =
+      static_cast<uint16_t>((segments + 1) * 4);
+  const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
+  const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  if (bgfx::getAvailTransientVertexBuffer(
+          vertexCount, rendering::PosColorVertex::ms_decl) < vertexCount ||
+      bgfx::getAvailTransientIndexBuffer(indexCount) < indexCount) {
+    return;
+  }
+  bgfx::allocTransientVertexBuffer(&tvb, vertexCount,
+                                   rendering::PosColorVertex::ms_decl);
+  bgfx::allocTransientIndexBuffer(&tib, indexCount);
+
+  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
+  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+  const uint32_t abgr = color.toABGR();
+  uint16_t vertexIndex = 0;
+  vertices[vertexIndex++] = {static_cast<float>(x) +
+                                 static_cast<float>(width) * 0.5f,
+                             static_cast<float>(y) +
+                                 static_cast<float>(height) * 0.5f,
+                             0.0f, abgr};
+
+  const auto appendCorner = [&](float cx, float cy, float startAngle) {
+    for (int i = 0; i <= segments; ++i) {
+      const float t = static_cast<float>(i) / static_cast<float>(segments);
+      const float angle = startAngle + t * (kPi * 0.5f);
+      vertices[vertexIndex++] = {cx + std::cos(angle) * radius,
+                                 cy + std::sin(angle) * radius, 0.0f, abgr};
+    }
+  };
+
+  const float fx = static_cast<float>(x);
+  const float fy = static_cast<float>(y);
+  const float fw = static_cast<float>(width);
+  const float fh = static_cast<float>(height);
+  appendCorner(fx + fw - radius, fy + radius, -kPi * 0.5f);
+  appendCorner(fx + fw - radius, fy + fh - radius, 0.0f);
+  appendCorner(fx + radius, fy + fh - radius, kPi * 0.5f);
+  appendCorner(fx + radius, fy + radius, kPi);
+
+  uint16_t index = 0;
+  for (uint16_t i = 0; i < ringVertexCount; ++i) {
+    indices[index++] = 0;
+    indices[index++] = static_cast<uint16_t>(i + 1);
+    indices[index++] = static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
+  }
+
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
+                 BGFX_STATE_MSAA);
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::submit(rendering::ui_view, kSimpleProgram);
@@ -246,6 +334,27 @@ View *View::clearBackgroundColor() {
   return this;
 }
 
+View *View::setCornerRadius(float radius) {
+  cornerRadius = std::max(0.0f, radius);
+  return this;
+}
+
+View *View::setShadow(const Color &color, int offsetX, int offsetY,
+                      int spread) {
+  shadowColor = color;
+  shadowOffsetX = offsetX;
+  shadowOffsetY = offsetY;
+  shadowSpread = std::max(0, spread);
+  hasShadow = color.a > 0 && shadowSpread > 0;
+  return this;
+}
+
+View *View::clearShadow() {
+  hasShadow = false;
+  shadowSpread = 0;
+  return this;
+}
+
 View *View::setBorderColor(const Color &color) {
   borderColor = color;
   hasBorder = true;
@@ -298,8 +407,8 @@ void View::applyYogaLayoutFromRoot() {
 }
 
 void View::renderBoxDecoration(RenderContext &context) const {
-  if ((!hasBackground && (!hasBorder || borderWidth <= 0)) || getWidth() <= 0 ||
-      getHeight() <= 0) {
+  if ((!hasBackground && (!hasBorder || borderWidth <= 0) && !hasShadow) ||
+      getWidth() <= 0 || getHeight() <= 0) {
     return;
   }
 
@@ -310,6 +419,48 @@ void View::renderBoxDecoration(RenderContext &context) const {
 
   int inset = hasBorder ? borderWidth : 0;
   inset = std::min(inset, std::min(width / 2, height / 2));
+  const bool rounded = cornerRadius > 0.5f;
+
+  if (hasShadow) {
+    constexpr int kShadowLayers = 4;
+    for (int layer = kShadowLayers; layer >= 1; --layer) {
+      const float t = static_cast<float>(layer) /
+                      static_cast<float>(kShadowLayers);
+      const int grow =
+          std::max(1, static_cast<int>(std::lround(shadowSpread * t)));
+      const Color layerColor =
+          colorWithAlphaScale(shadowColor, 0.12f + (1.0f - t) * 0.14f);
+      submitRoundedRect(context, x + shadowOffsetX - grow,
+                        y + shadowOffsetY - grow, width + grow * 2,
+                        height + grow * 2, cornerRadius + grow, layerColor);
+    }
+  }
+
+  if (rounded && hasBorder && inset > 0 && hasBackground) {
+    submitRoundedRect(context, x, y, width, height, cornerRadius, borderColor);
+
+    const int backgroundX = x + inset;
+    const int backgroundY = y + inset;
+    const int backgroundWidth = width - inset * 2;
+    const int backgroundHeight = height - inset * 2;
+    const float backgroundRadius = std::max(0.0f, cornerRadius - inset);
+    if (hasGradientBackground) {
+      submitRoundedRect(context, backgroundX, backgroundY, backgroundWidth,
+                        backgroundHeight, backgroundRadius,
+                        backgroundGradientTopColor);
+    } else {
+      submitRoundedRect(context, backgroundX, backgroundY, backgroundWidth,
+                        backgroundHeight, backgroundRadius, backgroundColor);
+    }
+    return;
+  }
+
+  if (rounded && hasBackground) {
+    const Color fillColor =
+        hasGradientBackground ? backgroundGradientTopColor : backgroundColor;
+    submitRoundedRect(context, x, y, width, height, cornerRadius, fillColor);
+    return;
+  }
 
   if (hasBorder && inset > 0) {
     submitColoredRect(context, x, y, width, inset, borderColor);

@@ -298,6 +298,10 @@ public:
   View *setBackgroundGradient(const Color &topColor,
                               const Color &bottomColor);
   View *clearBackgroundColor();
+  View *setCornerRadius(float radius);
+  [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
+  View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
+  View *clearShadow();
   View *setBorderColor(const Color &color);
   View *clearBorderColor();
   View *setBorderWidth(int width);
@@ -388,13 +392,19 @@ private:
   Color backgroundGradientTopColor;
   Color backgroundGradientBottomColor;
   Color borderColor;
+  Color shadowColor;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view
   bool hasBackground = false;
   bool hasGradientBackground = false;
   bool hasBorder = false;
+  bool hasShadow = false;
   int borderWidth = 0;
+  float cornerRadius = 0.0f;
+  int shadowOffsetX = 0;
+  int shadowOffsetY = 0;
+  int shadowSpread = 0;
   YGNodeRef node;
   View *parent = nullptr;
 

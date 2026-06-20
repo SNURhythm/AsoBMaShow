@@ -88,6 +88,49 @@ inline Color textMuted() { return activePalette().textMuted; }
 inline Color darkText() { return activePalette().darkText; }
 inline Color hairline() { return activePalette().hairline; }
 
+inline Color backdrop() {
+  return activeMode() == ThemeMode::Light ? Color(235, 239, 244, 255)
+                                          : Color(7, 10, 16, 255);
+}
+
+inline Color panel() {
+  return activeMode() == ThemeMode::Light ? Color(249, 252, 253, 238)
+                                          : Color(15, 22, 32, 238);
+}
+
+inline Color panelStrong() {
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 250)
+                                          : Color(19, 28, 40, 250);
+}
+
+inline Color panelSubtle() {
+  return activeMode() == ThemeMode::Light ? Color(241, 246, 248, 224)
+                                          : Color(11, 17, 26, 224);
+}
+
+inline Color control() {
+  return activeMode() == ThemeMode::Light ? Color(232, 241, 243, 238)
+                                          : Color(24, 35, 48, 238);
+}
+
+inline Color controlHover() {
+  return activeMode() == ThemeMode::Light ? Color(220, 235, 237, 246)
+                                          : Color(31, 46, 62, 246);
+}
+
+inline Color controlPressed() {
+  return activeMode() == ThemeMode::Light ? Color(207, 226, 229, 255)
+                                          : Color(39, 58, 77, 255);
+}
+
+inline Color shadow() {
+  return activeMode() == ThemeMode::Light ? Color(22, 38, 50, 64)
+                                          : Color(0, 0, 0, 150);
+}
+
+inline float panelRadius() { return 8.0f; }
+inline float controlRadius() { return 8.0f; }
+
 inline SDL_Color sdl(const Color &color) {
   return SDL_Color{color.r, color.g, color.b, color.a};
 }
