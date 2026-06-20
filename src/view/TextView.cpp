@@ -15,6 +15,7 @@
 #include "bgfx/defines.h"
 #include "bx/math.h"
 #include <algorithm>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -44,6 +45,8 @@ struct TextLineMetrics {
   int descent = 0;
   int height = 0;
 };
+
+using SurfacePtr = std::unique_ptr<SDL_Surface, decltype(&SDL_FreeSurface)>;
 
 bool acquireTtf() {
   std::lock_guard<std::mutex> lock(g_ttfMutex);
@@ -737,14 +740,17 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
   const int targetWidth = std::max(1, width);
   const int targetHeight =
       std::max(1, metrics.height * static_cast<int>(lines.size()));
-  SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(
-      0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_BGRA32);
+  SurfacePtr surface(SDL_CreateRGBSurfaceWithFormat(
+                         0, targetWidth, targetHeight, 32,
+                         SDL_PIXELFORMAT_BGRA32),
+                     SDL_FreeSurface);
   if (surface == nullptr) {
     SDL_Log("Failed to create text fallback surface: %s", SDL_GetError());
     return nullptr;
   }
 
-  SDL_FillRect(surface, nullptr, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+  SDL_FillRect(surface.get(), nullptr,
+               SDL_MapRGBA(surface->format, 0, 0, 0, 0));
 
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     const std::string &line = lines[lineIndex];
@@ -771,26 +777,25 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
         continue;
       }
 
-      SDL_Surface *runSurface =
-          renderFontSourceTextSurface(run.source, run.text);
+      SurfacePtr runSurface(renderFontSourceTextSurface(run.source, run.text),
+                            SDL_FreeSurface);
       if (runSurface == nullptr) {
         SDL_Log("Failed to render fallback text run: %s", TTF_GetError());
         continue;
       }
 
-      SDL_SetSurfaceBlendMode(runSurface, SDL_BLENDMODE_NONE);
+      SDL_SetSurfaceBlendMode(runSurface.get(), SDL_BLENDMODE_NONE);
       SDL_Rect dst = {x,
                       lineTop + metrics.ascent - fontSourceAscent(run.source),
                       runSurface->w, runSurface->h};
-      SDL_BlitSurface(runSurface, nullptr, surface, &dst);
+      SDL_BlitSurface(runSurface.get(), nullptr, surface.get(), &dst);
       x += measureFontSourceTextWidth(run.source, run.text);
-      SDL_FreeSurface(runSurface);
     }
   }
 
   surfaceWidth = width;
   surfaceHeight = targetHeight;
-  return surface;
+  return surface.release();
 }
 
 float TextView::marqueeOffset(int viewportWidth) {
@@ -872,24 +877,24 @@ void TextView::createTexture(bool markDirty, bool force,
     }
     return;
   }
-  SDL_Surface *surface = nullptr;
+  SurfacePtr surface(nullptr, SDL_FreeSurface);
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
   const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
   if (usePrimaryFont && wrapEnabled && effectiveWrapWidth > 0) {
-    surface = TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
-                                             effectiveWrapWidth);
+    surface.reset(TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
+                                                 effectiveWrapWidth));
   } else if (usePrimaryFont) {
-    surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+    surface.reset(TTF_RenderUTF8_Blended(font, text.c_str(), color));
   } else {
-    surface = renderFallbackTextSurface(
+    surface.reset(renderFallbackTextSurface(
         wrapEnabled && effectiveWrapWidth > 0 ? effectiveWrapWidth : 0,
-        fallbackSurfaceWidth, fallbackSurfaceHeight);
+        fallbackSurfaceWidth, fallbackSurfaceHeight));
   }
   if (surface == nullptr && usePrimaryFont && fontFaces.size() > 1) {
-    surface = renderFallbackTextSurface(
+    surface.reset(renderFallbackTextSurface(
         wrapEnabled && effectiveWrapWidth > 0 ? effectiveWrapWidth : 0,
-        fallbackSurfaceWidth, fallbackSurfaceHeight);
+        fallbackSurfaceWidth, fallbackSurfaceHeight));
   }
   if (!surface) {
     SDL_Log("Failed to render text: %s", TTF_GetError());
@@ -897,8 +902,7 @@ void TextView::createTexture(bool markDirty, bool force,
   }
   rect.w = fallbackSurfaceHeight > 0 ? fallbackSurfaceWidth : surface->w;
   rect.h = fallbackSurfaceHeight > 0 ? fallbackSurfaceHeight : surface->h;
-  texture = rendering::sdlSurfaceToBgfxTexture(surface);
-  SDL_FreeSurface(surface);
+  texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
   if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
     YGNodeMarkDirty(getNode());
     applyYogaLayoutFromRoot();

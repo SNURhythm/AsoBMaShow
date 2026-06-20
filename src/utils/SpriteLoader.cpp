@@ -7,6 +7,7 @@
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
+#include <limits>
 
 void SpriteLoader::ImageDataDeleter::operator()(unsigned char *ptr) const {
   stbi_image_free(ptr);
@@ -69,21 +70,29 @@ unsigned char *SpriteLoader::crop(const int x, const int y, const int w,
   if (data == nullptr) {
     return nullptr;
   }
-  if (x < 0 || y < 0 || w < 0 || h < 0) {
+  if (x < 0 || y < 0 || w <= 0 || h <= 0 || channels <= 0) {
     return nullptr;
   }
-  if (x + w > width || y + h > height) {
+  if (x > width - w || y > height - h) {
     return nullptr;
   }
-  auto *newData = static_cast<unsigned char *>(SDL_malloc(w * h * channels));
+  const auto rowBytes = static_cast<size_t>(w) * static_cast<size_t>(channels);
+  if (rowBytes / static_cast<size_t>(channels) != static_cast<size_t>(w)) {
+    return nullptr;
+  }
+  if (rowBytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(h)) {
+    return nullptr;
+  }
+  const size_t byteCount = rowBytes * static_cast<size_t>(h);
+  auto *newData = static_cast<unsigned char *>(SDL_malloc(byteCount));
   if (!newData) {
     return nullptr;
   }
   for (int row = 0; row < h; ++row) {
     const unsigned char* src_ptr =
         data.get() + ((y + row) * width + x) * channels;
-    unsigned char* dst_ptr = newData + row * w * channels;
-    SDL_memcpy(dst_ptr, src_ptr, w * channels);
+    unsigned char* dst_ptr = newData + static_cast<size_t>(row) * rowBytes;
+    SDL_memcpy(dst_ptr, src_ptr, rowBytes);
   }
   return newData;
 }

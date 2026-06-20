@@ -5,6 +5,7 @@
 #include "common.h"
 #include "ShaderManager.h"
 #include "UniformCache.h"
+#include <limits>
 namespace rendering {
 float near_clip = 0.1f;
 float far_clip = 100.0f;
@@ -28,21 +29,39 @@ void createRect(bgfx::TransientVertexBuffer &tvb,
 }
 
 bgfx::TextureHandle sdlSurfaceToBgfxTexture(SDL_Surface *surface) {
+  if (surface == nullptr || surface->pixels == nullptr || surface->w <= 0 ||
+      surface->h <= 0 ||
+      surface->w > std::numeric_limits<uint16_t>::max() ||
+      surface->h > std::numeric_limits<uint16_t>::max()) {
+    SDL_Log("Invalid SDL surface for bgfx texture");
+    return BGFX_INVALID_HANDLE;
+  }
+
   // Calculate the total size needed for the copy considering pitch
-  uint32_t totalSize = surface->h * surface->w * sizeof(Uint32);
-  const bgfx::Memory *mem = bgfx::alloc(totalSize);
+  const auto rowBytes = static_cast<size_t>(surface->w) * sizeof(Uint32);
+  const auto totalSize = rowBytes * static_cast<size_t>(surface->h);
+  if (totalSize > std::numeric_limits<uint32_t>::max()) {
+    SDL_Log("SDL surface is too large for bgfx texture");
+    return BGFX_INVALID_HANDLE;
+  }
+  const bgfx::Memory *mem = bgfx::alloc(static_cast<uint32_t>(totalSize));
+  if (mem == nullptr) {
+    SDL_Log("Failed to allocate bgfx texture memory");
+    return BGFX_INVALID_HANDLE;
+  }
 
   // Copy row by row considering the pitch
   uint8_t *dst = (uint8_t *)mem->data;
   uint8_t *src = (uint8_t *)surface->pixels;
   for (int i = 0; i < surface->h; ++i) {
-    bx::memCopy(dst, src, surface->w * sizeof(Uint32));
+    bx::memCopy(dst, src, rowBytes);
     src += surface->pitch;
-    dst += surface->w * sizeof(Uint32);
+    dst += rowBytes;
   }
 
-  return bgfx::createTexture2D((uint16_t)surface->w, (uint16_t)surface->h,
-                               false, 1, bgfx::TextureFormat::BGRA8, 0, mem);
+  return bgfx::createTexture2D(static_cast<uint16_t>(surface->w),
+                               static_cast<uint16_t>(surface->h), false, 1,
+                               bgfx::TextureFormat::BGRA8, 0, mem);
 }
 
 void renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId) {
