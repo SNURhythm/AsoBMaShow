@@ -11,11 +11,43 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
+
+struct SqliteStatementDeleter {
+  void operator()(sqlite3_stmt *stmt) const {
+    if (stmt != nullptr) {
+      sqlite3_finalize(stmt);
+    }
+  }
+};
+
+using SqliteStatementHandle =
+    std::unique_ptr<sqlite3_stmt, SqliteStatementDeleter>;
+
+class ScoreDbConnection {
+public:
+  ScoreDbConnection(ScoreDBHelper &helper, sqlite3 *db)
+      : helper_(helper), db_(db) {}
+  ScoreDbConnection(const ScoreDbConnection &) = delete;
+  ScoreDbConnection &operator=(const ScoreDbConnection &) = delete;
+
+  ~ScoreDbConnection() {
+    if (db_ != nullptr) {
+      helper_.Close(db_);
+    }
+  }
+
+  sqlite3 *get() const { return db_; }
+
+private:
+  ScoreDBHelper &helper_;
+  sqlite3 *db_ = nullptr;
+};
 
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -96,24 +128,24 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
       std::string("SELECT ") + columnName + ", MAX(clear_type) FROM scores "
       "WHERE " + columnName + " IS NOT NULL AND " + columnName +
       " != '' GROUP BY " + columnName;
-  sqlite3_stmt *stmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while loading score clear ranks: %s", sqlite3_errmsg(db));
     return;
   }
 
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 0));
     if (text == nullptr) {
       continue;
     }
     const std::string key =
         hashColumn ? normalizedHash(text) : normalizedPath(text);
-    storeBestRank(ranks, key, sqlite3_column_int(stmt, 1));
+    storeBestRank(ranks, key, sqlite3_column_int(stmt.get(), 1));
   }
-  sqlite3_finalize(stmt);
 }
 } // namespace
 
@@ -275,8 +307,9 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       "@final_gauge, @clear_type"
       ")";
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  sqlite3_stmt *rawStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
+  SqliteStatementHandle stmt(rawStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing score insert: %s", sqlite3_errmsg(db));
     return false;
@@ -285,28 +318,27 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   const auto chartPath = path_t_to_utf8(
       fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
   int bindIndex = 1;
-  bindText(stmt, bindIndex++, chartPath);
-  bindText(stmt, bindIndex++, chartMeta.MD5);
-  bindText(stmt, bindIndex++, chartMeta.SHA256);
-  bindText(stmt, bindIndex++, chartMeta.Title);
-  bindText(stmt, bindIndex++, chartMeta.Artist);
-  sqlite3_bind_int(stmt, bindIndex++, state.getScore());
-  sqlite3_bind_int(stmt, bindIndex++, chartMeta.TotalNotes * 2);
-  sqlite3_bind_int(stmt, bindIndex++, state.maxCombo);
-  sqlite3_bind_int(stmt, bindIndex++, state.comboBreak);
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, PGreat));
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, Great));
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, Good));
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, Bad));
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, Poor));
-  sqlite3_bind_int(stmt, bindIndex++, judgeCount(state, Kpoor));
-  sqlite3_bind_int(stmt, bindIndex++, state.fastCount);
-  sqlite3_bind_int(stmt, bindIndex++, state.slowCount);
-  sqlite3_bind_double(stmt, bindIndex++, state.currentGauge);
-  sqlite3_bind_int(stmt, bindIndex++, state.getClearTypeRank());
+  bindText(stmt.get(), bindIndex++, chartPath);
+  bindText(stmt.get(), bindIndex++, chartMeta.MD5);
+  bindText(stmt.get(), bindIndex++, chartMeta.SHA256);
+  bindText(stmt.get(), bindIndex++, chartMeta.Title);
+  bindText(stmt.get(), bindIndex++, chartMeta.Artist);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
+  sqlite3_bind_int(stmt.get(), bindIndex++, chartMeta.TotalNotes * 2);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.maxCombo);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.comboBreak);
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, PGreat));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Great));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Good));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Bad));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Poor));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Kpoor));
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.fastCount);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.slowCount);
+  sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.getClearTypeRank());
 
-  rc = sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
+  rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving score: %s", sqlite3_errmsg(db));
     return false;
@@ -320,9 +352,11 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
   if (db == nullptr) {
     return false;
   }
+  ScoreDbConnection connection(*this, db);
 
-  const bool result = CreateScoreTable(db) && InsertScore(db, chartMeta, state);
-  Close(db);
+  const bool result =
+      CreateScoreTable(connection.get()) &&
+      InsertScore(connection.get(), chartMeta, state);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -335,13 +369,16 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   if (db == nullptr) {
     return cache;
   }
+  ScoreDbConnection connection(*this, db);
 
-  if (CreateScoreTable(db)) {
-    loadBestRanksForColumn(db, "chart_sha256", cache.rankBySha256, true);
-    loadBestRanksForColumn(db, "chart_md5", cache.rankByMd5, true);
-    loadBestRanksForColumn(db, "chart_path", cache.rankByPath, false);
+  if (CreateScoreTable(connection.get())) {
+    loadBestRanksForColumn(connection.get(), "chart_sha256",
+                           cache.rankBySha256, true);
+    loadBestRanksForColumn(connection.get(), "chart_md5", cache.rankByMd5,
+                           true);
+    loadBestRanksForColumn(connection.get(), "chart_path", cache.rankByPath,
+                           false);
   }
-  Close(db);
   return cache;
 }
 
