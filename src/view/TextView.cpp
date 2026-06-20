@@ -158,7 +158,12 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
   }
   if (opened != nullptr) {
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
-    g_fontCache[key] = {opened, 1};
+    auto [cached, inserted] = g_fontCache.emplace(key, CachedFont{opened, 1});
+    if (!inserted) {
+      ++cached->second.refCount;
+      TTF_CloseFont(opened);
+      return cached->second.font;
+    }
   }
   return opened;
 }
