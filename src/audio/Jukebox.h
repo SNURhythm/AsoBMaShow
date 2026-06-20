@@ -82,7 +82,22 @@ private:
   std::mutex schedulerWaitMutex;
   std::condition_variable schedulerWakeCv;
   void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  bool loadArchivedSounds(bms_parser::Chart &chart,
+                          std::atomic_bool &isCancelled);
+  bool loadArchivedChartAssets(bms_parser::Chart &chart, bool loadVisualAssets,
+                               std::atomic_bool &isCancelled);
   void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  bool loadArchivedBMPs(bms_parser::Chart &chart,
+                        std::atomic_bool &isCancelled);
+  bool loadVideoPath(int id, const std::filesystem::path &path,
+                     std::atomic_bool &isCancelled);
+  bool loadMaterializedVideoPath(int id,
+                                 const std::filesystem::path &materializedPath,
+                                 const std::filesystem::path &displayPath,
+                                 std::atomic_bool &isCancelled);
+  bool loadImagePath(int id, const std::filesystem::path &path);
+  bool loadImageBytes(int id, const std::filesystem::path &path,
+                      const std::vector<unsigned char> &bytes);
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);

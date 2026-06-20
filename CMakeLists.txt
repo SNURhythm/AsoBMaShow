@@ -160,6 +160,14 @@ else()
         list(APPEND COMMON_LIBS ${LibArchive_LIBRARIES})
     endif()
 
+    # 7-Zip SDK backend for indexed reads of 7z/RAR/LZH-style archives.
+    find_package(7zip CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS 7zip::7zip)
+
+    # unarr gives direct offset-based reads for non-solid RAR4 archives.
+    find_package(unarr CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS unarr::unarr)
+
     # # Fontconfig & LibASS (Required by FFmpeg[all-gpl] static build)
     # find_package(PkgConfig REQUIRED)
     
@@ -272,6 +280,35 @@ target_link_libraries(main
     bgfx 
     yogacore
 )
+
+if (PLATFORM_MACOS)
+    # 7-Zip registers archive handlers through static initialization. With a
+    # static lib, pull the RAR handler objects explicitly without loading the
+    # whole SDK archive, which conflicts with libarchive's bundled PPMd code.
+    set(SEVENZIP_RAR_SUPPORT_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/7zip-rar-support")
+    set(SEVENZIP_RAR_CODECS_OBJECT
+        "${SEVENZIP_RAR_SUPPORT_DIR}/RarCodecsRegister.cpp.o")
+    add_custom_command(
+        OUTPUT "${SEVENZIP_RAR_CODECS_OBJECT}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SEVENZIP_RAR_SUPPORT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${SEVENZIP_RAR_CODECS_OBJECT}"
+        COMMAND ${CMAKE_AR} -x "$<TARGET_FILE:7zip::7zip>" RarCodecsRegister.cpp.o
+        WORKING_DIRECTORY "${SEVENZIP_RAR_SUPPORT_DIR}"
+        COMMENT "Extracting 7-Zip RAR codec registration object"
+        VERBATIM
+    )
+    set_source_files_properties("${SEVENZIP_RAR_CODECS_OBJECT}"
+        PROPERTIES
+        EXTERNAL_OBJECT TRUE
+        GENERATED TRUE
+    )
+    target_sources(main PRIVATE "${SEVENZIP_RAR_CODECS_OBJECT}")
+    target_link_options(main PRIVATE
+        "LINKER:-u,__ZTVN8NArchive4NRar8CHandlerE"
+        "LINKER:-u,__ZTVN8NArchive5NRar58CHandlerE"
+    )
+endif()
 
 if (WIN32)
     target_link_libraries(main PRIVATE shell32 ole32)

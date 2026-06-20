@@ -1,20 +1,80 @@
-#include <iostream>
 #include "decoder.h"
+#include "../ArchiveFile.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
+#include <cstring>
+#include <iostream>
 #ifdef _WIN32
 #define sf_open sf_wchar_open
 #endif
-// Function to decode audio file to PCM
-bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
-                      SF_INFO &fileInfo, std::atomic<bool> &isCancelled) {
-  // Open the audio file
-  SNDFILE *file = sf_open(filePath.c_str(), SFM_READ, &fileInfo);
+namespace {
+struct MemoryAudioFile {
+  const unsigned char *data = nullptr;
+  sf_count_t size = 0;
+  sf_count_t offset = 0;
+};
 
+sf_count_t memoryFileLength(void *userData) {
+  auto *file = static_cast<MemoryAudioFile *>(userData);
+  return file == nullptr ? 0 : file->size;
+}
+
+sf_count_t memoryFileSeek(sf_count_t offset, int whence, void *userData) {
+  auto *file = static_cast<MemoryAudioFile *>(userData);
+  if (file == nullptr) {
+    return -1;
+  }
+
+  sf_count_t target = 0;
+  switch (whence) {
+  case SEEK_SET:
+    target = offset;
+    break;
+  case SEEK_CUR:
+    target = file->offset + offset;
+    break;
+  case SEEK_END:
+    target = file->size + offset;
+    break;
+  default:
+    return -1;
+  }
+  if (target < 0 || target > file->size) {
+    return -1;
+  }
+  file->offset = target;
+  return file->offset;
+}
+
+sf_count_t memoryFileRead(void *ptr, sf_count_t count, void *userData) {
+  auto *file = static_cast<MemoryAudioFile *>(userData);
+  if (file == nullptr || ptr == nullptr || count <= 0) {
+    return 0;
+  }
+  const sf_count_t remaining = file->size - file->offset;
+  const sf_count_t toRead = std::min(count, remaining);
+  if (toRead <= 0) {
+    return 0;
+  }
+  std::memcpy(ptr, file->data + file->offset, static_cast<size_t>(toRead));
+  file->offset += toRead;
+  return toRead;
+}
+
+sf_count_t memoryFileWrite(const void *, sf_count_t, void *) { return 0; }
+
+sf_count_t memoryFileTell(void *userData) {
+  auto *file = static_cast<MemoryAudioFile *>(userData);
+  return file == nullptr ? 0 : file->offset;
+}
+
+bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
+                     std::vector<short> &buffer, SF_INFO &fileInfo,
+                     std::atomic<bool> &isCancelled) {
   if (!file) {
-    SDL_Log("Failed to open audio file %ls, error: %s", filePath.c_str(),
-            sf_strerror(file));
+    SDL_Log("Failed to open audio file %s, error: %s",
+            path_t_to_utf8(displayPath).c_str(), sf_strerror(file));
     return false;
   }
 
@@ -38,7 +98,7 @@ bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
   }
   if (numFrames < 0) {
     SDL_Log("Failed to read audio data from file %s, error: %s",
-            filePath.c_str(), sf_strerror(file));
+            path_t_to_utf8(displayPath).c_str(), sf_strerror(file));
     sf_close(file);
     return false;
   }
@@ -54,7 +114,7 @@ bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
 
   if (numFrames < fileInfo.frames) {
     SDL_Log("Failed to read all audio data from file %s, read %lld frames",
-            filePath.c_str(), numFrames);
+            path_t_to_utf8(displayPath).c_str(), numFrames);
     // Zero out the remaining buffer
     std::fill(buffer.begin() + numFrames * fileInfo.channels, buffer.end(), 0);
   }
@@ -62,4 +122,45 @@ bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
   // Close the file
   sf_close(file);
   return true;
+}
+} // namespace
+
+bool decodeAudioBytesToPCM(const path_t &displayPath,
+                           const std::vector<unsigned char> &bytes,
+                           std::vector<short> &buffer, SF_INFO &fileInfo,
+                           std::atomic<bool> &isCancelled) {
+  MemoryAudioFile memoryFile{
+      .data = bytes.data(),
+      .size = static_cast<sf_count_t>(bytes.size()),
+      .offset = 0,
+  };
+  SF_VIRTUAL_IO io{
+      .get_filelen = memoryFileLength,
+      .seek = memoryFileSeek,
+      .read = memoryFileRead,
+      .write = memoryFileWrite,
+      .tell = memoryFileTell,
+  };
+  SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
+  return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled);
+}
+
+// Function to decode audio file to PCM
+bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
+                      SF_INFO &fileInfo, std::atomic<bool> &isCancelled) {
+  const std::filesystem::path fsPath(filePath);
+  if (archive_file::isVirtualPath(fsPath)) {
+    std::vector<unsigned char> bytes;
+    std::string errorMessage;
+    if (!archive_file::readFile(fsPath, bytes, &errorMessage)) {
+      SDL_Log("Failed to read archived audio file %s: %s",
+              path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
+      return false;
+    }
+    return decodeAudioBytesToPCM(filePath, bytes, buffer, fileInfo,
+                                 isCancelled);
+  }
+
+  SNDFILE *file = sf_open(filePath.c_str(), SFM_READ, &fileInfo);
+  return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled);
 }

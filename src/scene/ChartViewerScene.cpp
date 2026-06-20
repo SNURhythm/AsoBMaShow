@@ -1,5 +1,6 @@
 #include "ChartViewerScene.h"
 
+#include "../ArchiveFile.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
@@ -2481,17 +2482,33 @@ void ChartViewerScene::parseAndRefresh(
   }
 
   std::atomic_bool cancelled = false;
+  std::vector<unsigned char> sourceBytes;
   std::unique_ptr<bms_parser::Chart> parsed;
   try {
-    parsed = play_options::parseChart(record.meta.BmsPath, randomSeed,
-                                      randomPrng, requestedValues, cancelled,
-                                      "chart viewer");
+    std::string readError;
+    if (!archive_file::readFile(record.meta.BmsPath, sourceBytes, &readError) ||
+        sourceBytes.empty()) {
+      SDL_Log("Chart viewer read failed: %s", readError.c_str());
+      archive_file::appendDebugLogLine(
+          "Chart viewer read failed: " +
+          path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) +
+          (readError.empty() ? "" : ": " + readError));
+    } else {
+      parsed = play_options::parseChartBytes(
+          record.meta.BmsPath, sourceBytes, randomSeed, randomPrng,
+          requestedValues, cancelled, "chart viewer");
+    }
   } catch (const std::exception &e) {
     SDL_Log("Chart viewer parse failed: %s", e.what());
+    archive_file::appendDebugLogLine(
+        "Chart viewer parse exception: " +
+        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
+        e.what());
   }
 
   if (parsed == nullptr || cancelled) {
     chart.reset();
+    chartSourceBytes.clear();
     randomOptions.clear();
     if (canvasView != nullptr) {
       canvasView->setChart(nullptr);
@@ -2507,6 +2524,7 @@ void ChartViewerScene::parseAndRefresh(
 
   if (!applyViewerPlayOptions(*parsed, "chart viewer")) {
     chart.reset();
+    chartSourceBytes.clear();
     randomOptions.clear();
     if (canvasView != nullptr) {
       canvasView->setChart(nullptr);
@@ -2524,7 +2542,8 @@ void ChartViewerScene::parseAndRefresh(
   randomPrng = parsed->Meta.RandomPrng;
   selectedRandomValues = parsed->Meta.RandomValues;
   chart = std::move(parsed);
-  randomOptions = scanActiveRandomOptions();
+  chartSourceBytes = std::move(sourceBytes);
+  randomOptions = scanActiveRandomOptions(&chartSourceBytes);
   if (canvasView != nullptr) {
     canvasView->setChart(chart.get());
   }
@@ -3467,6 +3486,10 @@ void ChartViewerScene::startPracticeFromSelection() {
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for practice: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+          archive_file::appendDebugLogLine(
+              "Practice parse exception: " +
+              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
+              e.what());
         }
         if (practiceChart == nullptr || parseCancelled) {
           if (statusText != nullptr) {
@@ -3532,29 +3555,30 @@ void ChartViewerScene::goBack() {
 }
 
 std::vector<ChartViewerScene::RandomOption>
-ChartViewerScene::scanActiveRandomOptions() const {
+ChartViewerScene::scanActiveRandomOptions(
+    const std::vector<unsigned char> *sourceBytes) const {
   std::vector<RandomOption> options;
   if (record.meta.BmsPath.empty()) {
     return options;
   }
 
-  std::ifstream file(record.meta.BmsPath, std::ios::binary);
-  if (!file) {
+  std::vector<unsigned char> bytes;
+  if (sourceBytes == nullptr && !chartSourceBytes.empty()) {
+    sourceBytes = &chartSourceBytes;
+  }
+  if (sourceBytes == nullptr) {
+    if (!archive_file::readFile(record.meta.BmsPath, bytes) || bytes.empty()) {
+      return options;
+    }
+    sourceBytes = &bytes;
+  }
+  if (sourceBytes->empty()) {
     return options;
   }
-  file.seekg(0, std::ios::end);
-  const auto size = file.tellg();
-  if (size <= 0) {
-    return options;
-  }
-  file.seekg(0, std::ios::beg);
-  std::vector<unsigned char> bytes(static_cast<size_t>(size));
-  file.read(reinterpret_cast<char *>(bytes.data()),
-            static_cast<std::streamsize>(bytes.size()));
 
   std::string content;
-  bms_parser::ShiftJISConverter::BytesToUTF8(bytes.data(), bytes.size(),
-                                             content);
+  bms_parser::ShiftJISConverter::BytesToUTF8(sourceBytes->data(),
+                                             sourceBytes->size(), content);
 
   struct ConditionalFrame {
     bool parentSkipped = false;

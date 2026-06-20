@@ -28,6 +28,7 @@
 		B7CA782E2F2906130016BA21 /* ffmpeg.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */; };
 		B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */; };
 		B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78322F3010010016BA21 /* libarchive.xcframework */; };
+		B7CA78342F3020010016BA21 /* lib7zip.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7CA78332F3020010016BA21 /* lib7zip.xcframework */; };
 		B7D27A9F2C7CD1F300189ED7 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */; };
 		B7D27AA12C7CD21100189ED7 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA02C7CD21100189ED7 /* libbz2.tbd */; };
 		B7D27AA32C7CD21900189ED7 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B7D27AA22C7CD21900189ED7 /* libiconv.tbd */; };
@@ -638,6 +639,7 @@
 		B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = ffmpeg.xcframework; path = lib/ffmpeg.xcframework; sourceTree = "<group>"; };
 		B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libluajit.xcframework; path = lib/libluajit.xcframework; sourceTree = "<group>"; };
 		B7CA78322F3010010016BA21 /* libarchive.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libarchive.xcframework; path = lib/libarchive.xcframework; sourceTree = "<group>"; };
+		B7CA78332F3020010016BA21 /* lib7zip.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = lib7zip.xcframework; path = lib/lib7zip.xcframework; sourceTree = "<group>"; };
 		B7D27A9E2C7CD1F300189ED7 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		B7D27AA02C7CD21100189ED7 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		B7D27AA22C7CD21900189ED7 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
@@ -701,6 +703,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppSettings.cpp,
+				ArchiveFile.cpp,
 				audio/AudioWrapper.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
@@ -728,6 +731,7 @@
 				iOSNatives.mm,
 				MacNatives.mm,
 				main.cpp,
+				MinizBridge.c,
 				math/Quaternion.cpp,
 				math/Vector3.cpp,
 				path.cpp,
@@ -812,6 +816,7 @@
 				B7D27AAB2C7CD23F00189ED7 /* AVKit.framework in Frameworks */,
 				B7D27AA92C7CD23900189ED7 /* VideoToolbox.framework in Frameworks */,
 				B7CA78312F3010010016BA21 /* libarchive.xcframework in Frameworks */,
+				B7CA78342F3020010016BA21 /* lib7zip.xcframework in Frameworks */,
 				B7CA782D2F2906130016BA21 /* libsndfile.xcframework in Frameworks */,
 				B7CA782E2F2906130016BA21 /* ffmpeg.xcframework in Frameworks */,
 				B7CA78302F290E9D0016BA21 /* libluajit.xcframework in Frameworks */,
@@ -882,6 +887,7 @@
 			isa = PBXGroup;
 			children = (
 				B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */,
+				B7CA78332F3020010016BA21 /* lib7zip.xcframework */,
 				B7CA78322F3010010016BA21 /* libarchive.xcframework */,
 				B7CA782C2F2906120016BA21 /* ffmpeg.xcframework */,
 				B7CA782B2F2906120016BA21 /* libsndfile.xcframework */,
@@ -1074,12 +1080,13 @@
 		B70027002BF7A8D8000DB8EC /* AsoBMaShow */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B700271C2BF7A8DA000DB8EC /* Build configuration list for PBXNativeTarget "AsoBMaShow" */;
-			buildPhases = (
-				1A3EB0595D79BE96F6E16C91 /* [CP] Check Pods Manifest.lock */,
-				B70026FD2BF7A8D8000DB8EC /* Sources */,
-				B70026FE2BF7A8D8000DB8EC /* Frameworks */,
-				B7BAA5562DA3F719008F6FCD /* ShellScript */,
-				B70026FF2BF7A8D8000DB8EC /* Resources */,
+				buildPhases = (
+					1A3EB0595D79BE96F6E16C91 /* [CP] Check Pods Manifest.lock */,
+					B7CA78352F3030010016BA21 /* Prepare 7-Zip RAR Codecs */,
+					B70026FD2BF7A8D8000DB8EC /* Sources */,
+					B70026FE2BF7A8D8000DB8EC /* Frameworks */,
+					B7BAA5562DA3F719008F6FCD /* ShellScript */,
+					B70026FF2BF7A8D8000DB8EC /* Resources */,
 				B72522FA2BF7AD8200C6C414 /* Embed Frameworks */,
 			);
 			buildRules = (
@@ -1761,9 +1768,9 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
-		B7BAA5562DA3F719008F6FCD /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
+			B7BAA5562DA3F719008F6FCD /* ShellScript */ = {
+				isa = PBXShellScriptBuildPhase;
+				buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
@@ -1776,8 +1783,30 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "find \"${SRCROOT}/../../../shaders/$1\" -type f -print0 | xargs -0 touch\nfind \"${SRCROOT}/../../../assets/$1\" -type f -print0 | xargs -0 touch\n\n";
-		};
+				shellScript = "find \"${SRCROOT}/../../../shaders/$1\" -type f -print0 | xargs -0 touch\nfind \"${SRCROOT}/../../../assets/$1\" -type f -print0 | xargs -0 touch\n\n";
+			};
+			B7CA78352F3030010016BA21 /* Prepare 7-Zip RAR Codecs */ = {
+				isa = PBXShellScriptBuildPhase;
+				alwaysOutOfDate = 1;
+				buildActionMask = 2147483647;
+				files = (
+				);
+				inputFileListPaths = (
+				);
+				inputPaths = (
+					"$(PROJECT_DIR)/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a",
+					"$(PROJECT_DIR)/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a",
+				);
+				name = "Prepare 7-Zip RAR Codecs";
+				outputFileListPaths = (
+				);
+				outputPaths = (
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+				);
+				runOnlyForDeploymentPostprocessing = 0;
+				shellPath = /bin/sh;
+				shellScript = "set -eu\n\ncase \"${PLATFORM_NAME}\" in\n  iphonesimulator)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a\"\n    ;;\n  *)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a\"\n    ;;\nesac\n\nout_dir=\"${DERIVED_FILE_DIR}/7zip-rar-codecs\"\nout=\"${out_dir}/RarCodecsRegister.cpp.o\"\nmkdir -p \"${out_dir}\"\nrm -f \"${out}\"\n(cd \"${out_dir}\" && /usr/bin/ar -x \"${archive}\" RarCodecsRegister.cpp.o)\ntest -f \"${out}\"\n";
+			};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -1974,6 +2003,18 @@
 					"$(OTHER_CFLAGS)",
 					"-fexperimental-library",
 				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
+					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
+				);
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
+					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.snurhythm.AsoBMaShow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -2031,6 +2072,18 @@
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-fexperimental-library",
+				);
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
+					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
+				);
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
+					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.snurhythm.AsoBMaShow;
 				PRODUCT_NAME = "$(TARGET_NAME)";

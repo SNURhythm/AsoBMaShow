@@ -50,6 +50,7 @@ private:
   std::vector<int> selectedRandomValues;
   std::vector<RandomOption> randomOptions;
   std::unique_ptr<bms_parser::Chart> chart;
+  std::vector<unsigned char> chartSourceBytes;
 
   View *rootLayout = nullptr;
   ChartCanvasView *canvasView = nullptr;
@@ -137,7 +138,9 @@ private:
   void startPracticeFromSelection();
   void goBack();
 
-  [[nodiscard]] std::vector<RandomOption> scanActiveRandomOptions() const;
+  [[nodiscard]] std::vector<RandomOption>
+  scanActiveRandomOptions(
+      const std::vector<unsigned char> *sourceBytes = nullptr) const;
   [[nodiscard]] std::string randomSummary() const;
   [[nodiscard]] std::string viewerPlayOptionLabel() const;
   [[nodiscard]] std::string defaultLaneAssignNotation() const;

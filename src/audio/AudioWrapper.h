@@ -157,6 +157,9 @@ public:
   AudioWrapper(Stopwatch *stopwatch);
   ~AudioWrapper();
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
+  bool loadSoundFromMemory(const path_t &path,
+                           const std::vector<unsigned char> &bytes,
+                           std::atomic<bool> &isCancelled);
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path, long long startOffsetMicros = 0);
@@ -203,6 +206,9 @@ private:
   Stopwatch *stopwatch;
 
   void updateCurrentSampleRate();
+  bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
+                        int channels, int sampleRate,
+                        std::atomic<bool> &isCancelled);
   bool appendScheduledSound(SoundData *soundData, long long startMicros,
                             uint64_t sequence, size_t startFrame = 0);
   void clearCallbackState();

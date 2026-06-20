@@ -126,26 +126,34 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
 void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   const auto &meta = record.meta;
   unavailable = record.unavailable;
+  solidArchive = record.solidArchive;
   std::string title = meta.Title;
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
   }
   titleView->setText(title);
   artistView->setText(meta.Artist);
-  levelView->setText(record.difficultyTableLabels.empty()
-                         ? formatPlayLevel(meta.PlayLevel)
-                         : record.difficultyTableLabels);
-  keyModeView->setText(unavailable ? "MISSING"
-                                   : keyModeDescription(meta.KeyMode));
-  if (!unavailable && !meta.StageFile.empty()) {
-    jacketImage->setImage(meta.Folder / meta.StageFile);
+  if (solidArchive) {
+    levelView->setText(record.difficultyTableLabels.empty()
+                           ? "Unzip required"
+                           : record.difficultyTableLabels);
+    keyModeView->setText("ARCHIVE");
+  } else {
+    levelView->setText(record.difficultyTableLabels.empty()
+                           ? formatPlayLevel(meta.PlayLevel)
+                           : record.difficultyTableLabels);
+    keyModeView->setText(unavailable ? "MISSING"
+                                     : keyModeDescription(meta.KeyMode));
+  }
+  if (!unavailable && !solidArchive && !meta.StageFile.empty()) {
+    jacketImage->setImageAsync(meta.Folder / meta.StageFile);
   } else {
     jacketImage->freeImage();
   }
 }
 
 void ChartListItemView::setClearRank(int clearRank) {
-  if (hasClearLampColor(clearRank)) {
+  if (!solidArchive && hasClearLampColor(clearRank)) {
     clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
   } else {
     clearLamp->clearBackgroundColor();
@@ -171,6 +179,18 @@ void ChartListItemView::onUnselected() {
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
+  if (solidArchive) {
+    titleView->setColor(selected ? SDL_Color{255, 245, 214, 255}
+                                 : SDL_Color{236, 214, 158, 255});
+    artistView->setColor(selected ? SDL_Color{231, 220, 197, 255}
+                                  : SDL_Color{181, 164, 128, 255});
+    levelView->setColor(selected ? SDL_Color{255, 231, 174, 255}
+                                 : SDL_Color{216, 183, 108, 255});
+    keyModeView->setColor(selected ? SDL_Color{237, 211, 157, 255}
+                                  : SDL_Color{179, 145, 78, 255});
+    return;
+  }
+
   if (unavailable) {
     titleView->setColor(selected ? SDL_Color{255, 192, 192, 255}
                                  : SDL_Color{241, 96, 96, 255});

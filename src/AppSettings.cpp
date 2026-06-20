@@ -383,6 +383,8 @@ bool AppSettings::save() const {
        << "\n";
   file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
        << "\n";
+  file << "archive_chart_preview_enabled="
+       << (sanitized.archiveChartPreviewEnabled ? 1 : 0) << "\n";
   file << "bga_enabled=" << (sanitized.bgaEnabled ? 1 : 0) << "\n";
   file << "bga_brightness_percent=" << sanitized.bgaBrightnessPercent << "\n";
   file << "bga_blur_strength=" << sanitized.bgaBlurStrength << "\n";
@@ -466,6 +468,11 @@ AppSettings AppSettings::load() {
         bool parsed = settings.showInvisibleNotes;
         if (parseBool(value, parsed)) {
           settings.showInvisibleNotes = parsed;
+        }
+      } else if (key == "archive_chart_preview_enabled") {
+        bool parsed = settings.archiveChartPreviewEnabled;
+        if (parseBool(value, parsed)) {
+          settings.archiveChartPreviewEnabled = parsed;
         }
       } else if (key == "bga_enabled") {
         bool parsed = settings.bgaEnabled;

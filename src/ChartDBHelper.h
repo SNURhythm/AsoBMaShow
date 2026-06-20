@@ -17,6 +17,7 @@ struct ChartMetaQuery {
   int tableId = 0;
   std::string tableLevel;
   bool coursesOnly = false;
+  bool solidArchivesOnly = false;
   int courseId = 0;
   int courseTableId = 0;
   std::string courseGroupName;
@@ -29,6 +30,10 @@ struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
   std::string difficultyTableLabels;
   bool unavailable = false;
+  bool solidArchive = false;
+  std::uint64_t archiveSize = 0;
+  std::uint64_t archiveUncompressedSize = 0;
+  int archiveFileCount = 0;
 };
 
 struct ChartEntry {
@@ -100,10 +105,12 @@ public:
 
   // CreateTable
   bool CreateChartMetaTable(sqlite3 *db);
+  bool CreateSolidArchiveTable(sqlite3 *db);
 
   // Insert ChartMeta
   bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);
   int CountAllChartMeta(sqlite3 *db);
+  int CountSolidArchives(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
                           std::vector<bms_parser::ChartMeta> &chartMetas);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
@@ -114,6 +121,8 @@ public:
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   int DeleteChartMetaInDirectory(sqlite3 *db,
                                  const std::filesystem::path &directory);
+  bool DeleteArchiveRecords(sqlite3 *db,
+                            const std::filesystem::path &archivePath);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
   void BeginTransaction(sqlite3 *db);

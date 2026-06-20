@@ -41,5 +41,5 @@ git submodule update --init --recursive
 - SQLite3
 - PortAudio (for desktop) + miniaudio (for mobile)
 - libsndfile
+- 7-Zip SDK (archive reading; see [third-party notices](THIRD_PARTY_NOTICES.md))
 - [bms-parser-cpp](https://github.com/SNURhythm/bms-parser-cpp) for fast BMS parsing
-

@@ -20,6 +20,7 @@ private:
   void applyTextColors(bool selected);
 
   bool unavailable = false;
+  bool solidArchive = false;
   View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;

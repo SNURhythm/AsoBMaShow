@@ -52,12 +52,15 @@ private:
   std::jthread checkEntriesThread;
   std::jthread findBmsThread;
   std::jthread replayExportThread;
+  std::jthread unzipThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
   std::atomic_bool replayExportInProgress = false;
+  std::atomic_bool unzipInProgress = false;
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
+      SolidArchives,
       DifficultyTable,
       DifficultyLevel,
       CoursesRoot,
@@ -109,6 +112,11 @@ private:
   View *findBmsButtonSlot = nullptr;
   Button *findBmsButton = nullptr;
   TextView *findBmsButtonText = nullptr;
+  View *unzipButtonSlot = nullptr;
+  Button *unzipButton = nullptr;
+  TextView *unzipButtonText = nullptr;
+  Button *parseLogButton = nullptr;
+  TextView *parseLogButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
   View *replayModalRoot = nullptr;
@@ -123,6 +131,23 @@ private:
   TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
+  View *parseLogModalRoot = nullptr;
+  View *unzipModalRoot = nullptr;
+  View *unzipProgressTrack = nullptr;
+  View *unzipProgressFill = nullptr;
+  TextView *unzipModalTitleText = nullptr;
+  TextView *unzipProgressMessageText = nullptr;
+  TextView *unzipProgressPercentText = nullptr;
+  TextView *unzipProgressDetailText = nullptr;
+  Button *unzipDeleteArchiveButton = nullptr;
+  Button *unzipCancelButton = nullptr;
+  TextView *unzipDeleteArchiveButtonText = nullptr;
+  TextView *unzipCancelButtonText = nullptr;
+  ScrollView *parseLogScrollView = nullptr;
+  View *parseLogContent = nullptr;
+  TextView *parseLogText = nullptr;
+  Button *parseLogCloseButton = nullptr;
+  TextView *parseLogCloseButtonText = nullptr;
   View *findBmsModalRoot = nullptr;
   View *findBmsProgressTrack = nullptr;
   View *findBmsProgressFill = nullptr;
@@ -173,6 +198,29 @@ private:
   };
   std::mutex replayExportProgressMutex;
   std::optional<PendingReplayExportProgress> pendingReplayExportProgress;
+  struct PendingUnzipResult {
+    bool success = false;
+    std::filesystem::path chartPath;
+    std::filesystem::path rootPath;
+    std::filesystem::path outputFolder;
+    std::filesystem::path archivePath;
+    std::string message;
+    bool canDeleteArchive = false;
+  };
+  struct PendingUnzipProgress {
+    double fraction = 0.0;
+    std::uint64_t current = 0;
+    std::uint64_t total = 0;
+    std::string message;
+  };
+  std::mutex unzipResultMutex;
+  std::optional<PendingUnzipResult> pendingUnzipResult;
+  std::mutex unzipProgressMutex;
+  std::optional<PendingUnzipProgress> pendingUnzipProgress;
+  std::optional<std::filesystem::path> pendingSelectChartPath;
+  std::optional<std::filesystem::path> suppressPreviewForChartPath;
+  std::optional<std::filesystem::path> unzipDeleteCandidatePath;
+  std::uint64_t unzipEstimatedUncompressedSize = 0;
   std::atomic_bool findBmsJobRunning = false;
   std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
@@ -221,6 +269,7 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
+  std::uint64_t parseLogDisplayedRevision = 0;
 
   void initView(ApplicationContext &context);
   void reloadFolderItems();
@@ -242,11 +291,31 @@ private:
   void refreshReadySettingsSummary();
   bms_parser::Chart *loadedSelectedChart() const;
   void startSelectedChart();
+  void startChartDirect(const ChartMetaRecord &record);
   void openChartViewerForSelection();
+  void openChartViewerDirect(const ChartMetaRecord &record);
   void revealSelectedChartInFileManager();
+  void startUnzipSelectedArchiveFolder();
+  void startUnzipArchiveFolder(const ChartMetaRecord &record);
   void setPlayableChartActionsVisible(bool visible);
+  void setUnzipButtonVisible(bool visible);
+  void refreshUnzipButtonForSelection(const ChartMetaRecord *record);
+  void buildUnzipProgressModal();
+  void showUnzipProgressModal();
+  void hideUnzipProgressModal();
+  void updateUnzipProgressUi(double fraction, const std::string &message,
+                             std::uint64_t current, std::uint64_t total);
+  void setUnzipDeleteArchiveButtonVisible(bool visible);
+  void deleteUnzippedSourceArchive();
+  void applyUnzipProgress();
+  void applyUnzipResult();
+  void selectChartByPathAfterReload(const std::filesystem::path &path);
   void setFindBmsButtonVisible(bool visible);
   void openFindBmsForSelection();
+  void buildParseLogModal();
+  void showParseLogModal();
+  void hideParseLogModal();
+  void refreshParseLogModal();
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void startFindBmsCandidateDownload(size_t candidateIndex);
