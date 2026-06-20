@@ -234,7 +234,7 @@ void GamePlayScene::init() {
     pauseScreen->setBackgroundColor(ui_theme::panelStrong());
     pauseScreen->setCornerRadius(ui_theme::panelRadius());
     pauseScreen->setShadow(ui_theme::shadow(), 0, 18, 28);
-    pauseScreen->setBorderColor(ui_theme::hairline());
+    pauseScreen->setBorderColor(ui_theme::hairlineSubtle());
     pauseScreen->setBorderWidth(1);
     {
       auto makePauseButton = [](const std::string &label, const Color &normal,
@@ -251,8 +251,9 @@ void GamePlayScene::init() {
         button->setSize(360, 64);
         button->setCornerRadius(ui_theme::controlRadius());
         button->setBackgroundColors(normal, hover, pressed);
-        button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
-                                Color(255, 255, 255, 255));
+        button->setBorderColors(ui_theme::withAlpha(border, 150),
+                                ui_theme::withAlpha(border, 190),
+                                ui_theme::withAlpha(border, 220));
         button->setStyledBorderWidth(1);
         return button;
       };
@@ -266,7 +267,7 @@ void GamePlayScene::init() {
       pauseScreen->addView(pauseText);
       pauseScreen->addView(makePauseButton(
           "Resume", Color(22, 132, 126, 238), Color(28, 151, 144, 248),
-          Color(40, 173, 164, 255), ui_theme::cyan(), [this]() {
+          Color(40, 173, 164, 255), ui_theme::accentBorderStrong(), [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
         if (pauseButton != nullptr) {
@@ -327,8 +328,9 @@ void GamePlayScene::init() {
   pauseButton->setBackgroundColors(Color(236, 253, 255, 42),
                                    Color(70, 230, 224, 88),
                                    Color(255, 204, 81, 120));
-  pauseButton->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                               ui_theme::amber());
+  pauseButton->setBorderColors(ui_theme::hairlineSubtle(),
+                               ui_theme::accentBorder(),
+                               ui_theme::withAlpha(ui_theme::amber(), 190));
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
     context.jukebox.pause();
