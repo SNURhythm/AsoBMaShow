@@ -223,6 +223,91 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
          *first != std::filesystem::path(".");
 }
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+std::filesystem::path pathFromComponents(
+    const std::vector<std::string> &components, std::size_t start) {
+  std::filesystem::path result;
+  for (std::size_t i = start; i < components.size(); ++i) {
+    if (components[i].empty() || components[i] == "/" ||
+        components[i] == ".") {
+      continue;
+    }
+    result /= components[i];
+  }
+  return result;
+}
+
+std::optional<std::filesystem::path>
+relativeToCurrentDocumentsPath(const std::filesystem::path &normalizedPath) {
+  const std::filesystem::path documentsRoot =
+      Utils::GetDocumentsPath().lexically_normal();
+  const std::string rootText = documentsRoot.generic_string();
+  const std::string pathText = normalizedPath.generic_string();
+  const std::string rootPrefix = rootText + "/";
+
+  if (pathText == rootText) {
+    return std::filesystem::path();
+  }
+  if (pathText.starts_with(rootPrefix)) {
+    return std::filesystem::path(pathText.substr(rootPrefix.size()));
+  }
+  return std::nullopt;
+}
+
+std::optional<std::filesystem::path>
+relativeToAnyAppDocumentsPath(const std::filesystem::path &path) {
+  if (path.empty() || !path.is_absolute()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path normalizedPath = path.lexically_normal();
+  if (auto relative = relativeToCurrentDocumentsPath(normalizedPath)) {
+    return relative;
+  }
+
+  std::vector<std::string> components;
+  for (const auto &part : normalizedPath) {
+    components.push_back(part.generic_string());
+  }
+  for (std::size_t i = 0; i + 4 < components.size(); ++i) {
+    if (components[i] == "Containers" && components[i + 1] == "Data" &&
+        components[i + 2] == "Application" &&
+        !components[i + 3].empty() && components[i + 4] == "Documents") {
+      return pathFromComponents(components, i + 5);
+    }
+  }
+  return std::nullopt;
+}
+
+std::filesystem::path
+storedDocumentsPath(const std::filesystem::path &relativeToDocuments) {
+  std::filesystem::path stored("Documents");
+  if (!relativeToDocuments.empty()) {
+    stored /= relativeToDocuments;
+  }
+  return stored;
+}
+
+std::optional<std::filesystem::path>
+relativeFromStoredDocumentsPath(const std::filesystem::path &path) {
+  if (path.empty() || path.is_absolute()) {
+    return std::nullopt;
+  }
+
+  auto it = path.begin();
+  if (it == path.end() || *it != std::filesystem::path("Documents")) {
+    return std::nullopt;
+  }
+  ++it;
+
+  std::filesystem::path relative;
+  for (; it != path.end(); ++it) {
+    relative /= *it;
+  }
+  return relative;
+}
+#endif
+
 bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
@@ -852,6 +937,152 @@ bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
          SQLITE_OK;
 }
 
+std::optional<std::string> normalizedPathTextForStorage(
+    const std::string &original) {
+  if (original.empty()) {
+    return std::nullopt;
+  }
+
+  std::filesystem::path path(utf8_to_path_t(original));
+  if (path.empty()) {
+    return std::nullopt;
+  }
+  ChartDBHelper::ToAbsolutePath(path);
+  ChartDBHelper::ToRelativePath(path);
+
+  const std::string normalized = path_t_to_utf8(fspath_to_path_t(path));
+  if (normalized == original) {
+    return std::nullopt;
+  }
+  return normalized;
+}
+
+bool normalizedPathValueExists(sqlite3_stmt *stmt,
+                               const std::string &normalized) {
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  bindText(stmt, 1, normalized);
+  const bool exists = sqlite3_step(stmt) == SQLITE_ROW;
+  return exists;
+}
+
+bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
+                               const char *column, bool primaryKey) {
+  struct PendingNormalization {
+    sqlite3_int64 rowid = 0;
+    std::string normalized;
+  };
+
+  std::string selectQuery = "SELECT rowid, ";
+  selectQuery += column;
+  selectQuery += " FROM ";
+  selectQuery += table;
+  selectQuery += " WHERE ";
+  selectQuery += column;
+  selectQuery += " IS NOT NULL AND ";
+  selectQuery += column;
+  selectQuery += " != ''";
+
+  sqlite3_stmt *selectStmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, selectQuery.c_str(), -1, &selectStmt,
+                              nullptr);
+  if (rc != SQLITE_OK) {
+    sqlite3_finalize(selectStmt);
+    return false;
+  }
+
+  std::vector<PendingNormalization> pending;
+  while (sqlite3_step(selectStmt) == SQLITE_ROW) {
+    const sqlite3_int64 rowid = sqlite3_column_int64(selectStmt, 0);
+    const auto *text =
+        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 1));
+    if (text == nullptr) {
+      continue;
+    }
+
+    const auto normalized = normalizedPathTextForStorage(text);
+    if (normalized.has_value()) {
+      pending.push_back({.rowid = rowid, .normalized = *normalized});
+    }
+  }
+  sqlite3_finalize(selectStmt);
+  if (pending.empty()) {
+    return false;
+  }
+
+  std::string updateQuery =
+      std::string(primaryKey ? "UPDATE OR IGNORE " : "UPDATE ") + table +
+      " SET " + column + " = ? WHERE rowid = ?";
+  sqlite3_stmt *updateStmt = nullptr;
+  rc = sqlite3_prepare_v2(db, updateQuery.c_str(), -1, &updateStmt, nullptr);
+  if (rc != SQLITE_OK) {
+    sqlite3_finalize(updateStmt);
+    return false;
+  }
+
+  sqlite3_stmt *existsStmt = nullptr;
+  sqlite3_stmt *deleteStmt = nullptr;
+  if (primaryKey) {
+    std::string existsQuery = "SELECT 1 FROM ";
+    existsQuery += table;
+    existsQuery += " WHERE ";
+    existsQuery += column;
+    existsQuery += " = ? LIMIT 1";
+    rc = sqlite3_prepare_v2(db, existsQuery.c_str(), -1, &existsStmt,
+                            nullptr);
+    if (rc != SQLITE_OK) {
+      sqlite3_finalize(updateStmt);
+      sqlite3_finalize(existsStmt);
+      return false;
+    }
+
+    std::string deleteQuery = "DELETE FROM ";
+    deleteQuery += table;
+    deleteQuery += " WHERE rowid = ?";
+    rc = sqlite3_prepare_v2(db, deleteQuery.c_str(), -1, &deleteStmt,
+                            nullptr);
+    if (rc != SQLITE_OK) {
+      sqlite3_finalize(updateStmt);
+      sqlite3_finalize(existsStmt);
+      sqlite3_finalize(deleteStmt);
+      return false;
+    }
+  }
+
+  bool changed = false;
+  for (const auto &item : pending) {
+    sqlite3_reset(updateStmt);
+    sqlite3_clear_bindings(updateStmt);
+    bindText(updateStmt, 1, item.normalized);
+    sqlite3_bind_int64(updateStmt, 2, item.rowid);
+    rc = sqlite3_step(updateStmt);
+    if (rc == SQLITE_DONE && sqlite3_changes(db) > 0) {
+      changed = true;
+      continue;
+    }
+
+    if (!primaryKey ||
+        !normalizedPathValueExists(existsStmt, item.normalized)) {
+      continue;
+    }
+    sqlite3_reset(deleteStmt);
+    sqlite3_clear_bindings(deleteStmt);
+    sqlite3_bind_int64(deleteStmt, 1, item.rowid);
+    if (sqlite3_step(deleteStmt) == SQLITE_DONE &&
+        sqlite3_changes(db) > 0) {
+      changed = true;
+    }
+  }
+
+  sqlite3_finalize(updateStmt);
+  sqlite3_finalize(existsStmt);
+  sqlite3_finalize(deleteStmt);
+  if (changed) {
+    SDL_Log("Normalized stored app document paths in %s.%s", table, column);
+  }
+  return changed;
+}
+
 sqlite3_int64 clampSqlInteger(std::uint64_t value) {
   return value > static_cast<std::uint64_t>(
                      std::numeric_limits<sqlite3_int64>::max())
@@ -1011,6 +1242,9 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating archive scan cache index")) {
       return false;
     }
+  }
+  if (normalizeStoredPathColumn(db, "archive_scan_cache", "path", true)) {
+    bumpLibraryRevision();
   }
   return true;
 }
@@ -1759,6 +1993,12 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
       return false;
     }
   }
+  const bool normalizedPaths =
+      normalizeStoredPathColumn(db, "chart_meta", "path", true) |
+      normalizeStoredPathColumn(db, "chart_meta", "folder", false);
+  if (normalizedPaths) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -1787,6 +2027,9 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating solid archive index")) {
       return false;
     }
+  }
+  if (normalizeStoredPathColumn(db, "solid_archives", "path", true)) {
+    bumpLibraryRevision();
   }
   return true;
 }
@@ -2775,6 +3018,9 @@ bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
     return false;
   }
   sqlite3_free(errMsg);
+  if (normalizeStoredPathColumn(db, "entries", "path", true)) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -2796,7 +3042,9 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
     sqlite3_close(db);
     return false;
   }
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  std::filesystem::path storedPath = path;
+  ToRelativePath(storedPath);
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
   sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 2, iosBookmark.c_str(), -1, SQLITE_TRANSIENT);
   rc = sqlite3_step(stmt);
@@ -2827,7 +3075,11 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
   std::vector<ChartEntry> entries;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     ChartEntry entry;
-    entry.path = ReadPath(stmt, 0);
+    std::filesystem::path path(ReadPath(stmt, 0));
+    if (!path.empty()) {
+      ToAbsolutePath(path);
+    }
+    entry.path = fspath_to_path_t(path);
     const char *bookmark =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
     entry.iosBookmark = bookmark != nullptr ? bookmark : "";
@@ -2848,7 +3100,9 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
     sqlite3_finalize(stmt);
     return false;
   }
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  std::filesystem::path storedPath = path;
+  ToRelativePath(storedPath);
+  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
   sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
@@ -4079,17 +4333,8 @@ void ChartDBHelper::ToRelativePath(
     return;
   }
 
-  const std::filesystem::path documentsRoot =
-      Utils::GetDocumentsPath("BMS").lexically_normal();
-  const std::filesystem::path normalizedPath = path.lexically_normal();
-  const std::string rootText = documentsRoot.string();
-  const std::string pathText = normalizedPath.string();
-  const std::string rootPrefix = rootText + "/";
-
-  if (pathText == rootText) {
-    path.clear();
-  } else if (pathText.starts_with(rootPrefix)) {
-    path = pathText.substr(rootPrefix.size());
+  if (auto relative = relativeToAnyAppDocumentsPath(path)) {
+    path = storedDocumentsPath(*relative);
   }
 #endif
 }
@@ -4097,7 +4342,20 @@ void ChartDBHelper::ToRelativePath(
 void ChartDBHelper::ToAbsolutePath(
     [[maybe_unused]] std::filesystem::path &path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (!path.empty() && path.is_relative()) {
+  if (path.empty()) {
+    return;
+  }
+
+  if (path.is_absolute()) {
+    if (auto relative = relativeToAnyAppDocumentsPath(path)) {
+      path = Utils::GetDocumentsPath() / *relative;
+    }
+    return;
+  }
+
+  if (auto relative = relativeFromStoredDocumentsPath(path)) {
+    path = Utils::GetDocumentsPath() / *relative;
+  } else {
     path = Utils::GetDocumentsPath("BMS") / path;
   }
 #endif
