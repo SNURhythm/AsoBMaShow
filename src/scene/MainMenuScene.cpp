@@ -2138,11 +2138,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->applyYogaLayout();
 }
 
-void MainMenuScene::reloadFolderItems() {
+void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   if (folderRecyclerView == nullptr) {
     return;
   }
 
+  const float previousScrollOffset = preserveViewState
+                                         ? folderRecyclerView->scrollOffset
+                                         : 0.0f;
   auto dbHelper = ChartDBHelper::GetInstance();
   std::vector<LibraryFolderItem> folders;
 
@@ -2264,17 +2267,39 @@ void MainMenuScene::reloadFolderItems() {
     activeIndex = 0;
   }
 
+  const int folderCount = static_cast<int>(folders.size());
   folderRecyclerView->setItems(std::move(folders));
   folderRecyclerView->selectedIndex = activeIndex;
+  if (preserveViewState) {
+    const float maxOffset = std::max(
+        0.0f, static_cast<float>(
+                  std::max(1, folderCount) * folderRecyclerView->itemHeight -
+                  folderRecyclerView->getHeight()));
+    folderRecyclerView->scrollOffset =
+        std::clamp(previousScrollOffset, 0.0f, maxOffset);
+    folderRecyclerView->rebindVisibleItems();
+  }
   auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
   if (selectedView != nullptr) {
     selectedView->onSelected();
   }
 }
 
-void MainMenuScene::reloadChartList() {
+void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr) {
     return;
+  }
+
+  const float previousScrollOffset = preserveViewState
+                                         ? recyclerView->scrollOffset
+                                         : 0.0f;
+  const int previousSelectedIndex =
+      preserveViewState ? recyclerView->selectedIndex : -1;
+  path_t previousSelectedPath;
+  if (preserveViewState && previousSelectedIndex >= 0 &&
+      previousSelectedIndex < recyclerView->size()) {
+    previousSelectedPath =
+        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
   }
 
   ChartMetaQuery query;
@@ -2309,11 +2334,57 @@ void MainMenuScene::reloadChartList() {
 
   const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   chartListCache.reset(db, query, count);
-  refreshReplayAvailability(nullptr);
+  if (!preserveViewState || previousSelectedPath.empty()) {
+    refreshReplayAvailability(nullptr);
+  }
   recyclerView->setItemProvider(count,
                                 [this](int index) -> const ChartMetaRecord & {
                                   return chartListCache.get(index);
                                 });
+  if (!preserveViewState) {
+    return;
+  }
+
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(std::max(1, count) * recyclerView->itemHeight -
+                                recyclerView->getHeight()));
+  recyclerView->scrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
+
+  int restoredSelectedIndex = -1;
+  auto pathMatchesPreviousSelection = [&](int index) {
+    if (index < 0 || index >= count || previousSelectedPath.empty()) {
+      return false;
+    }
+    return fspath_to_path_t(chartListCache.get(index).meta.BmsPath) ==
+           previousSelectedPath;
+  };
+
+  if (pathMatchesPreviousSelection(previousSelectedIndex)) {
+    restoredSelectedIndex = previousSelectedIndex;
+  } else if (!previousSelectedPath.empty()) {
+    const int visibleStart =
+        std::max(0, static_cast<int>(previousScrollOffset /
+                                     std::max(1, recyclerView->itemHeight)) -
+                        chartListCache.pageSize);
+    const int visibleEnd =
+        std::min(count, visibleStart + chartListCache.pageSize * 3);
+    for (int i = visibleStart; i < visibleEnd; ++i) {
+      if (pathMatchesPreviousSelection(i)) {
+        restoredSelectedIndex = i;
+        break;
+      }
+    }
+  }
+
+  recyclerView->selectedIndex = restoredSelectedIndex;
+  if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
+    refreshReplayAvailability(nullptr);
+    setPlayableChartActionsVisible(false);
+    setUnzipButtonVisible(false);
+    setFindBmsButtonVisible(false);
+  }
+  recyclerView->rebindVisibleItems();
 }
 
 void MainMenuScene::reloadScoreClearRanks() {
@@ -2354,8 +2425,8 @@ void MainMenuScene::refreshLibraryIfNeeded() {
   }
 
   reloadScoreClearRanks();
-  reloadFolderItems();
-  reloadChartList();
+  reloadFolderItems(true);
+  reloadChartList(true);
   libraryRevision = revision;
 }
 
@@ -2383,10 +2454,10 @@ void MainMenuScene::applyPendingUiUpdates() {
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
   if (shouldReloadFolders) {
     reloadScoreClearRanks();
-    reloadFolderItems();
+    reloadFolderItems(true);
   }
   if (shouldReloadFolders || shouldReloadCharts) {
-    reloadChartList();
+    reloadChartList(true);
     libraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   }
   if ((shouldReloadFolders || shouldReloadCharts) &&

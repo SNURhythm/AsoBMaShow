@@ -339,8 +339,8 @@ private:
   std::uint64_t parseLogDisplayedRevision = 0;
 
   void initView(ApplicationContext &context);
-  void reloadFolderItems();
-  void reloadChartList();
+  void reloadFolderItems(bool preserveViewState = false);
+  void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
