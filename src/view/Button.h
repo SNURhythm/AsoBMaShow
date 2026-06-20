@@ -11,6 +11,7 @@ class Button : public View {
 private:
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
+  void onThemeChanged() override;
 
 private:
   std::function<void()> onClickListener;
@@ -24,6 +25,12 @@ private:
   Color normalBorderColor = Color(0, 0, 0, 0);
   Color hoverBorderColor = Color(0, 0, 0, 0);
   Color pressedBorderColor = Color(0, 0, 0, 0);
+  ThemeColorProvider normalBackgroundColorProvider;
+  ThemeColorProvider hoverBackgroundColorProvider;
+  ThemeColorProvider pressedBackgroundColorProvider;
+  ThemeColorProvider normalBorderColorProvider;
+  ThemeColorProvider hoverBorderColorProvider;
+  ThemeColorProvider pressedBorderColorProvider;
   int styleBorderWidth = 0;
   bool hasStyledBackground = false;
   bool hasStyledBorder = false;
@@ -36,12 +43,19 @@ public:
   void onLayout() override;
   void onMove(int newX, int newY) override;
   void onResize(int newWidth, int newHeight) override;
+  void propagateThemeChange() override;
 
   void setOnClickListener(std::function<void()> listener);
   void setContentView(View *view);
   Button *setBackgroundColors(const Color &normal, const Color &hover,
                               const Color &pressed);
+  Button *setThemedBackgroundColors(ThemeColorProvider normal,
+                                    ThemeColorProvider hover,
+                                    ThemeColorProvider pressed);
   Button *setBorderColors(const Color &normal, const Color &hover,
                           const Color &pressed);
+  Button *setThemedBorderColors(ThemeColorProvider normal,
+                                ThemeColorProvider hover,
+                                ThemeColorProvider pressed);
   Button *setStyledBorderWidth(int width);
 };

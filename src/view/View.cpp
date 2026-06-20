@@ -7,10 +7,9 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
 Color colorWithAlphaScale(Color color, float alphaScale) {
-  color.a = static_cast<uint8_t>(
-      std::clamp(static_cast<int>(std::lround(
-                     static_cast<float>(color.a) * alphaScale)),
-                 0, 255));
+  color.a = static_cast<uint8_t>(std::clamp(
+      static_cast<int>(std::lround(static_cast<float>(color.a) * alphaScale)),
+      0, 255));
   return color;
 }
 
@@ -46,10 +45,9 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
     return;
   }
 
-  const int segments = std::clamp(static_cast<int>(std::ceil(radius / 4.0f)),
-                                  4, 12);
-  const uint16_t ringVertexCount =
-      static_cast<uint16_t>((segments + 1) * 4);
+  const int segments =
+      std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
+  const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
   const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
   const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
 
@@ -68,11 +66,9 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
   auto *indices = reinterpret_cast<uint16_t *>(tib.data);
   const uint32_t abgr = color.toABGR();
   uint16_t vertexIndex = 0;
-  vertices[vertexIndex++] = {static_cast<float>(x) +
-                                 static_cast<float>(width) * 0.5f,
-                             static_cast<float>(y) +
-                                 static_cast<float>(height) * 0.5f,
-                             0.0f, abgr};
+  vertices[vertexIndex++] = {
+      static_cast<float>(x) + static_cast<float>(width) * 0.5f,
+      static_cast<float>(y) + static_cast<float>(height) * 0.5f, 0.0f, abgr};
 
   const auto appendCorner = [&](float cx, float cy, float startAngle) {
     for (int i = 0; i <= segments; ++i) {
@@ -113,15 +109,13 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
 void submitGradientRect(const RenderContext &context, int x, int y, int width,
                         int height, const Color &topColor,
                         const Color &bottomColor) {
-  if (width <= 0 || height <= 0 ||
-      (topColor.a == 0 && bottomColor.a == 0)) {
+  if (width <= 0 || height <= 0 || (topColor.a == 0 && bottomColor.a == 0)) {
     return;
   }
 
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
-  bgfx::allocTransientVertexBuffer(&tvb, 4,
-                                   rendering::PosColorVertex::ms_decl);
+  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosColorVertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
 
   auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
@@ -163,8 +157,7 @@ void View::eraseInactiveTemporaryEventListeners() {
       temporaryEventListeners.end());
 }
 
-uint64_t
-View::addTemporaryEventListener(TemporaryEventListener listener) {
+uint64_t View::addTemporaryEventListener(TemporaryEventListener listener) {
   if (!listener) {
     return 0;
   }
@@ -313,14 +306,26 @@ View *View::setDirection(YGDirection direction) {
 }
 
 View *View::setBackgroundColor(const Color &color) {
+  themedBackgroundColorProvider = nullptr;
   backgroundColor = color;
   hasBackground = true;
   hasGradientBackground = false;
   return this;
 }
 
+View *View::setThemedBackgroundColor(ThemeColorProvider provider) {
+  themedBackgroundColorProvider = std::move(provider);
+  if (themedBackgroundColorProvider) {
+    backgroundColor = themedBackgroundColorProvider();
+    hasBackground = true;
+    hasGradientBackground = false;
+  }
+  return this;
+}
+
 View *View::setBackgroundGradient(const Color &topColor,
                                   const Color &bottomColor) {
+  themedBackgroundColorProvider = nullptr;
   backgroundGradientTopColor = topColor;
   backgroundGradientBottomColor = bottomColor;
   hasBackground = true;
@@ -329,6 +334,7 @@ View *View::setBackgroundGradient(const Color &topColor,
 }
 
 View *View::clearBackgroundColor() {
+  themedBackgroundColorProvider = nullptr;
   hasBackground = false;
   hasGradientBackground = false;
   return this;
@@ -341,6 +347,7 @@ View *View::setCornerRadius(float radius) {
 
 View *View::setShadow(const Color &color, int offsetX, int offsetY,
                       int spread) {
+  themedShadowColorProvider = nullptr;
   shadowColor = color;
   shadowOffsetX = offsetX;
   shadowOffsetY = offsetY;
@@ -349,19 +356,44 @@ View *View::setShadow(const Color &color, int offsetX, int offsetY,
   return this;
 }
 
+View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
+                            int offsetY, int spread) {
+  themedShadowColorProvider = std::move(provider);
+  shadowOffsetX = offsetX;
+  shadowOffsetY = offsetY;
+  shadowSpread = std::max(0, spread);
+  if (themedShadowColorProvider) {
+    shadowColor = themedShadowColorProvider();
+    hasShadow = shadowColor.a > 0 && shadowSpread > 0;
+  }
+  return this;
+}
+
 View *View::clearShadow() {
+  themedShadowColorProvider = nullptr;
   hasShadow = false;
   shadowSpread = 0;
   return this;
 }
 
 View *View::setBorderColor(const Color &color) {
+  themedBorderColorProvider = nullptr;
   borderColor = color;
   hasBorder = true;
   return this;
 }
 
+View *View::setThemedBorderColor(ThemeColorProvider provider) {
+  themedBorderColorProvider = std::move(provider);
+  if (themedBorderColorProvider) {
+    borderColor = themedBorderColorProvider();
+    hasBorder = true;
+  }
+  return this;
+}
+
 View *View::clearBorderColor() {
+  themedBorderColorProvider = nullptr;
   hasBorder = false;
   return this;
 }
@@ -406,6 +438,31 @@ void View::applyYogaLayoutFromRoot() {
   root->applyYogaLayoutImmediate();
 }
 
+void View::onThemeChanged() {
+  if (themedBackgroundColorProvider) {
+    backgroundColor = themedBackgroundColorProvider();
+    hasBackground = true;
+    hasGradientBackground = false;
+  }
+  if (themedBorderColorProvider) {
+    borderColor = themedBorderColorProvider();
+    hasBorder = true;
+  }
+  if (themedShadowColorProvider) {
+    shadowColor = themedShadowColorProvider();
+    hasShadow = shadowColor.a > 0 && shadowSpread > 0;
+  }
+}
+
+void View::propagateThemeChange() {
+  onThemeChanged();
+  for (auto *child : children) {
+    if (child != nullptr) {
+      child->propagateThemeChange();
+    }
+  }
+}
+
 void View::renderBoxDecoration(RenderContext &context) const {
   if ((!hasBackground && (!hasBorder || borderWidth <= 0) && !hasShadow) ||
       getWidth() <= 0 || getHeight() <= 0) {
@@ -424,8 +481,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
   if (hasShadow) {
     constexpr int kShadowLayers = 4;
     for (int layer = kShadowLayers; layer >= 1; --layer) {
-      const float t = static_cast<float>(layer) /
-                      static_cast<float>(kShadowLayers);
+      const float t =
+          static_cast<float>(layer) / static_cast<float>(kShadowLayers);
       const int grow =
           std::max(1, static_cast<int>(std::lround(shadowSpread * t)));
       const Color layerColor =
@@ -526,15 +583,15 @@ void View::applyYogaLayoutImmediate() {
   }
 }
 
-View* View::findViewByName(const std::string& targetName) {
-    if (this->name == targetName) {
-        return this;
+View *View::findViewByName(const std::string &targetName) {
+  if (this->name == targetName) {
+    return this;
+  }
+  for (auto *child : children) {
+    View *found = child->findViewByName(targetName);
+    if (found) {
+      return found;
     }
-    for (auto* child : children) {
-        View* found = child->findViewByName(targetName);
-        if (found) {
-            return found;
-        }
-    }
-    return nullptr;
+  }
+  return nullptr;
 }

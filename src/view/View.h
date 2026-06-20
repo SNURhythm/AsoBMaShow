@@ -74,6 +74,8 @@ private:
 
 class View {
 public:
+  using ThemeColorProvider = std::function<Color()>;
+
   struct LayoutBatchScope {
     LayoutBatchScope() { View::beginLayoutBatch(); }
     ~LayoutBatchScope() { View::endLayoutBatch(); }
@@ -171,9 +173,7 @@ public:
       // Submit the draw call
       static const bgfx::ProgramHandle kSimpleProgram =
           rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-      bgfx::submit(
-          rendering::ui_view,
-          kSimpleProgram);
+      bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
 #endif
     renderBoxDecoration(context);
@@ -295,14 +295,17 @@ public:
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
   View *setBackgroundColor(const Color &color);
-  View *setBackgroundGradient(const Color &topColor,
-                              const Color &bottomColor);
+  View *setThemedBackgroundColor(ThemeColorProvider provider);
+  View *setBackgroundGradient(const Color &topColor, const Color &bottomColor);
   View *clearBackgroundColor();
   View *setCornerRadius(float radius);
   [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
   View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
+  View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
+                        int spread);
   View *clearShadow();
   View *setBorderColor(const Color &color);
+  View *setThemedBorderColor(ThemeColorProvider provider);
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
@@ -315,6 +318,7 @@ public:
   bool drawBoundingBox = false;
   void applyYogaLayout();
   void applyYogaLayoutFromRoot();
+  virtual void propagateThemeChange();
   static void beginLayoutBatch() { ++layoutBatchDepth; }
   static void endLayoutBatch() {
     if (layoutBatchDepth == 0) {
@@ -329,6 +333,7 @@ public:
 protected:
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
+  virtual void onThemeChanged();
   // onResize
   virtual void onResize(int newWidth, int newHeight) {}
   // onMove
@@ -393,6 +398,9 @@ private:
   Color backgroundGradientBottomColor;
   Color borderColor;
   Color shadowColor;
+  ThemeColorProvider themedBackgroundColorProvider;
+  ThemeColorProvider themedBorderColorProvider;
+  ThemeColorProvider themedShadowColorProvider;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view

@@ -145,6 +145,21 @@ inline Color panelSubtle() {
                                           : Color(11, 17, 26, 224);
 }
 
+inline Color mainMenuBackdrop() {
+  return activeMode() == ThemeMode::Light ? Color(247, 252, 253, 96)
+                                          : Color(5, 8, 13, 88);
+}
+
+inline Color mainMenuPanel() {
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 214)
+                                          : Color(15, 22, 32, 204);
+}
+
+inline Color mainMenuSurface() {
+  return activeMode() == ThemeMode::Light ? Color(232, 241, 243, 214)
+                                          : Color(24, 35, 48, 210);
+}
+
 inline Color control() {
   return activeMode() == ThemeMode::Light ? Color(232, 241, 243, 238)
                                           : Color(24, 35, 48, 238);

@@ -154,19 +154,20 @@ public:
   }
 
   void onSelected() override {
-    const Color fill = ui_theme::infoActionHover();
-    setBackgroundColor(fill);
-    setBorderColor(ui_theme::withAlpha(ui_theme::infoActionPressed(), 210));
+    setThemedBackgroundColor(ui_theme::infoActionHover);
+    setThemedBorderColor(
+        [] { return ui_theme::withAlpha(ui_theme::infoActionPressed(), 210); });
     if (label != nullptr) {
-      label->setColor(ui_theme::sdl(ui_theme::textOn(fill)));
+      label->setThemedColor(
+          [] { return ui_theme::textOn(ui_theme::infoActionHover()); });
     }
   }
 
   void onUnselected() override {
-    setBackgroundColor(ui_theme::control());
-    setBorderColor(ui_theme::hairlineStrong());
+    setThemedBackgroundColor(ui_theme::control);
+    setThemedBorderColor(ui_theme::hairlineStrong);
     if (label != nullptr) {
-      label->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+      label->setThemedColor(ui_theme::textPrimary);
     }
   }
 
@@ -658,48 +659,50 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   return {.type = GaugeType::Normal};
 }
 
-void styleActionButton(Button *button, TextView *text, bool enabled,
-                       const Color &normal, const Color &hover,
-                       const Color &pressed, const Color &border) {
+void styleThemedActionButton(Button *button, TextView *text, bool enabled,
+                             View::ThemeColorProvider normal,
+                             View::ThemeColorProvider hover,
+                             View::ThemeColorProvider pressed,
+                             View::ThemeColorProvider border) {
   if (button == nullptr || text == nullptr) {
     return;
   }
 
   button->setCornerRadius(ui_theme::controlRadius());
   if (enabled) {
-    button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    button->setThemedBackgroundColors(normal, hover, pressed);
+    button->setThemedBorderColors(
+        [border] { return ui_theme::withAlpha(border(), 150); },
+        [border] { return ui_theme::withAlpha(border(), 190); },
+        [border] { return ui_theme::withAlpha(border(), 220); });
+    text->setThemedColor([normal] { return ui_theme::textOn(normal()); });
   } else {
-    button->setBackgroundColors(ui_theme::panelSubtle(),
-                                ui_theme::panelSubtle(),
-                                ui_theme::panelSubtle());
-    button->setBorderColors(ui_theme::hairlineSubtle(),
-                            ui_theme::hairlineSubtle(),
-                            ui_theme::hairlineSubtle());
-    text->setColor(ui_theme::sdl(ui_theme::textMuted()));
+    button->setThemedBackgroundColors(
+        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
+    button->setThemedBorderColors(ui_theme::hairlineSubtle,
+                                  ui_theme::hairlineSubtle,
+                                  ui_theme::hairlineSubtle);
+    text->setThemedColor(ui_theme::textMuted);
   }
 }
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleActionButton(button, text, true, ui_theme::primaryAction(),
-                      ui_theme::primaryActionHover(),
-                      ui_theme::primaryActionPressed(),
-                      ui_theme::accentBorderStrong());
+    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
+                            ui_theme::primaryActionHover,
+                            ui_theme::primaryActionPressed,
+                            ui_theme::accentBorderStrong);
   } else {
-    styleActionButton(button, text, true, ui_theme::control(),
-                      ui_theme::controlHover(), ui_theme::controlPressed(),
-                      ui_theme::hairlineStrong());
+    styleThemedActionButton(button, text, true, ui_theme::control,
+                            ui_theme::controlHover, ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
   }
 }
 
 TextView *makeModalLabel(const std::string &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   label->setText(text);
-  label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
 }
@@ -825,142 +828,38 @@ void MainMenuScene::init() {
 void MainMenuScene::onPause() { pauseLibraryTaskWorker(); }
 
 void MainMenuScene::onResume() {
-  rebuildViewForActiveTheme();
+  applyThemeChange();
   resumeLibraryTaskWorker();
   startLibraryTaskWorker();
   refreshScoreClearRanksIfNeeded();
   refreshLibraryIfNeeded();
 }
 
-void MainMenuScene::resetViewReferences() {
-  recyclerView = nullptr;
-  folderRecyclerView = nullptr;
-  rootLayout = nullptr;
-  jacketView = nullptr;
-  searchBox = nullptr;
-  difficultyFilterBox = nullptr;
-  startButton = nullptr;
-  chartActionsRow = nullptr;
-  replayButtonSlot = nullptr;
-  replayButton = nullptr;
-  findBmsButtonSlot = nullptr;
-  findBmsButton = nullptr;
-  findBmsButtonText = nullptr;
-  unzipButtonSlot = nullptr;
-  unzipButton = nullptr;
-  unzipButtonText = nullptr;
-  parseLogButton = nullptr;
-  parseLogButtonText = nullptr;
-  tasksButton = nullptr;
-  tasksButtonText = nullptr;
-  replayButtonText = nullptr;
-  replayStatusText = nullptr;
-  replayModalRoot = nullptr;
-  replayModalContentFrame = nullptr;
-  replayListContent = nullptr;
-  replayExportOptionsContent = nullptr;
-  replayExportProgressContent = nullptr;
-  replayExportProgressTrack = nullptr;
-  replayExportProgressFill = nullptr;
-  replayModalTitleText = nullptr;
-  replayExportProgressMessageText = nullptr;
-  replayExportProgressPercentText = nullptr;
-  startButtonText = nullptr;
-  playOptionsModalRoot = nullptr;
-  parseLogModalRoot = nullptr;
-  tasksModalRoot = nullptr;
-  unzipModalRoot = nullptr;
-  unzipProgressTrack = nullptr;
-  unzipProgressFill = nullptr;
-  unzipModalTitleText = nullptr;
-  unzipProgressMessageText = nullptr;
-  unzipProgressPercentText = nullptr;
-  unzipProgressDetailText = nullptr;
-  unzipDeleteArchiveButton = nullptr;
-  unzipCancelButton = nullptr;
-  unzipDeleteArchiveButtonText = nullptr;
-  unzipCancelButtonText = nullptr;
-  parseLogScrollView = nullptr;
-  parseLogContent = nullptr;
-  parseLogText = nullptr;
-  parseLogCloseButton = nullptr;
-  parseLogCloseButtonText = nullptr;
-  tasksScrollView = nullptr;
-  tasksContent = nullptr;
-  tasksText = nullptr;
-  tasksRefreshButton = nullptr;
-  tasksRefreshButtonText = nullptr;
-  tasksCloseButton = nullptr;
-  tasksCloseButtonText = nullptr;
-  findBmsModalRoot = nullptr;
-  findBmsProgressTrack = nullptr;
-  findBmsProgressFill = nullptr;
-  findBmsModalTitleText = nullptr;
-  findBmsStatusText = nullptr;
-  findBmsDetailText = nullptr;
-  findBmsLogScrollView = nullptr;
-  findBmsLogContent = nullptr;
-  findBmsLogText = nullptr;
-  findBmsCloseButton = nullptr;
-  findBmsOpenButton = nullptr;
-  findBmsGoogleButton = nullptr;
-  findBmsRefreshButton = nullptr;
-  findBmsCandidateRecyclerView = nullptr;
-  findBmsCloseButtonText = nullptr;
-  findBmsOpenButtonText = nullptr;
-  findBmsGoogleButtonText = nullptr;
-  findBmsRefreshButtonText = nullptr;
-  readyGaugeText = nullptr;
-  readyPlayOptionText = nullptr;
-  playOptionsCloseButton = nullptr;
-  playOptionsCloseButtonText = nullptr;
-  replayListView = nullptr;
-  replayWatchButton = nullptr;
-  replayModalExportButton = nullptr;
-  replayModalCloseButton = nullptr;
-  replayFps60Button = nullptr;
-  replayFps120Button = nullptr;
-  replayResolution1080Button = nullptr;
-  replayResolutionFullButton = nullptr;
-  replayWatchButtonText = nullptr;
-  replayModalExportButtonText = nullptr;
-  replayModalCloseButtonText = nullptr;
-  replayFps60ButtonText = nullptr;
-  replayFps120ButtonText = nullptr;
-  replayResolution1080ButtonText = nullptr;
-  replayResolutionFullButtonText = nullptr;
-  gaugeSelectionButtons.clear();
-  playOptionButtons.clear();
-}
-
-void MainMenuScene::rebuildViewForActiveTheme() {
+void MainMenuScene::applyThemeChange() {
   const ui_theme::ThemeMode activeMode = ui_theme::activeMode();
   if (appliedUiThemeMode == activeMode) {
     return;
   }
 
-  std::optional<std::filesystem::path> selectedPath;
-  if (recyclerView != nullptr && recyclerView->selectedIndex >= 0 &&
-      recyclerView->selectedIndex < recyclerView->size()) {
-    selectedPath = recyclerView->get(recyclerView->selectedIndex).meta.BmsPath;
-  }
-
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    SDL_Log("Joining preview thread before theme rebuild");
-    loadThread.join();
-  }
-
+  appliedUiThemeMode = activeMode;
   for (auto *view : views) {
-    delete view;
+    if (view != nullptr) {
+      view->propagateThemeChange();
+    }
   }
-  views.clear();
-  deferred.clear();
-  resetViewReferences();
-  initView(context);
-
-  if (selectedPath.has_value() && !selectedPath->empty()) {
-    selectChartByPathAfterReload(*selectedPath);
+  if (folderRecyclerView != nullptr) {
+    folderRecyclerView->rebindVisibleItems();
+  }
+  if (recyclerView != nullptr) {
+    recyclerView->rebindVisibleItems();
+  }
+  refreshGaugeSelectionButtons();
+  refreshPlayOptionButtons();
+  refreshReplayModalActions();
+  refreshReplayExportOptionButtons();
+  refreshFindBmsModal();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
   }
 }
 
@@ -1624,14 +1523,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
 
-  const Color kPanelFill = ui_theme::panel();
-  const Color kSurfaceFill = ui_theme::control();
-  const Color kPrimaryButtonNormal = ui_theme::primaryAction();
-  const Color kPrimaryButtonHover = ui_theme::primaryActionHover();
-  const Color kPrimaryButtonPressed = ui_theme::primaryActionPressed();
-  const Color kSecondaryButtonNormal = ui_theme::dangerAction();
-  const Color kSecondaryButtonHover = ui_theme::dangerActionHover();
-  const Color kSecondaryButtonPressed = ui_theme::dangerActionPressed();
   appliedUiThemeMode = ui_theme::activeMode();
 
   recyclerView = new RecyclerView<ChartMetaRecord>(
@@ -1846,7 +1737,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
-  rootLayout->setBackgroundColor(ui_theme::backdrop());
+  rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1854,15 +1745,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setWidth(280);
   nav->setGap(12);
   nav->setPadding(Edge::All, 14);
-  nav->setBackgroundColor(kPanelFill);
+  nav->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   nav->setCornerRadius(ui_theme::panelRadius());
-  nav->setShadow(ui_theme::shadow(), 0, 12, 20);
-  nav->setBorderColor(ui_theme::hairline());
+  nav->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
 
   auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   navTitle->setText("Library");
-  navTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  navTitle->setThemedColor(ui_theme::textPrimary);
   nav->addView(navTitle);
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1872,10 +1763,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   addFolderText->setAlign(TextView::CENTER);
   addFolderText->setVAlign(TextView::MIDDLE);
   addFolderButton->setContentView(addFolderText);
-  styleActionButton(addFolderButton, addFolderText, true,
-                    ui_theme::primaryAction(), ui_theme::primaryActionHover(),
-                    ui_theme::primaryActionPressed(),
-                    ui_theme::accentBorderStrong());
+  styleThemedActionButton(addFolderButton, addFolderText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   addFolderButton->setCornerRadius(ui_theme::controlRadius());
   addFolderButton->setStyledBorderWidth(1);
   addFolderButton->setOnClickListener(
@@ -1885,7 +1776,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
-  folderRecyclerView->setBorderColor(ui_theme::hairlineSubtle());
+  folderRecyclerView->setThemedBorderColor(ui_theme::hairlineSubtle);
   folderRecyclerView->setBorderWidth(1);
   folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
@@ -1897,10 +1788,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setBackgroundColor(kPanelFill);
+  left->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   left->setCornerRadius(ui_theme::panelRadius());
-  left->setShadow(ui_theme::shadow(), 0, 12, 20);
-  left->setBorderColor(ui_theme::hairline());
+  left->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  left->setThemedBorderColor(ui_theme::hairline);
   left->setBorderWidth(1);
 
   auto *libraryHeader = new View();
@@ -1911,7 +1802,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
   libraryTitle->setText("Song Select");
-  libraryTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
   libraryTitle->setFlex(1);
   libraryHeader->addView(libraryTitle);
@@ -1920,25 +1811,25 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(50);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
-  styleActionButton(parseLogButton, parseLogButtonText, true,
-                    ui_theme::control(), ui_theme::controlHover(),
-                    ui_theme::controlPressed(), ui_theme::hairlineStrong());
+  styleThemedActionButton(parseLogButton, parseLogButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(parseLogButton);
 
   tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(50);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
-  styleActionButton(tasksButton, tasksButtonText, true, ui_theme::control(),
-                    ui_theme::controlHover(), ui_theme::controlPressed(),
-                    ui_theme::hairlineStrong());
+  styleThemedActionButton(tasksButton, tasksButtonText, true, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
   libraryHeader->addView(tasksButton);
   left->addView(libraryHeader);
 
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   librarySubtitle->setText(
       "Search your library and preview charts before starting.");
-  librarySubtitle->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  librarySubtitle->setThemedColor(ui_theme::textSecondary);
   left->addView(librarySubtitle);
 
   auto *filterRow = new View();
@@ -1950,12 +1841,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->setText(searchText);
   searchBox->setHeight(56);
   searchBox->setFlex(1);
-  searchBox->setBackgroundColor(kSurfaceFill);
+  searchBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
   searchBox->setCornerRadius(ui_theme::controlRadius());
-  searchBox->setBorderColor(ui_theme::hairlineSubtle());
+  searchBox->setThemedBorderColor(ui_theme::hairlineSubtle);
   searchBox->setBorderWidth(1);
   searchBox->setVAlign(TextView::MIDDLE);
-  searchBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  searchBox->setThemedColor(ui_theme::textPrimary);
   auto onSearchChanged = [this](const std::string &text) {
     searchText = text;
     reloadChartList();
@@ -1968,12 +1859,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   difficultyFilterBox->setText(difficultyText);
   difficultyFilterBox->setHeight(56);
   difficultyFilterBox->setWidth(180);
-  difficultyFilterBox->setBackgroundColor(kSurfaceFill);
+  difficultyFilterBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
   difficultyFilterBox->setCornerRadius(ui_theme::controlRadius());
-  difficultyFilterBox->setBorderColor(ui_theme::hairlineSubtle());
+  difficultyFilterBox->setThemedBorderColor(ui_theme::hairlineSubtle);
   difficultyFilterBox->setBorderWidth(1);
   difficultyFilterBox->setVAlign(TextView::MIDDLE);
-  difficultyFilterBox->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  difficultyFilterBox->setThemedColor(ui_theme::textPrimary);
   auto onDifficultyChanged = [this](const std::string &text) {
     difficultyText = text;
     reloadChartList();
@@ -1984,13 +1875,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   filterLabel->setText("Search / Difficulty");
-  filterLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
-  recyclerView->setBorderColor(ui_theme::hairlineSubtle());
+  recyclerView->setThemedBorderColor(ui_theme::hairlineSubtle);
   recyclerView->setBorderWidth(1);
   recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
@@ -2002,22 +1893,22 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setPadding(Edge::All, 20);
   right->setGap(12);
   right->setWidth(300);
-  right->setBackgroundColor(kPanelFill);
+  right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   right->setCornerRadius(ui_theme::panelRadius());
-  right->setShadow(ui_theme::shadow(), 0, 12, 20);
-  right->setBorderColor(ui_theme::hairline());
+  right->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  right->setThemedBorderColor(ui_theme::hairline);
   right->setBorderWidth(1);
 
   auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
   rightTitle->setText("Ready");
-  rightTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  rightTitle->setThemedColor(ui_theme::textPrimary);
   rightTitle->setAlign(TextView::CENTER);
   rightTitle->setHeight(42);
   right->addView(rightTitle);
 
   auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   rightSubtitle->setText("Preview, tweak, and start.");
-  rightSubtitle->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  rightSubtitle->setThemedColor(ui_theme::textSecondary);
   rightSubtitle->setAlign(TextView::CENTER);
   rightSubtitle->setHeight(28);
   right->addView(rightSubtitle);
@@ -2038,7 +1929,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto makeReadyStatusText = []() {
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     text->setHeight(28);
-    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    text->setThemedColor(ui_theme::textPrimary);
     return text;
   };
   auto *readyGaugeRow = new View();
@@ -2048,7 +1939,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->setHeight(28);
   auto *readyGaugeLabelText = makeReadyStatusText();
   readyGaugeLabelText->setText("Gauge:");
-  readyGaugeLabelText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  readyGaugeLabelText->setThemedColor(ui_theme::textSecondary);
   readyGaugeLabelText->setWidth(70);
   readyGaugeText = makeReadyStatusText();
   readyGaugeText->setFlex(1);
@@ -2064,16 +1955,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButtonText->setText("Options");
   playOptionsButtonText->setAlign(TextView::CENTER);
   playOptionsButtonText->setVAlign(TextView::MIDDLE);
-  playOptionsButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(kPrimaryButtonNormal)));
   playOptionsButton->setContentView(playOptionsButtonText);
-  playOptionsButton->setBackgroundColors(
-      kPrimaryButtonNormal, kPrimaryButtonHover, kPrimaryButtonPressed);
-  playOptionsButton->setBorderColors(
-      ui_theme::accentBorder(), ui_theme::accentBorderStrong(),
-      ui_theme::withAlpha(ui_theme::cyan(), 220));
-  playOptionsButton->setCornerRadius(ui_theme::controlRadius());
-  playOptionsButton->setStyledBorderWidth(1);
+  styleThemedActionButton(playOptionsButton, playOptionsButtonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
   readySettings->addView(playOptionsButton);
   right->addView(readySettings);
@@ -2085,15 +1971,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buttonText->setText("Start");
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
-  buttonText->setColor(ui_theme::sdl(ui_theme::textOn(kPrimaryButtonNormal)));
   startButton->setContentView(buttonText);
-  startButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
-                                   kPrimaryButtonPressed);
-  startButton->setBorderColors(ui_theme::accentBorder(),
-                               ui_theme::accentBorderStrong(),
-                               ui_theme::withAlpha(ui_theme::cyan(), 220));
-  startButton->setCornerRadius(ui_theme::controlRadius());
-  startButton->setStyledBorderWidth(1);
+  styleThemedActionButton(startButton, buttonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
@@ -2118,17 +2000,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonText->setText("Replay");
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
-  replayButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::successAction())));
   replayButton->setContentView(replayButtonText);
-  replayButton->setBackgroundColors(ui_theme::successAction(),
-                                    ui_theme::successActionHover(),
-                                    ui_theme::successActionPressed());
-  replayButton->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 118),
-                                ui_theme::withAlpha(ui_theme::cyan(), 154),
-                                ui_theme::withAlpha(ui_theme::cyan(), 190));
-  replayButton->setCornerRadius(ui_theme::controlRadius());
-  replayButton->setStyledBorderWidth(1);
+  styleThemedActionButton(replayButton, replayButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
   replayButton->setOnClickListener([this]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -2157,17 +2033,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonText->setText("Find BMS");
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
-  findBmsButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::successAction())));
   findBmsButton->setContentView(findBmsButtonText);
-  findBmsButton->setBackgroundColors(ui_theme::successAction(),
-                                     ui_theme::successActionHover(),
-                                     ui_theme::successActionPressed());
-  findBmsButton->setBorderColors(ui_theme::withAlpha(ui_theme::lime(), 122),
-                                 ui_theme::withAlpha(ui_theme::lime(), 164),
-                                 ui_theme::withAlpha(ui_theme::lime(), 198));
-  findBmsButton->setCornerRadius(ui_theme::controlRadius());
-  findBmsButton->setStyledBorderWidth(1);
+  styleThemedActionButton(findBmsButton, findBmsButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -2181,24 +2051,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText->setText("Unzip");
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
-  unzipButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::warningAction())));
   unzipButton->setContentView(unzipButtonText);
-  unzipButton->setBackgroundColors(ui_theme::warningAction(),
-                                   ui_theme::warningActionHover(),
-                                   ui_theme::warningActionPressed());
-  unzipButton->setBorderColors(ui_theme::withAlpha(ui_theme::amber(), 122),
-                               ui_theme::withAlpha(ui_theme::amber(), 164),
-                               ui_theme::withAlpha(ui_theme::amber(), 198));
-  unzipButton->setCornerRadius(ui_theme::controlRadius());
-  unzipButton->setStyledBorderWidth(1);
+  styleThemedActionButton(unzipButton, unzipButtonText, true,
+                          ui_theme::warningAction, ui_theme::warningActionHover,
+                          ui_theme::warningActionPressed,
+                          ui_theme::accentBorder);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
   replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   replayStatusText->setText("");
-  replayStatusText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  replayStatusText->setThemedColor(ui_theme::textSecondary);
   replayStatusText->setAlign(TextView::CENTER);
   replayStatusText->setHeight(20);
 
@@ -2207,9 +2071,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setHeight(200);
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
-  jacketCard->setBackgroundColor(kSurfaceFill);
+  jacketCard->setThemedBackgroundColor(ui_theme::mainMenuSurface);
   jacketCard->setCornerRadius(ui_theme::panelRadius());
-  jacketCard->setBorderColor(ui_theme::hairlineSubtle());
+  jacketCard->setThemedBorderColor(ui_theme::hairlineSubtle);
   jacketCard->setBorderWidth(1);
   jacketView->setWidth(200)->setHeight(200);
   jacketCard->addView(jacketView);
@@ -2230,17 +2094,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButtonText->setText("Viewer");
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
-  viewerButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::infoAction())));
   viewerButton->setContentView(viewerButtonText);
-  viewerButton->setBackgroundColors(ui_theme::infoAction(),
-                                    ui_theme::infoActionHover(),
-                                    ui_theme::infoActionPressed());
-  viewerButton->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 118),
-                                ui_theme::withAlpha(ui_theme::cyan(), 154),
-                                ui_theme::withAlpha(ui_theme::cyan(), 190));
-  viewerButton->setCornerRadius(ui_theme::controlRadius());
-  viewerButton->setStyledBorderWidth(1);
+  styleThemedActionButton(viewerButton, viewerButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
   viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
@@ -2250,17 +2107,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButtonText->setText("Reveal");
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
-  revealButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::infoAction())));
   revealButton->setContentView(revealButtonText);
-  revealButton->setBackgroundColors(ui_theme::infoAction(),
-                                    ui_theme::infoActionHover(),
-                                    ui_theme::infoActionPressed());
-  revealButton->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 118),
-                                ui_theme::withAlpha(ui_theme::cyan(), 154),
-                                ui_theme::withAlpha(ui_theme::cyan(), 190));
-  revealButton->setCornerRadius(ui_theme::controlRadius());
-  revealButton->setStyledBorderWidth(1);
+  styleThemedActionButton(revealButton, revealButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
   revealButton->setOnClickListener(
       [this]() { revealSelectedChartInFileManager(); });
   chartActionsRow->addView(revealButton);
@@ -2281,16 +2131,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsText->setText("Settings");
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
-  settingsText->setColor(
-      ui_theme::sdl(ui_theme::textOn(kSecondaryButtonNormal)));
   settingsButton->setContentView(settingsText);
-  settingsButton->setBackgroundColors(
-      kSecondaryButtonNormal, kSecondaryButtonHover, kSecondaryButtonPressed);
-  settingsButton->setBorderColors(ui_theme::withAlpha(ui_theme::coral(), 132),
-                                  Color(255, 143, 118, 176),
-                                  Color(255, 179, 148, 212));
-  settingsButton->setCornerRadius(ui_theme::controlRadius());
-  settingsButton->setStyledBorderWidth(1);
+  styleThemedActionButton(settingsButton, settingsText, true,
+                          ui_theme::dangerAction, ui_theme::dangerActionHover,
+                          ui_theme::dangerActionPressed,
+                          ui_theme::accentBorder);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -2730,13 +2575,12 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
                                    Color(255, 255, 255, 255));
       item.text->setColor(ui_theme::sdl(ui_theme::textOn(accent)));
     } else {
-      item.button->setBackgroundColors(ui_theme::control(),
-                                       ui_theme::controlHover(),
-                                       ui_theme::controlPressed());
-      item.button->setBorderColors(ui_theme::hairlineSubtle(),
-                                   ui_theme::hairlineStrong(),
-                                   ui_theme::accentBorder());
-      item.text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+      item.button->setThemedBackgroundColors(
+          ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      item.button->setThemedBorderColors(ui_theme::hairlineSubtle,
+                                         ui_theme::hairlineStrong,
+                                         ui_theme::accentBorder);
+      item.text->setThemedColor(ui_theme::textPrimary);
     }
   }
   refreshReadySettingsSummary();
@@ -3225,36 +3069,36 @@ void MainMenuScene::buildUnzipProgressModal() {
   unzipModalRoot->setFlexDirection(FlexDirection::Column);
   unzipModalRoot->setAlignItems(YGAlignCenter);
   unzipModalRoot->setJustifyContent(YGJustifyCenter);
-  unzipModalRoot->setBackgroundColor(ui_theme::scrim());
+  unzipModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   unzipModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   unzipModalTitleText->setText("Unzip");
-  unzipModalTitleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  unzipModalTitleText->setThemedColor(ui_theme::textPrimary);
   unzipModalTitleText->setHeight(42);
   panel->addView(unzipModalTitleText);
 
   unzipProgressMessageText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  unzipProgressMessageText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  unzipProgressMessageText->setThemedColor(ui_theme::textSecondary);
   unzipProgressMessageText->setHeight(32);
   panel->addView(unzipProgressMessageText);
 
   unzipProgressTrack = new View();
   unzipProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(ui_theme::progressTrack())
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
       ->setCornerRadius(ui_theme::controlRadius())
-      ->setBorderColor(ui_theme::hairline())
+      ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
   unzipProgressFill = new View();
   unzipProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
@@ -3263,12 +3107,12 @@ void MainMenuScene::buildUnzipProgressModal() {
   panel->addView(unzipProgressTrack);
 
   unzipProgressPercentText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  unzipProgressPercentText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  unzipProgressPercentText->setThemedColor(ui_theme::textSecondary);
   unzipProgressPercentText->setHeight(28);
   panel->addView(unzipProgressPercentText);
 
   unzipProgressDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  unzipProgressDetailText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  unzipProgressDetailText->setThemedColor(ui_theme::textMuted);
   unzipProgressDetailText->setHeight(54);
   panel->addView(unzipProgressDetailText);
 
@@ -3601,7 +3445,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->setFlexDirection(FlexDirection::Column);
   parseLogModalRoot->setAlignItems(YGAlignCenter);
   parseLogModalRoot->setJustifyContent(YGJustifyCenter);
-  parseLogModalRoot->setBackgroundColor(ui_theme::scrim());
+  parseLogModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3610,15 +3454,15 @@ void MainMenuScene::buildParseLogModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Parsing Logs");
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -3626,9 +3470,9 @@ void MainMenuScene::buildParseLogModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 480);
   parseLogScrollView->setWidth(kModalContentWidth);
   parseLogScrollView->setFlex(1);
-  parseLogScrollView->setBackgroundColor(ui_theme::insetSurface());
+  parseLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
   parseLogScrollView->setCornerRadius(ui_theme::controlRadius());
-  parseLogScrollView->setBorderColor(ui_theme::hairline());
+  parseLogScrollView->setThemedBorderColor(ui_theme::hairline);
   parseLogScrollView->setBorderWidth(1);
 
   parseLogContent = new View();
@@ -3638,7 +3482,7 @@ void MainMenuScene::buildParseLogModal() {
 
   parseLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   parseLogText->setText(archive_file::debugLogText());
-  parseLogText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  parseLogText->setThemedColor(ui_theme::textSecondary);
   parseLogText->setWrap(true);
   parseLogText->setOverflow(TextView::TextOverflow::Visible);
   parseLogContent->addView(parseLogText);
@@ -3655,9 +3499,9 @@ void MainMenuScene::buildParseLogModal() {
   parseLogCloseButton = makeModalButton("Close", 20, &parseLogCloseButtonText);
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
-  styleActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
-                    ui_theme::infoAction(), ui_theme::infoActionHover(),
-                    ui_theme::infoActionPressed(), ui_theme::accentBorder());
+  styleThemedActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
 
   footer->addView(parseLogCloseButton);
   panel->addView(footer);
@@ -3723,7 +3567,7 @@ void MainMenuScene::buildTasksModal() {
   tasksModalRoot->setFlexDirection(FlexDirection::Column);
   tasksModalRoot->setAlignItems(YGAlignCenter);
   tasksModalRoot->setJustifyContent(YGJustifyCenter);
-  tasksModalRoot->setBackgroundColor(ui_theme::scrim());
+  tasksModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3732,15 +3576,15 @@ void MainMenuScene::buildTasksModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Tasks");
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -3748,9 +3592,9 @@ void MainMenuScene::buildTasksModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
   tasksScrollView->setWidth(kModalContentWidth);
   tasksScrollView->setFlex(1);
-  tasksScrollView->setBackgroundColor(ui_theme::insetSurface());
+  tasksScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
   tasksScrollView->setCornerRadius(ui_theme::controlRadius());
-  tasksScrollView->setBorderColor(ui_theme::hairline());
+  tasksScrollView->setThemedBorderColor(ui_theme::hairline);
   tasksScrollView->setBorderWidth(1);
 
   tasksContent = new View();
@@ -3760,7 +3604,7 @@ void MainMenuScene::buildTasksModal() {
 
   tasksText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   tasksText->setText(tasksModalTextSnapshot());
-  tasksText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  tasksText->setThemedColor(ui_theme::textSecondary);
   tasksText->setWrap(true);
   tasksText->setOverflow(TextView::TextOverflow::Visible);
   tasksContent->addView(tasksText);
@@ -3782,16 +3626,17 @@ void MainMenuScene::buildTasksModal() {
     applyPendingUiUpdates();
     hideTasksModal();
   });
-  styleActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
-                    ui_theme::successAction(), ui_theme::successActionHover(),
-                    ui_theme::successActionPressed(), ui_theme::accentBorder());
+  styleThemedActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
 
   tasksCloseButton = makeModalButton("Close", 20, &tasksCloseButtonText);
   tasksCloseButton->setWidth(130);
   tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
-  styleActionButton(tasksCloseButton, tasksCloseButtonText, true,
-                    ui_theme::infoAction(), ui_theme::infoActionHover(),
-                    ui_theme::infoActionPressed(), ui_theme::accentBorder());
+  styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
 
   footer->addView(tasksRefreshButton);
   footer->addView(tasksCloseButton);
@@ -3933,7 +3778,7 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsModalRoot->setFlexDirection(FlexDirection::Column);
   findBmsModalRoot->setAlignItems(YGAlignCenter);
   findBmsModalRoot->setJustifyContent(YGJustifyCenter);
-  findBmsModalRoot->setBackgroundColor(ui_theme::scrim());
+  findBmsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3942,21 +3787,21 @@ void MainMenuScene::buildFindBmsModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   findBmsModalTitleText->setText("Find BMS");
-  findBmsModalTitleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  findBmsModalTitleText->setThemedColor(ui_theme::textPrimary);
   findBmsModalTitleText->setHeight(42);
   panel->addView(findBmsModalTitleText);
 
   findBmsStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   findBmsStatusText->setText("Preparing lookup");
-  findBmsStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  findBmsStatusText->setThemedColor(ui_theme::textPrimary);
   findBmsStatusText->setWrap(true);
   findBmsStatusText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsStatusText->setHeight(58);
@@ -3964,7 +3809,7 @@ void MainMenuScene::buildFindBmsModal() {
 
   findBmsDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   findBmsDetailText->setText("");
-  findBmsDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  findBmsDetailText->setThemedColor(ui_theme::textSecondary);
   findBmsDetailText->setWrap(true);
   findBmsDetailText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsDetailText->setFlex(1);
@@ -3974,9 +3819,9 @@ void MainMenuScene::buildFindBmsModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 112);
   findBmsLogScrollView->setWidth(kModalContentWidth);
   findBmsLogScrollView->setHeight(112);
-  findBmsLogScrollView->setBackgroundColor(ui_theme::insetSurface());
+  findBmsLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
   findBmsLogScrollView->setCornerRadius(ui_theme::controlRadius());
-  findBmsLogScrollView->setBorderColor(ui_theme::hairline());
+  findBmsLogScrollView->setThemedBorderColor(ui_theme::hairline);
   findBmsLogScrollView->setBorderWidth(1);
 
   findBmsLogContent = new View();
@@ -3986,7 +3831,7 @@ void MainMenuScene::buildFindBmsModal() {
 
   findBmsLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   findBmsLogText->setText("Preparing lookup");
-  findBmsLogText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  findBmsLogText->setThemedColor(ui_theme::textSecondary);
   findBmsLogText->setWrap(true);
   findBmsLogText->setOverflow(TextView::TextOverflow::Visible);
   findBmsLogContent->addView(findBmsLogText);
@@ -4001,9 +3846,10 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsCandidateRecyclerView->reserveScrollbarGutter = true;
   findBmsCandidateRecyclerView->setWidth(kModalContentWidth);
   findBmsCandidateRecyclerView->setHeight(0);
-  findBmsCandidateRecyclerView->setBackgroundColor(ui_theme::insetSurface());
+  findBmsCandidateRecyclerView->setThemedBackgroundColor(
+      ui_theme::insetSurface);
   findBmsCandidateRecyclerView->setCornerRadius(ui_theme::controlRadius());
-  findBmsCandidateRecyclerView->setBorderColor(ui_theme::hairline());
+  findBmsCandidateRecyclerView->setThemedBorderColor(ui_theme::hairline);
   findBmsCandidateRecyclerView->setBorderWidth(1);
   findBmsCandidateRecyclerView->setVisible(false);
   findBmsCandidateRecyclerView->onCreateView = [](const BmsSearchCandidate &) {
@@ -4026,9 +3872,9 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsProgressTrack = new View();
   findBmsProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(ui_theme::progressTrack())
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
       ->setCornerRadius(ui_theme::controlRadius())
-      ->setBorderColor(ui_theme::hairline())
+      ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
   findBmsProgressFill = new View();
   findBmsProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
@@ -4398,21 +4244,21 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsRefreshButton->setWidth(hasRefreshAction ? 150.0f : 0.0f);
   }
 
-  styleActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
-                    ui_theme::control(), ui_theme::controlHover(),
-                    ui_theme::controlPressed(), ui_theme::hairlineStrong());
-  styleActionButton(findBmsOpenButton, findBmsOpenButtonText,
-                    !running && hasSource, ui_theme::infoAction(),
-                    ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
-                    ui_theme::accentBorder());
-  styleActionButton(
+  styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(findBmsOpenButton, findBmsOpenButtonText,
+                          !running && hasSource, ui_theme::infoAction,
+                          ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(
       findBmsGoogleButton, findBmsGoogleButtonText, !running && hasSearchAction,
-      ui_theme::violetAction(), ui_theme::violetActionHover(),
-      ui_theme::violetActionPressed(), ui_theme::violetActionHover());
-  styleActionButton(findBmsRefreshButton, findBmsRefreshButtonText,
-                    hasRefreshAction, ui_theme::successAction(),
-                    ui_theme::successActionHover(),
-                    ui_theme::successActionPressed(), ui_theme::accentBorder());
+      ui_theme::violetAction, ui_theme::violetActionHover,
+      ui_theme::violetActionPressed, ui_theme::violetActionHover);
+  styleThemedActionButton(
+      findBmsRefreshButton, findBmsRefreshButtonText, hasRefreshAction,
+      ui_theme::successAction, ui_theme::successActionHover,
+      ui_theme::successActionPressed, ui_theme::accentBorder);
   findBmsModalRoot->applyYogaLayout();
 }
 
@@ -4503,7 +4349,7 @@ void MainMenuScene::buildPlayOptionsModal() {
   playOptionsModalRoot->setFlexDirection(FlexDirection::Column);
   playOptionsModalRoot->setAlignItems(YGAlignCenter);
   playOptionsModalRoot->setJustifyContent(YGJustifyCenter);
-  playOptionsModalRoot->setBackgroundColor(ui_theme::scrim());
+  playOptionsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -4512,15 +4358,15 @@ void MainMenuScene::buildPlayOptionsModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, 22)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Play Options");
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -4597,9 +4443,9 @@ void MainMenuScene::buildPlayOptionsModal() {
   rootLayout->addView(playOptionsModalRoot);
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
-  styleActionButton(playOptionsCloseButton, playOptionsCloseButtonText, true,
-                    ui_theme::control(), ui_theme::controlHover(),
-                    ui_theme::controlPressed(), ui_theme::hairlineStrong());
+  styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
+                          true, ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
 }
 
 void MainMenuScene::showPlayOptionsModal() {
@@ -4643,7 +4489,7 @@ void MainMenuScene::buildReplayModal() {
   replayModalRoot->setFlexDirection(FlexDirection::Column);
   replayModalRoot->setAlignItems(YGAlignCenter);
   replayModalRoot->setJustifyContent(YGJustifyCenter);
-  replayModalRoot->setBackgroundColor(ui_theme::scrim());
+  replayModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -4652,15 +4498,15 @@ void MainMenuScene::buildReplayModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, 22)
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(modalPanelBorder())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
   replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   replayModalTitleText->setText("Replay");
-  replayModalTitleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  replayModalTitleText->setThemedColor(ui_theme::textPrimary);
   replayModalTitleText->setHeight(42);
   panel->addView(replayModalTitleText);
 
@@ -4686,7 +4532,7 @@ void MainMenuScene::buildReplayModal() {
   };
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
-  replayListView->setBorderColor(ui_theme::hairline());
+  replayListView->setThemedBorderColor(ui_theme::hairline);
   replayListView->setBorderWidth(1);
   replayListContent->addView(replayListView);
   replayModalContentFrame->addView(replayListContent);
@@ -4777,9 +4623,9 @@ void MainMenuScene::buildReplayModal() {
   replayExportProgressTrack = new View();
   replayExportProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(ui_theme::progressTrack())
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
       ->setCornerRadius(ui_theme::controlRadius())
-      ->setBorderColor(ui_theme::hairline())
+      ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
   replayExportProgressFill = new View();
   replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
@@ -4978,20 +4824,20 @@ void MainMenuScene::refreshReplayModalActions() {
     replayModalExportButton->setWidth(progressMode ? 0.0f : 160.0f);
   }
 
-  styleActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                    !exportInProgress, ui_theme::control(),
-                    ui_theme::controlHover(), ui_theme::controlPressed(),
-                    ui_theme::hairlineStrong());
-  styleActionButton(replayWatchButton, replayWatchButtonText,
-                    hasSelection && !optionsMode && !progressMode &&
-                        !exportInProgress,
-                    ui_theme::infoAction(), ui_theme::infoActionHover(),
-                    ui_theme::infoActionPressed(), ui_theme::accentBorder());
-  styleActionButton(replayModalExportButton, replayModalExportButtonText,
-                    hasSelection && !progressMode && !exportInProgress,
-                    ui_theme::violetAction(), ui_theme::violetActionHover(),
-                    ui_theme::violetActionPressed(),
-                    ui_theme::violetActionHover());
+  styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
+                          !exportInProgress, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  styleThemedActionButton(replayWatchButton, replayWatchButtonText,
+                          hasSelection && !optionsMode && !progressMode &&
+                              !exportInProgress,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
+                          hasSelection && !progressMode && !exportInProgress,
+                          ui_theme::violetAction, ui_theme::violetActionHover,
+                          ui_theme::violetActionPressed,
+                          ui_theme::violetActionHover);
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayout();

@@ -838,12 +838,45 @@ float TextView::marqueeOffset(int viewportWidth) {
 }
 
 void TextView::setColor(SDL_Color newColor) {
+  themedColorProvider = nullptr;
   if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
       newColor.a == color.a) {
     return;
   }
   this->color = newColor;
   createTexture(); // Update the texture since newColor has changed
+}
+
+void TextView::setThemedColor(ThemeColorProvider provider) {
+  themedColorProvider = std::move(provider);
+  if (!themedColorProvider) {
+    return;
+  }
+  const Color themedColor = themedColorProvider();
+  SDL_Color newColor{themedColor.r, themedColor.g, themedColor.b,
+                     themedColor.a};
+  if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
+      newColor.a == color.a) {
+    return;
+  }
+  color = newColor;
+  createTexture();
+}
+
+void TextView::onThemeChanged() {
+  View::onThemeChanged();
+  if (!themedColorProvider) {
+    return;
+  }
+  const Color themedColor = themedColorProvider();
+  SDL_Color newColor{themedColor.r, themedColor.g, themedColor.b,
+                     themedColor.a};
+  if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
+      newColor.a == color.a) {
+    return;
+  }
+  color = newColor;
+  createTexture();
 }
 
 void TextView::createTexture(bool markDirty, bool force,

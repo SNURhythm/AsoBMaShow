@@ -57,19 +57,19 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
-  setBackgroundColor(ui_theme::panelStrong());
+  setThemedBackgroundColor(ui_theme::panelStrong);
   setCornerRadius(ui_theme::controlRadius());
-  setBorderColor(ui_theme::accentBorderStrong());
+  setThemedBorderColor(ui_theme::accentBorderStrong);
   setBorderWidth(1);
-  labelView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  countView->setColor(ui_theme::sdl(ui_theme::lime()));
+  labelView->setThemedColor(ui_theme::textPrimary);
+  countView->setThemedColor(ui_theme::lime);
 }
 
 void LibraryFolderItemView::onUnselected() {
-  setBackgroundColor(ui_theme::panelSubtle());
+  setThemedBackgroundColor(ui_theme::panelSubtle);
   setCornerRadius(ui_theme::controlRadius());
-  setBorderColor(ui_theme::hairlineSubtle());
+  setThemedBorderColor(ui_theme::hairlineSubtle);
   setBorderWidth(1);
-  labelView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  countView->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  labelView->setThemedColor(ui_theme::textPrimary);
+  countView->setThemedColor(ui_theme::textMuted);
 }

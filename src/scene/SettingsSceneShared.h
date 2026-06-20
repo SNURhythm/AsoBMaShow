@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -167,12 +168,95 @@ static LayoutMetrics resolveLayoutMetrics() {
   return metrics;
 }
 
+static bool sameColor(const Color &lhs, const Color &rhs) {
+  return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.a == rhs.a;
+}
+
+static View::ThemeColorProvider themeTextColorProvider(const Color &color) {
+  if (sameColor(color, ui_theme::textPrimary())) {
+    return ui_theme::textPrimary;
+  }
+  if (sameColor(color, ui_theme::textSecondary())) {
+    return ui_theme::textSecondary;
+  }
+  if (sameColor(color, ui_theme::textMuted())) {
+    return ui_theme::textMuted;
+  }
+  if (sameColor(color, ui_theme::cyan())) {
+    return ui_theme::cyan;
+  }
+  if (sameColor(color, ui_theme::lime())) {
+    return ui_theme::lime;
+  }
+  if (sameColor(color, ui_theme::amber())) {
+    return ui_theme::amber;
+  }
+  if (sameColor(color, ui_theme::coral())) {
+    return ui_theme::coral;
+  }
+  return {};
+}
+
+static View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
+  if (sameColor(color, ui_theme::control())) {
+    return ui_theme::control;
+  }
+  if (sameColor(color, ui_theme::controlHover())) {
+    return ui_theme::controlHover;
+  }
+  if (sameColor(color, ui_theme::controlPressed())) {
+    return ui_theme::controlPressed;
+  }
+  if (sameColor(color, ui_theme::panel())) {
+    return ui_theme::panel;
+  }
+  if (sameColor(color, ui_theme::panelStrong())) {
+    return ui_theme::panelStrong;
+  }
+  if (sameColor(color, ui_theme::panelSubtle())) {
+    return ui_theme::panelSubtle;
+  }
+  if (sameColor(color, ui_theme::hairline())) {
+    return ui_theme::hairline;
+  }
+  if (sameColor(color, ui_theme::hairlineSubtle())) {
+    return ui_theme::hairlineSubtle;
+  }
+  if (sameColor(color, ui_theme::hairlineStrong())) {
+    return ui_theme::hairlineStrong;
+  }
+  if (sameColor(color, ui_theme::accentBorder())) {
+    return ui_theme::accentBorder;
+  }
+  if (sameColor(color, ui_theme::accentBorderStrong())) {
+    return ui_theme::accentBorderStrong;
+  }
+  if (sameColor(color, ui_theme::cyan())) {
+    return ui_theme::cyan;
+  }
+  if (sameColor(color, ui_theme::coral())) {
+    return ui_theme::coral;
+  }
+  if (sameColor(color, ui_theme::lime())) {
+    return ui_theme::lime;
+  }
+  if (sameColor(color, ui_theme::amber())) {
+    return ui_theme::amber;
+  }
+  return {};
+}
+
 static TextView *makeText(const std::string &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
                           TextView::TextVAlign valign = TextView::TOP) {
   auto *view = new TextView(kFontPath, size);
   view->setText(text);
-  view->setColor({color.r, color.g, color.b, color.a});
+  const auto themedProvider = themeTextColorProvider(color);
+  if (themedProvider) {
+    view->setThemedColor(themedProvider);
+  } else {
+    view->setColor({color.r, color.g, color.b, color.a});
+  }
   view->setAlign(align);
   view->setVAlign(valign);
   return view;
@@ -201,28 +285,77 @@ static Button *makeButton(int width, int height, TextView *label,
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
   button->setBorderColors(normalBorder, hoverBorder, pressedBorder);
+  const auto normalBackgroundProvider =
+      themeSurfaceColorProvider(normalBackground);
+  const auto hoverBackgroundProvider =
+      themeSurfaceColorProvider(hoverBackground);
+  const auto pressedBackgroundProvider =
+      themeSurfaceColorProvider(pressedBackground);
+  if (normalBackgroundProvider && hoverBackgroundProvider &&
+      pressedBackgroundProvider) {
+    button->setThemedBackgroundColors(normalBackgroundProvider,
+                                      hoverBackgroundProvider,
+                                      pressedBackgroundProvider);
+  }
+  const auto normalBorderProvider = themeSurfaceColorProvider(normalBorder);
+  const auto hoverBorderProvider = themeSurfaceColorProvider(hoverBorder);
+  const auto pressedBorderProvider = themeSurfaceColorProvider(pressedBorder);
+  if (normalBorderProvider && hoverBorderProvider && pressedBorderProvider) {
+    button->setThemedBorderColors(normalBorderProvider, hoverBorderProvider,
+                                  pressedBorderProvider);
+  }
   button->setStyledBorderWidth(borderWidth);
   return button;
 }
 
 static Button *makeControlButton(int width, int height, TextView *label) {
-  return makeButton(width, height, label, ui_theme::control(),
-                    ui_theme::controlHover(), ui_theme::controlPressed(),
-                    ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+  auto *button = makeButton(
+      width, height, label, ui_theme::control(), ui_theme::controlHover(),
+      ui_theme::controlPressed(), ui_theme::hairline(),
+      ui_theme::accentBorder(), ui_theme::accentBorderStrong());
+  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
+                                    ui_theme::controlPressed);
+  button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
+                                ui_theme::accentBorderStrong);
+  return button;
 }
 
 static Button *makeAccentButton(int width, int height, TextView *label,
                                 const Color &accent) {
+  const auto accentProvider = themeSurfaceColorProvider(accent);
   const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
   const uint8_t normalAlpha = light ? 54 : 82;
   const uint8_t hoverAlpha = light ? 74 : 108;
   const uint8_t pressedAlpha = light ? 100 : 136;
-  return makeButton(width, height, label,
-                    Color(accent.r, accent.g, accent.b, normalAlpha),
-                    Color(accent.r, accent.g, accent.b, hoverAlpha),
-                    Color(accent.r, accent.g, accent.b, pressedAlpha),
-                    Color(accent.r, accent.g, accent.b, 178),
-                    Color(accent.r, accent.g, accent.b, 216), accent);
+  auto *button = makeButton(width, height, label,
+                            Color(accent.r, accent.g, accent.b, normalAlpha),
+                            Color(accent.r, accent.g, accent.b, hoverAlpha),
+                            Color(accent.r, accent.g, accent.b, pressedAlpha),
+                            Color(accent.r, accent.g, accent.b, 178),
+                            Color(accent.r, accent.g, accent.b, 216), accent);
+  if (accentProvider) {
+    auto withModeAlpha = [accentProvider](uint8_t lightAlpha,
+                                          uint8_t darkAlpha) {
+      return [accentProvider, lightAlpha, darkAlpha]() {
+        Color color = accentProvider();
+        color.a = ui_theme::activeMode() == ui_theme::ThemeMode::Light
+                      ? lightAlpha
+                      : darkAlpha;
+        return color;
+      };
+    };
+    button->setThemedBackgroundColors(
+        withModeAlpha(54, 82), withModeAlpha(74, 108), withModeAlpha(100, 136));
+    button->setThemedBorderColors(
+        [accentProvider]() {
+          return ui_theme::withAlpha(accentProvider(), 178);
+        },
+        [accentProvider]() {
+          return ui_theme::withAlpha(accentProvider(), 216);
+        },
+        accentProvider);
+  }
+  return button;
 }
 
 static Button *makeStepButton(const LayoutMetrics &metrics, int width,
@@ -249,7 +382,7 @@ static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   input->setBorderWidth(0);
   input->setAlign(TextView::CENTER);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  input->setThemedColor(ui_theme::textPrimary);
   return input;
 }
 
@@ -257,12 +390,12 @@ static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
   input->setText("");
   input->setSize(minWidth, metrics.actionButtonHeight);
-  input->setBackgroundColor(ui_theme::control());
+  input->setThemedBackgroundColor(ui_theme::control);
   input->setCornerRadius(ui_theme::controlRadius());
-  input->setBorderColor(ui_theme::hairline());
+  input->setThemedBorderColor(ui_theme::hairline);
   input->setBorderWidth(1);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  input->setThemedColor(ui_theme::textPrimary);
   return input;
 }
 
@@ -270,9 +403,9 @@ static View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
   value->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  value->setBackgroundColor(ui_theme::control());
+  value->setThemedBackgroundColor(ui_theme::control);
   value->setCornerRadius(ui_theme::controlRadius());
-  value->setBorderColor(ui_theme::hairline());
+  value->setThemedBorderColor(ui_theme::hairline);
   value->setBorderWidth(1);
   value->addView(input);
   return value;
@@ -285,10 +418,10 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setBackgroundColor(ui_theme::panel());
+  card->setThemedBackgroundColor(ui_theme::panel);
   card->setCornerRadius(ui_theme::panelRadius());
-  card->setShadow(ui_theme::shadow(), 0, 10, 16);
-  card->setBorderColor(ui_theme::hairline());
+  card->setThemedShadow(ui_theme::shadow, 0, 10, 16);
+  card->setThemedBorderColor(ui_theme::hairline);
   card->setBorderWidth(1);
   card->setMinHeight(static_cast<float>(minHeight));
   if (width > 0) {

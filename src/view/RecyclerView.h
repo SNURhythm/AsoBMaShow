@@ -358,6 +358,22 @@ public:
     updateVisibleItems();
   }
 
+  inline void propagateThemeChange() override {
+    View::propagateThemeChange();
+    std::unordered_set<View *> themedViews;
+    for (auto &entry : viewEntries) {
+      themedViews.insert(entry.first);
+    }
+    for (auto *view : recycledViewEntries) {
+      themedViews.insert(view);
+    }
+    for (auto *view : themedViews) {
+      if (view != nullptr) {
+        view->propagateThemeChange();
+      }
+    }
+  }
+
 private:
   std::vector<T> items;
   int externalItemCount = 0;
@@ -498,8 +514,7 @@ private:
       return;
     }
 
-    const int itemsSize =
-        std::max(1, itemCount()) * itemHeight;
+    const int itemsSize = std::max(1, itemCount()) * itemHeight;
     const int trackHeight =
         std::max(0, this->getHeight() - (kScrollbarVerticalInset * 2));
     if (trackHeight <= 0) {
@@ -528,8 +543,7 @@ private:
   }
 
   inline void clampScrollOffset() {
-    const int itemsSize =
-        std::max(1, itemCount()) * itemHeight;
+    const int itemsSize = std::max(1, itemCount()) * itemHeight;
     const float maxOffset =
         std::max(0.0f, static_cast<float>(itemsSize - this->getHeight()));
     scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);

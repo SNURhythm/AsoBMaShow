@@ -26,7 +26,7 @@ struct LayoutMetrics;
 namespace bms_parser {
 class Chart;
 class Note;
-}
+} // namespace bms_parser
 
 #include "../input/IRhythmControl.h"
 
@@ -102,6 +102,11 @@ private:
   Button *laneTabButton = nullptr;
   Button *miscTabButton = nullptr;
   Button *tablesTabButton = nullptr;
+  TextView *timingTabText = nullptr;
+  TextView *visualTabText = nullptr;
+  TextView *laneTabText = nullptr;
+  TextView *miscTabText = nullptr;
+  TextView *tablesTabText = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;

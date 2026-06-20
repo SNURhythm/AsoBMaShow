@@ -97,24 +97,24 @@ public:
   }
 
   void onSelected() override {
-    setBackgroundColor(ui_theme::panelStrong());
+    setThemedBackgroundColor(ui_theme::panelStrong);
     setCornerRadius(ui_theme::controlRadius());
-    setBorderColor(ui_theme::accentBorderStrong());
+    setThemedBorderColor(ui_theme::accentBorderStrong);
     setBorderWidth(1);
-    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-    detailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-    scoreText->setColor(ui_theme::sdl(ui_theme::lime()));
+    titleText->setThemedColor(ui_theme::textPrimary);
+    detailText->setThemedColor(ui_theme::textSecondary);
+    scoreText->setThemedColor(ui_theme::lime);
   }
 
   void onUnselected() override {
-    setBackgroundColor(ui_theme::panelSubtle());
+    setThemedBackgroundColor(ui_theme::panelSubtle);
     setCornerRadius(ui_theme::controlRadius());
-    setBorderColor(ui_theme::hairlineSubtle());
+    setThemedBorderColor(ui_theme::hairlineSubtle);
     setBorderWidth(1);
-    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-    detailText->setColor(ui_theme::sdl(ui_theme::textMuted()));
-    scoreText->setColor(
-        ui_theme::sdl(ui_theme::withAlpha(ui_theme::cyan(), 218)));
+    titleText->setThemedColor(ui_theme::textPrimary);
+    detailText->setThemedColor(ui_theme::textMuted);
+    scoreText->setThemedColor(
+        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
   }
 
 private:

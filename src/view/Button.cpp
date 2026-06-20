@@ -5,6 +5,7 @@
 #include "Button.h"
 
 #include <cmath>
+#include <utility>
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
@@ -26,7 +27,8 @@ void mouseCoordsToUi(int rawX, int rawY, int &uiX, int &uiY) {
   rendering::screenToUi(screenX, screenY, uiX, uiY);
 }
 
-void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX, float &uiY) {
+void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX,
+                     float &uiY) {
   rendering::normalizedToUi(event.x, event.y, uiX, uiY);
 }
 
@@ -40,8 +42,7 @@ void drawButtonRect(const RenderContext &context, int x, int y, int width,
   if (radius > 0.5f) {
     const int segments =
         std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
-    const uint16_t ringVertexCount =
-        static_cast<uint16_t>((segments + 1) * 4);
+    const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
     const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
     const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
     if (bgfx::getAvailTransientVertexBuffer(
@@ -58,11 +59,9 @@ void drawButtonRect(const RenderContext &context, int x, int y, int width,
     auto *indices = reinterpret_cast<uint16_t *>(tib.data);
     const uint32_t abgr = color.toABGR();
     uint16_t vertexIndex = 0;
-    vertices[vertexIndex++] = {static_cast<float>(x) +
-                                   static_cast<float>(width) * 0.5f,
-                               static_cast<float>(y) +
-                                   static_cast<float>(height) * 0.5f,
-                               0.0f, abgr};
+    vertices[vertexIndex++] = {
+        static_cast<float>(x) + static_cast<float>(width) * 0.5f,
+        static_cast<float>(y) + static_cast<float>(height) * 0.5f, 0.0f, abgr};
     const auto appendCorner = [&](float cx, float cy, float startAngle) {
       for (int i = 0; i <= segments; ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(segments);
@@ -161,6 +160,9 @@ void Button::setContentView(View *view) {
 
 Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
                                     const Color &pressed) {
+  normalBackgroundColorProvider = nullptr;
+  hoverBackgroundColorProvider = nullptr;
+  pressedBackgroundColorProvider = nullptr;
   normalBackgroundColor = normal;
   hoverBackgroundColor = hover;
   pressedBackgroundColor = pressed;
@@ -168,11 +170,52 @@ Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
   return this;
 }
 
+Button *Button::setThemedBackgroundColors(ThemeColorProvider normal,
+                                          ThemeColorProvider hover,
+                                          ThemeColorProvider pressed) {
+  normalBackgroundColorProvider = std::move(normal);
+  hoverBackgroundColorProvider = std::move(hover);
+  pressedBackgroundColorProvider = std::move(pressed);
+  if (normalBackgroundColorProvider) {
+    normalBackgroundColor = normalBackgroundColorProvider();
+  }
+  if (hoverBackgroundColorProvider) {
+    hoverBackgroundColor = hoverBackgroundColorProvider();
+  }
+  if (pressedBackgroundColorProvider) {
+    pressedBackgroundColor = pressedBackgroundColorProvider();
+  }
+  hasStyledBackground = true;
+  return this;
+}
+
 Button *Button::setBorderColors(const Color &normal, const Color &hover,
                                 const Color &pressed) {
+  normalBorderColorProvider = nullptr;
+  hoverBorderColorProvider = nullptr;
+  pressedBorderColorProvider = nullptr;
   normalBorderColor = normal;
   hoverBorderColor = hover;
   pressedBorderColor = pressed;
+  hasStyledBorder = true;
+  return this;
+}
+
+Button *Button::setThemedBorderColors(ThemeColorProvider normal,
+                                      ThemeColorProvider hover,
+                                      ThemeColorProvider pressed) {
+  normalBorderColorProvider = std::move(normal);
+  hoverBorderColorProvider = std::move(hover);
+  pressedBorderColorProvider = std::move(pressed);
+  if (normalBorderColorProvider) {
+    normalBorderColor = normalBorderColorProvider();
+  }
+  if (hoverBorderColorProvider) {
+    hoverBorderColor = hoverBorderColorProvider();
+  }
+  if (pressedBorderColorProvider) {
+    pressedBorderColor = pressedBorderColorProvider();
+  }
   hasStyledBorder = true;
   return this;
 }
@@ -182,10 +225,37 @@ Button *Button::setStyledBorderWidth(int width) {
   return this;
 }
 
-Button::~Button() = default;
-void Button::onLayout() {
-  syncContentFrame(*this, contentView.get(), true);
+void Button::onThemeChanged() {
+  View::onThemeChanged();
+  if (normalBackgroundColorProvider) {
+    normalBackgroundColor = normalBackgroundColorProvider();
+  }
+  if (hoverBackgroundColorProvider) {
+    hoverBackgroundColor = hoverBackgroundColorProvider();
+  }
+  if (pressedBackgroundColorProvider) {
+    pressedBackgroundColor = pressedBackgroundColorProvider();
+  }
+  if (normalBorderColorProvider) {
+    normalBorderColor = normalBorderColorProvider();
+  }
+  if (hoverBorderColorProvider) {
+    hoverBorderColor = hoverBorderColorProvider();
+  }
+  if (pressedBorderColorProvider) {
+    pressedBorderColor = pressedBorderColorProvider();
+  }
 }
+
+void Button::propagateThemeChange() {
+  View::propagateThemeChange();
+  if (contentView) {
+    contentView->propagateThemeChange();
+  }
+}
+
+Button::~Button() = default;
+void Button::onLayout() { syncContentFrame(*this, contentView.get(), true); }
 
 void Button::onMove(int newX, int newY) {
   (void)newX;

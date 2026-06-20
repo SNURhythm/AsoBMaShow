@@ -4,6 +4,149 @@
 
 using namespace settings_scene;
 
+namespace {
+enum class SettingsButtonTone {
+  Neutral,
+  Primary,
+  Info,
+  Success,
+  Warning,
+  Danger,
+  Violet
+};
+
+enum class ButtonVisualState { Normal, Hover, Pressed };
+
+View::ThemeColorProvider semanticBackgroundProvider(SettingsButtonTone tone,
+                                                    ButtonVisualState state) {
+  return [tone, state]() {
+    switch (tone) {
+    case SettingsButtonTone::Primary:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::primaryAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::primaryActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::primaryActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Info:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::infoAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::infoActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::infoActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Success:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::successAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::successActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::successActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Warning:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::warningAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::warningActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::warningActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Danger:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::dangerAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::dangerActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::dangerActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Violet:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::violetAction();
+      case ButtonVisualState::Hover:
+        return ui_theme::violetActionHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::violetActionPressed();
+      }
+      break;
+    case SettingsButtonTone::Neutral:
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::control();
+      case ButtonVisualState::Hover:
+        return ui_theme::controlHover();
+      case ButtonVisualState::Pressed:
+        return ui_theme::controlPressed();
+      }
+      break;
+    }
+    return ui_theme::control();
+  };
+}
+
+View::ThemeColorProvider semanticBorderProvider(SettingsButtonTone tone,
+                                                ButtonVisualState state) {
+  return [tone, state]() {
+    if (tone == SettingsButtonTone::Neutral) {
+      switch (state) {
+      case ButtonVisualState::Normal:
+        return ui_theme::hairline();
+      case ButtonVisualState::Hover:
+        return ui_theme::accentBorder();
+      case ButtonVisualState::Pressed:
+        return ui_theme::accentBorderStrong();
+      }
+    }
+
+    const View::ThemeColorProvider baseProvider =
+        semanticBackgroundProvider(tone, state);
+    const uint8_t alpha = state == ButtonVisualState::Normal
+                              ? 164
+                              : (state == ButtonVisualState::Hover ? 206 : 232);
+    return ui_theme::withAlpha(baseProvider(), alpha);
+  };
+}
+
+void applySemanticButtonStyle(Button *button, TextView *text,
+                              SettingsButtonTone tone) {
+  if (button == nullptr) {
+    return;
+  }
+
+  auto normal = semanticBackgroundProvider(tone, ButtonVisualState::Normal);
+  button->setCornerRadius(ui_theme::controlRadius());
+  button->setThemedBackgroundColors(
+      normal, semanticBackgroundProvider(tone, ButtonVisualState::Hover),
+      semanticBackgroundProvider(tone, ButtonVisualState::Pressed));
+  button->setThemedBorderColors(
+      semanticBorderProvider(tone, ButtonVisualState::Normal),
+      semanticBorderProvider(tone, ButtonVisualState::Hover),
+      semanticBorderProvider(tone, ButtonVisualState::Pressed));
+  button->setStyledBorderWidth(1);
+
+  if (text == nullptr) {
+    return;
+  }
+  if (tone == SettingsButtonTone::Neutral) {
+    text->setThemedColor(ui_theme::textPrimary);
+  } else {
+    text->setThemedColor([normal]() { return ui_theme::textOn(normal()); });
+  }
+}
+} // namespace
+
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;
@@ -142,89 +285,68 @@ void SettingsScene::refreshSettingsText() {
     visibleTimeBpmStrategyText->setText("BPM: " + visibleTimeBpmStrategyLabel);
   }
 
-  auto applyTonalStyle = [](Button *button, const Color &accent) {
-    if (button == nullptr) {
-      return;
-    }
-    const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
-    const uint8_t normalAlpha = light ? 54 : 82;
-    const uint8_t hoverAlpha = light ? 74 : 108;
-    const uint8_t pressedAlpha = light ? 100 : 136;
-    button->setBackgroundColors(
-        Color(accent.r, accent.g, accent.b, normalAlpha),
-        Color(accent.r, accent.g, accent.b, hoverAlpha),
-        Color(accent.r, accent.g, accent.b, pressedAlpha));
-    button->setBorderColors(Color(accent.r, accent.g, accent.b, 178),
-                            Color(accent.r, accent.g, accent.b, 216), accent);
-  };
+  applySemanticButtonStyle(visibleTimeModeButton, visibleTimeModeText,
+                           context.settings.visibleTimeUseMilliseconds
+                               ? SettingsButtonTone::Success
+                               : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
+      visibleTimeBpmStrategyButton, visibleTimeBpmStrategyText,
+      context.settings.visibleTimeBpmStrategy ==
+              AppSettings::VisibleTimeBpmStrategy::MostPrevalent
+          ? SettingsButtonTone::Success
+          : SettingsButtonTone::Info);
+  applySemanticButtonStyle(keysoundModeButton, keysoundModeText,
+                           context.settings.inputKeysoundEnabled
+                               ? SettingsButtonTone::Info
+                               : SettingsButtonTone::Warning);
+  applySemanticButtonStyle(notePriorityModeButton, notePriorityModeText,
+                           context.settings.notePriorityMode ==
+                                   AppSettings::NotePriorityMode::Lowest
+                               ? SettingsButtonTone::Info
+                               : SettingsButtonTone::Success);
+  applySemanticButtonStyle(
+      showInvisibleNotesModeButton, showInvisibleNotesModeText,
+      context.settings.showInvisibleNotes ? SettingsButtonTone::Success
+                                          : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
+      archiveChartPreviewModeButton, archiveChartPreviewModeText,
+      context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success
+                                                  : SettingsButtonTone::Danger);
+  applySemanticButtonStyle(
+      judgementIndicatorModeButton, judgementIndicatorModeText,
+      context.settings.judgementIndicatorEnabled ? SettingsButtonTone::Success
+                                                 : SettingsButtonTone::Danger);
+  applySemanticButtonStyle(
+      judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
+      context.settings.judgementIndicatorRenderMode ==
+              AppSettings::JudgementIndicatorRenderMode::Hud2D
+          ? SettingsButtonTone::Success
+          : SettingsButtonTone::Info);
+  applySemanticButtonStyle(bgaModeButton, bgaModeText,
+                           context.settings.bgaEnabled
+                               ? SettingsButtonTone::Success
+                               : SettingsButtonTone::Danger);
+  applySemanticButtonStyle(uiThemeModeButton, uiThemeModeText,
+                           context.settings.uiThemeMode ==
+                                   AppSettings::UiThemeMode::Dark
+                               ? SettingsButtonTone::Violet
+                               : SettingsButtonTone::Warning);
 
-  auto applyNeutralStyle = [](Button *button) {
-    if (button == nullptr) {
-      return;
-    }
-    button->setBackgroundColors(ui_theme::control(), ui_theme::controlHover(),
-                                ui_theme::controlPressed());
-    button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                            ui_theme::cyan());
-  };
-
-  applyTonalStyle(visibleTimeModeButton,
-                  context.settings.visibleTimeUseMilliseconds
-                      ? ui_theme::lime()
-                      : ui_theme::cyan());
-  applyTonalStyle(visibleTimeBpmStrategyButton,
-                  context.settings.visibleTimeBpmStrategy ==
-                          AppSettings::VisibleTimeBpmStrategy::MostPrevalent
-                      ? ui_theme::lime()
-                      : ui_theme::cyan());
-  applyTonalStyle(keysoundModeButton, context.settings.inputKeysoundEnabled
-                                          ? ui_theme::cyan()
-                                          : ui_theme::amber());
-  applyTonalStyle(notePriorityModeButton,
-                  context.settings.notePriorityMode ==
-                          AppSettings::NotePriorityMode::Lowest
-                      ? ui_theme::cyan()
-                      : ui_theme::lime());
-  applyTonalStyle(showInvisibleNotesModeButton,
-                  context.settings.showInvisibleNotes ? ui_theme::lime()
-                                                      : ui_theme::cyan());
-  applyTonalStyle(archiveChartPreviewModeButton,
-                  context.settings.archiveChartPreviewEnabled
-                      ? ui_theme::lime()
-                      : ui_theme::coral());
-  applyTonalStyle(judgementIndicatorModeButton,
-                  context.settings.judgementIndicatorEnabled
-                      ? ui_theme::lime()
-                      : ui_theme::coral());
-  applyTonalStyle(judgementIndicatorRenderModeButton,
-                  context.settings.judgementIndicatorRenderMode ==
-                          AppSettings::JudgementIndicatorRenderMode::Hud2D
-                      ? ui_theme::lime()
-                      : ui_theme::cyan());
-  applyTonalStyle(bgaModeButton, context.settings.bgaEnabled
-                                     ? ui_theme::lime()
-                                     : ui_theme::coral());
-  applyTonalStyle(uiThemeModeButton,
-                  context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark
-                      ? ui_theme::cyan()
-                      : ui_theme::amber());
-
-  auto applyTabStyle = [this, &applyTonalStyle,
-                        &applyNeutralStyle](Button *button, SettingsTab tab) {
+  auto applyTabStyle = [this](Button *button, TextView *text, SettingsTab tab) {
     if (button == nullptr) {
       return;
     }
     if (activeTab == tab) {
-      applyTonalStyle(button, ui_theme::cyan());
+      applySemanticButtonStyle(button, text, SettingsButtonTone::Primary);
     } else {
-      applyNeutralStyle(button);
+      applySemanticButtonStyle(button, text, SettingsButtonTone::Neutral);
     }
   };
-  applyTabStyle(timingTabButton, SettingsTab::Timing);
-  applyTabStyle(visualTabButton, SettingsTab::Visual);
-  applyTabStyle(laneTabButton, SettingsTab::Lane);
-  applyTabStyle(miscTabButton, SettingsTab::Misc);
-  applyTabStyle(tablesTabButton, SettingsTab::Tables);
+  applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);
+  applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
+  applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
+  applyTabStyle(miscTabButton, miscTabText, SettingsTab::Misc);
+  applyTabStyle(tablesTabButton, tablesTabText, SettingsTab::Tables);
 
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -242,16 +364,16 @@ void SettingsScene::persistSettings() {
           ? ui_theme::ThemeMode::Light
           : ui_theme::ThemeMode::Dark;
   ui_theme::setActiveMode(nextMode);
-  if (previousMode != nextMode) {
-    lastLayoutWidth = -1;
-    lastLayoutHeight = -1;
-  }
+  const bool themeChanged = previousMode != nextMode;
   if (!context.settings.save()) {
     SDL_Log("Failed to save settings");
   }
   context.jukebox.setVisualsEnabled(context.settings.bgaEnabled);
   context.jukebox.setBgaOffsetMs(context.settings.audioOffsetMs);
   context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
+  if (themeChanged && rootLayout != nullptr) {
+    rootLayout->propagateThemeChange();
+  }
   refreshSettingsText();
 }
 

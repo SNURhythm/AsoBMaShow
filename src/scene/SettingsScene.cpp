@@ -126,7 +126,13 @@ void SettingsScene::cleanupScene() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  miscTabButton = nullptr;
   tablesTabButton = nullptr;
+  timingTabText = nullptr;
+  visualTabText = nullptr;
+  laneTabText = nullptr;
+  miscTabText = nullptr;
+  tablesTabText = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;

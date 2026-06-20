@@ -69,6 +69,11 @@ void SettingsScene::resetViewState() {
   laneTabButton = nullptr;
   miscTabButton = nullptr;
   tablesTabButton = nullptr;
+  timingTabText = nullptr;
+  visualTabText = nullptr;
+  laneTabText = nullptr;
+  miscTabText = nullptr;
+  tablesTabText = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
@@ -252,10 +257,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->setFlexDirection(FlexDirection::Column);
   previewPanel->setAlignItems(previewPanelFolded ? YGAlignFlexEnd
                                                  : YGAlignStretch);
-  previewPanel->setBackgroundColor(ui_theme::panel());
+  previewPanel->setThemedBackgroundColor(ui_theme::panel);
   previewPanel->setCornerRadius(ui_theme::panelRadius());
-  previewPanel->setShadow(ui_theme::shadow(), 0, 10, 18);
-  previewPanel->setBorderColor(ui_theme::hairline());
+  previewPanel->setThemedShadow(ui_theme::shadow, 0, 10, 18);
+  previewPanel->setThemedBorderColor(ui_theme::hairline);
   previewPanel->setBorderWidth(1);
 
   auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
@@ -515,9 +520,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *offsetValue = new View();
   offsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   offsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  offsetValue->setBackgroundColor(ui_theme::control());
+  offsetValue->setThemedBackgroundColor(ui_theme::control);
   offsetValue->setCornerRadius(ui_theme::controlRadius());
-  offsetValue->setBorderColor(ui_theme::hairline());
+  offsetValue->setThemedBorderColor(ui_theme::hairline);
   offsetValue->setBorderWidth(1);
   offsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   offsetInput->setText("");
@@ -526,7 +531,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetInput->setBorderWidth(0);
   offsetInput->setAlign(TextView::CENTER);
   offsetInput->setVAlign(TextView::MIDDLE);
-  offsetInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  offsetInput->setThemedColor(ui_theme::textPrimary);
   offsetInput->onEditingFinished(
       [this](const std::string &) { commitOffsetInput(); });
   offsetValue->addView(offsetInput);
@@ -585,9 +590,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *visualOffsetValue = new View();
   visualOffsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   visualOffsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  visualOffsetValue->setBackgroundColor(ui_theme::control());
+  visualOffsetValue->setThemedBackgroundColor(ui_theme::control);
   visualOffsetValue->setCornerRadius(ui_theme::controlRadius());
-  visualOffsetValue->setBorderColor(ui_theme::hairline());
+  visualOffsetValue->setThemedBorderColor(ui_theme::hairline);
   visualOffsetValue->setBorderWidth(1);
   visualOffsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   visualOffsetInput->setText("");
@@ -597,7 +602,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetInput->setBorderWidth(0);
   visualOffsetInput->setAlign(TextView::CENTER);
   visualOffsetInput->setVAlign(TextView::MIDDLE);
-  visualOffsetInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  visualOffsetInput->setThemedColor(ui_theme::textPrimary);
   visualOffsetInput->onEditingFinished(
       [this](const std::string &) { commitVisualOffsetInput(); });
   visualOffsetValue->addView(visualOffsetInput);
@@ -1526,9 +1531,9 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(ui_theme::panelSubtle());
+      row->setThemedBackgroundColor(ui_theme::panelSubtle);
       row->setCornerRadius(ui_theme::controlRadius());
-      row->setBorderColor(ui_theme::hairline());
+      row->setThemedBorderColor(ui_theme::hairline);
       row->setBorderWidth(1);
 
       row->addView(makeWrappedText(formatChartEntryName(entry),
@@ -1602,9 +1607,9 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(ui_theme::panelSubtle());
+      row->setThemedBackgroundColor(ui_theme::panelSubtle);
       row->setCornerRadius(ui_theme::controlRadius());
-      row->setBorderColor(ui_theme::hairline());
+      row->setThemedBorderColor(ui_theme::hairline);
       row->setBorderWidth(1);
 
       auto *titleRow = new View();
@@ -1677,7 +1682,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
   difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
   difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
-  difficultyTableImportModalRoot->setBackgroundColor(ui_theme::scrim());
+  difficultyTableImportModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *importPanel = new View();
   importPanel
@@ -1689,10 +1694,10 @@ void SettingsScene::buildDifficultyTableImportModal(
       ->setAlignItems(YGAlignStretch)
       ->setGap(metrics.compact ? 14.0f : 18.0f)
       ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
-      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
-      ->setBorderColor(ui_theme::hairline())
+      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
 
   difficultyTableImportTitleText =
@@ -1720,15 +1725,16 @@ void SettingsScene::buildDifficultyTableImportModal(
   progressTrack->setHeight(static_cast<float>(metrics.compact ? 16 : 18));
   progressTrack->setAlignSelf(YGAlignStretch);
   progressTrack->setFlexDirection(FlexDirection::Row);
-  progressTrack->setBackgroundColor(ui_theme::control());
+  progressTrack->setThemedBackgroundColor(ui_theme::control);
   progressTrack->setCornerRadius(ui_theme::controlRadius());
-  progressTrack->setBorderColor(ui_theme::hairline());
+  progressTrack->setThemedBorderColor(ui_theme::hairline);
   progressTrack->setBorderWidth(1);
   difficultyTableImportProgressFill = new View();
   difficultyTableImportProgressFill->setWidthPercent(0.0f);
   difficultyTableImportProgressFill->setHeight(
       static_cast<float>(metrics.compact ? 16 : 18));
-  difficultyTableImportProgressFill->setBackgroundColor(ui_theme::lime());
+  difficultyTableImportProgressFill->setThemedBackgroundColor(
+      ui_theme::progressFill);
   progressTrack->addView(difficultyTableImportProgressFill);
   progressRow->addView(progressTrack);
   importPanel->addView(progressRow);
@@ -1776,7 +1782,7 @@ void SettingsScene::initView() {
     return;
   }
 
-  rootLayout->setBackgroundColor(ui_theme::backdrop());
+  rootLayout->setThemedBackgroundColor(ui_theme::backdrop);
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -1831,14 +1837,19 @@ void SettingsScene::initView() {
   tabControls->setGap(metrics.compact ? 8.0f : 12.0f);
   tabControls->setWidth(static_cast<float>(tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
-  auto makeTabButton = [&](SettingsTab tab, const std::string &label) {
-    auto *button = makeButton(tabColumnWidth, metrics.actionButtonHeight,
-                              makeText(label, metrics.bodyTextSize + 4,
-                                       ui_theme::textPrimary(),
-                                       TextView::CENTER, TextView::MIDDLE),
-                              ui_theme::control(), ui_theme::controlHover(),
-                              ui_theme::controlPressed(), ui_theme::hairline(),
-                              ui_theme::cyan(), ui_theme::cyan());
+  auto makeTabButton = [&](SettingsTab tab, const std::string &label,
+                           TextView **labelOut) {
+    auto *labelText =
+        makeText(label, metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    if (labelOut != nullptr) {
+      *labelOut = labelText;
+    }
+    auto *button =
+        makeButton(tabColumnWidth, metrics.actionButtonHeight, labelText,
+                   ui_theme::control(), ui_theme::controlHover(),
+                   ui_theme::controlPressed(), ui_theme::hairline(),
+                   ui_theme::accentBorder(), ui_theme::accentBorderStrong());
     button->setOnClickListener([this, tab]() {
       if (activeTab == tab) {
         return;
@@ -1848,11 +1859,14 @@ void SettingsScene::initView() {
     });
     return button;
   };
-  timingTabButton = makeTabButton(SettingsTab::Timing, "Timing");
-  visualTabButton = makeTabButton(SettingsTab::Visual, "Visual");
-  laneTabButton = makeTabButton(SettingsTab::Lane, "Lane");
-  miscTabButton = makeTabButton(SettingsTab::Misc, "Misc");
-  tablesTabButton = makeTabButton(SettingsTab::Tables, "Tables");
+  timingTabButton =
+      makeTabButton(SettingsTab::Timing, "Timing", &timingTabText);
+  visualTabButton =
+      makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
+  laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
+  miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
+  tablesTabButton =
+      makeTabButton(SettingsTab::Tables, "Tables", &tablesTabText);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
@@ -1891,9 +1905,9 @@ void SettingsScene::initView() {
 
   auto *footer = new View();
   footer->setPadding(Edge::All, static_cast<float>(metrics.cardPadding - 4));
-  footer->setBackgroundColor(ui_theme::panelSubtle());
+  footer->setThemedBackgroundColor(ui_theme::panelSubtle);
   footer->setCornerRadius(ui_theme::panelRadius());
-  footer->setBorderColor(ui_theme::hairline());
+  footer->setThemedBorderColor(ui_theme::hairline);
   footer->setBorderWidth(1);
   footer->addView(makeWrappedText(
       metrics.compact

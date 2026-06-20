@@ -350,8 +350,7 @@ private:
   ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
 
   void initView(ApplicationContext &context);
-  void resetViewReferences();
-  void rebuildViewForActiveTheme();
+  void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
