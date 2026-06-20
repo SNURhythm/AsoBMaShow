@@ -73,6 +73,10 @@ bool RevealIOSFileInFiles(const std::string &filePath,
                           std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
+bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
+                                  std::string &errorMessage);
+bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
+                                  std::string &errorMessage);
 void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,

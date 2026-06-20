@@ -3,6 +3,43 @@
 
 using namespace settings_scene;
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+namespace {
+class IOSScopedChartEntryAccess {
+public:
+  explicit IOSScopedChartEntryAccess(const ChartEntry &entry)
+      : resolvedPath(formatChartEntryPath(entry)) {
+    if (entry.iosBookmark.empty()) {
+      return;
+    }
+
+    std::string bookmarkResolvedPath;
+    handle = StartIOSSecurityScopedResource(
+        resolvedPath, entry.iosBookmark, bookmarkResolvedPath, errorMessage);
+    if (!bookmarkResolvedPath.empty()) {
+      resolvedPath = bookmarkResolvedPath;
+    }
+  }
+
+  IOSScopedChartEntryAccess(const IOSScopedChartEntryAccess &) = delete;
+  IOSScopedChartEntryAccess &
+  operator=(const IOSScopedChartEntryAccess &) = delete;
+
+  ~IOSScopedChartEntryAccess() {
+    if (handle != nullptr) {
+      StopIOSSecurityScopedResource(handle);
+    }
+  }
+
+  std::string resolvedPath;
+  std::string errorMessage;
+
+private:
+  void *handle = nullptr;
+};
+} // namespace
+#endif
+
 void SettingsScene::loadDifficultyTables() {
   auto &dbHelper = ChartDBHelper::GetInstance();
   sqlite3 *settingsDb = dbHelper.Connect();
@@ -53,6 +90,104 @@ void SettingsScene::loadChartEntries() {
       pendingDeleteChartEntryPath.clear();
     }
   }
+}
+
+void SettingsScene::refreshChartEntryBackupStatuses() {
+  chartEntryICloudBackupExcluded.clear();
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  for (const auto &entry : chartEntries) {
+    const std::string entryPathText = formatChartEntryPath(entry);
+    IOSScopedChartEntryAccess access(entry);
+    if (!access.errorMessage.empty()) {
+      SDL_Log("Failed to open folder access for %s: %s",
+              entryPathText.c_str(), access.errorMessage.c_str());
+    }
+
+    bool excluded = false;
+    std::string errorMessage;
+    if (!GetIOSFileExcludedFromBackup(access.resolvedPath, excluded,
+                                      errorMessage)) {
+      SDL_Log("Failed to read iCloud Backup setting for %s: %s",
+              access.resolvedPath.c_str(), errorMessage.c_str());
+      continue;
+    }
+    chartEntryICloudBackupExcluded[entryPathText] = excluded;
+  }
+#endif
+}
+
+void SettingsScene::toggleChartEntryICloudBackup(
+    const std::string &entryPathText) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const auto entryIt =
+      std::find_if(chartEntries.begin(), chartEntries.end(),
+                   [&entryPathText](const ChartEntry &entry) {
+                     return formatChartEntryPath(entry) == entryPathText;
+                   });
+  if (entryIt == chartEntries.end()) {
+    difficultyTableStatusMessage = "Folder entry was not found.";
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    if (difficultyTableStatusText != nullptr) {
+      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setColor(difficultyTableStatusColor);
+    }
+    return;
+  }
+
+  IOSScopedChartEntryAccess access(*entryIt);
+  if (!access.errorMessage.empty()) {
+    SDL_Log("Failed to open folder access for %s: %s",
+            entryPathText.c_str(), access.errorMessage.c_str());
+  }
+
+  bool excluded = false;
+  std::string errorMessage;
+  if (!GetIOSFileExcludedFromBackup(access.resolvedPath, excluded,
+                                    errorMessage)) {
+    difficultyTableStatusMessage =
+        "Could not check iCloud Backup: " + errorMessage;
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    if (difficultyTableStatusText != nullptr) {
+      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setColor(difficultyTableStatusColor);
+    }
+    return;
+  }
+
+  const bool shouldExclude = !excluded;
+  if (!SetIOSFileExcludedFromBackup(access.resolvedPath, shouldExclude,
+                                    errorMessage)) {
+    difficultyTableStatusMessage =
+        "Could not update iCloud Backup: " + errorMessage;
+    difficultyTableStatusColor = {255, 177, 170, 255};
+    if (difficultyTableStatusText != nullptr) {
+      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setColor(difficultyTableStatusColor);
+    }
+    return;
+  }
+
+  chartEntryICloudBackupExcluded[entryPathText] = shouldExclude;
+  difficultyTableStatusMessage =
+      shouldExclude ? "iCloud Backup disabled for folder."
+                    : "iCloud Backup enabled for folder.";
+  difficultyTableStatusColor = {181, 228, 165, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+  lastLayoutWidth = -1;
+#else
+  (void)entryPathText;
+  difficultyTableStatusMessage =
+      "iCloud Backup settings are only available on iOS.";
+  difficultyTableStatusColor = {255, 177, 170, 255};
+  if (difficultyTableStatusText != nullptr) {
+    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  }
+#endif
 }
 
 void SettingsScene::requestDifficultyTableStatus(const std::string &text,

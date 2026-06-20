@@ -1824,6 +1824,58 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
   return false;
 }
 
+bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
+                                  std::string &errorMessage) {
+  excluded = false;
+  errorMessage.clear();
+  @autoreleasepool {
+    NSString *path = NSStringFromUtf8(filePath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "File path is empty";
+      return false;
+    }
+
+    NSURL *url = [NSURL fileURLWithPath:path isDirectory:YES];
+    NSError *error = nil;
+    NSDictionary<NSURLResourceKey, id> *values =
+        [url resourceValuesForKeys:@[ NSURLIsExcludedFromBackupKey ]
+                              error:&error];
+    if (values == nil) {
+      errorMessage =
+          NSErrorMessage(error, "Failed to read iCloud Backup setting");
+      return false;
+    }
+
+    NSNumber *value = values[NSURLIsExcludedFromBackupKey];
+    excluded = value != nil && value.boolValue;
+    return true;
+  }
+}
+
+bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
+                                  std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    NSString *path = NSStringFromUtf8(filePath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "File path is empty";
+      return false;
+    }
+
+    NSURL *url = [NSURL fileURLWithPath:path isDirectory:YES];
+    NSError *error = nil;
+    NSNumber *value = @(excluded);
+    if (![url setResourceValue:value
+                        forKey:NSURLIsExcludedFromBackupKey
+                         error:&error]) {
+      errorMessage =
+          NSErrorMessage(error, "Failed to update iCloud Backup setting");
+      return false;
+    }
+    return true;
+  }
+}
+
 void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,

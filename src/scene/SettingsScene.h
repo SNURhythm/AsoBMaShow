@@ -147,6 +147,7 @@ private:
   std::string difficultyTableImportName;
   std::string difficultyTableImportStatusMessage;
   std::string tableUrlText;
+  std::unordered_map<std::string, bool> chartEntryICloudBackupExcluded;
   int pendingDeleteDifficultyTableId = 0;
   std::string pendingDeleteChartEntryPath;
   int lastLayoutWidth = -1;
@@ -196,6 +197,8 @@ private:
   void deleteDifficultyTable(int tableId);
   void deleteChartEntry(const std::string &entryPathText);
   void refreshChartLibrary();
+  void refreshChartEntryBackupStatuses();
+  void toggleChartEntryICloudBackup(const std::string &entryPathText);
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

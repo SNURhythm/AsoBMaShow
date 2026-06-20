@@ -1464,6 +1464,7 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
   loadChartEntries();
+  refreshChartEntryBackupStatuses();
 
   auto *addControls = new View();
   addControls->setFlexDirection(FlexDirection::Column);
@@ -1575,6 +1576,33 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       deleteButton->setOnClickListener(
           [this, entryPathText]() { deleteChartEntry(entryPathText); });
       actions->addView(deleteButton);
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+      const auto backupStatusIt =
+          chartEntryICloudBackupExcluded.find(entryPathText);
+      const bool backupExcluded =
+          backupStatusIt != chartEntryICloudBackupExcluded.end() &&
+          backupStatusIt->second;
+      const int backupActionWidth = metrics.compact ? 224 : 260;
+      auto *backupButton = makeButton(
+          backupActionWidth, metrics.actionButtonHeight,
+          makeText(backupExcluded ? "Enable iCloud Backup"
+                                  : "Disable iCloud Backup",
+                   metrics.smallTextSize, Color(239, 244, 251),
+                   TextView::CENTER, TextView::MIDDLE),
+          backupExcluded ? Color(33, 56, 87, 255) : Color(35, 68, 62, 255),
+          backupExcluded ? Color(43, 72, 110, 255) : Color(45, 88, 80, 255),
+          backupExcluded ? Color(59, 98, 147, 255) : Color(63, 118, 107, 255),
+          backupExcluded ? Color(92, 131, 177, 255) : Color(97, 157, 142, 255),
+          backupExcluded ? Color(118, 163, 217, 255)
+                         : Color(120, 187, 169, 255),
+          backupExcluded ? Color(139, 189, 244, 255)
+                         : Color(145, 214, 195, 255));
+      backupButton->setOnClickListener([this, entryPathText]() {
+        toggleChartEntryICloudBackup(entryPathText);
+      });
+      actions->addView(backupButton);
+#endif
 
       row->addView(actions);
       folderList->addView(row);

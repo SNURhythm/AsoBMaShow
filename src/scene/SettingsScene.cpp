@@ -3,7 +3,10 @@
 
 using namespace settings_scene;
 
-void SettingsScene::init() { ensureLayoutUpToDate(); }
+void SettingsScene::init() {
+  lastLayoutWidth = -1;
+  ensureLayoutUpToDate();
+}
 
 void SettingsScene::update(float dt) {
   if (previewActive) {
