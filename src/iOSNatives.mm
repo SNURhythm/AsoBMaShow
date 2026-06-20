@@ -613,6 +613,9 @@ public:
     if (writer != nil && writer.status == AVAssetWriterStatusWriting) {
       [writer cancelWriting];
     }
+    if (audioReader != nil && audioReader.status == AVAssetReaderStatusReading) {
+      [audioReader cancelReading];
+    }
     releasePendingAudioSample();
   }
 
@@ -1894,7 +1897,7 @@ void *CreateIOSReplayVideoWriter(const std::string &wavPath,
       writer.reset(new IOSReplayVideoWriter());
       if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
                         errorMessage)) {
-        delete writer.release();
+        writer.reset();
         return nullptr;
       }
       return writer.release();
@@ -1935,6 +1938,9 @@ bool FinishIOSReplayVideoWriter(void *writer,
   auto *iosWriter = static_cast<IOSReplayVideoWriter *>(writer);
   const bool success = iosWriter->finish(errorMessage);
   profile = iosWriter->profile;
+  if (!success) {
+    iosWriter->cancel();
+  }
   delete iosWriter;
   return success;
 }
