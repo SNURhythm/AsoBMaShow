@@ -7,6 +7,7 @@
 #include "../view/Button.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include "../view/View.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -266,8 +267,8 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setBackgroundColor(Color(19, 30, 46, 245));
-  card->setBorderColor(Color(76, 104, 136, 255));
+  card->setBackgroundGradient(ui_theme::glassTop(), ui_theme::glassBottom());
+  card->setBorderColor(ui_theme::hairline());
   card->setBorderWidth(2);
   card->setMinHeight(static_cast<float>(minHeight));
   if (width > 0) {
@@ -278,10 +279,12 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   header->setFlexDirection(FlexDirection::Column);
   header->setGap(metrics.compact ? 6.0f : 8.0f);
   auto *titleText =
-      makeWrappedText(title, metrics.sectionTitleSize, Color(244, 248, 255));
+      makeWrappedText(title, metrics.sectionTitleSize,
+                      ui_theme::textPrimary());
   header->addView(titleText);
   auto *descriptionText =
-      makeWrappedText(description, metrics.bodyTextSize, Color(168, 186, 209));
+      makeWrappedText(description, metrics.bodyTextSize,
+                      ui_theme::textSecondary());
   header->addView(descriptionText);
   card->addView(header);
   card->addView(body);
@@ -533,6 +536,16 @@ formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
   return "Lowest";
 }
 
+static std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return "Dark";
+  case AppSettings::UiThemeMode::Light:
+    return "Light";
+  }
+  return "Dark";
+}
+
 static std::string formatTableCount(int chartCount) {
   return std::to_string(chartCount) + (chartCount == 1 ? " chart" : " charts");
 }
@@ -625,6 +638,16 @@ nextJudgementIndicatorRenderMode(
     return AppSettings::JudgementIndicatorRenderMode::World3D;
   }
   return AppSettings::JudgementIndicatorRenderMode::World3D;
+}
+
+static AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return AppSettings::UiThemeMode::Light;
+  case AppSettings::UiThemeMode::Light:
+    return AppSettings::UiThemeMode::Dark;
+  }
+  return AppSettings::UiThemeMode::Dark;
 }
 
 } // namespace settings_scene

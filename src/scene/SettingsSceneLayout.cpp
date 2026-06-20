@@ -39,6 +39,7 @@ void SettingsScene::resetViewState() {
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  summaryUiThemeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
@@ -51,6 +52,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorRenderModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
+  uiThemeModeText = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -61,6 +63,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorRenderModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
+  uiThemeModeButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
@@ -1464,6 +1467,38 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
 
+  auto *themeControls = new View();
+  themeControls->setFlexDirection(FlexDirection::Column);
+  themeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  themeControls->setAlignItems(YGAlignFlexStart);
+  themeControls->addView(makeWrappedText(
+      metrics.compact ? "Switch the UI palette."
+                      : "Switch between the dark prismatic palette and a "
+                        "light high-contrast palette.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  uiThemeModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  uiThemeModeButton = makeButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight, uiThemeModeText,
+      Color(23, 151, 143, 255), Color(34, 196, 187, 255),
+      Color(63, 228, 217, 255), ui_theme::cyan(),
+      Color(142, 255, 248, 255), Color(255, 255, 255, 255));
+  uiThemeModeButton->setOnClickListener([this]() {
+    context.settings.uiThemeMode =
+        nextUiThemeMode(context.settings.uiThemeMode);
+    persistSettings();
+    lastLayoutWidth = -1;
+  });
+  themeControls->addView(uiThemeModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Theme",
+      metrics.compact ? "Dark stays colorful without the old graphite panels."
+                      : "Dark keeps the stage-light rhythm-game mood without "
+                        "the old graphite panels. Light is available for "
+                        "brighter environments.",
+      themeControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *archivePreviewControls = new View();
   archivePreviewControls->setFlexDirection(FlexDirection::Column);
   archivePreviewControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1849,18 +1884,22 @@ void SettingsScene::initView() {
     return;
   }
 
-  rootLayout->setBackgroundColor(Color(10, 18, 30));
+  rootLayout->setBackgroundGradient(ui_theme::backdropTop(),
+                                    ui_theme::backdropBottom());
 
   if (!metrics.compact) {
     auto *accentA = new View(110, 86, 480, 180);
     accentA->setPositionType(YGPositionTypeAbsolute);
-    accentA->setBackgroundColor(Color(39, 101, 160, 96));
+    accentA->setBackgroundColor(Color(ui_theme::cyan().r, ui_theme::cyan().g,
+                                      ui_theme::cyan().b, 70));
     rootLayout->addView(accentA);
 
     auto *accentB = new View(rendering::window_width - 520,
                              rendering::window_height - 250, 420, 160);
     accentB->setPositionType(YGPositionTypeAbsolute);
-    accentB->setBackgroundColor(Color(207, 110, 62, 72));
+    accentB->setBackgroundColor(Color(ui_theme::coral().r,
+                                      ui_theme::coral().g,
+                                      ui_theme::coral().b, 64));
     rootLayout->addView(accentB);
   }
 
@@ -1873,13 +1912,13 @@ void SettingsScene::initView() {
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
-      makeText("Settings", metrics.titleSize, Color(244, 248, 255)));
+      makeText("Settings", metrics.titleSize, ui_theme::textPrimary()));
   headerText->addView(makeWrappedText(
       metrics.compact
           ? "Timing, keysound, and visual preferences."
           : "Persistent player preferences for timing, keysounds, and visual "
             "load.",
-      metrics.subtitleSize, Color(162, 183, 205)));
+      metrics.subtitleSize, ui_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =

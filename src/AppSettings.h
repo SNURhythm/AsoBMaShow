@@ -28,6 +28,11 @@ public:
     MostPrevalent = 1,
   };
 
+  enum class UiThemeMode {
+    Dark = 0,
+    Light = 1,
+  };
+
   static constexpr int kMinAudioOffsetMs = -300;
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
@@ -96,6 +101,7 @@ public:
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
+  UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
 

@@ -163,6 +163,28 @@ const char *visibleTimeBpmStrategyToString(
   return "chart";
 }
 
+AppSettings::UiThemeMode parseUiThemeMode(
+    const std::string &value, AppSettings::UiThemeMode fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "dark" || normalized == "0") {
+    return AppSettings::UiThemeMode::Dark;
+  }
+  if (normalized == "light" || normalized == "1") {
+    return AppSettings::UiThemeMode::Light;
+  }
+  return fallback;
+}
+
+const char *uiThemeModeToString(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return "dark";
+  case AppSettings::UiThemeMode::Light:
+    return "light";
+  }
+  return "dark";
+}
+
 std::string parseGaugeTypeId(const std::string &value,
                              const std::string &fallback) {
   if (value == "assisted_easy") {
@@ -295,6 +317,14 @@ void AppSettings::sanitize() {
     visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
     break;
   }
+  switch (uiThemeMode) {
+  case UiThemeMode::Dark:
+  case UiThemeMode::Light:
+    break;
+  default:
+    uiThemeMode = UiThemeMode::Dark;
+    break;
+  }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
@@ -414,6 +444,8 @@ bool AppSettings::save() const {
        << judgementIndicatorRenderModeToString(
               sanitized.judgementIndicatorRenderMode)
        << "\n";
+  file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
+       << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   return file.good();
@@ -524,6 +556,8 @@ AppSettings AppSettings::load() {
         settings.judgementIndicatorRenderMode =
             parseJudgementIndicatorRenderMode(
                 value, settings.judgementIndicatorRenderMode);
+      } else if (key == "ui_theme_mode") {
+        settings.uiThemeMode = parseUiThemeMode(value, settings.uiThemeMode);
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

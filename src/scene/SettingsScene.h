@@ -72,6 +72,7 @@ private:
   TextView *summaryNoteStartPositionValueText = nullptr;
   TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
+  TextView *summaryUiThemeValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
@@ -84,6 +85,7 @@ private:
   TextView *judgementIndicatorRenderModeText = nullptr;
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
+  TextView *uiThemeModeText = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -94,6 +96,7 @@ private:
   Button *judgementIndicatorRenderModeButton = nullptr;
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;
+  Button *uiThemeModeButton = nullptr;
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;

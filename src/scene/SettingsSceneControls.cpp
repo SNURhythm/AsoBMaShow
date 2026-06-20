@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
+#include "../view/UiTheme.h"
 
 using namespace settings_scene;
 
@@ -45,6 +46,8 @@ void SettingsScene::refreshSettingsText() {
   const std::string judgementIndicatorRenderModeLabel =
       formatJudgementIndicatorRenderModeLabel(
           context.settings.judgementIndicatorRenderMode);
+  const std::string uiThemeLabel =
+      formatUiThemeModeLabel(context.settings.uiThemeMode);
 
   syncOffsetInputText();
   if (summaryOffsetValueText != nullptr) {
@@ -97,6 +100,9 @@ void SettingsScene::refreshSettingsText() {
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
   }
+  if (summaryUiThemeValueText != nullptr) {
+    summaryUiThemeValueText->setText(uiThemeLabel);
+  }
   syncJudgementIndicatorYInputText();
   syncJudgementIndicatorWidthInputText();
   if (keysoundModeText != nullptr) {
@@ -123,6 +129,9 @@ void SettingsScene::refreshSettingsText() {
   }
   if (bgaDisplayModeText != nullptr) {
     bgaDisplayModeText->setText(bgaDisplayLabel);
+  }
+  if (uiThemeModeText != nullptr) {
+    uiThemeModeText->setText(uiThemeLabel);
   }
   if (visibleTimeModeText != nullptr) {
     visibleTimeModeText->setText(context.settings.visibleTimeUseMilliseconds
@@ -299,6 +308,24 @@ void SettingsScene::refreshSettingsText() {
     }
   }
 
+  if (uiThemeModeButton != nullptr) {
+    if (context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark) {
+      uiThemeModeButton->setBackgroundColors(Color(23, 151, 143, 255),
+                                             Color(34, 196, 187, 255),
+                                             Color(63, 228, 217, 255));
+      uiThemeModeButton->setBorderColors(ui_theme::cyan(),
+                                         Color(142, 255, 248, 255),
+                                         Color(255, 255, 255, 255));
+    } else {
+      uiThemeModeButton->setBackgroundColors(Color(238, 246, 244, 255),
+                                             Color(225, 255, 248, 255),
+                                             Color(201, 247, 240, 255));
+      uiThemeModeButton->setBorderColors(Color(0, 174, 174, 190),
+                                         Color(0, 190, 190, 220),
+                                         Color(238, 76, 66, 255));
+    }
+  }
+
   auto applyTabStyle = [this](Button *button, SettingsTab tab) {
     if (button == nullptr) {
       return;
@@ -335,6 +362,10 @@ void SettingsScene::refreshSettingsText() {
 
 void SettingsScene::persistSettings() {
   context.settings.sanitize();
+  ui_theme::setActiveMode(context.settings.uiThemeMode ==
+                                  AppSettings::UiThemeMode::Light
+                              ? ui_theme::ThemeMode::Light
+                              : ui_theme::ThemeMode::Dark);
   if (!context.settings.save()) {
     SDL_Log("Failed to save settings");
   }
