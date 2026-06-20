@@ -12,6 +12,40 @@ namespace rendering {
 // singleton
 class ShaderManager {
 private:
+  struct ShaderHandleGuard {
+    explicit ShaderHandleGuard(bgfx::ShaderHandle handle) : handle(handle) {}
+    ShaderHandleGuard(const ShaderHandleGuard &) = delete;
+    ShaderHandleGuard &operator=(const ShaderHandleGuard &) = delete;
+    ~ShaderHandleGuard() {
+      if (bgfx::isValid(handle)) {
+        bgfx::destroy(handle);
+      }
+    }
+
+    bgfx::ShaderHandle get() const { return handle; }
+    void release() { handle = BGFX_INVALID_HANDLE; }
+
+  private:
+    bgfx::ShaderHandle handle = BGFX_INVALID_HANDLE;
+  };
+
+  struct ProgramHandleGuard {
+    explicit ProgramHandleGuard(bgfx::ProgramHandle handle) : handle(handle) {}
+    ProgramHandleGuard(const ProgramHandleGuard &) = delete;
+    ProgramHandleGuard &operator=(const ProgramHandleGuard &) = delete;
+    ~ProgramHandleGuard() {
+      if (bgfx::isValid(handle)) {
+        bgfx::destroy(handle);
+      }
+    }
+
+    bgfx::ProgramHandle get() const { return handle; }
+    void release() { handle = BGFX_INVALID_HANDLE; }
+
+  private:
+    bgfx::ProgramHandle handle = BGFX_INVALID_HANDLE;
+  };
+
   std::unordered_map<std::string, bgfx::ProgramHandle> programMap;
 
   ShaderManager() {} // Private constructor
@@ -62,7 +96,11 @@ private:
     if (SDL_RWread(rw.get(), data.get(), 1, size) != size) {
       throw std::runtime_error("Failed to read shader file: " + path);
     }
-    return bgfx::createShader(bgfx::copy(data.get(), size));
+    auto shader = bgfx::createShader(bgfx::copy(data.get(), size));
+    if (!bgfx::isValid(shader)) {
+      throw std::runtime_error("Failed to create shader: " + path);
+    }
+    return shader;
   }
 
 public:
@@ -85,11 +123,20 @@ public:
       return it->second;
     }
 
-    bgfx::ShaderHandle vsh = loadShader(vs);
-    bgfx::ShaderHandle fsh = loadShader(fs);
-    const bgfx::ProgramHandle program = bgfx::createProgram(vsh, fsh, true);
-    programMap.emplace(std::move(name), program);
-    return program;
+    ShaderHandleGuard vsh(loadShader(vs));
+    ShaderHandleGuard fsh(loadShader(fs));
+    ProgramHandleGuard program(
+        bgfx::createProgram(vsh.get(), fsh.get(), true));
+    if (!bgfx::isValid(program.get())) {
+      throw std::runtime_error("Failed to create shader program: " + name);
+    }
+
+    vsh.release();
+    fsh.release();
+    const bgfx::ProgramHandle result = program.get();
+    programMap.emplace(std::move(name), result);
+    program.release();
+    return result;
   }
 
   void preloadProgram(const std::string &vs, const std::string &fs) {
