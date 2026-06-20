@@ -2,6 +2,7 @@
 
 #include "ScrollMomentum.h"
 #include "View.h"
+#include <memory>
 
 class ScrollView : public View {
 public:
@@ -22,7 +23,7 @@ protected:
   void onResize(int newWidth, int newHeight) override;
 
 private:
-  View *contentView = nullptr;
+  std::unique_ptr<View> contentView;
   float scrollOffset = 0.0f;
   bool mousePressedInside = false;
   bool mouseDragging = false;

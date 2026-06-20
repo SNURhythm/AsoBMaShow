@@ -22,6 +22,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -30,6 +31,7 @@
 
 class Button;
 class ScrollView;
+struct StartOptions;
 class View;
 
 class MainMenuScene : public Scene {
@@ -44,10 +46,11 @@ public:
   void cleanupScene() override;
 
 private:
-  sqlite3 *db;
+  sqlite3 *db = nullptr;
   std::atomic_bool previewLoadCancelled = false;
   std::atomic_bool willStart = false;
-  std::atomic<bms_parser::Chart *> selectedChart{nullptr};
+  std::unique_ptr<bms_parser::Chart> selectedChart;
+  mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
 
   std::thread loadThread;
@@ -93,6 +96,7 @@ private:
   std::condition_variable_any libraryTaskPauseCv;
   std::atomic<std::uint64_t> nextLibraryTaskId{1};
   std::uint64_t libraryTasksRevision = 0;
+  std::atomic<int> libraryActiveTaskCount{0};
   std::uint64_t displayedLibraryTasksRevision = 0;
   std::atomic<std::uint64_t> libraryProgressRevision{0};
   std::atomic<std::uint64_t> libraryProgressTaskId{0};
@@ -113,6 +117,11 @@ private:
     int total = 0;
     int basisPoints = 0;
     ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
+  };
+  struct SelectedChartRandomInfo {
+    std::optional<unsigned int> seed;
+    std::optional<std::string> prng;
+    std::optional<std::vector<int>> values;
   };
   struct LibraryFolderItem {
     enum class Type {
@@ -359,9 +368,12 @@ private:
   void libraryTaskLoop(const std::stop_token &stopToken);
   void runLibraryRefreshTask(const LibraryTaskRequest &task,
                              const std::stop_token &stopToken);
+  static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
+  static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
   void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
                            double fraction, int current, int total,
                            const std::string &detail);
+  void bumpLibraryTasksRevisionLocked();
   void updateLibraryTaskProgress(std::uint64_t id,
                                  const ChartScanProgress &progress);
   LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
@@ -380,7 +392,17 @@ private:
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();
   void refreshReadySettingsSummary();
-  bms_parser::Chart *loadedSelectedChart() const;
+  bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+                                      bool mediaReady);
+  void clearSelectedChart();
+  void stopAndClearSelectedChart();
+  SelectedChartRandomInfo
+  selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
+  bms_parser::Chart *
+  loadedSelectedChartForPath(const std::filesystem::path &path) const;
+  void resetStartLoadingUi();
+  void resetReplayWatchLoadingUi();
+  void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
   void openChartViewerForSelection();

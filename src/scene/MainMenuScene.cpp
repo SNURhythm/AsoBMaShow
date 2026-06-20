@@ -7,13 +7,14 @@
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
 #include "../PlayOptionUtils.h"
+#include "../RAII.h"
+#include "../SqliteRAII.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
 #include "../targets.h"
-#include "../video/transcode.h"
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
@@ -517,13 +518,22 @@ std::mutex gIOSFolderAccessMutex;
 std::vector<void *> gIOSFolderAccessHandles;
 std::unordered_map<path_t, path_t> gIOSResolvedFolderPaths;
 
-void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+void ClearIOSFolderAccessLocked() {
   for (void *handle : gIOSFolderAccessHandles) {
     StopIOSSecurityScopedResource(handle);
   }
   gIOSFolderAccessHandles.clear();
   gIOSResolvedFolderPaths.clear();
+}
+
+void ClearIOSFolderAccess() {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  ClearIOSFolderAccessLocked();
+}
+
+void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  ClearIOSFolderAccessLocked();
 
   for (const auto &entry : entries) {
     if (entry.iosBookmark.empty()) {
@@ -836,7 +846,7 @@ void MainMenuScene::startLibraryTaskWorker() {
       }
     }
     if (changed) {
-      ++libraryTasksRevision;
+      bumpLibraryTasksRevisionLocked();
     }
   }
   checkEntriesThread = std::jthread(
@@ -862,15 +872,14 @@ void MainMenuScene::pauseLibraryTaskWorker() {
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     for (auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running) {
+      if (isPauseableLibraryTaskStatus(task.status)) {
         task.status = LibraryTaskStatus::Paused;
         task.detail = "Paused";
         changed = true;
       }
     }
     if (changed) {
-      ++libraryTasksRevision;
+      bumpLibraryTasksRevisionLocked();
     }
   }
   libraryTaskCv.notify_all();
@@ -897,7 +906,7 @@ void MainMenuScene::resumeLibraryTaskWorker() {
       changed = true;
     }
     if (changed) {
-      ++libraryTasksRevision;
+      bumpLibraryTasksRevisionLocked();
     }
   }
   libraryTaskPauseCv.notify_all();
@@ -968,9 +977,19 @@ void MainMenuScene::enqueueLibraryRefreshTask(
       }
       libraryTasks.erase(removable);
     }
-    ++libraryTasksRevision;
+    bumpLibraryTasksRevisionLocked();
   }
   libraryTaskCv.notify_one();
+}
+
+bool MainMenuScene::isPauseableLibraryTaskStatus(LibraryTaskStatus status) {
+  return status == LibraryTaskStatus::Queued ||
+         status == LibraryTaskStatus::Running;
+}
+
+bool MainMenuScene::isActiveLibraryTaskStatus(LibraryTaskStatus status) {
+  return isPauseableLibraryTaskStatus(status) ||
+         status == LibraryTaskStatus::Paused;
 }
 
 void MainMenuScene::setLibraryTaskState(std::uint64_t id,
@@ -989,7 +1008,16 @@ void MainMenuScene::setLibraryTaskState(std::uint64_t id,
   taskIt->current = std::max(0, current);
   taskIt->total = std::max(0, total);
   taskIt->detail = detail;
+  bumpLibraryTasksRevisionLocked();
+}
+
+void MainMenuScene::bumpLibraryTasksRevisionLocked() {
   ++libraryTasksRevision;
+  const int activeCount = static_cast<int>(std::count_if(
+      libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
+        return isActiveLibraryTaskStatus(task.status);
+      }));
+  libraryActiveTaskCount.store(activeCount, std::memory_order_release);
 }
 
 void MainMenuScene::updateLibraryTaskProgress(
@@ -1047,13 +1075,7 @@ MainMenuScene::readLibraryTaskProgress() const {
 }
 
 int MainMenuScene::activeLibraryTaskCount() {
-  std::lock_guard<std::mutex> lock(libraryTaskMutex);
-  return static_cast<int>(std::count_if(
-      libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-        return task.status == LibraryTaskStatus::Queued ||
-               task.status == LibraryTaskStatus::Running ||
-               task.status == LibraryTaskStatus::Paused;
-      }));
+  return libraryActiveTaskCount.load(std::memory_order_acquire);
 }
 
 void MainMenuScene::requestLibraryScanFlush() {
@@ -1152,20 +1174,23 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
       }
     }
     for (auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running) {
+      if (isPauseableLibraryTaskStatus(task.status)) {
         task.status = LibraryTaskStatus::Paused;
         task.detail = "Paused";
       }
     }
-    ++libraryTasksRevision;
+    bumpLibraryTasksRevisionLocked();
   }
 }
 
 void MainMenuScene::runLibraryRefreshTask(
     const LibraryTaskRequest &task, const std::stop_token &stopToken) {
   auto &dbHelper = ChartDBHelper::GetInstance();
-  auto taskDb = dbHelper.Connect();
+  SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
+  sqlite3 *taskDb = taskDbHandle.get();
+  if (taskDb == nullptr) {
+    throw std::runtime_error("Failed to open chart database");
+  }
   dbHelper.CreateChartMetaTable(taskDb);
   dbHelper.CreateSolidArchiveTable(taskDb);
   dbHelper.CreateEntriesTable(taskDb);
@@ -1175,7 +1200,6 @@ void MainMenuScene::runLibraryRefreshTask(
     return waitForLibraryTaskResume(task.id, stopToken);
   };
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
@@ -1188,7 +1212,6 @@ void MainMenuScene::runLibraryRefreshTask(
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
                       "Importing difficulty tables");
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
   const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
@@ -1199,7 +1222,6 @@ void MainMenuScene::runLibraryRefreshTask(
   auto entries = dbHelper.SelectAllEntries(taskDb);
 
   if (stopToken.stop_requested()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
@@ -1207,7 +1229,6 @@ void MainMenuScene::runLibraryRefreshTask(
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.04, 0, 0,
                         "Waiting for library folder");
     if (!pauseTask()) {
-      dbHelper.Close(taskDb);
       return;
     }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1239,7 +1260,6 @@ void MainMenuScene::runLibraryRefreshTask(
 
       while (folder.empty()) {
         if (stopToken.stop_requested()) {
-          dbHelper.Close(taskDb);
           return;
         }
 
@@ -1261,7 +1281,6 @@ void MainMenuScene::runLibraryRefreshTask(
       }
 
       if (folder.empty()) {
-        dbHelper.Close(taskDb);
         return;
       }
     } else {
@@ -1274,14 +1293,12 @@ void MainMenuScene::runLibraryRefreshTask(
   }
 
   if (stopToken.stop_requested()) {
-    dbHelper.Close(taskDb);
     return;
   }
 
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.06, 0, 0,
                       "Refreshing folder access");
   if (!pauseTask()) {
-    dbHelper.Close(taskDb);
     return;
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1294,7 +1311,6 @@ void MainMenuScene::runLibraryRefreshTask(
              [this, taskId = task.id, &stopToken]() {
                return waitForLibraryTaskResume(taskId, stopToken);
              });
-  dbHelper.Close(taskDb);
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1543,16 +1559,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
       SDL_Log("Joining preview thread");
       loadThread.join();
     }
-    selectedChartMediaReady.store(false);
-    delete selectedChart.exchange(nullptr);
+    stopAndClearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
-      context.jukebox.stop();
       return;
     }
     if (item.solidArchive) {
       jacketView->freeImage();
-      context.jukebox.stop();
       if (!replayExportInProgress.load() && replayStatusText != nullptr) {
         replayStatusText->setText(
             "Skipped solid archive. Estimated unzip: " +
@@ -1569,7 +1582,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (archive_file::isVirtualPath(meta.BmsPath) &&
         !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
-      context.jukebox.stop();
       if (!replayExportInProgress.load() && replayStatusText != nullptr) {
         replayStatusText->setText("Archive preview disabled");
       }
@@ -1593,7 +1605,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       jacketView->freeImage();
     }
     if (suppressPreview) {
-      context.jukebox.stop();
       if (!replayExportInProgress.load() && replayStatusText != nullptr) {
         replayStatusText->setText("Unzipped chart selected");
       }
@@ -1642,9 +1653,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       if (previewLoadCancelled) {
         return;
       }
-      auto *loadedChart = chart.release();
-      delete selectedChart.exchange(loadedChart);
-      selectedChartMediaReady.store(true);
+      setSelectedChart(std::move(chart), true);
       if (!willStart.load()) {
         context.jukebox.play();
       }
@@ -1687,6 +1696,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(rootLayout);
   const SafeAreaInsets safe = getSafeAreaInsetsUi();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
@@ -2130,7 +2140,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();
-  addView(rootLayout);
   reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
@@ -2632,7 +2641,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   }
 
   if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
-    willStart.store(false);
+    resetStartLoadingUi();
     return;
   }
 
@@ -2649,21 +2658,16 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       play_options::normalizePlayOption(playOption);
   const bool canReusePreviewForStart =
       normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
-  std::optional<unsigned int> chartRandomSeed;
-  std::optional<std::string> chartRandomPrng;
-  std::optional<std::vector<int>> chartRandomValues;
-  if (auto *currentChart = selectedChart.load(); currentChart != nullptr) {
-    chartRandomSeed = currentChart->Meta.RandomSeed;
-    chartRandomPrng = currentChart->Meta.RandomPrng;
-    if (!currentChart->Meta.RandomValues.empty()) {
-      chartRandomValues = currentChart->Meta.RandomValues;
-    }
-  }
+  const SelectedChartRandomInfo chartRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       canReusePreviewForStart, chartRandomSeed, chartRandomPrng,
-       chartRandomValues]() {
+       canReusePreviewForStart, chartRandomInfo]() {
+        auto finishStart = [this]() {
+          resetStartLoadingUi();
+          return true;
+        };
         if (!canReusePreviewForStart) {
           previewLoadCancelled = true;
         }
@@ -2671,31 +2675,24 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           loadThread.join();
         }
 
-        if (canReusePreviewForStart && selectedChartMediaReady.load()) {
-          if (auto *readyChart = selectedChart.load();
-              readyChart != nullptr &&
-              fspath_to_path_t(readyChart->Meta.BmsPath) ==
-                  fspath_to_path_t(record.meta.BmsPath)) {
-            archive_file::appendDebugLogLine(
-                "Start reusing loaded preview chart: " +
-                path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
-            context.jukebox.stop();
-            context.sceneManager->changeScene(
-                new GamePlayScene(context, readyChart,
-                                  {
-                                      .startPosition = 0,
-                                      .autoKeySound = autoKeySound,
-                                      .autoPlay = false,
-                                      .gaugeType = gaugeType,
-                                      .gaugeAutoShift = gaugeAutoShift,
-                                  }),
-                true);
-            willStart.store(false);
-            if (startButtonText != nullptr) {
-              startButtonText->setText("Start");
-            }
-            return true;
-          }
+        bms_parser::Chart *readyChart = nullptr;
+        if (canReusePreviewForStart) {
+          readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
+        }
+        if (readyChart != nullptr) {
+          archive_file::appendDebugLogLine(
+              "Start reusing loaded preview chart: " +
+              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+          context.jukebox.stop();
+          changeToGameplayScene(readyChart,
+                                {
+                                    .startPosition = 0,
+                                    .autoKeySound = autoKeySound,
+                                    .autoPlay = false,
+                                    .gaugeType = gaugeType,
+                                    .gaugeAutoShift = gaugeAutoShift,
+                                });
+          return finishStart();
         }
 
         selectedChartMediaReady.store(false);
@@ -2703,9 +2700,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         std::unique_ptr<bms_parser::Chart> preparedChart;
         try {
           preparedChart =
-              play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
-                                       chartRandomPrng, chartRandomValues,
-                                       parseCancelled);
+              play_options::parseChart(record.meta.BmsPath,
+                                       chartRandomInfo.seed,
+                                       chartRandomInfo.prng,
+                                       chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
@@ -2720,16 +2718,14 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                                      playOption);
           context.jukebox.stop();
           context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+          bms_parser::Chart *loadedChart = nullptr;
           if (!parseCancelled) {
-            auto *loadedChart = preparedChart.release();
-            delete selectedChart.exchange(loadedChart);
-            selectedChartMediaReady.store(true);
+            loadedChart = setSelectedChart(std::move(preparedChart), true);
           }
           if (parseCancelled) {
             preparedChart.reset();
           } else {
-            context.sceneManager->changeScene(
-                new GamePlayScene(context, selectedChart.load(),
+            changeToGameplayScene(loadedChart,
                                   {
                                       .startPosition = 0,
                                       .autoKeySound = autoKeySound,
@@ -2740,41 +2736,26 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .playOptionSeed = playInfo.seed,
                                       .playOption2 = playInfo.option2,
                                       .playOption2Seed = playInfo.seed2,
-                                  }),
-                true);
-            willStart.store(false);
-            if (startButtonText != nullptr) {
-              startButtonText->setText("Start");
-            }
-            return true;
+                                  });
+            return finishStart();
           }
         }
 
-        auto *chart = loadedSelectedChart();
+        auto *chart = loadedSelectedChartForPath(record.meta.BmsPath);
         if (chart == nullptr) {
-          willStart.store(false);
-          if (startButtonText != nullptr) {
-            startButtonText->setText("Start");
-          }
-          return true;
+          return finishStart();
         }
 
         context.jukebox.stop();
-        context.sceneManager->changeScene(
-            new GamePlayScene(context, chart,
+        changeToGameplayScene(chart,
                               {
                                   .startPosition = 0,
                                   .autoKeySound = autoKeySound,
                                   .autoPlay = false,
                                   .gaugeType = gaugeType,
                                   .gaugeAutoShift = gaugeAutoShift,
-                              }),
-            true);
-        willStart.store(false);
-        if (startButtonText != nullptr) {
-          startButtonText->setText("Start");
-        }
-        return true;
+                              });
+        return finishStart();
       },
       0, true);
 }
@@ -2805,18 +2786,8 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
     return;
   }
 
-  std::optional<unsigned int> chartRandomSeed;
-  std::optional<std::string> chartRandomPrng;
-  std::optional<std::vector<int>> chartRandomValues;
-  if (auto *currentChart = selectedChart.load();
-      currentChart != nullptr &&
-      currentChart->Meta.BmsPath == record.meta.BmsPath) {
-    chartRandomSeed = currentChart->Meta.RandomSeed;
-    chartRandomPrng = currentChart->Meta.RandomPrng;
-    if (!currentChart->Meta.RandomValues.empty()) {
-      chartRandomValues = currentChart->Meta.RandomValues;
-    }
-  }
+  const SelectedChartRandomInfo chartRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   previewLoadCancelled = true;
   if (loadThread.joinable()) {
@@ -2827,8 +2798,9 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
   context.jukebox.stop();
   context.sceneManager->changeScene(
-      new ChartViewerScene(context, record, chartRandomSeed, chartRandomPrng,
-                           chartRandomValues),
+      std::make_unique<ChartViewerScene>(
+          context, record, chartRandomInfo.seed, chartRandomInfo.prng,
+          chartRandomInfo.values),
       true);
 }
 
@@ -2969,9 +2941,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   if (loadThread.joinable()) {
     loadThread.join();
   }
-  selectedChartMediaReady.store(false);
-  delete selectedChart.exchange(nullptr);
-  context.jukebox.stop();
+  stopAndClearSelectedChart();
   unzipEstimatedUncompressedSize =
       fullArchiveUnzip ? record.archiveUncompressedSize : 0;
 
@@ -3033,35 +3003,40 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       result.success = false;
       result.message = "Unzip cancelled";
     } else {
-      auto dbHelper = ChartDBHelper::GetInstance();
-      auto unzipDb = dbHelper.Connect();
-      dbHelper.CreateChartMetaTable(unzipDb);
-      dbHelper.CreateSolidArchiveTable(unzipDb);
-      dbHelper.CreateDifficultyTableTables(unzipDb);
-      std::vector<std::filesystem::path> roots{scanRoot};
-      postProgress(archive_file::UnzipProgress{
-          .fraction = 0.98, .message = "Refreshing library"});
-      const int changedCount =
-          dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
-      if (!stopToken.stop_requested()) {
-        std::vector<bms_parser::ChartMeta> chartMetas;
-        dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
-        for (const auto &meta : chartMetas) {
-          if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
-            result.chartPath = meta.BmsPath;
-            break;
+      auto &dbHelper = ChartDBHelper::GetInstance();
+      SqliteConnectionHandle unzipDbHandle(dbHelper.Connect());
+      sqlite3 *unzipDb = unzipDbHandle.get();
+      if (unzipDb == nullptr) {
+        result.success = false;
+        result.message = "Unzipped archive. Failed to refresh library.";
+      } else {
+        dbHelper.CreateChartMetaTable(unzipDb);
+        dbHelper.CreateSolidArchiveTable(unzipDb);
+        dbHelper.CreateDifficultyTableTables(unzipDb);
+        std::vector<std::filesystem::path> roots{scanRoot};
+        postProgress(archive_file::UnzipProgress{
+            .fraction = 0.98, .message = "Refreshing library"});
+        const int changedCount =
+            dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
+        if (!stopToken.stop_requested()) {
+          std::vector<bms_parser::ChartMeta> chartMetas;
+          dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
+          for (const auto &meta : chartMetas) {
+            if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
+              result.chartPath = meta.BmsPath;
+              break;
+            }
           }
         }
-      }
-      dbHelper.Close(unzipDb);
 
-      result.success = true;
-      result.message =
-          changedCount > 0
-              ? "Unzipped archive. Library refreshed."
-              : "Unzipped archive. Library already current.";
-      if (!stopToken.stop_requested()) {
-        requestLibraryReload(true);
+        result.success = true;
+        result.message =
+            changedCount > 0
+                ? "Unzipped archive. Library refreshed."
+                : "Unzipped archive. Library already current.";
+        if (!stopToken.stop_requested()) {
+          requestLibraryReload(true);
+        }
       }
     }
 
@@ -3277,11 +3252,11 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
     return;
   }
 
-  auto dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *deleteDb = dbHelper.Connect();
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  SqliteConnectionHandle deleteDbHandle(dbHelper.Connect());
+  sqlite3 *deleteDb = deleteDbHandle.get();
   if (deleteDb != nullptr) {
     dbHelper.DeleteArchiveRecords(deleteDb, archivePath);
-    dbHelper.Close(deleteDb);
   }
   requestLibraryReload(true);
   unzipDeleteCandidatePath.reset();
@@ -4896,6 +4871,10 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
 
   defer(
       [this, record, replayId]() {
+        auto failReplayLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          return true;
+        };
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -4903,10 +4882,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         auto replay =
             ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
         if (!replay.has_value()) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
+          resetReplayWatchLoadingUi();
           refreshReplayAvailability(&record);
           return true;
         }
@@ -4915,42 +4891,25 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         auto replayChart = play_options::prepareReplayChart(
             record.meta.BmsPath, replay.value(), parseCancelled);
         if (replayChart == nullptr || parseCancelled) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
         context.jukebox.stop();
         context.jukebox.loadChart(*replayChart, true, parseCancelled);
         if (parseCancelled) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
-        auto *loadedChart = replayChart.release();
-        delete selectedChart.exchange(loadedChart);
-        selectedChartMediaReady.store(true);
-
-        auto *chart = loadedSelectedChart();
+        auto *chart = setSelectedChart(std::move(replayChart), true);
         if (chart == nullptr) {
-          willStart.store(false);
-          if (replayWatchButtonText != nullptr) {
-            replayWatchButtonText->setText("Watch");
-          }
-          return true;
+          return failReplayLoad();
         }
 
         auto replayData =
             std::make_shared<ReplayData>(std::move(replay.value()));
         context.jukebox.stop();
         hideReplayModal();
-        context.sceneManager->changeScene(
-            new GamePlayScene(context, chart,
+        changeToGameplayScene(chart,
                               {
                                   .startPosition = 0,
                                   .autoKeySound = false,
@@ -4958,19 +4917,87 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                   .gaugeType = replayData->initialGaugeType,
                                   .gaugeAutoShift = replayData->gaugeAutoShift,
                                   .replayData = replayData,
-                              }),
-            true);
+                              });
         willStart.store(false);
         return true;
       },
       0, true);
 }
 
-bms_parser::Chart *MainMenuScene::loadedSelectedChart() const {
-  if (!selectedChartMediaReady.load()) {
+bms_parser::Chart *
+MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+                                bool mediaReady) {
+  bms_parser::Chart *raw = chart.get();
+  std::unique_ptr<bms_parser::Chart> previous;
+  {
+    std::lock_guard<std::mutex> lock(selectedChartMutex);
+    previous = std::move(selectedChart);
+    selectedChart = std::move(chart);
+    selectedChartMediaReady.store(mediaReady);
+  }
+  return raw;
+}
+
+void MainMenuScene::clearSelectedChart() {
+  std::unique_ptr<bms_parser::Chart> previous;
+  {
+    std::lock_guard<std::mutex> lock(selectedChartMutex);
+    previous = std::move(selectedChart);
+    selectedChartMediaReady.store(false);
+  }
+}
+
+void MainMenuScene::stopAndClearSelectedChart() {
+  context.jukebox.stop();
+  clearSelectedChart();
+}
+
+MainMenuScene::SelectedChartRandomInfo
+MainMenuScene::selectedChartRandomInfoForPath(
+    const std::filesystem::path &path) const {
+  SelectedChartRandomInfo info;
+  std::lock_guard<std::mutex> lock(selectedChartMutex);
+  if (selectedChart == nullptr ||
+      fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
+    return info;
+  }
+  info.seed = selectedChart->Meta.RandomSeed;
+  info.prng = selectedChart->Meta.RandomPrng;
+  if (!selectedChart->Meta.RandomValues.empty()) {
+    info.values = selectedChart->Meta.RandomValues;
+  }
+  return info;
+}
+
+bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
+    const std::filesystem::path &path) const {
+  std::lock_guard<std::mutex> lock(selectedChartMutex);
+  if (!selectedChartMediaReady.load() || selectedChart == nullptr ||
+      fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
-  return selectedChart.load();
+  return selectedChart.get();
+}
+
+void MainMenuScene::resetStartLoadingUi() {
+  willStart.store(false);
+  if (startButtonText != nullptr) {
+    startButtonText->setText("Start");
+  }
+}
+
+void MainMenuScene::resetReplayWatchLoadingUi() {
+  willStart.store(false);
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Watch");
+  }
+}
+
+void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
+                                          StartOptions options) {
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, chart, std::move(options)),
+      true);
 }
 
 void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
@@ -5248,7 +5275,10 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
-  delete selectedChart.exchange(nullptr);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  ClearIOSFolderAccess();
+#endif
+  stopAndClearSelectedChart();
   ChartDBHelper::GetInstance().Close(db);
   db = nullptr;
   recyclerView = nullptr;
@@ -5370,7 +5400,7 @@ void MainMenuScene::cleanupScene() {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     libraryTaskQueue.clear();
     libraryTasks.clear();
-    ++libraryTasksRevision;
+    bumpLibraryTasksRevisionLocked();
   }
   libraryProgressRevision.store(0, std::memory_order_release);
   libraryProgressTaskId.store(0, std::memory_order_relaxed);
@@ -5499,12 +5529,11 @@ void MainMenuScene::FindFilesUnix(
     const std::unordered_set<path_t> &oldFiles,
     std::vector<std::filesystem::path> &directoriesToVisit,
     const std::stop_token &stop_token) {
-  DIR *dir = opendir(directoryPath.c_str());
+  UniqueResource<DIR, closedir> dir(opendir(directoryPath.c_str()));
   if (dir) {
     struct dirent *entry;
-    while ((entry = readdir(dir)) != nullptr) {
+    while ((entry = readdir(dir.get())) != nullptr) {
       if (stop_token.stop_requested()) {
-        closedir(dir);
         break;
       }
       resolveDType(directoryPath, entry);
@@ -5529,7 +5558,6 @@ void MainMenuScene::FindFilesUnix(
         SDL_Log("Unknown file type: %s", entry->d_name);
       }
     }
-    closedir(dir);
   } else {
     SDL_Log("Failed to open directory: %s", directoryPath.c_str());
   }

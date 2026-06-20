@@ -1,10 +1,14 @@
 #pragma once
+#include "BgfxRAII.h"
+#include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <stdexcept>
 #include <string>
 #include <SDL2/SDL.h>
 #include <unordered_map>
 #include <filesystem>
+#include <cstdint>
+#include <limits>
 namespace rendering {
 // singleton
 class ShaderManager {
@@ -40,19 +44,29 @@ private:
     }
 
     std::string path = (shaderPath / FILENAME).string();
-    SDL_RWops *rw = SDL_RWFromFile(path.c_str(), "rb");
+    UniqueResource<SDL_RWops, SDL_RWclose> rw(
+        SDL_RWFromFile(path.c_str(), "rb"));
     if (rw == nullptr) {
       throw std::runtime_error("Failed to open shader file: " + path);
     }
-    size_t size = SDL_RWsize(rw);
-    void *data = SDL_malloc(size);
-    if (SDL_RWread(rw, data, 1, size) != size) {
-      SDL_free(data);
-      SDL_RWclose(rw);
+    const Sint64 fileSize = SDL_RWsize(rw.get());
+    if (fileSize <= 0 ||
+        fileSize > static_cast<Sint64>(std::numeric_limits<uint32_t>::max())) {
+      throw std::runtime_error("Invalid shader file size: " + path);
+    }
+    const auto size = static_cast<uint32_t>(fileSize);
+    UniqueResource<void, SDL_free> data(SDL_malloc(size));
+    if (data == nullptr) {
+      throw std::runtime_error("Failed to allocate shader buffer: " + path);
+    }
+    if (SDL_RWread(rw.get(), data.get(), 1, size) != size) {
       throw std::runtime_error("Failed to read shader file: " + path);
     }
-    SDL_RWclose(rw);
-    return bgfx::createShader(bgfx::copy(data, size));
+    auto shader = bgfx::createShader(bgfx::copy(data.get(), size));
+    if (!bgfx::isValid(shader)) {
+      throw std::runtime_error("Failed to create shader: " + path);
+    }
+    return shader;
   }
 
 public:
@@ -75,11 +89,20 @@ public:
       return it->second;
     }
 
-    bgfx::ShaderHandle vsh = loadShader(vs);
-    bgfx::ShaderHandle fsh = loadShader(fs);
-    const bgfx::ProgramHandle program = bgfx::createProgram(vsh, fsh, true);
-    programMap.emplace(std::move(name), program);
-    return program;
+    BgfxHandleGuard<bgfx::ShaderHandle> vsh(loadShader(vs));
+    BgfxHandleGuard<bgfx::ShaderHandle> fsh(loadShader(fs));
+    BgfxHandleGuard<bgfx::ProgramHandle> program(
+        bgfx::createProgram(vsh.get(), fsh.get(), true));
+    if (!bgfx::isValid(program.get())) {
+      throw std::runtime_error("Failed to create shader program: " + name);
+    }
+
+    vsh.release();
+    fsh.release();
+    const bgfx::ProgramHandle result = program.get();
+    programMap.emplace(std::move(name), result);
+    program.release();
+    return result;
   }
 
   void preloadProgram(const std::string &vs, const std::string &fs) {

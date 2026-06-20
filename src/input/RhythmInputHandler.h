@@ -8,6 +8,7 @@
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"
 #include "IInputSource.h"
+#include <memory>
 #include <map>
 #include <vector>
 
@@ -20,8 +21,8 @@ struct FlickState {
 };
 class RhythmInputHandler : public IInputHandler {
 private:
-  IInputSource *sdlInputSource = nullptr;
-  IInputSource *touchInputSource = nullptr;
+  std::unique_ptr<IInputSource> sdlInputSource;
+  std::unique_ptr<IInputSource> touchInputSource;
   int totalLaneCount;
   int scratchLaneCount;
   float playAreaWidth = 8.0f;

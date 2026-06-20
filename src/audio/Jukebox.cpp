@@ -1,5 +1,7 @@
 #include "Jukebox.h"
 #include "../ArchiveFile.h"
+#include "../RAII.h"
+#include "../StbImageRAII.h"
 #include <SDL2/SDL.h>
 #include <thread>
 #include "../Utils.h"
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -80,6 +83,15 @@ unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
     return nullptr;
   }
   return decodeImageBytes(bytes, width, height, channels, requestedChannels);
+}
+
+bool decodedImageDimensionsAreValid(int width, int height) {
+  return width > 0 && height > 0 &&
+         width <= std::numeric_limits<std::uint16_t>::max() &&
+         height <= std::numeric_limits<std::uint16_t>::max() &&
+         static_cast<std::uint64_t>(width) *
+                 static_cast<std::uint64_t>(height) <=
+             std::numeric_limits<std::uint32_t>::max() / 4;
 }
 
 struct ArchiveAssetBatch {
@@ -330,6 +342,36 @@ bool readArchiveBatchEntries(
   return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
                                           files, errorMessage);
 }
+
+void replaceVideoPlayerLocked(
+    std::unordered_map<int, std::unique_ptr<VideoPlayer>> &table, int id,
+    std::unique_ptr<VideoPlayer> videoPlayer) {
+  const auto existing = table.find(id);
+  if (existing != table.end()) {
+    existing->second = std::move(videoPlayer);
+    return;
+  }
+  table.emplace(id, std::move(videoPlayer));
+}
+
+void destroyImageTexture(ImageData &image) {
+  if (bgfx::isValid(image.texture)) {
+    bgfx::destroy(image.texture);
+    image.texture = BGFX_INVALID_HANDLE;
+  }
+}
+
+void replaceImageLocked(std::unordered_map<int, ImageData> &table, int id,
+                        ImageData image) {
+  const auto existing = table.find(id);
+  if (existing != table.end()) {
+    destroyImageTexture(existing->second);
+    existing->second = image;
+    return;
+  }
+  table.emplace(id, image);
+}
+
 } // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
@@ -358,7 +400,7 @@ void Jukebox::render() {
       std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
       auto videoIt = videoPlayerTable.find(bga);
       if (videoIt != videoPlayerTable.end()) {
-        auto *videoPlayer = videoIt->second;
+        auto *videoPlayer = videoIt->second.get();
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
@@ -386,7 +428,7 @@ void Jukebox::render() {
       std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
       auto videoIt = videoPlayerTable.find(bmpLayer);
       if (videoIt != videoPlayerTable.end()) {
-        auto *videoPlayer = videoIt->second;
+        auto *videoPlayer = videoIt->second.get();
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
@@ -448,22 +490,22 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
-  auto videoPlayer = new VideoPlayer(stopwatch);
+  auto videoPlayer = std::make_unique<VideoPlayer>(stopwatch);
   const path_t playablePath = fspath_to_path_t(materializedPath);
 
   if (videoPlayer->loadVideo(path_t_to_utf8(playablePath), isCancelled)) {
+    auto *loadedVideoPlayer = videoPlayer.get();
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-    videoPlayerTable[id] = videoPlayer;
+    replaceVideoPlayerLocked(videoPlayerTable, id, std::move(videoPlayer));
 
-    SDL_Log("video width: %f, video height: %f", videoPlayer->viewWidth,
-            videoPlayer->viewHeight);
+    SDL_Log("video width: %f, video height: %f", loadedVideoPlayer->viewWidth,
+            loadedVideoPlayer->viewHeight);
     SDL_Log("Loaded video to id: %d", id);
     return true;
   }
 
   SDL_Log("Failed to load video: %s",
           path_t_to_utf8(fspath_to_path_t(displayPath)).c_str());
-  delete videoPlayer;
   return false;
 }
 
@@ -484,24 +526,36 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
-  unsigned char *data = decodeImageBytes(bytes, &width, &height, &channels, 4);
+  StbiImageHandle data(decodeImageBytes(bytes, &width, &height, &channels, 4));
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
   }
+  if (!decodedImageDimensionsAreValid(width, height)) {
+    SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
+            height);
+    return false;
+  }
+  const auto texture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(data.get(), width * height * 4));
+  if (!bgfx::isValid(texture)) {
+    SDL_Log("Failed to create image texture: %s", utf8Path.c_str());
+    return false;
+  }
   SDL_Log("Loaded image: %s", utf8Path.c_str());
+  ImageData image{
+      .texture = texture,
+      .width = width,
+      .height = height,
+      .channels = channels,
+  };
+  auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
-    imageTable[id] = {
-        .texture = bgfx::createTexture2D(
-            width, height, false, 1, bgfx::TextureFormat::RGBA8,
-            BGFX_TEXTURE_NONE, bgfx::copy(data, width * height * 4)),
-        .width = width,
-        .height = height,
-        .channels = channels,
-    };
+    replaceImageLocked(imageTable, id, image);
+    textureGuard.dismiss();
   }
-  stbi_image_free(data);
   return true;
 }
 
@@ -509,24 +563,36 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
-  unsigned char *data = loadImageFile(path, &width, &height, &channels, 4);
+  StbiImageHandle data(loadImageFile(path, &width, &height, &channels, 4));
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
   }
+  if (!decodedImageDimensionsAreValid(width, height)) {
+    SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
+            height);
+    return false;
+  }
+  const auto texture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(data.get(), width * height * 4));
+  if (!bgfx::isValid(texture)) {
+    SDL_Log("Failed to create image texture: %s", utf8Path.c_str());
+    return false;
+  }
   SDL_Log("Loaded image: %s", utf8Path.c_str());
+  ImageData image{
+      .texture = texture,
+      .width = width,
+      .height = height,
+      .channels = channels,
+  };
+  auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
-    imageTable[id] = {
-        .texture = bgfx::createTexture2D(
-            width, height, false, 1, bgfx::TextureFormat::RGBA8,
-            BGFX_TEXTURE_NONE, bgfx::copy(data, width * height * 4)),
-        .width = width,
-        .height = height,
-        .channels = channels,
-    };
+    replaceImageLocked(imageTable, id, image);
+    textureGuard.dismiss();
   }
-  stbi_image_free(data);
   return true;
 }
 
@@ -1099,27 +1165,6 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
         if (isCancelled)
           return;
         path = *resolvedVideoPath;
-        // calculate hash of base path
-        // auto pathHash = bms_parser::md5(basePath.string());
-        // auto fileName = pathHash + "-" + std::to_string(bmp->first) + ".mp4";
-        // auto transcodedPath =
-        //     (Utils::GetDocumentsPath("temp") / fileName).string();
-        // if (!std::filesystem::exists(transcodedPath)) {
-        //   // mkdir
-        //   std::filesystem::create_directories(Utils::GetDocumentsPath("temp"));
-        //   int result = transcode(path.string().c_str(),
-        //   transcodedPath.c_str(),
-        //                          &isCancelled);
-        //   if (isCancelled) {
-        //     // delete transcoded file
-        //     std::filesystem::remove(transcodedPath);
-        //     return;
-        //   }
-        //   if (result != 0) {
-        //     SDL_Log("Failed to transcode video: %ls", path.c_str());
-        //     continue;
-        //   }
-        // }
         found = loadVideoPath(bmp->first, path, isCancelled);
       }
 
@@ -1352,15 +1397,12 @@ void Jukebox::clearVisualResources() {
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-    for (auto &videoPlayer : videoPlayerTable) {
-      delete videoPlayer.second;
-    }
     videoPlayerTable.clear();
   }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
     for (auto &image : imageTable) {
-      bgfx::destroy(image.second.texture);
+      destroyImageTexture(image.second);
     }
     imageTable.clear();
   }
@@ -1567,7 +1609,7 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     auto videoIt = videoPlayerTable.find(visualId);
     if (videoIt != videoPlayerTable.end()) {
-      auto *videoPlayer = videoIt->second;
+      auto *videoPlayer = videoIt->second.get();
       videoPlayer->seek(0);
       videoPlayer->play();
       videoPlayer->viewWidth = rendering::window_width;
@@ -1688,7 +1730,7 @@ void Jukebox::play() {
             std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
             auto videoIt = videoPlayerTable.find(target.second);
             if (videoIt != videoPlayerTable.end()) {
-              auto *videoPlayer = videoIt->second;
+              auto *videoPlayer = videoIt->second.get();
               videoPlayer->seek(0);
               videoPlayer->play();
               videoPlayer->viewWidth = rendering::window_width;
@@ -1726,7 +1768,7 @@ void Jukebox::play() {
             std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
             auto videoIt = videoPlayerTable.find(target.second);
             if (videoIt != videoPlayerTable.end()) {
-              auto *videoPlayer = videoIt->second;
+              auto *videoPlayer = videoIt->second.get();
               videoPlayer->seek(0);
               videoPlayer->play();
               videoPlayer->viewWidth = rendering::window_width;

@@ -31,6 +31,36 @@ void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene>
   registeredScenes[name] = std::move(scene);
 }
 
+void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
+                               bool keepBackground) {
+  if (newScene == nullptr) {
+    return;
+  }
+
+  Scene *newScenePtr = newScene.get();
+  if (currentScene && !keepBackground) {
+    Scene *sceneToRelease = currentScene;
+    currentScene = nullptr;
+    cleanupSceneInstance(sceneToRelease);
+  }
+  if (keepBackground && currentScene && currentScene != newScenePtr) {
+    currentScene->onPause();
+    backgroundScenes.insert(currentScene);
+  }
+
+  currentScene = newScenePtr;
+  try {
+    currentScene->prepareForUse();
+    currentScene->init();
+  } catch (...) {
+    if (currentScene == newScenePtr) {
+      currentScene = nullptr;
+    }
+    throw;
+  }
+  newScene.release();
+}
+
 void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
   // Check if the new scene is already in backgroundScenes (O(1) lookup)
   auto it = backgroundScenes.find(newScene);

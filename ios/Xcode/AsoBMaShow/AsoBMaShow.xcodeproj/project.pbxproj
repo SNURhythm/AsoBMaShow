@@ -769,7 +769,6 @@
 				Utils.cpp,
 				utils/SpriteLoader.cpp,
 				utils/Stopwatch.cpp,
-				video/transcode.c,
 				video/VideoPlayer.cpp,
 				view/Button.cpp,
 				view/ChartListItemView.cpp,

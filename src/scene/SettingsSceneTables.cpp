@@ -1,5 +1,8 @@
 #include "SettingsSceneShared.h"
+#include "../SqliteRAII.h"
 #include "../Utils.h"
+
+#include <memory>
 
 using namespace settings_scene;
 
@@ -42,7 +45,8 @@ private:
 
 void SettingsScene::loadDifficultyTables() {
   auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *settingsDb = dbHelper.Connect();
+  SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+  sqlite3 *settingsDb = settingsDbHandle.get();
   if (settingsDb == nullptr) {
     difficultyTables.clear();
     difficultyTableStatusMessage = "Could not open chart database.";
@@ -52,7 +56,6 @@ void SettingsScene::loadDifficultyTables() {
 
   dbHelper.CreateDifficultyTableTables(settingsDb);
   difficultyTables = dbHelper.SelectDifficultyTables(settingsDb);
-  dbHelper.Close(settingsDb);
 
   if (pendingDeleteDifficultyTableId != 0) {
     const auto it =
@@ -68,7 +71,8 @@ void SettingsScene::loadDifficultyTables() {
 
 void SettingsScene::loadChartEntries() {
   auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *settingsDb = dbHelper.Connect();
+  SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+  sqlite3 *settingsDb = settingsDbHandle.get();
   if (settingsDb == nullptr) {
     chartEntries.clear();
     difficultyTableStatusMessage = "Could not open chart database.";
@@ -78,7 +82,6 @@ void SettingsScene::loadChartEntries() {
 
   dbHelper.CreateEntriesTable(settingsDb);
   chartEntries = dbHelper.SelectAllEntries(settingsDb);
-  dbHelper.Close(settingsDb);
 
   if (!pendingDeleteChartEntryPath.empty()) {
     const auto it = std::find_if(chartEntries.begin(), chartEntries.end(),
@@ -368,7 +371,8 @@ void SettingsScene::addDifficultyTableFromUrl() {
   difficultyTableJobThread = std::jthread([this,
                                            url](const std::stop_token &token) {
     auto &dbHelper = ChartDBHelper::GetInstance();
-    sqlite3 *settingsDb = dbHelper.Connect();
+    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+    sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
       if (!token.stop_requested()) {
         difficultyTableJobRunning = false;
@@ -395,7 +399,6 @@ void SettingsScene::addDifficultyTableFromUrl() {
     };
     const bool imported = dbHelper.ImportDifficultyTableFromUrl(
         settingsDb, url, &errorMessage, progressCallback);
-    dbHelper.Close(settingsDb);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -438,7 +441,8 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
     auto &dbHelper = ChartDBHelper::GetInstance();
-    sqlite3 *settingsDb = dbHelper.Connect();
+    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+    sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
       if (!token.stop_requested()) {
         requestDifficultyTableStatus("Could not open chart database.",
@@ -451,7 +455,6 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     std::string errorMessage;
     const bool updated = dbHelper.UpdateDifficultyTableFromSourceUrl(
         settingsDb, tableId, &errorMessage);
-    dbHelper.Close(settingsDb);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -497,7 +500,8 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
     auto &dbHelper = ChartDBHelper::GetInstance();
-    sqlite3 *settingsDb = dbHelper.Connect();
+    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+    sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
       if (!token.stop_requested()) {
         requestDifficultyTableStatus("Could not open chart database.",
@@ -508,7 +512,6 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     }
 
     const bool deleted = dbHelper.DeleteDifficultyTable(settingsDb, tableId);
-    dbHelper.Close(settingsDb);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -545,7 +548,8 @@ void SettingsScene::refreshChartLibrary() {
   difficultyTableJobThread =
       std::jthread([this](const std::stop_token &token) {
         auto &dbHelper = ChartDBHelper::GetInstance();
-        sqlite3 *settingsDb = dbHelper.Connect();
+        SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+        sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {
           if (!token.stop_requested()) {
             requestDifficultyTableStatus("Could not open chart database.",
@@ -568,33 +572,19 @@ void SettingsScene::refreshChartLibrary() {
 
         std::vector<std::filesystem::path> roots;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-        std::vector<void *> accessHandles;
+        std::vector<std::unique_ptr<IOSScopedChartEntryAccess>> accessHandles;
         for (const auto &entry : entries) {
           if (token.stop_requested()) {
             break;
           }
-          if (entry.iosBookmark.empty()) {
-            roots.emplace_back(entry.path);
-            continue;
-          }
-
-          std::string resolvedPath;
-          std::string errorMessage;
-          void *handle = StartIOSSecurityScopedResource(
-              path_t_to_utf8(entry.path), entry.iosBookmark, resolvedPath,
-              errorMessage);
-          if (!errorMessage.empty()) {
+          auto access = std::make_unique<IOSScopedChartEntryAccess>(entry);
+          if (!access->errorMessage.empty()) {
             SDL_Log("Failed to open folder access for %s: %s",
-                    path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
+                    path_t_to_utf8(entry.path).c_str(),
+                    access->errorMessage.c_str());
           }
-          if (!resolvedPath.empty()) {
-            roots.emplace_back(utf8_to_path_t(resolvedPath));
-          } else {
-            roots.emplace_back(entry.path);
-          }
-          if (handle != nullptr) {
-            accessHandles.push_back(handle);
-          }
+          roots.emplace_back(utf8_to_path_t(access->resolvedPath));
+          accessHandles.push_back(std::move(access));
         }
 #else
         roots.reserve(entries.size());
@@ -607,13 +597,6 @@ void SettingsScene::refreshChartLibrary() {
             token.stop_requested()
                 ? -1
                 : dbHelper.ScanChartRoots(settingsDb, roots, &token);
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-        for (void *handle : accessHandles) {
-          StopIOSSecurityScopedResource(handle);
-        }
-#endif
-        dbHelper.Close(settingsDb);
 
         if (token.stop_requested()) {
           difficultyTableJobRunning = false;
@@ -671,7 +654,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   difficultyTableJobThread =
       std::jthread([this, entryPathText](const std::stop_token &token) {
         auto &dbHelper = ChartDBHelper::GetInstance();
-        sqlite3 *settingsDb = dbHelper.Connect();
+        SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
+        sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {
           if (!token.stop_requested()) {
             requestDifficultyTableStatus("Could not open chart database.",
@@ -692,7 +676,6 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
                          });
 
         if (entryIt == entries.end()) {
-          dbHelper.Close(settingsDb);
           if (!token.stop_requested()) {
             requestDifficultyTableStatus("Folder entry was not found.",
                                          {255, 177, 170, 255}, true);
@@ -712,7 +695,6 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         } else {
           sqlite3_exec(settingsDb, "ROLLBACK", nullptr, nullptr, nullptr);
         }
-        dbHelper.Close(settingsDb);
 
         if (token.stop_requested()) {
           difficultyTableJobRunning = false;

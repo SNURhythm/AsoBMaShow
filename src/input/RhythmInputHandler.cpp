@@ -14,6 +14,7 @@
 #include <array>
 #include <map>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -175,7 +176,7 @@ bool RhythmInputHandler::startListenSDL() {
   if (sdlInputSource != nullptr) {
     return false;
   }
-  sdlInputSource = new SDLInputSource();
+  sdlInputSource = std::make_unique<SDLInputSource>();
   sdlInputSource->setHandler(this);
   return sdlInputSource->startListen();
 }
@@ -183,17 +184,18 @@ bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
     return false;
   }
-  touchInputSource = new SDLTouchInputSource();
+  touchInputSource = std::make_unique<SDLTouchInputSource>();
   touchInputSource->setHandler(this);
   return touchInputSource->startListen();
 }
 void RhythmInputHandler::stopListen() {
-  for (auto &input : {&sdlInputSource, &touchInputSource}) {
-    if (*input != nullptr) {
-      (*input)->stopListen();
-      delete *input;
-      *input = nullptr;
-    }
+  if (sdlInputSource != nullptr) {
+    sdlInputSource->stopListen();
+    sdlInputSource.reset();
+  }
+  if (touchInputSource != nullptr) {
+    touchInputSource->stopListen();
+    touchInputSource.reset();
   }
 }
 void RhythmInputHandler::discardPendingTouchEvents() {

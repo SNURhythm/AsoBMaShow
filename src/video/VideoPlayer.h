@@ -20,6 +20,10 @@ class VideoPlayer {
 public:
   VideoPlayer(Stopwatch *stopwatch);
   ~VideoPlayer();
+  VideoPlayer(const VideoPlayer &) = delete;
+  VideoPlayer &operator=(const VideoPlayer &) = delete;
+  VideoPlayer(VideoPlayer &&) = delete;
+  VideoPlayer &operator=(VideoPlayer &&) = delete;
 
   bool loadVideo(const std::string &videoPath, std::atomic<bool> &isCancelled);
   void update();
@@ -66,6 +70,7 @@ private:
   std::condition_variable eofCV; // Condition variable for eof signaling
 
   void unloadVideo();
+  void destroyVideoTextures();
   void predecodeFrames();
   void stopPredecoding();
 

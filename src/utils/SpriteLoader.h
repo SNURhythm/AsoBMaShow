@@ -4,8 +4,9 @@
 
 #pragma once
 
-
+#include "../StbImageRAII.h"
 #include "../path.h"
+
 class SpriteLoader {
   public:
     explicit SpriteLoader(const path_t& path);
@@ -24,7 +25,7 @@ private:
   int channels = 0;
   int width = 0;
   int height = 0;
-  unsigned char *data = nullptr;
+  StbiImageHandle data;
   path_t path;
 
 };

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -75,11 +76,11 @@ public:
   ~BMSRenderer();
 
 private:
-  TextView *titleText = nullptr;
-  TextView *judgeText = nullptr;
-  TextView *scoreText = nullptr;
-  TextView *gaugeText = nullptr;
-  TextView *playOptionText = nullptr;
+  std::unique_ptr<TextView> titleText;
+  std::unique_ptr<TextView> judgeText;
+  std::unique_ptr<TextView> scoreText;
+  std::unique_ptr<TextView> gaugeText;
+  std::unique_ptr<TextView> playOptionText;
   std::mutex hudMutex;
   bool hudDirty = false;
   std::string pendingJudgeText;
@@ -179,6 +180,7 @@ private:
                                                 bool isHolding);
   void beginNoteTextureBatches(uint32_t bodyDepth, uint32_t sheetDepth);
   void flushNoteTextureBatches();
+  void destroyNoteSheetTextures();
   float calculateLanePlaneScreenTopIntersection();
   NoteSheet graySheet;
   NoteSheet blueSheet;

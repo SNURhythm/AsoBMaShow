@@ -18,6 +18,10 @@ public:
   GameObject(Vector3 position, Quaternion rotation, Vector3 scale);
   GameObject(Vector3 position, Quaternion rotation);
   virtual ~GameObject() = default;
+  GameObject(const GameObject &) = delete;
+  GameObject &operator=(const GameObject &) = delete;
+  GameObject(GameObject &&) = delete;
+  GameObject &operator=(GameObject &&) = delete;
   explicit GameObject(Vector3 position);
   void translate(Vector3 translation);
   void rotate(Quaternion rotation);

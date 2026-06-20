@@ -1,5 +1,6 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "RAII.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -611,6 +613,9 @@ public:
   void cancel() {
     if (writer != nil && writer.status == AVAssetWriterStatusWriting) {
       [writer cancelWriting];
+    }
+    if (audioReader != nil && audioReader.status == AVAssetReaderStatusReading) {
+      [audioReader cancelReading];
     }
     releasePendingAudioSample();
   }
@@ -1880,40 +1885,30 @@ void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,
                                  std::string &errorMessage) {
-  IOSReplayVideoWriter *writer = nullptr;
+  UniqueCleanupObject<IOSReplayVideoWriter, &IOSReplayVideoWriter::cancel>
+      writer;
   try {
     @try {
-      writer = new IOSReplayVideoWriter();
+      writer = makeUniqueCleanupObject<IOSReplayVideoWriter,
+                                       &IOSReplayVideoWriter::cancel>();
       if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
                         errorMessage)) {
-        delete writer;
+        writer.reset();
         return nullptr;
       }
-      return writer;
+      return writer.release();
     } @catch (NSException *exception) {
-      if (writer != nullptr) {
-        writer->cancel();
-        delete writer;
-      }
       errorMessage =
           "Replay video writer setup exception: " +
           NSExceptionMessage(exception, "Objective-C exception");
       return nullptr;
     }
   } catch (const std::exception &exception) {
-    if (writer != nullptr) {
-      writer->cancel();
-      delete writer;
-    }
     errorMessage =
         std::string("Replay video writer setup exception: ") +
         exception.what();
     return nullptr;
   } catch (...) {
-    if (writer != nullptr) {
-      writer->cancel();
-      delete writer;
-    }
     errorMessage = "Replay video writer setup exception";
     return nullptr;
   }
@@ -1939,6 +1934,9 @@ bool FinishIOSReplayVideoWriter(void *writer,
   auto *iosWriter = static_cast<IOSReplayVideoWriter *>(writer);
   const bool success = iosWriter->finish(errorMessage);
   profile = iosWriter->profile;
+  if (!success) {
+    iosWriter->cancel();
+  }
   delete iosWriter;
   return success;
 }

@@ -91,8 +91,11 @@ void Button::setOnClickListener(std::function<void()> listener) {
 }
 
 void Button::setContentView(View *view) {
-  this->contentView = view;
-  syncContentFrame(*this, contentView, true);
+  if (contentView.get() == view) {
+    return;
+  }
+  contentView.reset(view);
+  syncContentFrame(*this, contentView.get(), true);
 }
 
 Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
@@ -118,21 +121,21 @@ Button *Button::setStyledBorderWidth(int width) {
   return this;
 }
 
-Button::~Button() { delete contentView; }
+Button::~Button() = default;
 void Button::onLayout() {
-  syncContentFrame(*this, contentView, true);
+  syncContentFrame(*this, contentView.get(), true);
 }
 
 void Button::onMove(int newX, int newY) {
   (void)newX;
   (void)newY;
-  syncContentFrame(*this, contentView, false);
+  syncContentFrame(*this, contentView.get(), false);
 }
 
 void Button::onResize(int newWidth, int newHeight) {
   (void)newWidth;
   (void)newHeight;
-  syncContentFrame(*this, contentView, true);
+  syncContentFrame(*this, contentView.get(), true);
 }
 
 bool Button::handleEventsImpl(SDL_Event &event) {

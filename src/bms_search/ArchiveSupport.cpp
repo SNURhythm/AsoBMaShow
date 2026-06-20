@@ -1,5 +1,9 @@
 #include "Internal.h"
 
+#if ASOBMSHOW_HAS_LIBARCHIVE
+#include "../ArchiveRAII.h"
+#endif
+
 namespace asobmshow::bms_search {
 
 bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
@@ -357,24 +361,23 @@ bool extractArchiveWithLibarchive(
   }
 
   ensureArchiveFilenameLocale();
-  archive *archiveHandle = archive_read_new();
+  auto archiveHandle = makeArchiveReadHandle();
   if (archiveHandle == nullptr) {
     errorMessage = "Could not initialize archive reader.";
     return false;
   }
-  archive_read_support_filter_all(archiveHandle);
-  archive_read_support_format_all(archiveHandle);
-  archive_read_support_format_raw(archiveHandle);
-  preferJapaneseArchiveHeaderCharset(archiveHandle);
+  archive_read_support_filter_all(archiveHandle.get());
+  archive_read_support_format_all(archiveHandle.get());
+  archive_read_support_format_raw(archiveHandle.get());
+  preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
   const std::string archiveText =
       path_t_to_utf8(fspath_to_path_t(archivePath));
-  int status =
-      archive_read_open_filename(archiveHandle, archiveText.c_str(), 10240);
+  int status = archive_read_open_filename(archiveHandle.get(),
+                                          archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
     errorMessage =
-        "Could not open archive: " + archiveErrorString(archiveHandle, "");
-    archive_read_free(archiveHandle);
+        "Could not open archive: " + archiveErrorString(archiveHandle.get(), "");
     return false;
   }
 
@@ -386,7 +389,7 @@ bool extractArchiveWithLibarchive(
   std::uint64_t entryIndex = 0;
   archive_entry *entry = nullptr;
   for (;;) {
-    status = archive_read_next_header(archiveHandle, &entry);
+    status = archive_read_next_header(archiveHandle.get(), &entry);
     if (status == ARCHIVE_EOF) {
       break;
     }
@@ -396,15 +399,16 @@ bool extractArchiveWithLibarchive(
     if (status < ARCHIVE_WARN) {
       ok = false;
       errorMessage =
-          "Could not read archive: " + archiveErrorString(archiveHandle, "");
+          "Could not read archive: " +
+          archiveErrorString(archiveHandle.get(), "");
       break;
     }
     if (status == ARCHIVE_WARN) {
       SDL_Log("Continuing after archive warning: %s",
-              archiveErrorString(archiveHandle, "").c_str());
+              archiveErrorString(archiveHandle.get(), "").c_str());
     }
     if (entry == nullptr) {
-      archive_read_data_skip(archiveHandle);
+      archive_read_data_skip(archiveHandle.get());
       continue;
     }
 
@@ -417,7 +421,7 @@ bool extractArchiveWithLibarchive(
     std::filesystem::path relativePath;
     if (!safeArchivePath(entryName, relativePath)) {
       ++skippedInvalidPaths;
-      archive_read_data_skip(archiveHandle);
+      archive_read_data_skip(archiveHandle.get());
       continue;
     }
 
@@ -438,7 +442,7 @@ bool extractArchiveWithLibarchive(
     }
     if (!unknownFileType && fileType != AE_IFREG) {
       ++skippedUnsupportedTypes;
-      archive_read_data_skip(archiveHandle);
+      archive_read_data_skip(archiveHandle.get());
       continue;
     }
 
@@ -465,14 +469,15 @@ bool extractArchiveWithLibarchive(
     std::array<char, 64 * 1024> buffer{};
     for (;;) {
       const la_ssize_t bytes =
-          archive_read_data(archiveHandle, buffer.data(), buffer.size());
+          archive_read_data(archiveHandle.get(), buffer.data(),
+                            buffer.size());
       if (bytes == 0) {
         break;
       }
       if (bytes < 0) {
         ok = false;
         errorMessage = "Could not extract " + relativePath.string() + ": " +
-                       archiveErrorString(archiveHandle, "");
+                       archiveErrorString(archiveHandle.get(), "");
         break;
       }
       output.write(buffer.data(), static_cast<std::streamsize>(bytes));
@@ -487,8 +492,6 @@ bool extractArchiveWithLibarchive(
     }
     ++extractedFiles;
   }
-
-  archive_read_free(archiveHandle);
 
   if (!ok) {
     return false;
@@ -536,31 +539,30 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
   }
 
   ensureArchiveFilenameLocale();
-  archive *archiveHandle = archive_read_new();
+  auto archiveHandle = makeArchiveReadHandle();
   if (archiveHandle == nullptr) {
     output << "Could not initialize archive reader.\n";
     return;
   }
-  archive_read_support_filter_all(archiveHandle);
-  archive_read_support_format_all(archiveHandle);
-  archive_read_support_format_raw(archiveHandle);
-  preferJapaneseArchiveHeaderCharset(archiveHandle);
+  archive_read_support_filter_all(archiveHandle.get());
+  archive_read_support_format_all(archiveHandle.get());
+  archive_read_support_format_raw(archiveHandle.get());
+  preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
   const std::string archiveText =
       path_t_to_utf8(fspath_to_path_t(archivePath));
-  int status =
-      archive_read_open_filename(archiveHandle, archiveText.c_str(), 10240);
+  int status = archive_read_open_filename(archiveHandle.get(),
+                                          archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
     output << "Could not open archive: "
-           << archiveErrorString(archiveHandle, "") << '\n';
-    archive_read_free(archiveHandle);
+           << archiveErrorString(archiveHandle.get(), "") << '\n';
     return;
   }
 
   std::uint64_t entryIndex = 0;
   archive_entry *entry = nullptr;
   for (;;) {
-    status = archive_read_next_header(archiveHandle, &entry);
+    status = archive_read_next_header(archiveHandle.get(), &entry);
     if (status == ARCHIVE_EOF) {
       break;
     }
@@ -569,14 +571,14 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
     }
     if (status < ARCHIVE_WARN) {
       output << "Could not read archive: "
-             << archiveErrorString(archiveHandle, "") << '\n';
+             << archiveErrorString(archiveHandle.get(), "") << '\n';
       break;
     }
     ++entryIndex;
     output << entryIndex << '\t';
     if (entry == nullptr) {
       output << "entry=null\n";
-      archive_read_data_skip(archiveHandle);
+      archive_read_data_skip(archiveHandle.get());
       continue;
     }
     output << "name=" << archiveEntryPathnameUtf8(entry)
@@ -584,9 +586,8 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
            << "\ttype=" << archive_entry_filetype(entry)
            << "\tsize_set=" << archive_entry_size_is_set(entry)
            << "\tsize=" << archive_entry_size(entry) << '\n';
-    archive_read_data_skip(archiveHandle);
+    archive_read_data_skip(archiveHandle.get());
   }
-  archive_read_free(archiveHandle);
 #else
   (void)archivePath;
   (void)outputPath;

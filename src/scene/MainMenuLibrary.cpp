@@ -1,5 +1,6 @@
 #include "MainMenuLibrary.h"
 
+#include "../SqliteRAII.h"
 #include "../view/ClearLampColors.h"
 
 #include <SDL2/SDL.h>
@@ -107,21 +108,18 @@ void addFolderChart(
 std::unordered_map<std::string, int>
 LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
   std::unordered_map<std::string, FolderClearAggregate> aggregates;
-  sqlite3_stmt *stmt = nullptr;
 
   auto runQuery = [&](const std::string &query, const auto &handleRow) {
-    stmt = nullptr;
-    const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+    SqliteStatementHandle stmt;
+    const int rc = prepareSqliteStatement(db, query, stmt);
     if (rc != SQLITE_OK) {
       SDL_Log("SQL error while loading folder clear ranks: %s",
               sqlite3_errmsg(db));
       return;
     }
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      handleRow(stmt);
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+      handleRow(stmt.get());
     }
-    sqlite3_finalize(stmt);
-    stmt = nullptr;
   };
 
   runQuery("SELECT cm.sha256, cm.md5, cm.path FROM chart_meta cm WHERE " +

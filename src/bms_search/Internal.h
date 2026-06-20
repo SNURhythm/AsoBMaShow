@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <regex>

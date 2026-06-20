@@ -22,14 +22,13 @@ SDL_Event makeCancelledTouchUpEvent(const SDL_Event &event) {
 }
 } // namespace
 
-ScrollView::~ScrollView() { delete contentView; }
+ScrollView::~ScrollView() = default;
 
 void ScrollView::setContentView(View *view) {
-  if (contentView == view) {
+  if (contentView.get() == view) {
     return;
   }
-  delete contentView;
-  contentView = view;
+  contentView.reset(view);
   refreshContentLayout();
 }
 

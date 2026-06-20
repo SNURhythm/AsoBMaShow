@@ -4,6 +4,7 @@
 
 #include "ImageView.h"
 #include "../ArchiveFile.h"
+#include "../RAII.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -13,10 +14,13 @@
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include "../StbImageRAII.h"
 #include <algorithm>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -34,14 +38,23 @@ std::string imageCacheKey(const path_t &path) {
   return archive_file::cacheKeyForPath(std::filesystem::path(path));
 }
 
+bool decodedImageDimensionsAreValid(int width, int height) {
+  return width > 0 && height > 0 &&
+         width <= std::numeric_limits<std::uint16_t>::max() &&
+         height <= std::numeric_limits<std::uint16_t>::max() &&
+         static_cast<std::uint64_t>(width) *
+                 static_cast<std::uint64_t>(height) <=
+             std::numeric_limits<std::uint32_t>::max() / 4;
+}
+
 std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
   int width = 0;
   int height = 0;
   int channels = 0;
-  unsigned char *data = nullptr;
+  StbiImageHandle data(nullptr);
   if (!archive_file::isVirtualPath(path)) {
     const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
-    data = stbi_load(utf8Path.c_str(), &width, &height, &channels, 4);
+    data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
   } else {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
@@ -51,22 +64,19 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
               errorMessage.c_str());
       return std::nullopt;
     }
-    data = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
-                                 &width, &height, &channels, 4);
+    data.reset(stbi_load_from_memory(bytes.data(),
+                                     static_cast<int>(bytes.size()), &width,
+                                     &height, &channels, 4));
   }
 
-  if (data == nullptr || width <= 0 || height <= 0) {
-    if (data != nullptr) {
-      stbi_image_free(data);
-    }
+  if (data == nullptr || !decodedImageDimensionsAreValid(width, height)) {
     return std::nullopt;
   }
 
   const size_t byteCount = static_cast<size_t>(width) *
                            static_cast<size_t>(height) * 4;
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
-  std::copy(data, data + byteCount, rgba->begin());
-  stbi_image_free(data);
+  std::copy(data.get(), data.get() + byteCount, rgba->begin());
   return DecodedImage{.width = width, .height = height, .rgba = rgba};
 }
 
@@ -96,7 +106,9 @@ public:
     if (it == ready.end()) {
       return std::nullopt;
     }
-    return it->second;
+    std::optional<DecodedImage> decoded(std::move(it->second));
+    ready.erase(it);
+    return decoded;
   }
 
   bool hasFailed(const path_t &path) {
@@ -204,12 +216,26 @@ ImageView::~ImageView() { freeTexture(); }
 bool ImageView::applyImage(const path_t &path, const ImageCache &cache) {
   freeTexture();
   const std::string key = imageCacheKey(path);
-  if (!cache.rgba || cache.rgba->empty()) {
+  if (!cache.rgba || cache.rgba->empty() ||
+      !decodedImageDimensionsAreValid(cache.width, cache.height)) {
     return false;
   }
-  texture = bgfx::createTexture2D(
-      cache.width, cache.height, false, 1, bgfx::TextureFormat::RGBA8, 0,
-      bgfx::copy(cache.rgba->data(), cache.rgba->size()));
+  const size_t expectedByteCount = static_cast<size_t>(cache.width) *
+                                   static_cast<size_t>(cache.height) * 4;
+  if (cache.rgba->size() != expectedByteCount ||
+      cache.rgba->size() > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  const bgfx::TextureHandle nextTexture = bgfx::createTexture2D(
+      static_cast<std::uint16_t>(cache.width),
+      static_cast<std::uint16_t>(cache.height), false, 1,
+      bgfx::TextureFormat::RGBA8, 0,
+      bgfx::copy(cache.rgba->data(),
+                 static_cast<std::uint32_t>(cache.rgba->size())));
+  if (!bgfx::isValid(nextTexture)) {
+    return false;
+  }
+  texture = nextTexture;
   currentImageKey = key;
   currentImagePath = path;
   imageCache[key] = cache;

@@ -74,10 +74,8 @@ ResultScene::ResultScene(ApplicationContext &context,
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled) {
-  skin = new DefaultSkin();
+  skin = std::make_unique<DefaultSkin>();
 }
-
-ResultScene::~ResultScene() { delete skin; }
 
 void ResultScene::saveScore() {
   if (scoreSaved || !shouldSaveScore) {
@@ -229,9 +227,10 @@ void ResultScene::startRetry(bool samePattern) {
           return true;
         }
 
-        auto *loadedChart = retryChart.release();
         context.sceneManager->changeScene(
-            new GamePlayScene(context, loadedChart, options), false);
+            std::make_unique<GamePlayScene>(context, std::move(retryChart),
+                                            options),
+            false);
         return false;
       },
       0, true);
@@ -269,18 +268,18 @@ void ResultScene::startReplay() {
         }
 
         auto replayData = std::make_shared<ReplayData>(replaySource);
-        auto *loadedChart = replayChart.release();
         context.sceneManager->changeScene(
-            new GamePlayScene(context, loadedChart,
-                              {
-                                  .startPosition = 0,
-                                  .autoKeySound = false,
-                                  .autoPlay = false,
-                                  .gaugeType = replayData->initialGaugeType,
-                                  .gaugeAutoShift = replayData->gaugeAutoShift,
-                                  .replayData = replayData,
-                                  .ownsChart = true,
-                              }),
+            std::make_unique<GamePlayScene>(
+                context, std::move(replayChart),
+                StartOptions{
+                    .startPosition = 0,
+                    .autoKeySound = false,
+                    .autoPlay = false,
+                    .gaugeType = replayData->initialGaugeType,
+                    .gaugeAutoShift = replayData->gaugeAutoShift,
+                    .replayData = replayData,
+                    .ownsChart = true,
+                }),
             false);
         return false;
       },
@@ -293,6 +292,7 @@ void ResultScene::init() {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(rootLayout);
 
   ResultSkinData data = {&resultState, &meta, &context};
   skin->buildLayout("Result", rootLayout, &data);
@@ -306,7 +306,6 @@ void ResultScene::init() {
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
-  addView(rootLayout);
   rootLayout->applyYogaLayout();
 }
 

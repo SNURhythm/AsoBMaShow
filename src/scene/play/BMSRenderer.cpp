@@ -6,6 +6,7 @@
 
 #include "GameplayGeometry.h"
 #include "Judge.h"
+#include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
@@ -17,6 +18,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -51,6 +53,19 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   }
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
 }
+
+void destroyTextureHandle(bgfx::TextureHandle &texture) {
+  if (bgfx::isValid(texture)) {
+    bgfx::destroy(texture);
+    texture = BGFX_INVALID_HANDLE;
+  }
+}
+
+void destroyNoteSheet(NoteSheet &sheet) {
+  destroyTextureHandle(sheet.texture);
+  destroyTextureHandle(sheet.longBodyOffTexture);
+  destroyTextureHandle(sheet.longBodyOnTexture);
+}
 } // namespace
 
 BMSRenderer::BMSRenderer(
@@ -61,6 +76,8 @@ BMSRenderer::BMSRenderer(
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
+  auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
+
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
   laneStatesByOrder.resize(laneOrder.size());
@@ -215,27 +232,29 @@ BMSRenderer::BMSRenderer(
   configureSheet(scratchSheet, spriteLoader3.getWidth(),
                  spriteLoader3.getHeight());
 
-  titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  titleText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
   titleText->setText(chart->Meta.Title);
   titleText->setPosition(10, 10);
   titleText->setAlign(TextView::LEFT);
-  judgeText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  judgeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
   judgeText->setPosition(rendering::window_width / 2,
                          rendering::window_height / 2);
   judgeText->setAlign(TextView::CENTER);
-  scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  scoreText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
   scoreText->setPosition(0, rendering::window_height - 50);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setText("Score: 0");
-  gaugeText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  gaugeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 24);
   gaugeText->setPosition(10, 50);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
-  playOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  playOptionText =
+      std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 22);
   playOptionText->setPosition(10, 82);
   playOptionText->setColor({255, 205, 37, 255});
   playOptionText->setVisible(false);
 
   refreshGeometry();
+  textureGuard.dismiss();
 }
 
 bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
@@ -269,7 +288,7 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
                                                     int y, int width,
                                                     int height,
                                                     const char *label) {
-  auto *data = loader.crop(x, y, width, height);
+  UniqueResource<unsigned char, SDL_free> data(loader.crop(x, y, width, height));
   if (data == nullptr) {
     SDL_Log("Failed to load %s texture", label);
     throw std::runtime_error(std::string("Failed to load ") + label +
@@ -279,8 +298,7 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
   const auto handle = bgfx::createTexture2D(
       static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
       bgfx::TextureFormat::RGBA8, 0,
-      bgfx::copy(data, width * height * kBytesPerPixel));
-  SDL_free(data);
+      bgfx::copy(data.get(), width * height * kBytesPerPixel));
   if (!bgfx::isValid(handle)) {
     SDL_Log("Failed to create %s texture", label);
     throw std::runtime_error(std::string("Failed to create ") + label +
@@ -1269,37 +1287,11 @@ void BMSRendererState::reset() {
   latestCombo = 0;
   latestScore = 0;
 }
-BMSRenderer::~BMSRenderer() {
-  if (bgfx::isValid(graySheet.texture)) {
-    bgfx::destroy(graySheet.texture);
-  }
-  if (bgfx::isValid(graySheet.longBodyOffTexture)) {
-    bgfx::destroy(graySheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(graySheet.longBodyOnTexture)) {
-    bgfx::destroy(graySheet.longBodyOnTexture);
-  }
-  if (bgfx::isValid(blueSheet.texture)) {
-    bgfx::destroy(blueSheet.texture);
-  }
-  if (bgfx::isValid(blueSheet.longBodyOffTexture)) {
-    bgfx::destroy(blueSheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(blueSheet.longBodyOnTexture)) {
-    bgfx::destroy(blueSheet.longBodyOnTexture);
-  }
-  if (bgfx::isValid(scratchSheet.texture)) {
-    bgfx::destroy(scratchSheet.texture);
-  }
-  if (bgfx::isValid(scratchSheet.longBodyOffTexture)) {
-    bgfx::destroy(scratchSheet.longBodyOffTexture);
-  }
-  if (bgfx::isValid(scratchSheet.longBodyOnTexture)) {
-    bgfx::destroy(scratchSheet.longBodyOnTexture);
-  }
-  delete titleText;
-  delete judgeText;
-  delete scoreText;
-  delete gaugeText;
-  delete playOptionText;
+
+void BMSRenderer::destroyNoteSheetTextures() {
+  destroyNoteSheet(graySheet);
+  destroyNoteSheet(blueSheet);
+  destroyNoteSheet(scratchSheet);
 }
+
+BMSRenderer::~BMSRenderer() { destroyNoteSheetTextures(); }
