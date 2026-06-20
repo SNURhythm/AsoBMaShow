@@ -5,6 +5,7 @@
 #include "ClearLampColors.h"
 #include "RecyclerView.h"
 #include "TextView.h"
+#include "UiTheme.h"
 #include "View.h"
 
 #include <functional>
@@ -95,21 +96,27 @@ public:
   }
 
   void onSelected() override {
-    setBackgroundColor(Color(32, 55, 82, 224));
-    setBorderColor(Color(112, 177, 238, 255));
+    setBackgroundGradient(ui_theme::glassStrongTop(),
+                          ui_theme::glassStrongBottom());
+    setBorderColor(ui_theme::cyan());
     setBorderWidth(1);
-    titleText->setColor({255, 255, 255, 255});
-    detailText->setColor({203, 220, 239, 255});
-    scoreText->setColor({245, 250, 255, 255});
+    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    detailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    scoreText->setColor(ui_theme::sdl(ui_theme::lime()));
   }
 
   void onUnselected() override {
-    setBackgroundColor(Color(7, 12, 20, 138));
-    setBorderColor(Color(38, 52, 70, 160));
+    setBackgroundGradient(Color(ui_theme::fieldInk().r, ui_theme::fieldInk().g,
+                                ui_theme::fieldInk().b, 96),
+                          Color(ui_theme::fieldTeal().r,
+                                ui_theme::fieldTeal().g,
+                                ui_theme::fieldTeal().b, 42));
+    setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
+                         ui_theme::hairline().b, 96));
     setBorderWidth(1);
-    titleText->setColor({235, 242, 250, 255});
-    detailText->setColor({151, 171, 194, 255});
-    scoreText->setColor({197, 216, 238, 255});
+    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    detailText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+    scoreText->setColor(ui_theme::sdl(ui_theme::cyan()));
   }
 
 private:

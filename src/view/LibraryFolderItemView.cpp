@@ -1,5 +1,6 @@
 #include "LibraryFolderItemView.h"
 #include "ClearLampColors.h"
+#include "UiTheme.h"
 #include <algorithm>
 
 namespace {
@@ -55,16 +56,22 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
-  setBackgroundColor(Color(45, 79, 116, 220));
-  setBorderColor(Color(105, 162, 222, 255));
+  setBackgroundGradient(ui_theme::glassStrongTop(),
+                        ui_theme::glassStrongBottom());
+  setBorderColor(ui_theme::cyan());
   setBorderWidth(1);
-  labelView->setColor({255, 255, 255, 255});
-  countView->setColor({218, 232, 249, 255});
+  labelView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  countView->setColor(ui_theme::sdl(ui_theme::lime()));
 }
 
 void LibraryFolderItemView::onUnselected() {
-  setBackgroundColor(Color(12, 20, 32, 112));
-  clearBorderColor();
-  labelView->setColor({213, 224, 239, 255});
-  countView->setColor({142, 163, 188, 255});
+  setBackgroundGradient(Color(ui_theme::fieldInk().r, ui_theme::fieldInk().g,
+                              ui_theme::fieldInk().b, 72),
+                        Color(ui_theme::fieldTeal().r, ui_theme::fieldTeal().g,
+                              ui_theme::fieldTeal().b, 34));
+  setBorderColor(Color(ui_theme::hairline().r, ui_theme::hairline().g,
+                       ui_theme::hairline().b, 78));
+  setBorderWidth(1);
+  labelView->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  countView->setColor(ui_theme::sdl(ui_theme::textMuted()));
 }
