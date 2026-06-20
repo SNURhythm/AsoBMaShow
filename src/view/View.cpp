@@ -208,10 +208,15 @@ View *View::setBorderWidth(int width) {
 }
 
 View *View::addView(View *view) {
+  if (view == nullptr) {
+    return this;
+  }
+  std::unique_ptr<View> pending(view);
+  children.push_back(view);
+  pending.release();
   YGNodeInsertChild(node, view->getNode(), YGNodeGetChildCount(node));
   view->parent = this;
   view->insertionOrder = nextInsertionOrder++;
-  children.push_back(view);
   childrenOrderDirty = true;
   applyYogaLayout();
   return this;

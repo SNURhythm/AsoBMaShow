@@ -1,4 +1,6 @@
 #pragma once
+#include "BgfxRAII.h"
+#include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <stdexcept>
 #include <string>
@@ -7,45 +9,10 @@
 #include <filesystem>
 #include <cstdint>
 #include <limits>
-#include <memory>
 namespace rendering {
 // singleton
 class ShaderManager {
 private:
-  struct ShaderHandleGuard {
-    explicit ShaderHandleGuard(bgfx::ShaderHandle handle) : handle(handle) {}
-    ShaderHandleGuard(const ShaderHandleGuard &) = delete;
-    ShaderHandleGuard &operator=(const ShaderHandleGuard &) = delete;
-    ~ShaderHandleGuard() {
-      if (bgfx::isValid(handle)) {
-        bgfx::destroy(handle);
-      }
-    }
-
-    bgfx::ShaderHandle get() const { return handle; }
-    void release() { handle = BGFX_INVALID_HANDLE; }
-
-  private:
-    bgfx::ShaderHandle handle = BGFX_INVALID_HANDLE;
-  };
-
-  struct ProgramHandleGuard {
-    explicit ProgramHandleGuard(bgfx::ProgramHandle handle) : handle(handle) {}
-    ProgramHandleGuard(const ProgramHandleGuard &) = delete;
-    ProgramHandleGuard &operator=(const ProgramHandleGuard &) = delete;
-    ~ProgramHandleGuard() {
-      if (bgfx::isValid(handle)) {
-        bgfx::destroy(handle);
-      }
-    }
-
-    bgfx::ProgramHandle get() const { return handle; }
-    void release() { handle = BGFX_INVALID_HANDLE; }
-
-  private:
-    bgfx::ProgramHandle handle = BGFX_INVALID_HANDLE;
-  };
-
   std::unordered_map<std::string, bgfx::ProgramHandle> programMap;
 
   ShaderManager() {} // Private constructor
@@ -77,8 +44,8 @@ private:
     }
 
     std::string path = (shaderPath / FILENAME).string();
-    std::unique_ptr<SDL_RWops, decltype(&SDL_RWclose)> rw(
-        SDL_RWFromFile(path.c_str(), "rb"), SDL_RWclose);
+    UniqueResource<SDL_RWops, SDL_RWclose> rw(
+        SDL_RWFromFile(path.c_str(), "rb"));
     if (rw == nullptr) {
       throw std::runtime_error("Failed to open shader file: " + path);
     }
@@ -88,8 +55,7 @@ private:
       throw std::runtime_error("Invalid shader file size: " + path);
     }
     const auto size = static_cast<uint32_t>(fileSize);
-    std::unique_ptr<void, decltype(&SDL_free)> data(SDL_malloc(size),
-                                                    SDL_free);
+    UniqueResource<void, SDL_free> data(SDL_malloc(size));
     if (data == nullptr) {
       throw std::runtime_error("Failed to allocate shader buffer: " + path);
     }
@@ -123,9 +89,9 @@ public:
       return it->second;
     }
 
-    ShaderHandleGuard vsh(loadShader(vs));
-    ShaderHandleGuard fsh(loadShader(fs));
-    ProgramHandleGuard program(
+    BgfxHandleGuard<bgfx::ShaderHandle> vsh(loadShader(vs));
+    BgfxHandleGuard<bgfx::ShaderHandle> fsh(loadShader(fs));
+    BgfxHandleGuard<bgfx::ProgramHandle> program(
         bgfx::createProgram(vsh.get(), fsh.get(), true));
     if (!bgfx::isValid(program.get())) {
       throw std::runtime_error("Failed to create shader program: " + name);

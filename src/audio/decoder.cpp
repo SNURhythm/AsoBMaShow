@@ -1,11 +1,11 @@
 #include "decoder.h"
 #include "../ArchiveFile.h"
+#include "../RAII.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <iostream>
-#include <memory>
 #ifdef _WIN32
 #define sf_open sf_wchar_open
 #endif
@@ -73,7 +73,7 @@ sf_count_t memoryFileTell(void *userData) {
 bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
                      std::vector<short> &buffer, SF_INFO &fileInfo,
                      std::atomic<bool> &isCancelled) {
-  std::unique_ptr<SNDFILE, decltype(&sf_close)> fileHandle(file, sf_close);
+  UniqueResource<SNDFILE, sf_close> fileHandle(file);
   if (!file) {
     SDL_Log("Failed to open audio file %s, error: %s",
             path_t_to_utf8(displayPath).c_str(), sf_strerror(file));

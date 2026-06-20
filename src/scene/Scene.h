@@ -4,6 +4,7 @@
 #include <SDL2/SDL.h>
 #include <vector>
 #include <set>
+#include <memory>
 struct EventHandleResult {
   bool quit = false;
 };
@@ -12,6 +13,10 @@ class Scene {
 public:
   Scene() = delete;
   Scene(ApplicationContext &context) : context(context) {}
+  Scene(const Scene &) = delete;
+  Scene &operator=(const Scene &) = delete;
+  Scene(Scene &&) = delete;
+  Scene &operator=(Scene &&) = delete;
   std::vector<View *> views;
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>>
       deferred;
@@ -79,11 +84,7 @@ public:
     }
     isDead = true;
     cleanupScene(); // Additional custom cleanup
-    for (auto view : views) {
-      delete view;
-    }
-    views.clear();
-    deferred.clear();
+    destroyOwnedViews();
     isCleaned = true;
   }
 
@@ -93,9 +94,16 @@ public:
     deferred.clear();
   }
 
-  inline void addView(View *view) { views.push_back(view); }
+  inline void addView(View *view) {
+    if (view == nullptr) {
+      return;
+    }
+    std::unique_ptr<View> pending(view);
+    views.push_back(view);
+    pending.release();
+  }
 
-  virtual ~Scene() {}
+  virtual ~Scene() { destroyOwnedViews(); }
 
 protected:
   // Protected virtual methods for customization by derived classes
@@ -106,6 +114,14 @@ protected:
   ApplicationContext &context;
 
 private:
+  void destroyOwnedViews() {
+    for (auto *view : views) {
+      delete view;
+    }
+    views.clear();
+    deferred.clear();
+  }
+
   bool isDead = false;
   bool isCleaned = false;
 };

@@ -1,5 +1,6 @@
 #include "ScoreDBHelper.h"
 
+#include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
 #include "targets.h"
@@ -11,43 +12,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <memory>
 #include <string>
 #include <string_view>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-
-struct SqliteStatementDeleter {
-  void operator()(sqlite3_stmt *stmt) const {
-    if (stmt != nullptr) {
-      sqlite3_finalize(stmt);
-    }
-  }
-};
-
-using SqliteStatementHandle =
-    std::unique_ptr<sqlite3_stmt, SqliteStatementDeleter>;
-
-class ScoreDbConnection {
-public:
-  ScoreDbConnection(ScoreDBHelper &helper, sqlite3 *db)
-      : helper_(helper), db_(db) {}
-  ScoreDbConnection(const ScoreDbConnection &) = delete;
-  ScoreDbConnection &operator=(const ScoreDbConnection &) = delete;
-
-  ~ScoreDbConnection() {
-    if (db_ != nullptr) {
-      helper_.Close(db_);
-    }
-  }
-
-  sqlite3 *get() const { return db_; }
-
-private:
-  ScoreDBHelper &helper_;
-  sqlite3 *db_ = nullptr;
-};
 
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -91,12 +60,11 @@ std::string normalizedPath(const std::string &value) {
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  char *errMsg = nullptr;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, &errMsg);
+  SqliteErrorMessageHandle errMsg;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while %s: %s", context,
-            errMsg != nullptr ? errMsg : sqlite3_errmsg(db));
-    sqlite3_free(errMsg);
+            errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db));
     return false;
   }
   return true;
@@ -128,9 +96,8 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
       std::string("SELECT ") + columnName + ", MAX(clear_type) FROM scores "
       "WHERE " + columnName + " IS NOT NULL AND " + columnName +
       " != '' GROUP BY " + columnName;
-  sqlite3_stmt *rawStmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while loading score clear ranks: %s", sqlite3_errmsg(db));
     return;
@@ -307,9 +274,8 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       "@final_gauge, @clear_type"
       ")";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing score insert: %s", sqlite3_errmsg(db));
     return false;
@@ -352,7 +318,7 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
   if (db == nullptr) {
     return false;
   }
-  ScoreDbConnection connection(*this, db);
+  SqliteConnectionHandle connection(db);
 
   const bool result =
       CreateScoreTable(connection.get()) &&
@@ -369,7 +335,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   if (db == nullptr) {
     return cache;
   }
-  ScoreDbConnection connection(*this, db);
+  SqliteConnectionHandle connection(db);
 
   if (CreateScoreTable(connection.get())) {
     loadBestRanksForColumn(connection.get(), "chart_sha256",

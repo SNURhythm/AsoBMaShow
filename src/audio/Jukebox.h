@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
@@ -129,7 +130,7 @@ private:
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;
   std::unordered_map<int, path_t> wavTableAbs;
-  std::unordered_map<int, VideoPlayer *> videoPlayerTable;
+  std::unordered_map<int, std::unique_ptr<VideoPlayer>> videoPlayerTable;
   std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
   std::mutex imageTableMutex;

@@ -7,6 +7,8 @@
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
 #include "../PlayOptionUtils.h"
+#include "../RAII.h"
+#include "../SqliteRAII.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -516,13 +518,22 @@ std::mutex gIOSFolderAccessMutex;
 std::vector<void *> gIOSFolderAccessHandles;
 std::unordered_map<path_t, path_t> gIOSResolvedFolderPaths;
 
-void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+void ClearIOSFolderAccessLocked() {
   for (void *handle : gIOSFolderAccessHandles) {
     StopIOSSecurityScopedResource(handle);
   }
   gIOSFolderAccessHandles.clear();
   gIOSResolvedFolderPaths.clear();
+}
+
+void ClearIOSFolderAccess() {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  ClearIOSFolderAccessLocked();
+}
+
+void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
+  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
+  ClearIOSFolderAccessLocked();
 
   for (const auto &entry : entries) {
     if (entry.iosBookmark.empty()) {
@@ -1175,13 +1186,7 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
 void MainMenuScene::runLibraryRefreshTask(
     const LibraryTaskRequest &task, const std::stop_token &stopToken) {
   auto &dbHelper = ChartDBHelper::GetInstance();
-  auto closeTaskDb = [&dbHelper](sqlite3 *database) {
-    if (database != nullptr) {
-      dbHelper.Close(database);
-    }
-  };
-  std::unique_ptr<sqlite3, decltype(closeTaskDb)> taskDbHandle(
-      dbHelper.Connect(), closeTaskDb);
+  SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
   sqlite3 *taskDb = taskDbHandle.get();
   if (taskDb == nullptr) {
     throw std::runtime_error("Failed to open chart database");
@@ -1691,6 +1696,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(rootLayout);
   const SafeAreaInsets safe = getSafeAreaInsetsUi();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
@@ -2134,7 +2140,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();
-  addView(rootLayout);
   reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
@@ -2793,8 +2798,9 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
   context.jukebox.stop();
   context.sceneManager->changeScene(
-      new ChartViewerScene(context, record, chartRandomInfo.seed,
-                           chartRandomInfo.prng, chartRandomInfo.values),
+      std::make_unique<ChartViewerScene>(
+          context, record, chartRandomInfo.seed, chartRandomInfo.prng,
+          chartRandomInfo.values),
       true);
 }
 
@@ -2997,14 +3003,8 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       result.success = false;
       result.message = "Unzip cancelled";
     } else {
-      auto dbHelper = ChartDBHelper::GetInstance();
-      auto closeUnzipDb = [&dbHelper](sqlite3 *database) {
-        if (database != nullptr) {
-          dbHelper.Close(database);
-        }
-      };
-      std::unique_ptr<sqlite3, decltype(closeUnzipDb)> unzipDbHandle(
-          dbHelper.Connect(), closeUnzipDb);
+      auto &dbHelper = ChartDBHelper::GetInstance();
+      SqliteConnectionHandle unzipDbHandle(dbHelper.Connect());
       sqlite3 *unzipDb = unzipDbHandle.get();
       if (unzipDb == nullptr) {
         result.success = false;
@@ -3252,14 +3252,8 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
     return;
   }
 
-  auto dbHelper = ChartDBHelper::GetInstance();
-  auto closeDeleteDb = [&dbHelper](sqlite3 *database) {
-    if (database != nullptr) {
-      dbHelper.Close(database);
-    }
-  };
-  std::unique_ptr<sqlite3, decltype(closeDeleteDb)> deleteDbHandle(
-      dbHelper.Connect(), closeDeleteDb);
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  SqliteConnectionHandle deleteDbHandle(dbHelper.Connect());
   sqlite3 *deleteDb = deleteDbHandle.get();
   if (deleteDb != nullptr) {
     dbHelper.DeleteArchiveRecords(deleteDb, archivePath);
@@ -5002,7 +4996,8 @@ void MainMenuScene::resetReplayWatchLoadingUi() {
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
   context.sceneManager->changeScene(
-      new GamePlayScene(context, chart, std::move(options)), true);
+      std::make_unique<GamePlayScene>(context, chart, std::move(options)),
+      true);
 }
 
 void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
@@ -5280,6 +5275,9 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  ClearIOSFolderAccess();
+#endif
   stopAndClearSelectedChart();
   ChartDBHelper::GetInstance().Close(db);
   db = nullptr;
@@ -5531,8 +5529,7 @@ void MainMenuScene::FindFilesUnix(
     const std::unordered_set<path_t> &oldFiles,
     std::vector<std::filesystem::path> &directoriesToVisit,
     const std::stop_token &stop_token) {
-  std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(directoryPath.c_str()),
-                                                closedir);
+  UniqueResource<DIR, closedir> dir(opendir(directoryPath.c_str()));
   if (dir) {
     struct dirent *entry;
     while ((entry = readdir(dir.get())) != nullptr) {

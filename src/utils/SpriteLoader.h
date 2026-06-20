@@ -4,9 +4,8 @@
 
 #pragma once
 
-
+#include "../StbImageRAII.h"
 #include "../path.h"
-#include <memory>
 
 class SpriteLoader {
   public:
@@ -23,15 +22,10 @@ class SpriteLoader {
     [[nodiscard]] unsigned char *crop(int x, int y, int w, int h) const;
 
 private:
-  struct ImageDataDeleter {
-    void operator()(unsigned char *ptr) const;
-  };
-  using ImageDataPtr = std::unique_ptr<unsigned char, ImageDataDeleter>;
-
   int channels = 0;
   int width = 0;
   int height = 0;
-  ImageDataPtr data;
+  StbiImageHandle data;
   path_t path;
 
 };

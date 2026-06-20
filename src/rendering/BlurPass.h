@@ -10,6 +10,7 @@ namespace rendering {
 class BlurPass final : public PostProcessPass {
 public:
   BlurPass(uint16_t downsampleFactor, float tintAlpha);
+  ~BlurPass() override;
   void init(uint16_t windowW, uint16_t windowH) override;
   void resize(uint16_t windowW, uint16_t windowH) override;
   void execute() override;

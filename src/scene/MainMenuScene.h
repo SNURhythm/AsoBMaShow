@@ -46,7 +46,7 @@ public:
   void cleanupScene() override;
 
 private:
-  sqlite3 *db;
+  sqlite3 *db = nullptr;
   std::atomic_bool previewLoadCancelled = false;
   std::atomic_bool willStart = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;

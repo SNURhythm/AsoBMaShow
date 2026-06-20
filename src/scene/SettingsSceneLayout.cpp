@@ -276,7 +276,6 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   if (previewPanelFolded) {
     previewPanel->addView(makeFoldButton("<"));
     rootLayout->addView(previewPanel);
-    addView(rootLayout);
     rootLayout->applyYogaLayout();
     refreshSettingsText();
     return;
@@ -490,7 +489,6 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->addView(doneButton);
 
   rootLayout->addView(previewPanel);
-  addView(rootLayout);
   rootLayout->applyYogaLayout();
   refreshSettingsText();
   return;
@@ -1830,6 +1828,7 @@ void SettingsScene::initView() {
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(rootLayout);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setPadding(
       Edge::Top,
@@ -1995,7 +1994,6 @@ void SettingsScene::initView() {
 
   buildDifficultyTableImportModal(metrics);
 
-  addView(rootLayout);
   rootLayout->applyYogaLayout();
   refreshDifficultyTableImportModal();
   refreshSettingsText();

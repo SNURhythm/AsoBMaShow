@@ -2092,6 +2092,7 @@ void ChartViewerScene::initView() {
   lastSafeRight = safe.right;
 
   rootLayout = new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(rootLayout);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setBackgroundColor(Color(8, 9, 11, 255));
@@ -2235,7 +2236,6 @@ void ChartViewerScene::initView() {
   rootLayout->addView(header);
   rootLayout->addView(toolbar);
   rootLayout->addView(canvasView);
-  addView(rootLayout);
 
   updateZoomText();
   updateSelectionText();
@@ -3513,36 +3513,34 @@ void ChartViewerScene::startPracticeFromSelection() {
           return true;
         }
 
-        auto *loadedChart = practiceChart.release();
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +
                               " notes");
         }
         context.sceneManager->changeScene(
-            new GamePlayScene(context, loadedChart,
-                              {
-                                  .startPosition =
-                                      static_cast<unsigned long long>(
-                                          std::max(0LL, selectedTime)),
-                                  .autoKeySound = autoKeySound,
-                                  .autoPlay = false,
-                                  .gaugeType = gaugeSelection.type,
-                                  .gaugeAutoShift = gaugeSelection.autoShift,
-                                  .playOption = viewerPlayOption,
-                                  .playOptionSeed = viewerPlayOptionSeed,
-                                  .playOption2 = viewerPlayOption2,
-                                  .playOption2Seed = viewerPlayOption2Seed,
-                                  .ownsChart = true,
-                                  .practiceMode = true,
-                                  .practiceLeadInMicros =
-                                      static_cast<unsigned long long>(
-                                          kPracticeLeadInMicros),
-                                  .returnScene = this,
-                                  .practiceGhostCallback =
-                                      [this](const ReplayData &replayData) {
-                                        setPracticeGhostReplay(replayData);
-                                      },
-                              }),
+            std::make_unique<GamePlayScene>(
+                context, std::move(practiceChart),
+                StartOptions{
+                    .startPosition = static_cast<unsigned long long>(
+                        std::max(0LL, selectedTime)),
+                    .autoKeySound = autoKeySound,
+                    .autoPlay = false,
+                    .gaugeType = gaugeSelection.type,
+                    .gaugeAutoShift = gaugeSelection.autoShift,
+                    .playOption = viewerPlayOption,
+                    .playOptionSeed = viewerPlayOptionSeed,
+                    .playOption2 = viewerPlayOption2,
+                    .playOption2Seed = viewerPlayOption2Seed,
+                    .ownsChart = true,
+                    .practiceMode = true,
+                    .practiceLeadInMicros =
+                        static_cast<unsigned long long>(kPracticeLeadInMicros),
+                    .returnScene = this,
+                    .practiceGhostCallback =
+                        [this](const ReplayData &replayData) {
+                          setPracticeGhostReplay(replayData);
+                        },
+                }),
             true);
         return true;
       },

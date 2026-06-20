@@ -1,4 +1,5 @@
 #include "TextView.h"
+#include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 #include <cstring>
@@ -46,7 +47,7 @@ struct TextLineMetrics {
   int height = 0;
 };
 
-using SurfacePtr = std::unique_ptr<SDL_Surface, decltype(&SDL_FreeSurface)>;
+using SurfacePtr = UniqueResource<SDL_Surface, SDL_FreeSurface>;
 
 bool acquireTtf() {
   std::lock_guard<std::mutex> lock(g_ttfMutex);
@@ -79,8 +80,7 @@ void addUniquePath(std::vector<std::string> &paths, std::string path) {
 }
 
 bool canReadFile(const std::string &path) {
-  std::unique_ptr<SDL_RWops, decltype(&SDL_RWclose)> rw(
-      SDL_RWFromFile(path.c_str(), "rb"), SDL_RWclose);
+  UniqueResource<SDL_RWops, SDL_RWclose> rw(SDL_RWFromFile(path.c_str(), "rb"));
   if (rw == nullptr) {
     return false;
   }
@@ -741,9 +741,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
   const int targetHeight =
       std::max(1, metrics.height * static_cast<int>(lines.size()));
   SurfacePtr surface(SDL_CreateRGBSurfaceWithFormat(
-                         0, targetWidth, targetHeight, 32,
-                         SDL_PIXELFORMAT_BGRA32),
-                     SDL_FreeSurface);
+      0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_BGRA32));
   if (surface == nullptr) {
     SDL_Log("Failed to create text fallback surface: %s", SDL_GetError());
     return nullptr;
@@ -777,8 +775,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
         continue;
       }
 
-      SurfacePtr runSurface(renderFontSourceTextSurface(run.source, run.text),
-                            SDL_FreeSurface);
+      SurfacePtr runSurface(renderFontSourceTextSurface(run.source, run.text));
       if (runSurface == nullptr) {
         SDL_Log("Failed to render fallback text run: %s", TTF_GetError());
         continue;
@@ -877,7 +874,7 @@ void TextView::createTexture(bool markDirty, bool force,
     }
     return;
   }
-  SurfacePtr surface(nullptr, SDL_FreeSurface);
+  SurfacePtr surface(nullptr);
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
   const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);

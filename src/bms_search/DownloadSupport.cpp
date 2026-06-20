@@ -1,34 +1,13 @@
 #include "Internal.h"
 #include "GoogleDriveDriver.h"
 
+#include "../RAII.h"
+
+#if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
+#include "../CurlRAII.h"
+#endif
+
 namespace asobmshow::bms_search {
-
-class ScopedFileRemoval {
-public:
-  explicit ScopedFileRemoval(std::filesystem::path path)
-      : path(std::move(path)) {}
-
-  ~ScopedFileRemoval() {
-    if (path.empty()) {
-      return;
-    }
-
-    std::error_code error;
-    if (!std::filesystem::exists(path, error) || error) {
-      return;
-    }
-    error.clear();
-    std::filesystem::remove(path, error);
-    if (error) {
-      SDL_Log("Could not delete downloaded archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-              error.message().c_str());
-    }
-  }
-
-private:
-  std::filesystem::path path;
-};
 
 std::optional<std::filesystem::path> saveIosDebugArtifacts(
     const std::string &key, const std::string &downloadUrl,
@@ -201,7 +180,7 @@ size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
 std::optional<std::string> fetchUrlText(const std::string &url,
                                         std::string &errorMessage) {
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
-  CURL *curl = curl_easy_init();
+  CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
     errorMessage = "Failed to initialize HTTP client.";
     return std::nullopt;
@@ -209,22 +188,21 @@ std::optional<std::string> fetchUrlText(const std::string &url,
 
   std::string body;
   char curlError[CURL_ERROR_SIZE] = {};
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "AsoBMaShow");
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 25L);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, appendCurlResponse);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
-  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
-  const CURLcode result = curl_easy_perform(curl);
+  const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
-  curl_easy_cleanup(curl);
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
 
   if (result != CURLE_OK) {
     errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
@@ -241,7 +219,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
 std::optional<std::string> postUrlText(const std::string &url,
                                        std::string &errorMessage) {
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
-  CURL *curl = curl_easy_init();
+  CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
     errorMessage = "Failed to initialize HTTP client.";
     return std::nullopt;
@@ -249,23 +227,22 @@ std::optional<std::string> postUrlText(const std::string &url,
 
   std::string body;
   char curlError[CURL_ERROR_SIZE] = {};
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_POST, 1L);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "AsoBMaShow");
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 25L);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, appendCurlResponse);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
-  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
-  const CURLcode result = curl_easy_perform(curl);
+  const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
-  curl_easy_cleanup(curl);
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
 
   if (result != CURLE_OK) {
     errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
@@ -318,7 +295,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback) {
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
-  CURL *curl = curl_easy_init();
+  CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
     errorMessage = "Failed to initialize HTTP client.";
     return false;
@@ -326,7 +303,6 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
 
   std::ofstream file(path, std::ios::binary);
   if (!file) {
-    curl_easy_cleanup(curl);
     errorMessage = "Could not create downloaded archive.";
     return false;
   }
@@ -335,25 +311,24 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
                               .cancelled = &cancelled,
                               .progressCallback = &progressCallback};
   char curlError[CURL_ERROR_SIZE] = {};
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 8L);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "AsoBMaShow");
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 180L);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCurlFile);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
-  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curlProgress);
-  curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &context);
-  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curlError);
-  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 180L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, writeCurlFile);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
-  const CURLcode result = curl_easy_perform(curl);
+  const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
-  curl_easy_cleanup(curl);
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
   file.close();
 
   if (cancelled.load()) {
@@ -418,7 +393,23 @@ bool downloadAndExtractArchive(
   }
 
   const std::filesystem::path archivePath = archiveDirectory / archiveName;
-  ScopedFileRemoval archiveCleanup(archivePath);
+  auto archiveCleanup = makeScopeExit([archivePath] {
+    if (archivePath.empty()) {
+      return;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::exists(archivePath, error) || error) {
+      return;
+    }
+    error.clear();
+    std::filesystem::remove(archivePath, error);
+    if (error) {
+      SDL_Log("Could not delete downloaded archive %s: %s",
+              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
+              error.message().c_str());
+    }
+  });
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }

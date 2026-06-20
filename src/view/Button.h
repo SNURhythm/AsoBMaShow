@@ -5,6 +5,7 @@
 #pragma once
 #include "View.h"
 #include <functional>
+#include <memory>
 #include <string>
 class Button : public View {
 private:
@@ -13,7 +14,7 @@ private:
 
 private:
   std::function<void()> onClickListener;
-  View *contentView = nullptr;
+  std::unique_ptr<View> contentView;
   bool mousePressedInside = false;
   bool isHovered = false;
   SDL_FingerID activeTouchId = -1;

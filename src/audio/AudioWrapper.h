@@ -88,14 +88,28 @@ struct SoftKneeCompressor {
 // Custom data structure to hold PCM data and playback state
 struct SoundData {
 
-  size_t currentFrame;
-  int channels;
-  int originalSampleRate;
-  bool playing;
-  bool isResampled;
-  ma_resampler resampler;
+  ~SoundData() { releaseResampler(); }
+
+  SoundData() = default;
+  SoundData(const SoundData &) = delete;
+  SoundData &operator=(const SoundData &) = delete;
+
+  void releaseResampler() {
+    if (resamplerInitialized) {
+      ma_resampler_uninit(&resampler, nullptr);
+      resamplerInitialized = false;
+    }
+  }
+
+  size_t currentFrame = 0;
+  int channels = 0;
+  int originalSampleRate = 0;
+  bool playing = false;
+  bool isResampled = false;
+  ma_resampler resampler{};
+  bool resamplerInitialized = false;
   std::vector<short> resampledData;
-  size_t resampledFrameCount;
+  size_t resampledFrameCount = 0;
 };
 
 struct PlayingSound {

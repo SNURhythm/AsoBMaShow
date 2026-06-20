@@ -11,6 +11,8 @@ BlurPass::BlurPass(uint16_t downsampleFactor, float tintAlpha)
       blur_view_v_(rendering::blur_view_v), final_view_(rendering::final_view) {
 }
 
+BlurPass::~BlurPass() { shutdown(); }
+
 void BlurPass::init(uint16_t windowW, uint16_t windowH) {
   window_width_ = windowW;
   window_height_ = windowH;

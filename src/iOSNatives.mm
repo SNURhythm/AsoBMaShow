@@ -1,5 +1,6 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "RAII.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -1884,17 +1885,12 @@ void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,
                                  std::string &errorMessage) {
-  auto cancelAndDeleteWriter = [](IOSReplayVideoWriter *writer) {
-    if (writer != nullptr) {
-      writer->cancel();
-      delete writer;
-    }
-  };
-  std::unique_ptr<IOSReplayVideoWriter, decltype(cancelAndDeleteWriter)> writer(
-      nullptr, cancelAndDeleteWriter);
+  UniqueCleanupObject<IOSReplayVideoWriter, &IOSReplayVideoWriter::cancel>
+      writer;
   try {
     @try {
-      writer.reset(new IOSReplayVideoWriter());
+      writer = makeUniqueCleanupObject<IOSReplayVideoWriter,
+                                       &IOSReplayVideoWriter::cancel>();
       if (!writer->open(wavPath, outputPath, width, height, fps, bitRate,
                         errorMessage)) {
         writer.reset();

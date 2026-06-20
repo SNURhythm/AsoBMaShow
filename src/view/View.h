@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <unordered_set>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
@@ -99,13 +100,27 @@ public:
     applyYogaLayout();
   }
 
+  View(const View &) = delete;
+  View &operator=(const View &) = delete;
+  View(View &&) = delete;
+  View &operator=(View &&) = delete;
+
   virtual ~View() {
+    dirtyRoots.erase(this);
+    for (auto *view : children) {
+      dirtyRoots.erase(view);
+      if (node != nullptr && view != nullptr && view->node != nullptr) {
+        YGNodeRemoveChild(node, view->node);
+      }
+      if (view != nullptr) {
+        view->parent = nullptr;
+        delete view;
+      }
+    }
+    children.clear();
     if (node != nullptr) {
       YGNodeFree(node);
       node = nullptr;
-    }
-    for (auto view : children) {
-      delete view;
     }
   }
 

@@ -1,6 +1,7 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "../targets.h"
 #include "AudioWrapper.h"
+#include "../RAII.h"
 #include <stdexcept>
 #include <SDL2/SDL.h>
 #include "decoder.h"
@@ -682,6 +683,7 @@ public:
                    Pa_GetErrorText(err));
       throw std::runtime_error("Failed to initialize PortAudio");
     }
+    auto terminateOnFailure = makeScopeExit([]() { Pa_Terminate(); });
 
     PaStreamParameters outputParameters;
     outputParameters.device = Pa_GetDefaultOutputDevice(); // Default
@@ -720,12 +722,17 @@ public:
                         paCallback, this);
 
     if (err != paNoError) {
+      if (stream != nullptr) {
+        Pa_CloseStream(stream);
+        stream = nullptr;
+      }
       SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "[PortAudio] OpenStream error: %s",
                    Pa_GetErrorText(err));
       throw std::runtime_error("Failed to open audio stream");
     }
     SDL_Log("[PortAudio] Output device: %s", deviceInfo->name);
     SDL_Log("[PortAudio] Initialized with sample rate: %d", sampleRate);
+    terminateOnFailure.dismiss();
   }
 
   ~PortAudioBackend() override {
@@ -947,7 +954,6 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
     // Initialize the resampler
     SDL_Log("Resampling audio data from %d Hz to %d Hz", sampleRate,
             targetSampleRate);
-    soundData->isResampled = true;
     ma_resampler_config resamplerConfig = ma_resampler_config_init(
         ma_format_s16, channels, sampleRate, targetSampleRate,
         ma_resample_algorithm_linear);
@@ -956,6 +962,8 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
       SDL_Log("Failed to initialize resampler.");
       return false;
     }
+    soundData->resamplerInitialized = true;
+    soundData->isResampled = true;
     if (isCancelled)
       return false;
 
@@ -1138,9 +1146,7 @@ void AudioWrapper::unloadSound(const path_t &path) {
     const size_t index = indexIt->second;
     auto &soundData = soundDataList[index];
 
-    if (soundData->isResampled) {
-      ma_resampler_uninit(&soundData->resampler, nullptr); // Cleanup resampler
-    }
+    soundData->releaseResampler();
 
     soundDataList.erase(soundDataList.begin() + index);
     soundDataIndexMap.erase(indexIt);
@@ -1159,10 +1165,7 @@ void AudioWrapper::unloadSounds() {
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
     for (auto &soundData : soundDataList) {
-      if (soundData->isResampled) {
-        ma_resampler_uninit(&soundData->resampler,
-                            nullptr); // Cleanup resampler
-      }
+      soundData->releaseResampler();
     }
     soundDataList.clear();
     soundDataIndexMap.clear();

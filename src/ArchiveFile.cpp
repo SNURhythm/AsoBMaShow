@@ -1,5 +1,7 @@
 #include "ArchiveFile.h"
 
+#include "RAII.h"
+
 #include <SDL2/SDL.h>
 #if __has_include(<TargetConditionals.h>)
 #include <TargetConditionals.h>
@@ -30,6 +32,10 @@
 #define ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE 1
 #else
 #define ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE 0
+#endif
+
+#if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
+#include "ArchiveRAII.h"
 #endif
 
 #if __has_include(<unarr.h>) && \
@@ -508,25 +514,8 @@ bool readRegularFile(const std::filesystem::path &path,
 }
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
-struct UnarrStreamHandle {
-  ~UnarrStreamHandle() {
-    if (stream != nullptr) {
-      ar_close(stream);
-    }
-  }
-
-  ar_stream *stream = nullptr;
-};
-
-struct UnarrArchiveHandle {
-  ~UnarrArchiveHandle() {
-    if (archive != nullptr) {
-      ar_close_archive(archive);
-    }
-  }
-
-  ar_archive *archive = nullptr;
-};
+using UnarrStreamHandle = UniqueResource<ar_stream, ar_close>;
+using UnarrArchiveHandle = UniqueResource<ar_archive, ar_close_archive>;
 
 constexpr unsigned char kRarMainHeader = 0x73;
 constexpr unsigned char kRarFileHeader = 0x74;
@@ -596,16 +585,16 @@ bool openUnarrRarArchive(const std::filesystem::path &archivePath,
                          UnarrArchiveHandle &archive,
                          std::string *errorMessage) {
   const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
-  stream.stream = ar_open_file(archiveText.c_str());
-  if (stream.stream == nullptr) {
+  stream.reset(ar_open_file(archiveText.c_str()));
+  if (stream == nullptr) {
     if (errorMessage != nullptr) {
       *errorMessage = "unarr could not open archive file.";
     }
     return false;
   }
 
-  archive.archive = ar_open_rar_archive(stream.stream);
-  if (archive.archive == nullptr) {
+  archive.reset(ar_open_rar_archive(stream.get()));
+  if (archive == nullptr) {
     if (errorMessage != nullptr) {
       *errorMessage = "unarr could not open RAR4 archive.";
     }
@@ -638,12 +627,12 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
   }
 
   std::size_t order = 0;
-  while (ar_parse_entry(archive.archive)) {
+  while (ar_parse_entry(archive.get())) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       entries.clear();
       return false;
     }
-    const char *entryName = ar_entry_get_name(archive.archive);
+    const char *entryName = ar_entry_get_name(archive.get());
     if (entryName == nullptr || entryName[0] == '\0') {
       continue;
     }
@@ -657,7 +646,7 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
     }
 
     const std::int64_t offset =
-        static_cast<std::int64_t>(ar_entry_get_offset(archive.archive));
+        static_cast<std::int64_t>(ar_entry_get_offset(archive.get()));
     bool solid = false;
     if (!readRar4EntrySolidFlagAtOffset(headerFile, offset, mainSolid, solid)) {
       if (errorMessage != nullptr) {
@@ -671,14 +660,14 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
     entries.push_back({
         .path = relativePath,
         .directory = false,
-        .size = static_cast<std::uint64_t>(ar_entry_get_size(archive.archive)),
+        .size = static_cast<std::uint64_t>(ar_entry_get_size(archive.get())),
         .order = order++,
         .offset = offset,
         .solid = solid,
     });
   }
 
-  if (!ar_at_eof(archive.archive)) {
+  if (!ar_at_eof(archive.get())) {
     if (errorMessage != nullptr) {
       *errorMessage = "unarr RAR index did not reach archive end.";
     }
@@ -1642,9 +1631,6 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
 
-using ArchiveReadHandle =
-    std::unique_ptr<archive, decltype(&archive_read_free)>;
-
 bool isValidUtf8(const std::string &value) {
   const auto *bytes = reinterpret_cast<const unsigned char *>(value.data());
   size_t i = 0;
@@ -1909,7 +1895,7 @@ void configureArchiveReader(archive *archiveHandle) {
 ArchiveReadHandle openArchive(const std::filesystem::path &archivePath,
                               std::string *errorMessage) {
   ensureArchiveFilenameLocale();
-  ArchiveReadHandle archiveStorage(archive_read_new(), archive_read_free);
+  auto archiveStorage = makeArchiveReadHandle();
   archive *archiveHandle = archiveStorage.get();
   if (archiveHandle == nullptr) {
     if (errorMessage != nullptr) {
@@ -3193,7 +3179,7 @@ bool readUnarrRarEntriesByOffset(
       files.clear();
       return false;
     }
-    if (!ar_parse_entry_at(archive.archive,
+    if (!ar_parse_entry_at(archive.get(),
                            static_cast<off64_t>(target.offset))) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr could not seek to RAR entry offset.";
@@ -3202,7 +3188,7 @@ bool readUnarrRarEntriesByOffset(
       return false;
     }
 
-    const char *actualName = ar_entry_get_name(archive.archive);
+    const char *actualName = ar_entry_get_name(archive.get());
     std::filesystem::path actualPath;
     if (actualName == nullptr || !safeEntryPath(actualName, actualPath) ||
         normalizeEntryName(actualPath.generic_string()) !=
@@ -3214,7 +3200,7 @@ bool readUnarrRarEntriesByOffset(
       return false;
     }
 
-    const size_t entrySize = ar_entry_get_size(archive.archive);
+    const size_t entrySize = ar_entry_get_size(archive.get());
     if (static_cast<std::uint64_t>(entrySize) != target.size) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr RAR entry size did not match cached index.";
@@ -3231,7 +3217,7 @@ bool readUnarrRarEntriesByOffset(
       return false;
     }
     if (entrySize > 0 &&
-        !ar_entry_uncompress(archive.archive, file.bytes.data(), entrySize)) {
+        !ar_entry_uncompress(archive.get(), file.bytes.data(), entrySize)) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr could not extract RAR entry.";
       }

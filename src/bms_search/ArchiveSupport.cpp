@@ -1,5 +1,9 @@
 #include "Internal.h"
 
+#if ASOBMSHOW_HAS_LIBARCHIVE
+#include "../ArchiveRAII.h"
+#endif
+
 namespace asobmshow::bms_search {
 
 bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
@@ -319,13 +323,6 @@ std::string archiveErrorString(archive *archiveHandle,
     return fallback;
   }
   return archive_error_string(archiveHandle);
-}
-
-using ArchiveReadHandle =
-    std::unique_ptr<archive, decltype(&archive_read_free)>;
-
-ArchiveReadHandle makeArchiveReadHandle() {
-  return ArchiveReadHandle(archive_read_new(), archive_read_free);
 }
 
 bool trySetArchiveHeaderCharset(archive *archiveHandle, const char *charset) {

@@ -1,6 +1,7 @@
 #include "ReplayVideoExporter.h"
 
 #include "ArchiveFile.h"
+#include "RAII.h"
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "path.h"
@@ -679,7 +680,7 @@ bool writeWavFile(const std::filesystem::path &path,
 #else
   SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
 #endif
-  std::unique_ptr<SNDFILE, decltype(&sf_close)> file(rawFile, sf_close);
+  UniqueResource<SNDFILE, sf_close> file(rawFile);
   if (file == nullptr) {
     errorMessage = std::string("Failed to open replay audio output: ") +
                    sf_strerror(nullptr);
@@ -1121,6 +1122,11 @@ bool encodeNextAudioFrame(SNDFILE *audioFile, AVCodecContext *audioContext,
 class ReplayMp4StreamWriter {
 public:
   ~ReplayMp4StreamWriter() { cleanup(); }
+  ReplayMp4StreamWriter() = default;
+  ReplayMp4StreamWriter(const ReplayMp4StreamWriter &) = delete;
+  ReplayMp4StreamWriter &operator=(const ReplayMp4StreamWriter &) = delete;
+  ReplayMp4StreamWriter(ReplayMp4StreamWriter &&) = delete;
+  ReplayMp4StreamWriter &operator=(ReplayMp4StreamWriter &&) = delete;
 
   bool open(const std::filesystem::path &wavPath,
             const std::filesystem::path &outputPath, int width, int height,
@@ -1919,10 +1925,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       bgfx::destroy(outputTexture);
     }
   };
+  auto bgfxCleanup = makeScopeExit(cleanupBgfx);
 
   outputFrameBuffer = bgfx::createFrameBuffer(1, &outputTexture, false);
   if (!bgfx::isValid(outputFrameBuffer)) {
-    cleanupBgfx();
+    bgfxCleanup.runNow();
     return {.success = false,
             .outputPath = outputPath,
             .message = "Failed to create replay export framebuffer"};
@@ -1934,7 +1941,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         bgfx::TextureFormat::BGRA8,
         BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
     if (!bgfx::isValid(readbackTexture)) {
-      cleanupBgfx();
+      bgfxCleanup.runNow();
       return {.success = false,
               .outputPath = outputPath,
               .message = "Failed to create replay export readback texture"};
@@ -1991,7 +1998,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::string errorMessage;
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
                      frameBufferCount, log, errorMessage)) {
-    cleanupBgfx();
+    bgfxCleanup.runNow();
     return {
         .success = false, .outputPath = outputPath, .message = errorMessage};
   }
@@ -2100,13 +2107,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     if (!drainReadyReadbacks()) {
-      cleanupBgfx();
+      bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
     }
     while (freeReadbackTextures.empty()) {
       if (!drainOldestReadback()) {
-        cleanupBgfx();
+        bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
                 .message = errorMessage};
@@ -2117,7 +2124,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     const int frameBufferIndex = encoder.acquireFrameBuffer(errorMessage);
     bufferWaitMicros += elapsedMicros(bufferWaitStart);
     if (frameBufferIndex < 0) {
-      cleanupBgfx();
+      bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
     }
@@ -2172,13 +2179,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
 
   while (!pendingReadbacks.empty()) {
     if (!drainOldestReadback()) {
-      cleanupBgfx();
+      bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
     }
   }
 
-  cleanupBgfx();
+  bgfxCleanup.runNow();
   bgfxAccess.release();
   auto result = encoder.finish([&](size_t encodedFrames) {
     reportVideoPipelineProgress(frameCount, encodedFrames, "Encoding video");

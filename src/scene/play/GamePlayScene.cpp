@@ -151,6 +151,16 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
+GamePlayScene::GamePlayScene(ApplicationContext &context,
+                             std::unique_ptr<bms_parser::Chart> chart,
+                             StartOptions options)
+    : Scene(context), ownedChart(std::move(chart)),
+      chart(ownedChart.get()), judge(this->chart->Meta.Rank),
+      options(std::move(options)) {
+  this->options.ownsChart = true;
+  latePoorTiming = judge.timingWindows[Bad].second;
+}
+
 GamePlayScene::~GamePlayScene() = default;
 
 void GamePlayScene::init() {
@@ -206,6 +216,7 @@ void GamePlayScene::init() {
   /* pause screen */
   pauseLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(pauseLayout);
   pauseLayout->setFlexDirection(FlexDirection::Column);
   pauseLayout->setAlignItems(YGAlignCenter);
   {
@@ -268,10 +279,10 @@ void GamePlayScene::init() {
     pauseLayout->addView(pauseScreen);
   }
   pauseLayout->setVisible(false);
-  addView(pauseLayout);
 
   /* pause button */
   pauseButton = new Button(rendering::window_width - 70, 50, 40, 40);
+  addView(pauseButton);
   auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   pauseText->setText("| |");
   pauseText->setAlign(TextView::CENTER);
@@ -280,7 +291,6 @@ void GamePlayScene::init() {
     context.jukebox.pause();
     pauseLayout->setVisible(true);
   });
-  addView(pauseButton);
 }
 
 void GamePlayScene::reset() {
@@ -385,9 +395,10 @@ void GamePlayScene::retryWithNewPattern() {
           return true;
         }
 
-        auto *loadedChart = retryChart.release();
         context.sceneManager->changeScene(
-            new GamePlayScene(context, loadedChart, retryOptions), false);
+            std::make_unique<GamePlayScene>(context, std::move(retryChart),
+                                            retryOptions),
+            false);
         return false;
       },
       0, true);
@@ -598,9 +609,10 @@ void GamePlayScene::update(float dt) {
               options.practiceGhostCallback;
         }
         context.sceneManager->changeScene(
-            new ResultScene(context, chart->Meta, *state, replayToSave,
-                            !options.practiceMode && !isReplayPlayback(),
-                            retrySource, practiceResultOptions),
+            std::make_unique<ResultScene>(
+                context, chart->Meta, *state, replayToSave,
+                !options.practiceMode && !isReplayPlayback(), retrySource,
+                practiceResultOptions),
             false);
         return false;
       },

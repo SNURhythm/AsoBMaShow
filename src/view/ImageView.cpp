@@ -4,6 +4,7 @@
 
 #include "ImageView.h"
 #include "../ArchiveFile.h"
+#include "../RAII.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -13,6 +14,7 @@
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include "../StbImageRAII.h"
 #include <algorithm>
 #include <condition_variable>
 #include <cstdint>
@@ -49,8 +51,7 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
   int width = 0;
   int height = 0;
   int channels = 0;
-  std::unique_ptr<unsigned char, decltype(&stbi_image_free)> data(
-      nullptr, stbi_image_free);
+  StbiImageHandle data(nullptr);
   if (!archive_file::isVirtualPath(path)) {
     const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
     data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));

@@ -8,13 +8,14 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
       hasVideoFrame(false) {
 
+  frameBuffer.resize(maxBufferSize, nullptr);
   s_texY = bgfx::createUniform("s_texY", bgfx::UniformType::Sampler);
   s_texU = bgfx::createUniform("s_texU", bgfx::UniformType::Sampler);
   s_texV = bgfx::createUniform("s_texV", bgfx::UniformType::Sampler);
-  frameBuffer.resize(maxBufferSize, nullptr);
 }
 
 VideoPlayer::~VideoPlayer() {
+  unloadVideo();
 
   if (bgfx::isValid(s_texY)) {
     bgfx::destroy(s_texY);
@@ -28,6 +29,10 @@ VideoPlayer::~VideoPlayer() {
     bgfx::destroy(s_texV);
     s_texV = BGFX_INVALID_HANDLE;
   }
+}
+
+void VideoPlayer::destroyVideoTextures() {
+  std::lock_guard<std::mutex> lock(videoFrameMutex);
   if (bgfx::isValid(videoTextureY)) {
     bgfx::destroy(videoTextureY);
     videoTextureY = BGFX_INVALID_HANDLE;
@@ -40,7 +45,9 @@ VideoPlayer::~VideoPlayer() {
     bgfx::destroy(videoTextureV);
     videoTextureV = BGFX_INVALID_HANDLE;
   }
-  unloadVideo();
+  videoFrameWidth = 0;
+  videoFrameHeight = 0;
+  hasVideoFrame = false;
 }
 
 void VideoPlayer::unloadVideo() {
@@ -62,6 +69,7 @@ void VideoPlayer::unloadVideo() {
     }
     videoStreamIndex = -1;
   }
+  destroyVideoTextures();
   {
     std::lock_guard<std::mutex> lock(recycleMutex);
     for (auto *f : recyclePool) {
@@ -93,6 +101,7 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
       } else if (tempFormatContext != nullptr) {
         avformat_close_input(&tempFormatContext);
       }
+      destroyVideoTextures();
       videoStreamIndex = -1;
       return false;
     };
@@ -361,12 +370,18 @@ void VideoPlayer::stop() {
 void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
   std::lock_guard<std::mutex> lock(videoFrameMutex);
   if (width != videoFrameWidth || height != videoFrameHeight) {
-    if (bgfx::isValid(videoTextureY))
+    if (bgfx::isValid(videoTextureY)) {
       bgfx::destroy(videoTextureY);
-    if (bgfx::isValid(videoTextureU))
+      videoTextureY = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(videoTextureU)) {
       bgfx::destroy(videoTextureU);
-    if (bgfx::isValid(videoTextureV))
+      videoTextureU = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(videoTextureV)) {
       bgfx::destroy(videoTextureV);
+      videoTextureV = BGFX_INVALID_HANDLE;
+    }
 
     videoFrameWidth = width;
     videoFrameHeight = height;

@@ -48,6 +48,9 @@ public:
 
   explicit GamePlayScene(ApplicationContext &context, bms_parser::Chart *chart,
                          StartOptions options);
+  explicit GamePlayScene(ApplicationContext &context,
+                         std::unique_ptr<bms_parser::Chart> chart,
+                         StartOptions options);
   ~GamePlayScene() override;
   void init() override;
   void update(float dt) override;

@@ -1,5 +1,6 @@
 #include "ReplayDBHelper.h"
 
+#include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
 #include "targets.h"
@@ -9,44 +10,11 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
-struct SqliteStatementDeleter {
-  void operator()(sqlite3_stmt *stmt) const {
-    if (stmt != nullptr) {
-      sqlite3_finalize(stmt);
-    }
-  }
-};
-
-using SqliteStatementHandle =
-    std::unique_ptr<sqlite3_stmt, SqliteStatementDeleter>;
-
-class ReplayDbConnection {
-public:
-  ReplayDbConnection(ReplayDBHelper &helper, sqlite3 *db)
-      : helper_(helper), db_(db) {}
-
-  ReplayDbConnection(const ReplayDbConnection &) = delete;
-  ReplayDbConnection &operator=(const ReplayDbConnection &) = delete;
-
-  ~ReplayDbConnection() {
-    if (db_ != nullptr) {
-      helper_.Close(db_);
-    }
-  }
-
-  sqlite3 *get() const { return db_; }
-
-private:
-  ReplayDBHelper &helper_;
-  sqlite3 *db_ = nullptr;
-};
-
 std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   static const std::filesystem::path documents =
@@ -86,12 +54,11 @@ std::string normalizedHash(const std::string &value) {
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  char *errMsg = nullptr;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, &errMsg);
+  SqliteErrorMessageHandle errMsg;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while %s: %s", context,
-            errMsg != nullptr ? errMsg : sqlite3_errmsg(db));
-    sqlite3_free(errMsg);
+            errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db));
     return false;
   }
   return true;
@@ -100,9 +67,8 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 bool tableHasColumn(sqlite3 *db, const char *tableName,
                     const char *columnName) {
   const std::string query = std::string("PRAGMA table_info(") + tableName + ")";
-  sqlite3_stmt *rawStmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while reading replay schema: %s", sqlite3_errmsg(db));
     return false;
@@ -424,7 +390,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
-  ReplayDbConnection dbHandle(*this, Connect());
+  SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return std::nullopt;
@@ -448,10 +414,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "@play_option, @play_option_seed, @play_option2, @play_option2_seed"
       ")";
 
-  sqlite3_stmt *rawReplayStmt = nullptr;
-  int rc =
-      sqlite3_prepare_v2(db, replayInsert, -1, &rawReplayStmt, nullptr);
-  SqliteStatementHandle replayStmt(rawReplayStmt);
+  SqliteStatementHandle replayStmt;
+  int rc = prepareSqliteStatement(db, replayInsert, replayStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
     execSql(db, "ROLLBACK", "rolling back replay save");
@@ -510,9 +474,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "gauge, gauge_type, combo, score"
       ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-  sqlite3_stmt *rawEventStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, eventInsert, -1, &rawEventStmt, nullptr);
-  SqliteStatementHandle eventStmt(rawEventStmt);
+  SqliteStatementHandle eventStmt;
+  rc = prepareSqliteStatement(db, eventInsert, eventStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event insert: %s",
             sqlite3_errmsg(db));
@@ -542,7 +505,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
 std::vector<ReplaySummary>
 ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   std::vector<ReplaySummary> replays;
-  ReplayDbConnection dbHandle(*this, Connect());
+  SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return replays;
@@ -570,9 +533,8 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "GROUP BY r.id "
       "ORDER BY r.id DESC LIMIT ?";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay list: %s", sqlite3_errmsg(db));
     return replays;
@@ -590,7 +552,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
 std::optional<ReplayData>
 ReplayDBHelper::LoadReplay(int replayId,
                            const bms_parser::ChartMeta &chartMeta) {
-  ReplayDbConnection dbHandle(*this, Connect());
+  SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return std::nullopt;
@@ -612,9 +574,8 @@ ReplayDBHelper::LoadReplay(int replayId,
       "(? != '' AND chart_md5 = ?) OR "
       "(? != '' AND chart_path = ?))";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay load: %s", sqlite3_errmsg(db));
     return std::nullopt;
@@ -679,9 +640,8 @@ ReplayDBHelper::LoadReplay(int replayId,
       "SELECT action, lane, note_time_micros, song_time_micros,"
       "judge_time_micros, judgement, diff_micros, gauge, gauge_type, combo,"
       "score FROM replay_events WHERE replay_id = ? ORDER BY event_index";
-  sqlite3_stmt *rawEventStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, eventQuery, -1, &rawEventStmt, nullptr);
-  SqliteStatementHandle eventStmt(rawEventStmt);
+  SqliteStatementHandle eventStmt;
+  rc = prepareSqliteStatement(db, eventQuery, eventStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event load: %s",
             sqlite3_errmsg(db));

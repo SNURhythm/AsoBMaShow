@@ -6,6 +6,7 @@
 
 #include "GameplayGeometry.h"
 #include "Judge.h"
+#include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
@@ -75,16 +76,7 @@ BMSRenderer::BMSRenderer(
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
-  struct TextureConstructionGuard {
-    BMSRenderer *renderer = nullptr;
-    bool active = true;
-
-    ~TextureConstructionGuard() {
-      if (active && renderer != nullptr) {
-        renderer->destroyNoteSheetTextures();
-      }
-    }
-  } textureGuard{this};
+  auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
 
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
   laneOrder = chart->Meta.GetTotalLaneIndices();
@@ -262,7 +254,7 @@ BMSRenderer::BMSRenderer(
   playOptionText->setVisible(false);
 
   refreshGeometry();
-  textureGuard.active = false;
+  textureGuard.dismiss();
 }
 
 bgfx::TextureHandle BMSRenderer::loadSheetTexture(SpriteLoader &loader,
@@ -296,8 +288,7 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
                                                     int y, int width,
                                                     int height,
                                                     const char *label) {
-  std::unique_ptr<unsigned char, decltype(&SDL_free)> data(
-      loader.crop(x, y, width, height), SDL_free);
+  UniqueResource<unsigned char, SDL_free> data(loader.crop(x, y, width, height));
   if (data == nullptr) {
     SDL_Log("Failed to load %s texture", label);
     throw std::runtime_error(std::string("Failed to load ") + label +

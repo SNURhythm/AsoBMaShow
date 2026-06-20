@@ -3,15 +3,11 @@
 //
 
 #include "SpriteLoader.h"
-#include <stb_image.h>
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
+#include <stb_image.h>
 #include <limits>
-
-void SpriteLoader::ImageDataDeleter::operator()(unsigned char *ptr) const {
-  stbi_image_free(ptr);
-}
 
 SpriteLoader::SpriteLoader(const path_t& path) {
   if (path.empty()) {
