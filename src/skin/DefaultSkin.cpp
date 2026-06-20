@@ -5,16 +5,17 @@
 #include "../view/Button.h"
 #include "../view/UiTheme.h"
 
-void DefaultSkin::buildLayout(const std::string& screenName, View* root, void* data) {
-    if (screenName == "Result") {
-        buildResultLayout(root, static_cast<ResultSkinData*>(data));
-    }
+void DefaultSkin::buildLayout(const std::string &screenName, View *root,
+                              void *data) {
+  if (screenName == "Result") {
+    buildResultLayout(root, static_cast<ResultSkinData *>(data));
+  }
 }
 
-void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
-  const auto& meta = *data->meta;
-  const auto& resultState = *data->state;
-  auto& context = *data->context;
+void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
+  const auto &meta = *data->meta;
+  const auto &resultState = *data->state;
+  auto &context = *data->context;
 
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
@@ -149,8 +150,9 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   scoreText->setName("score");
   scoreDetailView->addView(scoreText);
 
-  auto comboText = makeLabel("MAX COMBO " + std::to_string(resultState.maxCombo),
-                             30, ui_theme::lime());
+  auto comboText =
+      makeLabel("MAX COMBO " + std::to_string(resultState.maxCombo), 30,
+                ui_theme::lime());
   comboText->setText("Max Combo: " + std::to_string(resultState.maxCombo));
   comboText->setName("maxCombo");
   scoreDetailView->addView(comboText);
@@ -210,23 +212,22 @@ void DefaultSkin::buildResultLayout(View* rootLayout, ResultSkinData* data) {
   btnText->setText("Back to Menu");
   btnText->setAlign(TextView::CENTER);
   btnText->setVAlign(TextView::MIDDLE);
-  btnText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  btnText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
   btn->setContentView(btnText);
   btn->setName("backButton");
   btn->setSize(300, 64);
   btn->setCornerRadius(ui_theme::controlRadius());
-  btn->setBackgroundColors(Color(22, 132, 126, 238),
-                           Color(28, 151, 144, 248),
-                           Color(40, 173, 164, 255));
+  btn->setBackgroundColors(ui_theme::primaryAction(),
+                           ui_theme::primaryActionHover(),
+                           ui_theme::primaryActionPressed());
   btn->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
                        Color(255, 255, 255, 255));
   btn->setStyledBorderWidth(1);
-  btn->setOnClickListener([&context]() {
-    context.sceneManager->changeScene("MainMenu");
-  });
+  btn->setOnClickListener(
+      [&context]() { context.sceneManager->changeScene("MainMenu"); });
   rootLayout->addView(btn);
 }
 
-void DefaultSkin::buildGameContext(View* root, void* data) {
-    // Future implementation
+void DefaultSkin::buildGameContext(View *root, void *data) {
+  // Future implementation
 }

@@ -120,15 +120,15 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
             : "Green Number is the legacy BMS unit for note visible time. "
               "600 green equals 60 frames on a 60 FPS system, which is "
               "1000 ms.",
-        metrics.bodyTextSize, Color(150, 171, 193)));
+        metrics.bodyTextSize, ui_theme::textSecondary()));
   }
 
   visibleTimeModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeModeText);
+  visibleTimeModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        visibleTimeModeText);
   visibleTimeModeButton->setOnClickListener([this]() {
     context.settings.visibleTimeUseMilliseconds =
         !context.settings.visibleTimeUseMilliseconds;
@@ -140,9 +140,9 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeBpmStrategyText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeBpmStrategyButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeBpmStrategyText);
+  visibleTimeBpmStrategyButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        visibleTimeBpmStrategyText);
   visibleTimeBpmStrategyButton->setOnClickListener([this]() {
     context.settings.visibleTimeBpmStrategy =
         nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
@@ -259,10 +259,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->setBorderWidth(1);
 
   auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
-    auto *button = makeControlButton(
-        foldButtonSize, foldButtonSize,
-        makeText(label, 28, ui_theme::textPrimary(), TextView::CENTER,
-                 TextView::MIDDLE));
+    auto *button =
+        makeControlButton(foldButtonSize, foldButtonSize,
+                          makeText(label, 28, ui_theme::textPrimary(),
+                                   TextView::CENTER, TextView::MIDDLE));
     button->setOnClickListener([this]() {
       previewPanelFolded = !previewPanelFolded;
       lastLayoutWidth = -1;
@@ -283,20 +283,20 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setAlignItems(YGAlignCenter);
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
-      makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
+      makeText("Preview", metrics.sectionTitleSize, ui_theme::textPrimary()));
 
   auto *previewHeaderActions = new View();
   previewHeaderActions->setFlexDirection(FlexDirection::Row);
   previewHeaderActions->setGap(metrics.compact ? 8.0f : 10.0f);
   previewHeaderActions->setAlignItems(YGAlignCenter);
-  auto *pageButton = makeButton(
-      metrics.compact ? 78 : 88, foldButtonSize,
-      makeText(std::to_string(previewPanelPage + 1) + "/2",
-               metrics.smallTextSize, Color(239, 244, 251), TextView::CENTER,
-               TextView::MIDDLE),
-      Color(22, 33, 49, 190), Color(31, 46, 67, 220),
-      Color(53, 78, 110, 240), Color(96, 121, 156, 230),
-      Color(120, 151, 190, 245), Color(148, 186, 231, 255));
+  auto *pageButton =
+      makeButton(metrics.compact ? 78 : 88, foldButtonSize,
+                 makeText(std::to_string(previewPanelPage + 1) + "/2",
+                          metrics.smallTextSize, ui_theme::textPrimary(),
+                          TextView::CENTER, TextView::MIDDLE),
+                 ui_theme::control(), ui_theme::controlHover(),
+                 ui_theme::controlPressed(), ui_theme::hairline(),
+                 ui_theme::accentBorder(), ui_theme::accentBorderStrong());
   pageButton->setOnClickListener([this]() {
     previewPanelPage = (previewPanelPage + 1) % 2;
     lastLayoutWidth = -1;
@@ -333,8 +333,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->addView(plusAngle);
     auto *resetAngle = makeResetButton(metrics);
     resetAngle->setOnClickListener([this]() {
-      context.settings.laneAngleDegrees =
-          AppSettings::kDefaultLaneAngleDegrees;
+      context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
       persistSettings();
     });
     angleControls->addView(resetAngle);
@@ -369,16 +368,15 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->addView(resetLength);
     previewPanel->addView(lengthControls);
   } else {
-    previewPanel->addView(makeSummaryRow(
-        metrics, "Note Start", &summaryNoteStartPositionValueText));
+    previewPanel->addView(makeSummaryRow(metrics, "Note Start",
+                                         &summaryNoteStartPositionValueText));
     auto *noteStartControls = new View();
     noteStartControls->setFlexDirection(FlexDirection::Row);
     noteStartControls->setFlexWrap(YGWrapWrap);
     noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
     auto updateNoteStartPosition = [this](int deltaPercent) {
-      context.settings.noteStartPositionPercent =
-          clampNoteStartPositionPercent(
-              context.settings.noteStartPositionPercent + deltaPercent);
+      context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
+          context.settings.noteStartPositionPercent + deltaPercent);
       persistSettings();
     };
     auto *minusNoteStart =
@@ -400,8 +398,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     noteStartControls->addView(resetNoteStart);
     previewPanel->addView(noteStartControls);
 
-    previewPanel->addView(makeSummaryRow(
-        metrics, "Beam Length", &summaryLaneBeamLengthValueText));
+    previewPanel->addView(makeSummaryRow(metrics, "Beam Length",
+                                         &summaryLaneBeamLengthValueText));
     auto *beamControls = new View();
     beamControls->setFlexDirection(FlexDirection::Row);
     beamControls->setFlexWrap(YGWrapWrap);
@@ -469,9 +467,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText("Restart", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::control(), ui_theme::controlHover(),
-      ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
-      ui_theme::cyan());
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
   previewPanel->addView(restartButton);
 
@@ -479,9 +476,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText("Done", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::control(), ui_theme::controlHover(),
-      ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
-      ui_theme::cyan());
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
   previewPanel->addView(doneButton);
 
@@ -530,7 +526,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetInput->setBorderWidth(0);
   offsetInput->setAlign(TextView::CENTER);
   offsetInput->setVAlign(TextView::MIDDLE);
-  offsetInput->setColor({244, 248, 255, 255});
+  offsetInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   offsetInput->onEditingFinished(
       [this](const std::string &) { commitOffsetInput(); });
   offsetValue->addView(offsetInput);
@@ -601,7 +597,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetInput->setBorderWidth(0);
   visualOffsetInput->setAlign(TextView::CENTER);
   visualOffsetInput->setVAlign(TextView::MIDDLE);
-  visualOffsetInput->setColor({244, 248, 255, 255});
+  visualOffsetInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   visualOffsetInput->onEditingFinished(
       [this](const std::string &) { commitVisualOffsetInput(); });
   visualOffsetValue->addView(visualOffsetInput);
@@ -649,9 +645,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  judgementIndicatorModeButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      judgementIndicatorModeText, ui_theme::lime());
+  judgementIndicatorModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       judgementIndicatorModeText, ui_theme::lime());
   judgementIndicatorModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorEnabled =
         !context.settings.judgementIndicatorEnabled;
@@ -662,9 +658,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorRenderModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  judgementIndicatorRenderModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      judgementIndicatorRenderModeText);
+  judgementIndicatorRenderModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementIndicatorRenderModeText);
   judgementIndicatorRenderModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorRenderMode =
         nextJudgementIndicatorRenderMode(
@@ -675,7 +671,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorModeControls);
 
   judgementIndicatorControls->addView(
-      makeText("Y Position", metrics.bodyTextSize, Color(168, 186, 209)));
+      makeText("Y Position", metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *judgementIndicatorYControls = new View();
   judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
@@ -727,7 +723,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorYControls);
 
   judgementIndicatorControls->addView(
-      makeText("Width", metrics.bodyTextSize, Color(168, 186, 209)));
+      makeText("Width", metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *judgementIndicatorWidthControls = new View();
   judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
@@ -810,7 +806,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
           ? "Switch between manual hits and chart-timed playback."
           : "Tap to switch modes. The current selection is shown on "
             "the right.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   keysoundModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -840,13 +836,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
           ? "Choose which hittable note a lane press judges first."
           : "Choose which hittable note a lane press judges first when "
             "multiple notes are inside the input window.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   notePriorityModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  notePriorityModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      notePriorityModeText);
+  notePriorityModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        notePriorityModeText);
   notePriorityModeButton->setOnClickListener([this]() {
     context.settings.notePriorityMode =
         nextNotePriorityMode(context.settings.notePriorityMode);
@@ -876,7 +872,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Toggle BGA rendering for previews and gameplay."
                       : "Tap to switch BGA rendering on or off for future "
                         "previews and charts.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   bgaModeText = makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
   bgaModeButton = makeControlButton(metrics.actionButtonWidth,
@@ -903,13 +899,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Draw hidden notes as temporary lane markers."
                       : "Draw invisible chart notes as temporary lane "
                         "markers. Judgement and scoring stay unchanged.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   showInvisibleNotesModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  showInvisibleNotesModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      showInvisibleNotesModeText);
+  showInvisibleNotesModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        showInvisibleNotesModeText);
   showInvisibleNotesModeButton->setOnClickListener([this]() {
     context.settings.showInvisibleNotes = !context.settings.showInvisibleNotes;
     persistSettings();
@@ -938,13 +934,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
           : "Fit preserves the whole BGA with letterboxing. Fill preserves "
             "aspect and crops edges. Stretch fills the screen without "
             "preserving aspect.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   bgaDisplayModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  bgaDisplayModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      bgaDisplayModeText);
+  bgaDisplayModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        bgaDisplayModeText);
   bgaDisplayModeButton->setOnClickListener([this]() {
     context.settings.bgaDisplayMode =
         nextBgaDisplayMode(context.settings.bgaDisplayMode);
@@ -1236,7 +1232,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 
     auto *label =
         makeText(std::to_string(keyMode) + "K", metrics.bodyTextSize + 4,
-                 Color(244, 248, 255), TextView::CENTER, TextView::MIDDLE);
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
     label->setWidth(metrics.compact ? 54.0f : 64.0f);
     label->setHeight(static_cast<float>(metrics.actionButtonHeight));
     row->addView(label);
@@ -1261,21 +1257,21 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     });
     row->addView(minusWidth);
 
-    input->onEditingFinished([this, keyMode, input,
-                              applyWidth](const std::string &) {
-      const std::string rawText = input->getText();
-      if (rawText.empty()) {
-        input->setEditingText(formatPlayAreaWidthLabel(
-            context.settings.playAreaWidthForKeyMode(keyMode)));
-        return;
-      }
-      try {
-        applyWidth(std::stof(rawText));
-      } catch (const std::exception &) {
-        input->setEditingText(formatPlayAreaWidthLabel(
-            context.settings.playAreaWidthForKeyMode(keyMode)));
-      }
-    });
+    input->onEditingFinished(
+        [this, keyMode, input, applyWidth](const std::string &) {
+          const std::string rawText = input->getText();
+          if (rawText.empty()) {
+            input->setEditingText(formatPlayAreaWidthLabel(
+                context.settings.playAreaWidthForKeyMode(keyMode)));
+            return;
+          }
+          try {
+            applyWidth(std::stof(rawText));
+          } catch (const std::exception &) {
+            input->setEditingText(formatPlayAreaWidthLabel(
+                context.settings.playAreaWidthForKeyMode(keyMode)));
+          }
+        });
     row->addView(makeInputFrame(metrics, input));
 
     auto *plusWidth =
@@ -1286,9 +1282,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     row->addView(plusWidth);
 
     auto *resetWidth = makeResetButton(metrics);
-    resetWidth->setOnClickListener([applyWidth]() {
-      applyWidth(AppSettings::kDefaultPlayAreaWidth);
-    });
+    resetWidth->setOnClickListener(
+        [applyWidth]() { applyWidth(AppSettings::kDefaultPlayAreaWidth); });
     row->addView(resetWidth);
 
     syncInput();
@@ -1369,7 +1364,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
           : "Open a live gameplay preview with falling notes. It uses the "
             "same lane renderer, camera, viewport, and note textures as "
             "gameplay.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *previewButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
@@ -1401,9 +1396,9 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   uiThemeModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  uiThemeModeButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, uiThemeModeText,
-      ui_theme::cyan());
+  uiThemeModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       uiThemeModeText, ui_theme::cyan());
   uiThemeModeButton->setOnClickListener([this]() {
     context.settings.uiThemeMode =
         nextUiThemeMode(context.settings.uiThemeMode);
@@ -1427,13 +1422,13 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Preview selected charts inside non-solid archives."
                       : "Preview selected charts inside non-solid archives "
                         "from the song select screen.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   archiveChartPreviewModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  archiveChartPreviewModeButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      archiveChartPreviewModeText, ui_theme::lime());
+  archiveChartPreviewModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       archiveChartPreviewModeText, ui_theme::lime());
   archiveChartPreviewModeButton->setOnClickListener([this]() {
     context.settings.archiveChartPreviewEnabled =
         !context.settings.archiveChartPreviewEnabled;
@@ -1514,8 +1509,7 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   auto *refreshFoldersButton = makeAccentButton(
       metrics.compact ? 160 : 180, metrics.actionButtonHeight,
       makeText("Refresh List", metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
   folderList->addView(refreshFoldersButton);
@@ -1523,7 +1517,7 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   if (chartEntries.empty()) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
                                         metrics.bodyTextSize,
-                                        Color(165, 185, 205)));
+                                        ui_theme::textSecondary()));
   } else {
     for (const auto &entry : chartEntries) {
       const std::string entryPathText = formatChartEntryPath(entry);
@@ -1601,7 +1595,7 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   if (difficultyTables.empty()) {
     tableList->addView(makeWrappedText("No difficulty tables are installed.",
                                        metrics.bodyTextSize,
-                                       Color(165, 185, 205)));
+                                       ui_theme::textSecondary()));
   } else {
     for (const auto &table : difficultyTables) {
       auto *row = new View();
@@ -1639,9 +1633,8 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       const int smallActionWidth = metrics.compact ? 136 : 156;
       auto *updateButton = makeControlButton(
           smallActionWidth, metrics.actionButtonHeight,
-          makeText("Update", metrics.bodyTextSize + 2,
-                   ui_theme::textPrimary(), TextView::CENTER,
-                   TextView::MIDDLE));
+          makeText("Update", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
       updateButton->setOnClickListener([this, tableId = table.id]() {
         updateDifficultyTableFromSource(tableId);
       });
@@ -1684,7 +1677,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
   difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
   difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
-  difficultyTableImportModalRoot->setBackgroundColor(Color(2, 5, 9, 174));
+  difficultyTableImportModalRoot->setBackgroundColor(ui_theme::scrim());
 
   auto *importPanel = new View();
   importPanel
@@ -1806,11 +1799,10 @@ void SettingsScene::initView() {
   auto *backLabel =
       makeText("Back", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  auto *backButton =
-      makeButton(metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
-                 ui_theme::control(), ui_theme::controlHover(),
-                 ui_theme::controlPressed(), ui_theme::hairline(),
-                 ui_theme::cyan(), ui_theme::cyan());
+  auto *backButton = makeButton(
+      metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   backButton->setOnClickListener(
       [this]() { context.sceneManager->changeScene("MainMenu"); });
   header->addView(backButton);
@@ -1840,13 +1832,13 @@ void SettingsScene::initView() {
   tabControls->setWidth(static_cast<float>(tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
   auto makeTabButton = [&](SettingsTab tab, const std::string &label) {
-    auto *button = makeButton(
-        tabColumnWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.bodyTextSize + 4, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE),
-        ui_theme::control(), ui_theme::controlHover(),
-        ui_theme::controlPressed(), ui_theme::hairline(), ui_theme::cyan(),
-        ui_theme::cyan());
+    auto *button = makeButton(tabColumnWidth, metrics.actionButtonHeight,
+                              makeText(label, metrics.bodyTextSize + 4,
+                                       ui_theme::textPrimary(),
+                                       TextView::CENTER, TextView::MIDDLE),
+                              ui_theme::control(), ui_theme::controlHover(),
+                              ui_theme::controlPressed(), ui_theme::hairline(),
+                              ui_theme::cyan(), ui_theme::cyan());
     button->setOnClickListener([this, tab]() {
       if (activeTab == tab) {
         return;

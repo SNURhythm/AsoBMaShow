@@ -2,6 +2,7 @@
 
 #include "../rendering/Color.h"
 #include <SDL2/SDL.h>
+#include <algorithm>
 
 namespace ui_theme {
 
@@ -93,6 +94,17 @@ inline Color withAlpha(Color color, uint8_t alpha) {
   return color;
 }
 
+inline int perceivedBrightness(const Color &color) {
+  return (static_cast<int>(color.r) * 299 + static_cast<int>(color.g) * 587 +
+          static_cast<int>(color.b) * 114) /
+         1000;
+}
+
+inline Color textOn(const Color &background) {
+  return perceivedBrightness(background) > 150 ? darkText()
+                                               : Color(248, 253, 255, 255);
+}
+
 inline Color hairlineSubtle() {
   return activeMode() == ThemeMode::Light ? withAlpha(hairline(), 84)
                                           : withAlpha(hairline(), 56);
@@ -146,6 +158,116 @@ inline Color controlHover() {
 inline Color controlPressed() {
   return activeMode() == ThemeMode::Light ? Color(207, 226, 229, 255)
                                           : Color(39, 58, 77, 255);
+}
+
+inline Color primaryAction() {
+  return activeMode() == ThemeMode::Light ? Color(0, 105, 112, 244)
+                                          : Color(18, 118, 114, 238);
+}
+
+inline Color primaryActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(0, 122, 130, 250)
+                                          : Color(23, 139, 133, 246);
+}
+
+inline Color primaryActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(0, 91, 98, 255)
+                                          : Color(17, 101, 98, 255);
+}
+
+inline Color dangerAction() {
+  return activeMode() == ThemeMode::Light ? Color(164, 52, 45, 244)
+                                          : Color(142, 52, 48, 238);
+}
+
+inline Color dangerActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(186, 61, 52, 250)
+                                          : Color(164, 61, 55, 246);
+}
+
+inline Color dangerActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(139, 42, 37, 255)
+                                          : Color(123, 43, 40, 255);
+}
+
+inline Color successAction() {
+  return activeMode() == ThemeMode::Light ? Color(0, 112, 86, 244)
+                                          : Color(32, 120, 106, 238);
+}
+
+inline Color successActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(0, 132, 101, 250)
+                                          : Color(42, 143, 126, 246);
+}
+
+inline Color successActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(0, 96, 74, 255)
+                                          : Color(30, 101, 90, 255);
+}
+
+inline Color infoAction() {
+  return activeMode() == ThemeMode::Light ? Color(36, 90, 143, 244)
+                                          : Color(36, 82, 126, 238);
+}
+
+inline Color infoActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(43, 106, 166, 250)
+                                          : Color(47, 99, 149, 246);
+}
+
+inline Color infoActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(30, 76, 123, 255)
+                                          : Color(33, 71, 111, 255);
+}
+
+inline Color violetAction() {
+  return activeMode() == ThemeMode::Light ? Color(92, 76, 151, 244)
+                                          : Color(70, 69, 124, 238);
+}
+
+inline Color violetActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(108, 90, 174, 250)
+                                          : Color(86, 84, 148, 246);
+}
+
+inline Color violetActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(76, 62, 128, 255)
+                                          : Color(61, 60, 106, 255);
+}
+
+inline Color warningAction() {
+  return activeMode() == ThemeMode::Light ? Color(128, 82, 22, 244)
+                                          : Color(116, 84, 34, 238);
+}
+
+inline Color warningActionHover() {
+  return activeMode() == ThemeMode::Light ? Color(150, 96, 28, 250)
+                                          : Color(136, 99, 42, 246);
+}
+
+inline Color warningActionPressed() {
+  return activeMode() == ThemeMode::Light ? Color(108, 68, 18, 255)
+                                          : Color(98, 71, 30, 255);
+}
+
+inline Color scrim() {
+  return activeMode() == ThemeMode::Light ? Color(20, 31, 39, 92)
+                                          : Color(0, 0, 0, 164);
+}
+
+inline Color insetSurface() {
+  return activeMode() == ThemeMode::Light ? Color(244, 248, 250, 244)
+                                          : Color(8, 14, 23, 230);
+}
+
+inline Color progressTrack() {
+  return activeMode() == ThemeMode::Light ? Color(225, 235, 238, 246)
+                                          : Color(8, 14, 23, 230);
+}
+
+inline Color progressFill() {
+  return activeMode() == ThemeMode::Light ? Color(0, 121, 98, 244)
+                                          : Color(62, 168, 145, 240);
 }
 
 inline Color shadow() {

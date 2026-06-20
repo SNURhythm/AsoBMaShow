@@ -249,7 +249,7 @@ static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   input->setBorderWidth(0);
   input->setAlign(TextView::CENTER);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor({244, 248, 255, 255});
+  input->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   return input;
 }
 
@@ -262,7 +262,7 @@ static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   input->setBorderColor(ui_theme::hairline());
   input->setBorderWidth(1);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor({244, 248, 255, 255});
+  input->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   return input;
 }
 
@@ -299,12 +299,10 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   header->setFlexDirection(FlexDirection::Column);
   header->setGap(metrics.compact ? 6.0f : 8.0f);
   auto *titleText =
-      makeWrappedText(title, metrics.sectionTitleSize,
-                      ui_theme::textPrimary());
+      makeWrappedText(title, metrics.sectionTitleSize, ui_theme::textPrimary());
   header->addView(titleText);
-  auto *descriptionText =
-      makeWrappedText(description, metrics.bodyTextSize,
-                      ui_theme::textSecondary());
+  auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
+                                          ui_theme::textSecondary());
   header->addView(descriptionText);
   card->addView(header);
   card->addView(body);
@@ -318,9 +316,10 @@ static View *makeSummaryRow(const LayoutMetrics &metrics,
   row->setJustifyContent(YGJustifySpaceBetween);
   row->setAlignItems(YGAlignCenter);
 
-  row->addView(makeText(label, metrics.summaryValueSize, Color(164, 186, 206)));
-  auto *valueText = makeText("", metrics.summaryValueSize, Color(244, 248, 255),
-                             TextView::RIGHT);
+  row->addView(
+      makeText(label, metrics.summaryValueSize, ui_theme::textSecondary()));
+  auto *valueText = makeText("", metrics.summaryValueSize,
+                             ui_theme::textPrimary(), TextView::RIGHT);
   row->addView(valueText);
   if (valueOut != nullptr) {
     *valueOut = valueText;
@@ -637,8 +636,8 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::VisibleTimeBpmStrategy nextVisibleTimeBpmStrategy(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
+static AppSettings::VisibleTimeBpmStrategy
+nextVisibleTimeBpmStrategy(AppSettings::VisibleTimeBpmStrategy strategy) {
   switch (strategy) {
   case AppSettings::VisibleTimeBpmStrategy::Chart:
     return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;

@@ -139,8 +139,7 @@ void SettingsScene::refreshSettingsText() {
                                      : "Green Number");
   }
   if (visibleTimeBpmStrategyText != nullptr) {
-    visibleTimeBpmStrategyText->setText("BPM: " +
-                                        visibleTimeBpmStrategyLabel);
+    visibleTimeBpmStrategyText->setText("BPM: " + visibleTimeBpmStrategyLabel);
   }
 
   auto applyTonalStyle = [](Button *button, const Color &accent) {
@@ -151,13 +150,12 @@ void SettingsScene::refreshSettingsText() {
     const uint8_t normalAlpha = light ? 54 : 82;
     const uint8_t hoverAlpha = light ? 74 : 108;
     const uint8_t pressedAlpha = light ? 100 : 136;
-    button->setBackgroundColors(Color(accent.r, accent.g, accent.b, normalAlpha),
-                                Color(accent.r, accent.g, accent.b, hoverAlpha),
-                                Color(accent.r, accent.g, accent.b,
-                                      pressedAlpha));
+    button->setBackgroundColors(
+        Color(accent.r, accent.g, accent.b, normalAlpha),
+        Color(accent.r, accent.g, accent.b, hoverAlpha),
+        Color(accent.r, accent.g, accent.b, pressedAlpha));
     button->setBorderColors(Color(accent.r, accent.g, accent.b, 178),
-                            Color(accent.r, accent.g, accent.b, 216),
-                            accent);
+                            Color(accent.r, accent.g, accent.b, 216), accent);
   };
 
   auto applyNeutralStyle = [](Button *button) {
@@ -179,9 +177,9 @@ void SettingsScene::refreshSettingsText() {
                           AppSettings::VisibleTimeBpmStrategy::MostPrevalent
                       ? ui_theme::lime()
                       : ui_theme::cyan());
-  applyTonalStyle(keysoundModeButton,
-                  context.settings.inputKeysoundEnabled ? ui_theme::cyan()
-                                                        : ui_theme::amber());
+  applyTonalStyle(keysoundModeButton, context.settings.inputKeysoundEnabled
+                                          ? ui_theme::cyan()
+                                          : ui_theme::amber());
   applyTonalStyle(notePriorityModeButton,
                   context.settings.notePriorityMode ==
                           AppSettings::NotePriorityMode::Lowest
@@ -203,9 +201,9 @@ void SettingsScene::refreshSettingsText() {
                           AppSettings::JudgementIndicatorRenderMode::Hud2D
                       ? ui_theme::lime()
                       : ui_theme::cyan());
-  applyTonalStyle(bgaModeButton,
-                  context.settings.bgaEnabled ? ui_theme::lime()
-                                              : ui_theme::coral());
+  applyTonalStyle(bgaModeButton, context.settings.bgaEnabled
+                                     ? ui_theme::lime()
+                                     : ui_theme::coral());
   applyTonalStyle(uiThemeModeButton,
                   context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark
                       ? ui_theme::cyan()
@@ -238,10 +236,16 @@ void SettingsScene::refreshSettingsText() {
 
 void SettingsScene::persistSettings() {
   context.settings.sanitize();
-  ui_theme::setActiveMode(context.settings.uiThemeMode ==
-                                  AppSettings::UiThemeMode::Light
-                              ? ui_theme::ThemeMode::Light
-                              : ui_theme::ThemeMode::Dark);
+  const ui_theme::ThemeMode previousMode = ui_theme::activeMode();
+  const ui_theme::ThemeMode nextMode =
+      context.settings.uiThemeMode == AppSettings::UiThemeMode::Light
+          ? ui_theme::ThemeMode::Light
+          : ui_theme::ThemeMode::Dark;
+  ui_theme::setActiveMode(nextMode);
+  if (previousMode != nextMode) {
+    lastLayoutWidth = -1;
+    lastLayoutHeight = -1;
+  }
   if (!context.settings.save()) {
     SDL_Log("Failed to save settings");
   }

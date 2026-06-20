@@ -11,6 +11,7 @@
 #include "../view/ReplaySummaryListView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include <filesystem>
 #include <deque>
 #include <thread>
@@ -346,8 +347,11 @@ private:
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
   std::uint64_t parseLogDisplayedRevision = 0;
+  ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
 
   void initView(ApplicationContext &context);
+  void resetViewReferences();
+  void rebuildViewForActiveTheme();
   void reloadFolderItems(bool preserveViewState = false);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
