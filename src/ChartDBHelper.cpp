@@ -107,6 +107,10 @@ constexpr const char *kSolidArchiveSelectColumns =
     "sa.path, sa.name, sa.archive_size, sa.uncompressed_size, sa.file_count";
 constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
 constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+constexpr int kArchiveParseCheckpointInterval = 100;
+constexpr int kIndividualParseCheckpointInterval = 1000;
+constexpr const char *kScanCheckpointPhaseIndividual = "individual";
+constexpr const char *kScanCheckpointPhaseArchive = "archive";
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -117,6 +121,8 @@ struct DifficultyLabelCache {
 std::mutex gDifficultyLabelCacheMutex;
 DifficultyLabelCache gDifficultyLabelCache;
 std::atomic<std::uint64_t> gLibraryRevision{1};
+
+std::string columnString(sqlite3_stmt *stmt, int idx);
 
 void bumpLibraryRevision() {
   gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
@@ -318,14 +324,22 @@ struct ArchiveScanResult {
 
 ArchiveScanResult scanArchiveForChartsOrSolid(
     const std::filesystem::path &archivePath,
-    std::unordered_set<path_t> &knownChartPaths) {
+    std::unordered_set<path_t> &knownChartPaths,
+    const ChartScanPauseCallback &pauseCallback) {
+  auto pauseIfNeeded = [&]() {
+    return pauseCallback == nullptr || pauseCallback();
+  };
   ArchiveScanResult result;
   std::vector<archive_file::Entry> entries;
   std::string errorMessage;
   archive_file::appendDebugLogLine(
       "Scanning archive for BMS charts: " +
       path_t_to_utf8(fspath_to_path_t(archivePath)));
-  if (!archive_file::listEntries(archivePath, entries, &errorMessage)) {
+  if (!pauseIfNeeded()) {
+    return result;
+  }
+  if (!archive_file::listEntries(archivePath, entries, &errorMessage,
+                                 pauseCallback)) {
     if (!errorMessage.empty()) {
       SDL_Log("Failed to scan archive %s: %s",
               path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
@@ -339,6 +353,10 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   }
   result.readable = true;
   for (const auto &entry : entries) {
+    if (!pauseIfNeeded()) {
+      result.readable = false;
+      return result;
+    }
     if (entry.directory) {
       continue;
     }
@@ -353,6 +371,10 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
 
   if (!result.solid) {
     for (const auto &entry : entries) {
+      if (!pauseIfNeeded()) {
+        result.readable = false;
+        return result;
+      }
       if (entry.directory || !isBmsChartFile(entry.path)) {
         continue;
       }
@@ -917,6 +939,7 @@ std::optional<std::string> normalizedPathTextForStorage(
   }
   ChartDBHelper::ToAbsolutePath(path);
   ChartDBHelper::ToRelativePath(path);
+  path = path.lexically_normal();
 
   const std::string normalized = path_t_to_utf8(fspath_to_path_t(path));
   if (normalized == original) {
@@ -1182,7 +1205,172 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
 std::string archivePathTextForDb(const std::filesystem::path &archivePath) {
   std::filesystem::path storedPath = archivePath;
   ChartDBHelper::ToRelativePath(storedPath);
+  storedPath = storedPath.lexically_normal();
   return path_t_to_utf8(fspath_to_path_t(storedPath));
+}
+
+std::string checkpointPathTextForDb(const std::filesystem::path &path) {
+  std::filesystem::path storedPath = path;
+  ChartDBHelper::ToRelativePath(storedPath);
+  storedPath = storedPath.lexically_normal();
+  return path_t_to_utf8(fspath_to_path_t(storedPath));
+}
+
+std::filesystem::path checkpointPathFromDbText(const std::string &text) {
+  std::filesystem::path path(utf8_to_path_t(text));
+  if (!path.empty()) {
+    ChartDBHelper::ToAbsolutePath(path);
+  }
+  return path;
+}
+
+std::string checkpointInnerPathText(const std::filesystem::path &path) {
+  return path.lexically_normal().generic_string();
+}
+
+void fnv1aAppend(std::uint64_t &hash, const std::string &text) {
+  constexpr std::uint64_t kPrime = 1099511628211ull;
+  for (const unsigned char ch : text) {
+    hash ^= ch;
+    hash *= kPrime;
+  }
+  hash ^= 0xffu;
+  hash *= kPrime;
+}
+
+std::string stableHashHex(std::uint64_t value) {
+  constexpr char kHex[] = "0123456789abcdef";
+  std::string text(16, '0');
+  for (int i = 15; i >= 0; --i) {
+    text[i] = kHex[value & 0xfu];
+    value >>= 4u;
+  }
+  return text;
+}
+
+struct ChartScanCheckpoint {
+  bool found = false;
+  std::string scanSignature;
+  std::string phase;
+  int nextIndex = 0;
+  int subIndex = 0;
+  std::filesystem::path lastPath;
+  std::filesystem::path archivePath;
+  sqlite3_int64 archiveSize = 0;
+  sqlite3_int64 archiveMtimeNs = 0;
+  std::string lastInnerPath;
+};
+
+bool createChartScanCheckpointTable(sqlite3 *db) {
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS chart_scan_checkpoint ("
+      "id INTEGER PRIMARY KEY CHECK(id = 1),"
+      "scan_signature TEXT NOT NULL DEFAULT '',"
+      "phase TEXT NOT NULL DEFAULT '',"
+      "next_index INTEGER NOT NULL DEFAULT 0,"
+      "sub_index INTEGER NOT NULL DEFAULT 0,"
+      "last_path TEXT NOT NULL DEFAULT '',"
+      "archive_path TEXT NOT NULL DEFAULT '',"
+      "archive_size INTEGER NOT NULL DEFAULT 0,"
+      "archive_mtime_ns INTEGER NOT NULL DEFAULT 0,"
+      "last_inner_path TEXT NOT NULL DEFAULT '',"
+      "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+      ")";
+  if (!execSql(db, query, "creating chart scan checkpoint table")) {
+    return false;
+  }
+  if (normalizeStoredPathColumn(db, "chart_scan_checkpoint", "last_path",
+                                false) |
+      normalizeStoredPathColumn(db, "chart_scan_checkpoint", "archive_path",
+                                false)) {
+    bumpLibraryRevision();
+  }
+  return true;
+}
+
+ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
+  ChartScanCheckpoint checkpoint;
+  sqlite3_stmt *stmt = nullptr;
+  const char *query =
+      "SELECT scan_signature, phase, next_index, sub_index, last_path, "
+      "archive_path, archive_size, archive_mtime_ns, last_inner_path "
+      "FROM chart_scan_checkpoint WHERE id = 1";
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting chart scan checkpoint: "
+              << sqlite3_errmsg(db) << "\n";
+    sqlite3_finalize(stmt);
+    return checkpoint;
+  }
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    checkpoint.found = true;
+    checkpoint.scanSignature = columnString(stmt, 0);
+    checkpoint.phase = columnString(stmt, 1);
+    checkpoint.nextIndex = std::max(0, sqlite3_column_int(stmt, 2));
+    checkpoint.subIndex = std::max(0, sqlite3_column_int(stmt, 3));
+    checkpoint.lastPath = checkpointPathFromDbText(columnString(stmt, 4));
+    checkpoint.archivePath = checkpointPathFromDbText(columnString(stmt, 5));
+    checkpoint.archiveSize = sqlite3_column_int64(stmt, 6);
+    checkpoint.archiveMtimeNs = sqlite3_column_int64(stmt, 7);
+    checkpoint.lastInnerPath = columnString(stmt, 8);
+  }
+  sqlite3_finalize(stmt);
+  return checkpoint;
+}
+
+bool upsertChartScanCheckpoint(sqlite3 *db,
+                               const ChartScanCheckpoint &checkpoint) {
+  const char *query =
+      "INSERT INTO chart_scan_checkpoint "
+      "(id, scan_signature, phase, next_index, sub_index, last_path, "
+      "archive_path, archive_size, archive_mtime_ns, last_inner_path, "
+      "updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+      "CURRENT_TIMESTAMP) "
+      "ON CONFLICT(id) DO UPDATE SET "
+      "scan_signature = excluded.scan_signature,"
+      "phase = excluded.phase,"
+      "next_index = excluded.next_index,"
+      "sub_index = excluded.sub_index,"
+      "last_path = excluded.last_path,"
+      "archive_path = excluded.archive_path,"
+      "archive_size = excluded.archive_size,"
+      "archive_mtime_ns = excluded.archive_mtime_ns,"
+      "last_inner_path = excluded.last_inner_path,"
+      "updated_at = CURRENT_TIMESTAMP";
+  sqlite3_stmt *stmt = nullptr;
+  int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing chart scan checkpoint upsert: "
+              << sqlite3_errmsg(db) << "\n";
+    sqlite3_finalize(stmt);
+    return false;
+  }
+  bindText(stmt, 1, checkpoint.scanSignature);
+  bindText(stmt, 2, checkpoint.phase);
+  sqlite3_bind_int(stmt, 3, std::max(0, checkpoint.nextIndex));
+  sqlite3_bind_int(stmt, 4, std::max(0, checkpoint.subIndex));
+  bindText(stmt, 5, checkpointPathTextForDb(checkpoint.lastPath));
+  bindText(stmt, 6, checkpointPathTextForDb(checkpoint.archivePath));
+  sqlite3_bind_int64(stmt, 7, checkpoint.archiveSize);
+  sqlite3_bind_int64(stmt, 8, checkpoint.archiveMtimeNs);
+  bindText(stmt, 9, checkpoint.lastInnerPath);
+  rc = sqlite3_step(stmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while upserting chart scan checkpoint: "
+              << sqlite3_errmsg(db) << "\n";
+    sqlite3_finalize(stmt);
+    return false;
+  }
+  sqlite3_finalize(stmt);
+  return true;
+}
+
+bool clearChartScanCheckpoint(sqlite3 *db) {
+  if (!createChartScanCheckpointTable(db)) {
+    return false;
+  }
+  return execSql(db, "DELETE FROM chart_scan_checkpoint",
+                 "clearing chart scan checkpoint");
 }
 
 bool createArchiveScanCacheTable(sqlite3 *db) {
@@ -2763,6 +2951,7 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
 
   CreateSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
+  createChartScanCheckpointTable(db);
 
   std::filesystem::path targetDirectory = directory;
   ToAbsolutePath(targetDirectory);
@@ -2829,6 +3018,7 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
     }
   }
   if (deletedCount > 0) {
+    clearChartScanCheckpoint(db);
     bumpLibraryRevision();
   }
   return deletedCount;
@@ -2843,6 +3033,7 @@ bool ChartDBHelper::DeleteArchiveRecords(
   CreateChartMetaTable(db);
   CreateSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
+  createChartScanCheckpointTable(db);
 
   int changedCount = 0;
   BeginTransaction(db);
@@ -2855,6 +3046,7 @@ bool ChartDBHelper::DeleteArchiveRecords(
   if (deleteArchiveScanCache(db, archivePath)) {
     ++changedCount;
   }
+  clearChartScanCheckpoint(db);
   CommitTransaction(db);
 
   if (changedCount > 0) {
@@ -2866,6 +3058,7 @@ bool ChartDBHelper::DeleteArchiveRecords(
 bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
   CreateSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
+  createChartScanCheckpointTable(db);
 
   auto query = "DELETE FROM chart_meta";
   sqlite3_stmt *stmt;
@@ -2891,6 +3084,11 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
   changed = sqlite3_changes(db) > 0 || changed;
   if (!execSql(db, "DELETE FROM archive_scan_cache",
                "clearing archive scan cache")) {
+    return false;
+  }
+  changed = sqlite3_changes(db) > 0 || changed;
+  if (!execSql(db, "DELETE FROM chart_scan_checkpoint",
+               "clearing chart scan checkpoint")) {
     return false;
   }
   changed = sqlite3_changes(db) > 0 || changed;
@@ -3008,6 +3206,7 @@ bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
 bool ChartDBHelper::InsertEntry(sqlite3 *db,
                                 const std::filesystem::path &path,
                                 const std::string &iosBookmark) {
+  createChartScanCheckpointTable(db);
   auto query = "REPLACE INTO entries ("
                "path,"
                "ios_bookmark"
@@ -3036,6 +3235,7 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
     return false;
   }
   sqlite3_finalize(stmt);
+  clearChartScanCheckpoint(db);
   bumpLibraryRevision();
   return true;
 }
@@ -3072,6 +3272,7 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
 
 bool ChartDBHelper::DeleteEntry(sqlite3 *db,
                                 const std::filesystem::path &path) {
+  createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries WHERE path = @path";
   sqlite3_stmt *stmt = nullptr;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
@@ -3094,12 +3295,14 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
   }
   sqlite3_finalize(stmt);
   if (sqlite3_changes(db) > 0) {
+    clearChartScanCheckpoint(db);
     bumpLibraryRevision();
   }
   return true;
 }
 
 bool ChartDBHelper::ClearEntries(sqlite3 *db) {
+  createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
   sqlite3_stmt *stmt;
   int rc = sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
@@ -3117,6 +3320,7 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   }
   sqlite3_finalize(stmt);
   if (sqlite3_changes(db) > 0) {
+    clearChartScanCheckpoint(db);
     bumpLibraryRevision();
   }
   return true;
@@ -3124,8 +3328,35 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
 
 int ChartDBHelper::ScanChartRoots(
     sqlite3 *db, const std::vector<std::filesystem::path> &roots,
-    const std::stop_token *stopToken) {
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
   if (db == nullptr || stopRequested(stopToken)) {
+    return 0;
+  }
+  auto pauseIfNeeded = [&]() {
+    return pauseCallback == nullptr || pauseCallback();
+  };
+  auto shouldStop = [&]() {
+    return stopRequested(stopToken) || !pauseIfNeeded();
+  };
+
+  auto reportProgress = [&](int current, int total,
+                            ChartScanProgressStage stage) {
+    if (progressCallback != nullptr) {
+      progressCallback(ChartScanProgress{
+          .current = current,
+          .total = total,
+          .stage = stage,
+      });
+    }
+  };
+
+  reportProgress(0, static_cast<int>(std::max<std::size_t>(roots.size(), 1)),
+                 ChartScanProgressStage::Preparing);
+  if (shouldStop()) {
     return 0;
   }
 
@@ -3198,7 +3429,7 @@ int ChartDBHelper::ScanChartRoots(
   };
 
   for (const auto &chartMeta : chartMetas) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       return 0;
     }
     if (!parsedChartMetaHasStableIdentity(chartMeta)) {
@@ -3235,6 +3466,9 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &solidArchivePath : selectSolidArchivePaths(db)) {
+    if (shouldStop()) {
+      return 0;
+    }
     sqlite3_int64 archiveSize = 0;
     sqlite3_int64 mtimeNs = 0;
     if (!archiveFileStateForDb(solidArchivePath, archiveSize, mtimeNs)) {
@@ -3243,6 +3477,9 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   auto scanArchivePath = [&](const std::filesystem::path &archivePath) {
+    if (shouldStop()) {
+      return;
+    }
     const path_t archiveKey = fspath_to_path_t(archivePath);
     if (scannedArchivePaths.find(archiveKey) != scannedArchivePaths.end()) {
       return;
@@ -3293,7 +3530,11 @@ int ChartDBHelper::ScanChartRoots(
     }
 
     const ArchiveScanResult archiveScan =
-        scanArchiveForChartsOrSolid(archivePath, knownChartPaths);
+        scanArchiveForChartsOrSolid(archivePath, knownChartPaths,
+                                    pauseCallback);
+    if (shouldStop()) {
+      return;
+    }
     if (!archiveScan.readable) {
       return;
     }
@@ -3330,13 +3571,18 @@ int ChartDBHelper::ScanChartRoots(
     }
   };
 
+  int scannedRootCount = 0;
+  const int rootCount = static_cast<int>(std::max<std::size_t>(roots.size(), 1));
   for (const auto &root : roots) {
-    if (stopRequested(stopToken) || root.empty()) {
+    if (shouldStop() || root.empty()) {
       continue;
     }
+    reportProgress(scannedRootCount, rootCount,
+                   ChartScanProgressStage::ScanningRoots);
     std::error_code error;
     if (!std::filesystem::exists(root, error) || error) {
       error.clear();
+      ++scannedRootCount;
       continue;
     }
 
@@ -3352,6 +3598,7 @@ int ChartDBHelper::ScanChartRoots(
       } else if (archive_file::hasSupportedArchiveExtension(root)) {
         scanArchivePath(root);
       }
+      ++scannedRootCount;
       continue;
     }
 
@@ -3360,7 +3607,7 @@ int ChartDBHelper::ScanChartRoots(
         error);
     for (const auto end = std::filesystem::recursive_directory_iterator();
          !error && iterator != end; iterator.increment(error)) {
-      if (stopRequested(stopToken)) {
+      if (shouldStop()) {
         return 0;
       }
       std::error_code typeError;
@@ -3385,13 +3632,20 @@ int ChartDBHelper::ScanChartRoots(
               path_t_to_utf8(fspath_to_path_t(root)).c_str(),
               error.message().c_str());
     }
+    ++scannedRootCount;
   }
+  reportProgress(rootCount, rootCount, ChartScanProgressStage::PreparingUpdates);
 
-  if ((diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
-       cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
-       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
-       staleSolidArchives.empty() && reindexedArchives.empty()) ||
-      stopRequested(stopToken)) {
+  const bool noScanWork =
+      diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
+      cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
+      archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
+      staleSolidArchives.empty() && reindexedArchives.empty();
+  if (noScanWork) {
+    clearChartScanCheckpoint(db);
+    return 0;
+  }
+  if (shouldStop()) {
     return 0;
   }
 
@@ -3429,11 +3683,329 @@ int ChartDBHelper::ScanChartRoots(
     batchIt->second.innerPaths.push_back(innerPath);
   }
 
+  int parseTotal = static_cast<int>(individualDiffs.size());
+  for (const auto &archiveKey : archiveBatchOrder) {
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt != archiveBatches.end()) {
+      parseTotal += static_cast<int>(batchIt->second.innerPaths.size());
+    }
+  }
+  parseTotal = std::max(parseTotal, 1);
+  int parseCurrent = 0;
+
+  auto computeScanSignature = [&](std::size_t individualStart,
+                                  std::size_t archiveStart) {
+    constexpr std::uint64_t kOffset = 14695981039346656037ull;
+    std::uint64_t hash = kOffset;
+    fnv1aAppend(hash, "chart-scan-v1");
+
+    std::vector<std::string> rootKeys;
+    rootKeys.reserve(roots.size());
+    for (const auto &root : roots) {
+      std::string rootKey = checkpointPathTextForDb(root);
+      sqlite3_int64 size = 0;
+      sqlite3_int64 mtimeNs = 0;
+      if (archiveFileStateForDb(root, size, mtimeNs)) {
+        rootKey += "|file|";
+        rootKey += std::to_string(size);
+        rootKey += "|";
+        rootKey += std::to_string(mtimeNs);
+      } else {
+        std::error_code error;
+        const bool directory =
+            std::filesystem::is_directory(root, error) && !error;
+        rootKey += directory ? "|dir" : "|missing";
+      }
+      rootKeys.push_back(std::move(rootKey));
+    }
+    std::sort(rootKeys.begin(), rootKeys.end());
+    fnv1aAppend(hash, "roots");
+    fnv1aAppend(hash, std::to_string(rootKeys.size()));
+    for (const auto &rootKey : rootKeys) {
+      fnv1aAppend(hash, rootKey);
+    }
+
+    fnv1aAppend(hash, "individual");
+    individualStart = std::min(individualStart, individualDiffs.size());
+    fnv1aAppend(hash,
+                std::to_string(individualDiffs.size() - individualStart));
+    for (std::size_t i = individualStart; i < individualDiffs.size(); ++i) {
+      const auto &diff = individualDiffs[i];
+      fnv1aAppend(hash, diff.deleted ? "d" : "u");
+      fnv1aAppend(hash, checkpointPathTextForDb(diff.path));
+    }
+
+    fnv1aAppend(hash, "archives");
+    archiveStart = std::min(archiveStart, archiveBatchOrder.size());
+    fnv1aAppend(hash, std::to_string(archiveBatchOrder.size() - archiveStart));
+    for (std::size_t i = archiveStart; i < archiveBatchOrder.size(); ++i) {
+      const auto &archiveKey = archiveBatchOrder[i];
+      const auto batchIt = archiveBatches.find(archiveKey);
+      if (batchIt == archiveBatches.end()) {
+        continue;
+      }
+      const ArchiveParseBatch &batch = batchIt->second;
+      fnv1aAppend(hash, checkpointPathTextForDb(batch.archivePath));
+      sqlite3_int64 archiveSize = 0;
+      sqlite3_int64 mtimeNs = 0;
+      if (archiveFileStateForDb(batch.archivePath, archiveSize, mtimeNs)) {
+        fnv1aAppend(hash, std::to_string(archiveSize));
+        fnv1aAppend(hash, std::to_string(mtimeNs));
+      } else {
+        fnv1aAppend(hash, "missing");
+      }
+      fnv1aAppend(hash, std::to_string(batch.innerPaths.size()));
+      for (const auto &innerPath : batch.innerPaths) {
+        fnv1aAppend(hash, checkpointInnerPathText(innerPath));
+      }
+    }
+    return stableHashHex(hash);
+  };
+
+  const std::string scanSignature = computeScanSignature(0, 0);
+  struct ResumePlan {
+    bool valid = false;
+    bool archivePhase = false;
+    std::size_t individualStart = 0;
+    std::size_t archiveStart = 0;
+    std::size_t archiveSubStart = 0;
+    std::unordered_set<path_t> protectedArchiveKeys;
+  };
+  ResumePlan resumePlan;
+  const ChartScanCheckpoint checkpoint = selectChartScanCheckpoint(db);
+
+  auto archiveBatchInnerCountBefore = [&](std::size_t archiveIndex) {
+    std::size_t count = 0;
+    const std::size_t limit = std::min(archiveIndex, archiveBatchOrder.size());
+    for (std::size_t i = 0; i < limit; ++i) {
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
+      if (batchIt != archiveBatches.end()) {
+        count += batchIt->second.innerPaths.size();
+      }
+    }
+    return count;
+  };
+
+  auto validateIndividualCheckpoint = [&]() {
+    const std::size_t nextIndex =
+        static_cast<std::size_t>(checkpoint.nextIndex);
+    if (nextIndex > individualDiffs.size() || checkpoint.subIndex != 0) {
+      return false;
+    }
+    if (nextIndex > 0 &&
+        checkpointPathTextForDb(individualDiffs[nextIndex - 1].path) !=
+            checkpointPathTextForDb(checkpoint.lastPath)) {
+      return false;
+    }
+    resumePlan.valid = true;
+    resumePlan.archivePhase = false;
+    resumePlan.individualStart = nextIndex;
+    parseCurrent = static_cast<int>(
+        std::min<std::size_t>(nextIndex, static_cast<std::size_t>(parseTotal)));
+    return true;
+  };
+
+  auto validateArchiveCheckpoint = [&]() {
+    const std::size_t nextIndex =
+        static_cast<std::size_t>(checkpoint.nextIndex);
+    const std::size_t subIndex = static_cast<std::size_t>(checkpoint.subIndex);
+    if (nextIndex > archiveBatchOrder.size()) {
+      return false;
+    }
+    if (nextIndex == 0 && subIndex == 0) {
+      resumePlan.valid = true;
+      resumePlan.archivePhase = true;
+      resumePlan.individualStart = individualDiffs.size();
+      resumePlan.archiveStart = 0;
+      resumePlan.archiveSubStart = 0;
+      parseCurrent = static_cast<int>(std::min<std::size_t>(
+          individualDiffs.size(), static_cast<std::size_t>(parseTotal)));
+      return true;
+    }
+
+    if (subIndex == 0) {
+      if (nextIndex == 0) {
+        return false;
+      }
+      const auto previousBatchIt =
+          archiveBatches.find(archiveBatchOrder[nextIndex - 1]);
+      if (previousBatchIt == archiveBatches.end()) {
+        return false;
+      }
+      const ArchiveParseBatch &previousBatch = previousBatchIt->second;
+      if (checkpointPathTextForDb(previousBatch.archivePath) !=
+          checkpointPathTextForDb(checkpoint.archivePath)) {
+        return false;
+      }
+      sqlite3_int64 archiveSize = 0;
+      sqlite3_int64 mtimeNs = 0;
+      if (!archiveFileStateForDb(previousBatch.archivePath, archiveSize,
+                                 mtimeNs) ||
+          archiveSize != checkpoint.archiveSize ||
+          mtimeNs != checkpoint.archiveMtimeNs) {
+        return false;
+      }
+      if (!previousBatch.innerPaths.empty() &&
+          checkpointInnerPathText(previousBatch.innerPaths.back()) !=
+              checkpoint.lastInnerPath) {
+        return false;
+      }
+    } else {
+      if (nextIndex >= archiveBatchOrder.size()) {
+        return false;
+      }
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[nextIndex]);
+      if (batchIt == archiveBatches.end()) {
+        return false;
+      }
+      const ArchiveParseBatch &batch = batchIt->second;
+      if (subIndex > batch.innerPaths.size()) {
+        return false;
+      }
+      if (checkpointPathTextForDb(batch.archivePath) !=
+          checkpointPathTextForDb(checkpoint.archivePath)) {
+        return false;
+      }
+      sqlite3_int64 archiveSize = 0;
+      sqlite3_int64 mtimeNs = 0;
+      if (!archiveFileStateForDb(batch.archivePath, archiveSize, mtimeNs) ||
+          archiveSize != checkpoint.archiveSize ||
+          mtimeNs != checkpoint.archiveMtimeNs) {
+        return false;
+      }
+      if (checkpointInnerPathText(batch.innerPaths[subIndex - 1]) !=
+          checkpoint.lastInnerPath) {
+        return false;
+      }
+    }
+
+    resumePlan.valid = true;
+    resumePlan.archivePhase = true;
+    resumePlan.individualStart = individualDiffs.size();
+    resumePlan.archiveStart = nextIndex;
+    resumePlan.archiveSubStart = subIndex;
+    for (std::size_t i = 0; i < nextIndex && i < archiveBatchOrder.size();
+         ++i) {
+      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
+    }
+    if (subIndex > 0 && nextIndex < archiveBatchOrder.size()) {
+      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[nextIndex]);
+    }
+    const std::size_t resumedCount =
+        individualDiffs.size() + archiveBatchInnerCountBefore(nextIndex) +
+        subIndex;
+    parseCurrent = static_cast<int>(std::min<std::size_t>(
+        resumedCount, static_cast<std::size_t>(parseTotal)));
+    return true;
+  };
+
+  if (checkpoint.found && checkpoint.scanSignature == scanSignature &&
+      ((checkpoint.phase == kScanCheckpointPhaseIndividual &&
+        validateIndividualCheckpoint()) ||
+       (checkpoint.phase == kScanCheckpointPhaseArchive &&
+        validateArchiveCheckpoint()))) {
+    archive_file::appendDebugLogLine(
+        "Continuing chart scan from checkpoint: phase=" + checkpoint.phase +
+        " nextIndex=" + std::to_string(checkpoint.nextIndex) +
+        " subIndex=" + std::to_string(checkpoint.subIndex));
+  } else if (checkpoint.found) {
+    clearChartScanCheckpoint(db);
+    archive_file::appendDebugLogLine(
+        "Discarded stale chart scan checkpoint before parsing.");
+  }
+
   int changedCount = 0;
+  bool transactionOpen = false;
   BeginTransaction(db);
+  transactionOpen = true;
+  std::uint64_t completedFlushRequest = 0;
+
+  auto makeCheckpoint = [&](const std::string &signature,
+                            const std::string &phase, std::size_t nextIndex,
+                            std::size_t subIndex,
+                            const std::filesystem::path &lastPath,
+                            const std::filesystem::path &archivePath,
+                            const std::string &lastInnerPath) {
+    ChartScanCheckpoint nextCheckpoint;
+    nextCheckpoint.found = true;
+    nextCheckpoint.scanSignature = signature;
+    nextCheckpoint.phase = phase;
+    nextCheckpoint.nextIndex =
+        static_cast<int>(std::min<std::size_t>(
+            nextIndex, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    nextCheckpoint.subIndex =
+        static_cast<int>(std::min<std::size_t>(
+            subIndex, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    nextCheckpoint.lastPath = lastPath;
+    nextCheckpoint.archivePath = archivePath;
+    nextCheckpoint.lastInnerPath = lastInnerPath;
+    if (!archivePath.empty()) {
+      archiveFileStateForDb(archivePath, nextCheckpoint.archiveSize,
+                            nextCheckpoint.archiveMtimeNs);
+    }
+    return nextCheckpoint;
+  };
+
+  auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
+    if (transactionOpen) {
+      CommitTransaction(db);
+      transactionOpen = false;
+    }
+    if (!upsertChartScanCheckpoint(db, nextCheckpoint)) {
+      archive_file::appendDebugLogLine(
+          "Failed to save chart scan checkpoint: phase=" +
+          nextCheckpoint.phase +
+          " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
+          " subIndex=" + std::to_string(nextCheckpoint.subIndex));
+    }
+    BeginTransaction(db);
+    transactionOpen = true;
+  };
+
+  auto pendingFlushRequest = [&]() -> std::uint64_t {
+    if (flushRequestCallback == nullptr) {
+      return 0;
+    }
+    return flushRequestCallback();
+  };
+
+  auto acknowledgeFlushRequest = [&](std::uint64_t request) {
+    if (request == 0 || request <= completedFlushRequest) {
+      return;
+    }
+    completedFlushRequest = request;
+    if (flushCompleteCallback != nullptr) {
+      flushCompleteCallback(request);
+    }
+  };
+
+  auto checkpointSaveRequest = [&](bool force)
+      -> std::optional<std::uint64_t> {
+    const std::uint64_t request = pendingFlushRequest();
+    if (!force && request <= completedFlushRequest) {
+      return std::nullopt;
+    }
+    return request;
+  };
+
+  auto saveCheckpointForFlush = [&](const ChartScanCheckpoint &nextCheckpoint,
+                                    std::uint64_t request) {
+    saveCheckpoint(nextCheckpoint);
+    acknowledgeFlushRequest(request);
+  };
+
+  auto archiveDeleteProtectedByCheckpoint =
+      [&](const std::filesystem::path &archivePath) {
+        if (!resumePlan.valid || !resumePlan.archivePhase) {
+          return false;
+        }
+        const path_t archiveKey = fspath_to_path_t(archivePath);
+        return resumePlan.protectedArchiveKeys.find(archiveKey) !=
+               resumePlan.protectedArchiveKeys.end();
+      };
 
   for (const auto &path : sourcePreferenceRefreshPaths) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
     }
     if (updateChartSourcePreference(db, path)) {
@@ -3442,7 +4014,7 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &update : cachedSourcePreferenceUpdates) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
     }
     if (updateChartSourcePreferenceValues(db, update.path, update.priority,
@@ -3452,7 +4024,7 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &path : staleSolidArchives) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
     }
     if (deleteSolidArchive(db, path)) {
@@ -3464,8 +4036,14 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &path : reindexedArchives) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
+    }
+    if (archiveDeleteProtectedByCheckpoint(path)) {
+      archive_file::appendDebugLogLine(
+          "Skipping archive chart delete for checkpoint-protected archive: " +
+          checkpointPathTextForDb(path));
+      continue;
     }
     if (deleteChartMetaInArchive(db, path)) {
       ++changedCount;
@@ -3473,7 +4051,7 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &diff : archiveCacheDiffs) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
     }
     if (upsertArchiveScanCache(db, diff.path, diff.solid,
@@ -3484,7 +4062,7 @@ int ChartDBHelper::ScanChartRoots(
   }
 
   for (const auto &diff : solidArchiveDiffs) {
-    if (stopRequested(stopToken)) {
+    if (shouldStop()) {
       break;
     }
     if (diff.solid) {
@@ -3554,35 +4132,114 @@ int ChartDBHelper::ScanChartRoots(
     return inserted;
   };
 
-  for (const auto &diff : individualDiffs) {
-    if (stopRequested(stopToken)) {
+  const std::size_t individualStartIndex =
+      resumePlan.valid ? resumePlan.individualStart : 0;
+  for (std::size_t diffIndex = individualStartIndex;
+       diffIndex < individualDiffs.size(); ++diffIndex) {
+    const auto &diff = individualDiffs[diffIndex];
+    if (shouldStop()) {
       break;
     }
+    reportProgress(parseCurrent, parseTotal,
+                   diff.deleted ? ChartScanProgressStage::RemovingDeleted
+                                : ChartScanProgressStage::ParsingCharts);
     if (diff.deleted) {
       if (DeleteChartMeta(db, diff.path)) {
         ++changedCount;
       }
-      continue;
-    }
-
-    if (parseAndInsertChart(diff.path, nullptr)) {
+    } else if (parseAndInsertChart(diff.path, nullptr)) {
       ++changedCount;
+    }
+    ++parseCurrent;
+    const std::size_t nextIndex = diffIndex + 1;
+    const auto checkpointRequest = checkpointSaveRequest(
+        nextIndex % kIndividualParseCheckpointInterval == 0);
+    if (checkpointRequest.has_value()) {
+      saveCheckpointForFlush(
+          makeCheckpoint(computeScanSignature(nextIndex, 0),
+                         kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
+          *checkpointRequest);
     }
   }
 
-  for (const auto &archiveKey : archiveBatchOrder) {
-    if (stopRequested(stopToken)) {
+  if (!shouldStop() && !archiveBatchOrder.empty() &&
+      (!resumePlan.valid || !resumePlan.archivePhase)) {
+    const std::filesystem::path lastPath =
+        individualDiffs.empty() ? std::filesystem::path()
+                                : individualDiffs.back().path;
+    const auto checkpointRequest = checkpointSaveRequest(true);
+    if (checkpointRequest.has_value()) {
+      saveCheckpointForFlush(makeCheckpoint(
+          computeScanSignature(individualDiffs.size(), 0),
+          kScanCheckpointPhaseArchive, 0, 0, lastPath, {}, ""),
+          *checkpointRequest);
+    }
+  }
+
+  const std::size_t archiveStartIndex =
+      resumePlan.valid && resumePlan.archivePhase ? resumePlan.archiveStart : 0;
+  const std::size_t archiveSubStartIndex =
+      resumePlan.valid && resumePlan.archivePhase ? resumePlan.archiveSubStart
+                                                  : 0;
+  auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch) {
+    const auto cacheIt =
+        pendingArchiveCacheDiffs.find(fspath_to_path_t(batch.archivePath));
+    if (cacheIt == pendingArchiveCacheDiffs.end()) {
+      return;
+    }
+    const ArchiveCacheDiff &diff = cacheIt->second;
+    if (upsertArchiveScanCache(db, diff.path, diff.solid,
+                               diff.uncompressedSize, diff.fileCount,
+                               diff.chartCount)) {
+      ++changedCount;
+    }
+  };
+
+  for (std::size_t archiveIndex = archiveStartIndex;
+       archiveIndex < archiveBatchOrder.size(); ++archiveIndex) {
+    if (shouldStop()) {
       break;
     }
+    const auto &archiveKey = archiveBatchOrder[archiveIndex];
     const auto batchIt = archiveBatches.find(archiveKey);
     if (batchIt == archiveBatches.end()) {
       continue;
     }
     const ArchiveParseBatch &batch = batchIt->second;
+    const std::size_t innerStart =
+        archiveIndex == archiveStartIndex ? archiveSubStartIndex : 0;
+    if (innerStart >= batch.innerPaths.size()) {
+      writePendingArchiveCache(batch);
+      const std::filesystem::path lastPath =
+          batch.innerPaths.empty()
+              ? std::filesystem::path()
+              : archive_file::makeVirtualPath(batch.archivePath,
+                                              batch.innerPaths.back());
+      const std::string lastInnerPath =
+          batch.innerPaths.empty()
+              ? ""
+              : checkpointInnerPathText(batch.innerPaths.back());
+      const auto checkpointRequest = checkpointSaveRequest(true);
+      if (checkpointRequest.has_value()) {
+        saveCheckpointForFlush(makeCheckpoint(
+            computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+            kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
+            lastInnerPath), *checkpointRequest);
+      }
+      continue;
+    }
+    std::vector<std::filesystem::path> pendingInnerPaths(
+        batch.innerPaths.begin() +
+            static_cast<std::vector<std::filesystem::path>::difference_type>(
+                innerStart),
+        batch.innerPaths.end());
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
-    if (!archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
-                                          files, &errorMessage)) {
+    reportProgress(parseCurrent, parseTotal,
+                   ChartScanProgressStage::ReadingArchive);
+    if (!archive_file::readArchiveEntries(batch.archivePath, pendingInnerPaths,
+                                          files, &errorMessage,
+                                          pauseCallback)) {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
                 path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
@@ -3592,46 +4249,84 @@ int ChartDBHelper::ScanChartRoots(
             path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
             errorMessage);
       }
+      parseCurrent += static_cast<int>(pendingInnerPaths.size());
       continue;
     }
     archive_file::appendDebugLogLine(
         "Parsing DB chart batch: " +
         path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
-        " requested=" + std::to_string(batch.innerPaths.size()) +
+        " requested=" + std::to_string(pendingInnerPaths.size()) +
         " files=" + std::to_string(files.size()));
-    bool parsedFullBatch = files.size() == batch.innerPaths.size();
+    bool parsedFullBatch = files.size() == pendingInnerPaths.size();
+    bool checkpointOrderReliable = true;
+    std::size_t parsedInBatch = innerStart;
     for (const auto &file : files) {
-      if (stopRequested(stopToken)) {
+      if (shouldStop()) {
         parsedFullBatch = false;
         break;
       }
       const std::filesystem::path chartPath =
           archive_file::makeVirtualPath(batch.archivePath, file.path);
+      reportProgress(parseCurrent, parseTotal,
+                     ChartScanProgressStage::ParsingCharts);
       if (parseAndInsertChart(chartPath, &file.bytes)) {
         ++changedCount;
       }
+      ++parseCurrent;
+      if (parsedInBatch >= batch.innerPaths.size() ||
+          checkpointInnerPathText(batch.innerPaths[parsedInBatch]) !=
+              checkpointInnerPathText(file.path)) {
+        checkpointOrderReliable = false;
+      }
+      ++parsedInBatch;
+      if (checkpointOrderReliable) {
+        const auto checkpointRequest = checkpointSaveRequest(
+            parsedInBatch % kArchiveParseCheckpointInterval == 0);
+        if (checkpointRequest.has_value()) {
+          saveCheckpointForFlush(
+              makeCheckpoint(
+                  computeScanSignature(individualDiffs.size(), archiveIndex),
+                  kScanCheckpointPhaseArchive, 0, parsedInBatch, chartPath,
+                  batch.archivePath, checkpointInnerPathText(file.path)),
+              *checkpointRequest);
+        }
+      }
     }
     if (parsedFullBatch && !stopRequested(stopToken)) {
-      const auto cacheIt =
-          pendingArchiveCacheDiffs.find(fspath_to_path_t(batch.archivePath));
-      if (cacheIt != pendingArchiveCacheDiffs.end()) {
-        const ArchiveCacheDiff &diff = cacheIt->second;
-        if (upsertArchiveScanCache(db, diff.path, diff.solid,
-                                   diff.uncompressedSize, diff.fileCount,
-                                   diff.chartCount)) {
-          ++changedCount;
-        }
+      writePendingArchiveCache(batch);
+      const std::filesystem::path lastPath =
+          batch.innerPaths.empty()
+              ? std::filesystem::path()
+              : archive_file::makeVirtualPath(batch.archivePath,
+                                              batch.innerPaths.back());
+      const std::string lastInnerPath =
+          batch.innerPaths.empty()
+              ? ""
+              : checkpointInnerPathText(batch.innerPaths.back());
+      const auto checkpointRequest = checkpointSaveRequest(true);
+      if (checkpointRequest.has_value()) {
+        saveCheckpointForFlush(makeCheckpoint(
+            computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+            kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
+            lastInnerPath), *checkpointRequest);
       }
     } else {
       archive_file::appendDebugLogLine(
           "Skipped archive scan cache write because chart batch did not "
           "complete: " +
           path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
-          " requested=" + std::to_string(batch.innerPaths.size()) +
+          " requested=" + std::to_string(pendingInnerPaths.size()) +
           " files=" + std::to_string(files.size()));
     }
   }
-  CommitTransaction(db);
+  if (transactionOpen) {
+    CommitTransaction(db);
+    transactionOpen = false;
+  }
+  acknowledgeFlushRequest(pendingFlushRequest());
+  if (!stopRequested(stopToken)) {
+    clearChartScanCheckpoint(db);
+  }
 
   if (changedCount > 0) {
     bumpLibraryRevision();
@@ -4348,6 +5043,12 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
   }
   sqlite3_finalize(stmt);
   return courses;
+}
+
+ChartDBHelper::ChartDBHelper() {
+  archive_file::setCachePathNormalizer([](std::filesystem::path &path) {
+    ChartDBHelper::ToRelativePath(path);
+  });
 }
 
 std::uint64_t ChartDBHelper::GetLibraryRevision() const {

@@ -20,6 +20,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -35,6 +36,7 @@ class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
   void init() override;
+  void onPause() override;
   void onResume() override;
 
   void update(float dt) override;
@@ -50,6 +52,7 @@ private:
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
+  std::jthread addFolderPickerThread;
   std::jthread findBmsThread;
   std::jthread replayExportThread;
   std::jthread unzipThread;
@@ -57,6 +60,60 @@ private:
   std::atomic_bool chartListReloadRequested = false;
   std::atomic_bool replayExportInProgress = false;
   std::atomic_bool unzipInProgress = false;
+  std::atomic_bool addFolderPickerInProgress = false;
+  std::atomic_bool libraryTaskWorkerPaused = false;
+  enum class LibraryTaskStatus {
+    Queued,
+    Running,
+    Complete,
+    Failed,
+    Paused,
+  };
+  struct LibraryTaskRequest {
+    std::uint64_t id = 0;
+    std::string title;
+    std::filesystem::path folderToAdd;
+    std::string iosBookmark;
+  };
+  struct LibraryTaskInfo {
+    std::uint64_t id = 0;
+    std::string title;
+    LibraryTaskStatus status = LibraryTaskStatus::Queued;
+    double fraction = 0.0;
+    int current = 0;
+    int total = 0;
+    std::string detail;
+  };
+  std::deque<LibraryTaskRequest> libraryTaskQueue;
+  std::vector<LibraryTaskInfo> libraryTasks;
+  std::mutex libraryTaskMutex;
+  std::mutex libraryTaskWorkerMutex;
+  std::mutex libraryTaskPauseMutex;
+  std::condition_variable_any libraryTaskCv;
+  std::condition_variable_any libraryTaskPauseCv;
+  std::atomic<std::uint64_t> nextLibraryTaskId{1};
+  std::uint64_t libraryTasksRevision = 0;
+  std::uint64_t displayedLibraryTasksRevision = 0;
+  std::atomic<std::uint64_t> libraryProgressRevision{0};
+  std::atomic<std::uint64_t> libraryProgressTaskId{0};
+  std::atomic<int> libraryProgressCurrent{0};
+  std::atomic<int> libraryProgressTotal{0};
+  std::atomic<int> libraryProgressBasisPoints{0};
+  std::atomic<int> libraryProgressStage{
+      static_cast<int>(ChartScanProgressStage::Preparing)};
+  std::atomic<std::uint64_t> libraryScanFlushRequested{0};
+  std::atomic<std::uint64_t> libraryScanFlushCompleted{0};
+  std::uint64_t displayedLibraryProgressRevision = 0;
+  std::string displayedLibraryTasksButtonText;
+  struct LibraryTaskProgressSnapshot {
+    bool valid = false;
+    std::uint64_t revision = 0;
+    std::uint64_t taskId = 0;
+    int current = 0;
+    int total = 0;
+    int basisPoints = 0;
+    ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
+  };
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
@@ -117,6 +174,8 @@ private:
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
   TextView *parseLogButtonText = nullptr;
+  Button *tasksButton = nullptr;
+  TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
   View *replayModalRoot = nullptr;
@@ -132,6 +191,7 @@ private:
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   View *parseLogModalRoot = nullptr;
+  View *tasksModalRoot = nullptr;
   View *unzipModalRoot = nullptr;
   View *unzipProgressTrack = nullptr;
   View *unzipProgressFill = nullptr;
@@ -148,6 +208,13 @@ private:
   TextView *parseLogText = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
+  ScrollView *tasksScrollView = nullptr;
+  View *tasksContent = nullptr;
+  TextView *tasksText = nullptr;
+  Button *tasksRefreshButton = nullptr;
+  TextView *tasksRefreshButtonText = nullptr;
+  Button *tasksCloseButton = nullptr;
+  TextView *tasksCloseButtonText = nullptr;
   View *findBmsModalRoot = nullptr;
   View *findBmsProgressTrack = nullptr;
   View *findBmsProgressFill = nullptr;
@@ -279,6 +346,30 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
+  void startLibraryTaskWorker();
+  void stopLibraryTaskWorker();
+  void pauseLibraryTaskWorker();
+  void resumeLibraryTaskWorker();
+  bool waitForLibraryTaskResume(std::uint64_t id,
+                                const std::stop_token &stopToken);
+  void enqueueLibraryRefreshTask(
+      const std::string &title,
+      const std::filesystem::path &folderToAdd = std::filesystem::path(),
+      const std::string &iosBookmark = "");
+  void libraryTaskLoop(const std::stop_token &stopToken);
+  void runLibraryRefreshTask(const LibraryTaskRequest &task,
+                             const std::stop_token &stopToken);
+  void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
+                           double fraction, int current, int total,
+                           const std::string &detail);
+  void updateLibraryTaskProgress(std::uint64_t id,
+                                 const ChartScanProgress &progress);
+  LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
+  int activeLibraryTaskCount();
+  void requestLibraryScanFlush();
+  std::uint64_t pendingLibraryScanFlushRequest() const;
+  void completeLibraryScanFlush(std::uint64_t request);
+  void refreshTasksButton();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   void requestLibraryReload(bool includeFolders);
@@ -316,6 +407,11 @@ private:
   void showParseLogModal();
   void hideParseLogModal();
   void refreshParseLogModal();
+  void buildTasksModal();
+  void showTasksModal();
+  void hideTasksModal();
+  void refreshTasksModal();
+  std::string tasksModalTextSnapshot();
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void startFindBmsCandidateDownload(size_t candidateIndex);
@@ -346,12 +442,11 @@ private:
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void addIOSFolderEntryFromFiles();
 #endif
-  static void CheckEntries(const std::stop_token &stop_token,
-                           ApplicationContext &context, MainMenuScene &scene);
-
   static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
-                         const std::stop_token &stop_token);
+                         const std::stop_token &stop_token,
+                         ChartScanProgressCallback progressCallback = nullptr,
+                         ChartScanPauseCallback pauseCallback = nullptr);
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

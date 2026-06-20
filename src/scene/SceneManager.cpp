@@ -40,7 +40,8 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     Scene *sceneToRelease = currentScene;
     cleanupSceneInstance(sceneToRelease);
   }
-  if (keepBackground && currentScene) {
+  if (keepBackground && currentScene && currentScene != newScene) {
+    currentScene->onPause();
     backgroundScenes.insert(currentScene);
   }
   
