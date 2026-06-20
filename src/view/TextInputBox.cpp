@@ -8,9 +8,10 @@
 #include <cstring>
 
 namespace {
+SDL_Cursor *s_ibeamCursor = nullptr;
+SDL_Cursor *s_arrowCursor = nullptr;
+
 SDL_Cursor *getCachedCursor(SDL_SystemCursor cursorType) {
-  static SDL_Cursor *s_ibeamCursor = nullptr;
-  static SDL_Cursor *s_arrowCursor = nullptr;
   SDL_Cursor **slot =
       cursorType == SDL_SYSTEM_CURSOR_IBEAM ? &s_ibeamCursor : &s_arrowCursor;
   if (*slot == nullptr) {
@@ -99,6 +100,17 @@ void submitRect(RenderContext &context, bgfx::ProgramHandle program, int x,
   bgfx::submit(rendering::ui_view, program);
 }
 } // namespace
+
+void TextInputBox::releaseCachedCursors() {
+  if (s_ibeamCursor != nullptr) {
+    SDL_FreeCursor(s_ibeamCursor);
+    s_ibeamCursor = nullptr;
+  }
+  if (s_arrowCursor != nullptr) {
+    SDL_FreeCursor(s_arrowCursor);
+    s_arrowCursor = nullptr;
+  }
+}
 
 TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
     : TextView(fontPath, fontSize) {

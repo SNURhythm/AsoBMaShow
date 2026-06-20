@@ -18,6 +18,7 @@
 #include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
+#include "view/TextInputBox.h"
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -387,6 +388,7 @@ int main(int argv, char **args) {
                : 0));
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
+    TextInputBox::releaseCachedCursors();
     SDL_Quit();
     return EXIT_FAILURE;
   }
@@ -410,6 +412,7 @@ int main(int argv, char **args) {
     cerr << "SDL_CreateRenderer Error: " << SDL_GetError() << endl;
     SDL_DestroyWindow(win);
     s_window = nullptr;
+    TextInputBox::releaseCachedCursors();
     SDL_Quit();
     return EXIT_FAILURE;
   }
@@ -453,6 +456,7 @@ int main(int argv, char **args) {
     }
     SDL_DestroyWindow(win);
     s_window = nullptr;
+    TextInputBox::releaseCachedCursors();
     SDL_Quit();
     return EXIT_FAILURE;
   }
@@ -481,6 +485,7 @@ int main(int argv, char **args) {
   }
   SDL_DestroyWindow(win);
   s_window = nullptr;
+  TextInputBox::releaseCachedCursors();
   SDL_Quit();
   APP_DEBUG_LOG("SDL quit");
 

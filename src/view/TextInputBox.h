@@ -18,6 +18,7 @@ class TextInputBox : public TextView {
 public:
   TextInputBox(const std::string &fontPath, int fontSize);
   ~TextInputBox() override;
+  static void releaseCachedCursors();
 
   void setEditingText(const std::string &newText);
 
