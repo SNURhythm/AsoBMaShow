@@ -117,9 +117,6 @@ uint32_t resolveResetFlags() {
 #endif
   uint32_t flags = parseMsaaFlag(msaaSamples);
 
-  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS) {
-    flags |= BGFX_RESET_HIDPI;
-  }
   if (TARGET_PLATFORM == iOS) {
     flags |= BGFX_RESET_VSYNC;
   }
@@ -766,11 +763,6 @@ void run() {
         return true;
       }
 #if TARGET_OS_IPHONE
-      if (!IsIOSGraphicsResizeAllowed()) {
-        return true;
-      }
-#endif
-#if TARGET_OS_IPHONE
       int targetRenderW = 0;
       int targetRenderH = 0;
       getIOSRendererOutputSize(s_renderer, logicalW, logicalH, targetRenderW,
@@ -861,11 +853,6 @@ void run() {
           event.type == SDL_APP_DIDENTERFOREGROUND) {
         iosForcedDrawableRefreshFrames = kIOSForcedDrawableRefreshFrames;
       }
-      if (event.type == SDL_APP_WILLENTERBACKGROUND ||
-          event.type == SDL_APP_DIDENTERBACKGROUND) {
-        hasDeferredRenderResize = false;
-        iosForcedDrawableRefreshFrames = 0;
-      }
 #endif
 
       if (event.type == SDL_TEXTEDITING_EXT) {
@@ -942,7 +929,6 @@ void run() {
       iosForcedDrawableRefreshFrames = kIOSForcedDrawableRefreshFrames;
     }
     if (iosForcedDrawableRefreshFrames > 0 &&
-        IsIOSGraphicsResizeAllowed() &&
         !context.replayVideoExportActive.load(std::memory_order_acquire)) {
       int logicalW = 0;
       int logicalH = 0;

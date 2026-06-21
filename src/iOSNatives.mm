@@ -30,7 +30,6 @@ constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 UIDocumentInteractionController *gIOSRevealFileController = nil;
 std::atomic_bool gIOSDisplayRefreshRequested{false};
-std::atomic_bool gIOSGraphicsResizeAllowed{true};
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -111,27 +110,10 @@ void EnsureIOSDisplayRefreshObservers() {
       (void)notification;
       gIOSDisplayRefreshRequested.store(true, std::memory_order_release);
     };
-    void (^lockResizes)(NSNotification *) = ^(NSNotification *notification) {
-      (void)notification;
-      gIOSGraphicsResizeAllowed.store(false, std::memory_order_release);
-    };
-    void (^unlockResizesAndRefresh)(NSNotification *) =
-        ^(NSNotification *notification) {
-          gIOSGraphicsResizeAllowed.store(true, std::memory_order_release);
-          requestRefresh(notification);
-        };
     [center addObserverForName:UIApplicationUserDidTakeScreenshotNotification
                         object:nil
                          queue:nil
                     usingBlock:requestRefresh];
-    [center addObserverForName:UIApplicationWillResignActiveNotification
-                        object:nil
-                         queue:nil
-                    usingBlock:lockResizes];
-    [center addObserverForName:UIApplicationDidEnterBackgroundNotification
-                        object:nil
-                         queue:nil
-                    usingBlock:lockResizes];
     [center addObserverForName:UIApplicationWillEnterForegroundNotification
                         object:nil
                          queue:nil
@@ -139,7 +121,7 @@ void EnsureIOSDisplayRefreshObservers() {
     [center addObserverForName:UIApplicationDidBecomeActiveNotification
                         object:nil
                          queue:nil
-                    usingBlock:unlockResizesAndRefresh];
+                    usingBlock:requestRefresh];
     [center addObserverForName:UIScreenModeDidChangeNotification
                         object:nil
                          queue:nil
@@ -2078,6 +2060,17 @@ bool SyncIOSMetalLayerDrawableSize(void *metalView, void *metalLayer,
       }
 
       if (view != nil) {
+        const CGSize bounds = view.bounds.size;
+        if (bounds.width > 0.0 && bounds.height > 0.0) {
+          const CGFloat scaleX =
+              static_cast<CGFloat>(drawableWidth) / bounds.width;
+          const CGFloat scaleY =
+              static_cast<CGFloat>(drawableHeight) / bounds.height;
+          if (scaleX > 0.0 && scaleY > 0.0 &&
+              std::abs(scaleX - scaleY) < 0.05) {
+            scale = (scaleX + scaleY) * 0.5;
+          }
+        }
         if (std::abs(view.contentScaleFactor - scale) > 0.001) {
           view.contentScaleFactor = scale;
           changed = true;
@@ -2110,17 +2103,6 @@ bool SyncIOSMetalLayerDrawableSize(void *metalView, void *metalLayer,
 bool ConsumeIOSDisplayRefreshRequest() {
   EnsureIOSDisplayRefreshObservers();
   return gIOSDisplayRefreshRequested.exchange(false, std::memory_order_acq_rel);
-}
-
-bool IsIOSGraphicsResizeAllowed() {
-  EnsureIOSDisplayRefreshObservers();
-  if (!gIOSGraphicsResizeAllowed.load(std::memory_order_acquire)) {
-    return false;
-  }
-  @autoreleasepool {
-    return UIApplication.sharedApplication.applicationState ==
-           UIApplicationStateActive;
-  }
 }
 
 IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize) {
