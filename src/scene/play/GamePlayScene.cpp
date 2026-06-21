@@ -233,7 +233,7 @@ void GamePlayScene::init() {
     pauseScreen->setPadding(Edge::All, 28);
     pauseScreen->setBackgroundColor(ui_theme::panelStrong());
     pauseScreen->setCornerRadius(ui_theme::panelRadius());
-    pauseScreen->setShadow(ui_theme::shadow(), 0, 18, 28);
+    pauseScreen->setShadow(ui_theme::shadow(), 0, 12, 18);
     pauseScreen->setBorderColor(ui_theme::hairlineSubtle());
     pauseScreen->setBorderWidth(1);
     {

@@ -2108,7 +2108,7 @@ void ChartViewerScene::initView() {
   header->setPadding(Edge::Bottom, 10);
   header->setGap(12);
   header->setBackgroundColor(ui_theme::panelStrong());
-  header->setShadow(ui_theme::shadow(), 0, 8, 14);
+  header->setShadow(ui_theme::shadow(), 0, 5, 9);
   header->setBorderColor(ui_theme::hairline());
   header->setBorderWidth(1);
 
@@ -2282,7 +2282,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     panel->setGap(14);
     panel->setBackgroundColor(ui_theme::panelStrong());
     panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setShadow(ui_theme::shadow(), -10, 0, 24);
+    panel->setShadow(ui_theme::shadow(), -6, 0, 16);
     panel->setBorderColor(ui_theme::hairline());
     panel->setBorderWidth(1);
 
@@ -2744,7 +2744,7 @@ void ChartViewerScene::rebuildGhostModal() {
       ->setPadding(Edge::All, kPanelPadding)
       ->setBackgroundColor(ui_theme::panelStrong())
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
+      ->setShadow(ui_theme::shadow(), 0, 12, 18)
       ->setBorderColor(ui_theme::hairline())
       ->setBorderWidth(1);
 
@@ -3059,7 +3059,7 @@ void ChartViewerScene::rebuildOptionsDrawer() {
       ->setPadding(Edge::All, 22)
       ->setBackgroundColor(ui_theme::panelStrong())
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), 0, 18, 28)
+      ->setShadow(ui_theme::shadow(), 0, 12, 18)
       ->setBorderColor(ui_theme::hairline())
       ->setBorderWidth(1);
 
