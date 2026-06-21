@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "../view/TextView.h"
 #include "../view/Button.h"
+#include "../view/ClearLampColors.h"
 #include "../view/UiTheme.h"
 
 void DefaultSkin::buildLayout(const std::string &screenName, View *root,
@@ -36,7 +37,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     auto *panel = new View();
     panel->setBackgroundColor(fill);
     panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setShadow(ui_theme::shadow(), 0, 10, 16);
+    panel->setShadow(ui_theme::shadow(), 0, 6, 10);
     panel->setBorderColor(border);
     panel->setBorderWidth(1);
     return panel;
@@ -96,17 +97,38 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   titleStack->addView(artistText);
   header->addView(titleStack);
 
-  auto *clearBadge = makePanel(
-      Color(ui_theme::amber().r, ui_theme::amber().g, ui_theme::amber().b, 42),
-      ui_theme::amber());
-  clearBadge->setWidth(260);
-  clearBadge->setHeight(70);
+  const Color clearAccent = clearLampColorForRank(resultState.getClearTypeRank());
+  auto *clearBadge = makePanel(Color(clearAccent.r, clearAccent.g,
+                                     clearAccent.b, 42),
+                               Color(clearAccent.r, clearAccent.g,
+                                     clearAccent.b, 188));
+  clearBadge->setWidth(280);
+  clearBadge->setHeight(76);
+  clearBadge->setFlexDirection(FlexDirection::Row);
+  clearBadge->setAlignItems(YGAlignCenter);
   clearBadge->setPadding(Edge::All, 12);
+  clearBadge->setGap(12);
+  auto *lampSwatch = new View();
+  lampSwatch->setWidth(10);
+  lampSwatch->setHeight(50);
+  lampSwatch->setFlexShrink(0);
+  lampSwatch->setBackgroundColor(clearAccent);
+  lampSwatch->setCornerRadius(5.0f);
+  clearBadge->addView(lampSwatch);
+  auto *clearTextStack = new View();
+  clearTextStack->setFlexDirection(FlexDirection::Column);
+  clearTextStack->setJustifyContent(YGJustifyCenter);
+  clearTextStack->setFlex(1);
+  clearTextStack->setMinWidth(0);
+  auto *clearLampLabel = makeLabel("CLEAR LAMP", 15, ui_theme::textSecondary());
+  clearLampLabel->setHeight(20);
+  clearTextStack->addView(clearLampLabel);
   auto *clearTypeText =
-      makeLabel(resultState.getClearTypeLabel(), 24, ui_theme::textPrimary());
-  clearTypeText->setAlign(TextView::CENTER);
+      makeLabel(resultState.getClearTypeLabel(), 23, ui_theme::textPrimary());
+  clearTypeText->setHeight(32);
   clearTypeText->setName("clearType");
-  clearBadge->addView(clearTypeText);
+  clearTextStack->addView(clearTypeText);
+  clearBadge->addView(clearTextStack);
   header->addView(clearBadge);
   rootLayout->addView(header);
 
@@ -163,6 +185,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   auto detailsGrid = new View();
   detailsGrid->setFlexDirection(FlexDirection::Row);
   detailsGrid->setFlexWrap(YGWrapWrap);
+  detailsGrid->setJustifyContent(YGJustifyCenter);
+  detailsGrid->setAlignItems(YGAlignCenter);
   detailsGrid->setGap(12);
   detailsGrid->setName("detailsGrid");
 
@@ -201,11 +225,19 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   graphPlaceHolder->setWidthPercent(100);
   graphPlaceHolder->setBackgroundColor(ui_theme::panelSubtle());
   graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
-  graphPlaceHolder->setShadow(ui_theme::shadow(), 0, 10, 16);
+  graphPlaceHolder->setShadow(ui_theme::shadow(), 0, 6, 10);
   graphPlaceHolder->setBorderColor(ui_theme::hairline());
   graphPlaceHolder->setBorderWidth(1);
   graphPlaceHolder->setName("graph");
   rootLayout->addView(graphPlaceHolder);
+
+  auto *actionsRow = new View();
+  actionsRow->setFlexDirection(FlexDirection::Row);
+  actionsRow->setAlignItems(YGAlignCenter);
+  actionsRow->setJustifyContent(YGJustifyCenter);
+  actionsRow->setFlexWrap(YGWrapWrap);
+  actionsRow->setGap(14);
+  actionsRow->setName("resultActions");
 
   auto btn = new Button(0, 0, 300, 80);
   auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
@@ -215,7 +247,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   btnText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
   btn->setContentView(btnText);
   btn->setName("backButton");
-  btn->setSize(300, 64);
+  btn->setSize(232, 64);
   btn->setCornerRadius(ui_theme::controlRadius());
   btn->setBackgroundColors(ui_theme::primaryAction(),
                            ui_theme::primaryActionHover(),
@@ -225,7 +257,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   btn->setStyledBorderWidth(1);
   btn->setOnClickListener(
       [&context]() { context.sceneManager->changeScene("MainMenu"); });
-  rootLayout->addView(btn);
+  actionsRow->addView(btn);
+  rootLayout->addView(actionsRow);
 }
 
 void DefaultSkin::buildGameContext(View *root, void *data) {

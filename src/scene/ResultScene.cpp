@@ -106,6 +106,11 @@ void ResultScene::addRetryButtons() {
     return;
   }
 
+  View *actionHost = rootLayout->findViewByName("resultActions");
+  if (actionHost == nullptr) {
+    actionHost = rootLayout;
+  }
+
   auto retryRow = new View();
   retryRow->setFlexDirection(FlexDirection::Row);
   retryRow->setAlignItems(YGAlignCenter);
@@ -163,7 +168,7 @@ void ResultScene::addRetryButtons() {
                                  ui_theme::successActionPressed(),
                                  ui_theme::lime()));
   }
-  rootLayout->addView(retryRow);
+  actionHost->addView(retryRow);
 }
 
 void ResultScene::startRetry(bool samePattern) {
