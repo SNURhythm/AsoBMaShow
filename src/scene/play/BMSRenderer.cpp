@@ -220,6 +220,54 @@ Color hudJudgementComboColor(Judgement judgement) {
   return Color(accent.r, accent.g, accent.b, judgement == None ? 168 : 242);
 }
 
+Color hudFastColor() { return ui_theme::cyan(); }
+
+Color hudSlowColor() { return ui_theme::amber(); }
+
+Color hudTimingColor(long long diffMicros) {
+  return diffMicros < 0 ? hudFastColor() : hudSlowColor();
+}
+
+int judgementTimingRank(Judgement judgement) {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Kpoor:
+  case Poor:
+    return 4;
+  case None:
+  case JudgementCount:
+    break;
+  }
+  return 99;
+}
+
+int judgementTimingCriteriaRank(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  switch (criteria) {
+  case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
+    return 0;
+  case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
+    return 1;
+  case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
+    return 2;
+  case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
+    return 3;
+  }
+  return 1;
+}
+
+bool judgementMeetsTimingCriteria(
+    Judgement judgement, AppSettings::JudgementTimingDisplayCriteria criteria) {
+  return judgementTimingRank(judgement) >= judgementTimingCriteriaRank(criteria);
+}
+
 int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
   switch (index) {
   case 0:
@@ -605,12 +653,18 @@ BMSRenderer::BMSRenderer(
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
-  judgeComboText = std::make_unique<TextView>(kHudFontPath, 24);
-  judgeComboText->setAlign(TextView::CENTER);
-  judgeComboText->setVAlign(TextView::MIDDLE);
-  judgeComboText->setColor(ui_theme::sdl(ui_theme::lime()));
-  judgeComboText->setOverflow(TextView::TextOverflow::Hidden);
-  judgeComboText->setVisible(false);
+  judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
+  judgementTimingDirectionText->setAlign(TextView::CENTER);
+  judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
+  judgementTimingDirectionText->setColor(ui_theme::sdl(ui_theme::cyan()));
+  judgementTimingDirectionText->setOverflow(TextView::TextOverflow::Hidden);
+  judgementTimingDirectionText->setVisible(false);
+  judgementTimingMsText = std::make_unique<TextView>(kHudFontPath, 21);
+  judgementTimingMsText->setAlign(TextView::CENTER);
+  judgementTimingMsText->setVAlign(TextView::MIDDLE);
+  judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  judgementTimingMsText->setOverflow(TextView::TextOverflow::Hidden);
+  judgementTimingMsText->setVisible(false);
   layoutCenteredJudgementText();
   scoreText = std::make_unique<TextView>(kHudFontPath, 34);
   scoreText->setAlign(TextView::LEFT);
@@ -706,10 +760,13 @@ void BMSRenderer::drawTitle(RenderContext &context) const {
   titleText->render(context);
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
-  judgeText->render(context);
-  if (judgeComboText != nullptr) {
-    judgeComboText->render(context);
+  if (judgementTimingDirectionText != nullptr) {
+    judgementTimingDirectionText->render(context);
   }
+  if (judgementTimingMsText != nullptr) {
+    judgementTimingMsText->render(context);
+  }
+  judgeText->render(context);
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
@@ -872,35 +929,6 @@ void BMSRenderer::drawHudGaugeBar() {
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
-  }
-}
-
-void BMSRenderer::drawJudgementTextPanel() {
-  if (renderedJudgement == None || judgementPanelWidth <= 0 ||
-      judgementPanelHeight <= 0) {
-    return;
-  }
-
-  const float x = static_cast<float>(judgementPanelX);
-  const float y = static_cast<float>(judgementPanelY);
-  const float width = static_cast<float>(judgementPanelWidth);
-  const float height = static_cast<float>(judgementPanelHeight);
-  const Color accent = hudJudgementAccent(renderedJudgement);
-
-  simpleBatchRenderer.addRoundedRect(
-      x + 12.0f, y + 15.0f, 5.0f, std::max(0.0f, height - 30.0f), 2.5f,
-      Color(accent.r, accent.g, accent.b, 180).toABGR());
-  simpleBatchRenderer.addRect(x + 28.0f, y + height - 9.0f,
-                              std::max(0.0f, width - 56.0f), 2.0f,
-                              Color(accent.r, accent.g, accent.b, 48)
-                                  .toABGR());
-
-  if (judgementLayoutHasCombo) {
-    const float dividerX = x + width * 0.58f;
-    simpleBatchRenderer.addRect(dividerX, y + 16.0f, 1.0f,
-                                std::max(0.0f, height - 32.0f),
-                                Color(accent.r, accent.g, accent.b, 62)
-                                    .toABGR());
   }
 }
 
@@ -1129,64 +1157,81 @@ float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
 }
 
 void BMSRenderer::layoutCenteredJudgementText() {
-  const bool hasCombo = renderedJudgement != None && renderedCombo > 0;
+  const bool hasTimingDirection =
+      judgementTimingDirectionText != nullptr &&
+      judgementTimingDirectionText->getVisible();
+  const bool hasTimingMs =
+      judgementTimingMsText != nullptr && judgementTimingMsText->getVisible();
   if (judgementLayoutWidth == rendering::window_width &&
       judgementLayoutHeight == rendering::window_height &&
-      judgementLayoutHasCombo == hasCombo) {
+      judgementLayoutHasTimingDirection == hasTimingDirection &&
+      judgementLayoutHasTimingMs == hasTimingMs) {
     return;
   }
 
   judgementLayoutWidth = rendering::window_width;
   judgementLayoutHeight = rendering::window_height;
-  judgementLayoutHasCombo = hasCombo;
+  judgementLayoutHasTimingDirection = hasTimingDirection;
+  judgementLayoutHasTimingMs = hasTimingMs;
 
-  const int maxAvailablePanelWidth = std::max(1, judgementLayoutWidth - 48);
-  const int minPanelWidth =
-      std::min(hasCombo ? 420 : 300, maxAvailablePanelWidth);
-  const int maxPanelWidth =
-      std::min(hasCombo ? 560 : 420, maxAvailablePanelWidth);
-  const int panelWidth = std::clamp(
-      static_cast<int>(std::round(static_cast<float>(judgementLayoutWidth) *
-                                  (hasCombo ? 0.34f : 0.26f))),
-      minPanelWidth, maxPanelWidth);
-  const int panelHeight = hasCombo ? 84 : 76;
+  const bool hasTiming = hasTimingDirection || hasTimingMs;
+  const int maxAvailableWidth = std::max(1, judgementLayoutWidth - 48);
+  const int groupHeight = hasTiming ? 88 : 76;
+  const int timingLineHeight = hasTiming ? 28 : 0;
+  const int judgeLineHeight = hasTiming ? 56 : groupHeight - 8;
+  const int lineGap = hasTiming ? 2 : 0;
   const float normalizedY =
       std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
                  AppSettings::kMaxJudgementTextY);
   const int centerY = static_cast<int>(
       std::round(static_cast<float>(judgementLayoutHeight) *
                  (1.0f - normalizedY)));
-  judgementPanelWidth = std::max(1, panelWidth);
-  judgementPanelHeight = panelHeight;
-  judgementPanelX = (judgementLayoutWidth - judgementPanelWidth) / 2;
-  judgementPanelY =
-      std::clamp(centerY - judgementPanelHeight / 2, 0,
-                 std::max(0, judgementLayoutHeight - judgementPanelHeight));
+  const int groupY =
+      std::clamp(centerY - groupHeight / 2, 0,
+                 std::max(0, judgementLayoutHeight - groupHeight));
 
-  if (hasCombo) {
-    const int dividerX =
-        judgementPanelX +
-        static_cast<int>(std::round(static_cast<float>(judgementPanelWidth) *
-                                    0.58f));
-    const int judgeX = judgementPanelX + 22;
-    const int judgeWidth = std::max(1, dividerX - judgeX - 12);
-    const int comboX = dividerX + 12;
-    const int comboWidth =
-        std::max(1, judgementPanelX + judgementPanelWidth - comboX - 16);
-    judgeText->setPosition(judgeX, judgementPanelY + 8);
-    judgeText->setSize(judgeWidth, judgementPanelHeight - 16);
-    if (judgeComboText != nullptr) {
-      judgeComboText->setPosition(comboX, judgementPanelY + 16);
-      judgeComboText->setSize(comboWidth, judgementPanelHeight - 32);
-    }
-  } else {
-    judgeText->setPosition(judgementPanelX + 24, judgementPanelY + 8);
-    judgeText->setSize(std::max(1, judgementPanelWidth - 48),
-                       judgementPanelHeight - 16);
-    if (judgeComboText != nullptr) {
-      judgeComboText->setPosition(judgementPanelX, judgementPanelY);
-      judgeComboText->setSize(1, 1);
-    }
+  int judgeWidth = 1;
+  if (judgeText != nullptr && judgeText->getVisible()) {
+    const int minJudgeWidth = std::min(170, maxAvailableWidth);
+    judgeWidth = std::clamp(judgeText->textureWidth() + 28, minJudgeWidth,
+                            maxAvailableWidth);
+  }
+  const int directionWidth =
+      hasTimingDirection
+          ? std::clamp(judgementTimingDirectionText->textureWidth() + 10, 54,
+                       104)
+          : 0;
+  const int msWidth =
+      hasTimingMs
+          ? std::clamp(judgementTimingMsText->textureWidth() + 10, 48, 96)
+          : 0;
+  const int timingInnerGap = hasTimingDirection && hasTimingMs ? 6 : 0;
+  const int timingWidth = directionWidth + timingInnerGap + msWidth;
+
+  int timingX =
+      (judgementLayoutWidth - std::min(timingWidth, maxAvailableWidth)) / 2;
+  const int timingY = groupY + 2;
+  if (hasTimingDirection) {
+    judgementTimingDirectionText->setPosition(timingX, timingY);
+    judgementTimingDirectionText->setSize(directionWidth, timingLineHeight);
+    timingX += directionWidth + timingInnerGap;
+  } else if (judgementTimingDirectionText != nullptr) {
+    judgementTimingDirectionText->setPosition(timingX, timingY);
+    judgementTimingDirectionText->setSize(1, 1);
+  }
+  if (hasTimingMs) {
+    judgementTimingMsText->setPosition(timingX, timingY);
+    judgementTimingMsText->setSize(msWidth, timingLineHeight);
+  } else if (judgementTimingMsText != nullptr) {
+    judgementTimingMsText->setPosition(timingX, timingY);
+    judgementTimingMsText->setSize(1, 1);
+  }
+
+  const int judgeY = groupY + timingLineHeight + lineGap + (hasTiming ? 2 : 4);
+  const int judgeX = (judgementLayoutWidth - judgeWidth) / 2;
+  if (judgeText != nullptr) {
+    judgeText->setPosition(judgeX, judgeY);
+    judgeText->setSize(judgeWidth, judgeLineHeight);
   }
 }
 
@@ -1227,6 +1272,7 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
                        std::memory_order_relaxed);
     pendingScore.store(score, std::memory_order_relaxed);
     pendingCombo.store(combo, std::memory_order_relaxed);
+    pendingJudgeDiffMicros.store(judgeResult.Diff, std::memory_order_relaxed);
     hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
@@ -1863,7 +1909,6 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
-    drawJudgementTextPanel();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -1897,26 +1942,64 @@ void BMSRenderer::applyPendingHudText() {
       static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed));
   const int score = pendingScore.load(std::memory_order_relaxed);
   const int combo = pendingCombo.load(std::memory_order_relaxed);
+  const long long diffMicros =
+      pendingJudgeDiffMicros.load(std::memory_order_relaxed);
   renderedHudRevision = revision;
   renderedJudgement = judgement;
   renderedCombo = combo;
 
   const bool hasJudgement = judgement != None;
-  const bool hasCombo = hasJudgement && combo > 0;
+  const bool hasTiming = hasJudgement && diffMicros != 0 &&
+                         judgementMeetsTimingCriteria(
+                             judgement, judgementTimingDisplayCriteria) &&
+                         judgementTimingDisplayMode !=
+                             AppSettings::JudgementTimingDisplayMode::Off;
+  const bool showTimingDirection =
+      hasTiming &&
+      (judgementTimingDisplayMode ==
+           AppSettings::JudgementTimingDisplayMode::Both ||
+       judgementTimingDisplayMode ==
+           AppSettings::JudgementTimingDisplayMode::Direction);
+  const bool showTimingMs =
+      hasTiming &&
+      (judgementTimingDisplayMode ==
+           AppSettings::JudgementTimingDisplayMode::Both ||
+       judgementTimingDisplayMode ==
+           AppSettings::JudgementTimingDisplayMode::Ms);
   if (judgeText != nullptr) {
     judgeText->setVisible(hasJudgement);
-    judgeText->setText(hasJudgement ? JudgeResult(judgement, 0).toString()
-                                    : "");
+    std::string judgeLine;
+    if (hasJudgement) {
+      judgeLine = JudgeResult(judgement, 0).toString();
+      if (combo > 0) {
+        judgeLine.push_back(' ');
+        judgeLine += std::to_string(combo);
+      }
+    }
+    judgeText->setText(judgeLine);
     judgeText->setColor(ui_theme::sdl(hasJudgement
                                           ? hudJudgementTextColor(judgement)
                                           : ui_theme::textPrimary()));
   }
-  if (judgeComboText != nullptr) {
-    judgeComboText->setVisible(hasCombo);
-    judgeComboText->setText(hasCombo ? std::to_string(combo) + " COMBO" : "");
-    judgeComboText->setColor(
-        ui_theme::sdl(hasJudgement ? hudJudgementComboColor(judgement)
-                                   : ui_theme::lime()));
+  const Color timingColor = hudTimingColor(diffMicros);
+  if (judgementTimingDirectionText != nullptr) {
+    judgementTimingDirectionText->setVisible(showTimingDirection);
+    judgementTimingDirectionText->setText(
+        showTimingDirection ? (diffMicros < 0 ? "FAST" : "SLOW") : "");
+    judgementTimingDirectionText->setColor(ui_theme::sdl(timingColor));
+  }
+  if (judgementTimingMsText != nullptr) {
+    const long long absDiffMicros =
+        diffMicros < 0 ? -diffMicros : diffMicros;
+    const long long ms = (absDiffMicros + 500LL) / 1000LL;
+    judgementTimingMsText->setVisible(showTimingMs);
+    judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
+                                                : "");
+    const Color msColor =
+        judgementTimingDisplayMode == AppSettings::JudgementTimingDisplayMode::Ms
+            ? timingColor
+            : ui_theme::textSecondary();
+    judgementTimingMsText->setColor(ui_theme::sdl(msColor));
   }
 
   scoreText->setText("SCORE " + std::to_string(score));
@@ -1972,6 +2055,7 @@ void BMSRenderer::reset() {
   pendingJudge.store(None, std::memory_order_relaxed);
   pendingScore.store(0, std::memory_order_relaxed);
   pendingCombo.store(0, std::memory_order_relaxed);
+  pendingJudgeDiffMicros.store(0, std::memory_order_relaxed);
   hudRevision.fetch_add(1, std::memory_order_release);
   publishJudgementCounterSnapshot({});
   renderedJudgementCounterSnapshot = {};
@@ -2065,6 +2149,24 @@ void BMSRenderer::setJudgementCounterPosition(
   judgementCounterPosition = position;
   renderedJudgementCounterRevision =
       judgementCounterRevision.load(std::memory_order_relaxed) - 1;
+}
+
+void BMSRenderer::setJudgementTimingDisplayMode(
+    AppSettings::JudgementTimingDisplayMode mode) {
+  if (judgementTimingDisplayMode == mode) {
+    return;
+  }
+  judgementTimingDisplayMode = mode;
+  hudRevision.fetch_add(1, std::memory_order_release);
+}
+
+void BMSRenderer::setJudgementTimingDisplayCriteria(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  if (judgementTimingDisplayCriteria == criteria) {
+    return;
+  }
+  judgementTimingDisplayCriteria = criteria;
+  hudRevision.fetch_add(1, std::memory_order_release);
 }
 
 void BMSRenderer::setGaugeBarPosition(AppSettings::GaugeBarPosition position) {

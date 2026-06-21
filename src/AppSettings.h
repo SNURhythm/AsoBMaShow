@@ -34,6 +34,20 @@ public:
     Right = 2,
   };
 
+  enum class JudgementTimingDisplayMode {
+    Both = 0,
+    Direction = 1,
+    Ms = 2,
+    Off = 3,
+  };
+
+  enum class JudgementTimingDisplayCriteria {
+    GreatOrBelow = 0,
+    PGreatOrBelow = 1,
+    GoodOrBelow = 2,
+    BadOrBelow = 3,
+  };
+
   enum class GaugeBarPosition {
     World = 0,
     Left = 1,
@@ -120,6 +134,10 @@ public:
   bool judgementCounterEnabled = true;
   JudgementCounterPosition judgementCounterPosition =
       JudgementCounterPosition::Right;
+  JudgementTimingDisplayMode judgementTimingDisplayMode =
+      JudgementTimingDisplayMode::Both;
+  JudgementTimingDisplayCriteria judgementTimingDisplayCriteria =
+      JudgementTimingDisplayCriteria::GreatOrBelow;
   GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;

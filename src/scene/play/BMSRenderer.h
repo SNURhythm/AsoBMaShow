@@ -99,7 +99,8 @@ public:
 private:
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
-  std::unique_ptr<TextView> judgeComboText;
+  std::unique_ptr<TextView> judgementTimingDirectionText;
+  std::unique_ptr<TextView> judgementTimingMsText;
   std::unique_ptr<TextView> scoreText;
   std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> gaugeText;
@@ -114,6 +115,7 @@ private:
   std::atomic<int> pendingJudge{None};
   std::atomic<int> pendingScore{0};
   std::atomic<int> pendingCombo{0};
+  std::atomic<long long> pendingJudgeDiffMicros{0};
   Judgement renderedJudgement = None;
   int renderedCombo = 0;
   std::array<std::atomic<int>, kJudgementCounterItemCount>
@@ -163,6 +165,10 @@ private:
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
+  AppSettings::JudgementTimingDisplayMode judgementTimingDisplayMode =
+      AppSettings::JudgementTimingDisplayMode::Both;
+  AppSettings::JudgementTimingDisplayCriteria judgementTimingDisplayCriteria =
+      AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
   AppSettings::GaugeBarPosition gaugeBarPosition =
       AppSettings::GaugeBarPosition::World;
   GaugeType currentGaugeType = GaugeType::Normal;
@@ -184,11 +190,8 @@ private:
   uint32_t noteSheetSubmitDepth = 0;
   int judgementLayoutWidth = 0;
   int judgementLayoutHeight = 0;
-  bool judgementLayoutHasCombo = false;
-  int judgementPanelX = 0;
-  int judgementPanelY = 0;
-  int judgementPanelWidth = 0;
-  int judgementPanelHeight = 0;
+  bool judgementLayoutHasTimingDirection = false;
+  bool judgementLayoutHasTimingMs = false;
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawHudRoundedPanel(float x, float y, float width, float height,
@@ -201,7 +204,6 @@ private:
   void drawGaugeBar();
   void drawWorldGaugeBar();
   void drawHudGaugeBar();
-  void drawJudgementTextPanel();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
   void layoutGaugeText();
@@ -288,6 +290,10 @@ public:
   void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
+  void setJudgementTimingDisplayMode(
+      AppSettings::JudgementTimingDisplayMode mode);
+  void setJudgementTimingDisplayCriteria(
+      AppSettings::JudgementTimingDisplayCriteria criteria);
   void setJudgementCounter(Judgement judgement, int count, int comboBreak);
   void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,
                             int comboBreak);

@@ -62,6 +62,8 @@ void SettingsScene::resetViewState() {
   summaryJudgementIndicatorYValueText = nullptr;
   summaryJudgementIndicatorWidthValueText = nullptr;
   summaryJudgementCounterPositionValueText = nullptr;
+  summaryJudgementTimingDisplayValueText = nullptr;
+  summaryJudgementTimingCriteriaValueText = nullptr;
   summaryGaugeBarPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryUiThemeValueText = nullptr;
@@ -75,6 +77,8 @@ void SettingsScene::resetViewState() {
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
+  judgementTimingDisplayModeText = nullptr;
+  judgementTimingCriteriaText = nullptr;
   judgementCounterModeText = nullptr;
   judgementCounterPositionText = nullptr;
   gaugeBarPositionText = nullptr;
@@ -91,6 +95,8 @@ void SettingsScene::resetViewState() {
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
+  judgementTimingDisplayModeButton = nullptr;
+  judgementTimingCriteriaButton = nullptr;
   judgementCounterModeButton = nullptr;
   judgementCounterPositionButton = nullptr;
   gaugeBarPositionButton = nullptr;
@@ -608,6 +614,56 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     previewPanel->addView(makePreviewStepRow(
         minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Timing Display", &summaryJudgementTimingDisplayValueText));
+    auto *timingDisplayControls = new View();
+    timingDisplayControls->setFlexDirection(FlexDirection::Row);
+    timingDisplayControls->setFlexWrap(YGWrapWrap);
+    timingDisplayControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    timingDisplayControls->setAlignItems(YGAlignCenter);
+    timingDisplayControls->setWidthPercent(100.0f);
+    timingDisplayControls->setJustifyContent(YGJustifyCenter);
+    judgementTimingDisplayModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementTimingDisplayModeButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementTimingDisplayModeText);
+    judgementTimingDisplayModeButton->setOnClickListener([this]() {
+      context.settings.judgementTimingDisplayMode =
+          nextJudgementTimingDisplayMode(
+              context.settings.judgementTimingDisplayMode);
+      persistSettings();
+    });
+    timingDisplayControls->addView(judgementTimingDisplayModeButton);
+    previewPanel->addView(timingDisplayControls);
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Timing Criteria", &summaryJudgementTimingCriteriaValueText));
+    auto *timingCriteriaControls = new View();
+    timingCriteriaControls->setFlexDirection(FlexDirection::Row);
+    timingCriteriaControls->setFlexWrap(YGWrapWrap);
+    timingCriteriaControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    timingCriteriaControls->setAlignItems(YGAlignCenter);
+    timingCriteriaControls->setWidthPercent(100.0f);
+    timingCriteriaControls->setJustifyContent(YGJustifyCenter);
+    judgementTimingCriteriaText =
+        makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementTimingCriteriaButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementTimingCriteriaText);
+    judgementTimingCriteriaButton->setOnClickListener([this]() {
+      context.settings.judgementTimingDisplayCriteria =
+          nextJudgementTimingDisplayCriteria(
+              context.settings.judgementTimingDisplayCriteria);
+      persistSettings();
+    });
+    timingCriteriaControls->addView(judgementTimingCriteriaButton);
+    previewPanel->addView(timingCriteriaControls);
 
     previewPanel->addView(
         makeText("Indicator", metrics.summaryValueSize,

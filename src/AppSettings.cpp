@@ -167,6 +167,84 @@ const char *judgementCounterPositionToString(
   return "right";
 }
 
+AppSettings::JudgementTimingDisplayMode parseJudgementTimingDisplayMode(
+    const std::string &value,
+    AppSettings::JudgementTimingDisplayMode fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "both" || normalized == "all" || normalized == "0") {
+    return AppSettings::JudgementTimingDisplayMode::Both;
+  }
+  if (normalized == "direction" || normalized == "fast-slow" ||
+      normalized == "fastslow" || normalized == "label" ||
+      normalized == "1") {
+    return AppSettings::JudgementTimingDisplayMode::Direction;
+  }
+  if (normalized == "ms" || normalized == "milliseconds" ||
+      normalized == "timing" || normalized == "2") {
+    return AppSettings::JudgementTimingDisplayMode::Ms;
+  }
+  if (normalized == "off" || normalized == "none" ||
+      normalized == "disabled" || normalized == "3") {
+    return AppSettings::JudgementTimingDisplayMode::Off;
+  }
+  return fallback;
+}
+
+const char *judgementTimingDisplayModeToString(
+    AppSettings::JudgementTimingDisplayMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementTimingDisplayMode::Both:
+    return "both";
+  case AppSettings::JudgementTimingDisplayMode::Direction:
+    return "direction";
+  case AppSettings::JudgementTimingDisplayMode::Ms:
+    return "ms";
+  case AppSettings::JudgementTimingDisplayMode::Off:
+    return "off";
+  }
+  return "both";
+}
+
+AppSettings::JudgementTimingDisplayCriteria
+parseJudgementTimingDisplayCriteria(
+    const std::string &value,
+    AppSettings::JudgementTimingDisplayCriteria fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "great-or-below" || normalized == "great" ||
+      normalized == "great-below" || normalized == "0") {
+    return AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
+  }
+  if (normalized == "pgreat-or-below" || normalized == "pgreat" ||
+      normalized == "pgreat-below" || normalized == "perfect-great" ||
+      normalized == "1") {
+    return AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+  }
+  if (normalized == "good-or-below" || normalized == "good" ||
+      normalized == "good-below" || normalized == "2") {
+    return AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow;
+  }
+  if (normalized == "bad-or-below" || normalized == "bad" ||
+      normalized == "bad-below" || normalized == "3") {
+    return AppSettings::JudgementTimingDisplayCriteria::BadOrBelow;
+  }
+  return fallback;
+}
+
+const char *judgementTimingDisplayCriteriaToString(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  switch (criteria) {
+  case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
+    return "great_or_below";
+  case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
+    return "pgreat_or_below";
+  case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
+    return "good_or_below";
+  case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
+    return "bad_or_below";
+  }
+  return "great_or_below";
+}
+
 AppSettings::GaugeBarPosition parseGaugeBarPosition(
     const std::string &value, AppSettings::GaugeBarPosition fallback) {
   const std::string normalized = normalizeSettingToken(value);
@@ -379,6 +457,27 @@ void AppSettings::sanitize() {
     judgementCounterPosition = JudgementCounterPosition::Right;
     break;
   }
+  switch (judgementTimingDisplayMode) {
+  case JudgementTimingDisplayMode::Both:
+  case JudgementTimingDisplayMode::Direction:
+  case JudgementTimingDisplayMode::Ms:
+  case JudgementTimingDisplayMode::Off:
+    break;
+  default:
+    judgementTimingDisplayMode = JudgementTimingDisplayMode::Both;
+    break;
+  }
+  switch (judgementTimingDisplayCriteria) {
+  case JudgementTimingDisplayCriteria::GreatOrBelow:
+  case JudgementTimingDisplayCriteria::PGreatOrBelow:
+  case JudgementTimingDisplayCriteria::GoodOrBelow:
+  case JudgementTimingDisplayCriteria::BadOrBelow:
+    break;
+  default:
+    judgementTimingDisplayCriteria =
+        JudgementTimingDisplayCriteria::GreatOrBelow;
+    break;
+  }
   switch (gaugeBarPosition) {
   case GaugeBarPosition::World:
   case GaugeBarPosition::Left:
@@ -530,6 +629,14 @@ bool AppSettings::save() const {
        << judgementCounterPositionToString(
               sanitized.judgementCounterPosition)
        << "\n";
+  file << "judgement_timing_display_mode="
+       << judgementTimingDisplayModeToString(
+              sanitized.judgementTimingDisplayMode)
+       << "\n";
+  file << "judgement_timing_display_criteria="
+       << judgementTimingDisplayCriteriaToString(
+              sanitized.judgementTimingDisplayCriteria)
+       << "\n";
   file << "gauge_bar_position="
        << gaugeBarPositionToString(sanitized.gaugeBarPosition) << "\n";
   file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
@@ -655,6 +762,14 @@ AppSettings AppSettings::load() {
         settings.judgementCounterPosition =
             parseJudgementCounterPosition(value,
                                           settings.judgementCounterPosition);
+      } else if (key == "judgement_timing_display_mode") {
+        settings.judgementTimingDisplayMode =
+            parseJudgementTimingDisplayMode(
+                value, settings.judgementTimingDisplayMode);
+      } else if (key == "judgement_timing_display_criteria") {
+        settings.judgementTimingDisplayCriteria =
+            parseJudgementTimingDisplayCriteria(
+                value, settings.judgementTimingDisplayCriteria);
       } else if (key == "gauge_bar_position") {
         settings.gaugeBarPosition =
             parseGaugeBarPosition(value, settings.gaugeBarPosition);

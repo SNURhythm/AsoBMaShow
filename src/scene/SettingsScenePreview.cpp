@@ -132,6 +132,10 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.judgementCounterPosition);
     previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
+    previewRenderer->setJudgementTimingDisplayMode(
+        context.settings.judgementTimingDisplayMode);
+    previewRenderer->setJudgementTimingDisplayCriteria(
+        context.settings.judgementTimingDisplayCriteria);
     resetPreviewHudSample();
   }
 }
@@ -264,8 +268,8 @@ void SettingsScene::resetPreviewHudSample() {
   }
   previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
   previewRenderer->setGaugeStatus(GaugeType::Normal, false, 74.0f);
-  previewRenderer->onJudge(JudgeResult(PGreat, 0), previewCombo, previewScore,
-                           previewElapsedMicros, false);
+  previewRenderer->onJudge(JudgeResult(Great, 50000), previewCombo,
+                           previewScore, previewElapsedMicros, false);
 }
 
 void SettingsScene::publishPreviewJudgement(const JudgeResult &judgeResult) {
