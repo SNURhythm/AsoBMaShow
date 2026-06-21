@@ -339,7 +339,7 @@ inline std::string formatPlayModeLabel(
   if (const auto laneSummary =
           formatLaneShuffleSummary(meta, option, seed, option2, seed2);
       laneSummary.has_value()) {
-    label += " / Lane " + *laneSummary;
+    label += " Lane " + *laneSummary;
   }
   return label;
 }

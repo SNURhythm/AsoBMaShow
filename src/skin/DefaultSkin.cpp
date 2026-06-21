@@ -98,7 +98,14 @@ PlayModeTileText splitPlayModeLabel(std::string label) {
     label = "NORMAL";
   }
 
-  const std::string laneDelimiter = " / Lane ";
+  const std::string legacyLaneDelimiter = " / Lane ";
+  if (const size_t pos = label.find(legacyLaneDelimiter);
+      pos != std::string::npos) {
+    return {.mode = label.substr(0, pos),
+            .laneOrder = label.substr(pos + legacyLaneDelimiter.size())};
+  }
+
+  const std::string laneDelimiter = " Lane ";
   if (const size_t pos = label.find(laneDelimiter); pos != std::string::npos) {
     return {.mode = label.substr(0, pos),
             .laneOrder = label.substr(pos + laneDelimiter.size())};

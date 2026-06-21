@@ -3771,7 +3771,7 @@ std::string ChartViewerScene::viewerPlayOptionLabel() const {
       viewerPlayOption2Seed);
   std::string result = label.empty() ? "NORMAL" : label;
   if (viewerLaneOrderSummary.has_value()) {
-    result += " / Lane " + *viewerLaneOrderSummary;
+    result += " Lane " + *viewerLaneOrderSummary;
   }
   return result;
 }
