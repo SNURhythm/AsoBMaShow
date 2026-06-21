@@ -8,6 +8,7 @@
 #include <CoreVideo/CoreVideo.h>
 #include <Foundation/Foundation.h>
 #include <Photos/Photos.h>
+#include <QuartzCore/CAMetalLayer.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
@@ -2028,6 +2029,66 @@ bool GetIOSWindowDrawablePixelSize(int &width, int &height) {
     return true;
   }
   return false;
+}
+
+bool SyncIOSMetalLayerDrawableSize(void *metalView, void *metalLayer,
+                                   int drawableWidth, int drawableHeight) {
+  if (metalLayer == nullptr || drawableWidth <= 0 || drawableHeight <= 0) {
+    return false;
+  }
+
+  __block bool changed = false;
+  void (^syncBlock)(void) = ^{
+    @autoreleasepool {
+      UIView *view = metalView != nullptr ? (__bridge UIView *)metalView : nil;
+      CAMetalLayer *layer = (__bridge CAMetalLayer *)metalLayer;
+      UIWindow *window = view.window != nil ? view.window : FindActiveWindow();
+      UIScreen *screen = window != nil ? window.screen : UIScreen.mainScreen;
+      CGFloat scale =
+          screen.nativeScale > 0.0 ? screen.nativeScale : screen.scale;
+      if (scale <= 0.0) {
+        scale = view.contentScaleFactor > 0.0 ? view.contentScaleFactor : 1.0;
+      }
+
+      if (view != nil) {
+        const CGSize bounds = view.bounds.size;
+        if (bounds.width > 0.0 && bounds.height > 0.0) {
+          const CGFloat scaleX =
+              static_cast<CGFloat>(drawableWidth) / bounds.width;
+          const CGFloat scaleY =
+              static_cast<CGFloat>(drawableHeight) / bounds.height;
+          if (scaleX > 0.0 && scaleY > 0.0 &&
+              std::abs(scaleX - scaleY) < 0.05) {
+            scale = (scaleX + scaleY) * 0.5;
+          }
+        }
+        if (std::abs(view.contentScaleFactor - scale) > 0.001) {
+          view.contentScaleFactor = scale;
+          changed = true;
+        }
+      }
+
+      const CGSize drawableSize =
+          CGSizeMake(static_cast<CGFloat>(drawableWidth),
+                     static_cast<CGFloat>(drawableHeight));
+      if (std::abs(layer.contentsScale - scale) > 0.001) {
+        layer.contentsScale = scale;
+        changed = true;
+      }
+      if (std::abs(layer.drawableSize.width - drawableSize.width) > 0.5 ||
+          std::abs(layer.drawableSize.height - drawableSize.height) > 0.5) {
+        layer.drawableSize = drawableSize;
+        changed = true;
+      }
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    syncBlock();
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), syncBlock);
+  }
+  return changed;
 }
 
 bool ConsumeIOSDisplayRefreshRequest() {
