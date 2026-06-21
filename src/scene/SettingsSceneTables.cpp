@@ -253,11 +253,31 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
   if (shouldReload) {
     loadDifficultyTables();
     loadChartEntries();
+    observedLibraryRevision =
+        ChartDBHelper::GetInstance().GetLibraryRevision();
     lastLayoutWidth = -1;
   }
   if (shouldRefreshImportModal) {
     refreshDifficultyTableImportModal();
   }
+}
+
+void SettingsScene::refreshTablesIfLibraryChanged() {
+  const std::uint64_t revision =
+      ChartDBHelper::GetInstance().GetLibraryRevision();
+  if (revision == observedLibraryRevision) {
+    return;
+  }
+
+  observedLibraryRevision = revision;
+  if (activeTab != SettingsTab::Tables) {
+    return;
+  }
+
+  loadDifficultyTables();
+  loadChartEntries();
+  refreshChartEntryBackupStatuses();
+  lastLayoutWidth = -1;
 }
 
 void SettingsScene::refreshDifficultyTableImportModal() {

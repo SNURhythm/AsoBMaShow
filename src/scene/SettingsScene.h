@@ -3,6 +3,7 @@
 #include "../ChartDBHelper.h"
 #include "Scene.h"
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -177,6 +178,7 @@ private:
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
   SettingsTab lastLaidOutTab = SettingsTab::Timing;
+  std::uint64_t observedLibraryRevision = 0;
 
   void initView();
   void resetViewState();
@@ -215,6 +217,7 @@ private:
                                             bool finished,
                                             bool succeeded = false);
   void applyPendingDifficultyTableUpdates();
+  void refreshTablesIfLibraryChanged();
   void refreshDifficultyTableImportModal();
   void hideDifficultyTableImportModal();
   void addDifficultyTableFromUrl();

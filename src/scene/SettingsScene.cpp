@@ -5,6 +5,7 @@ using namespace settings_scene;
 
 void SettingsScene::init() {
   lastLayoutWidth = -1;
+  observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
 }
 
@@ -20,6 +21,7 @@ void SettingsScene::update(float dt) {
     }
   }
   applyPendingDifficultyTableUpdates();
+  refreshTablesIfLibraryChanged();
   ensureLayoutUpToDate();
 }
 

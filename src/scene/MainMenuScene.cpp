@@ -990,6 +990,22 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark) {
+  std::filesystem::path taskFolderToAdd = folderToAdd;
+  std::string taskIOSBookmark = iosBookmark;
+  if (!taskFolderToAdd.empty()) {
+    auto &dbHelper = ChartDBHelper::GetInstance();
+    SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
+    sqlite3 *taskDb = taskDbHandle.get();
+    if (taskDb != nullptr) {
+      dbHelper.CreateEntriesTable(taskDb);
+      if (dbHelper.InsertEntry(taskDb, taskFolderToAdd, taskIOSBookmark)) {
+        taskFolderToAdd.clear();
+        taskIOSBookmark.clear();
+        requestLibraryReload(true);
+      }
+    }
+  }
+
   startLibraryTaskWorker();
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
@@ -997,8 +1013,8 @@ void MainMenuScene::enqueueLibraryRefreshTask(
     libraryTaskQueue.push_back(LibraryTaskRequest{
         .id = id,
         .title = title,
-        .folderToAdd = folderToAdd,
-        .iosBookmark = iosBookmark,
+        .folderToAdd = taskFolderToAdd,
+        .iosBookmark = taskIOSBookmark,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
