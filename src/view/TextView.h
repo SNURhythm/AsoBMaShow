@@ -46,6 +46,7 @@ protected:
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
+  [[nodiscard]] int rasterTextLineHeight() const;
   [[nodiscard]] int measureTextWidth(const std::string &utf8);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
@@ -75,6 +76,7 @@ protected:
   size_t nextFallbackFontPath = 0;
   std::unordered_map<Uint32, SelectedFont> fontSelectionCache;
   int fontSize = 0;
+  int fontRasterSize = 0;
   int fontLineHeight = 0;
   int fontAscent = 0;
   int fontDescent = 0;
