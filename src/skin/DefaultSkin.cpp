@@ -56,20 +56,40 @@ std::string gradeForScore(int score, int maxScore) {
   return "F";
 }
 
-std::string formatBpm(const bms_parser::ChartMeta &meta) {
-  auto formatBpmValue = [](double value) {
-    if (std::abs(value - std::round(value)) < 0.01) {
-      return std::to_string(static_cast<int>(std::round(value)));
-    }
-    return formatNumber(value, 2);
-  };
+struct BpmValueDisplay {
+  std::string prefix;
+  std::string value;
+};
 
+struct BpmDisplay {
+  BpmValueDisplay min;
+  BpmValueDisplay max;
+  BpmValueDisplay main;
+  bool variable = false;
+};
+
+BpmValueDisplay formatBpmValue(double value) {
+  if (std::abs(value - std::round(value)) < 0.01) {
+    const long long rounded = static_cast<long long>(std::llround(value));
+    std::string text = std::to_string(rounded);
+    if (rounded >= 1000 && text.size() > 3) {
+      return {.prefix = text.substr(0, text.size() - 3),
+              .value = text.substr(text.size() - 3)};
+    }
+    return {.value = text};
+  }
+  return {.value = formatNumber(value, 2)};
+}
+
+BpmDisplay formatBpm(const bms_parser::ChartMeta &meta) {
   const double minBpm = meta.MinBpm > 0.0 ? meta.MinBpm : meta.Bpm;
   const double maxBpm = meta.MaxBpm > 0.0 ? meta.MaxBpm : meta.Bpm;
-  if (minBpm > 0.0 && maxBpm > 0.0 && std::abs(maxBpm - minBpm) > 0.01) {
-    return formatBpmValue(minBpm) + "-" + formatBpmValue(maxBpm);
-  }
-  return formatBpmValue(meta.Bpm);
+  const bool variable =
+      minBpm > 0.0 && maxBpm > 0.0 && std::abs(maxBpm - minBpm) > 0.01;
+  return {.min = formatBpmValue(minBpm),
+          .max = formatBpmValue(maxBpm),
+          .main = formatBpmValue(meta.Bpm),
+          .variable = variable};
 }
 
 std::string formatDuration(long long micros) {
@@ -549,6 +569,74 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     infoGrid->addView(tile);
   };
 
+  auto addBpmTile = [&]() {
+    if (!infoGrid->getChildren().empty()) {
+      infoGrid->addView(makeDivider());
+    }
+
+    const BpmDisplay bpm = formatBpm(meta);
+    auto *tile = new View();
+    tile->setFlexGrow(1);
+    tile->setFlexBasis(0);
+    tile->setFlexShrink(1);
+    tile->setMinWidth(0);
+    tile->setPadding(Edge::All, 7);
+    tile->setFlexDirection(FlexDirection::Column);
+    tile->setJustifyContent(YGJustifyCenter);
+
+    auto *labelView = makeLabel("BPM", 15, ui_theme::textSecondary());
+    labelView->setHeight(21);
+    labelView->setAlign(TextView::CENTER);
+    labelView->setOverflow(TextView::TextOverflow::Hidden);
+    tile->addView(labelView);
+
+    auto *valueRow = new View();
+    valueRow->setFlexDirection(FlexDirection::Row);
+    valueRow->setAlignItems(YGAlignCenter);
+    valueRow->setJustifyContent(YGJustifyCenter);
+    valueRow->setHeight(38);
+    valueRow->setMinWidth(0);
+    valueRow->setName("BPM");
+
+    const int valueSize = bpm.variable ? 23 : 31;
+    const int prefixSize = bpm.variable ? 14 : 18;
+    const int punctuationSize = bpm.variable ? 18 : 22;
+    auto appendText = [&](const std::string &text, int size, Color color) {
+      if (text.empty()) {
+        return;
+      }
+      auto *textView = makeLabel(text, size, color);
+      textView->setWidth(std::max(1, textView->textureWidth() + 1));
+      textView->setHeight(38);
+      textView->setAlign(TextView::CENTER);
+      textView->setVAlign(TextView::MIDDLE);
+      textView->setOverflow(TextView::TextOverflow::Hidden);
+      textView->setFlexShrink(0);
+      valueRow->addView(textView);
+    };
+    auto appendBpmValue = [&](const BpmValueDisplay &value) {
+      appendText(value.prefix, prefixSize, ui_theme::textMuted());
+      appendText(value.value, valueSize, ui_theme::textPrimary());
+    };
+
+    if (bpm.variable) {
+      appendBpmValue(bpm.min);
+      appendText("-", punctuationSize, ui_theme::textSecondary());
+      appendBpmValue(bpm.max);
+      appendText("(", punctuationSize, ui_theme::textSecondary());
+      appendBpmValue(bpm.main);
+      appendText(")", punctuationSize, ui_theme::textSecondary());
+    } else {
+      appendBpmValue(bpm.main);
+    }
+    tile->addView(valueRow);
+
+    auto *subView = makeLabel("", 18, ui_theme::amber());
+    subView->setHeight(22);
+    tile->addView(subView);
+    infoGrid->addView(tile);
+  };
+
   auto addPlayModeTile = [&](const std::string &playModeLabel,
                              const std::string &laneOrderLabel) {
     if (!infoGrid->getChildren().empty()) {
@@ -612,7 +700,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
               ui_theme::amber());
   addInfoTile("TOTAL NOTES", std::to_string(totalNotes), longNoteSummary,
               ui_theme::lime());
-  addInfoTile("BPM", formatBpm(meta), "", ui_theme::amber());
+  addBpmTile();
   addInfoTile("JUDGE RANK", Judge::getRankDescription(meta.Rank), "",
               ui_theme::cyan());
   addInfoTile("DURATION", formatDuration(meta.PlayLength),
