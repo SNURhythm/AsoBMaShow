@@ -58,6 +58,11 @@ void *StartIOSSecurityScopedResource(const std::string &path,
                                       std::string &errorMessage);
 void StopIOSSecurityScopedResource(void *resource);
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
+bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
+                                           int logicalWidth, int logicalHeight,
+                                           int &preferredWidth,
+                                           int &preferredHeight);
+bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height);
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool PostURLTextIOS(const std::string &url, std::string &body,

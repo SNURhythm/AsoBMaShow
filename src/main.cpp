@@ -84,6 +84,9 @@ static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
 static float s_renderScale = 1.0f;
 static uint32_t s_bgfxResetFlags = 0;
+#if TARGET_OS_IPHONE
+static void *s_iosMetalLayer = nullptr;
+#endif
 
 namespace {
 
@@ -163,6 +166,18 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
       logicalH == renderH) {
     renderW = pixelW;
     renderH = pixelH;
+  }
+
+  int preferredW = 0;
+  int preferredH = 0;
+  if (s_iosMetalLayer != nullptr &&
+      GetIOSPreferredFullscreenDrawableSize(renderW, renderH, logicalW, logicalH,
+                                            preferredW, preferredH) &&
+      SetIOSMetalLayerDrawableSize(s_iosMetalLayer, preferredW, preferredH)) {
+    APP_DEBUG_LOG("iOS display-mode drawable size: %d x %d (SDL: %d x %d)",
+                  preferredW, preferredH, renderW, renderH);
+    renderW = preferredW;
+    renderH = preferredH;
   }
 }
 #endif
@@ -480,6 +495,7 @@ int main(int argv, char **args) {
   bgfx::PlatformData pd{};
   setup_bgfx_platform_data(pd, wmi, win);
 #if TARGET_OS_IPHONE
+  s_iosMetalLayer = pd.nwh;
   int metalDrawableW = 0;
   int metalDrawableH = 0;
   getIOSMetalDrawableSize(win, windowLogicalWidth, windowLogicalHeight,
@@ -513,6 +529,9 @@ int main(int argv, char **args) {
 
   SDL_DestroyWindow(win);
   s_window = nullptr;
+#if TARGET_OS_IPHONE
+  s_iosMetalLayer = nullptr;
+#endif
   TextInputBox::releaseCachedCursors();
   SDL_Quit();
   APP_DEBUG_LOG("SDL quit");
