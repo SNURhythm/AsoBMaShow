@@ -2100,7 +2100,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setThemedBorderColor(ui_theme::hairlineSubtle);
   jacketCard->setBorderWidth(1);
   jacketView->setWidth(198)->setHeight(198);
-  jacketView->setCornerRadius(ui_theme::panelRadius() - 1.0f);
+  jacketView->setCornerRadius(
+      ui_theme::childRadiusForInset(ui_theme::panelRadius(), 1.0f, 0.0f));
   jacketCard->addView(jacketView);
   startButton->setHeight(86);
   right->addView(jacketCard);

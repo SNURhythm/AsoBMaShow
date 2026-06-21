@@ -8,6 +8,8 @@
 
 namespace {
 constexpr int kBottomGap = 8;
+constexpr int kArtworkFramePadding = 3;
+constexpr int kArtworkFrameBorderWidth = 1;
 
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
@@ -72,15 +74,17 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artworkFrame->setWidth(84)
       ->setHeight(84)
       ->setFlexShrink(0)
-      ->setPadding(Edge::All, 3)
+      ->setPadding(Edge::All, kArtworkFramePadding)
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
       ->setThemedBackgroundColor(ui_theme::panelSubtle)
       ->setCornerRadius(ui_theme::controlRadius())
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
-      ->setBorderWidth(1);
+      ->setBorderWidth(kArtworkFrameBorderWidth);
   jacketImage->setWidth(78)->setHeight(78);
-  jacketImage->setCornerRadius(ui_theme::controlRadius() - 3.0f);
+  jacketImage->setCornerRadius(ui_theme::childRadiusForInset(
+      ui_theme::controlRadius(), static_cast<float>(kArtworkFrameBorderWidth),
+      static_cast<float>(kArtworkFramePadding)));
   artworkFrame->addView(jacketImage);
   contentCard->addView(artworkFrame);
 

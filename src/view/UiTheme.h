@@ -311,6 +311,15 @@ inline Color cardShadow() {
 inline float panelRadius() { return 8.0f; }
 inline float controlRadius() { return 8.0f; }
 
+inline float insetRadius(float outerRadius, float inset) {
+  return std::max(0.0f, outerRadius - std::max(0.0f, inset));
+}
+
+inline float childRadiusForInset(float parentRadius, float borderWidth,
+                                 float padding) {
+  return insetRadius(parentRadius, borderWidth + padding);
+}
+
 inline SDL_Color sdl(const Color &color) {
   return SDL_Color{color.r, color.g, color.b, color.a};
 }
