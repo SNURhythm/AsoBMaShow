@@ -13,6 +13,22 @@ Color colorWithAlphaScale(Color color, float alphaScale) {
   return color;
 }
 
+RenderContext shadowRenderContext(const RenderContext &context, int spread,
+                                  int offsetX, int offsetY) {
+  RenderContext shadowContext = context;
+  if (shadowContext.scissor.width < 0 || shadowContext.scissor.height < 0) {
+    return shadowContext;
+  }
+
+  const int bleedX = spread + std::abs(offsetX) + 2;
+  const int bleedY = spread + std::abs(offsetY) + 2;
+  shadowContext.scissor.x -= bleedX;
+  shadowContext.scissor.y -= bleedY;
+  shadowContext.scissor.width += bleedX * 2;
+  shadowContext.scissor.height += bleedY * 2;
+  return shadowContext;
+}
+
 void submitColoredRect(const RenderContext &context, int x, int y, int width,
                        int height, const Color &color) {
   if (width <= 0 || height <= 0 || color.a == 0) {
@@ -479,6 +495,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
   const bool rounded = cornerRadius > 0.5f;
 
   if (hasShadow) {
+    const RenderContext shadowContext = shadowRenderContext(
+        context, shadowSpread, shadowOffsetX, shadowOffsetY);
     constexpr int kShadowLayers = 4;
     for (int layer = kShadowLayers; layer >= 1; --layer) {
       const float t =
@@ -487,7 +505,7 @@ void View::renderBoxDecoration(RenderContext &context) const {
           std::max(1, static_cast<int>(std::lround(shadowSpread * t)));
       const Color layerColor =
           colorWithAlphaScale(shadowColor, 0.12f + (1.0f - t) * 0.14f);
-      submitRoundedRect(context, x + shadowOffsetX - grow,
+      submitRoundedRect(shadowContext, x + shadowOffsetX - grow,
                         y + shadowOffsetY - grow, width + grow * 2,
                         height + grow * 2, cornerRadius + grow, layerColor);
     }
