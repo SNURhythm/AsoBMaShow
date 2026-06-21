@@ -8,20 +8,44 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
-RenderContext shadowRenderContext(const RenderContext &context, int spread,
-                                  int offsetX, int offsetY) {
-  RenderContext shadowContext = context;
-  if (shadowContext.scissor.width < 0 || shadowContext.scissor.height < 0) {
-    return shadowContext;
+bool prepareShadowRenderContext(const RenderContext &context,
+                                RenderContext &shadowContext, int x, int y,
+                                int width, int height, int spread,
+                                int offsetX, int offsetY) {
+  shadowContext = context;
+  if (context.scissor.width < 0 || context.scissor.height < 0) {
+    return true;
+  }
+
+  if (context.scissor.width <= 0 || context.scissor.height <= 0) {
+    return false;
+  }
+
+  const int clipLeft = context.scissor.x;
+  const int clipTop = context.scissor.y;
+  const int clipRight = context.scissor.x + context.scissor.width;
+  const int clipBottom = context.scissor.y + context.scissor.height;
+  const int ownerLeft = x;
+  const int ownerTop = y;
+  const int ownerRight = x + width;
+  const int ownerBottom = y + height;
+  if (ownerRight <= clipLeft || ownerLeft >= clipRight ||
+      ownerBottom <= clipTop || ownerTop >= clipBottom) {
+    return false;
   }
 
   const int bleedX = spread + std::abs(offsetX) + 2;
   const int bleedY = spread + std::abs(offsetY) + 2;
-  shadowContext.scissor.x -= bleedX;
-  shadowContext.scissor.y -= bleedY;
-  shadowContext.scissor.width += bleedX * 2;
-  shadowContext.scissor.height += bleedY * 2;
-  return shadowContext;
+  const int leftBleed = ownerLeft >= clipLeft ? bleedX : 0;
+  const int topBleed = ownerTop >= clipTop ? bleedY : 0;
+  const int rightBleed = ownerRight <= clipRight ? bleedX : 0;
+  const int bottomBleed = ownerBottom <= clipBottom ? bleedY : 0;
+
+  shadowContext.scissor.x -= leftBleed;
+  shadowContext.scissor.y -= topBleed;
+  shadowContext.scissor.width += leftBleed + rightBleed;
+  shadowContext.scissor.height += topBleed + bottomBleed;
+  return shadowContext.scissor.width > 0 && shadowContext.scissor.height > 0;
 }
 
 void submitColoredRect(const RenderContext &context, int x, int y, int width,
@@ -563,10 +587,13 @@ void View::renderBoxDecoration(RenderContext &context) const {
   const bool rounded = cornerRadius > 0.5f;
 
   if (hasShadow) {
-    const RenderContext shadowContext = shadowRenderContext(
-        context, shadowSpread, shadowOffsetX, shadowOffsetY);
-    submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
-                     width, height, cornerRadius, shadowSpread, shadowColor);
+    RenderContext shadowContext;
+    if (prepareShadowRenderContext(context, shadowContext, x, y, width, height,
+                                   shadowSpread, shadowOffsetX,
+                                   shadowOffsetY)) {
+      submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
+                       width, height, cornerRadius, shadowSpread, shadowColor);
+    }
   }
 
   if (rounded && hasBorder && inset > 0 && hasBackground) {
