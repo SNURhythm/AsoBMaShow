@@ -115,9 +115,9 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   const Color clearAccent = clearLampColorForRank(resultState.getClearTypeRank());
   auto *clearBadge = makePanel(Color(clearAccent.r, clearAccent.g,
-                                     clearAccent.b, 42),
+                                     clearAccent.b, 30),
                                Color(clearAccent.r, clearAccent.g,
-                                     clearAccent.b, 188));
+                                     clearAccent.b, 136));
   clearBadge->setWidth(280);
   clearBadge->setHeight(76);
   clearBadge->setFlexDirection(FlexDirection::Row);
@@ -155,7 +155,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   scoreContainer->setHeight(230);
   scoreContainer->setName("scoreContainer");
 
-  auto *gradePanel = makePanel(ui_theme::panelStrong(), ui_theme::coral());
+  auto *gradePanel = makePanel(
+      ui_theme::resultPanelStrong(), ui_theme::withAlpha(ui_theme::coral(), 150));
   gradePanel->setWidth(360);
   gradePanel->setFlexDirection(FlexDirection::Column);
   gradePanel->setAlignItems(YGAlignCenter);
@@ -173,7 +174,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   gradePanel->addView(gradeText);
   scoreContainer->addView(gradePanel);
 
-  auto *scoreDetailView = makePanel(ui_theme::panel(), ui_theme::hairline());
+  auto *scoreDetailView =
+      makePanel(ui_theme::resultPanel(), ui_theme::hairlineSubtle());
   scoreDetailView->setFlex(1);
   scoreDetailView->setFlexDirection(FlexDirection::Column);
   scoreDetailView->setJustifyContent(YGJustifyCenter);
@@ -208,8 +210,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto addMetric = [&](const std::string &label, int count, Color accent,
                        const std::string &id) {
-    auto *tile = makePanel(ui_theme::panelSubtle(),
-                           Color(accent.r, accent.g, accent.b, 190));
+    auto *tile = makePanel(ui_theme::resultPanelSubtle(),
+                           Color(accent.r, accent.g, accent.b, 132));
     tile->setWidth(190);
     tile->setHeight(82);
     tile->setPadding(Edge::All, 10);
@@ -226,8 +228,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto addJudgementMetric = [&](const std::string &label, Judgement judgement,
                                 Color accent, const std::string &id) {
-    auto *tile = makePanel(ui_theme::panelSubtle(),
-                           Color(accent.r, accent.g, accent.b, 190));
+    auto *tile = makePanel(ui_theme::resultPanelSubtle(),
+                           Color(accent.r, accent.g, accent.b, 132));
     tile->setWidth(190);
     tile->setHeight(82);
     tile->setPadding(Edge::All, 8);
@@ -292,10 +294,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   auto graphPlaceHolder = new View();
   graphPlaceHolder->setHeight(210);
   graphPlaceHolder->setWidthPercent(100);
-  graphPlaceHolder->setBackgroundColor(ui_theme::panelSubtle());
+  graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
   graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
   graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
-  graphPlaceHolder->setBorderColor(ui_theme::hairline());
+  graphPlaceHolder->setBorderColor(ui_theme::hairlineSubtle());
   graphPlaceHolder->setBorderWidth(1);
   graphPlaceHolder->setName("graph");
   rootLayout->addView(graphPlaceHolder);
@@ -326,11 +328,13 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   btn->setName("backButton");
   btn->setSize(232, 64);
   btn->setCornerRadius(ui_theme::controlRadius());
-  btn->setBackgroundColors(ui_theme::primaryAction(),
-                           ui_theme::primaryActionHover(),
-                           ui_theme::primaryActionPressed());
-  btn->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
-                       Color(255, 255, 255, 255));
+  btn->setBackgroundColors(
+      ui_theme::withAlpha(ui_theme::primaryAction(), 182),
+      ui_theme::withAlpha(ui_theme::primaryActionHover(), 210),
+      ui_theme::withAlpha(ui_theme::primaryActionPressed(), 226));
+  btn->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 170),
+                       ui_theme::withAlpha(ui_theme::cyan(), 210),
+                       Color(255, 255, 255, 216));
   btn->setStyledBorderWidth(1);
   btn->setOnClickListener(
       [&context]() { context.sceneManager->changeScene("MainMenu"); });

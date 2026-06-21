@@ -9,57 +9,85 @@
 #include "play/GamePlayScene.h"
 
 #include "../rendering/Color.h"
-#include "../rendering/ShaderManager.h"
+#include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
 #include "../skin/SkinTypes.h"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-static void drawRect(float x, float y, float width, float height, Color color) {
-  static const bgfx::ProgramHandle kSimpleProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-
-  bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
-
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-
-  auto *vertices = (rendering::PosColorVertex *)tvb.data;
-  auto *index = (uint16_t *)tib.data;
-
-  uint32_t abgr = color.toABGR();
-  vertices[0] = {x, y, 0.0f, abgr};
-  vertices[1] = {x + width, y, 0.0f, abgr};
-  vertices[2] = {x + width, y + height, 0.0f, abgr};
-  vertices[3] = {x, y + height, 0.0f, abgr};
-
-  index[0] = 0;
-  index[1] = 1;
-  index[2] = 2;
-  index[3] = 2;
-  index[4] = 3;
-  index[5] = 0;
-
-  uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-  bgfx::setState(state);
-
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-
-  bgfx::submit(rendering::main_view, kSimpleProgram);
+namespace {
+Color resultGaugeLineColor(float value) {
+  if (value > 80.0f) {
+    return ui_theme::withAlpha(ui_theme::cyan(), 210);
+  }
+  if (value > 30.0f) {
+    return ui_theme::withAlpha(ui_theme::lime(), 210);
+  }
+  return ui_theme::withAlpha(ui_theme::coral(), 210);
 }
 
-// ... (drawRect function remains the same)
-namespace {
+void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
+                              const RhythmState &resultState, float x, float y,
+                              float w, float h) {
+  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+
+  const float padding = 8.0f;
+  const float graphX = x + padding;
+  const float graphY = y + padding;
+  const float graphW = std::max(1.0f, w - padding * 2.0f);
+  const float graphH = std::max(1.0f, h - padding * 2.0f);
+  auto valueY = [&](float value) {
+    const float clamped = std::clamp(value, 0.0f, 100.0f);
+    return graphY + graphH - (clamped / 100.0f) * graphH;
+  };
+
+  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
+                guideColor);
+  batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
+                guideColor);
+
+  const size_t count = resultState.gaugeHistory.size();
+  if (count == 1) {
+    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
+                                   100.0f);
+    batch.addCircle(graphX, valueY(value), 3.5f,
+                    resultGaugeLineColor(value).toABGR());
+    return;
+  }
+
+  for (size_t i = 1; i < count; ++i) {
+    const float prevValue =
+        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float x0 =
+        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
+                     graphW;
+    const float x1 =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
+                  resultGaugeLineColor(value).toABGR());
+  }
+
+  const size_t markerStep = std::max<size_t>(1, count / 40);
+  for (size_t i = 0; i < count; i += markerStep) {
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float pointX =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addCircle(pointX, valueY(value), 2.5f,
+                    resultGaugeLineColor(value).toABGR());
+  }
+}
+
 std::string resultPlayModeLabel(
     const bms_parser::ChartMeta &meta,
     const std::optional<ReplayData> &replayToSave,
@@ -434,72 +462,18 @@ void ResultScene::init() {
 void ResultScene::update(float dt) {}
 
 void ResultScene::renderScene() {
-  // Draw Gauge Graph
   if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
     float x = graphPlaceHolder->getX();
     float y = graphPlaceHolder->getY();
     float w = graphPlaceHolder->getWidth();
     float h = graphPlaceHolder->getHeight();
 
-    // Draw background
-    drawRect(x, y, w, h, Color(50, 50, 50, 200));
-
-    // Draw graph
-    size_t count = resultState.gaugeHistory.size();
-    if (count > 1) {
-      bgfx::TransientVertexBuffer tvb{};
-      bgfx::TransientIndexBuffer tib{};
-
-      if (bgfx::getAvailTransientVertexBuffer(
-              count * 4, rendering::PosColorVertex::ms_decl) == count * 4 &&
-          bgfx::getAvailTransientIndexBuffer(count * 6) == count * 6) {
-
-        bgfx::allocTransientVertexBuffer(&tvb, count * 4,
-                                         rendering::PosColorVertex::ms_decl);
-        bgfx::allocTransientIndexBuffer(&tib, count * 6);
-
-        auto *vertices = (rendering::PosColorVertex *)tvb.data;
-        auto *index = (uint16_t *)tib.data;
-
-        float step = w / static_cast<float>(count);
-
-        for (size_t i = 0; i < count; ++i) {
-          float val = resultState.gaugeHistory[i]; // 0 to 100
-          float barH = (val / 100.0f) * h;
-          // Color based on value
-          Color barColor = val > 80.0f ? Color(0, 255, 255, 200)
-                                       : (val > 30.0f ? Color(0, 255, 0, 200)
-                                                      : Color(255, 0, 0, 200));
-          uint32_t abgr = barColor.toABGR();
-          float bx = x + i * step;
-          float by = y + h - barH;
-
-          vertices[i * 4 + 0] = {bx, by, 0.0f, abgr};
-          vertices[i * 4 + 1] = {bx + step, by, 0.0f, abgr};
-          vertices[i * 4 + 2] = {bx + step, by + barH, 0.0f, abgr};
-          vertices[i * 4 + 3] = {bx, by + barH, 0.0f, abgr};
-
-          index[i * 6 + 0] = i * 4 + 0;
-          index[i * 6 + 1] = i * 4 + 1;
-          index[i * 6 + 2] = i * 4 + 2;
-          index[i * 6 + 3] = i * 4 + 2;
-          index[i * 6 + 4] = i * 4 + 3;
-          index[i * 6 + 5] = i * 4 + 0;
-        }
-
-        uint64_t state =
-            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-        bgfx::setState(state);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        static const bgfx::ProgramHandle kSimpleProgram =
-            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-        bgfx::submit(rendering::ui_view, kSimpleProgram);
-      } else {
-        // Fallback or just don't draw if too many
-        SDL_Log("Too many points in gauge history to draw: %zu", count);
-      }
-    }
+    rendering::SimpleBatchRenderer graphBatch;
+    graphBatch.setSubmitView(rendering::ui_view);
+    graphBatch.setSubmitDepth(0);
+    graphBatch.begin();
+    drawResultGaugeLineGraph(graphBatch, resultState, x, y, w, h);
+    graphBatch.end();
   }
 }
 

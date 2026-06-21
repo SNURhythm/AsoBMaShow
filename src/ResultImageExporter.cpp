@@ -300,6 +300,71 @@ void configureResultImageViews(int width, int height,
                             rendering::final_view);
 }
 
+Color resultGaugeLineColor(float value) {
+  if (value > 80.0f) {
+    return ui_theme::withAlpha(ui_theme::cyan(), 210);
+  }
+  if (value > 30.0f) {
+    return ui_theme::withAlpha(ui_theme::lime(), 210);
+  }
+  return ui_theme::withAlpha(ui_theme::coral(), 210);
+}
+
+void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
+                              const RhythmState &resultState, float x, float y,
+                              float w, float h) {
+  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+
+  const float padding = 8.0f;
+  const float graphX = x + padding;
+  const float graphY = y + padding;
+  const float graphW = std::max(1.0f, w - padding * 2.0f);
+  const float graphH = std::max(1.0f, h - padding * 2.0f);
+  auto valueY = [&](float value) {
+    const float clamped = std::clamp(value, 0.0f, 100.0f);
+    return graphY + graphH - (clamped / 100.0f) * graphH;
+  };
+
+  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
+                guideColor);
+  batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
+                guideColor);
+
+  const size_t count = resultState.gaugeHistory.size();
+  if (count == 1) {
+    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
+                                   100.0f);
+    batch.addCircle(graphX, valueY(value), 3.5f,
+                    resultGaugeLineColor(value).toABGR());
+    return;
+  }
+
+  for (size_t i = 1; i < count; ++i) {
+    const float prevValue =
+        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float x0 =
+        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
+                     graphW;
+    const float x1 =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
+                  resultGaugeLineColor(value).toABGR());
+  }
+
+  const size_t markerStep = std::max<size_t>(1, count / 40);
+  for (size_t i = 0; i < count; i += markerStep) {
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float pointX =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addCircle(pointX, valueY(value), 2.5f,
+                    resultGaugeLineColor(value).toABGR());
+  }
+}
+
 void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
                           const RhythmState &resultState,
                           const View *graphPlaceHolder) {
@@ -318,23 +383,7 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
   batch.setSubmitView(rendering::ui_view);
   batch.setSubmitDepth(0);
   batch.begin();
-  batch.addRect(x, y, w, h, Color(50, 50, 50, 200).toABGR());
-
-  const size_t count = resultState.gaugeHistory.size();
-  if (count > 1) {
-    const float step = w / static_cast<float>(count);
-    for (size_t i = 0; i < count; ++i) {
-      const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
-      const float barHeight = (value / 100.0f) * h;
-      const Color barColor =
-          value > 80.0f
-              ? Color(0, 255, 255, 200)
-              : (value > 30.0f ? Color(0, 255, 0, 200)
-                                : Color(255, 0, 0, 200));
-      batch.addRect(x + static_cast<float>(i) * step, y + h - barHeight, step,
-                    barHeight, barColor.toABGR());
-    }
-  }
+  drawResultGaugeLineGraph(batch, resultState, x, y, w, h);
   batch.end();
 }
 

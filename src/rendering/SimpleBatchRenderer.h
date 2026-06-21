@@ -18,6 +18,9 @@ public:
                                uint32_t topColor, uint32_t bottomColor);
   void addRoundedRect(float x, float y, float width, float height, float radius,
                       uint32_t color);
+  void addLine(float x0, float y0, float x1, float y1, float thickness,
+               uint32_t color);
+  void addCircle(float cx, float cy, float radius, uint32_t color);
   void addRectColors(float x, float y, float width, float height,
                      uint32_t topLeftColor, uint32_t topRightColor,
                      uint32_t bottomRightColor, uint32_t bottomLeftColor);
