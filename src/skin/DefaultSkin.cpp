@@ -190,33 +190,33 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   header->setFlexDirection(FlexDirection::Row);
   header->setAlignItems(YGAlignCenter);
   header->setGap(20);
-  header->setMinHeight(data->playModeLabel.empty() ? 84 : 108);
+  header->setMinHeight(data->playModeLabel.empty() ? 96 : 122);
 
   auto *titleStack = new View();
   titleStack->setFlexDirection(FlexDirection::Column);
   titleStack->setFlex(1);
   titleStack->setGap(4);
 
-  auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 39);
+  auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
   titleText->setText(meta.Title);
   titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   titleText->setOverflow(TextView::TextOverflow::Marquee);
-  titleText->setHeight(50);
+  titleText->setHeight(58);
   titleText->setName("title");
   titleStack->addView(titleText);
 
-  auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 23);
+  auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   artistText->setText(meta.Artist);
   artistText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  artistText->setHeight(32);
+  artistText->setHeight(36);
   artistText->setName("artist");
   titleStack->addView(artistText);
 
   if (!data->playModeLabel.empty()) {
-    auto playModeText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    auto playModeText = new TextView("assets/fonts/notosanscjkjp.ttf", 23);
     playModeText->setText("PLAY MODE: " + data->playModeLabel);
     playModeText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-    playModeText->setHeight(30);
+    playModeText->setHeight(34);
     playModeText->setOverflow(TextView::TextOverflow::Hidden);
     playModeText->setName("playMode");
     titleStack->addView(playModeText);
@@ -276,8 +276,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     column->setMinWidth(0);
     column->setGap(2);
 
-    auto *labelView = makeLabel(label, 14, ui_theme::textSecondary());
-    labelView->setHeight(19);
+    auto *labelView = makeLabel(label, 16, ui_theme::textSecondary());
+    labelView->setHeight(22);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     column->addView(labelView);
@@ -288,8 +288,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     valueView->setOverflow(TextView::TextOverflow::Hidden);
     column->addView(valueView);
 
-    auto *detailView = makeLabel(detail, 15, ui_theme::textSecondary());
-    detailView->setHeight(20);
+    auto *detailView = makeLabel(detail, 18, ui_theme::textSecondary());
+    detailView->setHeight(24);
     detailView->setAlign(TextView::CENTER);
     detailView->setOverflow(TextView::TextOverflow::Hidden);
     column->addView(detailView);
@@ -308,8 +308,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     column->setMinWidth(0);
     column->setGap(4);
 
-    auto *labelView = makeLabel(label, 14, ui_theme::textSecondary());
-    labelView->setHeight(19);
+    auto *labelView = makeLabel(label, 16, ui_theme::textSecondary());
+    labelView->setHeight(22);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     column->addView(labelView);
@@ -319,26 +319,26 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     lampRow->setAlignItems(YGAlignCenter);
     lampRow->setJustifyContent(YGJustifyCenter);
     lampRow->setGap(8);
-    lampRow->setHeight(40);
+    lampRow->setHeight(48);
 
     auto *lampSwatch = new View();
-    lampSwatch->setWidth(8);
-    lampSwatch->setHeight(32);
+    lampSwatch->setWidth(10);
+    lampSwatch->setHeight(38);
     lampSwatch->setFlexShrink(0);
     lampSwatch->setBackgroundColor(accent);
     lampSwatch->setCornerRadius(4.0f);
     lampRow->addView(lampSwatch);
 
-    auto *lampText = makeLabel(lampLabel, 20, ui_theme::textPrimary());
-    lampText->setHeight(32);
+    auto *lampText = makeLabel(lampLabel, 24, ui_theme::textPrimary());
+    lampText->setHeight(38);
     lampText->setFlexShrink(1);
     lampText->setMinWidth(0);
     lampText->setOverflow(TextView::TextOverflow::Hidden);
     lampRow->addView(lampText);
     column->addView(lampRow);
 
-    auto *detailView = makeLabel(detail, 15, ui_theme::textSecondary());
-    detailView->setHeight(20);
+    auto *detailView = makeLabel(detail, 18, ui_theme::textSecondary());
+    detailView->setHeight(24);
     detailView->setAlign(TextView::CENTER);
     detailView->setOverflow(TextView::TextOverflow::Hidden);
     column->addView(detailView);
@@ -346,8 +346,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   };
 
   auto addPanelTitle = [&](View *panel, const std::string &title) {
-    auto *titleView = makeLabel(title, 15, ui_theme::textSecondary());
-    titleView->setHeight(22);
+    auto *titleView = makeLabel(title, 17, ui_theme::textSecondary());
+    titleView->setHeight(25);
     titleView->setOverflow(TextView::TextOverflow::Hidden);
     panel->addView(titleView);
   };
@@ -356,32 +356,32 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   summaryRow->setFlexDirection(FlexDirection::Row);
   summaryRow->setAlignItems(YGAlignStretch);
   summaryRow->setGap(12);
-  summaryRow->setHeight(164);
+  summaryRow->setHeight(198);
   summaryRow->setName("resultSummary");
 
   auto *gradePanel = makePanel(
       ui_theme::resultPanelStrong(), ui_theme::withAlpha(ui_theme::amber(), 138));
-  gradePanel->setWidth(158);
+  gradePanel->setWidth(196);
   gradePanel->setFlexShrink(0);
   gradePanel->setFlexDirection(FlexDirection::Column);
   gradePanel->setAlignItems(YGAlignCenter);
   gradePanel->setJustifyContent(YGJustifyCenter);
   gradePanel->setPadding(Edge::All, 12);
   gradePanel->setGap(2);
-  auto *gradeLabel = makeLabel("GRADE", 15, ui_theme::textSecondary());
-  gradeLabel->setHeight(19);
+  auto *gradeLabel = makeLabel("GRADE", 17, ui_theme::textSecondary());
+  gradeLabel->setHeight(23);
   gradeLabel->setAlign(TextView::CENTER);
   gradePanel->addView(gradeLabel);
-  auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 72);
+  auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
   gradeText->setText(grade);
   gradeText->setColor(ui_theme::sdl(ui_theme::amber()));
   gradeText->setAlign(TextView::CENTER);
-  gradeText->setHeight(80);
+  gradeText->setHeight(106);
   gradeText->setName("grade");
   gradePanel->addView(gradeText);
-  auto *rateText = makeLabel(formatScoreRate(currentScore, maxScore), 18,
+  auto *rateText = makeLabel(formatScoreRate(currentScore, maxScore), 22,
                              ui_theme::cyan());
-  rateText->setHeight(24);
+  rateText->setHeight(30);
   rateText->setAlign(TextView::CENTER);
   gradePanel->addView(rateText);
   summaryRow->addView(gradePanel);
@@ -401,20 +401,20 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   scoreCompareRow->setGap(10);
   scoreCompareRow->setFlexGrow(1);
   scoreCompareRow->addView(makeComparisonColumn(
-      "CURRENT", std::to_string(currentScore),
-      "MAX " + std::to_string(maxScore), ui_theme::textPrimary(), 34));
-  scoreCompareRow->addView(makeDivider());
-  scoreCompareRow->addView(makeComparisonColumn(
       "BEST",
       hasPreviousBest ? std::to_string(previousScore) : "NO PLAY",
       hasPreviousBest ? gradeForScore(previousScore, previousMaxScore) : "",
-      hasPreviousBest ? ui_theme::textPrimary() : ui_theme::textMuted(), 34));
+      hasPreviousBest ? ui_theme::textPrimary() : ui_theme::textMuted(), 44));
+  scoreCompareRow->addView(makeDivider());
+  scoreCompareRow->addView(makeComparisonColumn(
+      "CURRENT", std::to_string(currentScore),
+      "MAX " + std::to_string(maxScore), ui_theme::textPrimary(), 44));
   scorePanel->addView(scoreCompareRow);
   auto *scoreDeltaText =
       makeLabel(hasPreviousBest ? "DELTA " + formatSignedDelta(scoreDelta)
                                 : "DELTA --",
-                19, hasPreviousBest ? positiveDelta : ui_theme::textMuted());
-  scoreDeltaText->setHeight(24);
+                22, hasPreviousBest ? positiveDelta : ui_theme::textMuted());
+  scoreDeltaText->setHeight(30);
   scoreDeltaText->setAlign(TextView::CENTER);
   scoreDeltaText->setOverflow(TextView::TextOverflow::Hidden);
   scorePanel->addView(scoreDeltaText);
@@ -436,14 +436,14 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   lampCompareRow->setGap(10);
   lampCompareRow->setFlexGrow(1);
   lampCompareRow->addView(makeLampColumn(
-      "CURRENT", resultState.getClearTypeLabel(),
-      "GAUGE " + formatGauge(resultState.currentGauge), currentClearAccent));
-  lampCompareRow->addView(makeDivider());
-  lampCompareRow->addView(makeLampColumn(
       "BEST", clearTypeLabelForRank(previousClearRank),
       hasPreviousBest ? "GAUGE " + formatGauge(data->previousBest->finalGauge)
                       : "",
       previousClearAccent));
+  lampCompareRow->addView(makeDivider());
+  lampCompareRow->addView(makeLampColumn(
+      "CURRENT", resultState.getClearTypeLabel(),
+      "GAUGE " + formatGauge(resultState.currentGauge), currentClearAccent));
   lampPanel->addView(lampCompareRow);
   summaryRow->addView(lampPanel);
 
@@ -462,27 +462,27 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   comboCompareRow->setGap(10);
   comboCompareRow->setFlexGrow(1);
   comboCompareRow->addView(makeComparisonColumn(
-      "CURRENT", std::to_string(resultState.maxCombo),
-      "BREAK " + std::to_string(resultState.comboBreak), ui_theme::lime(), 30));
-  comboCompareRow->addView(makeDivider());
-  comboCompareRow->addView(makeComparisonColumn(
       "BEST",
       hasPreviousBest ? std::to_string(data->previousBest->maxCombo)
                       : "NO PLAY",
       hasPreviousBest ? "BREAK " + std::to_string(data->previousBest->comboBreak)
                       : "",
-      hasPreviousBest ? ui_theme::lime() : ui_theme::textMuted(), 30));
+      hasPreviousBest ? ui_theme::lime() : ui_theme::textMuted(), 38));
+  comboCompareRow->addView(makeDivider());
+  comboCompareRow->addView(makeComparisonColumn(
+      "CURRENT", std::to_string(resultState.maxCombo),
+      "BREAK " + std::to_string(resultState.comboBreak), ui_theme::lime(), 38));
   comboPanel->addView(comboCompareRow);
   auto *comboDeltaText = makeLabel(
       hasPreviousBest ? "COMBO " + formatSignedDelta(comboDelta) +
                             " / BREAK " + formatSignedDelta(breakDelta)
                       : "COMBO -- / BREAK --",
-      17,
+      20,
       hasPreviousBest
           ? (comboDelta >= 0 && breakDelta <= 0 ? ui_theme::lime()
                                                 : ui_theme::amber())
           : ui_theme::textMuted());
-  comboDeltaText->setHeight(22);
+  comboDeltaText->setHeight(28);
   comboDeltaText->setAlign(TextView::CENTER);
   comboDeltaText->setOverflow(TextView::TextOverflow::Hidden);
   comboPanel->addView(comboDeltaText);
@@ -496,7 +496,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   infoGrid->setFlexWrap(YGWrapNoWrap);
   infoGrid->setJustifyContent(YGJustifyCenter);
   infoGrid->setAlignItems(YGAlignStretch);
-  infoGrid->setHeight(72);
+  infoGrid->setHeight(100);
   infoGrid->setName("resultInfoGrid");
 
   auto addInfoTile = [&](const std::string &label, const std::string &value,
@@ -510,25 +510,25 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 9);
+    tile->setPadding(Edge::All, 7);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
-    auto *labelView = makeLabel(label, 13, ui_theme::textSecondary());
-    labelView->setHeight(18);
+    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+    labelView->setHeight(21);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
-    auto *valueView = makeLabel(value, 23, valueColor);
-    valueView->setHeight(28);
+    auto *valueView = makeLabel(value, 31, valueColor);
+    valueView->setHeight(38);
     valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(label);
     tile->addView(valueView);
 
-    auto *subView = makeLabel(subValue, 15, accent);
-    subView->setHeight(18);
+    auto *subView = makeLabel(subValue, 18, accent);
+    subView->setHeight(22);
     subView->setAlign(TextView::CENTER);
     subView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(subView);
@@ -557,7 +557,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   detailsGrid->setFlexWrap(YGWrapNoWrap);
   detailsGrid->setJustifyContent(YGJustifyCenter);
   detailsGrid->setAlignItems(YGAlignStretch);
-  detailsGrid->setHeight(80);
+  detailsGrid->setHeight(108);
   detailsGrid->setName("detailsGrid");
 
   auto addMetric = [&](const std::string &label, int count, Color accent,
@@ -570,16 +570,16 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 9);
+    tile->setPadding(Edge::All, 8);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
-    auto *labelView = makeLabel(label, 13, ui_theme::textSecondary());
-    labelView->setHeight(18);
+    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+    labelView->setHeight(21);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
-    auto *valueView = makeLabel(std::to_string(count), 26, accent);
-    valueView->setHeight(34);
+    auto *valueView = makeLabel(std::to_string(count), 34, accent);
+    valueView->setHeight(43);
     valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(id);
@@ -601,15 +601,15 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
-    auto *labelView = makeLabel(label, 13, ui_theme::textSecondary());
-    labelView->setHeight(18);
+    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+    labelView->setHeight(21);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
-    auto *valueView = makeLabel(std::to_string(countFor(judgement)), 26,
+    auto *valueView = makeLabel(std::to_string(countFor(judgement)), 34,
                                 accent);
-    valueView->setHeight(30);
+    valueView->setHeight(40);
     valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(id);
@@ -620,26 +620,26 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     timingRow->setFlexDirection(FlexDirection::Row);
     timingRow->setAlignItems(YGAlignCenter);
     timingRow->setJustifyContent(YGJustifyCenter);
-    timingRow->setHeight(20);
+    timingRow->setHeight(24);
 
     auto *fastText =
-        makeLabel(std::to_string(timing.fast), 17, ui_theme::cyan());
-    fastText->setWidth(42);
-    fastText->setHeight(20);
+        makeLabel(std::to_string(timing.fast), 20, ui_theme::cyan());
+    fastText->setWidth(52);
+    fastText->setHeight(24);
     fastText->setAlign(TextView::RIGHT);
     fastText->setName(id + "Fast");
     timingRow->addView(fastText);
 
-    auto *slashText = makeLabel("/", 17, ui_theme::textSecondary());
-    slashText->setWidth(12);
-    slashText->setHeight(20);
+    auto *slashText = makeLabel("/", 20, ui_theme::textSecondary());
+    slashText->setWidth(14);
+    slashText->setHeight(24);
     slashText->setAlign(TextView::CENTER);
     timingRow->addView(slashText);
 
     auto *slowText =
-        makeLabel(std::to_string(timing.slow), 17, ui_theme::amber());
-    slowText->setWidth(42);
-    slowText->setHeight(20);
+        makeLabel(std::to_string(timing.slow), 20, ui_theme::amber());
+    slowText->setWidth(52);
+    slowText->setHeight(24);
     slowText->setAlign(TextView::LEFT);
     slowText->setName(id + "Slow");
     timingRow->addView(slowText);
@@ -688,14 +688,14 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   actionsRow->setName("resultActions");
 
   auto btn = new Button(0, 0, 300, 80);
-  auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   btnText->setText("Back to Menu");
   btnText->setAlign(TextView::CENTER);
   btnText->setVAlign(TextView::MIDDLE);
   btnText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
   btn->setContentView(btnText);
   btn->setName("backButton");
-  btn->setSize(232, 64);
+  btn->setSize(252, 70);
   btn->setCornerRadius(ui_theme::controlRadius());
   btn->setBackgroundColors(
       ui_theme::withAlpha(ui_theme::primaryAction(), 182),
