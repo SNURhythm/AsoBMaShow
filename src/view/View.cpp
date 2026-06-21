@@ -340,6 +340,7 @@ View *View::setMargin(Edge edge, float margin) {
 
 View *View::setPadding(Edge edge, float padding) {
   YGNodeStyleSetPadding(node, static_cast<YGEdge>(edge), padding);
+  updateStoredPadding(edge, padding);
   return this;
 }
 

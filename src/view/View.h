@@ -356,12 +356,49 @@ protected:
 private:
   void renderBoxDecoration(RenderContext &context) const;
   [[nodiscard]] int getLayoutInset(YGEdge edge) const {
-    const float border = YGNodeLayoutGetBorder(node, edge);
-    const float padding = YGNodeLayoutGetPadding(node, edge);
-    const float inset =
-        (std::isfinite(border) ? border : 0.0f) +
-        (std::isfinite(padding) ? padding : 0.0f);
-    return std::max(0, static_cast<int>(std::round(inset)));
+    return (hasBorder ? std::max(0, borderWidth) : 0) + getStoredPadding(edge);
+  }
+  [[nodiscard]] int getStoredPadding(YGEdge edge) const {
+    switch (edge) {
+    case YGEdgeLeft:
+    case YGEdgeStart:
+      return paddingLeft;
+    case YGEdgeTop:
+      return paddingTop;
+    case YGEdgeRight:
+    case YGEdgeEnd:
+      return paddingRight;
+    case YGEdgeBottom:
+      return paddingBottom;
+    default:
+      return 0;
+    }
+  }
+  void updateStoredPadding(Edge edge, float padding) {
+    const int value =
+        std::max(0, static_cast<int>(std::round(std::max(0.0f, padding))));
+    switch (edge) {
+    case Edge::Left:
+    case Edge::Start:
+      paddingLeft = value;
+      break;
+    case Edge::Top:
+      paddingTop = value;
+      break;
+    case Edge::Right:
+    case Edge::End:
+      paddingRight = value;
+      break;
+    case Edge::Bottom:
+      paddingBottom = value;
+      break;
+    case Edge::All:
+      paddingLeft = value;
+      paddingTop = value;
+      paddingRight = value;
+      paddingBottom = value;
+      break;
+    }
   }
   void syncYogaBorderWidth() {
     YGNodeStyleSetBorder(
@@ -436,6 +473,10 @@ private:
   bool hasBorder = false;
   bool hasShadow = false;
   int borderWidth = 0;
+  int paddingLeft = 0;
+  int paddingTop = 0;
+  int paddingRight = 0;
+  int paddingBottom = 0;
   float cornerRadius = 0.0f;
   int shadowOffsetX = 0;
   int shadowOffsetY = 0;
