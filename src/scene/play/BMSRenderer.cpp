@@ -634,6 +634,9 @@ void BMSRenderer::drawJudgementCounterPanels() {
                                 gameplayHudTitleWidth());
   const bool topPosition =
       judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
+  if (topPosition) {
+    return;
+  }
 
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     const float itemX =
