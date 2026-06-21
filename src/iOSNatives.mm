@@ -136,15 +136,6 @@ void RestoreIOSViewportAfterKeyboardFocusOnce() {
   }
 }
 
-void ScheduleIOSViewportKeyboardRestore(NSTimeInterval delaySeconds) {
-  const dispatch_time_t when =
-      dispatch_time(DISPATCH_TIME_NOW,
-                    static_cast<int64_t>(delaySeconds * NSEC_PER_SEC));
-  dispatch_after(when, dispatch_get_main_queue(), ^{
-    RestoreIOSViewportAfterKeyboardFocusOnce();
-  });
-}
-
 int RoundedCGFloat(CGFloat value) {
   return static_cast<int>(std::lround(static_cast<double>(value)));
 }
@@ -1187,7 +1178,6 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                                                   context:editorContext
                                                  callback:editorCallback];
       [gNativeTextEditor showInView:rootView];
-      RestoreIOSViewportAfterKeyboardFocus();
     }
   };
 
@@ -1221,11 +1211,21 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
 }
 
 void RestoreIOSViewportAfterKeyboardFocus() {
-  dispatch_async(dispatch_get_main_queue(), ^{
+  auto restoreIfNoEditor = ^{
+    if (gNativeTextEditor != nil) {
+      return;
+    }
     RestoreIOSViewportAfterKeyboardFocusOnce();
-  });
-  ScheduleIOSViewportKeyboardRestore(0.12);
-  ScheduleIOSViewportKeyboardRestore(0.35);
+  };
+  auto scheduleRestore = ^(NSTimeInterval delaySeconds) {
+    const dispatch_time_t when =
+        dispatch_time(DISPATCH_TIME_NOW,
+                      static_cast<int64_t>(delaySeconds * NSEC_PER_SEC));
+    dispatch_after(when, dispatch_get_main_queue(), restoreIfNoEditor);
+  };
+  dispatch_async(dispatch_get_main_queue(), restoreIfNoEditor);
+  scheduleRestore(0.12);
+  scheduleRestore(0.35);
 }
 
 @interface AsoFolderPickerDelegate : NSObject <UIDocumentPickerDelegate> {

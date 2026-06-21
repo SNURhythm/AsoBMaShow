@@ -721,7 +721,6 @@ void run() {
 
 #if TARGET_OS_IPHONE
     auto restoreIOSViewportAfterKeyboardFocus = [&]() {
-      SDL_StopTextInput();
       RestoreIOSViewportAfterKeyboardFocus();
 
       int logicalW = 0;
