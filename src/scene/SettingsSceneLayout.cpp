@@ -1468,13 +1468,16 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   loadChartEntries();
   refreshChartEntryBackupStatuses();
 
-  const int tableCardWidth =
-      metrics.useDualCardRow ? metrics.secondaryCardWidth : metrics.cardsWidth;
+  const std::string tableCardDescription =
+      metrics.compact ? "Import a bmstable page, header, or table list URL."
+                      : "Import a bmstable page URL or a direct header JSON "
+                        "URL. Table-list JSON URLs import each listed table.";
 
   auto *addControls = new View();
   addControls->setFlexDirection(FlexDirection::Column);
   addControls->setGap(metrics.compact ? 12.0f : 16.0f);
   addControls->setAlignItems(YGAlignFlexStart);
+  addControls->setAlignSelf(YGAlignStretch);
 
   const int addRowGap = metrics.compact ? 8 : 12;
   const int addButtonWidth = metrics.compact ? 150 : 170;
@@ -1514,16 +1517,10 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
             difficultyTableStatusColor.b, difficultyTableStatusColor.a));
   addControls->addView(difficultyTableStatusText);
 
-  auto *addTableCard = makeCard(
-      metrics, "Add Difficulty Table",
-      metrics.compact ? "Import a bmstable page, header, or table list URL."
-                      : "Import a bmstable page URL or a direct header JSON "
-                        "URL. Table-list JSON URLs import each listed table.",
-      addControls, metrics.modeCardHeight, tableCardWidth);
-
   auto *tableList = new View();
   tableList->setFlexDirection(FlexDirection::Column);
   tableList->setGap(metrics.compact ? 10.0f : 12.0f);
+  tableList->setAlignSelf(YGAlignStretch);
 
   if (difficultyTables.empty()) {
     tableList->addView(makeWrappedText("No difficulty tables are installed.",
@@ -1589,20 +1586,16 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
     }
   }
 
-  auto *installedTablesCard = makeCard(
-      metrics, "Installed Tables",
-      metrics.compact ? "Update from source URL or remove a table."
-                      : "Update a table from its stored source URL or remove "
-                        "it from the chart database.",
-      tableList, metrics.modeCardHeight, tableCardWidth);
+  auto *installedTablesBody = new View();
+  installedTablesBody->setFlexDirection(FlexDirection::Column);
+  installedTablesBody->setGap(metrics.compact ? 14.0f : 18.0f);
+  installedTablesBody->setAlignSelf(YGAlignStretch);
+  installedTablesBody->addView(addControls);
+  installedTablesBody->addView(tableList);
 
-  auto *tableCards = new View();
-  tableCards->setFlexDirection(
-      metrics.useDualCardRow ? FlexDirection::Row : FlexDirection::Column);
-  tableCards->setGap(static_cast<float>(metrics.secondaryGap));
-  tableCards->addView(addTableCard);
-  tableCards->addView(installedTablesCard);
-  cardsColumn->addView(tableCards);
+  cardsColumn->addView(makeCard(metrics, "Installed Difficulty Tables",
+                                tableCardDescription, installedTablesBody,
+                                metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *folderList = new View();
   folderList->setFlexDirection(FlexDirection::Column);
