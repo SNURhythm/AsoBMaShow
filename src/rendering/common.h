@@ -5,6 +5,7 @@ class Camera;
 #include "RenderPlan.h"
 #include <string>
 #include <algorithm>
+#include <cmath>
 #define SHADER_SIMPLE "vs_simple.bin", "fs_simple.bin"
 #define SHADER_TEXT "vs_text.bin", "fs_text.bin"
 #define SHADER_UI_SHADOW "vs_text.bin", "fs_shadow.bin"
@@ -128,10 +129,18 @@ inline void setScissorUI(int x, int y, int width, int height) {
     bgfx::setScissor();
     return;
   }
-  int sx = ui_offset_x + static_cast<int>(x * ui_scale_x);
-  int sy = ui_offset_y + static_cast<int>(y * ui_scale_y);
-  int sw = static_cast<int>(width * ui_scale_x);
-  int sh = static_cast<int>(height * ui_scale_y);
+  const int sx0 =
+      ui_offset_x + static_cast<int>(std::floor(x * ui_scale_x));
+  const int sy0 =
+      ui_offset_y + static_cast<int>(std::floor(y * ui_scale_y));
+  const int sx1 = ui_offset_x +
+                  static_cast<int>(std::ceil((x + width) * ui_scale_x));
+  const int sy1 = ui_offset_y +
+                  static_cast<int>(std::ceil((y + height) * ui_scale_y));
+  int sx = sx0;
+  int sy = sy0;
+  int sw = sx1 - sx0;
+  int sh = sy1 - sy0;
   if (sw <= 0 || sh <= 0) {
     bgfx::setScissor(0, 0, 0, 0);
     return;
