@@ -100,6 +100,51 @@ UIWindow *FindActiveWindow() {
   return UIApplication.sharedApplication.keyWindow;
 }
 
+void RestoreIOSViewportAfterKeyboardFocusOnce() {
+  @autoreleasepool {
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) {
+      return;
+    }
+
+    UIViewController *rootController = window.rootViewController;
+    UIView *rootView = rootController.view;
+    if (rootController == nil || rootView == nil) {
+      return;
+    }
+
+    @try {
+      if ([rootController
+              respondsToSelector:NSSelectorFromString(@"setKeyboardHeight:")]) {
+        [rootController setValue:@0 forKey:@"keyboardHeight"];
+      }
+      if ([rootController
+              respondsToSelector:NSSelectorFromString(@"setKeyboardVisible:")]) {
+        [rootController setValue:@NO forKey:@"keyboardVisible"];
+      }
+    } @catch (NSException *exception) {
+      (void)exception;
+    }
+
+    const CGRect windowBounds = window.bounds;
+    if (!CGRectIsEmpty(windowBounds) &&
+        !CGRectEqualToRect(rootView.frame, windowBounds)) {
+      rootView.frame = windowBounds;
+    }
+    [rootView setNeedsLayout];
+    [rootView layoutIfNeeded];
+  }
+}
+
+void ScheduleIOSViewportKeyboardRestore(NSTimeInterval delaySeconds) {
+  const dispatch_time_t when =
+      dispatch_time(DISPATCH_TIME_NOW,
+                    static_cast<int64_t>(delaySeconds * NSEC_PER_SEC));
+  dispatch_after(when, dispatch_get_main_queue(), ^{
+    RestoreIOSViewportAfterKeyboardFocusOnce();
+  });
+}
+
 int RoundedCGFloat(CGFloat value) {
   return static_cast<int>(std::lround(static_cast<double>(value)));
 }
@@ -1142,6 +1187,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                                                   context:editorContext
                                                  callback:editorCallback];
       [gNativeTextEditor showInView:rootView];
+      RestoreIOSViewportAfterKeyboardFocus();
     }
   };
 
@@ -1172,6 +1218,14 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
   } else {
     dispatch_async(dispatch_get_main_queue(), hideBlock);
   }
+}
+
+void RestoreIOSViewportAfterKeyboardFocus() {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RestoreIOSViewportAfterKeyboardFocusOnce();
+  });
+  ScheduleIOSViewportKeyboardRestore(0.12);
+  ScheduleIOSViewportKeyboardRestore(0.35);
 }
 
 @interface AsoFolderPickerDelegate : NSObject <UIDocumentPickerDelegate> {
