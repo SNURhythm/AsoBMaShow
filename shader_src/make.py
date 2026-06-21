@@ -52,6 +52,7 @@ def compile_all_shaders():
     # glob recursively
     fs_shaders = glob.glob("**/fs_*.sc", recursive=True)
     vs_shaders = glob.glob("**/vs_*.sc", recursive=True)
+    compile_dx11 = sys.platform == "win32"
 
     for fs_shader in fs_shaders:
         if fs_shader.endswith("def.sc"):
@@ -64,8 +65,10 @@ def compile_all_shaders():
         if should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "spirv")
         dst = "../shaders/dx11/" + fs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(fs_shader, dst):
+        if compile_dx11 and should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "s_5_0")
+        elif not compile_dx11 and not os.path.exists(dst):
+            print(f"Skipping DX11 shader on this platform: {dst}")
 
     for vs_shader in vs_shaders:
         if vs_shader.endswith("def.sc"):
@@ -78,8 +81,10 @@ def compile_all_shaders():
         if should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "spirv")
         dst = "../shaders/dx11/" + vs_shader.replace(".sc", ".bin")
-        if should_recompile_shader(vs_shader, dst):
+        if compile_dx11 and should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "s_5_0")
+        elif not compile_dx11 and not os.path.exists(dst):
+            print(f"Skipping DX11 shader on this platform: {dst}")
 
 
 if __name__ == "__main__":

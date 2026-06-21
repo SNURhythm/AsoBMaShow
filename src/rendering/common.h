@@ -7,6 +7,7 @@ class Camera;
 #include <algorithm>
 #define SHADER_SIMPLE "vs_simple.bin", "fs_simple.bin"
 #define SHADER_TEXT "vs_text.bin", "fs_text.bin"
+#define SHADER_UI_SHADOW "vs_text.bin", "fs_shadow.bin"
 #define SHADER_YUVRGB "vs_yuvrgb.bin", "fs_yuvrgb.bin"
 #define SHADER_BGALAYER "vs_text.bin", "fs_bgalayer.bin"
 namespace rendering {

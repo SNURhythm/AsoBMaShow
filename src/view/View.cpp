@@ -1,25 +1,12 @@
 #include "View.h"
 
+#include "../rendering/UniformCache.h"
+
 #include <cmath>
 #include <utility>
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
-
-Color colorWithAlphaScale(Color color, float alphaScale) {
-  color.a = static_cast<uint8_t>(std::clamp(
-      static_cast<int>(std::lround(static_cast<float>(color.a) * alphaScale)),
-      0, 255));
-  return color;
-}
-
-int shadowLayerCount(int spread) { return std::clamp(spread, 8, 24); }
-
-float shadowAlphaScale(int layer, int layerCount) {
-  const float t = static_cast<float>(layer) / static_cast<float>(layerCount);
-  const float inner = 1.0f - t;
-  return 0.025f + std::pow(inner, 1.35f) * 0.055f;
-}
 
 RenderContext shadowRenderContext(const RenderContext &context, int spread,
                                   int offsetX, int offsetY) {
@@ -70,7 +57,7 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
   }
 
   const int segments =
-      std::clamp(static_cast<int>(std::ceil(radius / 2.0f)), 6, 24);
+      std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
   const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
   const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
   const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
@@ -128,6 +115,79 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
   bgfx::submit(rendering::ui_view, kSimpleProgram);
+}
+
+void submitShadowRect(const RenderContext &context, int x, int y, int width,
+                      int height, float radius, int spread,
+                      const Color &color) {
+  if (width <= 0 || height <= 0 || spread <= 0 || color.a == 0) {
+    return;
+  }
+
+  radius = std::clamp(radius, 0.0f,
+                      static_cast<float>(std::min(width, height)) * 0.5f);
+  const int shadowX = x - spread;
+  const int shadowY = y - spread;
+  const int shadowWidth = width + spread * 2;
+  const int shadowHeight = height + spread * 2;
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  constexpr uint32_t kVertexCount = 4;
+  constexpr uint32_t kIndexCount = 6;
+  if (bgfx::getAvailTransientVertexBuffer(
+          kVertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
+          kVertexCount ||
+      bgfx::getAvailTransientIndexBuffer(kIndexCount) < kIndexCount) {
+    return;
+  }
+  bgfx::allocTransientVertexBuffer(&tvb, kVertexCount,
+                                   rendering::PosTexCoord0Vertex::ms_decl);
+  bgfx::allocTransientIndexBuffer(&tib, kIndexCount);
+
+  auto *vertices =
+      reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
+  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+  vertices[0] = {static_cast<float>(shadowX), static_cast<float>(shadowY),
+                 0.0f, 0.0f, 0.0f};
+  vertices[1] = {static_cast<float>(shadowX + shadowWidth),
+                 static_cast<float>(shadowY), 0.0f, 1.0f, 0.0f};
+  vertices[2] = {static_cast<float>(shadowX + shadowWidth),
+                 static_cast<float>(shadowY + shadowHeight), 0.0f, 1.0f,
+                 1.0f};
+  vertices[3] = {static_cast<float>(shadowX),
+                 static_cast<float>(shadowY + shadowHeight), 0.0f, 0.0f,
+                 1.0f};
+
+  indices[0] = 0;
+  indices[1] = 1;
+  indices[2] = 2;
+  indices[3] = 2;
+  indices[4] = 3;
+  indices[5] = 0;
+
+  const float inv255 = 1.0f / 255.0f;
+  const float shadowColor[4] = {static_cast<float>(color.r) * inv255,
+                                static_cast<float>(color.g) * inv255,
+                                static_cast<float>(color.b) * inv255,
+                                static_cast<float>(color.a) * inv255};
+  const float shadowParams[4] = {static_cast<float>(width),
+                                 static_cast<float>(height), radius,
+                                 static_cast<float>(spread)};
+  bgfx::setUniform(
+      rendering::UniformCache::getInstance().getVec4("u_shadowColor"),
+      shadowColor);
+  bgfx::setUniform(
+      rendering::UniformCache::getInstance().getVec4("u_shadowParams"),
+      shadowParams);
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+  static const bgfx::ProgramHandle kShadowProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_UI_SHADOW);
+  bgfx::submit(rendering::ui_view, kShadowProgram);
 }
 
 void submitGradientRect(const RenderContext &context, int x, int y, int width,
@@ -505,18 +565,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
   if (hasShadow) {
     const RenderContext shadowContext = shadowRenderContext(
         context, shadowSpread, shadowOffsetX, shadowOffsetY);
-    const int shadowLayers = shadowLayerCount(shadowSpread);
-    for (int layer = shadowLayers; layer >= 1; --layer) {
-      const float t =
-          static_cast<float>(layer) / static_cast<float>(shadowLayers);
-      const int grow =
-          std::max(1, static_cast<int>(std::lround(shadowSpread * t)));
-      const Color layerColor = colorWithAlphaScale(
-          shadowColor, shadowAlphaScale(layer, shadowLayers));
-      submitRoundedRect(shadowContext, x + shadowOffsetX - grow,
-                        y + shadowOffsetY - grow, width + grow * 2,
-                        height + grow * 2, cornerRadius + grow, layerColor);
-    }
+    submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
+                     width, height, cornerRadius, shadowSpread, shadowColor);
   }
 
   if (rounded && hasBorder && inset > 0 && hasBackground) {
