@@ -4,22 +4,13 @@
 #include <iostream>
 #include "SDL2/SDL_metal.h"
 #include "iOSNatives.hpp"
-#include "targets.h"
-
-#if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-namespace {
-SDL_MetalView g_metalView = nullptr;
-void *g_metalLayer = nullptr;
-} // namespace
-#endif
-
 void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi,
                               SDL_Window *sdlWindow) {
 #if BX_PLATFORM_IOS || BX_PLATFORM_OSX
-  g_metalView = SDL_Metal_CreateView(sdlWindow);
-  g_metalLayer = SDL_Metal_GetLayer(g_metalView);
+  SDL_MetalView metalView = SDL_Metal_CreateView(sdlWindow);
+  void *mtlLayer = SDL_Metal_GetLayer(metalView);
   pd.ndt = nullptr;
-  pd.nwh = g_metalLayer;
+  pd.nwh = mtlLayer;
   pd.context = nullptr;
   pd.backBuffer = nullptr;
   pd.backBufferDS = nullptr;
@@ -96,17 +87,5 @@ void setup_bgfx_platform_data(bgfx::PlatformData &pd, const SDL_SysWMinfo &wmi,
   pd.context = nullptr;
   pd.backBuffer = nullptr;
   pd.backBufferDS = nullptr;
-#endif
-}
-
-bool sync_bgfx_metal_layer_drawable_size(int drawableWidth,
-                                         int drawableHeight) {
-#if TARGET_OS_IPHONE
-  return SyncIOSMetalLayerDrawableSize(g_metalView, g_metalLayer,
-                                       drawableWidth, drawableHeight);
-#else
-  (void)drawableWidth;
-  (void)drawableHeight;
-  return false;
 #endif
 }

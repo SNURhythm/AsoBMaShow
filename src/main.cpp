@@ -515,8 +515,6 @@ int main(int argv, char **args) {
 
   bgfx::PlatformData pd{};
   setup_bgfx_platform_data(pd, wmi, win);
-  sync_bgfx_metal_layer_drawable_size(rendering::render_width,
-                                      rendering::render_height);
 
   bgfx::Init bgfx_init;
 #if __APPLE__
@@ -807,7 +805,6 @@ void run() {
         SDL_RenderSetScale(s_renderer, rendering::widthScale,
                            rendering::heightScale);
       }
-      sync_bgfx_metal_layer_drawable_size(targetRenderW, targetRenderH);
 #endif
       activeWindowLogicalW = logicalW;
       activeWindowLogicalH = logicalH;
@@ -983,10 +980,6 @@ void run() {
           context.replayVideoExportActive.load(std::memory_order_acquire) &&
           context.replayVideoExportUiFrameRequested.load(
               std::memory_order_acquire)) {
-#if TARGET_OS_IPHONE
-        sync_bgfx_metal_layer_drawable_size(rendering::render_width,
-                                            rendering::render_height);
-#endif
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         sceneManager.render();
@@ -1001,10 +994,6 @@ void run() {
                      std::memory_order_acquire)) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
-#if TARGET_OS_IPHONE
-        sync_bgfx_metal_layer_drawable_size(rendering::render_width,
-                                            rendering::render_height);
-#endif
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         if (hasActiveVisuals) {

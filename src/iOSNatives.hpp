@@ -59,8 +59,6 @@ void *StartIOSSecurityScopedResource(const std::string &path,
 void StopIOSSecurityScopedResource(void *resource);
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool GetIOSWindowDrawablePixelSize(int &width, int &height);
-bool SyncIOSMetalLayerDrawableSize(void *metalView, void *metalLayer,
-                                   int drawableWidth, int drawableHeight);
 bool ConsumeIOSDisplayRefreshRequest();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
