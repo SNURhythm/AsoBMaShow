@@ -69,6 +69,12 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     const auto it = resultState.judgeCount.find(judgement);
     return it == resultState.judgeCount.end() ? 0 : it->second;
   };
+  auto fastSlowFor = [&resultState](Judgement judgement) {
+    const auto it = resultState.judgementFastSlowCount.find(judgement);
+    return it == resultState.judgementFastSlowCount.end()
+               ? JudgementFastSlowCount{}
+               : it->second;
+  };
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -208,12 +214,65 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     detailsGrid->addView(tile);
   };
 
-  addMetric("PGREAT", countFor(PGreat), ui_theme::cyan(), "pgreat");
-  addMetric("GREAT", countFor(Great), ui_theme::lime(), "great");
-  addMetric("GOOD", countFor(Good), ui_theme::amber(), "good");
-  addMetric("BAD", countFor(Bad), Color(255, 132, 96, 255), "bad");
-  addMetric("POOR", countFor(Poor), ui_theme::coral(), "poor");
-  addMetric("KPOOR", countFor(Kpoor), Color(255, 78, 102, 255), "kpoor");
+  auto addJudgementMetric = [&](const std::string &label, Judgement judgement,
+                                Color accent, const std::string &id) {
+    auto *tile = makePanel(ui_theme::panelSubtle(),
+                           Color(accent.r, accent.g, accent.b, 190));
+    tile->setWidth(190);
+    tile->setHeight(82);
+    tile->setPadding(Edge::All, 8);
+    tile->setFlexDirection(FlexDirection::Column);
+    tile->setJustifyContent(YGJustifyCenter);
+
+    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+    labelView->setHeight(18);
+    tile->addView(labelView);
+
+    auto *valueView = makeLabel(std::to_string(countFor(judgement)), 27,
+                                accent);
+    valueView->setHeight(30);
+    valueView->setName(id);
+    tile->addView(valueView);
+
+    const JudgementFastSlowCount timing = fastSlowFor(judgement);
+    auto *timingRow = new View();
+    timingRow->setFlexDirection(FlexDirection::Row);
+    timingRow->setAlignItems(YGAlignCenter);
+    timingRow->setJustifyContent(YGJustifyCenter);
+    timingRow->setHeight(20);
+
+    auto *fastText =
+        makeLabel(std::to_string(timing.fast), 18, ui_theme::cyan());
+    fastText->setWidth(50);
+    fastText->setHeight(20);
+    fastText->setAlign(TextView::RIGHT);
+    fastText->setName(id + "Fast");
+    timingRow->addView(fastText);
+
+    auto *slashText = makeLabel("/", 18, ui_theme::textSecondary());
+    slashText->setWidth(14);
+    slashText->setHeight(20);
+    slashText->setAlign(TextView::CENTER);
+    timingRow->addView(slashText);
+
+    auto *slowText =
+        makeLabel(std::to_string(timing.slow), 18, ui_theme::amber());
+    slowText->setWidth(50);
+    slowText->setHeight(20);
+    slowText->setAlign(TextView::LEFT);
+    slowText->setName(id + "Slow");
+    timingRow->addView(slowText);
+
+    tile->addView(timingRow);
+    detailsGrid->addView(tile);
+  };
+
+  addJudgementMetric("PGREAT", PGreat, ui_theme::cyan(), "pgreat");
+  addJudgementMetric("GREAT", Great, ui_theme::lime(), "great");
+  addJudgementMetric("GOOD", Good, ui_theme::amber(), "good");
+  addJudgementMetric("BAD", Bad, Color(255, 132, 96, 255), "bad");
+  addJudgementMetric("POOR", Poor, ui_theme::coral(), "poor");
+  addJudgementMetric("KPOOR", Kpoor, Color(255, 78, 102, 255), "kpoor");
   addMetric("BREAK", resultState.comboBreak, ui_theme::coral(), "break");
   addMetric("FAST", resultState.fastCount, ui_theme::cyan(), "fast");
   addMetric("SLOW", resultState.slowCount, ui_theme::amber(), "slow");

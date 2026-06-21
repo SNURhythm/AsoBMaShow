@@ -1132,12 +1132,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);
 
-  if (judgeResult.judgement != None && judgeResult.judgement != Kpoor) {
-    if (judgeResult.Diff < 0)
-      state->fastCount++;
-    else if (judgeResult.Diff > 0)
-      state->slowCount++;
-  }
+  state->recordFastSlow(judgeResult);
 
   state->applyGaugeJudgement(judgeResult.judgement);
   updateGaugeStatusText();
