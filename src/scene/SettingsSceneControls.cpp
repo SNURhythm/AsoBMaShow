@@ -178,6 +178,14 @@ void SettingsScene::refreshSettingsText() {
       formatNoteStartPositionLabel(context.settings.noteStartPositionPercent);
   const std::string previewPlayAreaWidthLabel =
       formatPlayAreaWidthLabel(context.settings.playAreaWidthForKeyMode(7));
+  const std::string judgementTextYLabel = formatJudgementPercentLabel(
+      judgementTextYToPercent(context.settings.judgementTextY));
+  const std::string judgementIndicatorYLabel = formatJudgementPercentLabel(
+      judgementIndicatorYToPercent(context.settings.judgementIndicatorY));
+  const std::string judgementIndicatorWidthLabel =
+      std::to_string(judgementIndicatorWidthScaleToPercent(
+          context.settings.judgementIndicatorWidthScale)) +
+      "%";
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
@@ -242,6 +250,20 @@ void SettingsScene::refreshSettingsText() {
   }
   if (summaryPreviewPlayAreaWidthValueText != nullptr) {
     summaryPreviewPlayAreaWidthValueText->setText(previewPlayAreaWidthLabel);
+  }
+  if (summaryJudgementTextYValueText != nullptr) {
+    summaryJudgementTextYValueText->setText(judgementTextYLabel);
+  }
+  if (summaryJudgementIndicatorYValueText != nullptr) {
+    summaryJudgementIndicatorYValueText->setText(judgementIndicatorYLabel);
+  }
+  if (summaryJudgementIndicatorWidthValueText != nullptr) {
+    summaryJudgementIndicatorWidthValueText->setText(
+        judgementIndicatorWidthLabel);
+  }
+  if (summaryJudgementCounterPositionValueText != nullptr) {
+    summaryJudgementCounterPositionValueText->setText(
+        judgementCounterPositionLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);

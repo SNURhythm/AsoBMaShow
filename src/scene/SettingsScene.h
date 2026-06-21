@@ -2,8 +2,10 @@
 
 #include "../ChartDBHelper.h"
 #include "Scene.h"
+#include "play/Judge.h"
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -73,6 +75,10 @@ private:
   TextView *summaryLaneBeamLengthValueText = nullptr;
   TextView *summaryNoteStartPositionValueText = nullptr;
   TextView *summaryPreviewPlayAreaWidthValueText = nullptr;
+  TextView *summaryJudgementTextYValueText = nullptr;
+  TextView *summaryJudgementIndicatorYValueText = nullptr;
+  TextView *summaryJudgementIndicatorWidthValueText = nullptr;
+  TextView *summaryJudgementCounterPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextView *summaryUiThemeValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
@@ -144,6 +150,8 @@ private:
   long long previewElapsedMicros = 0;
   int previewCombo = 0;
   int previewScore = 0;
+  int previewComboBreak = 0;
+  std::map<Judgement, int> previewJudgeCount;
   SettingsTab activeTab = SettingsTab::Timing;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
@@ -224,6 +232,8 @@ private:
   void destroyPreviewInputHandler();
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
+  void resetPreviewHudSample();
+  void publishPreviewJudgement(const JudgeResult &judgeResult);
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();

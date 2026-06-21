@@ -539,6 +539,23 @@ static float judgementIndicatorPercentToY(int percent) {
   return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
 }
 
+static float clampJudgementTextY(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultJudgementTextY;
+  }
+  return std::clamp(value, AppSettings::kMinJudgementTextY,
+                    AppSettings::kMaxJudgementTextY);
+}
+
+static int judgementTextYToPercent(float value) {
+  return static_cast<int>(
+      std::lround(clampJudgementTextY(value) * 100.0f));
+}
+
+static float judgementTextPercentToY(int percent) {
+  return clampJudgementTextY(static_cast<float>(percent) / 100.0f);
+}
+
 static float clampJudgementIndicatorWidthScale(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementIndicatorWidthScale;
@@ -644,6 +661,10 @@ static std::string formatLaneBeamLengthLabel(int percent) {
 
 static std::string formatNoteStartPositionLabel(int percent) {
   return std::to_string(clampNoteStartPositionPercent(percent)) + "%";
+}
+
+static std::string formatJudgementPercentLabel(int percent) {
+  return std::to_string(std::clamp(percent, 0, 100)) + "%";
 }
 
 static std::string formatPlayAreaWidthLabel(float width) {

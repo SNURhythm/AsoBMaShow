@@ -38,6 +38,10 @@ void SettingsScene::resetViewState() {
   summaryLaneBeamLengthValueText = nullptr;
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
+  summaryJudgementTextYValueText = nullptr;
+  summaryJudgementIndicatorYValueText = nullptr;
+  summaryJudgementIndicatorWidthValueText = nullptr;
+  summaryJudgementCounterPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryUiThemeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
@@ -258,7 +262,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setAlignItems(YGAlignFlexStart);
 
   const int foldButtonSize = metrics.compact ? 54 : 58;
-  constexpr int previewPanelPageCount = 2;
+  constexpr int previewPanelPageCount = 3;
   if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
     previewPanelPage = 0;
   }
@@ -314,14 +318,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeaderActions->setAlignItems(YGAlignCenter);
   auto *pageButton =
       makeButton(metrics.compact ? 78 : 88, foldButtonSize,
-                 makeText(std::to_string(previewPanelPage + 1) + "/2",
+                 makeText(std::to_string(previewPanelPage + 1) + "/3",
                           metrics.smallTextSize, ui_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE),
                  ui_theme::control(), ui_theme::controlHover(),
                  ui_theme::controlPressed(), ui_theme::hairline(),
                  ui_theme::accentBorder(), ui_theme::accentBorderStrong());
   pageButton->setOnClickListener([this]() {
-    previewPanelPage = (previewPanelPage + 1) % 2;
+    previewPanelPage = (previewPanelPage + 1) % previewPanelPageCount;
     lastLayoutWidth = -1;
   });
   previewHeaderActions->addView(pageButton);
@@ -390,7 +394,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     lengthControls->addView(resetLength);
     previewPanel->addView(lengthControls);
-  } else {
+  } else if (previewPanelPage == 1) {
     previewPanel->addView(makeSummaryRow(metrics, "Note Start",
                                          &summaryNoteStartPositionValueText));
     auto *noteStartControls = new View();
@@ -484,6 +488,153 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     playAreaWidthControls->addView(resetWidth);
     previewPanel->addView(playAreaWidthControls);
+  } else {
+    auto makePreviewStepRow = [&metrics](Button *minus, Button *plus,
+                                         Button *reset) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row);
+      row->setFlexWrap(YGWrapWrap);
+      row->setGap(metrics.compact ? 8.0f : 10.0f);
+      row->addView(minus);
+      row->addView(plus);
+      row->addView(reset);
+      return row;
+    };
+
+    previewPanel->addView(makeSummaryRow(metrics, "Judge Text Y",
+                                         &summaryJudgementTextYValueText));
+    auto updateJudgementTextY = [this](int deltaPercent) {
+      const int currentPercent =
+          judgementTextYToPercent(context.settings.judgementTextY);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, 0, 100);
+      context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
+      persistSettings();
+    };
+    auto *minusJudgementTextY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusJudgementTextY->setOnClickListener(
+        [updateJudgementTextY]() { updateJudgementTextY(-10); });
+    auto *plusJudgementTextY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusJudgementTextY->setOnClickListener(
+        [updateJudgementTextY]() { updateJudgementTextY(10); });
+    auto *resetJudgementTextY = makeResetButton(metrics);
+    resetJudgementTextY->setOnClickListener([this]() {
+      context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
+      persistSettings();
+    });
+    previewPanel->addView(makePreviewStepRow(
+        minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
+
+    auto *indicatorModeControls = new View();
+    indicatorModeControls->setFlexDirection(FlexDirection::Row);
+    indicatorModeControls->setFlexWrap(YGWrapWrap);
+    indicatorModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    judgementIndicatorModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorModeButton =
+        makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                         judgementIndicatorModeText, ui_theme::lime());
+    judgementIndicatorModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorEnabled =
+          !context.settings.judgementIndicatorEnabled;
+      persistSettings();
+    });
+    indicatorModeControls->addView(judgementIndicatorModeButton);
+    judgementIndicatorRenderModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorRenderModeButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementIndicatorRenderModeText);
+    judgementIndicatorRenderModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorRenderMode =
+          nextJudgementIndicatorRenderMode(
+              context.settings.judgementIndicatorRenderMode);
+      persistSettings();
+    });
+    indicatorModeControls->addView(judgementIndicatorRenderModeButton);
+    previewPanel->addView(indicatorModeControls);
+
+    previewPanel->addView(makeSummaryRow(metrics, "Indicator Y",
+                                         &summaryJudgementIndicatorYValueText));
+    auto updateIndicatorY = [this](int deltaPercent) {
+      const int currentPercent =
+          judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, 0, 100);
+      context.settings.judgementIndicatorY =
+          judgementIndicatorPercentToY(nextPercent);
+      persistSettings();
+    };
+    auto *minusIndicatorY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusIndicatorY->setOnClickListener(
+        [updateIndicatorY]() { updateIndicatorY(-10); });
+    auto *plusIndicatorY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusIndicatorY->setOnClickListener(
+        [updateIndicatorY]() { updateIndicatorY(10); });
+    auto *resetIndicatorY = makeResetButton(metrics);
+    resetIndicatorY->setOnClickListener([this]() {
+      context.settings.judgementIndicatorY =
+          AppSettings::kDefaultJudgementIndicatorY;
+      persistSettings();
+    });
+    previewPanel->addView(
+        makePreviewStepRow(minusIndicatorY, plusIndicatorY, resetIndicatorY));
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Indicator Width", &summaryJudgementIndicatorWidthValueText));
+    auto updateIndicatorWidth = [this](int deltaPercent) {
+      const int currentPercent = judgementIndicatorWidthScaleToPercent(
+          context.settings.judgementIndicatorWidthScale);
+      const int minPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMinJudgementIndicatorWidthScale);
+      const int maxPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMaxJudgementIndicatorWidthScale);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
+      context.settings.judgementIndicatorWidthScale =
+          judgementIndicatorWidthPercentToScale(nextPercent);
+      persistSettings();
+    };
+    auto *minusIndicatorWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusIndicatorWidth->setOnClickListener(
+        [updateIndicatorWidth]() { updateIndicatorWidth(-10); });
+    auto *plusIndicatorWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusIndicatorWidth->setOnClickListener(
+        [updateIndicatorWidth]() { updateIndicatorWidth(10); });
+    auto *resetIndicatorWidth = makeResetButton(metrics);
+    resetIndicatorWidth->setOnClickListener([this]() {
+      context.settings.judgementIndicatorWidthScale =
+          AppSettings::kDefaultJudgementIndicatorWidthScale;
+      persistSettings();
+    });
+    previewPanel->addView(makePreviewStepRow(
+        minusIndicatorWidth, plusIndicatorWidth, resetIndicatorWidth));
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Counter", &summaryJudgementCounterPositionValueText));
+    judgementCounterPositionText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementCounterPositionButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementCounterPositionText);
+    judgementCounterPositionButton->setOnClickListener([this]() {
+      context.settings.judgementCounterPosition =
+          nextJudgementCounterPosition(
+              context.settings.judgementCounterPosition);
+      persistSettings();
+    });
+    previewPanel->addView(judgementCounterPositionButton);
   }
 
   auto *restartButton = makeButton(
@@ -1107,6 +1258,32 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+
+  auto *previewControls = new View();
+  previewControls->setFlexDirection(FlexDirection::Column);
+  previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  previewControls->setAlignItems(YGAlignFlexStart);
+  previewControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Open a live gameplay preview with falling notes."
+          : "Open a live gameplay preview with falling notes. It uses the "
+            "same lane renderer, camera, viewport, notes, and HUD as "
+            "gameplay.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *previewButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::lime());
+  previewButton->setOnClickListener([this]() { startLanePreview(); });
+  previewControls->addView(previewButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Gameplay Preview",
+      metrics.compact ? "Test lane and HUD setup in the gameplay renderer."
+                      : "Test lane and HUD setup in the gameplay renderer "
+                        "before entering a chart.",
+      previewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, false);
   cardsColumn->addView(makeCard(
       metrics, "Visible Time",
@@ -1407,30 +1584,6 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "beam.",
       beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
-  auto *previewControls = new View();
-  previewControls->setFlexDirection(FlexDirection::Column);
-  previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  previewControls->setAlignItems(YGAlignFlexStart);
-  previewControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Open a live gameplay preview with falling notes."
-          : "Open a live gameplay preview with falling notes. It uses the "
-            "same lane renderer, camera, viewport, and note textures as "
-            "gameplay.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
-  auto *previewButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
-  previewButton->setOnClickListener([this]() { startLanePreview(); });
-  previewControls->addView(previewButton);
-  cardsColumn->addView(makeCard(
-      metrics, "Gameplay Preview",
-      metrics.compact ? "Test lane setup in the gameplay renderer."
-                      : "Test lane setup in the gameplay renderer before "
-                        "entering a chart.",
-      previewControls, metrics.modeCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
 
