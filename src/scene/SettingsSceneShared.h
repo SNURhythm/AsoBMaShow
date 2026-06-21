@@ -420,7 +420,7 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
   card->setThemedBackgroundColor(ui_theme::panel);
   card->setCornerRadius(ui_theme::panelRadius());
-  card->setThemedShadow(ui_theme::shadow, 0, 10, 16);
+  card->setThemedShadow(ui_theme::cardShadow, ui_theme::kCardShadow);
   card->setThemedBorderColor(ui_theme::hairline);
   card->setBorderWidth(1);
   card->setMinHeight(static_cast<float>(minHeight));

@@ -14,6 +14,11 @@
 #include "../rendering/Color.h"
 #include "bgfx/bgfx.h"
 #include "bgfx/defines.h"
+
+namespace ui_theme {
+struct ShadowSpec;
+}
+
 enum class Edge {
   Left = YGEdgeLeft,
   Top = YGEdgeTop,
@@ -315,8 +320,11 @@ public:
   View *setCornerRadius(float radius);
   [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
   View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
+  View *setShadow(const Color &color, const ui_theme::ShadowSpec &shadow);
   View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
                         int spread);
+  View *setThemedShadow(ThemeColorProvider provider,
+                        const ui_theme::ShadowSpec &shadow);
   View *clearShadow();
   View *setBorderColor(const Color &color);
   View *setThemedBorderColor(ThemeColorProvider provider);

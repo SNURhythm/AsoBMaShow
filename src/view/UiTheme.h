@@ -29,6 +29,18 @@ struct Palette {
   Color hairline;
 };
 
+struct ShadowSpec {
+  int offsetX;
+  int offsetY;
+  int spread;
+};
+
+inline constexpr ShadowSpec kCardShadow{0, 6, 10};
+inline constexpr ShadowSpec kHeaderShadow{0, 5, 9};
+inline constexpr ShadowSpec kPanelShadow{0, 8, 12};
+inline constexpr ShadowSpec kModalShadow{0, 12, 18};
+inline constexpr ShadowSpec kSidePanelShadow{-6, 0, 16};
+
 inline const Palette &darkPalette() {
   static const Palette palette{
       Color(7, 20, 34, 236),     Color(39, 19, 42, 236),
@@ -288,6 +300,11 @@ inline Color progressFill() {
 inline Color shadow() {
   return activeMode() == ThemeMode::Light ? Color(22, 38, 50, 64)
                                           : Color(0, 0, 0, 150);
+}
+
+inline Color cardShadow() {
+  return activeMode() == ThemeMode::Light ? Color(22, 38, 50, 42)
+                                          : Color(0, 0, 0, 96);
 }
 
 inline float panelRadius() { return 8.0f; }

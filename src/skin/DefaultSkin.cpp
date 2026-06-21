@@ -37,7 +37,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     auto *panel = new View();
     panel->setBackgroundColor(fill);
     panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setShadow(ui_theme::shadow(), 0, 6, 10);
+    panel->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
     panel->setBorderColor(border);
     panel->setBorderWidth(1);
     return panel;
@@ -225,7 +225,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   graphPlaceHolder->setWidthPercent(100);
   graphPlaceHolder->setBackgroundColor(ui_theme::panelSubtle());
   graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
-  graphPlaceHolder->setShadow(ui_theme::shadow(), 0, 6, 10);
+  graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
   graphPlaceHolder->setBorderColor(ui_theme::hairline());
   graphPlaceHolder->setBorderWidth(1);
   graphPlaceHolder->setName("graph");

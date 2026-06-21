@@ -1,6 +1,7 @@
 #include "View.h"
 
 #include "../rendering/UniformCache.h"
+#include "UiTheme.h"
 
 #include <cmath>
 #include <utility>
@@ -445,6 +446,11 @@ View *View::setShadow(const Color &color, int offsetX, int offsetY,
   return this;
 }
 
+View *View::setShadow(const Color &color,
+                      const ui_theme::ShadowSpec &shadow) {
+  return setShadow(color, shadow.offsetX, shadow.offsetY, shadow.spread);
+}
+
 View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
                             int offsetY, int spread) {
   themedShadowColorProvider = std::move(provider);
@@ -456,6 +462,12 @@ View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
     hasShadow = shadowColor.a > 0 && shadowSpread > 0;
   }
   return this;
+}
+
+View *View::setThemedShadow(ThemeColorProvider provider,
+                            const ui_theme::ShadowSpec &shadow) {
+  return setThemedShadow(std::move(provider), shadow.offsetX, shadow.offsetY,
+                         shadow.spread);
 }
 
 View *View::clearShadow() {

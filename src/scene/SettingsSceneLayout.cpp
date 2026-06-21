@@ -270,7 +270,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                                                  : YGAlignStretch);
   previewPanel->setThemedBackgroundColor(ui_theme::panel);
   previewPanel->setCornerRadius(ui_theme::panelRadius());
-  previewPanel->setThemedShadow(ui_theme::shadow, 0, 10, 18);
+  previewPanel->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   previewPanel->setThemedBorderColor(ui_theme::hairline);
   previewPanel->setBorderWidth(1);
 
@@ -1749,7 +1749,7 @@ void SettingsScene::buildDifficultyTableImportModal(
       ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(ui_theme::hairline)
       ->setBorderWidth(1);
 

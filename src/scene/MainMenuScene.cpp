@@ -1770,7 +1770,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setPadding(Edge::All, 14);
   nav->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   nav->setCornerRadius(ui_theme::panelRadius());
-  nav->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
 
@@ -1812,7 +1812,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setPadding(Edge::All, 16);
   left->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   left->setCornerRadius(ui_theme::panelRadius());
-  left->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  left->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   left->setThemedBorderColor(ui_theme::hairline);
   left->setBorderWidth(1);
 
@@ -1916,7 +1916,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setWidth(300);
   right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   right->setCornerRadius(ui_theme::panelRadius());
-  right->setThemedShadow(ui_theme::shadow, 0, 12, 20);
+  right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   right->setThemedBorderColor(ui_theme::hairline);
   right->setBorderWidth(1);
 
@@ -3099,7 +3099,7 @@ void MainMenuScene::buildUnzipProgressModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -3477,7 +3477,7 @@ void MainMenuScene::buildParseLogModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -3599,7 +3599,7 @@ void MainMenuScene::buildTasksModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -3810,7 +3810,7 @@ void MainMenuScene::buildFindBmsModal() {
       ->setPadding(Edge::All, kModalPanelPadding)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -4381,7 +4381,7 @@ void MainMenuScene::buildPlayOptionsModal() {
       ->setPadding(Edge::All, 22)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -4521,7 +4521,7 @@ void MainMenuScene::buildReplayModal() {
       ->setPadding(Edge::All, 22)
       ->setThemedBackgroundColor(ui_theme::panelStrong)
       ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, 0, 18, 28)
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
