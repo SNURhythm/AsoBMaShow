@@ -171,6 +171,8 @@ private:
   void drawGameplayHudPanels();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
+  float gameplayHudTitleWidth() const;
+  float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
   void updateJudgementCounterText();
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);

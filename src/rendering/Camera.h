@@ -20,12 +20,17 @@ public:
   Camera &edit();
   Camera &commit();
   void render(bool force = false);
+  bx::Vec3 project(bx::Vec3 point) const;
   bx::Vec3 deproject(float x, float y, float distance);
   float getDistanceFromEye(bx::Vec3 point);
   [[nodiscard]] float getNearClip() const { return nearClip; }
   [[nodiscard]] float getFarClip() const { return farClip; }
   [[nodiscard]] bx::Vec3 getEye() const { return eye; }
   [[nodiscard]] bx::Vec3 getLookAt() const { return lookAt; }
+  [[nodiscard]] uint16_t getViewX() const { return x; }
+  [[nodiscard]] uint16_t getViewY() const { return y; }
+  [[nodiscard]] uint16_t getViewWidth() const { return width; }
+  [[nodiscard]] uint16_t getViewHeight() const { return height; }
 
 private:
   bool editing = false;

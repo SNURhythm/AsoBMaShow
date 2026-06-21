@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -39,6 +40,11 @@ struct JudgementCounterLayout {
   float itemWidth = 0.0f;
   float itemHeight = 0.0f;
   float gap = 0.0f;
+};
+
+struct UiPoint {
+  float x = 0.0f;
+  float y = 0.0f;
 };
 
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
@@ -190,7 +196,7 @@ void placeText(TextView *text, int x, int y, int width, int height) {
   text->setSize(width, height);
 }
 
-float gameplayHudTitleWidth() {
+float baseGameplayHudTitleWidth() {
   return std::clamp(static_cast<float>(rendering::window_width) * 0.30f,
                     430.0f, 620.0f);
 }
@@ -201,7 +207,7 @@ float gameplayHudMetricsWidth() {
 }
 
 JudgementCounterLayout judgementCounterLayoutFor(
-    AppSettings::JudgementCounterPosition position) {
+    AppSettings::JudgementCounterPosition position, float titleWidth) {
   JudgementCounterLayout layout;
   layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
   layout.gap = layout.horizontal ? 8.0f : 6.0f;
@@ -226,7 +232,7 @@ JudgementCounterLayout judgementCounterLayoutFor(
     layout.x = (static_cast<float>(rendering::window_width) - totalWidth) *
                0.5f;
     layout.y = 28.0f;
-    const float titleRight = 28.0f + gameplayHudTitleWidth();
+    const float titleRight = 28.0f + titleWidth;
     const float pauseLeft = static_cast<float>(rendering::window_width - 104);
     if (layout.x < titleRight + 16.0f ||
         layout.x + totalWidth > pauseLeft) {
@@ -554,8 +560,10 @@ void BMSRenderer::drawGameplayHudPanels() {
   const float titleWidth = gameplayHudTitleWidth();
   const float metricsWidth = gameplayHudMetricsWidth();
 
-  drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
-                      hudPanelFill(), hudPanelBorder());
+  if (titleWidth > 1.0f) {
+    drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
+                        hudPanelFill(), hudPanelBorder());
+  }
   drawHudRoundedPanel(margin, rendering::window_height - 108.0f, metricsWidth,
                       80.0f, radius, hudPanelStrongFill(), hudPanelBorder());
 }
@@ -563,7 +571,8 @@ void BMSRenderer::drawGameplayHudPanels() {
 void BMSRenderer::drawJudgementCounterPanels() {
   constexpr float radius = 10.0f;
   const JudgementCounterLayout layout =
-      judgementCounterLayoutFor(judgementCounterPosition);
+      judgementCounterLayoutFor(judgementCounterPosition,
+                                gameplayHudTitleWidth());
 
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     const float itemX =
@@ -581,9 +590,14 @@ void BMSRenderer::drawJudgementCounterPanels() {
 void BMSRenderer::layoutGameplayHud() {
   constexpr int margin = 28;
   const int titleWidth = static_cast<int>(gameplayHudTitleWidth());
-  placeText(titleText.get(), margin + 18, margin + 8, titleWidth - 36, 34);
-  placeText(playOptionText.get(), margin + 18, margin + 44, titleWidth - 36,
-            26);
+  const bool titleVisible = titleWidth > 48;
+  if (titleText != nullptr) {
+    titleText->setVisible(titleVisible);
+  }
+  placeText(titleText.get(), margin + 18, margin + 8,
+            std::max(1, titleWidth - 36), 34);
+  placeText(playOptionText.get(), margin + 18, margin + 44,
+            std::max(1, titleWidth - 36), 26);
 
   const int metricsY = rendering::window_height - 108;
   const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
@@ -594,7 +608,8 @@ void BMSRenderer::layoutGameplayHud() {
             24);
 
   const JudgementCounterLayout layout =
-      judgementCounterLayoutFor(judgementCounterPosition);
+      judgementCounterLayoutFor(judgementCounterPosition,
+                                gameplayHudTitleWidth());
   const int gap = static_cast<int>(layout.gap);
   const int itemWidth = static_cast<int>(layout.itemWidth);
   const int itemHeight = static_cast<int>(layout.itemHeight);
@@ -614,6 +629,108 @@ void BMSRenderer::layoutGameplayHud() {
               itemY + (layout.horizontal ? 24 : 22), itemWidth - 16,
               itemHeight - (layout.horizontal ? 28 : 24));
   }
+}
+
+float BMSRenderer::gameplayHudTitleWidth() const {
+  constexpr float kTitleMargin = 28.0f;
+  constexpr float kLaneGap = 18.0f;
+  constexpr float kTitleTop = 28.0f;
+  constexpr float kTitleBottom = kTitleTop + 82.0f;
+
+  const float baseWidth = baseGameplayHudTitleWidth();
+  const float laneLeft = projectedLaneLeftUiInBand(kTitleTop, kTitleBottom);
+  if (!std::isfinite(laneLeft)) {
+    return baseWidth;
+  }
+
+  const float maxWidth = laneLeft - kTitleMargin - kLaneGap;
+  return std::clamp(maxWidth, 0.0f, baseWidth);
+}
+
+float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
+                                             float bandBottom) const {
+  auto projectToUi = [](float worldX,
+                        float worldY) -> std::optional<UiPoint> {
+    const Camera &camera = rendering::game_camera;
+    if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
+      return std::nullopt;
+    }
+
+    const bx::Vec3 screen = camera.project({worldX, worldY, 0.0f});
+    if (!std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+      return std::nullopt;
+    }
+
+    const float uiX =
+        (screen.x - static_cast<float>(camera.getViewX())) /
+        static_cast<float>(camera.getViewWidth()) *
+        static_cast<float>(rendering::window_width);
+    const float uiY =
+        (screen.y - static_cast<float>(camera.getViewY())) /
+        static_cast<float>(camera.getViewHeight()) *
+        static_cast<float>(rendering::window_height);
+    if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
+      return std::nullopt;
+    }
+    return UiPoint{uiX, uiY};
+  };
+
+  const auto leftBottom = projectToUi(playAreaLeftX, judgeY);
+  const auto rightBottom = projectToUi(playAreaLeftX + playAreaWidth, judgeY);
+  const auto leftTop = projectToUi(playAreaLeftX, upperBound);
+  const auto rightTop =
+      projectToUi(playAreaLeftX + playAreaWidth, upperBound);
+  if (!leftBottom || !rightBottom || !leftTop || !rightTop) {
+    return std::numeric_limits<float>::quiet_NaN();
+  }
+
+  float minX = std::numeric_limits<float>::infinity();
+  auto considerX = [&minX](float x) {
+    if (std::isfinite(x)) {
+      minX = std::min(minX, x);
+    }
+  };
+  auto considerPoint = [&](const UiPoint &point) {
+    if (point.y >= bandTop && point.y <= bandBottom) {
+      considerX(point.x);
+    }
+  };
+  auto considerEdge = [&](const UiPoint &a, const UiPoint &b) {
+    considerPoint(a);
+    considerPoint(b);
+
+    const float minY = std::min(a.y, b.y);
+    const float maxY = std::max(a.y, b.y);
+    const float dy = b.y - a.y;
+    if (std::abs(dy) <= 0.0001f) {
+      if (a.y >= bandTop && a.y <= bandBottom) {
+        considerX(std::min(a.x, b.x));
+      }
+      return;
+    }
+
+    auto considerAtY = [&](float targetY) {
+      if (targetY < minY || targetY > maxY) {
+        return;
+      }
+      const float t = (targetY - a.y) / dy;
+      if (t < 0.0f || t > 1.0f) {
+        return;
+      }
+      considerX(a.x + (b.x - a.x) * t);
+    };
+
+    considerAtY(bandTop);
+    considerAtY(bandBottom);
+  };
+
+  considerEdge(*leftBottom, *leftTop);
+  considerEdge(*leftTop, *rightTop);
+  considerEdge(*rightTop, *rightBottom);
+  considerEdge(*rightBottom, *leftBottom);
+
+  return std::isfinite(minX) ? minX
+                             : std::numeric_limits<float>::quiet_NaN();
 }
 
 void BMSRenderer::layoutCenteredJudgementText() {

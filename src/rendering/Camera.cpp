@@ -103,6 +103,16 @@ Camera &Camera::commit() {
   return *this;
 }
 
+bx::Vec3 Camera::project(bx::Vec3 point) const {
+  const bx::Vec3 viewPoint = bx::mul(point, viewMtx);
+  const bx::Vec3 ndcPoint = bx::mulH(viewPoint, projMtx);
+  return {static_cast<float>(x) + (ndcPoint.x + 1.0f) * 0.5f *
+                                      static_cast<float>(width),
+          static_cast<float>(y) + (1.0f - ndcPoint.y) * 0.5f *
+                                      static_cast<float>(height),
+          ndcPoint.z};
+}
+
 bx::Vec3 Camera::deproject(float x, float y, float distance) {
   // First, normalize screen coordinates to NDC (Normalized Device Coordinates)
   float ndcX = (2.0f * (x - this->x) / this->width) - 1.0f;
