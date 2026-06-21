@@ -26,5 +26,6 @@ struct ResultSkinData {
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   std::string playModeLabel;
+  std::string difficultyLabel;
   std::optional<ResultPreviousBestData> previousBest;
 };

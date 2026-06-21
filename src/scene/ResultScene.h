@@ -43,6 +43,7 @@ public:
   void cleanupScene() override;
 
 private:
+  void loadDifficultyLabel();
   void loadPreviousBest();
   void saveScore();
   void saveReplay();
@@ -59,6 +60,7 @@ private:
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   std::string playModeLabel;
+  std::string difficultyLabel;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
   Button *exportPhotoButton = nullptr;

@@ -1,4 +1,5 @@
 #include "ResultScene.h"
+#include "../ChartDBHelper.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ResultImageExporter.h"
@@ -170,6 +171,18 @@ void ResultScene::loadPreviousBest() {
   }
 }
 
+void ResultScene::loadDifficultyLabel() {
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    difficultyLabel.clear();
+    return;
+  }
+
+  difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, meta);
+  dbHelper.Close(db);
+}
+
 void ResultScene::saveReplay() {
   if (replaySaved || !replayToSave.has_value() ||
       replayToSave->events.empty()) {
@@ -287,7 +300,7 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
   const auto result = ResultImageExporter::Export(
-      context, meta, resultState, playModeLabel, previousBest);
+      context, meta, resultState, playModeLabel, difficultyLabel, previousBest);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -465,6 +478,7 @@ void ResultScene::startReplay() {
 }
 
 void ResultScene::init() {
+  loadDifficultyLabel();
   loadPreviousBest();
   saveScore();
   saveReplay();
@@ -475,6 +489,7 @@ void ResultScene::init() {
 
   ResultSkinData data = {&resultState, &meta, &context};
   data.playModeLabel = playModeLabel;
+  data.difficultyLabel = difficultyLabel;
   data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();

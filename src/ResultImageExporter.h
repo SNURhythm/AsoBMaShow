@@ -22,6 +22,7 @@ public:
                                         const bms_parser::ChartMeta &meta,
                                         const RhythmState &state,
                                         const std::string &playModeLabel = {},
+                                        const std::string &difficultyLabel = {},
                                         const std::optional<
                                             ResultPreviousBestData>
                                             &previousBest = std::nullopt);

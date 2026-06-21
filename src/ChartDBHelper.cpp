@@ -1973,7 +1973,7 @@ std::string joinLabels(const std::vector<std::string> &labels) {
   std::string joined;
   for (const auto &label : labels) {
     if (!joined.empty()) {
-      joined += "/";
+      joined += " / ";
     }
     joined += label;
   }
@@ -3120,6 +3120,18 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
     record.unavailable = sqlite3_column_int(stmt, idx++) != 0;
   }
   return record;
+}
+
+std::string ChartDBHelper::DifficultyTableLabelsForChart(
+    sqlite3 *db, const bms_parser::ChartMeta &meta) {
+  if (db == nullptr || !CreateDifficultyTableTables(db)) {
+    return {};
+  }
+
+  std::vector<ChartMetaRecord> records(1);
+  records.front().meta = meta;
+  populateDifficultyTableLabels(db, records);
+  return records.front().difficultyTableLabels;
 }
 
 bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {

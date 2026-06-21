@@ -1,5 +1,6 @@
 #include "ResultImageExporter.h"
 
+#include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
@@ -404,6 +405,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const bms_parser::ChartMeta &meta,
                                           const RhythmState &state,
                                           const std::string &playModeLabel,
+                                          const std::string &difficultyLabel,
                                           const std::optional<ResultPreviousBestData>
                                               &previousBest,
                                           const std::filesystem::path &path) {
@@ -473,6 +475,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
   resultSkinData.playModeLabel = playModeLabel;
+  resultSkinData.difficultyLabel = difficultyLabel;
   resultSkinData.previousBest = previousBest;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
@@ -528,6 +531,7 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const bms_parser::ChartMeta &meta,
                             const RhythmState &state,
                             const std::string &playModeLabel,
+                            const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
                                 &previousBest) {
   std::error_code ec;
@@ -541,8 +545,8 @@ ResultImageExporter::Export(ApplicationContext &context,
   const auto outputPath =
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
-  return renderResultImage(context, meta, state, playModeLabel, previousBest,
-                           outputPath);
+  return renderResultImage(context, meta, state, playModeLabel, difficultyLabel,
+                           previousBest, outputPath);
 }
 
 ResultImageExportResult
@@ -560,6 +564,14 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
       best.has_value()) {
     previousBest = toResultPreviousBestData(*best);
   }
+  std::string difficultyLabel;
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db != nullptr) {
+    difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
+    dbHelper.Close(db);
+  }
   return Export(context, chart.Meta, state,
-                play_options::formatPlayModeLabel(replay), previousBest);
+                play_options::formatPlayModeLabel(replay), difficultyLabel,
+                previousBest);
 }

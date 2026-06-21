@@ -1,6 +1,7 @@
 #include "ReplayVideoExporter.h"
 
 #include "ArchiveFile.h"
+#include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
@@ -2398,10 +2399,18 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                       .clearType = best->clearType,
                       .createdAt = best->createdAt};
     }
+    std::string difficultyLabel;
+    auto &dbHelper = ChartDBHelper::GetInstance();
+    sqlite3 *db = dbHelper.Connect();
+    if (db != nullptr) {
+      difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
+      dbHelper.Close(db);
+    }
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
     resultSkinData.playModeLabel = play_options::formatPlayModeLabel(replay);
+    resultSkinData.difficultyLabel = difficultyLabel;
     resultSkinData.previousBest = previousBest;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);

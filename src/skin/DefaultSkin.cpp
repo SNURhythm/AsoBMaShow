@@ -88,6 +88,17 @@ std::string formatGauge(float gauge) {
   return formatNumber(static_cast<double>(gauge), 1) + "%";
 }
 
+std::string formatKeyModeLabel(const bms_parser::ChartMeta &meta) {
+  const int keyLaneCount = meta.GetKeyLaneCount();
+  if (meta.IsDP) {
+    const bool canSplitPlayers = keyLaneCount > 0 && keyLaneCount % 2 == 0;
+    const int keysPerPlayer =
+        canSplitPlayers ? keyLaneCount / 2 : keyLaneCount;
+    return std::to_string(keysPerPlayer) + " KEYS DP";
+  }
+  return std::to_string(keyLaneCount) + " KEYS";
+}
+
 std::string clearTypeLabelForRank(int rank) {
   if (rank >= kClearTypeExHardClearRank) {
     return "EX-HARD CLEAR";
@@ -254,6 +265,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
       std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
   const std::string playLevelLabel =
       "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
+  const std::string difficultyLabel =
+      data != nullptr && !data->difficultyLabel.empty()
+          ? data->difficultyLabel + " / " + playLevelLabel
+          : playLevelLabel;
 
   auto makeDivider = []() {
     auto *divider = new View();
@@ -547,8 +562,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                   ? "BGA " + formatDuration(meta.TotalLength)
                   : "",
               ui_theme::violetActionHover());
-  addInfoTile("KEY MODE", std::to_string(meta.GetTotalLaneCount()) + " KEYS",
-              playLevelLabel, ui_theme::coral());
+  addInfoTile("KEY MODE", formatKeyModeLabel(meta), difficultyLabel,
+              ui_theme::coral());
   rootLayout->addView(infoGrid);
 
   auto detailsGrid =
