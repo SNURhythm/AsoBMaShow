@@ -2010,15 +2010,6 @@ bool GetIOSWindowDrawablePixelSize(int &width, int &height) {
       return false;
     }
 
-    const CGRect nativeBounds = screen.nativeBounds;
-    if (nativeBounds.size.width > 0.0 && nativeBounds.size.height > 0.0) {
-      width =
-          std::max(1, static_cast<int>(std::lround(nativeBounds.size.width)));
-      height =
-          std::max(1, static_cast<int>(std::lround(nativeBounds.size.height)));
-      return true;
-    }
-
     CGSize pointSize = CGSizeZero;
     if (window != nil && !CGSizeEqualToSize(window.bounds.size, CGSizeZero)) {
       pointSize = window.bounds.size;
