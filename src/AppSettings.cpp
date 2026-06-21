@@ -486,6 +486,8 @@ bool AppSettings::save() const {
               sanitized.judgementIndicatorRenderMode)
        << "\n";
   file << "judgement_text_y=" << sanitized.judgementTextY << "\n";
+  file << "judgement_counter_enabled="
+       << (sanitized.judgementCounterEnabled ? 1 : 0) << "\n";
   file << "judgement_counter_position="
        << judgementCounterPositionToString(
               sanitized.judgementCounterPosition)
@@ -604,6 +606,11 @@ AppSettings AppSettings::load() {
                 value, settings.judgementIndicatorRenderMode);
       } else if (key == "judgement_text_y") {
         settings.judgementTextY = std::stof(value);
+      } else if (key == "judgement_counter_enabled") {
+        bool parsed = settings.judgementCounterEnabled;
+        if (parseBool(value, parsed)) {
+          settings.judgementCounterEnabled = parsed;
+        }
       } else if (key == "judgement_counter_position") {
         settings.judgementCounterPosition =
             parseJudgementCounterPosition(value,

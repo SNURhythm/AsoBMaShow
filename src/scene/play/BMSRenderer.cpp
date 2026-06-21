@@ -1493,7 +1493,9 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.setSubmitDepth(0);
     simpleBatchRenderer.begin();
     drawGameplayHudPanels();
-    drawJudgementCounterPanels();
+    if (judgementCounterEnabled) {
+      drawJudgementCounterPanels();
+    }
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -1504,12 +1506,14 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     }
     drawGauge(context);
     drawPlayOption(context);
-    for (size_t i = 0; i < kHudCounterItemCount; ++i) {
-      if (judgementCounterLabelTexts[i] != nullptr) {
-        judgementCounterLabelTexts[i]->render(context);
-      }
-      if (judgementCounterValueTexts[i] != nullptr) {
-        judgementCounterValueTexts[i]->render(context);
+    if (judgementCounterEnabled) {
+      for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+        if (judgementCounterLabelTexts[i] != nullptr) {
+          judgementCounterLabelTexts[i]->render(context);
+        }
+        if (judgementCounterValueTexts[i] != nullptr) {
+          judgementCounterValueTexts[i]->render(context);
+        }
       }
     }
   }
@@ -1664,6 +1668,10 @@ void BMSRenderer::setJudgementTextY(float y) {
   judgementTextY = clamped;
   judgementLayoutWidth = 0;
   judgementLayoutHeight = 0;
+}
+
+void BMSRenderer::setJudgementCounterEnabled(bool enabled) {
+  judgementCounterEnabled = enabled;
 }
 
 void BMSRenderer::setJudgementCounterPosition(

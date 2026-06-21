@@ -74,6 +74,7 @@ void SettingsScene::resetViewState() {
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
+  judgementCounterModeText = nullptr;
   judgementCounterPositionText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
@@ -88,6 +89,7 @@ void SettingsScene::resetViewState() {
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
+  judgementCounterModeButton = nullptr;
   judgementCounterPositionButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
@@ -205,7 +207,8 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
   visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  visibleTimeValueControls->setAlignItems(YGAlignFlexStart);
+  visibleTimeValueControls->setAlignItems(compactAdjustments ? YGAlignCenter
+                                                             : YGAlignFlexStart);
 
   auto updateVisibleTime = [this](int delta) {
     context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
@@ -306,7 +309,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
     auto *button =
         makeControlButton(foldButtonSize, foldButtonSize,
-                          makeText(label, 28, ui_theme::textPrimary(),
+                          makeText(label, 18, ui_theme::textPrimary(),
                                    TextView::CENTER, TextView::MIDDLE));
     button->setOnClickListener([this]() {
       previewPanelFolded = !previewPanelFolded;
@@ -316,7 +319,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   };
 
   if (previewPanelFolded) {
-    previewPanel->addView(makeFoldButton("<"));
+    previewPanel->addView(makeFoldButton("Open"));
     rootLayout->addView(previewPanel);
     rootLayout->applyYogaLayout();
     refreshSettingsText();
@@ -330,37 +333,86 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->addView(
       makeText("Preview", metrics.sectionTitleSize, ui_theme::textPrimary()));
 
-  auto *previewHeaderActions = new View();
-  previewHeaderActions->setFlexDirection(FlexDirection::Row);
-  previewHeaderActions->setGap(metrics.compact ? 8.0f : 10.0f);
-  previewHeaderActions->setAlignItems(YGAlignCenter);
-  auto *pageButton =
-      makeButton(metrics.compact ? 78 : 88, foldButtonSize,
-                 makeText(std::to_string(previewPanelPage + 1) + "/3",
-                          metrics.smallTextSize, ui_theme::textPrimary(),
-                          TextView::CENTER, TextView::MIDDLE),
-                 ui_theme::control(), ui_theme::controlHover(),
-                 ui_theme::controlPressed(), ui_theme::hairline(),
-                 ui_theme::accentBorder(), ui_theme::accentBorderStrong());
-  pageButton->setOnClickListener([this]() {
-    previewPanelPage = (previewPanelPage + 1) % previewPanelPageCount;
-    lastLayoutWidth = -1;
-  });
-  previewHeaderActions->addView(pageButton);
-  previewHeaderActions->addView(makeFoldButton(">"));
-  previewHeader->addView(previewHeaderActions);
+  previewHeader->addView(makeFoldButton("Hide"));
   previewPanel->addView(previewHeader);
+
+  auto *previewTabs = new View();
+  previewTabs->setFlexDirection(FlexDirection::Row);
+  previewTabs->setGap(metrics.compact ? 8.0f : 10.0f);
+  previewTabs->setAlignItems(YGAlignCenter);
+  const int previewTabGap = metrics.compact ? 8 : 10;
+  const int previewTabWidth = std::max(
+      0, (panelWidth - metrics.cardPadding * 2 -
+          previewTabGap * (previewPanelPageCount - 1)) /
+             previewPanelPageCount);
+  auto makePreviewTab = [this, &metrics, previewTabWidth](int page,
+                                                          const char *label) {
+    auto *labelText =
+        makeText(label, metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    auto *button =
+        previewPanelPage == page
+            ? makeAccentButton(previewTabWidth, metrics.actionButtonHeight,
+                               labelText, ui_theme::cyan())
+            : makeControlButton(previewTabWidth, metrics.actionButtonHeight,
+                                labelText);
+    button->setOnClickListener([this, page]() {
+      if (previewPanelPage == page) {
+        return;
+      }
+      previewPanelPage = page;
+      lastLayoutWidth = -1;
+    });
+    return button;
+  };
+  previewTabs->addView(makePreviewTab(0, "Scroll"));
+  previewTabs->addView(makePreviewTab(1, "Lane"));
+  previewTabs->addView(makePreviewTab(2, "HUD"));
+  previewPanel->addView(previewTabs);
 
   if (previewPanelPage == 0) {
     previewPanel->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
     previewPanel->addView(buildVisibleTimeControls(metrics, false, true));
+
+    previewPanel->addView(makeSummaryRow(metrics, "Note Start",
+                                         &summaryNoteStartPositionValueText));
+    auto *noteStartControls = new View();
+    noteStartControls->setFlexDirection(FlexDirection::Row);
+    noteStartControls->setFlexWrap(YGWrapWrap);
+    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    noteStartControls->setAlignItems(YGAlignCenter);
+    auto updateNoteStartPosition = [this](int deltaPercent) {
+      context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
+          context.settings.noteStartPositionPercent + deltaPercent);
+      persistSettings();
+    };
+    auto *minusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+    noteStartControls->addView(minusNoteStart);
+    auto *plusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+    noteStartControls->addView(plusNoteStart);
+    auto *resetNoteStart = makeResetButton(metrics);
+    resetNoteStart->setOnClickListener([this]() {
+      context.settings.noteStartPositionPercent =
+          AppSettings::kDefaultNoteStartPositionPercent;
+      persistSettings();
+    });
+    noteStartControls->addView(resetNoteStart);
+    previewPanel->addView(noteStartControls);
+  } else if (previewPanelPage == 1) {
     previewPanel->addView(
         makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
     auto *angleControls = new View();
     angleControls->setFlexDirection(FlexDirection::Row);
     angleControls->setFlexWrap(YGWrapWrap);
     angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    angleControls->setAlignItems(YGAlignCenter);
     auto updateLaneAngle = [this](float delta) {
       context.settings.laneAngleDegrees =
           clampLaneAngle(context.settings.laneAngleDegrees + delta);
@@ -390,6 +442,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->setFlexDirection(FlexDirection::Row);
     lengthControls->setFlexWrap(YGWrapWrap);
     lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    lengthControls->setAlignItems(YGAlignCenter);
     auto updateLaneLength = [this](float delta) {
       context.settings.laneLength =
           clampLaneLength(context.settings.laneLength + delta);
@@ -412,36 +465,6 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     lengthControls->addView(resetLength);
     previewPanel->addView(lengthControls);
-  } else if (previewPanelPage == 1) {
-    previewPanel->addView(makeSummaryRow(metrics, "Note Start",
-                                         &summaryNoteStartPositionValueText));
-    auto *noteStartControls = new View();
-    noteStartControls->setFlexDirection(FlexDirection::Row);
-    noteStartControls->setFlexWrap(YGWrapWrap);
-    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    auto updateNoteStartPosition = [this](int deltaPercent) {
-      context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
-          context.settings.noteStartPositionPercent + deltaPercent);
-      persistSettings();
-    };
-    auto *minusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
-    minusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
-    noteStartControls->addView(minusNoteStart);
-    auto *plusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
-    plusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
-    noteStartControls->addView(plusNoteStart);
-    auto *resetNoteStart = makeResetButton(metrics);
-    resetNoteStart->setOnClickListener([this]() {
-      context.settings.noteStartPositionPercent =
-          AppSettings::kDefaultNoteStartPositionPercent;
-      persistSettings();
-    });
-    noteStartControls->addView(resetNoteStart);
-    previewPanel->addView(noteStartControls);
 
     previewPanel->addView(makeSummaryRow(metrics, "Beam Length",
                                          &summaryLaneBeamLengthValueText));
@@ -449,6 +472,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     beamControls->setFlexDirection(FlexDirection::Row);
     beamControls->setFlexWrap(YGWrapWrap);
     beamControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    beamControls->setAlignItems(YGAlignCenter);
     auto updateLaneBeamLength = [this](int deltaPercent) {
       context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
           context.settings.laneBeamLengthPercent + deltaPercent);
@@ -479,6 +503,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     playAreaWidthControls->setFlexDirection(FlexDirection::Row);
     playAreaWidthControls->setFlexWrap(YGWrapWrap);
     playAreaWidthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    playAreaWidthControls->setAlignItems(YGAlignCenter);
     auto updatePreviewPlayAreaWidth = [this](float delta) {
       constexpr int previewKeyMode = 7;
       context.settings.setPlayAreaWidthForKeyMode(
@@ -513,6 +538,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Row);
       row->setFlexWrap(YGWrapWrap);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
+      row->setAlignItems(YGAlignCenter);
       row->addView(minus);
       row->addView(plus);
       row->addView(reset);
@@ -552,6 +578,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     indicatorModeControls->setFlexDirection(FlexDirection::Row);
     indicatorModeControls->setFlexWrap(YGWrapWrap);
     indicatorModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    indicatorModeControls->setAlignItems(YGAlignCenter);
     judgementIndicatorModeText =
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
@@ -642,6 +669,23 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 
     previewPanel->addView(makeSummaryRow(
         metrics, "Counter", &summaryJudgementCounterPositionValueText));
+    auto *counterControls = new View();
+    counterControls->setFlexDirection(FlexDirection::Row);
+    counterControls->setFlexWrap(YGWrapWrap);
+    counterControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    counterControls->setAlignItems(YGAlignCenter);
+    judgementCounterModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementCounterModeButton =
+        makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                         judgementCounterModeText, ui_theme::lime());
+    judgementCounterModeButton->setOnClickListener([this]() {
+      context.settings.judgementCounterEnabled =
+          !context.settings.judgementCounterEnabled;
+      persistSettings();
+    });
+    counterControls->addView(judgementCounterModeButton);
     judgementCounterPositionText =
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
@@ -655,7 +699,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
               context.settings.judgementCounterPosition);
       persistSettings();
     });
-    previewPanel->addView(judgementCounterPositionButton);
+    counterControls->addView(judgementCounterPositionButton);
+    previewPanel->addView(counterControls);
   }
 
   auto *restartButton = makeButton(
@@ -679,6 +724,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
                                                    : FlexDirection::Row);
   previewActions->setFlexWrap(YGWrapWrap);
   previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
+  previewActions->setAlignItems(YGAlignCenter);
   previewActions->addView(restartButton);
   previewActions->addView(doneButton);
   previewPanel->addView(previewActions);
@@ -1131,10 +1177,28 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   judgementCounterControls->setAlignItems(YGAlignFlexStart);
   judgementCounterControls->addView(makeWrappedText(
       metrics.compact
-          ? "Top is horizontal. Left and Right are vertical."
-          : "Choose where the live judgement counter sits during gameplay. "
-            "Top uses a horizontal strip; Left and Right use vertical stacks.",
+          ? "Enable totals and choose where they sit."
+          : "Enable realtime judgement totals and choose where they sit "
+            "during gameplay. Top uses a horizontal strip; Left and Right use "
+            "vertical stacks.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *judgementCounterModeControls = new View();
+  judgementCounterModeControls->setFlexDirection(FlexDirection::Row);
+  judgementCounterModeControls->setFlexWrap(YGWrapWrap);
+  judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+  judgementCounterModeControls->setAlignItems(YGAlignCenter);
+  judgementCounterModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementCounterModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       judgementCounterModeText, ui_theme::lime());
+  judgementCounterModeButton->setOnClickListener([this]() {
+    context.settings.judgementCounterEnabled =
+        !context.settings.judgementCounterEnabled;
+    persistSettings();
+  });
+  judgementCounterModeControls->addView(judgementCounterModeButton);
   judgementCounterPositionText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1147,7 +1211,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
             context.settings.judgementCounterPosition);
     persistSettings();
   });
-  judgementCounterControls->addView(judgementCounterPositionButton);
+  judgementCounterModeControls->addView(judgementCounterPositionButton);
+  judgementCounterControls->addView(judgementCounterModeControls);
   cardsColumn->addView(makeCard(
       metrics, "Judgement Counter",
       metrics.compact ? "Realtime judgement counts during gameplay."

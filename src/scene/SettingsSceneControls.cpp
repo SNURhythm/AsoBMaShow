@@ -200,6 +200,11 @@ void SettingsScene::refreshSettingsText() {
   const std::string judgementCounterPositionLabel =
       formatJudgementCounterPositionLabel(
           context.settings.judgementCounterPosition);
+  const std::string judgementCounterModeLabel =
+      context.settings.judgementCounterEnabled ? "Enabled" : "Disabled";
+  const std::string judgementCounterSummaryLabel =
+      context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
+                                               : "Disabled";
   const std::string uiThemeLabel =
       formatUiThemeModeLabel(context.settings.uiThemeMode);
 
@@ -263,7 +268,7 @@ void SettingsScene::refreshSettingsText() {
   }
   if (summaryJudgementCounterPositionValueText != nullptr) {
     summaryJudgementCounterPositionValueText->setText(
-        judgementCounterPositionLabel);
+        judgementCounterSummaryLabel);
   }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
@@ -294,6 +299,9 @@ void SettingsScene::refreshSettingsText() {
   }
   if (judgementCounterPositionText != nullptr) {
     judgementCounterPositionText->setText(judgementCounterPositionLabel);
+  }
+  if (judgementCounterModeText != nullptr) {
+    judgementCounterModeText->setText(judgementCounterModeLabel);
   }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
@@ -351,11 +359,20 @@ void SettingsScene::refreshSettingsText() {
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
   applySemanticButtonStyle(
+      judgementCounterModeButton, judgementCounterModeText,
+      context.settings.judgementCounterEnabled ? SettingsButtonTone::Success
+                                               : SettingsButtonTone::Danger);
+  SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
+  if (context.settings.judgementCounterEnabled) {
+    judgementCounterPositionTone =
+        context.settings.judgementCounterPosition ==
+                AppSettings::JudgementCounterPosition::Top
+            ? SettingsButtonTone::Info
+            : SettingsButtonTone::Success;
+  }
+  applySemanticButtonStyle(
       judgementCounterPositionButton, judgementCounterPositionText,
-      context.settings.judgementCounterPosition ==
-              AppSettings::JudgementCounterPosition::Top
-          ? SettingsButtonTone::Info
-          : SettingsButtonTone::Success);
+      judgementCounterPositionTone);
   applySemanticButtonStyle(bgaModeButton, bgaModeText,
                            context.settings.bgaEnabled
                                ? SettingsButtonTone::Success

@@ -91,6 +91,7 @@ private:
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
+  TextView *judgementCounterModeText = nullptr;
   TextView *judgementCounterPositionText = nullptr;
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
@@ -105,6 +106,7 @@ private:
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;
+  Button *judgementCounterModeButton = nullptr;
   Button *judgementCounterPositionButton = nullptr;
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;

@@ -126,6 +126,8 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.noteStartPositionPercent);
     previewRenderer->setLaneBeamClockUsesRenderTime(true);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
+    previewRenderer->setJudgementCounterEnabled(
+        context.settings.judgementCounterEnabled);
     previewRenderer->setJudgementCounterPosition(
         context.settings.judgementCounterPosition);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);

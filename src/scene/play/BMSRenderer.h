@@ -157,8 +157,9 @@ private:
   double mostPrevalentBpm = 0.0;
   bool renderHud = true;
   float judgementTextY = AppSettings::kDefaultJudgementTextY;
+  bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
-      AppSettings::JudgementCounterPosition::Top;
+      AppSettings::JudgementCounterPosition::Right;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
@@ -261,6 +262,7 @@ public:
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
   void setJudgementTextY(float y);
+  void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
   void setJudgementCounter(Judgement judgement, int count, int comboBreak);

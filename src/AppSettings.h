@@ -111,6 +111,7 @@ public:
   float judgementTextY = kDefaultJudgementTextY;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
+  bool judgementCounterEnabled = true;
   JudgementCounterPosition judgementCounterPosition =
       JudgementCounterPosition::Right;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
