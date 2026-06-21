@@ -23,7 +23,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   rootLayout->setJustifyContent(YGJustifyCenter);
   rootLayout->setPadding(Edge::All, 48);
   rootLayout->setGap(18);
-  rootLayout->setBackgroundColor(ui_theme::backdrop());
+  rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
 
   auto makeLabel = [](const std::string &text, int size, Color color) {
     auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", size);

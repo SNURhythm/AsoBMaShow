@@ -143,6 +143,11 @@ inline Color backdrop() {
                                           : Color(7, 10, 16, 255);
 }
 
+inline Color resultBackdrop() {
+  return activeMode() == ThemeMode::Light ? Color(235, 239, 244, 154)
+                                          : Color(7, 10, 16, 168);
+}
+
 inline Color panel() {
   return activeMode() == ThemeMode::Light ? Color(249, 252, 253, 238)
                                           : Color(15, 22, 32, 238);

@@ -2306,23 +2306,29 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
   size_t replayAutoReleaseTailCursor = 0;
-  const long long replayDurationMicros =
+  const long long gameplayDurationMicros =
       calculateExportDurationMicros(chart, replay);
+  const long long scheduledVisualEndMicros =
+      context.jukebox.getScheduledVisualEndMicros();
+  const long long visualTailMicros =
+      std::max(0LL, scheduledVisualEndMicros - gameplayDurationMicros);
   const long long resultTailMicros =
-      resolvedOptions.includeResultScreen ? kResultSceneTailMicros : 0LL;
+      resolvedOptions.includeResultScreen
+          ? std::max(kResultSceneTailMicros, visualTailMicros)
+          : visualTailMicros;
   const long long totalDurationMicros =
-      replayDurationMicros + resultTailMicros;
+      gameplayDurationMicros + resultTailMicros;
   const long long visualOffsetMicros =
       static_cast<long long>(settings.visualOffsetMs) * 1000LL;
   const size_t gameplayFrameCount = static_cast<size_t>(std::ceil(
-      static_cast<long double>(replayDurationMicros) * fps / 1000000.0L));
+      static_cast<long double>(gameplayDurationMicros) * fps / 1000000.0L));
   const size_t resultFrameCount = static_cast<size_t>(
       std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
   const RhythmState replayResultState =
       replay_result::BuildResultState(chart, replay);
   rendering::SimpleBatchRenderer resultGraphBatch;
-  if (resultFrameCount > 0) {
+  if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                         rendering::window_height);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
@@ -2350,6 +2356,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   "Replay video export workload: %zu frames, %.2fs, %.2f GiB "
                   "BGRA readback",
                   frameCount, durationSeconds, rawFrameGiB);
+  if (scheduledVisualEndMicros > gameplayDurationMicros) {
+    replayExportLog(log,
+                    "Replay video export BGA tail: visual end %.2fs, "
+                    "gameplay end %.2fs",
+                    static_cast<double>(scheduledVisualEndMicros) / 1000000.0,
+                    static_cast<double>(gameplayDurationMicros) / 1000000.0);
+  }
   replayExportLog(log,
                   "Replay video export frame buffers/readbacks: %zu, encoder "
                   "threads: %d",
@@ -2538,12 +2551,19 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
        ++resultFrameIndex) {
     const size_t frameIndex = gameplayFrameCount + resultFrameIndex;
     const long long videoTimeMicros =
-        replayDurationMicros +
+        gameplayDurationMicros +
         static_cast<long long>((static_cast<long double>(resultFrameIndex) *
                                 1000000.0L) /
                                fps);
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);
+          bgfx::touch(rendering::bga_view);
+          bgfx::touch(rendering::bga_layer_view);
+          context.jukebox.renderVisualsAt(videoTimeMicros);
+          bgaBlurPass->execute();
+          rendering::renderFullscreenTextureTint(
+              bgaBlurPass->outputTexture(), rendering::final_view,
+              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
           bgfx::touch(rendering::ui_view);
           if (resultRoot != nullptr) {
             resultRoot->render(renderContext);

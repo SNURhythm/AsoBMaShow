@@ -1,6 +1,7 @@
 #include "VideoPlayer.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
+#include <algorithm>
 #include <cstring>
 
 #include <thread>
@@ -189,6 +190,29 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     }
     return true;
   }
+}
+
+long long VideoPlayer::getDurationMicros() const {
+  std::lock_guard<std::mutex> videoLock(videoMutex);
+  if (formatContext == nullptr || videoStreamIndex < 0 ||
+      static_cast<unsigned>(videoStreamIndex) >= formatContext->nb_streams) {
+    return 0;
+  }
+
+  const AVStream *videoStream = formatContext->streams[videoStreamIndex];
+  if (videoStream != nullptr && videoStream->duration != AV_NOPTS_VALUE &&
+      videoStream->duration > 0) {
+    return std::max<long long>(
+        0, av_rescale_q(videoStream->duration, videoStream->time_base,
+                        AVRational{1, AV_TIME_BASE}));
+  }
+
+  if (formatContext->duration != AV_NOPTS_VALUE &&
+      formatContext->duration > 0) {
+    return static_cast<long long>(formatContext->duration);
+  }
+
+  return 0;
 }
 
 void VideoPlayer::update() {
