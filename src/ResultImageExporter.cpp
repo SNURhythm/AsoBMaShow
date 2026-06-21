@@ -1,5 +1,6 @@
 #include "ResultImageExporter.h"
 
+#include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
 #include "Utils.h"
@@ -331,6 +332,7 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const bms_parser::ChartMeta &meta,
                                           const RhythmState &state,
+                                          const std::string &playModeLabel,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const int height = rendering::render_height;
@@ -397,6 +399,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   ResultSkinData resultSkinData = {&state, &meta, &context};
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
+  resultSkinData.playModeLabel = playModeLabel;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
   resultRoot->applyYogaLayout();
@@ -441,7 +444,8 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
 ResultImageExportResult
 ResultImageExporter::Export(ApplicationContext &context,
                             const bms_parser::ChartMeta &meta,
-                            const RhythmState &state) {
+                            const RhythmState &state,
+                            const std::string &playModeLabel) {
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("result_exports");
   std::filesystem::create_directories(outputDir, ec);
@@ -453,7 +457,7 @@ ResultImageExporter::Export(ApplicationContext &context,
   const auto outputPath =
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
-  return renderResultImage(context, meta, state, outputPath);
+  return renderResultImage(context, meta, state, playModeLabel, outputPath);
 }
 
 ResultImageExportResult
@@ -461,5 +465,6 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
                                   const ReplayData &replay) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
-  return Export(context, chart.Meta, state);
+  return Export(context, chart.Meta, state,
+                play_options::formatPlayModeLabel(replay));
 }

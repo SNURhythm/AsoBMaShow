@@ -18,7 +18,8 @@ class ResultImageExporter {
 public:
   static ResultImageExportResult Export(ApplicationContext &context,
                                         const bms_parser::ChartMeta &meta,
-                                        const RhythmState &state);
+                                        const RhythmState &state,
+                                        const std::string &playModeLabel = {});
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay);

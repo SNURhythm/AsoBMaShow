@@ -4,6 +4,8 @@
 #include "../scene/play/RhythmState.h"
 #include "../context.h"
 
+#include <string>
+
 class View;
 
 struct ResultSkinData {
@@ -12,4 +14,5 @@ struct ResultSkinData {
   ApplicationContext *context;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
+  std::string playModeLabel;
 };

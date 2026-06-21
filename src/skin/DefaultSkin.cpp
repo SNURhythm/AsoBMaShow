@@ -80,7 +80,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   header->setFlexDirection(FlexDirection::Row);
   header->setAlignItems(YGAlignCenter);
   header->setGap(20);
-  header->setMinHeight(94);
+  header->setMinHeight(data->playModeLabel.empty() ? 94 : 124);
 
   auto *titleStack = new View();
   titleStack->setFlexDirection(FlexDirection::Column);
@@ -101,6 +101,16 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   artistText->setHeight(34);
   artistText->setName("artist");
   titleStack->addView(artistText);
+
+  if (!data->playModeLabel.empty()) {
+    auto playModeText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    playModeText->setText("PLAY MODE: " + data->playModeLabel);
+    playModeText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    playModeText->setHeight(28);
+    playModeText->setOverflow(TextView::TextOverflow::Hidden);
+    playModeText->setName("playMode");
+    titleStack->addView(playModeText);
+  }
   header->addView(titleStack);
 
   const Color clearAccent = clearLampColorForRank(resultState.getClearTypeRank());

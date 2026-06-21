@@ -2323,10 +2323,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       replay_result::BuildResultState(chart, replay);
   rendering::SimpleBatchRenderer resultGraphBatch;
   if (resultFrameCount > 0) {
-    resultRoot = std::make_unique<View>(0, 0, width, height);
+    resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
+                                        rendering::window_height);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
+    resultSkinData.playModeLabel = play_options::formatPlayModeLabel(replay);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultRoot->applyYogaLayout();

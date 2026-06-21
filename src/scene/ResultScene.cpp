@@ -59,6 +59,26 @@ static void drawRect(float x, float y, float width, float height, Color color) {
 }
 
 // ... (drawRect function remains the same)
+namespace {
+std::string resultPlayModeLabel(
+    const bms_parser::ChartMeta &meta,
+    const std::optional<ReplayData> &replayToSave,
+    const std::optional<ReplayData> &retryData,
+    const ResultPracticeOptions &practiceOptions) {
+  if (practiceOptions.enabled) {
+    return play_options::formatPlayModeLabel(
+        meta, practiceOptions.playOption, practiceOptions.playOptionSeed,
+        practiceOptions.playOption2, practiceOptions.playOption2Seed);
+  }
+  if (replayToSave.has_value()) {
+    return play_options::formatPlayModeLabel(*replayToSave);
+  }
+  if (retryData.has_value()) {
+    return play_options::formatPlayModeLabel(*retryData);
+  }
+  return play_options::formatPlayModeLabel(meta, std::nullopt);
+}
+} // namespace
 
 ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
@@ -76,6 +96,9 @@ ResultScene::ResultScene(ApplicationContext &context,
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled) {
+  playModeLabel =
+      resultPlayModeLabel(this->meta, replayToSave, retryData,
+                          this->practiceOptions);
   skin = std::make_unique<DefaultSkin>();
 }
 
@@ -206,7 +229,8 @@ void ResultScene::exportPhoto() {
 
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
-  const auto result = ResultImageExporter::Export(context, meta, resultState);
+  const auto result =
+      ResultImageExporter::Export(context, meta, resultState, playModeLabel);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -392,6 +416,7 @@ void ResultScene::init() {
   addView(rootLayout);
 
   ResultSkinData data = {&resultState, &meta, &context};
+  data.playModeLabel = playModeLabel;
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();
 

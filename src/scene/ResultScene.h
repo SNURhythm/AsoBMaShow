@@ -55,6 +55,7 @@ private:
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
   ResultPracticeOptions practiceOptions;
+  std::string playModeLabel;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
   Button *exportPhotoButton = nullptr;
