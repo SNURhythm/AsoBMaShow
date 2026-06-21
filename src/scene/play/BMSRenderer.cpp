@@ -2071,7 +2071,10 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   if (beamHeight <= 0.0f) {
     return;
   }
-  drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
+  const auto fadedColor = Color(color.r, color.g, color.b, 0);
+  simpleBatchRenderer.addRectVerticalGradient(
+      laneToX(lane), judgeY, noteRenderWidth, beamHeight, color.toABGR(),
+      fadedColor.toABGR());
 }
 
 void BMSRenderer::drawLaneCover() {
