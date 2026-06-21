@@ -403,6 +403,9 @@ void GamePlayScene::reset() {
 
 void GamePlayScene::restartCurrentPattern() {
   pauseLayout->setVisible(false);
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
   context.jukebox.stop();
   defer(
       [this]() {
@@ -419,6 +422,9 @@ void GamePlayScene::retryWithNewPattern() {
   }
 
   pauseLayout->setVisible(false);
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
   context.jukebox.stop();
 
   defer(
