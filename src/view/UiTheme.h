@@ -33,13 +33,14 @@ struct ShadowSpec {
   int offsetX;
   int offsetY;
   int spread;
+  float radiusInset;
 };
 
-inline constexpr ShadowSpec kCardShadow{0, 6, 10};
-inline constexpr ShadowSpec kHeaderShadow{0, 5, 9};
-inline constexpr ShadowSpec kPanelShadow{0, 8, 12};
-inline constexpr ShadowSpec kModalShadow{0, 12, 18};
-inline constexpr ShadowSpec kSidePanelShadow{-6, 0, 16};
+inline constexpr ShadowSpec kCardShadow{0, 6, 14, 3.0f};
+inline constexpr ShadowSpec kHeaderShadow{0, 5, 12, 3.0f};
+inline constexpr ShadowSpec kPanelShadow{0, 8, 16, 4.0f};
+inline constexpr ShadowSpec kModalShadow{0, 12, 22, 5.0f};
+inline constexpr ShadowSpec kSidePanelShadow{-6, 0, 20, 5.0f};
 
 inline const Palette &darkPalette() {
   static const Palette palette{

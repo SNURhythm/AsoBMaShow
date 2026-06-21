@@ -442,13 +442,16 @@ View *View::setShadow(const Color &color, int offsetX, int offsetY,
   shadowOffsetX = offsetX;
   shadowOffsetY = offsetY;
   shadowSpread = std::max(0, spread);
+  shadowRadiusInset = 0.0f;
   hasShadow = color.a > 0 && shadowSpread > 0;
   return this;
 }
 
 View *View::setShadow(const Color &color,
                       const ui_theme::ShadowSpec &shadow) {
-  return setShadow(color, shadow.offsetX, shadow.offsetY, shadow.spread);
+  setShadow(color, shadow.offsetX, shadow.offsetY, shadow.spread);
+  shadowRadiusInset = std::max(0.0f, shadow.radiusInset);
+  return this;
 }
 
 View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
@@ -457,6 +460,7 @@ View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
   shadowOffsetX = offsetX;
   shadowOffsetY = offsetY;
   shadowSpread = std::max(0, spread);
+  shadowRadiusInset = 0.0f;
   if (themedShadowColorProvider) {
     shadowColor = themedShadowColorProvider();
     hasShadow = shadowColor.a > 0 && shadowSpread > 0;
@@ -466,14 +470,17 @@ View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
 
 View *View::setThemedShadow(ThemeColorProvider provider,
                             const ui_theme::ShadowSpec &shadow) {
-  return setThemedShadow(std::move(provider), shadow.offsetX, shadow.offsetY,
-                         shadow.spread);
+  setThemedShadow(std::move(provider), shadow.offsetX, shadow.offsetY,
+                  shadow.spread);
+  shadowRadiusInset = std::max(0.0f, shadow.radiusInset);
+  return this;
 }
 
 View *View::clearShadow() {
   themedShadowColorProvider = nullptr;
   hasShadow = false;
   shadowSpread = 0;
+  shadowRadiusInset = 0.0f;
   return this;
 }
 
@@ -587,8 +594,9 @@ void View::renderBoxDecoration(RenderContext &context) const {
     RenderContext shadowContext;
     if (prepareShadowRenderContext(context, shadowContext, shadowSpread,
                                    shadowOffsetX, shadowOffsetY)) {
+      const float shadowRadius = std::max(0.0f, cornerRadius - shadowRadiusInset);
       submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
-                       width, height, cornerRadius, shadowSpread, shadowColor);
+                       width, height, shadowRadius, shadowSpread, shadowColor);
     }
   }
 

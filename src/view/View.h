@@ -489,6 +489,7 @@ private:
   int shadowOffsetX = 0;
   int shadowOffsetY = 0;
   int shadowSpread = 0;
+  float shadowRadiusInset = 0.0f;
   YGNodeRef node;
   View *parent = nullptr;
 
