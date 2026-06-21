@@ -88,37 +88,6 @@ std::string formatGauge(float gauge) {
   return formatNumber(static_cast<double>(gauge), 1) + "%";
 }
 
-struct PlayModeTileText {
-  std::string mode;
-  std::string laneOrder;
-};
-
-PlayModeTileText splitPlayModeLabel(std::string label) {
-  if (label.empty()) {
-    label = "NORMAL";
-  }
-
-  const std::string legacyLaneDelimiter = " / Lane ";
-  if (const size_t pos = label.find(legacyLaneDelimiter);
-      pos != std::string::npos) {
-    return {.mode = label.substr(0, pos),
-            .laneOrder = label.substr(pos + legacyLaneDelimiter.size())};
-  }
-
-  const std::string laneDelimiter = " Lane ";
-  if (const size_t pos = label.find(laneDelimiter); pos != std::string::npos) {
-    return {.mode = label.substr(0, pos),
-            .laneOrder = label.substr(pos + laneDelimiter.size())};
-  }
-
-  const std::string assignPrefix = "ASSIGN ";
-  if (label.rfind(assignPrefix, 0) == 0 && label.size() > assignPrefix.size()) {
-    return {.mode = "ASSIGN", .laneOrder = label.substr(assignPrefix.size())};
-  }
-
-  return {.mode = label};
-}
-
 std::string clearTypeLabelForRank(int rank) {
   if (rank >= kClearTypeExHardClearRank) {
     return "EX-HARD CLEAR";
@@ -580,12 +549,14 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     infoGrid->addView(tile);
   };
 
-  auto addPlayModeTile = [&](const std::string &playModeLabel) {
+  auto addPlayModeTile = [&](const std::string &playModeLabel,
+                             const std::string &laneOrderLabel) {
     if (!infoGrid->getChildren().empty()) {
       infoGrid->addView(makeDivider());
     }
 
-    const PlayModeTileText display = splitPlayModeLabel(playModeLabel);
+    const std::string modeLabel =
+        playModeLabel.empty() ? std::string("NORMAL") : playModeLabel;
     auto *tile = new View();
     tile->setFlexGrow(1);
     tile->setFlexBasis(0);
@@ -602,16 +573,16 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     tile->addView(labelView);
 
     auto *modeView =
-        makeLabel(display.mode, display.laneOrder.empty() ? 31 : 24,
-                  display.laneOrder.empty() ? ui_theme::amber()
-                                            : ui_theme::textPrimary());
-    modeView->setHeight(display.laneOrder.empty() ? 38 : 30);
+        makeLabel(modeLabel, laneOrderLabel.empty() ? 31 : 24,
+                  laneOrderLabel.empty() ? ui_theme::amber()
+                                         : ui_theme::textPrimary());
+    modeView->setHeight(laneOrderLabel.empty() ? 38 : 30);
     modeView->setAlign(TextView::CENTER);
     modeView->setOverflow(TextView::TextOverflow::Hidden);
     modeView->setName("PLAY MODE");
     tile->addView(modeView);
 
-    if (display.laneOrder.empty()) {
+    if (laneOrderLabel.empty()) {
       auto *subView = makeLabel("", 18, ui_theme::amber());
       subView->setHeight(22);
       tile->addView(subView);
@@ -621,7 +592,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
       laneRow->setAlignItems(YGAlignCenter);
       laneRow->setJustifyContent(YGJustifyCenter);
       laneRow->setHeight(24);
-      for (char symbol : display.laneOrder) {
+      for (char symbol : laneOrderLabel) {
         auto *symbolView =
             makeLabel(std::string(1, symbol), 18,
                       symbol == 'S' ? ui_theme::coral() : ui_theme::amber());
@@ -649,7 +620,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                   ? "BGA " + formatDuration(meta.TotalLength)
                   : "",
               ui_theme::violetActionHover());
-  addPlayModeTile(data->playModeLabel);
+  addPlayModeTile(data->playModeLabel, data->laneOrderLabel);
   rootLayout->addView(infoGrid);
 
   auto detailsGrid =

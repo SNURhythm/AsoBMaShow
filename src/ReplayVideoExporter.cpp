@@ -2409,7 +2409,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
-    resultSkinData.playModeLabel = play_options::formatPlayModeLabel(replay);
+    const play_options::PlayModeDisplayLabel playModeDisplay =
+        play_options::formatPlayModeDisplayLabel(replay);
+    resultSkinData.playModeLabel = playModeDisplay.mode;
+    resultSkinData.laneOrderLabel = playModeDisplay.laneOrder;
     resultSkinData.difficultyLabel = difficultyLabel;
     resultSkinData.previousBest = previousBest;
     DefaultSkin resultSkin;

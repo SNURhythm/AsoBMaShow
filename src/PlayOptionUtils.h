@@ -26,6 +26,11 @@ struct PlayOptionReplayInfo {
   std::optional<long long> seed2;
 };
 
+struct PlayModeDisplayLabel {
+  std::string mode;
+  std::string laneOrder;
+};
+
 inline constexpr std::array<const char *, 10> kPlayOptions = {
     "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
     "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
@@ -327,27 +332,54 @@ formatPlayOptionLabel(const std::optional<std::string> &option,
   return formatSingle(normalizedOption, seed);
 }
 
+inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed = std::nullopt,
+    const std::optional<std::string> &option2 = std::nullopt,
+    const std::optional<long long> &seed2 = std::nullopt) {
+  if (option.has_value()) {
+    if (const auto assign = laneAssignNotationFromOption(*option);
+        assign.has_value()) {
+      return {.mode = "ASSIGN", .laneOrder = *assign};
+    }
+  }
+
+  PlayModeDisplayLabel display{
+      .mode = formatPlayOptionLabel(option, seed, option2, seed2)};
+  if (display.mode.empty()) {
+    display.mode = "NORMAL";
+  }
+
+  if (const auto laneSummary =
+          formatLaneShuffleSummary(meta, option, seed, option2, seed2);
+      laneSummary.has_value()) {
+    display.laneOrder = *laneSummary;
+  }
+  return display;
+}
+
+inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
+    const ReplayData &replay) {
+  return formatPlayModeDisplayLabel(
+      replay.chartMeta, replay.playOption, replay.playOptionSeed,
+      replay.playOption2, replay.playOption2Seed);
+}
+
 inline std::string formatPlayModeLabel(
     const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
     const std::optional<long long> &seed = std::nullopt,
     const std::optional<std::string> &option2 = std::nullopt,
     const std::optional<long long> &seed2 = std::nullopt) {
-  std::string label = formatPlayOptionLabel(option, seed, option2, seed2);
-  if (label.empty()) {
-    label = "NORMAL";
-  }
-  if (const auto laneSummary =
-          formatLaneShuffleSummary(meta, option, seed, option2, seed2);
-      laneSummary.has_value()) {
-    label += " Lane " + *laneSummary;
-  }
-  return label;
+  const PlayModeDisplayLabel display =
+      formatPlayModeDisplayLabel(meta, option, seed, option2, seed2);
+  return display.laneOrder.empty() ? display.mode
+                                   : display.mode + " Lane " + display.laneOrder;
 }
 
 inline std::string formatPlayModeLabel(const ReplayData &replay) {
-  return formatPlayModeLabel(replay.chartMeta, replay.playOption,
-                             replay.playOptionSeed, replay.playOption2,
-                             replay.playOption2Seed);
+  const PlayModeDisplayLabel display = formatPlayModeDisplayLabel(replay);
+  return display.laneOrder.empty() ? display.mode
+                                   : display.mode + " Lane " + display.laneOrder;
 }
 
 inline bool

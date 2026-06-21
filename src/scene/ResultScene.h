@@ -60,6 +60,7 @@ private:
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   std::string playModeLabel;
+  std::string laneOrderLabel;
   std::string difficultyLabel;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;

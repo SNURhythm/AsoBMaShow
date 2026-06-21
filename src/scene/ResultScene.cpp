@@ -89,23 +89,23 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   }
 }
 
-std::string resultPlayModeLabel(
+play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
     const bms_parser::ChartMeta &meta,
     const std::optional<ReplayData> &replayToSave,
     const std::optional<ReplayData> &retryData,
     const ResultPracticeOptions &practiceOptions) {
   if (practiceOptions.enabled) {
-    return play_options::formatPlayModeLabel(
+    return play_options::formatPlayModeDisplayLabel(
         meta, practiceOptions.playOption, practiceOptions.playOptionSeed,
         practiceOptions.playOption2, practiceOptions.playOption2Seed);
   }
   if (replayToSave.has_value()) {
-    return play_options::formatPlayModeLabel(*replayToSave);
+    return play_options::formatPlayModeDisplayLabel(*replayToSave);
   }
   if (retryData.has_value()) {
-    return play_options::formatPlayModeLabel(*retryData);
+    return play_options::formatPlayModeDisplayLabel(*retryData);
   }
-  return play_options::formatPlayModeLabel(meta, std::nullopt);
+  return play_options::formatPlayModeDisplayLabel(meta, std::nullopt);
 }
 
 ResultPreviousBestData toResultPreviousBestData(
@@ -136,9 +136,11 @@ ResultScene::ResultScene(ApplicationContext &context,
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled) {
-  playModeLabel =
-      resultPlayModeLabel(this->meta, replayToSave, retryData,
-                          this->practiceOptions);
+  const play_options::PlayModeDisplayLabel display =
+      resultPlayModeDisplayLabel(this->meta, replayToSave, retryData,
+                                 this->practiceOptions);
+  playModeLabel = display.mode;
+  laneOrderLabel = display.laneOrder;
   skin = std::make_unique<DefaultSkin>();
 }
 
@@ -300,7 +302,8 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
   const auto result = ResultImageExporter::Export(
-      context, meta, resultState, playModeLabel, difficultyLabel, previousBest);
+      context, meta, resultState, playModeLabel, laneOrderLabel,
+      difficultyLabel, previousBest);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -489,6 +492,7 @@ void ResultScene::init() {
 
   ResultSkinData data = {&resultState, &meta, &context};
   data.playModeLabel = playModeLabel;
+  data.laneOrderLabel = laneOrderLabel;
   data.difficultyLabel = difficultyLabel;
   data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);

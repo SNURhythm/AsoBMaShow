@@ -405,6 +405,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const bms_parser::ChartMeta &meta,
                                           const RhythmState &state,
                                           const std::string &playModeLabel,
+                                          const std::string &laneOrderLabel,
                                           const std::string &difficultyLabel,
                                           const std::optional<ResultPreviousBestData>
                                               &previousBest,
@@ -475,6 +476,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
   resultSkinData.playModeLabel = playModeLabel;
+  resultSkinData.laneOrderLabel = laneOrderLabel;
   resultSkinData.difficultyLabel = difficultyLabel;
   resultSkinData.previousBest = previousBest;
   DefaultSkin resultSkin;
@@ -531,6 +533,7 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const bms_parser::ChartMeta &meta,
                             const RhythmState &state,
                             const std::string &playModeLabel,
+                            const std::string &laneOrderLabel,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
                                 &previousBest) {
@@ -545,8 +548,8 @@ ResultImageExporter::Export(ApplicationContext &context,
   const auto outputPath =
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
-  return renderResultImage(context, meta, state, playModeLabel, difficultyLabel,
-                           previousBest, outputPath);
+  return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
+                           difficultyLabel, previousBest, outputPath);
 }
 
 ResultImageExportResult
@@ -571,7 +574,8 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
     difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
     dbHelper.Close(db);
   }
-  return Export(context, chart.Meta, state,
-                play_options::formatPlayModeLabel(replay), difficultyLabel,
-                previousBest);
+  const play_options::PlayModeDisplayLabel display =
+      play_options::formatPlayModeDisplayLabel(replay);
+  return Export(context, chart.Meta, state, display.mode, display.laneOrder,
+                difficultyLabel, previousBest);
 }
