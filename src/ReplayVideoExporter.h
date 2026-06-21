@@ -22,6 +22,7 @@ struct ReplayVideoExportOptions {
   int width = 0;
   int height = 0;
   int fps = 0;
+  bool includeResultScreen = false;
   ReplayVideoExportProgressCallback progressCallback;
 };
 

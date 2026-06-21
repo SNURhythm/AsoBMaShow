@@ -1509,6 +1509,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayFps120Button = nullptr;
   replayResolution1080Button = nullptr;
   replayResolutionFullButton = nullptr;
+  replayResultIncludeButton = nullptr;
+  replayResultSkipButton = nullptr;
   replayWatchButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
@@ -1516,6 +1518,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayFps120ButtonText = nullptr;
   replayResolution1080ButtonText = nullptr;
   replayResolutionFullButtonText = nullptr;
+  replayResultIncludeButtonText = nullptr;
+  replayResultSkipButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -1540,6 +1544,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedReplayIndex = -1;
   selectedExportFps = 120;
   selectedExportFullResolution = true;
+  selectedExportIncludeResultScreen = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
@@ -4627,6 +4632,32 @@ void MainMenuScene::buildReplayModal() {
   resolutionRow->addView(replayResolution1080Button);
   resolutionRow->addView(replayResolutionFullButton);
   replayExportOptionsContent->addView(resolutionRow);
+
+  replayExportOptionsContent->addView(makeModalLabel("Result Screen"));
+  auto *resultRow = makeModalOptionRow();
+  replayResultIncludeButton =
+      makeModalButton("Include", 20, &replayResultIncludeButtonText);
+  replayResultSkipButton =
+      makeModalButton("Skip", 20, &replayResultSkipButtonText);
+  replayResultIncludeButton->setFlex(1);
+  replayResultSkipButton->setFlex(1);
+  replayResultIncludeButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedExportIncludeResultScreen = true;
+    refreshReplayExportOptionButtons();
+  });
+  replayResultSkipButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedExportIncludeResultScreen = false;
+    refreshReplayExportOptionButtons();
+  });
+  resultRow->addView(replayResultIncludeButton);
+  resultRow->addView(replayResultSkipButton);
+  replayExportOptionsContent->addView(resultRow);
   replayModalContentFrame->addView(replayExportOptionsContent);
 
   replayExportProgressContent = new View();
@@ -4731,6 +4762,7 @@ void MainMenuScene::buildReplayModal() {
         replayExportOptionsContent->getVisible()) {
       ReplayVideoExportOptions options;
       options.fps = selectedExportFps;
+      options.includeResultScreen = selectedExportIncludeResultScreen;
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
@@ -4787,6 +4819,7 @@ void MainMenuScene::showReplayExportOptions() {
   replayExportProgressContent->setVisible(false);
   selectedExportFps = 120;
   selectedExportFullResolution = true;
+  selectedExportIncludeResultScreen = true;
   refreshReplayExportOptionButtons();
   refreshReplayModalActions();
   replayModalRoot->applyYogaLayout();
@@ -4882,6 +4915,10 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
                     !selectedExportFullResolution);
   styleOptionButton(replayResolutionFullButton, replayResolutionFullButtonText,
                     selectedExportFullResolution);
+  styleOptionButton(replayResultIncludeButton, replayResultIncludeButtonText,
+                    selectedExportIncludeResultScreen);
+  styleOptionButton(replayResultSkipButton, replayResultSkipButtonText,
+                    !selectedExportIncludeResultScreen);
 }
 
 void MainMenuScene::updateReplayExportProgressUi(double fraction,
@@ -5421,6 +5458,8 @@ void MainMenuScene::cleanupScene() {
   replayFps120Button = nullptr;
   replayResolution1080Button = nullptr;
   replayResolutionFullButton = nullptr;
+  replayResultIncludeButton = nullptr;
+  replayResultSkipButton = nullptr;
   replayWatchButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
@@ -5428,6 +5467,8 @@ void MainMenuScene::cleanupScene() {
   replayFps120ButtonText = nullptr;
   replayResolution1080ButtonText = nullptr;
   replayResolutionFullButtonText = nullptr;
+  replayResultIncludeButtonText = nullptr;
+  replayResultSkipButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -5471,6 +5512,7 @@ void MainMenuScene::cleanupScene() {
   selectedReplayIndex = -1;
   selectedExportFps = 120;
   selectedExportFullResolution = true;
+  selectedExportIncludeResultScreen = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();

@@ -256,6 +256,8 @@ private:
   Button *replayFps120Button = nullptr;
   Button *replayResolution1080Button = nullptr;
   Button *replayResolutionFullButton = nullptr;
+  Button *replayResultIncludeButton = nullptr;
+  Button *replayResultSkipButton = nullptr;
   TextView *replayWatchButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
@@ -263,6 +265,8 @@ private:
   TextView *replayFps120ButtonText = nullptr;
   TextView *replayResolution1080ButtonText = nullptr;
   TextView *replayResolutionFullButtonText = nullptr;
+  TextView *replayResultIncludeButtonText = nullptr;
+  TextView *replayResultSkipButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
     std::filesystem::path outputPath;
@@ -324,6 +328,7 @@ private:
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
   bool selectedExportFullResolution = true;
+  bool selectedExportIncludeResultScreen = true;
   double replayExportProgressFraction = 0.0;
   struct GaugeSelectionButton {
     Button *button = nullptr;

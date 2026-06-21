@@ -290,6 +290,14 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   graphPlaceHolder->setName("graph");
   rootLayout->addView(graphPlaceHolder);
 
+  if (data != nullptr && data->outGraphPlaceholder != nullptr) {
+    *data->outGraphPlaceholder = graphPlaceHolder;
+  }
+
+  if (data != nullptr && !data->showControls) {
+    return;
+  }
+
   auto *actionsRow = new View();
   actionsRow->setFlexDirection(FlexDirection::Row);
   actionsRow->setAlignItems(YGAlignCenter);
