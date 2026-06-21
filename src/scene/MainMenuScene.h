@@ -455,6 +455,7 @@ private:
   void applyFindBmsUpdates();
   void openFindBmsResultUrl(const std::string &url);
   std::filesystem::path preferredBmsDownloadRoot();
+  void reselectCurrentChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);
   void buildPlayOptionsModal();

@@ -88,15 +88,28 @@ std::string formatGauge(float gauge) {
   return formatNumber(static_cast<double>(gauge), 1) + "%";
 }
 
-std::string formatKeyModeLabel(const bms_parser::ChartMeta &meta) {
-  const int keyLaneCount = meta.GetKeyLaneCount();
-  if (meta.IsDP) {
-    const bool canSplitPlayers = keyLaneCount > 0 && keyLaneCount % 2 == 0;
-    const int keysPerPlayer =
-        canSplitPlayers ? keyLaneCount / 2 : keyLaneCount;
-    return std::to_string(keysPerPlayer) + " KEYS DP";
+struct PlayModeTileText {
+  std::string mode;
+  std::string laneOrder;
+};
+
+PlayModeTileText splitPlayModeLabel(std::string label) {
+  if (label.empty()) {
+    label = "NORMAL";
   }
-  return std::to_string(keyLaneCount) + " KEYS";
+
+  const std::string laneDelimiter = " / Lane ";
+  if (const size_t pos = label.find(laneDelimiter); pos != std::string::npos) {
+    return {.mode = label.substr(0, pos),
+            .laneOrder = label.substr(pos + laneDelimiter.size())};
+  }
+
+  const std::string assignPrefix = "ASSIGN ";
+  if (label.rfind(assignPrefix, 0) == 0 && label.size() > assignPrefix.size()) {
+    return {.mode = "ASSIGN", .laneOrder = label.substr(assignPrefix.size())};
+  }
+
+  return {.mode = label};
 }
 
 std::string clearTypeLabelForRank(int rank) {
@@ -185,6 +198,14 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int maxScore = totalNotes * 2;
   const int currentScore = resultState.getScore();
   const std::string grade = gradeForScore(currentScore, maxScore);
+  const int playLevelDecimals =
+      std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
+  const std::string playLevelLabel =
+      "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
+  const std::string difficultyLabel =
+      data != nullptr && !data->difficultyLabel.empty()
+          ? data->difficultyLabel + " / " + playLevelLabel
+          : playLevelLabel;
 
   auto countFor = [&resultState](Judgement judgement) {
     const auto it = resultState.judgeCount.find(judgement);
@@ -208,13 +229,33 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   titleStack->setFlex(1);
   titleStack->setGap(4);
 
+  auto *titleRow = new View();
+  titleRow->setFlexDirection(FlexDirection::Row);
+  titleRow->setAlignItems(YGAlignCenter);
+  titleRow->setGap(14);
+  titleRow->setHeight(58);
+
   auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
   titleText->setText(meta.Title);
   titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   titleText->setOverflow(TextView::TextOverflow::Marquee);
   titleText->setHeight(58);
+  titleText->setFlex(1);
+  titleText->setMinWidth(0);
   titleText->setName("title");
-  titleStack->addView(titleText);
+  titleRow->addView(titleText);
+
+  auto difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+  difficultyText->setText(difficultyLabel);
+  difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
+  difficultyText->setOverflow(TextView::TextOverflow::Hidden);
+  difficultyText->setHeight(58);
+  difficultyText->setFlexShrink(0);
+  difficultyText->setWidth(
+      std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
+  difficultyText->setName("difficulty");
+  titleRow->addView(difficultyText);
+  titleStack->addView(titleRow);
 
   auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   artistText->setText(meta.Artist);
@@ -252,15 +293,6 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const std::string longNoteSummary =
       meta.TotalLongNotes > 0 ? std::to_string(meta.TotalLongNotes) + " LN"
                               : "";
-  const int playLevelDecimals =
-      std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
-  const std::string playLevelLabel =
-      "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
-  const std::string difficultyLabel =
-      data != nullptr && !data->difficultyLabel.empty()
-          ? data->difficultyLabel + " / " + playLevelLabel
-          : playLevelLabel;
-
   auto makeDivider = []() {
     auto *divider = new View();
     divider->setWidth(1);
@@ -507,13 +539,12 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto addInfoTile = [&](const std::string &label, const std::string &value,
                          const std::string &subValue, Color accent,
-                         Color valueColor = ui_theme::textPrimary(),
-                         float flexGrow = 1.0f, int valueSize = 31) {
+                         Color valueColor = ui_theme::textPrimary()) {
     if (!infoGrid->getChildren().empty()) {
       infoGrid->addView(makeDivider());
     }
     auto *tile = new View();
-    tile->setFlexGrow(flexGrow);
+    tile->setFlexGrow(1);
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
@@ -527,7 +558,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
-    auto *valueView = makeLabel(value, valueSize, valueColor);
+    auto *valueView = makeLabel(value, 31, valueColor);
     valueView->setHeight(38);
     valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
@@ -539,6 +570,63 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     subView->setAlign(TextView::CENTER);
     subView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(subView);
+    infoGrid->addView(tile);
+  };
+
+  auto addPlayModeTile = [&](const std::string &playModeLabel) {
+    if (!infoGrid->getChildren().empty()) {
+      infoGrid->addView(makeDivider());
+    }
+
+    const PlayModeTileText display = splitPlayModeLabel(playModeLabel);
+    auto *tile = new View();
+    tile->setFlexGrow(1);
+    tile->setFlexBasis(0);
+    tile->setFlexShrink(1);
+    tile->setMinWidth(0);
+    tile->setPadding(Edge::All, 7);
+    tile->setFlexDirection(FlexDirection::Column);
+    tile->setJustifyContent(YGJustifyCenter);
+
+    auto *labelView = makeLabel("PLAY MODE", 15, ui_theme::textSecondary());
+    labelView->setHeight(21);
+    labelView->setAlign(TextView::CENTER);
+    labelView->setOverflow(TextView::TextOverflow::Hidden);
+    tile->addView(labelView);
+
+    auto *modeView =
+        makeLabel(display.mode, display.laneOrder.empty() ? 31 : 24,
+                  display.laneOrder.empty() ? ui_theme::amber()
+                                            : ui_theme::textPrimary());
+    modeView->setHeight(display.laneOrder.empty() ? 38 : 30);
+    modeView->setAlign(TextView::CENTER);
+    modeView->setOverflow(TextView::TextOverflow::Hidden);
+    modeView->setName("PLAY MODE");
+    tile->addView(modeView);
+
+    if (display.laneOrder.empty()) {
+      auto *subView = makeLabel("", 18, ui_theme::amber());
+      subView->setHeight(22);
+      tile->addView(subView);
+    } else {
+      auto *laneRow = new View();
+      laneRow->setFlexDirection(FlexDirection::Row);
+      laneRow->setAlignItems(YGAlignCenter);
+      laneRow->setJustifyContent(YGJustifyCenter);
+      laneRow->setHeight(24);
+      for (char symbol : display.laneOrder) {
+        auto *symbolView =
+            makeLabel(std::string(1, symbol), 18,
+                      symbol == 'S' ? ui_theme::coral() : ui_theme::amber());
+        symbolView->setWidth(std::max(10, symbolView->textureWidth() + 1));
+        symbolView->setHeight(24);
+        symbolView->setAlign(TextView::CENTER);
+        symbolView->setOverflow(TextView::TextOverflow::Hidden);
+        laneRow->addView(symbolView);
+      }
+      tile->addView(laneRow);
+    }
+
     infoGrid->addView(tile);
   };
 
@@ -554,12 +642,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                   ? "BGA " + formatDuration(meta.TotalLength)
                   : "",
               ui_theme::violetActionHover());
-  addInfoTile("KEY MODE", formatKeyModeLabel(meta), difficultyLabel,
-              ui_theme::coral());
-  addInfoTile("PLAY MODE",
-              data->playModeLabel.empty() ? std::string("NORMAL")
-                                          : data->playModeLabel,
-              "", ui_theme::amber(), ui_theme::amber(), 2.0f, 25);
+  addPlayModeTile(data->playModeLabel);
   rootLayout->addView(infoGrid);
 
   auto detailsGrid =

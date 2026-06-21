@@ -839,6 +839,7 @@ void MainMenuScene::onResume() {
   startLibraryTaskWorker();
   refreshScoreClearRanksIfNeeded();
   refreshLibraryIfNeeded();
+  reselectCurrentChart();
 }
 
 void MainMenuScene::applyThemeChange() {
@@ -2870,6 +2871,19 @@ void MainMenuScene::revealSelectedChartInFileManager() {
             path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)).c_str(),
             errorMessage.c_str());
   }
+}
+
+void MainMenuScene::reselectCurrentChart() {
+  if (recyclerView == nullptr || !recyclerView->onSelected) {
+    return;
+  }
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  recyclerView->onSelected(record, selected);
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
