@@ -1566,10 +1566,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateDifficultyTableTables(db);
 
+  static constexpr int kChartListItemHeight = 108;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
-    return new ChartListItemView(0, 0, rendering::window_width, 100, item);
+    return new ChartListItemView(0, 0, rendering::window_width,
+                                 kChartListItemHeight, item);
   };
-  recyclerView->itemHeight = 100;
+  recyclerView->itemHeight = kChartListItemHeight;
   recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);

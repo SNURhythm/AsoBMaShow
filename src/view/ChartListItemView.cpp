@@ -7,6 +7,8 @@
 #include <sstream>
 
 namespace {
+constexpr int kBottomGap = 8;
+
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
   if (std::fabs(level - rounded) < 0.001) {
@@ -38,6 +40,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const ChartMetaRecord &record)
     : View(x, y, width, height) {
   (void)record;
+  contentCard = new View();
   clearLamp = new View();
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
@@ -48,16 +51,22 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
 
-  // Configure root layout
-  this->setFlexDirection(FlexDirection::Row)
+  this->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPadding(Edge::Bottom, kBottomGap);
+
+  contentCard->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
+      ->setHeight(height > kBottomGap ? height - kBottomGap : height)
+      ->setFlexShrink(0)
       ->setPadding(Edge::All, 8)
       ->setPadding(Edge::End, 24)
       ->setGap(12);
+  this->addView(contentCard);
 
   clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
   clearLamp->setCornerRadius(3.0f);
-  this->addView(clearLamp);
+  contentCard->addView(clearLamp);
 
   // Stage file jacket
   artworkFrame->setWidth(84)
@@ -72,7 +81,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setBorderWidth(1);
   jacketImage->setWidth(78)->setHeight(78);
   artworkFrame->addView(jacketImage);
-  this->addView(artworkFrame);
+  contentCard->addView(artworkFrame);
 
   // Main text
   textLayout->setFlexDirection(FlexDirection::Column)
@@ -82,7 +91,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setFlexShrink(1)
       ->setMinWidth(0)
       ->setGap(4);
-  this->addView(textLayout);
+  contentCard->addView(textLayout);
 
   titleView->setHeight(36);
   titleView->setVAlign(TextView::TextVAlign::BOTTOM);
@@ -108,7 +117,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setHeight(84)
       ->setFlexShrink(0)
       ->setGap(6);
-  this->addView(detailsLayout);
+  contentCard->addView(detailsLayout);
 
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
@@ -164,20 +173,20 @@ void ChartListItemView::setClearRank(int clearRank) {
 }
 
 void ChartListItemView::onSelected() {
-  setThemedBackgroundColor(ui_theme::panelStrong);
-  setCornerRadius(ui_theme::controlRadius());
-  setThemedBorderColor(ui_theme::accentBorderStrong);
-  setBorderWidth(1);
+  contentCard->setThemedBackgroundColor(ui_theme::panelStrong);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
+  contentCard->setBorderWidth(1);
   artworkFrame->setThemedBackgroundColor(ui_theme::controlHover);
   artworkFrame->setThemedBorderColor(ui_theme::accentBorder);
   applyTextColors(true);
 }
 
 void ChartListItemView::onUnselected() {
-  setThemedBackgroundColor(ui_theme::panelSubtle);
-  setCornerRadius(ui_theme::controlRadius());
-  setThemedBorderColor(ui_theme::hairlineSubtle);
-  setBorderWidth(1);
+  contentCard->setThemedBackgroundColor(ui_theme::panelSubtle);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
+  contentCard->setBorderWidth(1);
   artworkFrame->setThemedBackgroundColor(ui_theme::control);
   artworkFrame->setThemedBorderColor(ui_theme::hairlineStrong);
   applyTextColors(false);

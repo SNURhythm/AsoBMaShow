@@ -21,6 +21,7 @@ private:
 
   bool unavailable = false;
   bool solidArchive = false;
+  View *contentCard;
   View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;
