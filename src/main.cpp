@@ -168,6 +168,9 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
     renderH = pixelH;
   }
 
+  // iPad Display Zoom can expose a larger fullscreen display mode than SDL's
+  // native-scale Metal drawable. Render at that mode to avoid compositor
+  // upscaling during screenshots and app-focus transitions.
   int preferredW = 0;
   int preferredH = 0;
   if (s_iosMetalLayer != nullptr &&
