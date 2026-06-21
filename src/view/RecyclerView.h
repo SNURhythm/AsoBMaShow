@@ -149,9 +149,9 @@ private:
           event.button.button != SDL_BUTTON_LEFT) {
         return true;
       }
-      // ignore touch
-      if (event.button.which == SDL_TOUCH_MOUSEID &&
-          event.type == SDL_MOUSEBUTTONDOWN) {
+      // Touch selection is handled by FINGERDOWN/FINGERUP so release cannot
+      // select a row unless this recycler accepted the matching press.
+      if (event.button.which == SDL_TOUCH_MOUSEID) {
         return true;
       }
 
@@ -169,25 +169,11 @@ private:
       int uiX = 0;
       int uiY = 0;
       rendering::screenToUi(x, y, uiX, uiY);
-      if (uiX < this->getContentX() ||
-          uiX > this->getContentX() + this->getContentWidth()) {
-        return true;
-      }
-      if (uiY < this->getContentY() ||
-          uiY > this->getContentY() + this->getContentHeight()) {
+      if (!isInsideContent(uiX, uiY)) {
         return true;
       }
       touchMomentum.stop();
-      int index = (uiY - this->getContentY() + scrollOffset) / itemHeight;
-      if (index >= 0 && index < itemCount()) {
-        if (selectedIndex != -1 && onUnselected) {
-          onUnselected(itemAt(selectedIndex), selectedIndex);
-        }
-        selectedIndex = index;
-        if (onSelected) {
-          onSelected(itemAt(selectedIndex), selectedIndex);
-        }
-      }
+      selectIndex(indexAtUiY(uiY));
       break;
     }
     case SDL_FINGERDOWN: {
@@ -200,18 +186,14 @@ private:
       float touchY = 0.0f;
       rendering::normalizedToUi(normX, normY, touchX, touchY);
 
-      if (touchX < this->getContentX() ||
-          touchX > this->getContentX() + this->getContentWidth()) {
-        return true;
-      }
-      if (touchY < this->getContentY() ||
-          touchY > this->getContentY() + this->getContentHeight()) {
+      if (!isInsideContent(touchX, touchY)) {
         return true;
       }
       touchMomentum.stop();
       touchLastY = touchY;
       touchDragging = false;
       touchId = event.tfinger.fingerId;
+      touchPressIndex = indexAtUiY(touchY);
       break;
     }
     case SDL_FINGERMOTION: {
@@ -227,12 +209,9 @@ private:
       float touchY = 0.0f;
       rendering::normalizedToUi(normX, normY, touchX, touchY);
 
-      if (touchX < this->getContentX() ||
-          touchX > this->getContentX() + this->getContentWidth()) {
-        return true;
-      }
-      if (touchY < this->getContentY() ||
-          touchY > this->getContentY() + this->getContentHeight()) {
+      if (!isInsideContent(touchX, touchY)) {
+        touchDragging = true;
+        touchPressIndex = -1;
         return true;
       }
       const float delta = touchLastY - touchY;
@@ -253,8 +232,18 @@ private:
         touchMomentum.release();
       } else {
         touchMomentum.stop();
+        float touchX = 0.0f;
+        float touchY = 0.0f;
+        rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, touchX,
+                                  touchY);
+        const int releaseIndex = indexAtUiY(touchY);
+        if (touchPressIndex >= 0 && touchPressIndex == releaseIndex &&
+            isInsideContent(touchX, touchY)) {
+          selectIndex(releaseIndex);
+        }
       }
       touchId = -1;
+      touchPressIndex = -1;
       break;
     }
     }
@@ -400,6 +389,7 @@ private:
   float touchLastY = 0;
   ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
+  int touchPressIndex = -1;
   bool touchDragging = false;
   Uint64 scrollbarFadeInStartedAt = 0;
   Uint64 scrollbarLastActivityAt = 0;
@@ -432,6 +422,31 @@ private:
 
   inline const T &itemAt(int index) const {
     return itemProvider ? itemProvider(index) : items[index];
+  }
+
+  inline bool isInsideContent(float uiX, float uiY) const {
+    return uiX >= this->getContentX() &&
+           uiX <= this->getContentX() + this->getContentWidth() &&
+           uiY >= this->getContentY() &&
+           uiY <= this->getContentY() + this->getContentHeight();
+  }
+
+  inline int indexAtUiY(float uiY) const {
+    return static_cast<int>((uiY - this->getContentY() + scrollOffset) /
+                            itemHeight);
+  }
+
+  inline void selectIndex(int index) {
+    if (index < 0 || index >= itemCount()) {
+      return;
+    }
+    if (selectedIndex != -1 && onUnselected) {
+      onUnselected(itemAt(selectedIndex), selectedIndex);
+    }
+    selectedIndex = index;
+    if (onSelected) {
+      onSelected(itemAt(selectedIndex), selectedIndex);
+    }
   }
 
   inline int visibleItemWidth() const {
