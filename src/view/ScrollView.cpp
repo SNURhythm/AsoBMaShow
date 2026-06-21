@@ -36,7 +36,7 @@ void ScrollView::refreshContentLayout() {
   if (contentView == nullptr) {
     return;
   }
-  contentView->setWidth(static_cast<float>(getWidth()));
+  contentView->setWidth(static_cast<float>(getContentWidth()));
   contentView->applyYogaLayout();
   clampScrollOffset();
   updateContentPosition();
@@ -47,8 +47,8 @@ void ScrollView::scrollToBottom() {
     return;
   }
   refreshContentLayout();
-  scrollOffset = std::max(
-      0.0f, static_cast<float>(contentView->getHeight() - getHeight()));
+  scrollOffset = std::max(0.0f, static_cast<float>(contentView->getHeight() -
+                                                  getContentHeight()));
   updateContentPosition();
 }
 
@@ -68,7 +68,8 @@ void ScrollView::renderImpl(RenderContext &context) {
       touchMomentum.stop();
     }
   }
-  ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
+  ScissorScope scissor(context, getContentX(), getContentY(),
+                       getContentWidth(), getContentHeight());
   contentView->render(context);
 }
 
@@ -290,8 +291,8 @@ void ScrollView::onResize(int newWidth, int newHeight) {
 }
 
 bool ScrollView::isInside(float uiX, float uiY) const {
-  return uiX >= getX() && uiX <= getX() + getWidth() && uiY >= getY() &&
-         uiY <= getY() + getHeight();
+  return uiX >= getContentX() && uiX <= getContentX() + getContentWidth() &&
+         uiY >= getContentY() && uiY <= getContentY() + getContentHeight();
 }
 
 void ScrollView::clampScrollOffset() {
@@ -300,7 +301,8 @@ void ScrollView::clampScrollOffset() {
     return;
   }
   const float maxOffset = std::max(
-      0.0f, static_cast<float>(contentView->getHeight() - getHeight()));
+      0.0f,
+      static_cast<float>(contentView->getHeight() - getContentHeight()));
   scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
 }
 
@@ -320,7 +322,8 @@ void ScrollView::updateContentPosition() {
     return;
   }
   contentView->setPositionNoLayout(
-      getX(), getY() - static_cast<int>(scrollOffset), YGPositionTypeAbsolute);
+      getContentX(), getContentY() - static_cast<int>(scrollOffset),
+      YGPositionTypeAbsolute);
 }
 
 bool ScrollView::eventToUi(const SDL_MouseButtonEvent &event, int &uiX,

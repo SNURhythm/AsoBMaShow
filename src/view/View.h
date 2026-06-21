@@ -268,6 +268,20 @@ public:
   [[nodiscard]] inline int getHeight() const {
     return YGNodeLayoutGetHeight(node);
   }
+  [[nodiscard]] inline int getContentX() const {
+    return getX() + getLayoutInset(YGEdgeLeft);
+  }
+  [[nodiscard]] inline int getContentY() const {
+    return getY() + getLayoutInset(YGEdgeTop);
+  }
+  [[nodiscard]] inline int getContentWidth() const {
+    return std::max(0, getWidth() - getLayoutInset(YGEdgeLeft) -
+                           getLayoutInset(YGEdgeRight));
+  }
+  [[nodiscard]] inline int getContentHeight() const {
+    return std::max(0, getHeight() - getLayoutInset(YGEdgeTop) -
+                           getLayoutInset(YGEdgeBottom));
+  }
 
   virtual void onSelected() {}
   virtual void onUnselected() {}
@@ -341,6 +355,14 @@ protected:
 
 private:
   void renderBoxDecoration(RenderContext &context) const;
+  [[nodiscard]] int getLayoutInset(YGEdge edge) const {
+    const float border = YGNodeLayoutGetBorder(node, edge);
+    const float padding = YGNodeLayoutGetPadding(node, edge);
+    const float inset =
+        (std::isfinite(border) ? border : 0.0f) +
+        (std::isfinite(padding) ? padding : 0.0f);
+    return std::max(0, static_cast<int>(std::round(inset)));
+  }
   void syncYogaBorderWidth() {
     YGNodeStyleSetBorder(
         node, YGEdgeAll,
