@@ -187,7 +187,19 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     persistSettings();
     syncVisibleTimeInputText(true);
   });
-  visibleTimeControls->addView(visibleTimeModeButton);
+  View *visibleTimeModeRow = nullptr;
+  if (compactAdjustments) {
+    visibleTimeModeRow = new View();
+    visibleTimeModeRow->setFlexDirection(FlexDirection::Row);
+    visibleTimeModeRow->setFlexWrap(YGWrapWrap);
+    visibleTimeModeRow->setGap(metrics.compact ? 8.0f : 10.0f);
+    visibleTimeModeRow->setAlignItems(YGAlignCenter);
+    visibleTimeModeRow->setWidthPercent(100.0f);
+    visibleTimeModeRow->setJustifyContent(YGJustifyCenter);
+    visibleTimeModeRow->addView(visibleTimeModeButton);
+  } else {
+    visibleTimeControls->addView(visibleTimeModeButton);
+  }
 
   visibleTimeBpmStrategyText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
@@ -204,7 +216,12 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
           context.settings.visibleTimeBpmStrategy);
     }
   });
-  visibleTimeControls->addView(visibleTimeBpmStrategyButton);
+  if (visibleTimeModeRow != nullptr) {
+    visibleTimeModeRow->addView(visibleTimeBpmStrategyButton);
+    visibleTimeControls->addView(visibleTimeModeRow);
+  } else {
+    visibleTimeControls->addView(visibleTimeBpmStrategyButton);
+  }
 
   auto *visibleTimeValueControls = new View();
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
@@ -939,9 +956,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorModeControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorModeControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorModeControls->setAlignItems(YGAlignCenter);
-  judgementIndicatorModeControls->setWidthPercent(100.0f);
-  judgementIndicatorModeControls->setJustifyContent(YGJustifyCenter);
+  judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
 
   judgementIndicatorModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
@@ -977,9 +992,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorYControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorYControls->setAlignItems(YGAlignCenter);
-  judgementIndicatorYControls->setWidthPercent(100.0f);
-  judgementIndicatorYControls->setJustifyContent(YGJustifyCenter);
+  judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementIndicatorY = [this](int deltaPercent) {
     const int currentPercent =
         judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
@@ -1031,9 +1044,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorWidthControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorWidthControls->setAlignItems(YGAlignCenter);
-  judgementIndicatorWidthControls->setWidthPercent(100.0f);
-  judgementIndicatorWidthControls->setJustifyContent(YGJustifyCenter);
+  judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
   auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
     const int currentPercent = judgementIndicatorWidthScaleToPercent(
         context.settings.judgementIndicatorWidthScale);
@@ -1243,9 +1254,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   judgementCounterModeControls->setFlexDirection(FlexDirection::Row);
   judgementCounterModeControls->setFlexWrap(YGWrapWrap);
   judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  judgementCounterModeControls->setAlignItems(YGAlignCenter);
-  judgementCounterModeControls->setWidthPercent(100.0f);
-  judgementCounterModeControls->setJustifyContent(YGJustifyCenter);
+  judgementCounterModeControls->setAlignItems(YGAlignFlexStart);
   judgementCounterModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1293,9 +1302,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   gaugePositionControls->setFlexDirection(FlexDirection::Row);
   gaugePositionControls->setFlexWrap(YGWrapWrap);
   gaugePositionControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  gaugePositionControls->setAlignItems(YGAlignCenter);
-  gaugePositionControls->setWidthPercent(100.0f);
-  gaugePositionControls->setJustifyContent(YGJustifyCenter);
+  gaugePositionControls->setAlignItems(YGAlignFlexStart);
   gaugeBarPositionText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
