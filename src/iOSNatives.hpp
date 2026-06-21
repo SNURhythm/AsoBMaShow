@@ -62,6 +62,7 @@ bool GetIOSWindowDrawablePixelSize(int &width, int &height);
 bool SyncIOSMetalLayerDrawableSize(void *metalView, void *metalLayer,
                                    int drawableWidth, int drawableHeight);
 bool ConsumeIOSDisplayRefreshRequest();
+bool IsIOSGraphicsResizeAllowed();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool PostURLTextIOS(const std::string &url, std::string &body,
