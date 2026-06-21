@@ -819,6 +819,11 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 void MainMenuScene::init() {
   // Initialize the scene
   db = ChartDBHelper::GetInstance().Connect();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  context.requestAddChartFolderFromFiles = [this]() {
+    addIOSFolderEntryFromFiles();
+  };
+#endif
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
   startLibraryTaskWorker();
@@ -5263,6 +5268,7 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
+  context.requestAddChartFolderFromFiles = nullptr;
   libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");

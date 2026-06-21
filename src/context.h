@@ -26,6 +26,7 @@ public:
   std::atomic<std::uint64_t> replayVideoExportUiFrameSerial{0};
   std::atomic<std::uint32_t> bgfxResetFlags{0};
   std::function<void()> restoreGameplayRenderViews;
+  std::function<void()> requestAddChartFolderFromFiles;
 
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;
