@@ -1,6 +1,7 @@
 #include "ResultScene.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
+#include "../ResultImageExporter.h"
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -174,7 +175,66 @@ void ResultScene::addRetryButtons() {
                                    ui_theme::lime()));
     }
   }
+
+  exportPhotoButton = new Button();
+  exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  exportPhotoButtonText->setText("Export Photo");
+  exportPhotoButtonText->setAlign(TextView::CENTER);
+  exportPhotoButtonText->setVAlign(TextView::MIDDLE);
+  exportPhotoButtonText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
+  exportPhotoButton->setContentView(exportPhotoButtonText);
+  exportPhotoButton->setOnClickListener([this]() { exportPhoto(); });
+  exportPhotoButton->setSize(232, 64);
+  exportPhotoButton->setCornerRadius(ui_theme::controlRadius());
+  exportPhotoButton->setBackgroundColors(ui_theme::violetAction(),
+                                         ui_theme::violetActionHover(),
+                                         ui_theme::violetActionPressed());
+  exportPhotoButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 150),
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 190),
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
+  exportPhotoButton->setStyledBorderWidth(1);
+  retryRow->addView(exportPhotoButton);
   actionHost->addView(retryRow);
+}
+
+void ResultScene::exportPhoto() {
+  if (resultPhotoExportInProgress || exportPhotoButtonText == nullptr) {
+    return;
+  }
+
+  resultPhotoExportInProgress = true;
+  exportPhotoButtonText->setText("Saving...");
+  const auto result = ResultImageExporter::Export(context, meta, resultState);
+  resultPhotoExportInProgress = false;
+
+  if (result.success) {
+    exportPhotoButtonText->setText(result.message == "Saved to Photos"
+                                       ? "Saved"
+                                       : "Exported");
+    SDL_Log("Result image exported: %s (%s)",
+            result.outputPath.string().c_str(), result.message.c_str());
+  } else {
+    exportPhotoButtonText->setText("Export Failed");
+    SDL_Log("Result image export failed: %s (%s)", result.message.c_str(),
+            result.outputPath.string().c_str());
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+
+  defer(
+      [this]() {
+        if (!resultPhotoExportInProgress && exportPhotoButtonText != nullptr) {
+          exportPhotoButtonText->setText("Export Photo");
+          if (rootLayout != nullptr) {
+            rootLayout->applyYogaLayout();
+          }
+        }
+        return true;
+      },
+      result.success ? 1800 : 1400, true);
 }
 
 void ResultScene::startRetry(bool samePattern) {
@@ -419,6 +479,9 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::cleanupScene() {
-  // Resources are cleaned up by Scene logic usually, but we have Views.
-  // Scene::cleanup() deletes all views.
+  rootLayout = nullptr;
+  graphPlaceHolder = nullptr;
+  exportPhotoButton = nullptr;
+  exportPhotoButtonText = nullptr;
+  resultPhotoExportInProgress = false;
 }

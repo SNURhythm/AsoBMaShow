@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
+#include "ReplayResultStateBuilder.h"
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "main.h"
@@ -1142,85 +1143,6 @@ bool applyReplayEventForVideo(
     return false;
   }
   return false;
-}
-
-bool replayEventCountsInResult(
-    const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event) {
-  if (event.judgement == None) {
-    return false;
-  }
-  if (event.action != ReplayEventAction::Press) {
-    return true;
-  }
-
-  const JudgeResult recordedJudge(event.judgement, event.diffMicros);
-  auto *note = findReplayNote(lookup, event);
-  if (note == nullptr || !note->IsLongNote()) {
-    return true;
-  }
-
-  auto *longNote = static_cast<bms_parser::LongNote *>(note);
-  return longNote->IsTail() || !recordedJudge.isNotePlayed();
-}
-
-void syncReplayResultGaugeSnapshot(RhythmState &state,
-                                   const ReplayEvent &event) {
-  state.gaugeType = event.gaugeType;
-  state.currentGauge = event.gauge;
-  const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
-  if (gaugeIndex >= 0 &&
-      gaugeIndex < static_cast<int>(state.gaugeValues.size())) {
-    state.gaugeValues[gaugeIndex] = event.gauge;
-  }
-  if (!state.gaugeHistory.empty()) {
-    state.gaugeHistory.back() = event.gauge;
-  } else {
-    state.gaugeHistory.push_back(event.gauge);
-  }
-}
-
-RhythmState buildReplayResultState(
-    const bms_parser::Chart &chart, const ReplayData &replay,
-    const std::unordered_map<std::string, bms_parser::Note *> &lookup) {
-  RhythmState state(&chart, false);
-  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift);
-
-  for (const auto &event : replay.events) {
-    if (event.action == ReplayEventAction::Mine) {
-      if (auto *note = findReplayNote(lookup, event);
-          note != nullptr && note->IsLandmineNote()) {
-        auto *mine = static_cast<bms_parser::LandmineNote *>(note);
-        state.applyGaugeDelta(-mine->Damage);
-      }
-      syncReplayResultGaugeSnapshot(state, event);
-      continue;
-    }
-
-    if (!replayEventCountsInResult(lookup, event)) {
-      continue;
-    }
-
-    const JudgeResult judgeResult(event.judgement, event.diffMicros);
-    state.judgeCount[event.judgement]++;
-    if (judgeResult.isComboBreak()) {
-      state.combo = 0;
-      state.comboBreak++;
-    } else if (event.judgement != Kpoor) {
-      state.combo++;
-      state.maxCombo = std::max(state.maxCombo, state.combo);
-    }
-    state.recordFastSlow(judgeResult);
-    state.applyGaugeJudgement(event.judgement);
-    state.combo = event.combo;
-    state.maxCombo = std::max(state.maxCombo, event.combo);
-    syncReplayResultGaugeSnapshot(state, event);
-  }
-
-  if (!replay.events.empty() && state.gaugeHistory.empty()) {
-    state.currentGauge = replay.finalGauge;
-  }
-  return state;
 }
 
 void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
@@ -2398,7 +2320,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
   const RhythmState replayResultState =
-      buildReplayResultState(chart, replay, replayNotes);
+      replay_result::BuildResultState(chart, replay);
   rendering::SimpleBatchRenderer resultGraphBatch;
   if (resultFrameCount > 0) {
     resultRoot = std::make_unique<View>(0, 0, width, height);

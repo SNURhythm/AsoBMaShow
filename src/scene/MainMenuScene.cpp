@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
+#include "../ResultImageExporter.h"
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
 #include "../SqliteRAII.h"
@@ -1503,6 +1504,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
+  replayModalPhotoButton = nullptr;
   replayModalExportButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -1512,6 +1514,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResultIncludeButton = nullptr;
   replayResultSkipButton = nullptr;
   replayWatchButtonText = nullptr;
+  replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
@@ -4713,6 +4716,8 @@ void MainMenuScene::buildReplayModal() {
   replayModalCloseButton =
       makeModalButton("Close", 20, &replayModalCloseButtonText);
   replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
+  replayModalPhotoButton =
+      makeModalButton("Export Photo", 18, &replayModalPhotoButtonText);
   replayModalExportButton =
       makeModalButton("Export", 20, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
@@ -4750,6 +4755,17 @@ void MainMenuScene::buildReplayModal() {
     startReplayPlayback(replayModalChart,
                         replaySummaries[selectedReplayIndex].id);
   });
+  replayModalPhotoButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    if (selectedReplayIndex < 0 ||
+        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+      return;
+    }
+    startReplayImageExport(replayModalChart,
+                           replaySummaries[selectedReplayIndex].id);
+  });
   replayModalExportButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
       return;
@@ -4774,6 +4790,7 @@ void MainMenuScene::buildReplayModal() {
   });
   footer->addView(replayModalCloseButton);
   footer->addView(replayWatchButton);
+  footer->addView(replayModalPhotoButton);
   footer->addView(replayModalExportButton);
   panel->addView(footer);
 
@@ -4825,16 +4842,17 @@ void MainMenuScene::showReplayExportOptions() {
   replayModalRoot->applyYogaLayout();
 }
 
-void MainMenuScene::showReplayExportProgress() {
+void MainMenuScene::showReplayExportProgress(const std::string &title,
+                                             const std::string &message) {
   if (replayModalRoot == nullptr) {
     return;
   }
 
-  replayModalTitleText->setText("Exporting Replay");
+  replayModalTitleText->setText(title);
   replayListContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(true);
-  updateReplayExportProgressUi(0.0, "Preparing export");
+  updateReplayExportProgressUi(0.0, message);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayModalActions();
@@ -4852,6 +4870,9 @@ void MainMenuScene::hideReplayModal() {
   selectedReplayIndex = -1;
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
+  }
+  if (replayModalPhotoButtonText != nullptr) {
+    replayModalPhotoButtonText->setText("Export Photo");
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText("Export");
@@ -4881,6 +4902,11 @@ void MainMenuScene::refreshReplayModalActions() {
     replayWatchButton->setVisible(!optionsMode && !progressMode);
     replayWatchButton->setWidth((optionsMode || progressMode) ? 0.0f : 160.0f);
   }
+  if (replayModalPhotoButton != nullptr) {
+    replayModalPhotoButton->setVisible(!optionsMode && !progressMode);
+    replayModalPhotoButton->setWidth((optionsMode || progressMode) ? 0.0f
+                                                                   : 160.0f);
+  }
   if (replayModalExportButton != nullptr) {
     replayModalExportButton->setVisible(!progressMode);
     replayModalExportButton->setWidth(progressMode ? 0.0f : 160.0f);
@@ -4895,6 +4921,12 @@ void MainMenuScene::refreshReplayModalActions() {
                               !exportInProgress,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(replayModalPhotoButton, replayModalPhotoButtonText,
+                          hasSelection && !optionsMode && !progressMode &&
+                              !exportInProgress,
+                          ui_theme::successAction,
+                          ui_theme::successActionHover,
+                          ui_theme::successActionPressed, ui_theme::lime);
   styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
                           hasSelection && !progressMode && !exportInProgress,
                           ui_theme::violetAction, ui_theme::violetActionHover,
@@ -5124,6 +5156,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
           std::lock_guard<std::mutex> lock(replayExportResultMutex);
           pendingReplayExportResult = PendingReplayExportResult{
               .success = result.success,
+              .photo = false,
               .outputPath = result.outputPath,
               .message = result.message,
           };
@@ -5165,6 +5198,80 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         } catch (...) {
           complete({.success = false,
                     .message = "Unexpected replay export failure"});
+        }
+      });
+}
+
+void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
+                                           int replayId) {
+  if (replayExportInProgress.exchange(true)) {
+    return;
+  }
+  if (replayExportThread.joinable()) {
+    replayExportThread.join();
+  }
+
+  willStart.store(true);
+  previewLoadCancelled = true;
+  selectedChartMediaReady.store(false);
+  selectedChartReusableForStart.store(false);
+  {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    pendingReplayExportProgress.reset();
+  }
+  showReplayExportProgress("Exporting Photo", "Preparing photo");
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText("Exporting photo...");
+  }
+
+  replayExportThread = std::jthread(
+      [this, record, replayId](const std::stop_token &stopToken) {
+        auto complete = [this](const ResultImageExportResult &result) {
+          std::lock_guard<std::mutex> lock(replayExportResultMutex);
+          pendingReplayExportResult = PendingReplayExportResult{
+              .success = result.success,
+              .photo = true,
+              .outputPath = result.outputPath,
+              .message = result.message,
+          };
+        };
+
+        try {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+          context.jukebox.stop();
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Photo export cancelled"});
+            return;
+          }
+
+          auto replay =
+              ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+          if (!replay.has_value()) {
+            complete({.success = false, .message = "No Replay"});
+            return;
+          }
+
+          std::atomic_bool parseCancelled = false;
+          auto chart = play_options::prepareReplayChart(
+              record.meta.BmsPath, replay.value(), parseCancelled);
+          if (chart == nullptr || parseCancelled) {
+            complete({.success = false, .message = "No Chart"});
+            return;
+          }
+          if (stopToken.stop_requested()) {
+            complete({.success = false, .message = "Photo export cancelled"});
+            return;
+          }
+
+          complete(ResultImageExporter::ExportReplay(context, *chart,
+                                                     replay.value()));
+        } catch (const std::exception &e) {
+          complete({.success = false, .message = e.what()});
+        } catch (...) {
+          complete({.success = false,
+                    .message = "Unexpected photo export failure"});
         }
       });
 }
@@ -5229,28 +5336,20 @@ void MainMenuScene::applyReplayVideoExportResult() {
   }
   if (replayExportProgressContent != nullptr &&
       replayExportProgressContent->getVisible()) {
-    if (result->success) {
-      updateReplayExportProgressUi(1.0, result->message == "Saved to Photos"
-                                            ? "Saved to Photos"
-                                            : "Export complete");
-    } else {
-      const std::string failureMessage =
-          (result->message == "No Replay" || result->message == "No Chart")
-              ? result->message
-              : "Export failed";
-      updateReplayExportProgressUi(replayExportProgressFraction,
-                                   failureMessage);
-    }
-    replayModalTitleText->setText(result->success ? "Export Complete"
-                                                  : "Export Failed");
+    replayModalTitleText->setText("Replay");
+    replayExportProgressContent->setVisible(false);
+    replayExportOptionsContent->setVisible(false);
+    replayListContent->setVisible(true);
     refreshReplayModalActions();
   }
 
   if (result->success) {
-    SDL_Log("Replay video exported: %s (%s)",
+    SDL_Log("Replay %s exported: %s (%s)",
+            result->photo ? "image" : "video",
             result->outputPath.string().c_str(), result->message.c_str());
   } else {
-    SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
+    SDL_Log("Replay %s export failed: %s (%s)",
+            result->photo ? "image" : "video", result->message.c_str(),
             result->outputPath.string().c_str());
   }
 
@@ -5452,6 +5551,7 @@ void MainMenuScene::cleanupScene() {
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
+  replayModalPhotoButton = nullptr;
   replayModalExportButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -5461,6 +5561,7 @@ void MainMenuScene::cleanupScene() {
   replayResultIncludeButton = nullptr;
   replayResultSkipButton = nullptr;
   replayWatchButtonText = nullptr;
+  replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;

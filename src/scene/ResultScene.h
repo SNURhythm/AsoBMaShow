@@ -25,6 +25,7 @@ struct ResultPracticeOptions {
 };
 
 class TextView;
+class Button;
 
 class ResultScene : public Scene {
 public:
@@ -46,6 +47,7 @@ private:
   void addRetryButtons();
   void startRetry(bool samePattern);
   void startReplay();
+  void exportPhoto();
   void exitResult();
 
   bms_parser::ChartMeta meta;
@@ -55,9 +57,12 @@ private:
   ResultPracticeOptions practiceOptions;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  Button *exportPhotoButton = nullptr;
+  TextView *exportPhotoButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
   bool shouldSaveScore = true;
   bool replayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
+  bool resultPhotoExportInProgress = false;
 };

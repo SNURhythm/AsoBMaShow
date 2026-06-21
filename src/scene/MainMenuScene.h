@@ -250,6 +250,7 @@ private:
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
+  Button *replayModalPhotoButton = nullptr;
   Button *replayModalExportButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
@@ -259,6 +260,7 @@ private:
   Button *replayResultIncludeButton = nullptr;
   Button *replayResultSkipButton = nullptr;
   TextView *replayWatchButtonText = nullptr;
+  TextView *replayModalPhotoButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
@@ -269,6 +271,7 @@ private:
   TextView *replayResultSkipButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
+    bool photo = false;
     std::filesystem::path outputPath;
     std::string message;
   };
@@ -460,7 +463,9 @@ private:
   void buildReplayModal();
   void showReplayListModal(const ChartMetaRecord &record);
   void showReplayExportOptions();
-  void showReplayExportProgress();
+  void showReplayExportProgress(const std::string &title = "Exporting Replay",
+                                const std::string &message =
+                                    "Preparing export");
   void hideReplayModal();
   void refreshReplayModalActions();
   void refreshReplayExportOptionButtons();
@@ -469,6 +474,7 @@ private:
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
+  void startReplayImageExport(const ChartMetaRecord &record, int replayId);
   void applyReplayVideoExportProgress();
   void applyReplayVideoExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
