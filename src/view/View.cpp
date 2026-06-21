@@ -13,6 +13,14 @@ Color colorWithAlphaScale(Color color, float alphaScale) {
   return color;
 }
 
+int shadowLayerCount(int spread) { return std::clamp(spread, 8, 24); }
+
+float shadowAlphaScale(int layer, int layerCount) {
+  const float t = static_cast<float>(layer) / static_cast<float>(layerCount);
+  const float inner = 1.0f - t;
+  return 0.025f + std::pow(inner, 1.35f) * 0.055f;
+}
+
 RenderContext shadowRenderContext(const RenderContext &context, int spread,
                                   int offsetX, int offsetY) {
   RenderContext shadowContext = context;
@@ -62,7 +70,7 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
   }
 
   const int segments =
-      std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
+      std::clamp(static_cast<int>(std::ceil(radius / 2.0f)), 6, 24);
   const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
   const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
   const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
@@ -497,14 +505,14 @@ void View::renderBoxDecoration(RenderContext &context) const {
   if (hasShadow) {
     const RenderContext shadowContext = shadowRenderContext(
         context, shadowSpread, shadowOffsetX, shadowOffsetY);
-    constexpr int kShadowLayers = 4;
-    for (int layer = kShadowLayers; layer >= 1; --layer) {
+    const int shadowLayers = shadowLayerCount(shadowSpread);
+    for (int layer = shadowLayers; layer >= 1; --layer) {
       const float t =
-          static_cast<float>(layer) / static_cast<float>(kShadowLayers);
+          static_cast<float>(layer) / static_cast<float>(shadowLayers);
       const int grow =
           std::max(1, static_cast<int>(std::lround(shadowSpread * t)));
-      const Color layerColor =
-          colorWithAlphaScale(shadowColor, 0.12f + (1.0f - t) * 0.14f);
+      const Color layerColor = colorWithAlphaScale(
+          shadowColor, shadowAlphaScale(layer, shadowLayers));
       submitRoundedRect(shadowContext, x + shadowOffsetX - grow,
                         y + shadowOffsetY - grow, width + grow * 2,
                         height + grow * 2, cornerRadius + grow, layerColor);
