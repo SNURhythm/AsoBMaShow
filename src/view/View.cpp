@@ -36,10 +36,10 @@ bool prepareShadowRenderContext(const RenderContext &context,
 
   const int bleedX = spread + std::abs(offsetX) + 2;
   const int bleedY = spread + std::abs(offsetY) + 2;
-  const int leftBleed = ownerLeft >= clipLeft ? bleedX : 0;
-  const int topBleed = ownerTop >= clipTop ? bleedY : 0;
-  const int rightBleed = ownerRight <= clipRight ? bleedX : 0;
-  const int bottomBleed = ownerBottom <= clipBottom ? bleedY : 0;
+  const int leftBleed = std::clamp(ownerLeft - clipLeft, 0, bleedX);
+  const int topBleed = std::clamp(ownerTop - clipTop, 0, bleedY);
+  const int rightBleed = std::clamp(clipRight - ownerRight, 0, bleedX);
+  const int bottomBleed = std::clamp(clipBottom - ownerBottom, 0, bleedY);
 
   shadowContext.scissor.x -= leftBleed;
   shadowContext.scissor.y -= topBleed;
