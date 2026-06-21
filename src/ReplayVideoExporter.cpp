@@ -1,17 +1,25 @@
 #include "ReplayVideoExporter.h"
 
 #include "ArchiveFile.h"
+#include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
+#include "ReplayResultStateBuilder.h"
+#include "ScoreDBHelper.h"
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "main.h"
 #include "path.h"
 #include "rendering/BlurPass.h"
+#include "rendering/Color.h"
 #include "rendering/RenderPlan.h"
+#include "rendering/SimpleBatchRenderer.h"
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/Judge.h"
+#include "skin/DefaultSkin.h"
+#include "view/UiTheme.h"
+#include "view/View.h"
 #include "targets.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "iOSNatives.hpp"
@@ -66,6 +74,7 @@ constexpr int kExportChannels = 2;
 constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kAudioTailMicros = 3000000;
+constexpr long long kResultSceneTailMicros = 10000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
 
@@ -127,6 +136,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.height = makeEvenExportDimension(height);
   resolved.fps =
       std::clamp(options.fps > 0 ? options.fps : kDefaultExportFps, 1, 120);
+  resolved.includeResultScreen = options.includeResultScreen;
   resolved.progressCallback = options.progressCallback;
   return resolved;
 }
@@ -1136,6 +1146,93 @@ bool applyReplayEventForVideo(
     return false;
   }
   return false;
+}
+
+Color resultGaugeLineColor(float value) {
+  if (value > 80.0f) {
+    return ui_theme::withAlpha(ui_theme::cyan(), 210);
+  }
+  if (value > 30.0f) {
+    return ui_theme::withAlpha(ui_theme::lime(), 210);
+  }
+  return ui_theme::withAlpha(ui_theme::coral(), 210);
+}
+
+void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
+                              const RhythmState &resultState, float x, float y,
+                              float w, float h) {
+  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+
+  const float padding = 8.0f;
+  const float graphX = x + padding;
+  const float graphY = y + padding;
+  const float graphW = std::max(1.0f, w - padding * 2.0f);
+  const float graphH = std::max(1.0f, h - padding * 2.0f);
+  auto valueY = [&](float value) {
+    const float clamped = std::clamp(value, 0.0f, 100.0f);
+    return graphY + graphH - (clamped / 100.0f) * graphH;
+  };
+
+  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
+                guideColor);
+  batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
+                guideColor);
+
+  const size_t count = resultState.gaugeHistory.size();
+  if (count == 1) {
+    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
+                                   100.0f);
+    batch.addCircle(graphX, valueY(value), 3.5f,
+                    resultGaugeLineColor(value).toABGR());
+    return;
+  }
+
+  for (size_t i = 1; i < count; ++i) {
+    const float prevValue =
+        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float x0 =
+        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
+                     graphW;
+    const float x1 =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
+                  resultGaugeLineColor(value).toABGR());
+  }
+
+  const size_t markerStep = std::max<size_t>(1, count / 40);
+  for (size_t i = 0; i < count; i += markerStep) {
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float pointX =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addCircle(pointX, valueY(value), 2.5f,
+                    resultGaugeLineColor(value).toABGR());
+  }
+}
+
+void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
+                                const RhythmState &resultState,
+                                const View *graphPlaceHolder) {
+  if (graphPlaceHolder == nullptr || resultState.gaugeHistory.empty()) {
+    return;
+  }
+
+  const float x = graphPlaceHolder->getX();
+  const float y = graphPlaceHolder->getY();
+  const float w = graphPlaceHolder->getWidth();
+  const float h = graphPlaceHolder->getHeight();
+  if (w <= 0.0f || h <= 0.0f) {
+    return;
+  }
+
+  batch.setSubmitView(rendering::ui_view);
+  batch.setSubmitDepth(0);
+  batch.begin();
+  drawResultGaugeLineGraph(batch, resultState, x, y, w, h);
+  batch.end();
 }
 
 std::string ffmpegError(int errorCode) {
@@ -2152,7 +2249,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
+  std::unique_ptr<View> resultRoot;
+  View *resultGraphPlaceholder = nullptr;
   auto cleanupBgfx = [&]() {
+    resultGraphPlaceholder = nullptr;
+    resultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
     exportGeometry.restorePrimary();
@@ -2257,11 +2358,67 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
   size_t replayAutoReleaseTailCursor = 0;
-  const long long durationMicros = calculateExportDurationMicros(chart, replay);
+  const long long gameplayDurationMicros =
+      calculateExportDurationMicros(chart, replay);
+  const long long scheduledVisualEndMicros =
+      context.jukebox.getScheduledVisualEndMicros();
+  const long long visualTailMicros =
+      std::max(0LL, scheduledVisualEndMicros - gameplayDurationMicros);
+  const long long resultTailMicros =
+      resolvedOptions.includeResultScreen
+          ? std::max(kResultSceneTailMicros, visualTailMicros)
+          : visualTailMicros;
+  const long long totalDurationMicros =
+      gameplayDurationMicros + resultTailMicros;
   const long long visualOffsetMicros =
       static_cast<long long>(settings.visualOffsetMs) * 1000LL;
-  const size_t frameCount = static_cast<size_t>(
-      std::ceil(static_cast<long double>(durationMicros) * fps / 1000000.0L));
+  const size_t gameplayFrameCount = static_cast<size_t>(std::ceil(
+      static_cast<long double>(gameplayDurationMicros) * fps / 1000000.0L));
+  const size_t resultFrameCount = static_cast<size_t>(
+      std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
+  const size_t frameCount = gameplayFrameCount + resultFrameCount;
+  const RhythmState replayResultState =
+      replay_result::BuildResultState(chart, replay);
+  rendering::SimpleBatchRenderer resultGraphBatch;
+  if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
+    resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
+                                        rendering::window_height);
+    std::optional<ResultPreviousBestData> previousBest;
+    std::optional<std::string> beforeCreatedAt;
+    if (!replay.createdAt.empty()) {
+      beforeCreatedAt = replay.createdAt;
+    }
+    if (const auto best =
+            ScoreDBHelper::GetInstance().LoadBestScore(chart.Meta, beforeCreatedAt);
+        best.has_value()) {
+      previousBest = {.score = best->score,
+                      .maxScore = best->maxScore,
+                      .maxCombo = best->maxCombo,
+                      .comboBreak = best->comboBreak,
+                      .finalGauge = best->finalGauge,
+                      .clearType = best->clearType,
+                      .createdAt = best->createdAt};
+    }
+    std::string difficultyLabel;
+    auto &dbHelper = ChartDBHelper::GetInstance();
+    sqlite3 *db = dbHelper.Connect();
+    if (db != nullptr) {
+      difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
+      dbHelper.Close(db);
+    }
+    ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
+    resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
+    resultSkinData.showControls = false;
+    const play_options::PlayModeDisplayLabel playModeDisplay =
+        play_options::formatPlayModeDisplayLabel(replay);
+    resultSkinData.playModeLabel = playModeDisplay.mode;
+    resultSkinData.laneOrderLabel = playModeDisplay.laneOrder;
+    resultSkinData.difficultyLabel = difficultyLabel;
+    resultSkinData.previousBest = previousBest;
+    DefaultSkin resultSkin;
+    resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
+    resultRoot->applyYogaLayout();
+  }
   ReplayAsyncFrameEncoder encoder;
   std::string errorMessage;
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
@@ -2271,7 +2428,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .success = false, .outputPath = outputPath, .message = errorMessage};
   }
   const double durationSeconds =
-      static_cast<double>(durationMicros) / 1000000.0;
+      static_cast<double>(totalDurationMicros) / 1000000.0;
   const double rawFrameGiB =
       (static_cast<double>(frameBytes) * static_cast<double>(frameCount)) /
       static_cast<double>(1024ULL * 1024ULL * 1024ULL);
@@ -2279,6 +2436,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   "Replay video export workload: %zu frames, %.2fs, %.2f GiB "
                   "BGRA readback",
                   frameCount, durationSeconds, rawFrameGiB);
+  if (scheduledVisualEndMicros > gameplayDurationMicros) {
+    replayExportLog(log,
+                    "Replay video export BGA tail: visual end %.2fs, "
+                    "gameplay end %.2fs",
+                    static_cast<double>(scheduledVisualEndMicros) / 1000000.0,
+                    static_cast<double>(gameplayDurationMicros) / 1000000.0);
+  }
   replayExportLog(log,
                   "Replay video export frame buffers/readbacks: %zu, encoder "
                   "threads: %d",
@@ -2378,18 +2542,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     allowUiFrame();
   };
 
-  for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+  auto renderAndQueueFrame = [&](size_t frameIndex, long long videoTimeMicros,
+                                 auto &&renderFrame) -> bool {
     if (!drainReadyReadbacks()) {
-      bgfxCleanup.runNow();
-      return {
-          .success = false, .outputPath = outputPath, .message = errorMessage};
+      return false;
     }
     while (freeReadbackTextures.empty()) {
       if (!drainOldestReadback()) {
-        bgfxCleanup.runNow();
-        return {.success = false,
-                .outputPath = outputPath,
-                .message = errorMessage};
+        return false;
       }
     }
 
@@ -2397,13 +2557,31 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     const int frameBufferIndex = encoder.acquireFrameBuffer(errorMessage);
     bufferWaitMicros += elapsedMicros(bufferWaitStart);
     if (frameBufferIndex < 0) {
-      bgfxCleanup.runNow();
-      return {
-          .success = false, .outputPath = outputPath, .message = errorMessage};
+      return false;
     }
     const size_t readbackTextureIndex = freeReadbackTextures.front();
     freeReadbackTextures.pop_front();
 
+    const auto renderStart = std::chrono::steady_clock::now();
+    renderFrame();
+    bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
+               0, 0, outputTexture);
+    currentFrame = bgfx::frame();
+    const uint32_t expectedFrame = bgfx::readTexture(
+        readbackTextures[readbackTextureIndex],
+        encoder.frameData(static_cast<size_t>(frameBufferIndex)));
+    renderSubmitMicros += elapsedMicros(renderStart);
+    pendingReadbacks.push_back(
+        {.frameIndex = frameIndex,
+         .frameBufferIndex = static_cast<size_t>(frameBufferIndex),
+         .readbackTextureIndex = readbackTextureIndex,
+         .songTimeMicros = videoTimeMicros,
+         .expectedFrame = expectedFrame});
+    maybeReportFrameProgress(frameIndex + 1, frameIndex + 1 == frameCount);
+    return true;
+  };
+
+  for (size_t frameIndex = 0; frameIndex < gameplayFrameCount; ++frameIndex) {
     const long long songTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
     const long long visualTimeMicros =
@@ -2426,32 +2604,59 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     releaseDueReplayLongNoteTails(replayAutoReleaseTails,
                                   replayAutoReleaseTailCursor, songTimeMicros);
 
-    const auto renderStart = std::chrono::steady_clock::now();
-    bgfx::touch(rendering::clear_view);
-    bgfx::touch(rendering::bga_view);
-    bgfx::touch(rendering::bga_layer_view);
-    context.jukebox.renderVisualsAt(songTimeMicros);
-    bgaBlurPass->execute();
-    rendering::renderFullscreenTextureTint(
-        bgaBlurPass->outputTexture(), rendering::final_view,
-        static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
-    renderer.render(renderContext, visualTimeMicros);
-    bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
-               0, 0, outputTexture);
-    currentFrame = bgfx::frame();
-    const uint32_t expectedFrame = bgfx::readTexture(
-        readbackTextures[readbackTextureIndex],
-        encoder.frameData(static_cast<size_t>(frameBufferIndex)));
-    renderSubmitMicros += elapsedMicros(renderStart);
-    pendingReadbacks.push_back(
-        {.frameIndex = frameIndex,
-         .frameBufferIndex = static_cast<size_t>(frameBufferIndex),
-         .readbackTextureIndex = readbackTextureIndex,
-         .songTimeMicros = songTimeMicros,
-         .expectedFrame = expectedFrame});
-    maybeReportFrameProgress(frameIndex + 1, frameIndex + 1 == frameCount);
+    if (!renderAndQueueFrame(frameIndex, songTimeMicros, [&]() {
+          bgfx::touch(rendering::clear_view);
+          bgfx::touch(rendering::bga_view);
+          bgfx::touch(rendering::bga_layer_view);
+          context.jukebox.renderVisualsAt(songTimeMicros);
+          bgaBlurPass->execute();
+          rendering::renderFullscreenTextureTint(
+              bgaBlurPass->outputTexture(), rendering::final_view,
+              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+          renderer.render(renderContext, visualTimeMicros);
+        })) {
+      bgfxCleanup.runNow();
+      return {
+          .success = false, .outputPath = outputPath, .message = errorMessage};
+    }
 
     if (frameIndex == 0 || (frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
+        frameIndex + 1 == frameCount) {
+      replayExportLog(log, "Replay video export encoded frame %zu/%zu",
+                      frameIndex + 1, frameCount);
+    }
+  }
+
+  for (size_t resultFrameIndex = 0; resultFrameIndex < resultFrameCount;
+       ++resultFrameIndex) {
+    const size_t frameIndex = gameplayFrameCount + resultFrameIndex;
+    const long long videoTimeMicros =
+        gameplayDurationMicros +
+        static_cast<long long>((static_cast<long double>(resultFrameIndex) *
+                                1000000.0L) /
+                               fps);
+    if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
+          bgfx::touch(rendering::clear_view);
+          bgfx::touch(rendering::bga_view);
+          bgfx::touch(rendering::bga_layer_view);
+          context.jukebox.renderVisualsAt(videoTimeMicros);
+          bgaBlurPass->execute();
+          rendering::renderFullscreenTextureTint(
+              bgaBlurPass->outputTexture(), rendering::final_view,
+              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+          bgfx::touch(rendering::ui_view);
+          if (resultRoot != nullptr) {
+            resultRoot->render(renderContext);
+            drawReplayResultGaugeGraph(resultGraphBatch, replayResultState,
+                                       resultGraphPlaceholder);
+          }
+        })) {
+      bgfxCleanup.runNow();
+      return {
+          .success = false, .outputPath = outputPath, .message = errorMessage};
+    }
+
+    if ((frameIndex + 1) % static_cast<size_t>(fps) == 0 ||
         frameIndex + 1 == frameCount) {
       replayExportLog(log, "Replay video export encoded frame %zu/%zu",
                       frameIndex + 1, frameCount);

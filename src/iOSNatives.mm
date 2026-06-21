@@ -1870,6 +1870,64 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
   return false;
 }
 
+bool SaveImageToIOSPhotos(const std::string &filePath,
+                          std::string &errorMessage) {
+  @autoreleasepool {
+    if (!RequestPhotoAddAuthorization(errorMessage)) {
+      return false;
+    }
+
+    NSString *path = NSStringFromUtf8(filePath);
+    if (path == nil || path.length == 0) {
+      errorMessage = "Image export path is empty";
+      return false;
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+      errorMessage = "Image export file does not exist";
+      return false;
+    }
+
+    NSURL *fileUrl = [NSURL fileURLWithPath:path];
+    __block BOOL saveSucceeded = NO;
+    __block BOOL requestCreated = NO;
+    __block NSError *saveError = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+
+    [[PHPhotoLibrary sharedPhotoLibrary]
+        performChanges:^{
+          PHAssetCreationRequest *request =
+              [PHAssetCreationRequest creationRequestForAssetFromImageAtFileURL:
+                                          fileUrl];
+          requestCreated = request != nil;
+        }
+        completionHandler:^(BOOL success, NSError *error) {
+          saveSucceeded = success;
+          saveError = error;
+          dispatch_semaphore_signal(semaphore);
+        }];
+
+    const long waitResult = dispatch_semaphore_wait(
+        semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    if (waitResult != 0) {
+      errorMessage = "Timed out saving image to Photos";
+      return false;
+    }
+
+    if (!saveSucceeded || !requestCreated) {
+      if (saveError != nil) {
+        errorMessage =
+            std::string([[saveError localizedDescription] UTF8String]);
+      } else {
+        errorMessage = "Failed to save image to Photos";
+      }
+      return false;
+    }
+
+    return true;
+  }
+  return false;
+}
+
 bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
                                   std::string &errorMessage) {
   excluded = false;

@@ -457,6 +457,74 @@ bool Jukebox::hasActiveVisuals() const {
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
 
+long long Jukebox::getScheduledVisualEndMicros() {
+  std::unordered_map<int, long long> videoDurations;
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    videoDurations.reserve(videoPlayerTable.size());
+    for (const auto &[visualId, videoPlayer] : videoPlayerTable) {
+      if (videoPlayer != nullptr) {
+        videoDurations[visualId] =
+            std::max(0LL, videoPlayer->getDurationMicros());
+      }
+    }
+  }
+
+  std::unordered_set<int> imageIds;
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    imageIds.reserve(imageTable.size());
+    for (const auto &[visualId, image] : imageTable) {
+      (void)image;
+      imageIds.insert(visualId);
+    }
+  }
+
+  auto visualDurationFor = [&](int visualId) -> std::optional<long long> {
+    auto videoIt = videoDurations.find(visualId);
+    if (videoIt != videoDurations.end()) {
+      return videoIt->second;
+    }
+    if (imageIds.find(visualId) != imageIds.end()) {
+      return 0LL;
+    }
+    return std::nullopt;
+  };
+
+  long long endMicros = 0;
+  auto extendFromEvents = [&](const std::vector<std::pair<long long, int>>
+                                  &events) {
+    long long activeStartMicros = -1;
+    long long activeDurationMicros = 0;
+
+    auto finishActiveVisual = [&](long long replacementMicros) {
+      if (activeStartMicros < 0) {
+        return;
+      }
+      long long activeEndMicros = activeStartMicros + activeDurationMicros;
+      if (activeDurationMicros > 0 && replacementMicros >= 0) {
+        activeEndMicros = std::min(activeEndMicros, replacementMicros);
+      }
+      endMicros = std::max(endMicros, activeEndMicros);
+    };
+
+    for (const auto &[eventMicros, visualId] : events) {
+      const auto durationMicros = visualDurationFor(visualId);
+      if (!durationMicros.has_value()) {
+        continue;
+      }
+      finishActiveVisual(eventMicros);
+      activeStartMicros = eventMicros;
+      activeDurationMicros = *durationMicros;
+    }
+
+    finishActiveVisual(-1);
+  };
+  extendFromEvents(bmpList);
+  extendFromEvents(bmpLayerList);
+  return endMicros;
+}
+
 std::vector<std::filesystem::path> Jukebox::activeMaterializedVideoPaths()
     const {
   std::vector<std::filesystem::path> paths;

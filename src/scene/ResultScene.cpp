@@ -1,6 +1,8 @@
 #include "ResultScene.h"
+#include "../ChartDBHelper.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
+#include "../ResultImageExporter.h"
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -8,56 +10,115 @@
 #include "play/GamePlayScene.h"
 
 #include "../rendering/Color.h"
-#include "../rendering/ShaderManager.h"
+#include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
 #include "../skin/SkinTypes.h"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-static void drawRect(float x, float y, float width, float height, Color color) {
-  static const bgfx::ProgramHandle kSimpleProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-
-  bgfx::VertexLayout layout = rendering::PosColorVertex::ms_decl;
-
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-
-  auto *vertices = (rendering::PosColorVertex *)tvb.data;
-  auto *index = (uint16_t *)tib.data;
-
-  uint32_t abgr = color.toABGR();
-  vertices[0] = {x, y, 0.0f, abgr};
-  vertices[1] = {x + width, y, 0.0f, abgr};
-  vertices[2] = {x + width, y + height, 0.0f, abgr};
-  vertices[3] = {x, y + height, 0.0f, abgr};
-
-  index[0] = 0;
-  index[1] = 1;
-  index[2] = 2;
-  index[3] = 2;
-  index[4] = 3;
-  index[5] = 0;
-
-  uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-  bgfx::setState(state);
-
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-
-  bgfx::submit(rendering::main_view, kSimpleProgram);
+namespace {
+Color resultGaugeLineColor(float value) {
+  if (value > 80.0f) {
+    return ui_theme::withAlpha(ui_theme::cyan(), 210);
+  }
+  if (value > 30.0f) {
+    return ui_theme::withAlpha(ui_theme::lime(), 210);
+  }
+  return ui_theme::withAlpha(ui_theme::coral(), 210);
 }
 
-// ... (drawRect function remains the same)
+void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
+                              const RhythmState &resultState, float x, float y,
+                              float w, float h) {
+  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+
+  const float padding = 8.0f;
+  const float graphX = x + padding;
+  const float graphY = y + padding;
+  const float graphW = std::max(1.0f, w - padding * 2.0f);
+  const float graphH = std::max(1.0f, h - padding * 2.0f);
+  auto valueY = [&](float value) {
+    const float clamped = std::clamp(value, 0.0f, 100.0f);
+    return graphY + graphH - (clamped / 100.0f) * graphH;
+  };
+
+  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
+                guideColor);
+  batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
+                guideColor);
+
+  const size_t count = resultState.gaugeHistory.size();
+  if (count == 1) {
+    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
+                                   100.0f);
+    batch.addCircle(graphX, valueY(value), 3.5f,
+                    resultGaugeLineColor(value).toABGR());
+    return;
+  }
+
+  for (size_t i = 1; i < count; ++i) {
+    const float prevValue =
+        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float x0 =
+        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
+                     graphW;
+    const float x1 =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
+                  resultGaugeLineColor(value).toABGR());
+  }
+
+  const size_t markerStep = std::max<size_t>(1, count / 40);
+  for (size_t i = 0; i < count; i += markerStep) {
+    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float pointX =
+        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
+                     graphW;
+    batch.addCircle(pointX, valueY(value), 2.5f,
+                    resultGaugeLineColor(value).toABGR());
+  }
+}
+
+play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
+    const bms_parser::ChartMeta &meta,
+    const std::optional<ReplayData> &replayToSave,
+    const std::optional<ReplayData> &retryData,
+    const ResultPracticeOptions &practiceOptions) {
+  if (practiceOptions.enabled) {
+    return play_options::formatPlayModeDisplayLabel(
+        meta, practiceOptions.playOption, practiceOptions.playOptionSeed,
+        practiceOptions.playOption2, practiceOptions.playOption2Seed);
+  }
+  if (replayToSave.has_value()) {
+    return play_options::formatPlayModeDisplayLabel(*replayToSave);
+  }
+  if (retryData.has_value()) {
+    return play_options::formatPlayModeDisplayLabel(*retryData);
+  }
+  return play_options::formatPlayModeDisplayLabel(meta, std::nullopt);
+}
+
+ResultPreviousBestData toResultPreviousBestData(
+    const ScoreBestSnapshot &snapshot) {
+  return {.score = snapshot.score,
+          .maxScore = snapshot.maxScore,
+          .maxCombo = snapshot.maxCombo,
+          .comboBreak = snapshot.comboBreak,
+          .finalGauge = snapshot.finalGauge,
+          .clearType = snapshot.clearType,
+          .createdAt = snapshot.createdAt};
+}
+} // namespace
 
 ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
@@ -75,6 +136,11 @@ ResultScene::ResultScene(ApplicationContext &context,
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled) {
+  const play_options::PlayModeDisplayLabel display =
+      resultPlayModeDisplayLabel(this->meta, replayToSave, retryData,
+                                 this->practiceOptions);
+  playModeLabel = display.mode;
+  laneOrderLabel = display.laneOrder;
   skin = std::make_unique<DefaultSkin>();
 }
 
@@ -87,6 +153,36 @@ void ResultScene::saveScore() {
   if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
     SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
   }
+}
+
+void ResultScene::loadPreviousBest() {
+  if (previousBestLoaded) {
+    return;
+  }
+  previousBestLoaded = true;
+
+  std::optional<std::string> beforeCreatedAt;
+  if (!shouldSaveScore && retryData.has_value() && !retryData->createdAt.empty()) {
+    beforeCreatedAt = retryData->createdAt;
+  }
+
+  const auto best =
+      ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+  if (best.has_value()) {
+    previousBest = toResultPreviousBestData(*best);
+  }
+}
+
+void ResultScene::loadDifficultyLabel() {
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    difficultyLabel.clear();
+    return;
+  }
+
+  difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, meta);
+  dbHelper.Close(db);
 }
 
 void ResultScene::saveReplay() {
@@ -174,7 +270,68 @@ void ResultScene::addRetryButtons() {
                                    ui_theme::lime()));
     }
   }
+
+  exportPhotoButton = new Button();
+  exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  exportPhotoButtonText->setText("Export Photo");
+  exportPhotoButtonText->setAlign(TextView::CENTER);
+  exportPhotoButtonText->setVAlign(TextView::MIDDLE);
+  exportPhotoButtonText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
+  exportPhotoButton->setContentView(exportPhotoButtonText);
+  exportPhotoButton->setOnClickListener([this]() { exportPhoto(); });
+  exportPhotoButton->setSize(232, 64);
+  exportPhotoButton->setCornerRadius(ui_theme::controlRadius());
+  exportPhotoButton->setBackgroundColors(ui_theme::violetAction(),
+                                         ui_theme::violetActionHover(),
+                                         ui_theme::violetActionPressed());
+  exportPhotoButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 150),
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 190),
+      ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
+  exportPhotoButton->setStyledBorderWidth(1);
+  retryRow->addView(exportPhotoButton);
   actionHost->addView(retryRow);
+}
+
+void ResultScene::exportPhoto() {
+  if (resultPhotoExportInProgress || exportPhotoButtonText == nullptr) {
+    return;
+  }
+
+  resultPhotoExportInProgress = true;
+  exportPhotoButtonText->setText("Saving...");
+  const auto result = ResultImageExporter::Export(
+      context, meta, resultState, playModeLabel, laneOrderLabel,
+      difficultyLabel, previousBest);
+  resultPhotoExportInProgress = false;
+
+  if (result.success) {
+    exportPhotoButtonText->setText(result.message == "Saved to Photos"
+                                       ? "Saved"
+                                       : "Exported");
+    SDL_Log("Result image exported: %s (%s)",
+            result.outputPath.string().c_str(), result.message.c_str());
+  } else {
+    exportPhotoButtonText->setText("Export Failed");
+    SDL_Log("Result image export failed: %s (%s)", result.message.c_str(),
+            result.outputPath.string().c_str());
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+
+  defer(
+      [this]() {
+        if (!resultPhotoExportInProgress && exportPhotoButtonText != nullptr) {
+          exportPhotoButtonText->setText("Export Photo");
+          if (rootLayout != nullptr) {
+            rootLayout->applyYogaLayout();
+          }
+        }
+        return true;
+      },
+      result.success ? 1800 : 1400, true);
 }
 
 void ResultScene::startRetry(bool samePattern) {
@@ -324,6 +481,8 @@ void ResultScene::startReplay() {
 }
 
 void ResultScene::init() {
+  loadDifficultyLabel();
+  loadPreviousBest();
   saveScore();
   saveReplay();
 
@@ -332,6 +491,10 @@ void ResultScene::init() {
   addView(rootLayout);
 
   ResultSkinData data = {&resultState, &meta, &context};
+  data.playModeLabel = playModeLabel;
+  data.laneOrderLabel = laneOrderLabel;
+  data.difficultyLabel = difficultyLabel;
+  data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();
 
@@ -349,76 +512,25 @@ void ResultScene::init() {
 void ResultScene::update(float dt) {}
 
 void ResultScene::renderScene() {
-  // Draw Gauge Graph
   if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
     float x = graphPlaceHolder->getX();
     float y = graphPlaceHolder->getY();
     float w = graphPlaceHolder->getWidth();
     float h = graphPlaceHolder->getHeight();
 
-    // Draw background
-    drawRect(x, y, w, h, Color(50, 50, 50, 200));
-
-    // Draw graph
-    size_t count = resultState.gaugeHistory.size();
-    if (count > 1) {
-      bgfx::TransientVertexBuffer tvb{};
-      bgfx::TransientIndexBuffer tib{};
-
-      if (bgfx::getAvailTransientVertexBuffer(
-              count * 4, rendering::PosColorVertex::ms_decl) == count * 4 &&
-          bgfx::getAvailTransientIndexBuffer(count * 6) == count * 6) {
-
-        bgfx::allocTransientVertexBuffer(&tvb, count * 4,
-                                         rendering::PosColorVertex::ms_decl);
-        bgfx::allocTransientIndexBuffer(&tib, count * 6);
-
-        auto *vertices = (rendering::PosColorVertex *)tvb.data;
-        auto *index = (uint16_t *)tib.data;
-
-        float step = w / static_cast<float>(count);
-
-        for (size_t i = 0; i < count; ++i) {
-          float val = resultState.gaugeHistory[i]; // 0 to 100
-          float barH = (val / 100.0f) * h;
-          // Color based on value
-          Color barColor = val > 80.0f ? Color(0, 255, 255, 200)
-                                       : (val > 30.0f ? Color(0, 255, 0, 200)
-                                                      : Color(255, 0, 0, 200));
-          uint32_t abgr = barColor.toABGR();
-          float bx = x + i * step;
-          float by = y + h - barH;
-
-          vertices[i * 4 + 0] = {bx, by, 0.0f, abgr};
-          vertices[i * 4 + 1] = {bx + step, by, 0.0f, abgr};
-          vertices[i * 4 + 2] = {bx + step, by + barH, 0.0f, abgr};
-          vertices[i * 4 + 3] = {bx, by + barH, 0.0f, abgr};
-
-          index[i * 6 + 0] = i * 4 + 0;
-          index[i * 6 + 1] = i * 4 + 1;
-          index[i * 6 + 2] = i * 4 + 2;
-          index[i * 6 + 3] = i * 4 + 2;
-          index[i * 6 + 4] = i * 4 + 3;
-          index[i * 6 + 5] = i * 4 + 0;
-        }
-
-        uint64_t state =
-            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
-        bgfx::setState(state);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);
-        static const bgfx::ProgramHandle kSimpleProgram =
-            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-        bgfx::submit(rendering::ui_view, kSimpleProgram);
-      } else {
-        // Fallback or just don't draw if too many
-        SDL_Log("Too many points in gauge history to draw: %zu", count);
-      }
-    }
+    rendering::SimpleBatchRenderer graphBatch;
+    graphBatch.setSubmitView(rendering::ui_view);
+    graphBatch.setSubmitDepth(0);
+    graphBatch.begin();
+    drawResultGaugeLineGraph(graphBatch, resultState, x, y, w, h);
+    graphBatch.end();
   }
 }
 
 void ResultScene::cleanupScene() {
-  // Resources are cleaned up by Scene logic usually, but we have Views.
-  // Scene::cleanup() deletes all views.
+  rootLayout = nullptr;
+  graphPlaceHolder = nullptr;
+  exportPhotoButton = nullptr;
+  exportPhotoButtonText = nullptr;
+  resultPhotoExportInProgress = false;
 }

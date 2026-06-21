@@ -58,6 +58,7 @@ public:
   void stop();
   void render();
   bool hasActiveVisuals() const;
+  long long getScheduledVisualEndMicros();
   std::vector<std::filesystem::path> activeMaterializedVideoPaths() const;
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;

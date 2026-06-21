@@ -186,6 +186,8 @@ public:
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
+  std::string DifficultyTableLabelsForChart(
+      sqlite3 *db, const bms_parser::ChartMeta &meta);
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
 
   static void ToRelativePath(std::filesystem::path &path);

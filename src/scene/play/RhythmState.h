@@ -25,6 +25,11 @@ inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
 inline constexpr size_t kGaugeTypeCount = 5;
 
+struct JudgementFastSlowCount {
+  int fast = 0;
+  int slow = 0;
+};
+
 inline int gaugeTypeIndex(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -322,12 +327,14 @@ public:
   int comboBreak = 0;
   // judge count. default 0
   std::map<Judgement, int> judgeCount;
+  std::map<Judgement, JudgementFastSlowCount> judgementFastSlowCount;
 
   explicit RhythmState(const bms_parser::Chart *Chart, bool addReadyMeasure) {
     gaugeTotalNotes = Chart != nullptr ? Chart->Meta.TotalNotes : 0;
     gaugeTotal = Chart != nullptr ? Chart->Meta.Total : 100.0;
     for (int i = 0; i < JudgementCount; i++) {
       judgeCount[static_cast<Judgement>(i)] = 0;
+      judgementFastSlowCount[static_cast<Judgement>(i)] = {};
     }
     configureGauge(GaugeType::Normal, false);
   }
@@ -345,6 +352,19 @@ public:
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
   int slowCount = 0;
+
+  void recordFastSlow(const JudgeResult &judgeResult) {
+    if (judgeResult.judgement == None || judgeResult.judgement == Kpoor) {
+      return;
+    }
+    if (judgeResult.Diff < 0) {
+      fastCount++;
+      judgementFastSlowCount[judgeResult.judgement].fast++;
+    } else if (judgeResult.Diff > 0) {
+      slowCount++;
+      judgementFastSlowCount[judgeResult.judgement].slow++;
+    }
+  }
 
   void configureGauge(GaugeType selectedGaugeType, bool autoShift) {
     gaugeAutoShift = autoShift;

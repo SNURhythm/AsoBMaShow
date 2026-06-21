@@ -143,6 +143,11 @@ inline Color backdrop() {
                                           : Color(7, 10, 16, 255);
 }
 
+inline Color resultBackdrop() {
+  return activeMode() == ThemeMode::Light ? Color(235, 239, 244, 112)
+                                          : Color(7, 10, 16, 116);
+}
+
 inline Color panel() {
   return activeMode() == ThemeMode::Light ? Color(249, 252, 253, 238)
                                           : Color(15, 22, 32, 238);
@@ -156,6 +161,21 @@ inline Color panelStrong() {
 inline Color panelSubtle() {
   return activeMode() == ThemeMode::Light ? Color(241, 246, 248, 224)
                                           : Color(11, 17, 26, 224);
+}
+
+inline Color resultPanel() {
+  return activeMode() == ThemeMode::Light ? Color(249, 252, 253, 168)
+                                          : Color(15, 22, 32, 152);
+}
+
+inline Color resultPanelStrong() {
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 188)
+                                          : Color(19, 28, 40, 172);
+}
+
+inline Color resultPanelSubtle() {
+  return activeMode() == ThemeMode::Light ? Color(241, 246, 248, 142)
+                                          : Color(11, 17, 26, 126);
 }
 
 inline Color mainMenuBackdrop() {

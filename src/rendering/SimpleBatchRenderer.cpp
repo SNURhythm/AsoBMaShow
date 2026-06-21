@@ -37,6 +37,52 @@ void SimpleBatchRenderer::addRectVerticalGradient(float x, float y, float width,
                 bottomColor);
 }
 
+void SimpleBatchRenderer::addLine(float x0, float y0, float x1, float y1,
+                                  float thickness, uint32_t color) {
+  if (thickness <= 0.0f) {
+    return;
+  }
+
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float length = std::sqrt(dx * dx + dy * dy);
+  if (length <= 0.001f) {
+    addCircle(x0, y0, thickness * 0.5f, color);
+    return;
+  }
+
+  if (vertices.size() + 4 > kMaxBatchVertices ||
+      indices.size() + 6 > kMaxBatchIndices) {
+    flush();
+  }
+
+  const float halfThickness = thickness * 0.5f;
+  const float nx = (-dy / length) * halfThickness;
+  const float ny = (dx / length) * halfThickness;
+  const uint16_t baseIndex = static_cast<uint16_t>(vertices.size());
+
+  vertices.push_back({x0 + nx, y0 + ny, 0.0f, color});
+  vertices.push_back({x1 + nx, y1 + ny, 0.0f, color});
+  vertices.push_back({x1 - nx, y1 - ny, 0.0f, color});
+  vertices.push_back({x0 - nx, y0 - ny, 0.0f, color});
+
+  indices.push_back(baseIndex + 0);
+  indices.push_back(baseIndex + 1);
+  indices.push_back(baseIndex + 2);
+  indices.push_back(baseIndex + 2);
+  indices.push_back(baseIndex + 3);
+  indices.push_back(baseIndex + 0);
+}
+
+void SimpleBatchRenderer::addCircle(float cx, float cy, float radius,
+                                    uint32_t color) {
+  if (radius <= 0.0f) {
+    return;
+  }
+  addRoundedRect(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f,
+                 radius, color);
+}
+
 void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
                                          float height, float radius,
                                          uint32_t color) {

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -33,6 +34,16 @@ struct ScoreClearRankCache {
                                           std::string_view path = "") const;
 };
 
+struct ScoreBestSnapshot {
+  int score = 0;
+  int maxScore = 0;
+  int maxCombo = 0;
+  int comboBreak = 0;
+  float finalGauge = 0.0f;
+  int clearType = kClearTypeFailedRank;
+  std::string createdAt;
+};
+
 class ScoreDBHelper {
 public:
   ScoreDBHelper() = default;
@@ -48,6 +59,10 @@ public:
                    const RhythmState &state);
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state);
+  std::optional<ScoreBestSnapshot>
+  LoadBestScore(const bms_parser::ChartMeta &chartMeta,
+                const std::optional<std::string> &beforeCreatedAt =
+                    std::nullopt);
   ScoreClearRankCache LoadBestClearRanks();
   [[nodiscard]] std::uint64_t GetRevision() const;
 };

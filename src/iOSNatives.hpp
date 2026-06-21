@@ -78,6 +78,8 @@ bool RevealIOSFileInFiles(const std::string &filePath,
                           std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
+bool SaveImageToIOSPhotos(const std::string &filePath,
+                          std::string &errorMessage);
 bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
                                   std::string &errorMessage);
 bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,

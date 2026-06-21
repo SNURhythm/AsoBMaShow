@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace play_options {
@@ -23,6 +24,11 @@ struct PlayOptionReplayInfo {
   std::optional<long long> seed;
   std::optional<std::string> option2;
   std::optional<long long> seed2;
+};
+
+struct PlayModeDisplayLabel {
+  std::string mode;
+  std::string laneOrder;
 };
 
 inline constexpr std::array<const char *, 10> kPlayOptions = {
@@ -150,6 +156,130 @@ inline bool usesRandomizer(const std::optional<std::string> &option) {
   return option.has_value() && usesRandomizer(*option);
 }
 
+inline bool isLaneShuffleOption(const std::optional<std::string> &option) {
+  const std::string normalized =
+      option.has_value() ? normalizePlayOption(*option) : "NORMAL";
+  return normalized == "MIRROR" || normalized == "RANDOM" ||
+         normalized == "R-RANDOM" || normalized == "RANDOM-EX";
+}
+
+inline std::optional<std::string>
+formatLaneOrderSummary(const bms_parser::ChartMeta &meta,
+                       const std::vector<int> &laneOrder) {
+  const std::vector<int> destinationLanes = meta.GetTotalLaneIndices();
+  if (destinationLanes.empty() || laneOrder.size() != destinationLanes.size()) {
+    return std::nullopt;
+  }
+
+  std::unordered_map<int, char> laneToSymbol;
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  if (meta.IsDP) {
+    if (scratchLanes.size() >= 2) {
+      laneToSymbol[scratchLanes.front()] = 'L';
+      laneToSymbol[scratchLanes.back()] = 'R';
+    }
+  } else if (!scratchLanes.empty()) {
+    laneToSymbol[scratchLanes.front()] = 'S';
+  }
+
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  if (keyLanes.size() > keySymbols.size()) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < keyLanes.size(); ++i) {
+    laneToSymbol[keyLanes[i]] = keySymbols[i];
+  }
+
+  std::string result;
+  result.reserve(laneOrder.size());
+  for (int sourceLane : laneOrder) {
+    const auto symbol = laneToSymbol.find(sourceLane);
+    if (symbol == laneToSymbol.end()) {
+      return std::nullopt;
+    }
+    result.push_back(symbol->second);
+  }
+  return result;
+}
+
+inline std::optional<std::vector<int>>
+laneOrderForPlayOption(const bms_parser::ChartMeta &meta,
+                       const std::optional<std::string> &option,
+                       const std::optional<long long> &seed, int player) {
+  const std::string normalized =
+      option.has_value() ? normalizePlayOption(*option) : "NORMAL";
+  if (usesRandomizer(normalized) && !seed.has_value()) {
+    return std::nullopt;
+  }
+
+  auto modifier = bms_parser::CreatePlayOptionModifier(
+      normalized, seed.value_or(-1), player);
+  if (modifier == nullptr) {
+    return std::nullopt;
+  }
+
+  const auto totalLanes = meta.GetTotalLaneIndices();
+  if (totalLanes.empty()) {
+    return std::nullopt;
+  }
+  const int laneCount = *std::max_element(totalLanes.begin(), totalLanes.end()) + 1;
+  if (laneCount <= 0) {
+    return std::nullopt;
+  }
+
+  bms_parser::Chart syntheticChart;
+  syntheticChart.Meta = meta;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(laneCount, false);
+  measure->TimeLines.push_back(timeline);
+  syntheticChart.Measures.push_back(measure);
+  modifier->Modify(syntheticChart);
+  return modifier->GetLaneOrder(meta);
+}
+
+inline std::optional<std::string> formatLaneShuffleSummary(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed,
+    const std::optional<std::string> &option2 = std::nullopt,
+    const std::optional<long long> &seed2 = std::nullopt) {
+  if (!isLaneShuffleOption(option) &&
+      (!meta.IsDP || !isLaneShuffleOption(option2))) {
+    return std::nullopt;
+  }
+
+  const std::vector<int> identityLaneOrder = meta.GetTotalLaneIndices();
+  std::vector<int> combinedLaneOrder = identityLaneOrder;
+  auto mergeLaneOrder = [&](const std::vector<int> &laneOrder) {
+    if (laneOrder.size() != combinedLaneOrder.size() ||
+        laneOrder.size() != identityLaneOrder.size()) {
+      return;
+    }
+    for (size_t i = 0; i < laneOrder.size(); ++i) {
+      if (laneOrder[i] != identityLaneOrder[i]) {
+        combinedLaneOrder[i] = laneOrder[i];
+      }
+    }
+  };
+
+  if (isLaneShuffleOption(option)) {
+    const auto laneOrder = laneOrderForPlayOption(meta, option, seed, 0);
+    if (!laneOrder.has_value()) {
+      return std::nullopt;
+    }
+    mergeLaneOrder(*laneOrder);
+  }
+  if (meta.IsDP && isLaneShuffleOption(option2)) {
+    const auto laneOrder = laneOrderForPlayOption(meta, option2, seed2, 1);
+    if (!laneOrder.has_value()) {
+      return std::nullopt;
+    }
+    mergeLaneOrder(*laneOrder);
+  }
+
+  return formatLaneOrderSummary(meta, combinedLaneOrder);
+}
+
 inline bool hasSamePatternRandomization(
     const bms_parser::ChartMeta &meta,
     const std::optional<std::string> &option = std::nullopt,
@@ -200,6 +330,56 @@ formatPlayOptionLabel(const std::optional<std::string> &option,
            formatSingle(normalizedOption2, seed2);
   }
   return formatSingle(normalizedOption, seed);
+}
+
+inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed = std::nullopt,
+    const std::optional<std::string> &option2 = std::nullopt,
+    const std::optional<long long> &seed2 = std::nullopt) {
+  if (option.has_value()) {
+    if (const auto assign = laneAssignNotationFromOption(*option);
+        assign.has_value()) {
+      return {.mode = "ASSIGN", .laneOrder = *assign};
+    }
+  }
+
+  PlayModeDisplayLabel display{
+      .mode = formatPlayOptionLabel(option, seed, option2, seed2)};
+  if (display.mode.empty()) {
+    display.mode = "NORMAL";
+  }
+
+  if (const auto laneSummary =
+          formatLaneShuffleSummary(meta, option, seed, option2, seed2);
+      laneSummary.has_value()) {
+    display.laneOrder = *laneSummary;
+  }
+  return display;
+}
+
+inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
+    const ReplayData &replay) {
+  return formatPlayModeDisplayLabel(
+      replay.chartMeta, replay.playOption, replay.playOptionSeed,
+      replay.playOption2, replay.playOption2Seed);
+}
+
+inline std::string formatPlayModeLabel(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed = std::nullopt,
+    const std::optional<std::string> &option2 = std::nullopt,
+    const std::optional<long long> &seed2 = std::nullopt) {
+  const PlayModeDisplayLabel display =
+      formatPlayModeDisplayLabel(meta, option, seed, option2, seed2);
+  return display.laneOrder.empty() ? display.mode
+                                   : display.mode + " Lane " + display.laneOrder;
+}
+
+inline std::string formatPlayModeLabel(const ReplayData &replay) {
+  const PlayModeDisplayLabel display = formatPlayModeDisplayLabel(replay);
+  return display.laneOrder.empty() ? display.mode
+                                   : display.mode + " Lane " + display.laneOrder;
 }
 
 inline bool

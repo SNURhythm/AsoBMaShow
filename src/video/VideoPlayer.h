@@ -32,6 +32,7 @@ public:
   void pause();
   void stop();
   void seek(int64_t micro);
+  long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
   float viewWidth = 1920.0f;
@@ -53,7 +54,7 @@ private:
   AVCodecContext *codecContext = nullptr;
   SwsContext *swsContext = nullptr;
   int videoStreamIndex = -1;
-  std::mutex videoMutex;
+  mutable std::mutex videoMutex;
 
   std::vector<AVFrame *> frameBuffer; // Fixed-size ring buffer
   std::atomic<size_t> bufferHead = 0;

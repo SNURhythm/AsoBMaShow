@@ -4,6 +4,7 @@
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
+#include "../skin/SkinTypes.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -25,6 +26,7 @@ struct ResultPracticeOptions {
 };
 
 class TextView;
+class Button;
 
 class ResultScene : public Scene {
 public:
@@ -41,23 +43,34 @@ public:
   void cleanupScene() override;
 
 private:
+  void loadDifficultyLabel();
+  void loadPreviousBest();
   void saveScore();
   void saveReplay();
   void addRetryButtons();
   void startRetry(bool samePattern);
   void startReplay();
+  void exportPhoto();
   void exitResult();
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
+  std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
+  std::string playModeLabel;
+  std::string laneOrderLabel;
+  std::string difficultyLabel;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  Button *exportPhotoButton = nullptr;
+  TextView *exportPhotoButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
   bool shouldSaveScore = true;
   bool replayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
+  bool previousBestLoaded = false;
+  bool resultPhotoExportInProgress = false;
 };

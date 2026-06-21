@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -327,6 +328,71 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return result;
+}
+
+std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
+    const bms_parser::ChartMeta &chartMeta,
+    const std::optional<std::string> &beforeCreatedAt) {
+  sqlite3 *db = Connect();
+  if (db == nullptr) {
+    return std::nullopt;
+  }
+  SqliteConnectionHandle connection(db);
+
+  if (!CreateScoreTable(connection.get())) {
+    return std::nullopt;
+  }
+
+  const auto chartPath = path_t_to_utf8(
+      fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+  const std::string sha256 = normalizedHash(chartMeta.SHA256);
+  const std::string md5 = normalizedHash(chartMeta.MD5);
+  const std::string cutoff = beforeCreatedAt.value_or("");
+
+  const char *query =
+      "SELECT score, max_score, max_combo, combo_break, final_gauge,"
+      "clear_type, created_at "
+      "FROM scores "
+      "WHERE ((? != '' AND lower(trim(chart_sha256)) = ?) OR "
+      "(? != '' AND lower(trim(chart_md5)) = ?) OR "
+      "(? != '' AND chart_path = ?)) "
+      "AND (? = '' OR created_at < ?) "
+      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
+      "LIMIT 1";
+
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(connection.get(), query, stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while loading best score: %s",
+            sqlite3_errmsg(connection.get()));
+    return std::nullopt;
+  }
+
+  int bindIndex = 1;
+  bindText(stmt.get(), bindIndex++, sha256);
+  bindText(stmt.get(), bindIndex++, sha256);
+  bindText(stmt.get(), bindIndex++, md5);
+  bindText(stmt.get(), bindIndex++, md5);
+  bindText(stmt.get(), bindIndex++, chartPath);
+  bindText(stmt.get(), bindIndex++, chartPath);
+  bindText(stmt.get(), bindIndex++, cutoff);
+  bindText(stmt.get(), bindIndex++, cutoff);
+
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return std::nullopt;
+  }
+
+  ScoreBestSnapshot snapshot;
+  snapshot.score = sqlite3_column_int(stmt.get(), 0);
+  snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
+  snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
+  snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+  snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
+  const auto *createdAt =
+      reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 6));
+  snapshot.createdAt = createdAt != nullptr ? std::string(createdAt) : "";
+  return snapshot;
 }
 
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
