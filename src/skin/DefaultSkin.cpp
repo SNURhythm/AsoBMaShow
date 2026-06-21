@@ -550,7 +550,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     infoGrid->addView(tile);
   };
 
-  addInfoTile("NEXT RANK", nextRank.first, formatSignedDelta(nextRank.second),
+  addInfoTile("NEXT GRADE", nextRank.first, formatSignedDelta(nextRank.second),
               ui_theme::amber());
   addInfoTile("TOTAL NOTES", std::to_string(totalNotes), longNoteSummary,
               ui_theme::lime());

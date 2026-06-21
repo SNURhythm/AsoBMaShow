@@ -4719,7 +4719,7 @@ void MainMenuScene::buildReplayModal() {
   replayModalPhotoButton =
       makeModalButton("Export Photo", 18, &replayModalPhotoButtonText);
   replayModalExportButton =
-      makeModalButton("Export", 20, &replayModalExportButtonText);
+      makeModalButton("Export Video", 18, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
       return;
@@ -4821,7 +4821,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayModalActions();
-  replayModalRoot->applyYogaLayout();
+  replayModalRoot->applyYogaLayoutFromRoot();
 }
 
 void MainMenuScene::showReplayExportOptions() {
@@ -4839,7 +4839,7 @@ void MainMenuScene::showReplayExportOptions() {
   selectedExportIncludeResultScreen = true;
   refreshReplayExportOptionButtons();
   refreshReplayModalActions();
-  replayModalRoot->applyYogaLayout();
+  replayModalRoot->applyYogaLayoutFromRoot();
 }
 
 void MainMenuScene::showReplayExportProgress(const std::string &title,
@@ -4856,7 +4856,7 @@ void MainMenuScene::showReplayExportProgress(const std::string &title,
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayModalActions();
-  replayModalRoot->applyYogaLayout();
+  replayModalRoot->applyYogaLayoutFromRoot();
 }
 
 void MainMenuScene::hideReplayModal() {
@@ -4875,7 +4875,7 @@ void MainMenuScene::hideReplayModal() {
     replayModalPhotoButtonText->setText("Export Photo");
   }
   if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText("Export");
+    replayModalExportButtonText->setText("Export Video");
   }
 }
 
@@ -4893,9 +4893,8 @@ void MainMenuScene::refreshReplayModalActions() {
     replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
   }
   if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText(
-        exportInProgress ? "Exporting"
-                         : (optionsMode ? "Start Export" : "Export"));
+    replayModalExportButtonText->setText(exportInProgress ? "Exporting"
+                                                          : "Export Video");
   }
 
   if (replayWatchButton != nullptr) {
@@ -4934,7 +4933,7 @@ void MainMenuScene::refreshReplayModalActions() {
                           ui_theme::violetActionHover);
 
   if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayout();
+    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
@@ -4970,7 +4969,7 @@ void MainMenuScene::updateReplayExportProgressUi(double fraction,
         static_cast<float>(displayedPercent));
   }
   if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayout();
+    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
