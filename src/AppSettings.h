@@ -76,7 +76,7 @@ public:
   static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
-  static constexpr float kDefaultJudgementTextY = 0.35f;
+  static constexpr float kDefaultJudgementTextY = 0.55f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 

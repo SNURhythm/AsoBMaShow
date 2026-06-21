@@ -545,6 +545,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     previewPanel->addView(makePreviewStepRow(
         minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
 
+    previewPanel->addView(
+        makeText("Indicator", metrics.summaryValueSize,
+                 ui_theme::textSecondary()));
     auto *indicatorModeControls = new View();
     indicatorModeControls->setFlexDirection(FlexDirection::Row);
     indicatorModeControls->setFlexWrap(YGWrapWrap);

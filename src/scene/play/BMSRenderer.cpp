@@ -1668,7 +1668,12 @@ void BMSRenderer::setJudgementTextY(float y) {
 
 void BMSRenderer::setJudgementCounterPosition(
     AppSettings::JudgementCounterPosition position) {
+  if (judgementCounterPosition == position) {
+    return;
+  }
   judgementCounterPosition = position;
+  renderedJudgementCounterRevision =
+      judgementCounterRevision.load(std::memory_order_relaxed) - 1;
 }
 
 void BMSRenderer::publishJudgementCounterSnapshot(
