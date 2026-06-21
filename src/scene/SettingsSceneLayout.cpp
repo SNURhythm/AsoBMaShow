@@ -53,6 +53,8 @@ void SettingsScene::resetViewState() {
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   uiThemeModeText = nullptr;
+  archiveCacheCleanupButtonText = nullptr;
+  archiveCacheCleanupStatusText = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -64,16 +66,19 @@ void SettingsScene::resetViewState() {
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   uiThemeModeButton = nullptr;
+  archiveCacheCleanupButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
   miscTabButton = nullptr;
-  tablesTabButton = nullptr;
+  difficultyTablesTabButton = nullptr;
+  bmsLibraryTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
   miscTabText = nullptr;
-  tablesTabText = nullptr;
+  difficultyTablesTabText = nullptr;
+  bmsLibraryTabText = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
@@ -1399,6 +1404,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+  measureTemporaryArchiveCache();
 
   auto *themeControls = new View();
   themeControls->setFlexDirection(FlexDirection::Column);
@@ -1459,14 +1465,43 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
                         "feel heavy on large packs.",
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+  auto *cacheCleanupControls = new View();
+  cacheCleanupControls->setFlexDirection(FlexDirection::Column);
+  cacheCleanupControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  cacheCleanupControls->setAlignItems(YGAlignFlexStart);
+  cacheCleanupControls->addView(makeWrappedText(
+      metrics.compact ? "Remove temporary files extracted from archives."
+                      : "Remove temporary BGA and video files extracted from "
+                        "archives. They will be recreated when needed.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  archiveCacheCleanupButtonText =
+      makeText(archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up",
+               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  archiveCacheCleanupButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       archiveCacheCleanupButtonText, ui_theme::coral());
+  archiveCacheCleanupButton->setOnClickListener(
+      [this]() { cleanupTemporaryArchiveCache(); });
+  cacheCleanupControls->addView(archiveCacheCleanupButton);
+  archiveCacheCleanupStatusText =
+      makeWrappedText(archiveCacheCleanupStatusMessage, metrics.bodyTextSize,
+                      ui_theme::textSecondary());
+  archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
+  cacheCleanupControls->addView(archiveCacheCleanupStatusText);
+  cardsColumn->addView(makeCard(
+      metrics, "Archive Temporary Cache",
+      metrics.compact ? "Clear extracted archive media."
+                      : "Clear temporary files made while playing media from "
+                        "archives.",
+      cacheCleanupControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   return cardsColumn;
 }
 
-View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
+View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
-  loadChartEntries();
-  refreshChartEntryBackupStatuses();
 
   const std::string tableCardDescription =
       metrics.compact ? "Import a bmstable page, header, or table list URL."
@@ -1596,6 +1631,13 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(metrics, "Installed Difficulty Tables",
                                 tableCardDescription, installedTablesBody,
                                 metrics.modeCardHeight, metrics.cardsWidth));
+  return cardsColumn;
+}
+
+View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
+  auto *cardsColumn = makeCardsColumn(metrics);
+  loadChartEntries();
+  refreshChartEntryBackupStatuses();
 
   auto *folderList = new View();
   folderList->setFlexDirection(FlexDirection::Column);
@@ -1918,13 +1960,17 @@ void SettingsScene::initView() {
       makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
   miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
-  tablesTabButton =
-      makeTabButton(SettingsTab::Tables, "Tables", &tablesTabText);
+  difficultyTablesTabButton = makeTabButton(
+      SettingsTab::DifficultyTables, "Difficulty Tables",
+      &difficultyTablesTabText);
+  bmsLibraryTabButton = makeTabButton(SettingsTab::BmsLibrary, "BMS Library",
+                                      &bmsLibraryTabText);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
   tabControls->addView(miscTabButton);
-  tabControls->addView(tablesTabButton);
+  tabControls->addView(difficultyTablesTabButton);
+  tabControls->addView(bmsLibraryTabButton);
   content->addView(tabControls);
 
   scrollView = new ScrollView();
@@ -1948,8 +1994,11 @@ void SettingsScene::initView() {
   case SettingsTab::Misc:
     cardsColumn = buildMiscTab(metrics);
     break;
-  case SettingsTab::Tables:
-    cardsColumn = buildTablesTab(metrics);
+  case SettingsTab::DifficultyTables:
+    cardsColumn = buildDifficultyTablesTab(metrics);
+    break;
+  case SettingsTab::BmsLibrary:
+    cardsColumn = buildBmsLibraryTab(metrics);
     break;
   }
   if (cardsColumn != nullptr) {

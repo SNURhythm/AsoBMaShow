@@ -52,7 +52,8 @@ private:
     Visual,
     Lane,
     Misc,
-    Tables,
+    DifficultyTables,
+    BmsLibrary,
   };
 
   View *rootLayout = nullptr;
@@ -87,6 +88,8 @@ private:
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
   TextView *uiThemeModeText = nullptr;
+  TextView *archiveCacheCleanupButtonText = nullptr;
+  TextView *archiveCacheCleanupStatusText = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -98,16 +101,19 @@ private:
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;
   Button *uiThemeModeButton = nullptr;
+  Button *archiveCacheCleanupButton = nullptr;
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *miscTabButton = nullptr;
-  Button *tablesTabButton = nullptr;
+  Button *difficultyTablesTabButton = nullptr;
+  Button *bmsLibraryTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *miscTabText = nullptr;
-  TextView *tablesTabText = nullptr;
+  TextView *difficultyTablesTabText = nullptr;
+  TextView *bmsLibraryTabText = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
@@ -140,26 +146,38 @@ private:
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
   std::jthread difficultyTableJobThread;
+  std::jthread archiveCacheCleanupThread;
+  std::jthread archiveCacheMeasureThread;
   std::atomic_bool difficultyTableJobRunning = false;
+  std::atomic_bool archiveCacheCleanupRunning = false;
+  std::atomic_bool archiveCacheMeasureRunning = false;
+  std::atomic<std::uint64_t> archiveCacheStatusGeneration = 0;
   std::mutex difficultyTableStatusMutex;
+  std::mutex archiveCacheCleanupStatusMutex;
   bool pendingDifficultyTableStatus = false;
   bool pendingChartFolderStatus = false;
   bool pendingDifficultyTableReload = false;
   bool pendingDifficultyTableImportProgress = false;
   bool pendingDifficultyTableImportFinished = false;
   bool pendingDifficultyTableImportSucceeded = false;
+  bool pendingArchiveCacheCleanupStatus = false;
   int pendingDifficultyTableImportCurrent = 0;
   int pendingDifficultyTableImportTotal = 0;
   std::string pendingDifficultyTableImportName;
   std::string pendingDifficultyTableImportStatusText;
   std::string pendingDifficultyTableStatusText;
   std::string pendingChartFolderStatusText;
+  std::string pendingArchiveCacheCleanupStatusText;
   SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
   SDL_Color pendingChartFolderStatusColor{157, 177, 200, 255};
+  SDL_Color pendingArchiveCacheCleanupStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
   SDL_Color chartFolderStatusColor{157, 177, 200, 255};
+  std::string archiveCacheCleanupStatusMessage =
+      "Temporary archive cache has not been cleaned yet.";
+  SDL_Color archiveCacheCleanupStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;
   bool difficultyTableImportSucceeded = false;
@@ -191,7 +209,9 @@ private:
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
-  View *buildTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *
+  buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
@@ -216,7 +236,10 @@ private:
                                             const std::string &statusText,
                                             bool finished,
                                             bool succeeded = false);
+  void requestArchiveCacheCleanupStatus(const std::string &text,
+                                        const SDL_Color &color);
   void applyPendingDifficultyTableUpdates();
+  void applyPendingArchiveCacheCleanupStatus();
   void refreshTablesIfLibraryChanged();
   void refreshDifficultyTableImportModal();
   void hideDifficultyTableImportModal();
@@ -227,6 +250,8 @@ private:
   void refreshChartLibrary();
   void refreshChartEntryBackupStatuses();
   void toggleChartEntryICloudBackup(const std::string &entryPathText);
+  void measureTemporaryArchiveCache();
+  void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
   void persistSettings();
   void syncOffsetInputText(bool force = false);

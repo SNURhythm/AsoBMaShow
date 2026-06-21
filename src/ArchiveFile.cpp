@@ -24,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #if __has_include(<archive.h>) && __has_include(<archive_entry.h>)
@@ -357,6 +358,7 @@ std::size_t filterSystemEntries(std::vector<Entry> &entries) {
 
 std::mutex gCachePathNormalizerMutex;
 CachePathNormalizer gCachePathNormalizer;
+std::mutex gTemporaryCacheMutex;
 
 std::filesystem::path cacheNormalizedPath(const std::filesystem::path &path) {
   std::filesystem::path normalized = path.lexically_normal();
@@ -404,6 +406,65 @@ std::string fileStateKey(const std::filesystem::path &path) {
                               .count();
   out << size << ':' << mtimeNanos;
   return out.str();
+}
+
+std::uint64_t clampFileSizeForResult(std::uintmax_t value) {
+  return static_cast<std::uint64_t>(
+      std::min(value, static_cast<std::uintmax_t>(
+                          std::numeric_limits<std::uint64_t>::max())));
+}
+
+void addClamped(std::uint64_t &total, std::uint64_t value) {
+  const std::uint64_t maxValue = std::numeric_limits<std::uint64_t>::max();
+  total = value > maxValue - total ? maxValue : total + value;
+}
+
+bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
+                    std::uint64_t &entries,
+                    const std::stop_token *stopToken = nullptr) {
+  bytes = 0;
+  entries = 0;
+  std::error_code error;
+  if (std::filesystem::is_regular_file(root, error) && !error) {
+    const std::uintmax_t size = std::filesystem::file_size(root, error);
+    if (error) {
+      return false;
+    }
+    bytes = clampFileSizeForResult(size);
+    entries = 1;
+    return true;
+  }
+  if (error || !std::filesystem::is_directory(root, error) || error) {
+    return false;
+  }
+
+  std::filesystem::recursive_directory_iterator it(
+      root, std::filesystem::directory_options::skip_permission_denied, error);
+  const std::filesystem::recursive_directory_iterator end;
+  while (!error && it != end) {
+    if (stopRequested(stopToken)) {
+      return false;
+    }
+    const std::filesystem::directory_entry &entry = *it;
+    std::error_code entryError;
+    if (entry.is_regular_file(entryError) && !entryError) {
+      const std::uintmax_t size = entry.file_size(entryError);
+      if (!entryError) {
+        addClamped(bytes, clampFileSizeForResult(size));
+      }
+    }
+    addClamped(entries, 1);
+    it.increment(error);
+  }
+  return !error && !stopRequested(stopToken);
+}
+
+std::uint64_t directoryByteSize(const std::filesystem::path &root,
+                                const std::stop_token *stopToken = nullptr) {
+  std::uint64_t bytes = 0;
+  std::uint64_t entries = 0;
+  directoryStats(root, bytes, entries, stopToken);
+  return bytes;
 }
 
 struct CachedIndex {
@@ -4834,6 +4895,7 @@ materializeFileBytes(const std::filesystem::path &path,
                      std::string *errorMessage) {
   const std::string key = cacheKeyForPath(path);
   std::filesystem::path cacheRoot = archiveCacheRoot();
+  std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
   std::error_code error;
   std::filesystem::create_directories(cacheRoot, error);
   if (error) {
@@ -4865,6 +4927,132 @@ materializeFileBytes(const std::filesystem::path &path,
     }
   }
   return output;
+}
+
+bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
+                           const std::vector<std::filesystem::path>
+                               &protectedPaths,
+                           std::string *errorMessage) {
+  result = {};
+  result.path = archiveCacheRoot();
+
+  std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
+  std::error_code error;
+  const bool exists = std::filesystem::exists(result.path, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not check archive cache: " + error.message();
+    }
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+
+  result.cacheExisted = true;
+  std::unordered_set<std::string> protectedKeys;
+  protectedKeys.reserve(protectedPaths.size());
+  for (const auto &protectedPath : protectedPaths) {
+    if (!protectedPath.empty()) {
+      protectedKeys.insert(cachePathKey(protectedPath));
+    }
+  }
+
+  std::vector<std::filesystem::path> cacheEntries;
+  std::filesystem::directory_iterator it(
+      result.path, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not read archive cache: " + error.message();
+    }
+    return false;
+  }
+
+  const std::filesystem::directory_iterator end;
+  while (it != end) {
+    cacheEntries.push_back(it->path());
+    it.increment(error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not scan archive cache: " + error.message();
+      }
+      return false;
+    }
+  }
+
+  for (const auto &entryPath : cacheEntries) {
+    if (protectedKeys.contains(cachePathKey(entryPath))) {
+      ++result.skippedEntries;
+      continue;
+    }
+
+    const std::uint64_t entryBytes = directoryByteSize(entryPath);
+    const std::uintmax_t removedEntries =
+        std::filesystem::remove_all(entryPath, error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not remove archive cache entry: " +
+                        error.message();
+      }
+      return false;
+    }
+    result.removedBytes += entryBytes;
+    result.removedEntries += clampFileSizeForResult(removedEntries);
+  }
+
+  error.clear();
+  std::filesystem::remove(result.path, error);
+  if (error && error != std::errc::directory_not_empty) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not remove empty archive cache folder: " +
+                      error.message();
+    }
+    return false;
+  }
+  appendDebugLogLineImpl("Cleaned archive temporary cache: " +
+                         pathForLog(result.path) +
+                         " entries=" +
+                         std::to_string(result.removedEntries) +
+                         " skipped=" +
+                         std::to_string(result.skippedEntries) +
+                         " bytes=" +
+                         std::to_string(result.removedBytes));
+  return true;
+}
+
+bool measureTemporaryCache(TemporaryCacheUsageResult &result,
+                           std::string *errorMessage,
+                           const std::stop_token *stopToken) {
+  result = {};
+  result.path = archiveCacheRoot();
+
+  std::error_code error;
+  const bool exists = std::filesystem::exists(result.path, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not check archive cache: " + error.message();
+    }
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+
+  result.cacheExisted = true;
+  if (!directoryStats(result.path, result.bytes, result.entries, stopToken)) {
+    if (stopRequested(stopToken)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive cache measurement cancelled.";
+      }
+      return false;
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not measure archive cache.";
+    }
+    return false;
+  }
+  return true;
 }
 
 void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,

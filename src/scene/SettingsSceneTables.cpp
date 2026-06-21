@@ -270,13 +270,17 @@ void SettingsScene::refreshTablesIfLibraryChanged() {
   }
 
   observedLibraryRevision = revision;
-  if (activeTab != SettingsTab::Tables) {
+  if (activeTab != SettingsTab::DifficultyTables &&
+      activeTab != SettingsTab::BmsLibrary) {
     return;
   }
 
-  loadDifficultyTables();
-  loadChartEntries();
-  refreshChartEntryBackupStatuses();
+  if (activeTab == SettingsTab::DifficultyTables) {
+    loadDifficultyTables();
+  } else {
+    loadChartEntries();
+    refreshChartEntryBackupStatuses();
+  }
   lastLayoutWidth = -1;
 }
 

@@ -346,7 +346,10 @@ void SettingsScene::refreshSettingsText() {
   applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
   applyTabStyle(miscTabButton, miscTabText, SettingsTab::Misc);
-  applyTabStyle(tablesTabButton, tablesTabText, SettingsTab::Tables);
+  applyTabStyle(difficultyTablesTabButton, difficultyTablesTabText,
+                SettingsTab::DifficultyTables);
+  applyTabStyle(bmsLibraryTabButton, bmsLibraryTabText,
+                SettingsTab::BmsLibrary);
 
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();

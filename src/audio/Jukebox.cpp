@@ -457,6 +457,20 @@ bool Jukebox::hasActiveVisuals() const {
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
 
+std::vector<std::filesystem::path> Jukebox::activeMaterializedVideoPaths()
+    const {
+  std::vector<std::filesystem::path> paths;
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+  paths.reserve(videoMaterializedPathTable.size());
+  for (const auto &[id, path] : videoMaterializedPathTable) {
+    (void)id;
+    if (!path.empty()) {
+      paths.push_back(path);
+    }
+  }
+  return paths;
+}
+
 void Jukebox::setVisualsEnabled(bool enabled) {
   visualsEnabled.store(enabled, std::memory_order_relaxed);
   wakeScheduler();
@@ -497,6 +511,7 @@ bool Jukebox::loadMaterializedVideoPath(
     auto *loadedVideoPlayer = videoPlayer.get();
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     replaceVideoPlayerLocked(videoPlayerTable, id, std::move(videoPlayer));
+    videoMaterializedPathTable[id] = materializedPath.lexically_normal();
 
     SDL_Log("video width: %f, video height: %f", loadedVideoPlayer->viewWidth,
             loadedVideoPlayer->viewHeight);
@@ -1398,6 +1413,7 @@ void Jukebox::clearVisualResources() {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     videoPlayerTable.clear();
+    videoMaterializedPathTable.clear();
   }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
