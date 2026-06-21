@@ -388,7 +388,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto *scorePanel =
       makePanel(ui_theme::resultPanel(), ui_theme::hairlineSubtle());
-  scorePanel->setFlexGrow(1.45f);
+  scorePanel->setFlexGrow(1.0f);
   scorePanel->setFlexBasis(0);
   scorePanel->setMinWidth(0);
   scorePanel->setFlexDirection(FlexDirection::Column);
@@ -423,7 +423,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   auto *lampPanel = makePanel(
       ui_theme::resultPanel(),
       ui_theme::withAlpha(currentClearAccent, hasPreviousBest ? 120 : 96));
-  lampPanel->setFlexGrow(1.15f);
+  lampPanel->setFlexGrow(1.0f);
   lampPanel->setFlexBasis(0);
   lampPanel->setMinWidth(0);
   lampPanel->setFlexDirection(FlexDirection::Column);
@@ -492,8 +492,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto *infoGrid = new View();
   infoGrid->setFlexDirection(FlexDirection::Row);
-  infoGrid->setFlexWrap(YGWrapWrap);
-  infoGrid->setJustifyContent(YGJustifyCenter);
+  infoGrid->setFlexWrap(YGWrapNoWrap);
+  infoGrid->setJustifyContent(YGJustifySpaceBetween);
   infoGrid->setAlignItems(YGAlignCenter);
   infoGrid->setGap(10);
   infoGrid->setName("resultInfoGrid");
@@ -503,7 +503,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                          Color valueColor = ui_theme::textPrimary()) {
     auto *tile = makePanel(ui_theme::resultPanelSubtle(),
                            Color(accent.r, accent.g, accent.b, 98));
-    tile->setWidth(150);
+    tile->setFlexGrow(1);
+    tile->setFlexBasis(0);
+    tile->setFlexShrink(1);
+    tile->setMinWidth(0);
     tile->setHeight(62);
     tile->setPadding(Edge::All, 8);
     tile->setFlexDirection(FlexDirection::Column);
@@ -545,8 +548,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto detailsGrid = new View();
   detailsGrid->setFlexDirection(FlexDirection::Row);
-  detailsGrid->setFlexWrap(YGWrapWrap);
-  detailsGrid->setJustifyContent(YGJustifyCenter);
+  detailsGrid->setFlexWrap(YGWrapNoWrap);
+  detailsGrid->setJustifyContent(YGJustifySpaceBetween);
   detailsGrid->setAlignItems(YGAlignCenter);
   detailsGrid->setGap(12);
   detailsGrid->setName("detailsGrid");
@@ -555,7 +558,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                        const std::string &id) {
     auto *tile = makePanel(ui_theme::resultPanelSubtle(),
                            Color(accent.r, accent.g, accent.b, 132));
-    tile->setWidth(132);
+    tile->setFlexGrow(1);
+    tile->setFlexBasis(0);
+    tile->setFlexShrink(1);
+    tile->setMinWidth(0);
     tile->setHeight(66);
     tile->setPadding(Edge::All, 8);
     tile->setFlexDirection(FlexDirection::Column);
@@ -573,7 +579,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                                 Color accent, const std::string &id) {
     auto *tile = makePanel(ui_theme::resultPanelSubtle(),
                            Color(accent.r, accent.g, accent.b, 132));
-    tile->setWidth(132);
+    tile->setFlexGrow(1);
+    tile->setFlexBasis(0);
+    tile->setFlexShrink(1);
+    tile->setMinWidth(0);
     tile->setHeight(66);
     tile->setPadding(Edge::All, 7);
     tile->setFlexDirection(FlexDirection::Column);
