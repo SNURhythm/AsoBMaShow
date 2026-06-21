@@ -696,7 +696,6 @@ void GamePlayScene::renderScene() {
   if (pauseButton != nullptr) {
     pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
   }
-  renderer->setHudSuppressed(pauseLayout != nullptr && pauseLayout->getVisible());
   renderer->render(renderContext, getVisualTimeMicros(getGameplayTimeMicros(
                                       context.jukebox.getTimeMicros())));
   if (laneStateText != nullptr) {

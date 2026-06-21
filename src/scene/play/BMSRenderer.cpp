@@ -993,7 +993,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
 
-  if (renderHud && !hudSuppressed) {
+  if (renderHud) {
     layoutCenteredJudgementText();
     drawTitle(context);
     drawJudgement(context);
@@ -1087,10 +1087,6 @@ void BMSRenderer::setShowInvisibleNotes(bool enabled) {
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
                                               float widthScale, bool hudMode) {
   judgementIndicator.configure(enabled, y, widthScale, hudMode);
-}
-
-void BMSRenderer::setHudSuppressed(bool suppressed) {
-  hudSuppressed = suppressed;
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

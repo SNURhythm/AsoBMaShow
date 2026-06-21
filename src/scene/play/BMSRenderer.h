@@ -138,7 +138,6 @@ private:
   std::unordered_map<uint64_t, size_t> noteTextureBatchLookup;
   uint32_t longBodySubmitDepth = 0;
   uint32_t noteSheetSubmitDepth = 0;
-  bool hudSuppressed = false;
   int judgementLayoutWidth = 0;
   int judgementLayoutHeight = 0;
 
@@ -215,7 +214,6 @@ public:
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
-  void setHudSuppressed(bool suppressed);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);
