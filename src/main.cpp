@@ -80,7 +80,6 @@ bgfx::VertexLayout rendering::PosTexVertex::ms_decl;
 bgfx::VertexLayout rendering::PosTexCoord0Vertex::ms_decl;
 
 static SDL_Window *s_window = nullptr;
-static SDL_Renderer *s_renderer = nullptr;
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
 static float s_renderScale = 1.0f;
@@ -143,6 +142,30 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
     renderH = scaledDimension(logicalH);
   }
 }
+
+#if TARGET_OS_IPHONE
+void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
+                             int &renderW, int &renderH) {
+  renderW = 0;
+  renderH = 0;
+  if (window != nullptr) {
+    SDL_Metal_GetDrawableSize(window, &renderW, &renderH);
+  }
+  if (renderW <= 0 || renderH <= 0) {
+    getWindowDrawableSize(window, logicalW, logicalH, renderW, renderH);
+    return;
+  }
+
+  int pixelW = 0;
+  int pixelH = 0;
+  getWindowDrawableSize(window, logicalW, logicalH, pixelW, pixelH);
+  if (pixelW > renderW && pixelH > renderH && logicalW == renderW &&
+      logicalH == renderH) {
+    renderW = pixelW;
+    renderH = pixelH;
+  }
+}
+#endif
 
 } // namespace
 
@@ -403,22 +426,15 @@ int main(int argv, char **args) {
   APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
                 windowLogicalHeight);
 
-  // this is intended; we don't need renderer for bgfx but SDL creates window
-  // handler after renderer creation on iOS
 #if TARGET_OS_IPHONE
-  s_renderer = SDL_CreateRenderer(
-      win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-  if (s_renderer == nullptr) {
-    cerr << "SDL_CreateRenderer Error: " << SDL_GetError() << endl;
-    SDL_DestroyWindow(win);
-    s_window = nullptr;
-    TextInputBox::releaseCachedCursors();
-    SDL_Quit();
-    return EXIT_FAILURE;
-  }
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
+  if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
+    windowLogicalWidth = windowCreateWidth;
+    windowLogicalHeight = windowCreateHeight;
+  }
   int rw = 0, rh = 0;
-  SDL_GetRendererOutputSize(s_renderer, &rw, &rh);
+  getWindowDrawableSize(win, windowLogicalWidth, windowLogicalHeight, rw, rh);
   rendering::widthScale =
       static_cast<float>(rw) / static_cast<float>(windowLogicalWidth);
   rendering::heightScale =
@@ -426,7 +442,6 @@ int main(int argv, char **args) {
   APP_DEBUG_LOG("Drawable size: %d x %d", rw, rh);
   APP_DEBUG_LOG("Drawable scale: %f x %f", rendering::widthScale,
                 rendering::heightScale);
-  SDL_RenderSetScale(s_renderer, rendering::widthScale, rendering::heightScale);
   rendering::updateUIScale(rw, rh);
 #else
   int initialRenderW = 0;
@@ -450,20 +465,37 @@ int main(int argv, char **args) {
   if (!SDL_GetWindowWMInfo(win, &wmi)) {
     printf("SDL_SysWMinfo could not be retrieved. SDL_Error: %s\n",
            SDL_GetError());
-    if (s_renderer != nullptr) {
-      SDL_DestroyRenderer(s_renderer);
-      s_renderer = nullptr;
-    }
+#if TARGET_OS_IPHONE
+    APP_DEBUG_LOG("Continuing without SDL_SysWMinfo on iOS Metal path");
+#else
     SDL_DestroyWindow(win);
     s_window = nullptr;
     TextInputBox::releaseCachedCursors();
     SDL_Quit();
     return EXIT_FAILURE;
+#endif
   }
 #endif // !BX_PLATFORM_EMSCRIPTEN
 
   bgfx::PlatformData pd{};
   setup_bgfx_platform_data(pd, wmi, win);
+#if TARGET_OS_IPHONE
+  int metalDrawableW = 0;
+  int metalDrawableH = 0;
+  getIOSMetalDrawableSize(win, windowLogicalWidth, windowLogicalHeight,
+                          metalDrawableW, metalDrawableH);
+  if (metalDrawableW > 0 && metalDrawableH > 0 &&
+      (metalDrawableW != rendering::render_width ||
+       metalDrawableH != rendering::render_height)) {
+    rendering::widthScale = static_cast<float>(metalDrawableW) /
+                            static_cast<float>(windowLogicalWidth);
+    rendering::heightScale = static_cast<float>(metalDrawableH) /
+                             static_cast<float>(windowLogicalHeight);
+    rendering::updateUIScale(metalDrawableW, metalDrawableH);
+    APP_DEBUG_LOG("Metal drawable size: %d x %d", metalDrawableW,
+                  metalDrawableH);
+  }
+#endif
 
   bgfx::Init bgfx_init;
 #if __APPLE__
@@ -479,10 +511,6 @@ int main(int argv, char **args) {
 
   int appExitCode = runApplication(bgfx_init);
 
-  if (s_renderer != nullptr) {
-    SDL_DestroyRenderer(s_renderer);
-    s_renderer = nullptr;
-  }
   SDL_DestroyWindow(win);
   s_window = nullptr;
   TextInputBox::releaseCachedCursors();
@@ -627,7 +655,8 @@ void run() {
 #if TARGET_OS_IPHONE
       int targetRenderW = 0;
       int targetRenderH = 0;
-      SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
+      getIOSMetalDrawableSize(s_window, logicalW, logicalH, targetRenderW,
+                              targetRenderH);
 #else
       int targetRenderW = 0;
       int targetRenderH = 0;
