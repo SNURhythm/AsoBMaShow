@@ -28,7 +28,7 @@
 
 namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
-constexpr long long kJudgementTimingTextLingerMicros = 450000LL;
+constexpr long long kJudgementTimingTextLingerMicros = 1000000LL;
 constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
 constexpr size_t kHudCounterItemCount = 7;
 
