@@ -1493,10 +1493,10 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
+  constexpr uint32_t kDepthBeams = 180;
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
-  constexpr uint32_t kDepthBeams = 300;
   constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
   constexpr uint32_t kDepthGauge = 340;
