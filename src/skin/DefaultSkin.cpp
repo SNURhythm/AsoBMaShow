@@ -490,41 +490,46 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   rootLayout->addView(summaryRow);
 
-  auto *infoGrid = new View();
+  auto *infoGrid =
+      makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
   infoGrid->setFlexDirection(FlexDirection::Row);
   infoGrid->setFlexWrap(YGWrapNoWrap);
-  infoGrid->setJustifyContent(YGJustifySpaceBetween);
-  infoGrid->setAlignItems(YGAlignCenter);
-  infoGrid->setGap(10);
+  infoGrid->setJustifyContent(YGJustifyCenter);
+  infoGrid->setAlignItems(YGAlignStretch);
+  infoGrid->setHeight(64);
   infoGrid->setName("resultInfoGrid");
 
   auto addInfoTile = [&](const std::string &label, const std::string &value,
                          const std::string &subValue, Color accent,
                          Color valueColor = ui_theme::textPrimary()) {
-    auto *tile = makePanel(ui_theme::resultPanelSubtle(),
-                           Color(accent.r, accent.g, accent.b, 98));
+    if (!infoGrid->getChildren().empty()) {
+      infoGrid->addView(makeDivider());
+    }
+    auto *tile = new View();
     tile->setFlexGrow(1);
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setHeight(62);
     tile->setPadding(Edge::All, 8);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
     auto *labelView = makeLabel(label, 12, ui_theme::textSecondary());
     labelView->setHeight(16);
+    labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
     auto *valueView = makeLabel(value, 20, valueColor);
     valueView->setHeight(24);
+    valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(label);
     tile->addView(valueView);
 
     auto *subView = makeLabel(subValue, 13, accent);
     subView->setHeight(16);
+    subView->setAlign(TextView::CENTER);
     subView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(subView);
     infoGrid->addView(tile);
@@ -546,30 +551,37 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
               playLevelLabel, ui_theme::coral());
   rootLayout->addView(infoGrid);
 
-  auto detailsGrid = new View();
+  auto detailsGrid =
+      makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
   detailsGrid->setFlexDirection(FlexDirection::Row);
   detailsGrid->setFlexWrap(YGWrapNoWrap);
-  detailsGrid->setJustifyContent(YGJustifySpaceBetween);
-  detailsGrid->setAlignItems(YGAlignCenter);
-  detailsGrid->setGap(12);
+  detailsGrid->setJustifyContent(YGJustifyCenter);
+  detailsGrid->setAlignItems(YGAlignStretch);
+  detailsGrid->setHeight(70);
   detailsGrid->setName("detailsGrid");
 
   auto addMetric = [&](const std::string &label, int count, Color accent,
                        const std::string &id) {
-    auto *tile = makePanel(ui_theme::resultPanelSubtle(),
-                           Color(accent.r, accent.g, accent.b, 132));
+    if (!detailsGrid->getChildren().empty()) {
+      detailsGrid->addView(makeDivider());
+    }
+    auto *tile = new View();
     tile->setFlexGrow(1);
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setHeight(66);
     tile->setPadding(Edge::All, 8);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
-    auto *labelView = makeLabel(label, 14, ui_theme::textSecondary());
-    labelView->setHeight(20);
+    auto *labelView = makeLabel(label, 12, ui_theme::textSecondary());
+    labelView->setHeight(16);
+    labelView->setAlign(TextView::CENTER);
+    labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
-    auto *valueView = makeLabel(std::to_string(count), 25, accent);
+    auto *valueView = makeLabel(std::to_string(count), 23, accent);
+    valueView->setHeight(30);
+    valueView->setAlign(TextView::CENTER);
+    valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(id);
     tile->addView(valueView);
     detailsGrid->addView(tile);
@@ -577,24 +589,29 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto addJudgementMetric = [&](const std::string &label, Judgement judgement,
                                 Color accent, const std::string &id) {
-    auto *tile = makePanel(ui_theme::resultPanelSubtle(),
-                           Color(accent.r, accent.g, accent.b, 132));
+    if (!detailsGrid->getChildren().empty()) {
+      detailsGrid->addView(makeDivider());
+    }
+    auto *tile = new View();
     tile->setFlexGrow(1);
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setHeight(66);
     tile->setPadding(Edge::All, 7);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
-    auto *labelView = makeLabel(label, 13, ui_theme::textSecondary());
+    auto *labelView = makeLabel(label, 12, ui_theme::textSecondary());
     labelView->setHeight(16);
+    labelView->setAlign(TextView::CENTER);
+    labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
     auto *valueView = makeLabel(std::to_string(countFor(judgement)), 23,
                                 accent);
     valueView->setHeight(26);
+    valueView->setAlign(TextView::CENTER);
+    valueView->setOverflow(TextView::TextOverflow::Hidden);
     valueView->setName(id);
     tile->addView(valueView);
 
