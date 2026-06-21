@@ -159,18 +159,28 @@ inline Color panelSubtle() {
 }
 
 inline Color mainMenuBackdrop() {
-  return activeMode() == ThemeMode::Light ? Color(247, 252, 253, 96)
-                                          : Color(5, 8, 13, 88);
+  return activeMode() == ThemeMode::Light ? Color(247, 252, 253, 72)
+                                          : Color(5, 8, 13, 52);
 }
 
 inline Color mainMenuPanel() {
-  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 188)
-                                          : Color(15, 22, 32, 168);
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 150)
+                                          : Color(15, 22, 32, 124);
 }
 
 inline Color mainMenuSurface() {
-  return activeMode() == ThemeMode::Light ? Color(232, 241, 243, 214)
-                                          : Color(24, 35, 48, 210);
+  return activeMode() == ThemeMode::Light ? Color(232, 241, 243, 172)
+                                          : Color(24, 35, 48, 150);
+}
+
+inline Color mainMenuItem() {
+  return activeMode() == ThemeMode::Light ? Color(249, 252, 253, 174)
+                                          : Color(15, 22, 32, 142);
+}
+
+inline Color mainMenuItemSelected() {
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 214)
+                                          : Color(23, 34, 48, 186);
 }
 
 inline Color control() {

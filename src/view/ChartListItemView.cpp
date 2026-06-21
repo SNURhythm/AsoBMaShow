@@ -178,7 +178,7 @@ void ChartListItemView::setClearRank(int clearRank) {
 }
 
 void ChartListItemView::onSelected() {
-  contentCard->setThemedBackgroundColor(ui_theme::panelStrong);
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
   contentCard->setBorderWidth(1);
@@ -188,7 +188,7 @@ void ChartListItemView::onSelected() {
 }
 
 void ChartListItemView::onUnselected() {
-  contentCard->setThemedBackgroundColor(ui_theme::panelSubtle);
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
   contentCard->setBorderWidth(1);
