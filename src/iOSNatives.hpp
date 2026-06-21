@@ -50,6 +50,7 @@ std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
 void RestoreIOSViewportAfterKeyboardFocus();
+int GetIOSNativeTextEditorHeight();
 std::vector<std::string> ListDocumentFilesRecursively();
 bool PickIOSFolder(std::string &path, std::string &bookmark,
                    std::string &errorMessage);

@@ -133,6 +133,11 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
   const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
   viewRect = nativeRectFromUiRect(cursorX, cursorY, lineWidth, lineHeight);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (nativeTextEditorVisible) {
+    viewRect.h = std::max(1, viewRect.h + GetIOSNativeTextEditorHeight());
+  }
+#endif
   SDL_SetTextInputRect(&viewRect);
 }
 

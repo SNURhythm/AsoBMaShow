@@ -899,7 +899,7 @@ private:
 @interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
 @private
   UITextField *_textField;
-  __unsafe_unretained UIView *_rootView;
+  __unsafe_unretained UIView *_containerView;
   void *_context;
   IOSNativeTextEditorCallback _callback;
   CGRect _lastKeyboardFrame;
@@ -910,7 +910,7 @@ private:
                        context:(void *)context
                       callback:(IOSNativeTextEditorCallback)callback;
 - (void *)context;
-- (void)showInView:(UIView *)rootView;
+- (void)showInView:(UIView *)containerView;
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished;
 - (void)keyboardFrameChanged:(NSNotification *)notification;
 - (void)keyboardWillHide:(NSNotification *)notification;
@@ -985,12 +985,12 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   return _context;
 }
 
-- (void)showInView:(UIView *)rootView {
-  if (rootView == nil) {
+- (void)showInView:(UIView *)containerView {
+  if (containerView == nil) {
     return;
   }
-  _rootView = rootView;
-  [rootView addSubview:self];
+  _containerView = containerView;
+  [containerView addSubview:self];
   [[NSNotificationCenter defaultCenter]
       addObserver:self
          selector:@selector(keyboardFrameChanged:)
@@ -1060,20 +1060,21 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 - (void)updateFrameAnimated:(BOOL)animated
                    duration:(NSTimeInterval)duration
                     options:(UIViewAnimationOptions)options {
-  UIView *rootView = _rootView;
-  if (rootView == nil) {
+  UIView *containerView = _containerView;
+  if (containerView == nil) {
     return;
   }
 
   UIEdgeInsets safeInsets = UIEdgeInsetsZero;
   if (@available(iOS 11.0, *)) {
-    safeInsets = rootView.safeAreaInsets;
+    safeInsets = containerView.safeAreaInsets;
   }
 
-  CGRect bounds = rootView.bounds;
+  CGRect bounds = containerView.bounds;
   CGFloat keyboardTop = bounds.size.height - safeInsets.bottom;
   if (_keyboardVisible && !CGRectIsEmpty(_lastKeyboardFrame)) {
-    CGRect keyboardFrame = [rootView convertRect:_lastKeyboardFrame fromView:nil];
+    CGRect keyboardFrame =
+        [containerView convertRect:_lastKeyboardFrame fromView:nil];
     if (CGRectIntersectsRect(bounds, keyboardFrame)) {
       keyboardTop = std::max<CGFloat>(
           0.0, std::min<CGFloat>(keyboardTop, CGRectGetMinY(keyboardFrame)));
@@ -1163,8 +1164,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
         return;
       }
       UIWindow *window = FindActiveWindow();
-      UIView *rootView = window.rootViewController.view;
-      if (rootView == nil) {
+      if (window == nil) {
         return;
       }
       if (gNativeTextEditor != nil) {
@@ -1177,7 +1177,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
           [[AsoNativeTextEditorView alloc] initWithConfig:editorConfig
                                                   context:editorContext
                                                  callback:editorCallback];
-      [gNativeTextEditor showInView:rootView];
+      [gNativeTextEditor showInView:window];
     }
   };
 
@@ -1208,6 +1208,10 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
   } else {
     dispatch_async(dispatch_get_main_queue(), hideBlock);
   }
+}
+
+int GetIOSNativeTextEditorHeight() {
+  return RoundedCGFloat(kNativeTextEditorHeight);
 }
 
 void RestoreIOSViewportAfterKeyboardFocus() {
