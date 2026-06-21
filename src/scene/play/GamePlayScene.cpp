@@ -198,6 +198,7 @@ void GamePlayScene::init() {
       context.settings.judgementIndicatorWidthScale,
       context.settings.judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D);
+  renderer->setJudgementTextY(context.settings.judgementTextY);
   renderer->setJudgementCounterPosition(
       context.settings.judgementCounterPosition);
   renderer->setReplayData(options.replayData.get());

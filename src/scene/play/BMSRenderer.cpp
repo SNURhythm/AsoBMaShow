@@ -820,8 +820,17 @@ void BMSRenderer::layoutCenteredJudgementText() {
   const int judgeWidth =
       std::max(360, std::min(720, judgementLayoutWidth - 80));
   const int judgeHeight = 96;
+  const float normalizedY =
+      std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
+                 AppSettings::kMaxJudgementTextY);
+  const int centerY = static_cast<int>(
+      std::round(static_cast<float>(judgementLayoutHeight) *
+                 (1.0f - normalizedY)));
+  const int judgeY =
+      std::clamp(centerY - judgeHeight / 2, 0,
+                 std::max(0, judgementLayoutHeight - judgeHeight));
   judgeText->setPosition((judgementLayoutWidth - judgeWidth) / 2,
-                         judgementLayoutHeight / 2 - judgeHeight / 2);
+                         judgeY);
   judgeText->setSize(judgeWidth, judgeHeight);
 }
 
@@ -1643,6 +1652,18 @@ void BMSRenderer::setShowInvisibleNotes(bool enabled) {
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
                                               float widthScale, bool hudMode) {
   judgementIndicator.configure(enabled, y, widthScale, hudMode);
+}
+
+void BMSRenderer::setJudgementTextY(float y) {
+  const float clamped =
+      std::clamp(y, AppSettings::kMinJudgementTextY,
+                 AppSettings::kMaxJudgementTextY);
+  if (std::abs(judgementTextY - clamped) <= 0.0001f) {
+    return;
+  }
+  judgementTextY = clamped;
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
 }
 
 void BMSRenderer::setJudgementCounterPosition(

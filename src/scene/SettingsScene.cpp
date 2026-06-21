@@ -259,6 +259,7 @@ void SettingsScene::renderScene() {
         context.settings.judgementIndicatorWidthScale,
         context.settings.judgementIndicatorRenderMode ==
             AppSettings::JudgementIndicatorRenderMode::Hud2D);
+    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);

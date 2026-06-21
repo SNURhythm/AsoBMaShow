@@ -156,6 +156,7 @@ private:
       AppSettings::VisibleTimeBpmStrategy::Chart;
   double mostPrevalentBpm = 0.0;
   bool renderHud = true;
+  float judgementTextY = AppSettings::kDefaultJudgementTextY;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Top;
   bool renderLaneBeams = true;
@@ -259,6 +260,7 @@ public:
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
+  void setJudgementTextY(float y);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
   void setJudgementCounter(Judgement judgement, int count, int comboBreak);

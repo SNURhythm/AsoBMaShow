@@ -74,6 +74,9 @@ public:
   static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
   static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
   static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
+  static constexpr float kMinJudgementTextY = 0.0f;
+  static constexpr float kMaxJudgementTextY = 1.0f;
+  static constexpr float kDefaultJudgementTextY = 0.35f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 
@@ -105,6 +108,7 @@ public:
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+  float judgementTextY = kDefaultJudgementTextY;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
   JudgementCounterPosition judgementCounterPosition =

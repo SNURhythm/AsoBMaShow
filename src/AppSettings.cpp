@@ -320,6 +320,9 @@ void AppSettings::sanitize() {
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementTextY =
+      sanitizeFloat(judgementTextY, kDefaultJudgementTextY, kMinJudgementTextY,
+                    kMaxJudgementTextY);
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:
@@ -482,6 +485,7 @@ bool AppSettings::save() const {
        << judgementIndicatorRenderModeToString(
               sanitized.judgementIndicatorRenderMode)
        << "\n";
+  file << "judgement_text_y=" << sanitized.judgementTextY << "\n";
   file << "judgement_counter_position="
        << judgementCounterPositionToString(
               sanitized.judgementCounterPosition)
@@ -598,6 +602,8 @@ AppSettings AppSettings::load() {
         settings.judgementIndicatorRenderMode =
             parseJudgementIndicatorRenderMode(
                 value, settings.judgementIndicatorRenderMode);
+      } else if (key == "judgement_text_y") {
+        settings.judgementTextY = std::stof(value);
       } else if (key == "judgement_counter_position") {
         settings.judgementCounterPosition =
             parseJudgementCounterPosition(value,
