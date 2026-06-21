@@ -4,6 +4,7 @@
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 
 #include "../rendering/Color.h"
@@ -109,14 +110,18 @@ void ResultScene::addRetryButtons() {
   retryRow->setFlexDirection(FlexDirection::Row);
   retryRow->setAlignItems(YGAlignCenter);
   retryRow->setJustifyContent(YGJustifyCenter);
-  retryRow->setGap(12);
+  retryRow->setFlexWrap(YGWrapWrap);
+  retryRow->setGap(14);
 
   auto makeButton = [this](const std::string &label, bool samePattern,
-                           bool replay) {
+                           bool replay, Color normal, Color hover,
+                           Color pressed, Color border) {
     auto button = new Button();
-    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener([this, samePattern, replay]() {
       if (replay) {
@@ -125,17 +130,38 @@ void ResultScene::addRetryButtons() {
         startRetry(samePattern);
       }
     });
-    button->setSize(220, 70);
+    button->setSize(232, 64);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
+    button->setStyledBorderWidth(1);
     return button;
   };
 
   if (replayResult) {
-    retryRow->addView(makeButton("Replay", true, true));
+    retryRow->addView(makeButton("Replay", true, true, ui_theme::infoAction(),
+                                 ui_theme::infoActionHover(),
+                                 ui_theme::infoActionPressed(),
+                                 ui_theme::cyan()));
   } else if (practiceOptions.enabled) {
-    retryRow->addView(makeButton("Retry", true, false));
+    retryRow->addView(makeButton("Retry", true, false,
+                                 ui_theme::primaryAction(),
+                                 ui_theme::primaryActionHover(),
+                                 ui_theme::primaryActionPressed(),
+                                 ui_theme::cyan()));
   } else {
-    retryRow->addView(makeButton("Retry", false, false));
-    retryRow->addView(makeButton("Retry Same", true, false));
+    retryRow->addView(makeButton("Retry", false, false,
+                                 ui_theme::primaryAction(),
+                                 ui_theme::primaryActionHover(),
+                                 ui_theme::primaryActionPressed(),
+                                 ui_theme::cyan()));
+    retryRow->addView(makeButton("Retry Same", true, false,
+                                 ui_theme::successAction(),
+                                 ui_theme::successActionHover(),
+                                 ui_theme::successActionPressed(),
+                                 ui_theme::lime()));
   }
   rootLayout->addView(retryRow);
 }
