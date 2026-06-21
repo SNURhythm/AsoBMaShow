@@ -106,6 +106,7 @@ private:
   int pendingCombo = 0;
   bool judgementCounterDirty = true;
   JudgementCounterSnapshot judgementCounterSnapshot;
+  JudgementCounterSnapshot renderedJudgementCounterSnapshot;
   std::mutex laneMutex;
   std::vector<int> laneOrder;
   std::vector<LaneState> laneStatesByOrder;

@@ -107,39 +107,6 @@ Color hudPanelBorder() {
              : Color(110, 219, 213, 74);
 }
 
-Color hudCounterFill(size_t index) {
-  const Color accent = [&]() {
-    switch (index) {
-    case 0:
-      return ui_theme::cyan();
-    case 1:
-      return ui_theme::lime();
-    case 2:
-      return ui_theme::amber();
-    case 3:
-      return Color(255, 132, 96, 255);
-    case 4:
-      return ui_theme::coral();
-    case 5:
-      return Color(255, 78, 102, 255);
-    case 6:
-      return ui_theme::coral();
-    default:
-      return ui_theme::textMuted();
-    }
-  }();
-  const uint8_t alpha =
-      ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 34 : 44;
-  return Color(accent.r, accent.g, accent.b, alpha);
-}
-
-Color hudCounterBorder(size_t index) {
-  const Color fill = hudCounterFill(index);
-  return Color(fill.r, fill.g, fill.b,
-               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 108
-                                                                    : 124);
-}
-
 Color hudCounterAccent(size_t index) {
   switch (index) {
   case 0:
@@ -159,6 +126,58 @@ Color hudCounterAccent(size_t index) {
   default:
     return ui_theme::textPrimary();
   }
+}
+
+Color hudCounterFill(size_t index, bool active, bool topPosition) {
+  if (active) {
+    if (topPosition) {
+      return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+                 ? Color(255, 255, 255, 30)
+                 : Color(4, 9, 16, 42);
+    }
+    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+               ? Color(255, 255, 255, 226)
+               : Color(3, 8, 14, 218);
+  }
+
+  const Color accent = hudCounterAccent(index);
+  const uint8_t alpha = topPosition ? 0 : 7;
+  return Color(accent.r, accent.g, accent.b, alpha);
+}
+
+Color hudCounterBorder(size_t index, bool active, bool topPosition) {
+  const Color accent = hudCounterAccent(index);
+  if (active) {
+    const uint8_t alpha =
+        topPosition
+            ? (ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 72 : 92)
+            : (ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 188
+                                                                    : 214);
+    return Color(accent.r, accent.g, accent.b, alpha);
+  }
+
+  return Color(accent.r, accent.g, accent.b, topPosition ? 8 : 18);
+}
+
+Color hudCounterLabelColor(int value) {
+  if (value <= 0) {
+    const Color muted = ui_theme::textMuted();
+    return Color(muted.r, muted.g, muted.b, 16);
+  }
+  const Color text = ui_theme::textSecondary();
+  return Color(text.r, text.g, text.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 238
+                                                                    : 248);
+}
+
+Color hudCounterValueColor(int value) {
+  if (value <= 0) {
+    const Color muted = ui_theme::textMuted();
+    return Color(muted.r, muted.g, muted.b, 20);
+  }
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? ui_theme::darkText()
+             : Color(248, 253, 255, 255);
 }
 
 int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
@@ -573,6 +592,8 @@ void BMSRenderer::drawJudgementCounterPanels() {
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
                                 gameplayHudTitleWidth());
+  const bool topPosition =
+      judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
 
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     const float itemX =
@@ -581,9 +602,12 @@ void BMSRenderer::drawJudgementCounterPanels() {
     const float itemY =
         layout.y +
         (layout.horizontal ? 0.0f : (layout.itemHeight + layout.gap) * i);
+    const int value = counterValueAt(renderedJudgementCounterSnapshot, i);
+    const bool active = value > 0;
     drawHudRoundedPanel(itemX, itemY, layout.itemWidth, layout.itemHeight,
                         radius,
-                        hudCounterFill(i), hudCounterBorder(i));
+                        hudCounterFill(i, active, topPosition),
+                        hudCounterBorder(i, active, topPosition));
   }
 }
 
@@ -1466,19 +1490,19 @@ void BMSRenderer::updateJudgementCounterText() {
     snapshot = judgementCounterSnapshot;
     judgementCounterDirty = false;
   }
+  renderedJudgementCounterSnapshot = snapshot;
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const int value = counterValueAt(snapshot, i);
     if (judgementCounterValueTexts[i] != nullptr) {
-      judgementCounterValueTexts[i]->setText(
-          std::to_string(counterValueAt(snapshot, i)));
+      judgementCounterValueTexts[i]->setText(std::to_string(value));
     }
     if (judgementCounterLabelTexts[i] != nullptr) {
       judgementCounterLabelTexts[i]->setColor(
-          ui_theme::sdl(ui_theme::textSecondary()));
+          ui_theme::sdl(hudCounterLabelColor(value)));
     }
     if (judgementCounterValueTexts[i] != nullptr) {
-      judgementCounterValueTexts[i]->setColor(ui_theme::sdl(
-          counterValueAt(snapshot, i) > 0 ? hudCounterAccent(i)
-                                          : ui_theme::textMuted()));
+      judgementCounterValueTexts[i]->setColor(
+          ui_theme::sdl(hudCounterValueColor(value)));
     }
   }
 }
@@ -1493,6 +1517,7 @@ void BMSRenderer::reset() {
     pendingCombo = 0;
     hudDirty = true;
     judgementCounterSnapshot = {};
+    renderedJudgementCounterSnapshot = {};
     judgementCounterDirty = true;
   }
   {

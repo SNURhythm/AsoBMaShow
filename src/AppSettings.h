@@ -108,7 +108,7 @@ public:
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
   JudgementCounterPosition judgementCounterPosition =
-      JudgementCounterPosition::Top;
+      JudgementCounterPosition::Right;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;

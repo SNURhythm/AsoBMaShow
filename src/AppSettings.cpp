@@ -164,7 +164,7 @@ const char *judgementCounterPositionToString(
   case AppSettings::JudgementCounterPosition::Right:
     return "right";
   }
-  return "top";
+  return "right";
 }
 
 AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
@@ -344,7 +344,7 @@ void AppSettings::sanitize() {
   case JudgementCounterPosition::Right:
     break;
   default:
-    judgementCounterPosition = JudgementCounterPosition::Top;
+    judgementCounterPosition = JudgementCounterPosition::Right;
     break;
   }
   switch (visibleTimeBpmStrategy) {
