@@ -574,6 +574,36 @@ void run() {
   bool hasDeferredRenderResize = false;
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
+  int activeWindowLogicalW = 0;
+  int activeWindowLogicalH = 0;
+  if (s_window != nullptr) {
+    SDL_GetWindowSize(s_window, &activeWindowLogicalW, &activeWindowLogicalH);
+  }
+  if (activeWindowLogicalW <= 0 && rendering::widthScale > 0.0f) {
+    activeWindowLogicalW = std::max(
+        1, static_cast<int>(std::lround(static_cast<float>(
+                                            rendering::render_width) /
+                                        rendering::widthScale)));
+  }
+  if (activeWindowLogicalH <= 0 && rendering::heightScale > 0.0f) {
+    activeWindowLogicalH = std::max(
+        1, static_cast<int>(std::lround(static_cast<float>(
+                                            rendering::render_height) /
+                                        rendering::heightScale)));
+  }
+  if (activeWindowLogicalW <= 0) {
+    activeWindowLogicalW = rendering::window_width;
+  }
+  if (activeWindowLogicalH <= 0) {
+    activeWindowLogicalH = rendering::window_height;
+  }
+
+  constexpr int kDrawableScaleDropRetryFrames = 60;
+  constexpr float kHiDpiScaleThreshold = 1.25f;
+  constexpr float kSuspiciousScaleDropRatio = 0.75f;
+  int deferredScaleDropFrames = 0;
+  int deferredScaleDropRenderW = 0;
+  int deferredScaleDropRenderH = 0;
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -620,6 +650,56 @@ void run() {
       hasDeferredRenderResize = true;
     };
 
+    auto shouldDeferDrawableScaleDrop = [&](int logicalW, int logicalH,
+                                            int targetRenderW,
+                                            int targetRenderH) {
+      if (logicalW != activeWindowLogicalW ||
+          logicalH != activeWindowLogicalH) {
+        deferredScaleDropFrames = 0;
+        return false;
+      }
+
+      const float currentScaleX =
+          static_cast<float>(rendering::render_width) /
+          static_cast<float>(std::max(1, activeWindowLogicalW));
+      const float currentScaleY =
+          static_cast<float>(rendering::render_height) /
+          static_cast<float>(std::max(1, activeWindowLogicalH));
+      const float targetScaleX =
+          static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
+      const float targetScaleY =
+          static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
+      const bool currentIsHiDpi = currentScaleX > kHiDpiScaleThreshold ||
+                                  currentScaleY > kHiDpiScaleThreshold;
+      const bool scaleDroppedSharply =
+          targetScaleX < currentScaleX * kSuspiciousScaleDropRatio &&
+          targetScaleY < currentScaleY * kSuspiciousScaleDropRatio;
+      if (!currentIsHiDpi || !scaleDroppedSharply) {
+        deferredScaleDropFrames = 0;
+        return false;
+      }
+
+      if (targetRenderW != deferredScaleDropRenderW ||
+          targetRenderH != deferredScaleDropRenderH) {
+        deferredScaleDropRenderW = targetRenderW;
+        deferredScaleDropRenderH = targetRenderH;
+        deferredScaleDropFrames = 0;
+      }
+
+      ++deferredScaleDropFrames;
+      if (deferredScaleDropFrames <= kDrawableScaleDropRetryFrames) {
+        APP_DEBUG_LOG("Delaying transient drawable scale drop: %dx%d -> %dx%d "
+                      "(logical %dx%d, frame %d)",
+                      rendering::render_width, rendering::render_height,
+                      targetRenderW, targetRenderH, logicalW, logicalH,
+                      deferredScaleDropFrames);
+        return true;
+      }
+
+      deferredScaleDropFrames = 0;
+      return false;
+    };
+
     auto applyWindowResize = [&](int logicalW, int logicalH) {
       if (logicalW <= 0 || logicalH <= 0) {
         return true;
@@ -639,7 +719,13 @@ void run() {
       }
       if (targetRenderW == rendering::render_width &&
           targetRenderH == rendering::render_height) {
+        deferredScaleDropFrames = 0;
         return true;
+      }
+
+      if (shouldDeferDrawableScaleDrop(logicalW, logicalH, targetRenderW,
+                                       targetRenderH)) {
+        return false;
       }
 
       if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
@@ -656,6 +742,9 @@ void run() {
       rendering::heightScale =
           static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
       rendering::updateUIScale(targetRenderW, targetRenderH);
+      activeWindowLogicalW = logicalW;
+      activeWindowLogicalH = logicalH;
+      deferredScaleDropFrames = 0;
 
       // set bgfx resolution
       bgfx::reset(rendering::render_width, rendering::render_height,
