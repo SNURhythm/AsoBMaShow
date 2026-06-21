@@ -790,7 +790,8 @@ void run() {
         return true;
       }
 
-      if (shouldDeferDrawableScaleDrop(logicalW, logicalH, targetRenderW,
+      if (!forceReset &&
+          shouldDeferDrawableScaleDrop(logicalW, logicalH, targetRenderW,
                                        targetRenderH)) {
         return false;
       }
@@ -955,7 +956,7 @@ void run() {
         logicalH = activeWindowLogicalH;
       }
       if (logicalW > 0 && logicalH > 0 &&
-          applyWindowResize(logicalW, logicalH)) {
+          applyWindowResize(logicalW, logicalH, true)) {
         --iosForcedDrawableRefreshFrames;
       }
     }
