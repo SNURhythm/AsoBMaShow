@@ -35,11 +35,10 @@ bool prepareShadowRenderContext(const RenderContext &context,
   }
 
   const int bleedX = spread + std::abs(offsetX) + 2;
-  const int bleedY = spread + std::abs(offsetY) + 2;
+  (void)offsetY;
+  // Vertical scrollers own the y clip; shadows only bleed horizontally.
   shadowContext.scissor.x -= bleedX;
-  shadowContext.scissor.y -= bleedY;
   shadowContext.scissor.width += bleedX * 2;
-  shadowContext.scissor.height += bleedY * 2;
   return shadowContext.scissor.width > 0 && shadowContext.scissor.height > 0;
 }
 
