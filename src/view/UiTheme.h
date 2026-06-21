@@ -151,8 +151,8 @@ inline Color mainMenuBackdrop() {
 }
 
 inline Color mainMenuPanel() {
-  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 214)
-                                          : Color(15, 22, 32, 204);
+  return activeMode() == ThemeMode::Light ? Color(255, 255, 255, 188)
+                                          : Color(15, 22, 32, 168);
 }
 
 inline Color mainMenuSurface() {

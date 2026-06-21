@@ -1776,8 +1776,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
-  folderRecyclerView->setThemedBorderColor(ui_theme::hairlineSubtle);
-  folderRecyclerView->setBorderWidth(1);
+  folderRecyclerView->setBorderWidth(0);
   folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
   rootLayout->addView(nav);
@@ -1881,8 +1880,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
-  recyclerView->setThemedBorderColor(ui_theme::hairlineSubtle);
-  recyclerView->setBorderWidth(1);
+  recyclerView->setBorderWidth(0);
   recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
   rootLayout->addView(left);
