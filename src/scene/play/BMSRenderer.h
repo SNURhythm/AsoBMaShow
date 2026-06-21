@@ -204,6 +204,7 @@ private:
   void drawGaugeBar();
   void drawWorldGaugeBar();
   void drawHudGaugeBar();
+  void drawJudgementAccentBar();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
   void layoutGaugeText();

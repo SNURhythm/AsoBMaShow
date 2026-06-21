@@ -932,6 +932,25 @@ void BMSRenderer::drawHudGaugeBar() {
   }
 }
 
+void BMSRenderer::drawJudgementAccentBar() {
+  if (renderedJudgement == None || judgeText == nullptr ||
+      !judgeText->getVisible()) {
+    return;
+  }
+
+  const float width = 6.0f;
+  const float height =
+      std::max(16.0f, static_cast<float>(judgeText->getHeight()) - 28.0f);
+  const float x =
+      std::max(0.0f, static_cast<float>(judgeText->getX()) - 15.0f);
+  const float y = static_cast<float>(judgeText->getY()) +
+                  (static_cast<float>(judgeText->getHeight()) - height) * 0.5f;
+  const Color accent = hudJudgementAccent(renderedJudgement);
+  simpleBatchRenderer.addRoundedRect(
+      x, y, width, height, width * 0.5f,
+      Color(accent.r, accent.g, accent.b, 210).toABGR());
+}
+
 void BMSRenderer::drawJudgementCounterPanels() {
   constexpr float radius = 10.0f;
   const JudgementCounterLayout layout =
@@ -1174,21 +1193,16 @@ void BMSRenderer::layoutCenteredJudgementText() {
   judgementLayoutHasTimingDirection = hasTimingDirection;
   judgementLayoutHasTimingMs = hasTimingMs;
 
-  const bool hasTiming = hasTimingDirection || hasTimingMs;
   const int maxAvailableWidth = std::max(1, judgementLayoutWidth - 48);
-  const int groupHeight = hasTiming ? 88 : 76;
-  const int timingLineHeight = hasTiming ? 28 : 0;
-  const int judgeLineHeight = hasTiming ? 56 : groupHeight - 8;
-  const int lineGap = hasTiming ? 2 : 0;
+  const int judgeLineHeight = 68;
+  const int timingLineHeight = 28;
+  const int lineGap = 2;
   const float normalizedY =
       std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
                  AppSettings::kMaxJudgementTextY);
   const int centerY = static_cast<int>(
       std::round(static_cast<float>(judgementLayoutHeight) *
                  (1.0f - normalizedY)));
-  const int groupY =
-      std::clamp(centerY - groupHeight / 2, 0,
-                 std::max(0, judgementLayoutHeight - groupHeight));
 
   int judgeWidth = 1;
   if (judgeText != nullptr && judgeText->getVisible()) {
@@ -1208,9 +1222,18 @@ void BMSRenderer::layoutCenteredJudgementText() {
   const int timingInnerGap = hasTimingDirection && hasTimingMs ? 6 : 0;
   const int timingWidth = directionWidth + timingInnerGap + msWidth;
 
+  const int judgeY =
+      std::clamp(centerY - judgeLineHeight / 2, 0,
+                 std::max(0, judgementLayoutHeight - judgeLineHeight));
+  const int judgeX = (judgementLayoutWidth - judgeWidth) / 2;
+  if (judgeText != nullptr) {
+    judgeText->setPosition(judgeX, judgeY);
+    judgeText->setSize(judgeWidth, judgeLineHeight);
+  }
+
   int timingX =
       (judgementLayoutWidth - std::min(timingWidth, maxAvailableWidth)) / 2;
-  const int timingY = groupY + 2;
+  const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
   if (hasTimingDirection) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
     judgementTimingDirectionText->setSize(directionWidth, timingLineHeight);
@@ -1225,13 +1248,6 @@ void BMSRenderer::layoutCenteredJudgementText() {
   } else if (judgementTimingMsText != nullptr) {
     judgementTimingMsText->setPosition(timingX, timingY);
     judgementTimingMsText->setSize(1, 1);
-  }
-
-  const int judgeY = groupY + timingLineHeight + lineGap + (hasTiming ? 2 : 4);
-  const int judgeX = (judgementLayoutWidth - judgeWidth) / 2;
-  if (judgeText != nullptr) {
-    judgeText->setPosition(judgeX, judgeY);
-    judgeText->setSize(judgeWidth, judgeLineHeight);
   }
 }
 
@@ -1909,6 +1925,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
+    drawJudgementAccentBar();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
