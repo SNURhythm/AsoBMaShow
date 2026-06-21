@@ -5,6 +5,7 @@
 #include "ClearLampColors.h"
 #include "RecyclerView.h"
 #include "TextView.h"
+#include "UiTheme.h"
 #include "View.h"
 
 #include <functional>
@@ -48,6 +49,7 @@ public:
         ->setGap(12);
 
     clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
+    clearLamp->setCornerRadius(3.0f);
     addView(clearLamp);
 
     textColumn->setFlexDirection(FlexDirection::Column)
@@ -75,11 +77,11 @@ public:
     titleText->setText(summary.createdAt.empty()
                            ? "Replay #" + std::to_string(summary.id)
                            : summary.createdAt);
-    std::string detail =
-        replay_summary_ui::gaugeLabel(summary.initialGaugeType,
-                                      summary.gaugeAutoShift) +
-        "  Gauge " + replay_summary_ui::formatGauge(summary.finalGauge) +
-        "  Events " + std::to_string(summary.eventCount);
+    std::string detail = replay_summary_ui::gaugeLabel(summary.initialGaugeType,
+                                                       summary.gaugeAutoShift) +
+                         "  Gauge " +
+                         replay_summary_ui::formatGauge(summary.finalGauge) +
+                         "  Events " + std::to_string(summary.eventCount);
     const std::string optionLabel = replay_summary_ui::playOptionLabel(summary);
     if (!optionLabel.empty()) {
       detail += "  " + optionLabel;
@@ -95,21 +97,24 @@ public:
   }
 
   void onSelected() override {
-    setBackgroundColor(Color(32, 55, 82, 224));
-    setBorderColor(Color(112, 177, 238, 255));
+    setThemedBackgroundColor(ui_theme::panelStrong);
+    setCornerRadius(ui_theme::controlRadius());
+    setThemedBorderColor(ui_theme::accentBorderStrong);
     setBorderWidth(1);
-    titleText->setColor({255, 255, 255, 255});
-    detailText->setColor({203, 220, 239, 255});
-    scoreText->setColor({245, 250, 255, 255});
+    titleText->setThemedColor(ui_theme::textPrimary);
+    detailText->setThemedColor(ui_theme::textSecondary);
+    scoreText->setThemedColor(ui_theme::lime);
   }
 
   void onUnselected() override {
-    setBackgroundColor(Color(7, 12, 20, 138));
-    setBorderColor(Color(38, 52, 70, 160));
+    setThemedBackgroundColor(ui_theme::panelSubtle);
+    setCornerRadius(ui_theme::controlRadius());
+    setThemedBorderColor(ui_theme::hairlineSubtle);
     setBorderWidth(1);
-    titleText->setColor({235, 242, 250, 255});
-    detailText->setColor({151, 171, 194, 255});
-    scoreText->setColor({197, 216, 238, 255});
+    titleText->setThemedColor(ui_theme::textPrimary);
+    detailText->setThemedColor(ui_theme::textMuted);
+    scoreText->setThemedColor(
+        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
   }
 
 private:
@@ -123,10 +128,10 @@ private:
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {
 public:
   ReplaySummaryListView()
-      : RecyclerView<ReplaySummary>([](const ReplaySummary &a,
-                                       const ReplaySummary &b) {
-          return a.id == b.id;
-        }) {
+      : RecyclerView<ReplaySummary>(
+            [](const ReplaySummary &a, const ReplaySummary &b) {
+              return a.id == b.id;
+            }) {
     itemHeight = 74;
     onCreateView = [](const ReplaySummary &) {
       return new ReplaySummaryListItemView();

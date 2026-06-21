@@ -1,5 +1,6 @@
 #pragma once
 #include "context.h"
+#include <bgfx/bgfx.h>
 #include <cstdint>
 int main(int argv, char **args);
 void run();

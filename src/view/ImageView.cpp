@@ -16,6 +16,7 @@
 #include <stb_image.h>
 #include "../StbImageRAII.h"
 #include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -28,6 +29,8 @@
 #include <vector>
 
 namespace {
+constexpr float kPi = 3.14159265358979323846f;
+
 struct DecodedImage {
   int width = 0;
   int height = 0;
@@ -203,6 +206,113 @@ private:
   std::uint64_t generation = 0;
   bool stop = false;
 };
+
+void submitTexturedRoundedRect(const RenderContext &context,
+                               bgfx::TextureHandle texture,
+                               bgfx::UniformHandle sampler, int x, int y,
+                               int width, int height, float radius) {
+  if (!bgfx::isValid(texture) || width <= 0 || height <= 0) {
+    return;
+  }
+
+  radius = std::clamp(radius, 0.0f,
+                      static_cast<float>(std::min(width, height)) * 0.5f);
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  if (radius <= 0.5f) {
+    constexpr uint32_t kVertexCount = 4;
+    constexpr uint32_t kIndexCount = 6;
+    if (bgfx::getAvailTransientVertexBuffer(
+            kVertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
+            kVertexCount ||
+        bgfx::getAvailTransientIndexBuffer(kIndexCount) < kIndexCount) {
+      return;
+    }
+    bgfx::allocTransientVertexBuffer(&tvb, kVertexCount,
+                                     rendering::PosTexCoord0Vertex::ms_decl);
+    bgfx::allocTransientIndexBuffer(&tib, kIndexCount);
+    auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
+    vertices[0] = {static_cast<float>(x), static_cast<float>(y + height), 0.0f,
+                   0.0f, 1.0f};
+    vertices[1] = {static_cast<float>(x + width),
+                   static_cast<float>(y + height), 0.0f, 1.0f, 1.0f};
+    vertices[2] = {static_cast<float>(x), static_cast<float>(y), 0.0f, 0.0f,
+                   0.0f};
+    vertices[3] = {static_cast<float>(x + width), static_cast<float>(y), 0.0f,
+                   1.0f, 0.0f};
+
+    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+    indices[0] = 0;
+    indices[1] = 1;
+    indices[2] = 2;
+    indices[3] = 1;
+    indices[4] = 3;
+    indices[5] = 2;
+  } else {
+    const int segments =
+        std::clamp(static_cast<int>(std::ceil(radius / 4.0f)), 4, 12);
+    const uint16_t ringVertexCount = static_cast<uint16_t>((segments + 1) * 4);
+    const uint16_t vertexCount = static_cast<uint16_t>(ringVertexCount + 1);
+    const uint16_t indexCount = static_cast<uint16_t>(ringVertexCount * 3);
+
+    if (bgfx::getAvailTransientVertexBuffer(
+            vertexCount, rendering::PosTexCoord0Vertex::ms_decl) <
+            vertexCount ||
+        bgfx::getAvailTransientIndexBuffer(indexCount) < indexCount) {
+      return;
+    }
+    bgfx::allocTransientVertexBuffer(&tvb, vertexCount,
+                                     rendering::PosTexCoord0Vertex::ms_decl);
+    bgfx::allocTransientIndexBuffer(&tib, indexCount);
+
+    auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
+    auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+    uint16_t vertexIndex = 0;
+
+    const float fx = static_cast<float>(x);
+    const float fy = static_cast<float>(y);
+    const float fw = static_cast<float>(width);
+    const float fh = static_cast<float>(height);
+    const auto appendVertex = [&](float px, float py) {
+      vertices[vertexIndex++] = {px, py, 0.0f, (px - fx) / fw,
+                                 (py - fy) / fh};
+    };
+
+    appendVertex(fx + fw * 0.5f, fy + fh * 0.5f);
+    const auto appendCorner = [&](float cx, float cy, float startAngle) {
+      for (int i = 0; i <= segments; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(segments);
+        const float angle = startAngle + t * (kPi * 0.5f);
+        appendVertex(cx + std::cos(angle) * radius,
+                     cy + std::sin(angle) * radius);
+      }
+    };
+
+    appendCorner(fx + fw - radius, fy + radius, -kPi * 0.5f);
+    appendCorner(fx + fw - radius, fy + fh - radius, 0.0f);
+    appendCorner(fx + radius, fy + fh - radius, kPi * 0.5f);
+    appendCorner(fx + radius, fy + radius, kPi);
+
+    uint16_t index = 0;
+    for (uint16_t i = 0; i < ringVertexCount; ++i) {
+      indices[index++] = 0;
+      indices[index++] = static_cast<uint16_t>(i + 1);
+      indices[index++] = static_cast<uint16_t>((i + 1) % ringVertexCount + 1);
+    }
+  }
+
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  bgfx::setTexture(0, sampler, texture);
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
+                 BGFX_STATE_MSAA);
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  bgfx::submit(rendering::ui_view, kProgram);
+}
 } // namespace
 
 std::map<std::string, ImageView::ImageCache> ImageView::imageCache = {};
@@ -327,58 +437,8 @@ void ImageView::renderImpl(RenderContext &context) {
   if (!bgfx::isValid(texture)) {
     return;
   }
-  // Submit a quad with the image texture
-  bgfx::TransientVertexBuffer tvb{};
-  bgfx::TransientIndexBuffer tib{};
-
-  //  SDL_Log("Rendering video texture frame %d; time: %f", currentFrame,
-  //  currentFrame / 30.0f);
-
-  bgfx::allocTransientVertexBuffer(&tvb, 4,
-                                   rendering::PosTexCoord0Vertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
-  auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
-
-  // Define quad vertices
-  vertex[0].x = getX();
-  vertex[0].y = getY() + getHeight();
-  vertex[0].z = 0.0f;
-  vertex[0].u = 0.0f;
-  vertex[0].v = 1.0f;
-  vertex[1].x = getX() + getWidth();
-  vertex[1].y = getY() + getHeight();
-  vertex[1].z = 0.0f;
-  vertex[1].u = 1.0f;
-  vertex[1].v = 1.0f;
-  vertex[2].x = getX();
-  vertex[2].y = getY();
-  vertex[2].z = 0.0f;
-  vertex[2].u = 0.0f;
-  vertex[2].v = 0.0f;
-  vertex[3].x = getX() + getWidth();
-  vertex[3].y = getY();
-  vertex[3].z = 0.0f;
-  vertex[3].u = 1.0f;
-  vertex[3].v = 0.0f;
-
-  // Define quad indices
-  auto *indices = (uint16_t *)tib.data;
-  indices[0] = 0;
-  indices[1] = 1;
-  indices[2] = 2;
-  indices[3] = 1;
-  indices[4] = 3;
-  indices[5] = 2;
-  bgfx::setVertexBuffer(0, &tvb);
-  bgfx::setIndexBuffer(&tib);
-
-  bgfx::setTexture(0, s_texColor, texture);
-  rendering::setScissorUI(context.scissor.x, context.scissor.y,
-                          context.scissor.width, context.scissor.height);
-  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-  static const bgfx::ProgramHandle kProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-  bgfx::submit(rendering::ui_view, kProgram);
+  submitTexturedRoundedRect(context, texture, s_texColor, getX(), getY(),
+                            getWidth(), getHeight(), getCornerRadius());
 }
 ImageView::ImageView(int x, int y, int width, int height)
     : View(x, y, width, height) {

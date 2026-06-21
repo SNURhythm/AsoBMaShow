@@ -1,8 +1,11 @@
 #include "LibraryFolderItemView.h"
 #include "ClearLampColors.h"
+#include "UiTheme.h"
 #include <algorithm>
 
 namespace {
+constexpr int kBottomGap = 6;
+
 std::string indentLabel(const std::string &label, int depth) {
   return std::string(static_cast<size_t>(std::max(0, depth)) * 2, ' ') + label;
 }
@@ -11,15 +14,24 @@ std::string indentLabel(const std::string &label, int depth) {
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
                                              int height)
     : View(x, y, width, height) {
-  setFlexDirection(FlexDirection::Row);
-  setAlignItems(YGAlignCenter);
-  setPadding(Edge::All, 8);
-  setPadding(Edge::End, 24);
-  setGap(8);
+  setFlexDirection(FlexDirection::Column);
+  setAlignItems(YGAlignStretch);
+  setPadding(Edge::Bottom, kBottomGap);
+
+  contentCard = new View();
+  contentCard->setFlexDirection(FlexDirection::Row);
+  contentCard->setAlignItems(YGAlignCenter);
+  contentCard->setHeight(height > kBottomGap ? height - kBottomGap : height);
+  contentCard->setFlexShrink(0);
+  contentCard->setPadding(Edge::All, 8);
+  contentCard->setPadding(Edge::End, 24);
+  contentCard->setGap(8);
+  addView(contentCard);
 
   clearLamp = new View();
   clearLamp->setWidth(5)->setHeight(26)->setFlexShrink(0);
-  addView(clearLamp);
+  clearLamp->setCornerRadius(3.0f);
+  contentCard->addView(clearLamp);
 
   labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   labelView->setVAlign(TextView::MIDDLE);
@@ -27,14 +39,14 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   labelView->setFlex(1);
   labelView->setFlexShrink(1);
   labelView->setMinWidth(0);
-  addView(labelView);
+  contentCard->addView(labelView);
 
   countView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   countView->setAlign(TextView::RIGHT);
   countView->setVAlign(TextView::MIDDLE);
   countView->setOverflow(TextView::TextOverflow::Hidden);
   countView->setWidth(48);
-  addView(countView);
+  contentCard->addView(countView);
 }
 
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
@@ -55,16 +67,19 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
-  setBackgroundColor(Color(45, 79, 116, 220));
-  setBorderColor(Color(105, 162, 222, 255));
-  setBorderWidth(1);
-  labelView->setColor({255, 255, 255, 255});
-  countView->setColor({218, 232, 249, 255});
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
+  contentCard->setBorderWidth(1);
+  labelView->setThemedColor(ui_theme::textPrimary);
+  countView->setThemedColor(ui_theme::lime);
 }
 
 void LibraryFolderItemView::onUnselected() {
-  setBackgroundColor(Color(12, 20, 32, 112));
-  clearBorderColor();
-  labelView->setColor({213, 224, 239, 255});
-  countView->setColor({142, 163, 188, 255});
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
+  contentCard->setBorderWidth(1);
+  labelView->setThemedColor(ui_theme::textPrimary);
+  countView->setThemedColor(ui_theme::textMuted);
 }

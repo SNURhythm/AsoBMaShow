@@ -10,6 +10,7 @@
 #include "../../input/RhythmInputHandler.h"
 #include "../../targets.h"
 #include "../../view/Button.h"
+#include "../../view/UiTheme.h"
 #include "../../scene/MainMenuScene.h"
 #include "../ResultScene.h"
 
@@ -86,6 +87,23 @@ std::string gameplayPlayOptionLabel(const StartOptions &options) {
   const std::string label =
       play_options::formatPlayOptionLabel(option, seed, option2, seed2);
   return label.empty() ? "" : "Option: " + label;
+}
+
+bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
+                                         const StartOptions &options) {
+  std::optional<std::string> option = options.playOption;
+  std::optional<std::string> option2 = options.playOption2;
+
+  if (options.replayData != nullptr) {
+    if (!option.has_value()) {
+      option = options.replayData->playOption;
+    }
+    if (!option2.has_value()) {
+      option2 = options.replayData->playOption2;
+    }
+  }
+
+  return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
 }
 
 bool prepareRetryChart(const bms_parser::ChartMeta &meta,
@@ -180,6 +198,12 @@ void GamePlayScene::init() {
       context.settings.judgementIndicatorWidthScale,
       context.settings.judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D);
+  renderer->setJudgementTextY(context.settings.judgementTextY);
+  renderer->setJudgementCounterEnabled(
+      context.settings.judgementCounterEnabled);
+  renderer->setJudgementCounterPosition(
+      context.settings.judgementCounterPosition);
+  renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
   renderer->setReplayData(options.replayData.get());
   renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
@@ -219,47 +243,82 @@ void GamePlayScene::init() {
   addView(pauseLayout);
   pauseLayout->setFlexDirection(FlexDirection::Column);
   pauseLayout->setAlignItems(YGAlignCenter);
+  pauseLayout->setJustifyContent(YGJustifyCenter);
+  pauseLayout->setBackgroundColor(Color(2, 5, 9, 198));
   {
     auto pauseScreen = new View();
-    pauseScreen->setFlex(1);
+    pauseScreen->setWidth(520);
+    pauseScreen->setHeight(430);
     pauseScreen->setFlexDirection(FlexDirection::Column);
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
+    pauseScreen->setGap(14);
+    pauseScreen->setPadding(Edge::All, 28);
+    pauseScreen->setBackgroundColor(ui_theme::panelStrong());
+    pauseScreen->setCornerRadius(ui_theme::panelRadius());
+    pauseScreen->setShadow(ui_theme::shadow(), ui_theme::kModalShadow);
+    pauseScreen->setBorderColor(ui_theme::hairlineSubtle());
+    pauseScreen->setBorderWidth(1);
     {
-      auto makePauseButton = [](const std::string &label, int width, int height,
-                                auto onClick) {
+      auto makePauseButton = [](const std::string &label, const Color &normal,
+                                const Color &hover, const Color &pressed,
+                                const Color &border, auto onClick) {
         auto button = new Button();
-        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+        auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
         text->setText(label);
         text->setAlign(TextView::CENTER);
+        text->setVAlign(TextView::MIDDLE);
+        text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
         button->setContentView(text);
         button->setOnClickListener(onClick);
-        button->setSize(width, height);
+        button->setSize(360, 64);
+        button->setCornerRadius(ui_theme::controlRadius());
+        button->setBackgroundColors(normal, hover, pressed);
+        button->setBorderColors(ui_theme::withAlpha(border, 150),
+                                ui_theme::withAlpha(border, 190),
+                                ui_theme::withAlpha(border, 220));
+        button->setStyledBorderWidth(1);
         return button;
       };
 
-      auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-      pauseText->setSize(200, 100);
-      pauseText->setText("Paused");
+      auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+      pauseText->setSize(420, 72);
+      pauseText->setText("PAUSED");
       pauseText->setAlign(TextView::CENTER);
+      pauseText->setVAlign(TextView::MIDDLE);
+      pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
-      pauseScreen->addView(makePauseButton("Resume", 200, 100, [this]() {
+      pauseScreen->addView(makePauseButton(
+          "Resume", Color(22, 132, 126, 238), Color(28, 151, 144, 248),
+          Color(40, 173, 164, 255), ui_theme::accentBorderStrong(), [this]() {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(true);
+        }
       }));
       pauseScreen->addView(makePauseButton(
-          isReplayPlayback() ? "Replay" : "Retry", 260, 90, [this]() {
+          isReplayPlayback() ? "Replay" : "Retry", Color(57, 105, 42, 238),
+          Color(72, 127, 51, 248), Color(91, 153, 61, 255),
+          ui_theme::lime(), [this]() {
             if (isReplayPlayback() || options.practiceMode) {
               restartCurrentPattern();
             } else {
               retryWithNewPattern();
             }
           }));
-      if (!isReplayPlayback() && !options.practiceMode) {
+      if (!isReplayPlayback() && !options.practiceMode &&
+          chart != nullptr && gameplayHasSamePatternRandomization(*chart,
+                                                                  options)) {
         pauseScreen->addView(makePauseButton(
-            "Retry Same", 260, 90, [this]() { restartCurrentPattern(); }));
+            "Retry Same", ui_theme::control(), ui_theme::controlHover(),
+            ui_theme::controlPressed(), ui_theme::hairline(),
+            [this]() { restartCurrentPattern(); }));
       }
-      pauseScreen->addView(makePauseButton("Exit", 200, 100, [this]() {
+      pauseScreen->addView(makePauseButton("Exit", Color(119, 45, 46, 238),
+                                           Color(145, 53, 51, 248),
+                                           Color(174, 64, 57, 255),
+                                           ui_theme::coral(), [this]() {
         finishReplayRecording();
         publishPracticeGhost();
         context.jukebox.stop();
@@ -283,13 +342,25 @@ void GamePlayScene::init() {
   /* pause button */
   pauseButton = new Button(rendering::window_width - 70, 50, 40, 40);
   addView(pauseButton);
-  auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
-  pauseText->setText("| |");
+  auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  pauseText->setText("||");
   pauseText->setAlign(TextView::CENTER);
+  pauseText->setVAlign(TextView::MIDDLE);
+  pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   pauseButton->setContentView(pauseText);
+  pauseButton->setSize(52, 52);
+  pauseButton->setCornerRadius(ui_theme::controlRadius());
+  pauseButton->setBackgroundColors(Color(236, 253, 255, 42),
+                                   Color(70, 230, 224, 88),
+                                   Color(255, 204, 81, 120));
+  pauseButton->setBorderColors(ui_theme::hairlineSubtle(),
+                               ui_theme::accentBorder(),
+                               ui_theme::withAlpha(ui_theme::amber(), 190));
+  pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
     context.jukebox.pause();
     pauseLayout->setVisible(true);
+    pauseButton->setVisible(false);
   });
 }
 
@@ -348,6 +419,7 @@ void GamePlayScene::reset() {
   state->configureGauge(initialGaugeType, gaugeAutoShift);
   initializeStartPositionState();
   state->isPlaying = true;
+  renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
   buildReplayNoteLookup();
@@ -357,6 +429,9 @@ void GamePlayScene::reset() {
 
 void GamePlayScene::restartCurrentPattern() {
   pauseLayout->setVisible(false);
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
   context.jukebox.stop();
   defer(
       [this]() {
@@ -373,6 +448,9 @@ void GamePlayScene::retryWithNewPattern() {
   }
 
   pauseLayout->setVisible(false);
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
   context.jukebox.stop();
 
   defer(
@@ -622,13 +700,20 @@ void GamePlayScene::update(float dt) {
 void GamePlayScene::renderScene() {
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
-  // pauseButton->setPosition(rendering::window_width - 40, 10);
+  if (pauseButton != nullptr) {
+    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+  }
   renderer->render(renderContext, getVisualTimeMicros(getGameplayTimeMicros(
                                       context.jukebox.getTimeMicros())));
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
 }
+
+bool GamePlayScene::renderViewBeforeScene(const View *view) const {
+  return view != pauseLayout && view != pauseButton;
+}
+
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
   context.jukebox.removeOnTick();
@@ -1027,10 +1112,7 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             bool recordTimingSample) {
-  std::lock_guard<std::mutex> lock(judgeMutex);
-  state->latestJudgeResult = judgeResult;
-
-  state->judgeCount[judgeResult.judgement]++;
+  const int judgementCount = ++state->judgeCount[judgeResult.judgement];
   if (judgeResult.isComboBreak()) {
     state->combo = 0;
     state->comboBreak++;
@@ -1044,6 +1126,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                     getVisualTimeMicros(
                         getGameplayTimeMicros(context.jukebox.getTimeMicros())),
                     recordTimingSample);
+  renderer->setJudgementCounter(judgeResult.judgement, judgementCount,
+                                state->comboBreak);
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);
@@ -1171,9 +1255,15 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
       if (context.jukebox.isPaused()) {
         context.jukebox.resume();
         pauseLayout->setVisible(false);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(true);
+        }
       } else {
         context.jukebox.pause();
         pauseLayout->setVisible(true);
+        if (pauseButton != nullptr) {
+          pauseButton->setVisible(false);
+        }
       }
     }
   }

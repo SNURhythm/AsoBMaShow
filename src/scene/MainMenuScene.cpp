@@ -22,6 +22,7 @@
 #include "../view/ClearLampColors.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
+#include "../view/UiTheme.h"
 #include <cctype>
 #include <cstring>
 #include <memory>
@@ -128,7 +129,8 @@ public:
     setJustifyContent(YGJustifyCenter);
     setPadding(Edge::Left, 14);
     setPadding(Edge::Right, 14);
-    setBorderWidth(2);
+    setCornerRadius(ui_theme::controlRadius());
+    setBorderWidth(1);
 
     label = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
     label->setWrap(true);
@@ -152,18 +154,20 @@ public:
   }
 
   void onSelected() override {
-    setBackgroundColor(Color(40, 96, 156, 236));
-    setBorderColor(Color(105, 162, 222, 255));
+    setThemedBackgroundColor(ui_theme::infoActionHover);
+    setThemedBorderColor(
+        [] { return ui_theme::withAlpha(ui_theme::infoActionPressed(), 210); });
     if (label != nullptr) {
-      label->setColor({242, 247, 255, 255});
+      label->setThemedColor(
+          [] { return ui_theme::textOn(ui_theme::infoActionHover()); });
     }
   }
 
   void onUnselected() override {
-    setBackgroundColor(Color(22, 49, 77, 224));
-    setBorderColor(Color(92, 128, 170, 230));
+    setThemedBackgroundColor(ui_theme::control);
+    setThemedBorderColor(ui_theme::hairlineStrong);
     if (label != nullptr) {
-      label->setColor({226, 237, 249, 255});
+      label->setThemedColor(ui_theme::textPrimary);
     }
   }
 
@@ -226,8 +230,8 @@ double progressRatio(const BmsSearchDownloadProgress &progress) {
 }
 
 std::string progressPercentText(double ratio) {
-  const int percent = static_cast<int>(
-      std::lround(std::clamp(ratio, 0.0, 1.0) * 100.0));
+  const int percent =
+      static_cast<int>(std::lround(std::clamp(ratio, 0.0, 1.0) * 100.0));
   return std::to_string(percent) + "%";
 }
 
@@ -236,10 +240,9 @@ std::string findBmsProgressDisplayText(const std::string &message,
                                        std::uint64_t totalBytes,
                                        bool includeBytes) {
   if (message == "Downloading archive" && totalBytes > 0) {
-    const double ratio =
-        std::clamp(static_cast<double>(downloadedBytes) /
-                       static_cast<double>(totalBytes),
-                   0.0, 1.0);
+    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
+                                        static_cast<double>(totalBytes),
+                                    0.0, 1.0);
     std::string text = "Downloading archive - " + progressPercentText(ratio);
     if (includeBytes) {
       text += " (" + formatFindBmsBytes(downloadedBytes) + " / " +
@@ -251,19 +254,19 @@ std::string findBmsProgressDisplayText(const std::string &message,
     return "Downloading archive (" + formatFindBmsBytes(downloadedBytes) + ")";
   }
   if (message == "Download complete" && totalBytes > 0) {
-    const double ratio =
-        std::clamp(static_cast<double>(downloadedBytes) /
-                       static_cast<double>(totalBytes),
-                   0.0, 1.0);
+    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
+                                        static_cast<double>(totalBytes),
+                                    0.0, 1.0);
     return "Download complete - " + progressPercentText(ratio);
   }
   return message;
 }
 
-std::string findBmsProgressDisplayText(
-    const BmsSearchDownloadProgress &progress, bool includeBytes) {
+std::string
+findBmsProgressDisplayText(const BmsSearchDownloadProgress &progress,
+                           bool includeBytes) {
   return findBmsProgressDisplayText(progress.message, progress.downloadedBytes,
-                                   progress.totalBytes, includeBytes);
+                                    progress.totalBytes, includeBytes);
 }
 
 bool shouldReplaceFindBmsLogLine(const std::string &previous,
@@ -312,8 +315,8 @@ double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
   }
   if (message == "Download complete") {
     const double ratio = progressRatio(progress);
-    return std::max(previous, progress.totalBytes > 0 ? 0.10 + ratio * 0.80
-                                                      : 0.90);
+    return std::max(previous,
+                    progress.totalBytes > 0 ? 0.10 + ratio * 0.80 : 0.90);
   }
   if (message == "Confirming Google Drive download") {
     return 0.10;
@@ -383,8 +386,8 @@ bool revealPathInFileManager(const std::filesystem::path &path,
                             errorMessage);
 #elif defined(_WIN32)
   const std::wstring nativePath = targetPath.wstring();
-  const HRESULT coInit =
-      CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
+                                                     COINIT_DISABLE_OLE1DDE);
   const bool didCoInitialize = SUCCEEDED(coInit);
   PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(nativePath.c_str());
   if (pidl == nullptr) {
@@ -437,8 +440,8 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   const int result =
       posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
   if (result != 0) {
-    errorMessage = std::string("Could not open file manager: ") +
-                   std::strerror(result);
+    errorMessage =
+        std::string("Could not open file manager: ") + std::strerror(result);
     return false;
   }
   std::thread([pid]() {
@@ -464,8 +467,8 @@ bool openExternalUrl(const std::string &url, std::string &errorMessage) {
 #elif TARGET_OS_OSX
   return OpenURLInDefaultBrowser(url, errorMessage);
 #elif defined(_WIN32)
-  const HINSTANCE result =
-      ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  const HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr,
+                                         nullptr, SW_SHOWNORMAL);
   if (reinterpret_cast<intptr_t>(result) <= 32) {
     errorMessage = "Could not open browser";
     return false;
@@ -493,8 +496,8 @@ bool openExternalUrl(const std::string &url, std::string &errorMessage) {
   const int result =
       posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
   if (result != 0) {
-    errorMessage = std::string("Could not open browser: ") +
-                   std::strerror(result);
+    errorMessage =
+        std::string("Could not open browser: ") + std::strerror(result);
     return false;
   }
   std::thread([pid]() {
@@ -541,9 +544,9 @@ void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
     }
     std::string resolvedPath;
     std::string errorMessage;
-    void *handle = StartIOSSecurityScopedResource(
-        path_t_to_utf8(entry.path), entry.iosBookmark, resolvedPath,
-        errorMessage);
+    void *handle = StartIOSSecurityScopedResource(path_t_to_utf8(entry.path),
+                                                  entry.iosBookmark,
+                                                  resolvedPath, errorMessage);
     if (!errorMessage.empty()) {
       SDL_Log("Failed to open folder access for %s: %s",
               path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
@@ -656,43 +659,50 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   return {.type = GaugeType::Normal};
 }
 
-void styleActionButton(Button *button, TextView *text, bool enabled,
-                       const Color &normal, const Color &hover,
-                       const Color &pressed, const Color &border) {
+void styleThemedActionButton(Button *button, TextView *text, bool enabled,
+                             View::ThemeColorProvider normal,
+                             View::ThemeColorProvider hover,
+                             View::ThemeColorProvider pressed,
+                             View::ThemeColorProvider border) {
   if (button == nullptr || text == nullptr) {
     return;
   }
 
+  button->setCornerRadius(ui_theme::controlRadius());
   if (enabled) {
-    button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(border, Color(border.r, border.g, border.b, 255),
-                            Color(235, 246, 255, 255));
-    text->setColor({242, 247, 255, 255});
+    button->setThemedBackgroundColors(normal, hover, pressed);
+    button->setThemedBorderColors(
+        [border] { return ui_theme::withAlpha(border(), 150); },
+        [border] { return ui_theme::withAlpha(border(), 190); },
+        [border] { return ui_theme::withAlpha(border(), 220); });
+    text->setThemedColor([normal] { return ui_theme::textOn(normal()); });
   } else {
-    button->setBackgroundColors(Color(25, 31, 39, 154), Color(25, 31, 39, 154),
-                                Color(25, 31, 39, 154));
-    button->setBorderColors(Color(76, 88, 102, 120), Color(76, 88, 102, 120),
-                            Color(76, 88, 102, 120));
-    text->setColor({129, 143, 160, 255});
+    button->setThemedBackgroundColors(
+        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
+    button->setThemedBorderColors(ui_theme::hairlineSubtle,
+                                  ui_theme::hairlineSubtle,
+                                  ui_theme::hairlineSubtle);
+    text->setThemedColor(ui_theme::textMuted);
   }
 }
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleActionButton(button, text, true, Color(38, 97, 87, 232),
-                      Color(50, 121, 109, 242), Color(65, 146, 130, 250),
-                      Color(112, 212, 191, 255));
+    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
+                            ui_theme::primaryActionHover,
+                            ui_theme::primaryActionPressed,
+                            ui_theme::accentBorderStrong);
   } else {
-    styleActionButton(button, text, true, Color(22, 34, 51, 220),
-                      Color(32, 48, 70, 232), Color(44, 65, 94, 242),
-                      Color(83, 109, 140, 220));
+    styleThemedActionButton(button, text, true, ui_theme::control,
+                            ui_theme::controlHover, ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
   }
 }
 
 TextView *makeModalLabel(const std::string &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   label->setText(text);
-  label->setColor({173, 193, 216, 255});
+  label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
 }
@@ -714,11 +724,18 @@ Button *makeModalButton(const std::string &label, int fontSize,
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
-  button->setStyledBorderWidth(2);
+  button->setStyledBorderWidth(1);
+  button->setCornerRadius(ui_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
   return button;
+}
+
+Color modalPanelBorder() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? ui_theme::hairlineStrong()
+             : Color(86, 118, 153, 210);
 }
 
 const char *chartScanProgressStageText(ChartScanProgressStage stage) {
@@ -802,21 +819,53 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 void MainMenuScene::init() {
   // Initialize the scene
   db = ChartDBHelper::GetInstance().Connect();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  context.requestAddChartFolderFromFiles = [this]() {
+    addIOSFolderEntryFromFiles();
+  };
+#endif
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
   startLibraryTaskWorker();
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
-void MainMenuScene::onPause() {
-  pauseLibraryTaskWorker();
-}
+void MainMenuScene::onPause() { pauseLibraryTaskWorker(); }
 
 void MainMenuScene::onResume() {
+  applyThemeChange();
   resumeLibraryTaskWorker();
   startLibraryTaskWorker();
   refreshScoreClearRanksIfNeeded();
   refreshLibraryIfNeeded();
+}
+
+void MainMenuScene::applyThemeChange() {
+  const ui_theme::ThemeMode activeMode = ui_theme::activeMode();
+  if (appliedUiThemeMode == activeMode) {
+    return;
+  }
+
+  appliedUiThemeMode = activeMode;
+  for (auto *view : views) {
+    if (view != nullptr) {
+      view->propagateThemeChange();
+    }
+  }
+  if (folderRecyclerView != nullptr) {
+    folderRecyclerView->rebindVisibleItems();
+  }
+  if (recyclerView != nullptr) {
+    recyclerView->rebindVisibleItems();
+  }
+  refreshGaugeSelectionButtons();
+  refreshPlayOptionButtons();
+  refreshReplayModalActions();
+  refreshReplayExportOptionButtons();
+  refreshFindBmsModal();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
 }
 
 void MainMenuScene::startLibraryTaskWorker() {
@@ -834,11 +883,9 @@ void MainMenuScene::startLibraryTaskWorker() {
       if (task.status != LibraryTaskStatus::Paused) {
         continue;
       }
-      const auto queuedIt =
-          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
-                       [&task](const auto &queuedTask) {
-                         return queuedTask.id == task.id;
-                       });
+      const auto queuedIt = std::find_if(
+          libraryTaskQueue.begin(), libraryTaskQueue.end(),
+          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
       if (queuedIt != libraryTaskQueue.end()) {
         task.status = LibraryTaskStatus::Queued;
         task.detail = "Waiting";
@@ -894,11 +941,9 @@ void MainMenuScene::resumeLibraryTaskWorker() {
       if (task.status != LibraryTaskStatus::Paused) {
         continue;
       }
-      const auto queuedIt =
-          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
-                       [&task](const auto &queuedTask) {
-                         return queuedTask.id == task.id;
-                       });
+      const auto queuedIt = std::find_if(
+          libraryTaskQueue.begin(), libraryTaskQueue.end(),
+          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
       task.status = queuedIt != libraryTaskQueue.end()
                         ? LibraryTaskStatus::Queued
                         : LibraryTaskStatus::Running;
@@ -913,8 +958,8 @@ void MainMenuScene::resumeLibraryTaskWorker() {
   libraryTaskCv.notify_all();
 }
 
-bool MainMenuScene::waitForLibraryTaskResume(
-    std::uint64_t id, const std::stop_token &stopToken) {
+bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
+                                             const std::stop_token &stopToken) {
   if (!libraryTaskWorkerPaused.load()) {
     return !stopToken.stop_requested();
   }
@@ -926,14 +971,14 @@ bool MainMenuScene::waitForLibraryTaskResume(
           : 0.0;
   const int current =
       snapshot.valid && snapshot.taskId == id ? snapshot.current : 0;
-  const int total = snapshot.valid && snapshot.taskId == id ? snapshot.total : 0;
+  const int total =
+      snapshot.valid && snapshot.taskId == id ? snapshot.total : 0;
   setLibraryTaskState(id, LibraryTaskStatus::Paused, fraction, current, total,
                       "Paused");
 
   std::unique_lock<std::mutex> lock(libraryTaskPauseMutex);
-  libraryTaskPauseCv.wait(lock, stopToken, [this]() {
-    return !libraryTaskWorkerPaused.load();
-  });
+  libraryTaskPauseCv.wait(lock, stopToken,
+                          [this]() { return !libraryTaskWorkerPaused.load(); });
   if (stopToken.stop_requested()) {
     return false;
   }
@@ -945,6 +990,22 @@ bool MainMenuScene::waitForLibraryTaskResume(
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark) {
+  std::filesystem::path taskFolderToAdd = folderToAdd;
+  std::string taskIOSBookmark = iosBookmark;
+  if (!taskFolderToAdd.empty()) {
+    auto &dbHelper = ChartDBHelper::GetInstance();
+    SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
+    sqlite3 *taskDb = taskDbHandle.get();
+    if (taskDb != nullptr) {
+      dbHelper.CreateEntriesTable(taskDb);
+      if (dbHelper.InsertEntry(taskDb, taskFolderToAdd, taskIOSBookmark)) {
+        taskFolderToAdd.clear();
+        taskIOSBookmark.clear();
+        requestLibraryReload(true);
+      }
+    }
+  }
+
   startLibraryTaskWorker();
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
@@ -952,8 +1013,8 @@ void MainMenuScene::enqueueLibraryRefreshTask(
     libraryTaskQueue.push_back(LibraryTaskRequest{
         .id = id,
         .title = title,
-        .folderToAdd = folderToAdd,
-        .iosBookmark = iosBookmark,
+        .folderToAdd = taskFolderToAdd,
+        .iosBookmark = taskIOSBookmark,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
@@ -994,8 +1055,7 @@ bool MainMenuScene::isActiveLibraryTaskStatus(LibraryTaskStatus status) {
 
 void MainMenuScene::setLibraryTaskState(std::uint64_t id,
                                         LibraryTaskStatus status,
-                                        double fraction, int current,
-                                        int total,
+                                        double fraction, int current, int total,
                                         const std::string &detail) {
   std::lock_guard<std::mutex> lock(libraryTaskMutex);
   auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
@@ -1014,23 +1074,21 @@ void MainMenuScene::setLibraryTaskState(std::uint64_t id,
 void MainMenuScene::bumpLibraryTasksRevisionLocked() {
   ++libraryTasksRevision;
   const int activeCount = static_cast<int>(std::count_if(
-      libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-        return isActiveLibraryTaskStatus(task.status);
-      }));
+      libraryTasks.begin(), libraryTasks.end(),
+      [](const auto &task) { return isActiveLibraryTaskStatus(task.status); }));
   libraryActiveTaskCount.store(activeCount, std::memory_order_release);
 }
 
 void MainMenuScene::updateLibraryTaskProgress(
     std::uint64_t id, const ChartScanProgress &progress) {
   const int total = std::max(0, progress.total);
-  const int current =
-      total > 0 ? std::clamp(progress.current, 0, total)
-                : std::max(0, progress.current);
+  const int current = total > 0 ? std::clamp(progress.current, 0, total)
+                                : std::max(0, progress.current);
   const int basisPoints =
-      total > 0 ? static_cast<int>((static_cast<std::int64_t>(current) *
-                                    10000) /
-                                   std::max(1, total))
-                : 0;
+      total > 0
+          ? static_cast<int>((static_cast<std::int64_t>(current) * 10000) /
+                             std::max(1, total))
+          : 0;
   std::uint64_t revision =
       libraryProgressRevision.load(std::memory_order_relaxed);
   if ((revision & 1U) != 0) {
@@ -1183,8 +1241,8 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
   }
 }
 
-void MainMenuScene::runLibraryRefreshTask(
-    const LibraryTaskRequest &task, const std::stop_token &stopToken) {
+void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
+                                          const std::stop_token &stopToken) {
   auto &dbHelper = ChartDBHelper::GetInstance();
   SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
   sqlite3 *taskDb = taskDbHandle.get();
@@ -1240,8 +1298,7 @@ void MainMenuScene::runLibraryRefreshTask(
       entries = dbHelper.SelectAllEntries(taskDb);
     } else {
       if (!errorMessage.empty()) {
-        SDL_Log("Failed to pick iOS library folder: %s",
-                errorMessage.c_str());
+        SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
       auto path = Utils::GetDocumentsPath("BMS");
       std::filesystem::create_directories(path);
@@ -1304,13 +1361,14 @@ void MainMenuScene::runLibraryRefreshTask(
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   RefreshIOSFolderAccess(entries);
 #endif
-  LoadCharts(dbHelper, taskDb, entries, *this, stopToken,
-             [this, taskId = task.id](const ChartScanProgress &progress) {
-               updateLibraryTaskProgress(taskId, progress);
-             },
-             [this, taskId = task.id, &stopToken]() {
-               return waitForLibraryTaskResume(taskId, stopToken);
-             });
+  LoadCharts(
+      dbHelper, taskDb, entries, *this, stopToken,
+      [this, taskId = task.id](const ChartScanProgress &progress) {
+        updateLibraryTaskProgress(taskId, progress);
+      },
+      [this, taskId = task.id, &stopToken]() {
+        return waitForLibraryTaskResume(taskId, stopToken);
+      });
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1326,8 +1384,8 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
     return;
   }
 
-  addFolderPickerThread = std::jthread(
-      [this](const std::stop_token &stopToken) {
+  addFolderPickerThread =
+      std::jthread([this](const std::stop_token &stopToken) {
         struct PickerFlagReset {
           std::atomic_bool &flag;
           ~PickerFlagReset() { flag.store(false); }
@@ -1486,15 +1544,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
 
-  const Color kBackdropTint(10, 18, 30, 112);
-  const Color kPanelFill(17, 27, 42, 196);
-  const Color kSurfaceFill(11, 18, 30, 168);
-  const Color kPrimaryButtonNormal(29, 73, 120, 216);
-  const Color kPrimaryButtonHover(40, 96, 156, 228);
-  const Color kPrimaryButtonPressed(58, 129, 204, 236);
-  const Color kSecondaryButtonNormal(76, 49, 36, 208);
-  const Color kSecondaryButtonHover(101, 65, 47, 220);
-  const Color kSecondaryButtonPressed(133, 87, 63, 232);
+  appliedUiThemeMode = ui_theme::activeMode();
 
   recyclerView = new RecyclerView<ChartMetaRecord>(
       [](const ChartMetaRecord &a, const ChartMetaRecord &b) {
@@ -1516,10 +1566,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateDifficultyTableTables(db);
 
+  static constexpr int kChartListItemHeight = 108;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
-    return new ChartListItemView(0, 0, rendering::window_width, 100, item);
+    return new ChartListItemView(0, 0, rendering::window_width,
+                                 kChartListItemHeight, item);
   };
-  recyclerView->itemHeight = 100;
+  recyclerView->itemHeight = kChartListItemHeight;
+  recyclerView->topMargin = 8;
+  recyclerView->bottomMargin = 8;
   recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
@@ -1546,14 +1600,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (!replayExportInProgress.load() && replayStatusText != nullptr) {
       replayStatusText->setText("");
     }
-    setPlayableChartActionsVisible(!item.unavailable &&
-                                   !item.solidArchive &&
+    setPlayableChartActionsVisible(!item.unavailable && !item.solidArchive &&
                                    !meta.BmsPath.empty());
     refreshUnzipButtonForSelection(&item);
-    setFindBmsButtonVisible(item.unavailable &&
-                            !item.solidArchive &&
-                            (!meta.SHA256.empty() || !meta.MD5.empty() ||
-                             !meta.Title.empty()));
+    setFindBmsButtonVisible(
+        item.unavailable && !item.solidArchive &&
+        (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     previewLoadCancelled = true;
     if (loadThread.joinable()) {
       SDL_Log("Joining preview thread");
@@ -1575,8 +1627,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           "Solid archive selected without chart probing: " +
           path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) +
           " files=" + std::to_string(item.archiveFileCount) +
-          " estimatedUnpacked=" +
-          std::to_string(item.archiveUncompressedSize));
+          " estimatedUnpacked=" + std::to_string(item.archiveUncompressedSize));
       return;
     }
     if (archive_file::isVirtualPath(meta.BmsPath) &&
@@ -1666,10 +1717,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
+  static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
-    return new LibraryFolderItemView(0, 0, 260, 44);
+    return new LibraryFolderItemView(0, 0, 260, kFolderListItemHeight);
   };
-  folderRecyclerView->itemHeight = 44;
+  folderRecyclerView->itemHeight = kFolderListItemHeight;
   folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
                                       int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
@@ -1711,7 +1763,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
-  rootLayout->setBackgroundColor(kBackdropTint);
+  rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1719,13 +1771,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setWidth(280);
   nav->setGap(12);
   nav->setPadding(Edge::All, 14);
-  nav->setBackgroundColor(kPanelFill);
-  nav->setBorderColor(Color(70, 95, 124, 255));
-  nav->setBorderWidth(2);
+  nav->setThemedBackgroundColor(ui_theme::mainMenuPanel);
+  nav->setCornerRadius(ui_theme::panelRadius());
+  nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
+  nav->setThemedBorderColor(ui_theme::hairline);
+  nav->setBorderWidth(1);
 
   auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   navTitle->setText("Library");
-  navTitle->setColor({243, 247, 255, 255});
+  navTitle->setThemedColor(ui_theme::textPrimary);
   nav->addView(navTitle);
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1735,13 +1789,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   addFolderText->setAlign(TextView::CENTER);
   addFolderText->setVAlign(TextView::MIDDLE);
   addFolderButton->setContentView(addFolderText);
-  addFolderButton->setBackgroundColors(
-      Color(30, 63, 75, 216), Color(42, 83, 97, 228),
-      Color(55, 106, 123, 236));
-  addFolderButton->setBorderColors(Color(96, 169, 181, 255),
-                                   Color(121, 199, 211, 255),
-                                   Color(151, 224, 235, 255));
-  addFolderButton->setStyledBorderWidth(2);
+  styleThemedActionButton(addFolderButton, addFolderText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
+  addFolderButton->setCornerRadius(ui_theme::controlRadius());
+  addFolderButton->setStyledBorderWidth(1);
   addFolderButton->setOnClickListener(
       [this]() { addIOSFolderEntryFromFiles(); });
   nav->addView(addFolderButton);
@@ -1749,8 +1802,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
-  folderRecyclerView->setBorderColor(Color(63, 86, 113, 255));
-  folderRecyclerView->setBorderWidth(2);
+  folderRecyclerView->setBorderWidth(0);
+  folderRecyclerView->setCornerRadius(ui_theme::controlRadius());
   nav->addView(folderRecyclerView);
   rootLayout->addView(nav);
 
@@ -1760,9 +1813,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->setFlex(1);
   left->setGap(14);
   left->setPadding(Edge::All, 16);
-  left->setBackgroundColor(kPanelFill);
-  left->setBorderColor(Color(70, 95, 124, 255));
-  left->setBorderWidth(2);
+  left->setThemedBackgroundColor(ui_theme::mainMenuPanel);
+  left->setCornerRadius(ui_theme::panelRadius());
+  left->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
+  left->setThemedBorderColor(ui_theme::hairline);
+  left->setBorderWidth(1);
 
   auto *libraryHeader = new View();
   libraryHeader->setFlexDirection(FlexDirection::Row);
@@ -1772,7 +1827,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
   libraryTitle->setText("Song Select");
-  libraryTitle->setColor({243, 247, 255, 255});
+  libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
   libraryTitle->setFlex(1);
   libraryHeader->addView(libraryTitle);
@@ -1781,25 +1836,25 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(50);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
-  styleActionButton(parseLogButton, parseLogButtonText, true,
-                    Color(22, 34, 51, 220), Color(32, 48, 70, 232),
-                    Color(44, 65, 94, 242), Color(83, 109, 140, 220));
+  styleThemedActionButton(parseLogButton, parseLogButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(parseLogButton);
 
   tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(50);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
-  styleActionButton(tasksButton, tasksButtonText, true,
-                    Color(22, 34, 51, 220), Color(32, 48, 70, 232),
-                    Color(44, 65, 94, 242), Color(83, 109, 140, 220));
+  styleThemedActionButton(tasksButton, tasksButtonText, true, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
   libraryHeader->addView(tasksButton);
   left->addView(libraryHeader);
 
   auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   librarySubtitle->setText(
       "Search your library and preview charts before starting.");
-  librarySubtitle->setColor({157, 177, 200, 255});
+  librarySubtitle->setThemedColor(ui_theme::textSecondary);
   left->addView(librarySubtitle);
 
   auto *filterRow = new View();
@@ -1808,14 +1863,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->setGap(10);
 
   searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
-  searchBox->setText("");
+  searchBox->setText(searchText);
   searchBox->setHeight(56);
   searchBox->setFlex(1);
-  searchBox->setBackgroundColor(kSurfaceFill);
-  searchBox->setBorderColor(Color(88, 115, 149, 255));
-  searchBox->setBorderWidth(2);
+  searchBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
+  searchBox->setCornerRadius(ui_theme::controlRadius());
+  searchBox->setThemedBorderColor(ui_theme::hairlineSubtle);
+  searchBox->setBorderWidth(1);
   searchBox->setVAlign(TextView::MIDDLE);
-  searchBox->setColor({239, 244, 251, 255});
+  searchBox->setThemedColor(ui_theme::textPrimary);
   auto onSearchChanged = [this](const std::string &text) {
     searchText = text;
     reloadChartList();
@@ -1825,14 +1881,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(searchBox);
 
   difficultyFilterBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
-  difficultyFilterBox->setText("");
+  difficultyFilterBox->setText(difficultyText);
   difficultyFilterBox->setHeight(56);
   difficultyFilterBox->setWidth(180);
-  difficultyFilterBox->setBackgroundColor(kSurfaceFill);
-  difficultyFilterBox->setBorderColor(Color(88, 115, 149, 255));
-  difficultyFilterBox->setBorderWidth(2);
+  difficultyFilterBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
+  difficultyFilterBox->setCornerRadius(ui_theme::controlRadius());
+  difficultyFilterBox->setThemedBorderColor(ui_theme::hairlineSubtle);
+  difficultyFilterBox->setBorderWidth(1);
   difficultyFilterBox->setVAlign(TextView::MIDDLE);
-  difficultyFilterBox->setColor({239, 244, 251, 255});
+  difficultyFilterBox->setThemedColor(ui_theme::textPrimary);
   auto onDifficultyChanged = [this](const std::string &text) {
     difficultyText = text;
     reloadChartList();
@@ -1843,14 +1900,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   filterLabel->setText("Search / Difficulty");
-  filterLabel->setColor({157, 177, 200, 255});
+  filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
-  recyclerView->setBorderColor(Color(63, 86, 113, 255));
-  recyclerView->setBorderWidth(2);
+  recyclerView->setBorderWidth(0);
+  recyclerView->setCornerRadius(ui_theme::controlRadius());
   left->addView(recyclerView);
   rootLayout->addView(left);
 
@@ -1860,20 +1917,22 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setPadding(Edge::All, 20);
   right->setGap(12);
   right->setWidth(300);
-  right->setBackgroundColor(kPanelFill);
-  right->setBorderColor(Color(70, 95, 124, 255));
-  right->setBorderWidth(2);
+  right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
+  right->setCornerRadius(ui_theme::panelRadius());
+  right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
+  right->setThemedBorderColor(ui_theme::hairline);
+  right->setBorderWidth(1);
 
   auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
   rightTitle->setText("Ready");
-  rightTitle->setColor({243, 247, 255, 255});
+  rightTitle->setThemedColor(ui_theme::textPrimary);
   rightTitle->setAlign(TextView::CENTER);
   rightTitle->setHeight(42);
   right->addView(rightTitle);
 
   auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   rightSubtitle->setText("Preview, tweak, and start.");
-  rightSubtitle->setColor({157, 177, 200, 255});
+  rightSubtitle->setThemedColor(ui_theme::textSecondary);
   rightSubtitle->setAlign(TextView::CENTER);
   rightSubtitle->setHeight(28);
   right->addView(rightSubtitle);
@@ -1894,7 +1953,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto makeReadyStatusText = []() {
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     text->setHeight(28);
-    text->setColor({222, 234, 247, 255});
+    text->setThemedColor(ui_theme::textPrimary);
     return text;
   };
   auto *readyGaugeRow = new View();
@@ -1904,7 +1963,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->setHeight(28);
   auto *readyGaugeLabelText = makeReadyStatusText();
   readyGaugeLabelText->setText("Gauge:");
-  readyGaugeLabelText->setColor({157, 177, 200, 255});
+  readyGaugeLabelText->setThemedColor(ui_theme::textSecondary);
   readyGaugeLabelText->setWidth(70);
   readyGaugeText = makeReadyStatusText();
   readyGaugeText->setFlex(1);
@@ -1921,12 +1980,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButtonText->setAlign(TextView::CENTER);
   playOptionsButtonText->setVAlign(TextView::MIDDLE);
   playOptionsButton->setContentView(playOptionsButtonText);
-  playOptionsButton->setBackgroundColors(
-      Color(30, 63, 75, 216), Color(42, 83, 97, 228), Color(55, 106, 123, 236));
-  playOptionsButton->setBorderColors(Color(96, 169, 181, 255),
-                                     Color(121, 199, 211, 255),
-                                     Color(151, 224, 235, 255));
-  playOptionsButton->setStyledBorderWidth(2);
+  styleThemedActionButton(playOptionsButton, playOptionsButtonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
   readySettings->addView(playOptionsButton);
   right->addView(readySettings);
@@ -1939,12 +1996,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
-  startButton->setBackgroundColors(kPrimaryButtonNormal, kPrimaryButtonHover,
-                                   kPrimaryButtonPressed);
-  startButton->setBorderColors(Color(105, 162, 222, 255),
-                               Color(133, 190, 244, 255),
-                               Color(162, 212, 255, 255));
-  startButton->setStyledBorderWidth(2);
+  styleThemedActionButton(startButton, buttonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
       return;
@@ -1970,12 +2025,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
-  replayButton->setBackgroundColors(
-      Color(25, 58, 65, 216), Color(35, 82, 92, 228), Color(48, 111, 124, 236));
-  replayButton->setBorderColors(Color(91, 174, 184, 255),
-                                Color(116, 204, 214, 255),
-                                Color(145, 232, 241, 255));
-  replayButton->setStyledBorderWidth(2);
+  styleThemedActionButton(replayButton, replayButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
   replayButton->setOnClickListener([this]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -2005,13 +2058,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
-  findBmsButton->setBackgroundColors(
-      Color(32, 74, 62, 216), Color(45, 99, 83, 228),
-      Color(61, 132, 109, 236));
-  findBmsButton->setBorderColors(Color(94, 181, 153, 255),
-                                 Color(119, 210, 180, 255),
-                                 Color(148, 235, 204, 255));
-  findBmsButton->setStyledBorderWidth(2);
+  styleThemedActionButton(findBmsButton, findBmsButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
   findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
   findBmsButtonSlot->addView(findBmsButton);
 
@@ -2026,20 +2076,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
   unzipButton->setContentView(unzipButtonText);
-  unzipButton->setBackgroundColors(
-      Color(76, 61, 30, 216), Color(103, 82, 40, 228),
-      Color(132, 106, 53, 236));
-  unzipButton->setBorderColors(Color(188, 157, 87, 255),
-                               Color(220, 188, 112, 255),
-                               Color(244, 214, 143, 255));
-  unzipButton->setStyledBorderWidth(2);
+  styleThemedActionButton(unzipButton, unzipButtonText, true,
+                          ui_theme::warningAction, ui_theme::warningActionHover,
+                          ui_theme::warningActionPressed,
+                          ui_theme::accentBorder);
   unzipButton->setOnClickListener(
       [this]() { startUnzipSelectedArchiveFolder(); });
   unzipButtonSlot->addView(unzipButton);
 
   replayStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   replayStatusText->setText("");
-  replayStatusText->setColor({157, 177, 200, 255});
+  replayStatusText->setThemedColor(ui_theme::textSecondary);
   replayStatusText->setAlign(TextView::CENTER);
   replayStatusText->setHeight(20);
 
@@ -2048,10 +2095,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setHeight(200);
   jacketCard->setAlignItems(YGAlignCenter);
   jacketCard->setJustifyContent(YGJustifyCenter);
-  jacketCard->setBackgroundColor(kSurfaceFill);
-  jacketCard->setBorderColor(Color(88, 115, 149, 255));
-  jacketCard->setBorderWidth(2);
-  jacketView->setWidth(200)->setHeight(200);
+  jacketCard->setThemedBackgroundColor(ui_theme::mainMenuSurface);
+  jacketCard->setCornerRadius(ui_theme::panelRadius());
+  jacketCard->setThemedBorderColor(ui_theme::hairlineSubtle);
+  jacketCard->setBorderWidth(1);
+  jacketView->setWidth(198)->setHeight(198);
+  jacketView->setCornerRadius(
+      ui_theme::childRadiusForInset(ui_theme::panelRadius(), 1.0f, 0.0f));
   jacketCard->addView(jacketView);
   startButton->setHeight(86);
   right->addView(jacketCard);
@@ -2071,15 +2121,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
   viewerButton->setContentView(viewerButtonText);
-  viewerButton->setBackgroundColors(
-      Color(31, 51, 74, 216), Color(43, 70, 100, 228),
-      Color(58, 93, 132, 236));
-  viewerButton->setBorderColors(Color(106, 153, 205, 255),
-                                Color(135, 181, 229, 255),
-                                Color(167, 209, 248, 255));
-  viewerButton->setStyledBorderWidth(2);
-  viewerButton->setOnClickListener(
-      [this]() { openChartViewerForSelection(); });
+  styleThemedActionButton(viewerButton, viewerButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
   auto *revealButton = new Button(0, 0, 105, 58);
@@ -2089,13 +2134,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
   revealButton->setContentView(revealButtonText);
-  revealButton->setBackgroundColors(
-      Color(31, 51, 74, 216), Color(43, 70, 100, 228),
-      Color(58, 93, 132, 236));
-  revealButton->setBorderColors(Color(106, 153, 205, 255),
-                                Color(135, 181, 229, 255),
-                                Color(167, 209, 248, 255));
-  revealButton->setStyledBorderWidth(2);
+  styleThemedActionButton(revealButton, revealButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
   revealButton->setOnClickListener(
       [this]() { revealSelectedChartInFileManager(); });
   chartActionsRow->addView(revealButton);
@@ -2117,12 +2158,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
-  settingsButton->setBackgroundColors(
-      kSecondaryButtonNormal, kSecondaryButtonHover, kSecondaryButtonPressed);
-  settingsButton->setBorderColors(Color(174, 124, 91, 255),
-                                  Color(207, 146, 105, 255),
-                                  Color(232, 169, 122, 255));
-  settingsButton->setStyledBorderWidth(2);
+  styleThemedActionButton(settingsButton, settingsText, true,
+                          ui_theme::dangerAction, ui_theme::dangerActionHover,
+                          ui_theme::dangerActionPressed,
+                          ui_theme::accentBorder);
   settingsButton->setOnClickListener([this, &context]() {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
@@ -2152,9 +2191,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     return;
   }
 
-  const float previousScrollOffset = preserveViewState
-                                         ? folderRecyclerView->scrollOffset
-                                         : 0.0f;
+  const float previousScrollOffset =
+      preserveViewState ? folderRecyclerView->scrollOffset : 0.0f;
   auto dbHelper = ChartDBHelper::GetInstance();
   std::vector<LibraryFolderItem> folders;
 
@@ -2280,10 +2318,10 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   folderRecyclerView->setItems(std::move(folders));
   folderRecyclerView->selectedIndex = activeIndex;
   if (preserveViewState) {
-    const float maxOffset = std::max(
-        0.0f, static_cast<float>(
-                  std::max(1, folderCount) * folderRecyclerView->itemHeight -
-                  folderRecyclerView->getHeight()));
+    const float maxOffset =
+        std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
+                                              folderRecyclerView->itemHeight -
+                                          folderRecyclerView->getHeight()));
     folderRecyclerView->scrollOffset =
         std::clamp(previousScrollOffset, 0.0f, maxOffset);
     folderRecyclerView->rebindVisibleItems();
@@ -2299,9 +2337,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     return;
   }
 
-  const float previousScrollOffset = preserveViewState
-                                         ? recyclerView->scrollOffset
-                                         : 0.0f;
+  const float previousScrollOffset =
+      preserveViewState ? recyclerView->scrollOffset : 0.0f;
   const int previousSelectedIndex =
       preserveViewState ? recyclerView->selectedIndex : -1;
   path_t previousSelectedPath;
@@ -2356,7 +2393,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
 
   const float maxOffset = std::max(
       0.0f, static_cast<float>(std::max(1, count) * recyclerView->itemHeight -
-                                recyclerView->getHeight()));
+                               recyclerView->getHeight()));
   recyclerView->scrollOffset =
       std::clamp(previousScrollOffset, 0.0f, maxOffset);
 
@@ -2490,8 +2527,8 @@ void MainMenuScene::selectChartByPathAfterReload(
     }
 
     const int previous = recyclerView->selectedIndex;
-    if (previous >= 0 && previous < recyclerView->size() &&
-        previous != i && recyclerView->onUnselected) {
+    if (previous >= 0 && previous < recyclerView->size() && previous != i &&
+        recyclerView->onUnselected) {
       recyclerView->onUnselected(recyclerView->get(previous), previous);
     }
     recyclerView->selectedIndex = i;
@@ -2500,10 +2537,10 @@ void MainMenuScene::selectChartByPathAfterReload(
     const float itemHeight = static_cast<float>(recyclerView->itemHeight);
     const float centeredOffset =
         selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-    const float maxOffset = std::max(
-        0.0f, static_cast<float>(
-                  std::max(1, recyclerView->size()) * recyclerView->itemHeight -
-                  recyclerView->getHeight()));
+    const float maxOffset =
+        std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
+                                              recyclerView->itemHeight -
+                                          recyclerView->getHeight()));
     recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
     recyclerView->rebindVisibleItems();
     suppressPreviewForChartPath = record.meta.BmsPath;
@@ -2562,18 +2599,14 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
       item.button->setBorderColors(Color(255, 255, 255, 220),
                                    Color(255, 255, 255, 240),
                                    Color(255, 255, 255, 255));
-      const bool darkText = item.autoShift || item.type == GaugeType::Hard ||
-                            item.type == GaugeType::ExHard;
-      item.text->setColor(darkText ? SDL_Color{14, 20, 28, 255}
-                                   : SDL_Color{255, 255, 255, 255});
+      item.text->setColor(ui_theme::sdl(ui_theme::textOn(accent)));
     } else {
-      item.button->setBackgroundColors(Color(20, 31, 47, 214),
-                                       Color(31, 48, 72, 226),
-                                       Color(44, 67, 99, 236));
-      item.button->setBorderColors(Color(76, 101, 130, 190),
-                                   Color(106, 134, 166, 220),
-                                   Color(134, 164, 198, 240));
-      item.text->setColor({216, 227, 241, 255});
+      item.button->setThemedBackgroundColors(
+          ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+      item.button->setThemedBorderColors(ui_theme::hairlineSubtle,
+                                         ui_theme::hairlineStrong,
+                                         ui_theme::accentBorder);
+      item.text->setThemedColor(ui_theme::textPrimary);
     }
   }
   refreshReadySettingsSummary();
@@ -2617,9 +2650,8 @@ void MainMenuScene::refreshReadySettingsSummary() {
 
 void MainMenuScene::startSelectedChart() {
   if (willStart.load() || unzipInProgress.load() ||
-      pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
-      recyclerView == nullptr) {
+      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
+      folderItemsReloadRequested.load() || recyclerView == nullptr) {
     return;
   }
 
@@ -2629,7 +2661,8 @@ void MainMenuScene::startSelectedChart() {
     return;
   }
   const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     return;
   }
   startChartDirect(record);
@@ -2640,7 +2673,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
     return;
   }
 
-  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     resetStartLoadingUi();
     return;
   }
@@ -2696,14 +2730,13 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         }
 
         selectedChartMediaReady.store(false);
+        selectedChartReusableForStart.store(false);
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> preparedChart;
         try {
-          preparedChart =
-              play_options::parseChart(record.meta.BmsPath,
-                                       chartRandomInfo.seed,
-                                       chartRandomInfo.prng,
-                                       chartRandomInfo.values, parseCancelled);
+          preparedChart = play_options::parseChart(
+              record.meta.BmsPath, chartRandomInfo.seed, chartRandomInfo.prng,
+              chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
@@ -2720,7 +2753,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           context.jukebox.loadChart(*preparedChart, true, parseCancelled);
           bms_parser::Chart *loadedChart = nullptr;
           if (!parseCancelled) {
-            loadedChart = setSelectedChart(std::move(preparedChart), true);
+            loadedChart = setSelectedChart(
+                std::move(preparedChart), true,
+                play_options::isNormalPlayOption(playOption));
           }
           if (parseCancelled) {
             preparedChart.reset();
@@ -2747,14 +2782,13 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         }
 
         context.jukebox.stop();
-        changeToGameplayScene(chart,
-                              {
-                                  .startPosition = 0,
-                                  .autoKeySound = autoKeySound,
-                                  .autoPlay = false,
-                                  .gaugeType = gaugeType,
-                                  .gaugeAutoShift = gaugeAutoShift,
-                              });
+        changeToGameplayScene(chart, {
+                                         .startPosition = 0,
+                                         .autoKeySound = autoKeySound,
+                                         .autoPlay = false,
+                                         .gaugeType = gaugeType,
+                                         .gaugeAutoShift = gaugeAutoShift,
+                                     });
         return finishStart();
       },
       0, true);
@@ -2763,8 +2797,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr) {
+      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      recyclerView == nullptr) {
     return;
   }
 
@@ -2774,7 +2808,8 @@ void MainMenuScene::openChartViewerForSelection() {
   }
 
   const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     return;
   }
   openChartViewerDirect(record);
@@ -2782,7 +2817,8 @@ void MainMenuScene::openChartViewerForSelection() {
 
 void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
   if (willStart.load() || replayExportInProgress.load() ||
-      record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+      record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     return;
   }
 
@@ -2798,9 +2834,9 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
   context.jukebox.stop();
   context.sceneManager->changeScene(
-      std::make_unique<ChartViewerScene>(
-          context, record, chartRandomInfo.seed, chartRandomInfo.prng,
-          chartRandomInfo.values),
+      std::make_unique<ChartViewerScene>(context, record, chartRandomInfo.seed,
+                                         chartRandomInfo.prng,
+                                         chartRandomInfo.values),
       true);
 }
 
@@ -2899,8 +2935,8 @@ void MainMenuScene::refreshUnzipButtonForSelection(
 void MainMenuScene::startUnzipSelectedArchiveFolder() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr) {
+      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      recyclerView == nullptr) {
     return;
   }
 
@@ -2994,11 +3030,11 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
 
     if (result.outputFolder.empty()) {
       result.success = false;
-      result.message = stopToken.stop_requested()
-                           ? "Unzip cancelled"
-                           : (errorMessage.empty()
-                                  ? "Unzip failed"
-                                  : "Unzip failed: " + errorMessage);
+      result.message =
+          stopToken.stop_requested()
+              ? "Unzip cancelled"
+              : (errorMessage.empty() ? "Unzip failed"
+                                      : "Unzip failed: " + errorMessage);
     } else if (stopToken.stop_requested()) {
       result.success = false;
       result.message = "Unzip cancelled";
@@ -3030,10 +3066,9 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
         }
 
         result.success = true;
-        result.message =
-            changedCount > 0
-                ? "Unzipped archive. Library refreshed."
-                : "Unzipped archive. Library already current.";
+        result.message = changedCount > 0
+                             ? "Unzipped archive. Library refreshed."
+                             : "Unzipped archive. Library already current.";
         if (!stopToken.stop_requested()) {
           requestLibraryReload(true);
         }
@@ -3053,9 +3088,8 @@ void MainMenuScene::buildUnzipProgressModal() {
   constexpr float kModalContentWidth =
       kModalPanelWidth - kModalPanelPadding * 2.0f;
 
-  unzipModalRoot =
-      new BlockingOverlayView(0, 0, rendering::window_width,
-                              rendering::window_height);
+  unzipModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                           rendering::window_height);
   unzipModalRoot->setPositionType(YGPositionTypeAbsolute);
   unzipModalRoot->setPosition(Edge::Left, 0);
   unzipModalRoot->setPosition(Edge::Top, 0);
@@ -3064,50 +3098,50 @@ void MainMenuScene::buildUnzipProgressModal() {
   unzipModalRoot->setFlexDirection(FlexDirection::Column);
   unzipModalRoot->setAlignItems(YGAlignCenter);
   unzipModalRoot->setJustifyContent(YGJustifyCenter);
-  unzipModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  unzipModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(Color(16, 25, 39, 244))
-      ->setBorderColor(Color(93, 123, 160, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   unzipModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   unzipModalTitleText->setText("Unzip");
-  unzipModalTitleText->setColor({245, 249, 255, 255});
+  unzipModalTitleText->setThemedColor(ui_theme::textPrimary);
   unzipModalTitleText->setHeight(42);
   panel->addView(unzipModalTitleText);
 
-  unzipProgressMessageText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  unzipProgressMessageText->setColor({222, 234, 247, 255});
+  unzipProgressMessageText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  unzipProgressMessageText->setThemedColor(ui_theme::textSecondary);
   unzipProgressMessageText->setHeight(32);
   panel->addView(unzipProgressMessageText);
 
   unzipProgressTrack = new View();
   unzipProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(Color(8, 14, 23, 230))
-      ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
+      ->setCornerRadius(ui_theme::controlRadius())
+      ->setThemedBorderColor(ui_theme::hairline)
+      ->setBorderWidth(1);
   unzipProgressFill = new View();
   unzipProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      Color(74, 157, 224, 240));
+      ui_theme::progressFill());
   unzipProgressTrack->addView(unzipProgressFill);
   panel->addView(unzipProgressTrack);
 
-  unzipProgressPercentText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  unzipProgressPercentText->setColor({173, 193, 216, 255});
+  unzipProgressPercentText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  unzipProgressPercentText->setThemedColor(ui_theme::textSecondary);
   unzipProgressPercentText->setHeight(28);
   panel->addView(unzipProgressPercentText);
 
-  unzipProgressDetailText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  unzipProgressDetailText->setColor({143, 161, 184, 255});
+  unzipProgressDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  unzipProgressDetailText->setThemedColor(ui_theme::textMuted);
   unzipProgressDetailText->setHeight(54);
   panel->addView(unzipProgressDetailText);
 
@@ -3196,8 +3230,7 @@ void MainMenuScene::updateUnzipProgressUi(double fraction,
     unzipProgressPercentText->setText(text.str());
   }
   if (unzipProgressDetailText != nullptr) {
-    std::string detail =
-        total > 0 ? "Processing files" : "Working on archive";
+    std::string detail = total > 0 ? "Processing files" : "Working on archive";
     if (unzipEstimatedUncompressedSize > 0) {
       detail += "\nEstimated unzipped size: " +
                 formatFindBmsBytes(unzipEstimatedUncompressedSize);
@@ -3311,11 +3344,11 @@ void MainMenuScene::applyUnzipResult() {
   }
   updateUnzipProgressUi(result->success ? 1.0 : 0.0, result->message, 0, 0);
   std::error_code archiveStateError;
-  const bool canDeleteArchive =
-      result->success && result->canDeleteArchive &&
-      !result->archivePath.empty() &&
-      std::filesystem::is_regular_file(result->archivePath, archiveStateError) &&
-      !archiveStateError;
+  const bool canDeleteArchive = result->success && result->canDeleteArchive &&
+                                !result->archivePath.empty() &&
+                                std::filesystem::is_regular_file(
+                                    result->archivePath, archiveStateError) &&
+                                !archiveStateError;
   if (canDeleteArchive) {
     unzipDeleteCandidatePath = result->archivePath;
     setUnzipDeleteArchiveButtonVisible(true);
@@ -3441,7 +3474,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->setFlexDirection(FlexDirection::Column);
   parseLogModalRoot->setAlignItems(YGAlignCenter);
   parseLogModalRoot->setJustifyContent(YGJustifyCenter);
-  parseLogModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  parseLogModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3450,13 +3483,15 @@ void MainMenuScene::buildParseLogModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(Color(13, 22, 35, 242))
-      ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Parsing Logs");
-  title->setColor({245, 249, 255, 255});
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -3464,9 +3499,10 @@ void MainMenuScene::buildParseLogModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 480);
   parseLogScrollView->setWidth(kModalContentWidth);
   parseLogScrollView->setFlex(1);
-  parseLogScrollView->setBackgroundColor(Color(7, 14, 24, 230));
-  parseLogScrollView->setBorderColor(Color(76, 105, 139, 255));
-  parseLogScrollView->setBorderWidth(2);
+  parseLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
+  parseLogScrollView->setCornerRadius(ui_theme::controlRadius());
+  parseLogScrollView->setThemedBorderColor(ui_theme::hairline);
+  parseLogScrollView->setBorderWidth(1);
 
   parseLogContent = new View();
   parseLogContent->setFlexDirection(FlexDirection::Column);
@@ -3475,7 +3511,7 @@ void MainMenuScene::buildParseLogModal() {
 
   parseLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   parseLogText->setText(archive_file::debugLogText());
-  parseLogText->setColor({181, 203, 225, 255});
+  parseLogText->setThemedColor(ui_theme::textSecondary);
   parseLogText->setWrap(true);
   parseLogText->setOverflow(TextView::TextOverflow::Visible);
   parseLogContent->addView(parseLogText);
@@ -3489,13 +3525,12 @@ void MainMenuScene::buildParseLogModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
-  parseLogCloseButton =
-      makeModalButton("Close", 20, &parseLogCloseButtonText);
+  parseLogCloseButton = makeModalButton("Close", 20, &parseLogCloseButtonText);
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
-  styleActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
-                    Color(38, 64, 95, 232), Color(50, 84, 123, 242),
-                    Color(64, 103, 148, 250), Color(116, 161, 210, 255));
+  styleThemedActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
 
   footer->addView(parseLogCloseButton);
   panel->addView(footer);
@@ -3561,7 +3596,7 @@ void MainMenuScene::buildTasksModal() {
   tasksModalRoot->setFlexDirection(FlexDirection::Column);
   tasksModalRoot->setAlignItems(YGAlignCenter);
   tasksModalRoot->setJustifyContent(YGJustifyCenter);
-  tasksModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  tasksModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3570,13 +3605,15 @@ void MainMenuScene::buildTasksModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(Color(13, 22, 35, 242))
-      ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Tasks");
-  title->setColor({245, 249, 255, 255});
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -3584,9 +3621,10 @@ void MainMenuScene::buildTasksModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
   tasksScrollView->setWidth(kModalContentWidth);
   tasksScrollView->setFlex(1);
-  tasksScrollView->setBackgroundColor(Color(7, 14, 24, 230));
-  tasksScrollView->setBorderColor(Color(76, 105, 139, 255));
-  tasksScrollView->setBorderWidth(2);
+  tasksScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
+  tasksScrollView->setCornerRadius(ui_theme::controlRadius());
+  tasksScrollView->setThemedBorderColor(ui_theme::hairline);
+  tasksScrollView->setBorderWidth(1);
 
   tasksContent = new View();
   tasksContent->setFlexDirection(FlexDirection::Column);
@@ -3595,7 +3633,7 @@ void MainMenuScene::buildTasksModal() {
 
   tasksText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   tasksText->setText(tasksModalTextSnapshot());
-  tasksText->setColor({205, 222, 241, 255});
+  tasksText->setThemedColor(ui_theme::textSecondary);
   tasksText->setWrap(true);
   tasksText->setOverflow(TextView::TextOverflow::Visible);
   tasksContent->addView(tasksText);
@@ -3617,16 +3655,17 @@ void MainMenuScene::buildTasksModal() {
     applyPendingUiUpdates();
     hideTasksModal();
   });
-  styleActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
-                    Color(38, 97, 87, 232), Color(50, 121, 109, 242),
-                    Color(65, 146, 130, 250), Color(112, 212, 191, 255));
+  styleThemedActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
 
   tasksCloseButton = makeModalButton("Close", 20, &tasksCloseButtonText);
   tasksCloseButton->setWidth(130);
   tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
-  styleActionButton(tasksCloseButton, tasksCloseButtonText, true,
-                    Color(38, 64, 95, 232), Color(50, 84, 123, 242),
-                    Color(64, 103, 148, 250), Color(116, 161, 210, 255));
+  styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
 
   footer->addView(tasksRefreshButton);
   footer->addView(tasksCloseButton);
@@ -3698,8 +3737,8 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   }
 
   std::ostringstream text;
-  text << activeTasks.size()
-       << (activeTasks.size() == 1 ? " task" : " tasks") << "\n\n";
+  text << activeTasks.size() << (activeTasks.size() == 1 ? " task" : " tasks")
+       << "\n\n";
   for (const auto &task : activeTasks) {
     std::string statusText;
     switch (task.status) {
@@ -3768,7 +3807,7 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsModalRoot->setFlexDirection(FlexDirection::Column);
   findBmsModalRoot->setAlignItems(YGAlignCenter);
   findBmsModalRoot->setJustifyContent(YGJustifyCenter);
-  findBmsModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  findBmsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -3777,19 +3816,21 @@ void MainMenuScene::buildFindBmsModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setBackgroundColor(Color(13, 22, 35, 242))
-      ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   findBmsModalTitleText->setText("Find BMS");
-  findBmsModalTitleText->setColor({245, 249, 255, 255});
+  findBmsModalTitleText->setThemedColor(ui_theme::textPrimary);
   findBmsModalTitleText->setHeight(42);
   panel->addView(findBmsModalTitleText);
 
   findBmsStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   findBmsStatusText->setText("Preparing lookup");
-  findBmsStatusText->setColor({235, 243, 252, 255});
+  findBmsStatusText->setThemedColor(ui_theme::textPrimary);
   findBmsStatusText->setWrap(true);
   findBmsStatusText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsStatusText->setHeight(58);
@@ -3797,7 +3838,7 @@ void MainMenuScene::buildFindBmsModal() {
 
   findBmsDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   findBmsDetailText->setText("");
-  findBmsDetailText->setColor({173, 193, 216, 255});
+  findBmsDetailText->setThemedColor(ui_theme::textSecondary);
   findBmsDetailText->setWrap(true);
   findBmsDetailText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsDetailText->setFlex(1);
@@ -3807,9 +3848,10 @@ void MainMenuScene::buildFindBmsModal() {
       new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 112);
   findBmsLogScrollView->setWidth(kModalContentWidth);
   findBmsLogScrollView->setHeight(112);
-  findBmsLogScrollView->setBackgroundColor(Color(7, 14, 24, 210));
-  findBmsLogScrollView->setBorderColor(Color(76, 105, 139, 255));
-  findBmsLogScrollView->setBorderWidth(2);
+  findBmsLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
+  findBmsLogScrollView->setCornerRadius(ui_theme::controlRadius());
+  findBmsLogScrollView->setThemedBorderColor(ui_theme::hairline);
+  findBmsLogScrollView->setBorderWidth(1);
 
   findBmsLogContent = new View();
   findBmsLogContent->setFlexDirection(FlexDirection::Column);
@@ -3818,7 +3860,7 @@ void MainMenuScene::buildFindBmsModal() {
 
   findBmsLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   findBmsLogText->setText("Preparing lookup");
-  findBmsLogText->setColor({150, 173, 197, 255});
+  findBmsLogText->setThemedColor(ui_theme::textSecondary);
   findBmsLogText->setWrap(true);
   findBmsLogText->setOverflow(TextView::TextOverflow::Visible);
   findBmsLogContent->addView(findBmsLogText);
@@ -3833,37 +3875,39 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsCandidateRecyclerView->reserveScrollbarGutter = true;
   findBmsCandidateRecyclerView->setWidth(kModalContentWidth);
   findBmsCandidateRecyclerView->setHeight(0);
-  findBmsCandidateRecyclerView->setBackgroundColor(Color(7, 14, 24, 210));
-  findBmsCandidateRecyclerView->setBorderColor(Color(76, 105, 139, 255));
-  findBmsCandidateRecyclerView->setBorderWidth(2);
+  findBmsCandidateRecyclerView->setThemedBackgroundColor(
+      ui_theme::insetSurface);
+  findBmsCandidateRecyclerView->setCornerRadius(ui_theme::controlRadius());
+  findBmsCandidateRecyclerView->setThemedBorderColor(ui_theme::hairline);
+  findBmsCandidateRecyclerView->setBorderWidth(1);
   findBmsCandidateRecyclerView->setVisible(false);
   findBmsCandidateRecyclerView->onCreateView = [](const BmsSearchCandidate &) {
     return new FindBmsCandidateItemView();
   };
-  findBmsCandidateRecyclerView->onBind =
-      [](View *view, const BmsSearchCandidate &candidate, int idx,
-         bool isSelected) {
-        auto *itemView = dynamic_cast<FindBmsCandidateItemView *>(view);
-        if (itemView != nullptr) {
-          itemView->setCandidate(candidate, static_cast<size_t>(idx),
-                                 isSelected);
-        }
-      };
-  findBmsCandidateRecyclerView->onSelected =
-      [this](const BmsSearchCandidate &, int idx) {
-        startFindBmsCandidateDownload(static_cast<size_t>(idx));
-      };
+  findBmsCandidateRecyclerView->onBind = [](View *view,
+                                            const BmsSearchCandidate &candidate,
+                                            int idx, bool isSelected) {
+    auto *itemView = dynamic_cast<FindBmsCandidateItemView *>(view);
+    if (itemView != nullptr) {
+      itemView->setCandidate(candidate, static_cast<size_t>(idx), isSelected);
+    }
+  };
+  findBmsCandidateRecyclerView->onSelected = [this](const BmsSearchCandidate &,
+                                                    int idx) {
+    startFindBmsCandidateDownload(static_cast<size_t>(idx));
+  };
   panel->addView(findBmsCandidateRecyclerView);
 
   findBmsProgressTrack = new View();
   findBmsProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(Color(8, 14, 23, 230))
-      ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
+      ->setCornerRadius(ui_theme::controlRadius())
+      ->setThemedBorderColor(ui_theme::hairline)
+      ->setBorderWidth(1);
   findBmsProgressFill = new View();
   findBmsProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      Color(62, 168, 145, 240));
+      ui_theme::progressFill());
   findBmsProgressTrack->addView(findBmsProgressFill);
   panel->addView(findBmsProgressTrack);
 
@@ -3902,9 +3946,8 @@ void MainMenuScene::buildFindBmsModal() {
     openFindBmsResultUrl(url);
   });
   findBmsGoogleButton->setOnClickListener([this]() {
-    openFindBmsResultUrl(
-        BmsSearchService::searchUrlForText(findBmsTitleSearchQuery(
-            findBmsModalChart)));
+    openFindBmsResultUrl(BmsSearchService::searchUrlForText(
+        findBmsTitleSearchQuery(findBmsModalChart)));
   });
   findBmsRefreshButton->setOnClickListener([this]() {
     startLibraryRefresh();
@@ -4023,9 +4066,9 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
     if (stopToken.stop_requested()) {
       findBmsCancelled = true;
     }
-    auto result = service.downloadCandidate(
-        candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
-        findBmsCancelled, progressCallback);
+    auto result = service.downloadCandidate(candidate, record.meta.SHA256,
+                                            record.meta.MD5, downloadRoot,
+                                            findBmsCancelled, progressCallback);
     {
       std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
       pendingFindBmsResult = std::move(result);
@@ -4066,8 +4109,8 @@ void MainMenuScene::refreshFindBmsModal() {
         (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
          findBmsResult.status == BmsSearchResult::Status::HashMismatch ||
          findBmsResult.status == BmsSearchResult::Status::NotFound);
-    findBmsStatusText->setColor(failed ? SDL_Color{255, 177, 170, 255}
-                                       : SDL_Color{235, 243, 252, 255});
+    findBmsStatusText->setColor(
+        ui_theme::sdl(failed ? ui_theme::coral() : ui_theme::textPrimary()));
   }
 
   const bool showCandidateList =
@@ -4080,12 +4123,11 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += findBmsModalChart.meta.Title + "\n";
   }
   if (!findBmsModalChart.meta.SHA256.empty()) {
-    detail += "SHA256: " + compactHashForModal(findBmsModalChart.meta.SHA256) +
-              "\n";
+    detail +=
+        "SHA256: " + compactHashForModal(findBmsModalChart.meta.SHA256) + "\n";
   }
   if (!findBmsModalChart.meta.MD5.empty()) {
-    detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) +
-              "\n";
+    detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) + "\n";
   }
   if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
     detail += "Saved to " +
@@ -4106,12 +4148,11 @@ void MainMenuScene::refreshFindBmsModal() {
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NotFound) {
     const bool hasSha = !findBmsModalChart.meta.SHA256.empty();
-    detail += hasSha
-                  ? "No matching BMS Search page was available. Search by title."
-                  : "Horie did not find a matching song. Search by title.";
-  } else if (!running &&
-             findBmsResult.status ==
-                 BmsSearchResult::Status::AmbiguousCandidates) {
+    detail +=
+        hasSha ? "No matching BMS Search page was available. Search by title."
+               : "Horie did not find a matching song. Search by title.";
+  } else if (!running && findBmsResult.status ==
+                             BmsSearchResult::Status::AmbiguousCandidates) {
     detail += "Horie found multiple matching archives. Choose one archive to "
               "download.";
     if (!findBmsResult.candidates.empty() &&
@@ -4199,11 +4240,10 @@ void MainMenuScene::refreshFindBmsModal() {
       findBmsResult.status != BmsSearchResult::Status::Downloaded &&
       findBmsResult.status != BmsSearchResult::Status::NotFound;
   const bool hasSearchAction =
-      !downloaded &&
-      (!findBmsModalChart.meta.SHA256.empty() ||
-       !findBmsModalChart.meta.MD5.empty() ||
-       !findBmsModalChart.meta.Title.empty() ||
-       !findBmsModalChart.meta.Artist.empty());
+      !downloaded && (!findBmsModalChart.meta.SHA256.empty() ||
+                      !findBmsModalChart.meta.MD5.empty() ||
+                      !findBmsModalChart.meta.Title.empty() ||
+                      !findBmsModalChart.meta.Artist.empty());
   const bool hasRefreshAction = !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
     findBmsCloseButtonText->setText(running ? "Cancel" : "Close");
@@ -4217,8 +4257,7 @@ void MainMenuScene::refreshFindBmsModal() {
         manualSourceUrl.find("bmssearch.net") != std::string::npos;
     findBmsOpenButtonText->setText(
         downloadSource ? "Open Download"
-                       : (bmsSearchSource ? "Open BMS Search"
-                                          : "Open Source"));
+                       : (bmsSearchSource ? "Open BMS Search" : "Open Source"));
   }
   if (findBmsOpenButton != nullptr) {
     findBmsOpenButton->setVisible(!running && hasSource);
@@ -4234,21 +4273,21 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsRefreshButton->setWidth(hasRefreshAction ? 150.0f : 0.0f);
   }
 
-  styleActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
-                    Color(47, 54, 70, 220), Color(62, 72, 92, 232),
-                    Color(78, 90, 114, 242), Color(118, 137, 160, 220));
-  styleActionButton(findBmsOpenButton, findBmsOpenButtonText,
-                    !running && hasSource, Color(29, 73, 120, 224),
-                    Color(40, 96, 156, 236), Color(58, 129, 204, 246),
-                    Color(105, 162, 222, 255));
-  styleActionButton(findBmsGoogleButton, findBmsGoogleButtonText,
-                    !running && hasSearchAction, Color(47, 54, 88, 224),
-                    Color(65, 75, 119, 236), Color(82, 94, 148, 246),
-                    Color(126, 141, 219, 255));
-  styleActionButton(findBmsRefreshButton, findBmsRefreshButtonText,
-                    hasRefreshAction, Color(38, 97, 87, 232),
-                    Color(50, 121, 109, 242), Color(65, 146, 130, 250),
-                    Color(112, 212, 191, 255));
+  styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(findBmsOpenButton, findBmsOpenButtonText,
+                          !running && hasSource, ui_theme::infoAction,
+                          ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(
+      findBmsGoogleButton, findBmsGoogleButtonText, !running && hasSearchAction,
+      ui_theme::violetAction, ui_theme::violetActionHover,
+      ui_theme::violetActionPressed, ui_theme::violetActionHover);
+  styleThemedActionButton(
+      findBmsRefreshButton, findBmsRefreshButtonText, hasRefreshAction,
+      ui_theme::successAction, ui_theme::successActionHover,
+      ui_theme::successActionPressed, ui_theme::accentBorder);
   findBmsModalRoot->applyYogaLayout();
 }
 
@@ -4339,7 +4378,7 @@ void MainMenuScene::buildPlayOptionsModal() {
   playOptionsModalRoot->setFlexDirection(FlexDirection::Column);
   playOptionsModalRoot->setAlignItems(YGAlignCenter);
   playOptionsModalRoot->setJustifyContent(YGJustifyCenter);
-  playOptionsModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  playOptionsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -4348,13 +4387,15 @@ void MainMenuScene::buildPlayOptionsModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, 22)
-      ->setBackgroundColor(Color(13, 22, 35, 242))
-      ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   title->setText("Play Options");
-  title->setColor({245, 249, 255, 255});
+  title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
 
@@ -4431,9 +4472,9 @@ void MainMenuScene::buildPlayOptionsModal() {
   rootLayout->addView(playOptionsModalRoot);
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
-  styleActionButton(playOptionsCloseButton, playOptionsCloseButtonText, true,
-                    Color(47, 54, 70, 220), Color(62, 72, 92, 232),
-                    Color(78, 90, 114, 242), Color(118, 137, 160, 220));
+  styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
+                          true, ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
 }
 
 void MainMenuScene::showPlayOptionsModal() {
@@ -4477,7 +4518,7 @@ void MainMenuScene::buildReplayModal() {
   replayModalRoot->setFlexDirection(FlexDirection::Column);
   replayModalRoot->setAlignItems(YGAlignCenter);
   replayModalRoot->setJustifyContent(YGJustifyCenter);
-  replayModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  replayModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
@@ -4486,13 +4527,15 @@ void MainMenuScene::buildReplayModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, 22)
-      ->setBackgroundColor(Color(13, 22, 35, 242))
-      ->setBorderColor(Color(86, 118, 153, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
 
   replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
   replayModalTitleText->setText("Replay");
-  replayModalTitleText->setColor({245, 249, 255, 255});
+  replayModalTitleText->setThemedColor(ui_theme::textPrimary);
   replayModalTitleText->setHeight(42);
   panel->addView(replayModalTitleText);
 
@@ -4518,8 +4561,8 @@ void MainMenuScene::buildReplayModal() {
   };
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
-  replayListView->setBorderColor(Color(55, 76, 102, 255));
-  replayListView->setBorderWidth(2);
+  replayListView->setThemedBorderColor(ui_theme::hairline);
+  replayListView->setBorderWidth(1);
   replayListContent->addView(replayListView);
   replayModalContentFrame->addView(replayListContent);
 
@@ -4601,26 +4644,29 @@ void MainMenuScene::buildReplayModal() {
   replayExportProgressMessageText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   replayExportProgressMessageText->setText("Preparing export");
-  replayExportProgressMessageText->setColor({235, 243, 252, 255});
+  replayExportProgressMessageText->setColor(
+      ui_theme::sdl(ui_theme::textPrimary()));
   replayExportProgressMessageText->setHeight(38);
   replayExportProgressContent->addView(replayExportProgressMessageText);
 
   replayExportProgressTrack = new View();
   replayExportProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setBackgroundColor(Color(8, 14, 23, 230))
-      ->setBorderColor(Color(74, 101, 132, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::progressTrack)
+      ->setCornerRadius(ui_theme::controlRadius())
+      ->setThemedBorderColor(ui_theme::hairline)
+      ->setBorderWidth(1);
   replayExportProgressFill = new View();
   replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      Color(62, 168, 145, 240));
+      ui_theme::progressFill());
   replayExportProgressTrack->addView(replayExportProgressFill);
   replayExportProgressContent->addView(replayExportProgressTrack);
 
   replayExportProgressPercentText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   replayExportProgressPercentText->setText("0%");
-  replayExportProgressPercentText->setColor({173, 193, 216, 255});
+  replayExportProgressPercentText->setColor(
+      ui_theme::sdl(ui_theme::textSecondary()));
   replayExportProgressPercentText->setHeight(34);
   replayExportProgressPercentText->setAlign(TextView::RIGHT);
   replayExportProgressContent->addView(replayExportProgressPercentText);
@@ -4807,19 +4853,20 @@ void MainMenuScene::refreshReplayModalActions() {
     replayModalExportButton->setWidth(progressMode ? 0.0f : 160.0f);
   }
 
-  styleActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                    !exportInProgress, Color(47, 54, 70, 220),
-                    Color(62, 72, 92, 232), Color(78, 90, 114, 242),
-                    Color(118, 137, 160, 220));
-  styleActionButton(replayWatchButton, replayWatchButtonText,
-                    hasSelection && !optionsMode && !progressMode &&
-                        !exportInProgress,
-                    Color(29, 73, 120, 224), Color(40, 96, 156, 236),
-                    Color(58, 129, 204, 246), Color(105, 162, 222, 255));
-  styleActionButton(replayModalExportButton, replayModalExportButtonText,
-                    hasSelection && !progressMode && !exportInProgress,
-                    Color(47, 54, 88, 224), Color(65, 75, 119, 236),
-                    Color(82, 94, 148, 246), Color(126, 141, 219, 255));
+  styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
+                          !exportInProgress, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  styleThemedActionButton(replayWatchButton, replayWatchButtonText,
+                          hasSelection && !optionsMode && !progressMode &&
+                              !exportInProgress,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
+                          hasSelection && !progressMode && !exportInProgress,
+                          ui_theme::violetAction, ui_theme::violetActionHover,
+                          ui_theme::violetActionPressed,
+                          ui_theme::violetActionHover);
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayout();
@@ -4900,7 +4947,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return failReplayLoad();
         }
 
-        auto *chart = setSelectedChart(std::move(replayChart), true);
+        auto *chart = setSelectedChart(std::move(replayChart), true, false);
         if (chart == nullptr) {
           return failReplayLoad();
         }
@@ -4926,7 +4973,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
 
 bms_parser::Chart *
 MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
-                                bool mediaReady) {
+                                bool mediaReady, bool reusableForStart) {
   bms_parser::Chart *raw = chart.get();
   std::unique_ptr<bms_parser::Chart> previous;
   {
@@ -4934,6 +4981,7 @@ MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
     previous = std::move(selectedChart);
     selectedChart = std::move(chart);
     selectedChartMediaReady.store(mediaReady);
+    selectedChartReusableForStart.store(reusableForStart);
   }
   return raw;
 }
@@ -4944,6 +4992,7 @@ void MainMenuScene::clearSelectedChart() {
     std::lock_guard<std::mutex> lock(selectedChartMutex);
     previous = std::move(selectedChart);
     selectedChartMediaReady.store(false);
+    selectedChartReusableForStart.store(false);
   }
 }
 
@@ -4957,7 +5006,7 @@ MainMenuScene::selectedChartRandomInfoForPath(
     const std::filesystem::path &path) const {
   SelectedChartRandomInfo info;
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (selectedChart == nullptr ||
+  if (!selectedChartReusableForStart.load() || selectedChart == nullptr ||
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return info;
   }
@@ -4972,7 +5021,8 @@ MainMenuScene::selectedChartRandomInfoForPath(
 bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
     const std::filesystem::path &path) const {
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (!selectedChartMediaReady.load() || selectedChart == nullptr ||
+  if (!selectedChartMediaReady.load() || !selectedChartReusableForStart.load() ||
+      selectedChart == nullptr ||
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
@@ -5013,6 +5063,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   willStart.store(true);
   previewLoadCancelled = true;
   selectedChartMediaReady.store(false);
+  selectedChartReusableForStart.store(false);
   {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress.reset();
@@ -5247,6 +5298,7 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
+  context.requestAddChartFolderFromFiles = nullptr;
   libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
@@ -5407,12 +5459,14 @@ void MainMenuScene::cleanupScene() {
   libraryProgressCurrent.store(0, std::memory_order_relaxed);
   libraryProgressTotal.store(0, std::memory_order_relaxed);
   libraryProgressBasisPoints.store(0, std::memory_order_relaxed);
-  libraryProgressStage.store(static_cast<int>(ChartScanProgressStage::Preparing),
-                             std::memory_order_relaxed);
+  libraryProgressStage.store(
+      static_cast<int>(ChartScanProgressStage::Preparing),
+      std::memory_order_relaxed);
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   displayedLibraryTasksButtonText.clear();
   selectedChartMediaReady.store(false);
+  selectedChartReusableForStart.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;
@@ -5452,15 +5506,12 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
   }
 
   SDL_Log("Refreshing chart library");
-  const int changedCount =
-      dbHelper.ScanChartRoots(db, roots, &stop_token, progressCallback,
-                              pauseCallback,
-                              [&scene]() {
-                                return scene.pendingLibraryScanFlushRequest();
-                              },
-                              [&scene](std::uint64_t request) {
-                                scene.completeLibraryScanFlush(request);
-                              });
+  const int changedCount = dbHelper.ScanChartRoots(
+      db, roots, &stop_token, progressCallback, pauseCallback,
+      [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
+      [&scene](std::uint64_t request) {
+        scene.completeLibraryScanFlush(request);
+      });
   SDL_Log("Chart library refresh changed %d entries", changedCount);
   if (changedCount > 0) {
     scene.requestLibraryReload(true);
@@ -5579,8 +5630,8 @@ void MainMenuScene::FindFilesIOS(
     return;
   }
 
-  for (const auto end = std::filesystem::directory_iterator();
-       iterator != end; iterator.increment(error)) {
+  for (const auto end = std::filesystem::directory_iterator(); iterator != end;
+       iterator.increment(error)) {
     if (stop_token.stop_requested()) {
       break;
     }
@@ -5595,10 +5646,9 @@ void MainMenuScene::FindFilesIOS(
     std::error_code typeError;
     if (entry.is_regular_file(typeError)) {
       std::string ext = entry.path().extension().string();
-      std::transform(ext.begin(), ext.end(), ext.begin(),
-                     [](unsigned char c) {
-                       return static_cast<char>(std::tolower(c));
-                     });
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
       if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
         if (oldFilesWs.find(fspath_to_path_t(entry.path())) ==
             oldFilesWs.end()) {

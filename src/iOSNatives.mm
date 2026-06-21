@@ -8,6 +8,7 @@
 #include <CoreVideo/CoreVideo.h>
 #include <Foundation/Foundation.h>
 #include <Photos/Photos.h>
+#include <QuartzCore/CAMetalLayer.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
@@ -97,6 +98,46 @@ UIWindow *FindActiveWindow() {
     }
   }
   return UIApplication.sharedApplication.keyWindow;
+}
+
+int RoundedCGFloat(CGFloat value) {
+  return static_cast<int>(std::lround(static_cast<double>(value)));
+}
+
+void OrientSizeToMatch(int &width, int &height, int referenceWidth,
+                       int referenceHeight) {
+  const bool candidateLandscape = width >= height;
+  const bool referenceLandscape = referenceWidth >= referenceHeight;
+  if (candidateLandscape != referenceLandscape) {
+    std::swap(width, height);
+  }
+}
+
+bool SimilarAspect(int width, int height, int referenceWidth,
+                   int referenceHeight) {
+  if (width <= 0 || height <= 0 || referenceWidth <= 0 || referenceHeight <= 0) {
+    return false;
+  }
+  const double aspect = static_cast<double>(width) / static_cast<double>(height);
+  const double referenceAspect =
+      static_cast<double>(referenceWidth) / static_cast<double>(referenceHeight);
+  return std::abs(aspect - referenceAspect) <= referenceAspect * 0.02;
+}
+
+void ConsiderDrawableCandidate(int candidateWidth, int candidateHeight,
+                               int referenceWidth, int referenceHeight,
+                               int &bestWidth, int &bestHeight) {
+  OrientSizeToMatch(candidateWidth, candidateHeight, referenceWidth,
+                    referenceHeight);
+  if (!SimilarAspect(candidateWidth, candidateHeight, referenceWidth,
+                     referenceHeight)) {
+    return;
+  }
+  if (candidateWidth <= bestWidth + 8 || candidateHeight <= bestHeight + 8) {
+    return;
+  }
+  bestWidth = candidateWidth;
+  bestHeight = candidateHeight;
 }
 
 UIViewController *TopViewController(UIViewController *viewController) {
@@ -1948,6 +1989,111 @@ void CancelIOSReplayVideoWriter(void *writer) {
   auto *iosWriter = static_cast<IOSReplayVideoWriter *>(writer);
   iosWriter->cancel();
   delete iosWriter;
+}
+
+bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
+                                           int logicalWidth, int logicalHeight,
+                                           int &preferredWidth,
+                                           int &preferredHeight) {
+  @autoreleasepool {
+    preferredWidth = 0;
+    preferredHeight = 0;
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) {
+      return false;
+    }
+    UIScreen *screen = window.screen;
+    if (screen == nil) {
+      screen = UIScreen.mainScreen;
+    }
+    if (screen == nil) {
+      return false;
+    }
+
+    const CGRect windowBounds = window.bounds;
+    const CGRect screenBounds = screen.bounds;
+    const int windowPointW = RoundedCGFloat(windowBounds.size.width);
+    const int windowPointH = RoundedCGFloat(windowBounds.size.height);
+    int screenPointW = RoundedCGFloat(screenBounds.size.width);
+    int screenPointH = RoundedCGFloat(screenBounds.size.height);
+    OrientSizeToMatch(screenPointW, screenPointH, windowPointW, windowPointH);
+    if (std::abs(windowPointW - screenPointW) > 4 ||
+        std::abs(windowPointH - screenPointH) > 4) {
+      return false;
+    }
+    if (!SimilarAspect(windowPointW, windowPointH, screenPointW, screenPointH)) {
+      return false;
+    }
+
+    int referenceWidth = currentWidth > 0 ? currentWidth : logicalWidth;
+    int referenceHeight = currentHeight > 0 ? currentHeight : logicalHeight;
+    if (referenceWidth <= 0 || referenceHeight <= 0) {
+      return false;
+    }
+
+    int bestWidth = currentWidth;
+    int bestHeight = currentHeight;
+    if (bestWidth <= 0 || bestHeight <= 0) {
+      bestWidth = logicalWidth;
+      bestHeight = logicalHeight;
+    }
+
+    if (screen.currentMode != nil) {
+      const CGSize modeSize = screen.currentMode.size;
+      ConsiderDrawableCandidate(RoundedCGFloat(modeSize.width),
+                                RoundedCGFloat(modeSize.height),
+                                referenceWidth, referenceHeight, bestWidth,
+                                bestHeight);
+    }
+
+    const CGRect nativeBounds = screen.nativeBounds;
+    ConsiderDrawableCandidate(RoundedCGFloat(nativeBounds.size.width),
+                              RoundedCGFloat(nativeBounds.size.height),
+                              referenceWidth, referenceHeight, bestWidth,
+                              bestHeight);
+    ConsiderDrawableCandidate(
+        RoundedCGFloat(screenBounds.size.width * screen.scale),
+        RoundedCGFloat(screenBounds.size.height * screen.scale), referenceWidth,
+        referenceHeight, bestWidth, bestHeight);
+    ConsiderDrawableCandidate(
+        RoundedCGFloat(screenBounds.size.width * screen.nativeScale),
+        RoundedCGFloat(screenBounds.size.height * screen.nativeScale),
+        referenceWidth, referenceHeight, bestWidth, bestHeight);
+
+    if (bestWidth <= currentWidth + 8 || bestHeight <= currentHeight + 8) {
+      return false;
+    }
+
+    preferredWidth = bestWidth;
+    preferredHeight = bestHeight;
+    return true;
+  }
+}
+
+bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
+  @autoreleasepool {
+    if (metalLayer == nullptr || width <= 0 || height <= 0) {
+      return false;
+    }
+    id layerObject = (__bridge id)metalLayer;
+    if (![layerObject isKindOfClass:[CAMetalLayer class]]) {
+      return false;
+    }
+
+    CAMetalLayer *layer = (CAMetalLayer *)layerObject;
+    const CGSize boundsSize = layer.bounds.size;
+    if (boundsSize.width > 0.0 && boundsSize.height > 0.0) {
+      const CGFloat scaleX = static_cast<CGFloat>(width) / boundsSize.width;
+      const CGFloat scaleY = static_cast<CGFloat>(height) / boundsSize.height;
+      const CGFloat maxScale = std::max(scaleX, scaleY);
+      if (maxScale > 0.0 &&
+          std::abs(scaleX - scaleY) <= maxScale * static_cast<CGFloat>(0.02)) {
+        layer.contentsScale = (scaleX + scaleY) * static_cast<CGFloat>(0.5);
+      }
+    }
+    layer.drawableSize = CGSizeMake(width, height);
+    return true;
+  }
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

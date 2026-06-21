@@ -26,6 +26,14 @@
 - To change parser behavior, edit `../bms-parser-cpp`, run `make clean && make test && make test_amalgamation` there, then copy `../bms-parser-cpp/build/bms_parser.hpp` and `../bms-parser-cpp/build/bms_parser.cpp` into `src/`.
 - Commit and push the parser repo when parser behavior changes.
 
+## Shader Compilation
+
+- Shader sources live under `shader_src/` and are compiled by `shader_src/make.py`.
+- The local bgfx shader compiler is:
+  `bgfx/bgfx/.build/osx-arm64/bin/shadercRelease`
+- To compile shaders from this machine, run:
+  `cd shader_src && SHADERC=../bgfx/bgfx/.build/osx-arm64/bin/shadercRelease python3 make.py`
+
 ## Local Build Verification
 
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:

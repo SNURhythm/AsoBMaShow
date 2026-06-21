@@ -1,15 +1,16 @@
 #include "ReplayVideoExporter.h"
 
 #include "ArchiveFile.h"
+#include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "Utils.h"
 #include "audio/decoder.h"
+#include "main.h"
 #include "path.h"
 #include "rendering/BlurPass.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
-#include "scene/play/GameplayGeometry.h"
 #include "scene/play/Judge.h"
 #include "targets.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -56,6 +57,7 @@ extern "C" {
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -75,6 +77,15 @@ struct AudioEvent {
 struct DecodedSound {
   std::vector<short> pcm;
   SF_INFO info{};
+};
+
+using DecodedSoundCache =
+    std::unordered_map<int, std::shared_ptr<DecodedSound>>;
+
+struct ReplayArchiveAudioBatch {
+  std::filesystem::path archivePath;
+  std::vector<std::filesystem::path> innerPaths;
+  std::unordered_map<path_t, std::vector<int>> wavIdsByPath;
 };
 
 int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
@@ -270,6 +281,54 @@ void reportReplayExportProgress(const ReplayVideoExportOptions &options,
                             .frameCount = frameCount});
 }
 
+struct ReplayVideoRenderGeometryState {
+  int windowWidth = rendering::window_width;
+  int windowHeight = rendering::window_height;
+  int renderWidth = rendering::render_width;
+  int renderHeight = rendering::render_height;
+  float uiScaleX = rendering::ui_scale_x;
+  float uiScaleY = rendering::ui_scale_y;
+  int uiOffsetX = rendering::ui_offset_x;
+  int uiOffsetY = rendering::ui_offset_y;
+  int uiViewWidth = rendering::ui_view_width;
+  int uiViewHeight = rendering::ui_view_height;
+};
+
+void restoreReplayVideoRenderGeometry(
+    const ReplayVideoRenderGeometryState &state) {
+  rendering::window_width = state.windowWidth;
+  rendering::window_height = state.windowHeight;
+  rendering::render_width = state.renderWidth;
+  rendering::render_height = state.renderHeight;
+  rendering::ui_scale_x = state.uiScaleX;
+  rendering::ui_scale_y = state.uiScaleY;
+  rendering::ui_offset_x = state.uiOffsetX;
+  rendering::ui_offset_y = state.uiOffsetY;
+  rendering::ui_view_width = state.uiViewWidth;
+  rendering::ui_view_height = state.uiViewHeight;
+}
+
+class ScopedReplayVideoRenderGeometry {
+public:
+  ScopedReplayVideoRenderGeometry(int exportWidth, int exportHeight)
+      : exportWidth(exportWidth), exportHeight(exportHeight) {}
+
+  ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
+
+  void applyExport() {
+    rendering::updateUIScale(exportWidth, exportHeight);
+  }
+
+  void restorePrimary() {
+    restoreReplayVideoRenderGeometry(primary);
+  }
+
+private:
+  ReplayVideoRenderGeometryState primary;
+  int exportWidth = 0;
+  int exportHeight = 0;
+};
+
 void restorePrimaryRenderViews(ApplicationContext *context = nullptr) {
   for (const auto view : rendering::kGameplayOutputViews) {
     bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
@@ -331,40 +390,12 @@ void configureReplayExportRenderViews(int width, int height,
 
   for (const auto view : rendering::kGameplayOutputViews) {
     bgfx::setViewFrameBuffer(view, outputFrameBuffer);
-    bgfx::setViewRect(view, 0, 0, exportWidth, exportHeight);
   }
   bgfx::setViewFrameBuffer(rendering::readback_view, BGFX_INVALID_HANDLE);
+  resetViewTransform(bgaBlurPass.sceneWidth(), bgaBlurPass.sceneHeight(),
+                     rendering::blur_view_h, rendering::blur_view_v,
+                     rendering::final_view, settings);
   bgfx::setViewRect(rendering::readback_view, 0, 0, exportWidth, exportHeight);
-  bgfx::setViewRect(rendering::bga_view, 0, 0, bgaBlurPass.sceneWidth(),
-                    bgaBlurPass.sceneHeight());
-  bgfx::setViewRect(rendering::bga_layer_view, 0, 0, bgaBlurPass.sceneWidth(),
-                    bgaBlurPass.sceneHeight());
-
-  float ortho[16];
-  bx::mtxOrtho(ortho, 0.0f, rendering::window_width, rendering::window_height,
-               0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
-  for (const auto view : rendering::kGameplayOrthographicOutputViews) {
-    bgfx::setViewTransform(view, nullptr, ortho);
-  }
-  bgfx::setViewTransform(rendering::bga_view, nullptr, ortho);
-  bgfx::setViewTransform(rendering::bga_layer_view, nullptr, ortho);
-
-  constexpr float kCameraDepth = 2.1f;
-  const float laneLookAtY = settings.laneLength * 0.25f;
-  const float laneAngleRad = bx::toRad(settings.laneAngleDegrees);
-  const bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY,
-                       0.0f};
-  const bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
-                        laneLookAtY - std::tan(laneAngleRad) * kCameraDepth,
-                        -kCameraDepth};
-  const float aspect = static_cast<float>(width) / static_cast<float>(height);
-  rendering::game_camera.edit()
-      .setPosition(eye)
-      .setLookAt(at)
-      .setAspectRatio(aspect)
-      .setViewRect(0, 0, exportWidth, exportHeight)
-      .commit();
-  rendering::game_camera.render(true);
 
   rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
                             rendering::final_view);
@@ -501,6 +532,79 @@ resolveSoundPath(const bms_parser::Chart &chart, int wav) {
   return archive_file::findFileWithExtensions(basePath, extensions);
 }
 
+std::string replayExportPlayOptionLabel(const ReplayData &replay) {
+  const std::string label = play_options::formatPlayOptionLabel(
+      replay.playOption, replay.playOptionSeed, replay.playOption2,
+      replay.playOption2Seed);
+  return label.empty() ? "" : "Option: " + label;
+}
+
+std::optional<archive_file::EntryRange>
+entryRangeForReplayChartArchive(const bms_parser::Chart &chart,
+                                const std::filesystem::path &archivePath) {
+  std::filesystem::path chartArchivePath;
+  std::filesystem::path chartInnerPath;
+  if (!archive_file::splitVirtualPath(chart.Meta.BmsPath, chartArchivePath,
+                                      chartInnerPath)) {
+    return std::nullopt;
+  }
+  if (fspath_to_path_t(chartArchivePath.lexically_normal()) !=
+      fspath_to_path_t(archivePath.lexically_normal())) {
+    return std::nullopt;
+  }
+  return archive_file::entryRangeForFolder(chart.Meta.Folder);
+}
+
+bool addReplayArchiveAudioTarget(
+    std::unordered_map<path_t, ReplayArchiveAudioBatch> &batches,
+    std::vector<path_t> &batchOrder, const std::filesystem::path &path,
+    int wav) {
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!archive_file::splitVirtualPath(path, archivePath, innerPath)) {
+    return false;
+  }
+
+  const path_t archiveKey = fspath_to_path_t(archivePath);
+  auto batchIt = batches.find(archiveKey);
+  if (batchIt == batches.end()) {
+    batchOrder.push_back(archiveKey);
+    batchIt =
+        batches
+            .emplace(archiveKey, ReplayArchiveAudioBatch{
+                                     .archivePath = archivePath,
+                                     .innerPaths = {},
+                                     .wavIdsByPath = {},
+                                 })
+            .first;
+  }
+
+  const path_t pathKey = fspath_to_path_t(path);
+  auto &wavIds = batchIt->second.wavIdsByPath[pathKey];
+  if (wavIds.empty()) {
+    batchIt->second.innerPaths.push_back(innerPath);
+  }
+  wavIds.push_back(wav);
+  return true;
+}
+
+bool readReplayArchiveAudioBatch(
+    const ReplayArchiveAudioBatch &batch,
+    const std::optional<archive_file::EntryRange> &range,
+    std::vector<archive_file::FileData> &files, std::string *errorMessage) {
+  if (range.has_value()) {
+    std::string rangeError;
+    if (archive_file::readArchiveEntriesInRange(
+            batch.archivePath, batch.innerPaths, *range, files, &rangeError) &&
+        files.size() == batch.innerPaths.size()) {
+      return true;
+    }
+    files.clear();
+  }
+  return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
+                                          files, errorMessage);
+}
+
 std::unordered_map<std::string, bms_parser::Note *>
 buildReplayNoteLookup(bms_parser::Chart &chart) {
   std::unordered_map<std::string, bms_parser::Note *> lookup;
@@ -581,38 +685,176 @@ std::vector<AudioEvent> collectAudioEvents(bms_parser::Chart &chart,
   return events;
 }
 
+bool decodedSoundIsValid(const DecodedSound &decoded) {
+  return decoded.info.frames > 0 && decoded.info.channels > 0 &&
+         decoded.info.samplerate > 0;
+}
+
+void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
+                                  const std::vector<AudioEvent> &audioEvents,
+                                  DecodedSoundCache &decodedSounds,
+                                  std::atomic_bool &isCancelled,
+                                  ReplayVideoExportLog *log) {
+  std::unordered_set<int> seenWavs;
+  std::vector<int> wavOrder;
+  wavOrder.reserve(audioEvents.size());
+  for (const auto &event : audioEvents) {
+    if (event.wav == bms_parser::Parser::NoWav) {
+      continue;
+    }
+    if (seenWavs.insert(event.wav).second) {
+      wavOrder.push_back(event.wav);
+    }
+  }
+
+  std::unordered_map<path_t, ReplayArchiveAudioBatch> archiveBatches;
+  std::vector<path_t> archiveBatchOrder;
+  std::size_t archivedWavCount = 0;
+  for (const int wav : wavOrder) {
+    if (isCancelled || decodedSounds.contains(wav)) {
+      continue;
+    }
+
+    const auto soundPath = resolveSoundPath(chart, wav);
+    if (!soundPath.has_value()) {
+      continue;
+    }
+    if (addReplayArchiveAudioTarget(archiveBatches, archiveBatchOrder,
+                                    *soundPath, wav)) {
+      ++archivedWavCount;
+    }
+  }
+
+  if (archiveBatches.empty()) {
+    return;
+  }
+
+  replayExportLog(log, "Replay export archived audio preload: %zu sounds, %zu "
+                       "archive batch(es)",
+                  archivedWavCount, archiveBatches.size());
+  const auto preloadStart = std::chrono::steady_clock::now();
+  std::size_t decodedCount = 0;
+  for (const auto &archiveKey : archiveBatchOrder) {
+    if (isCancelled) {
+      break;
+    }
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      continue;
+    }
+
+    const ReplayArchiveAudioBatch &batch = batchIt->second;
+    std::vector<archive_file::FileData> files;
+    std::string errorMessage;
+    const auto range = entryRangeForReplayChartArchive(chart, batch.archivePath);
+    const auto readStart = std::chrono::steady_clock::now();
+    if (!readReplayArchiveAudioBatch(batch, range, files, &errorMessage)) {
+      replayExportLog(log, "Replay export archived audio preload failed: %s: %s",
+                      path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+                      errorMessage.c_str());
+      continue;
+    }
+    replayExportLog(log,
+                    "Replay export archived audio batch read: %s files=%zu "
+                    "time=%.2fs",
+                    path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+                    files.size(),
+                    static_cast<double>(elapsedMicros(readStart)) / 1000000.0);
+
+    const auto decodeStart = std::chrono::steady_clock::now();
+    std::mutex decodedSoundsMutex;
+    std::atomic_size_t decodedInBatch = 0;
+    std::atomic_size_t failedInBatch = 0;
+    parallel_for(files.size(), [&](int start, int end) {
+      for (int i = start; i < end; ++i) {
+        if (isCancelled) {
+          return;
+        }
+        const auto &file = files[static_cast<std::size_t>(i)];
+        const std::filesystem::path virtualPath =
+            archive_file::makeVirtualPath(batch.archivePath, file.path);
+        const path_t soundPath = fspath_to_path_t(virtualPath);
+        const auto idsIt = batch.wavIdsByPath.find(soundPath);
+        if (idsIt == batch.wavIdsByPath.end()) {
+          continue;
+        }
+
+        auto decoded = std::make_shared<DecodedSound>();
+        if (!decodeAudioBytesToPCM(soundPath, file.bytes, decoded->pcm,
+                                   decoded->info, isCancelled) ||
+            !decodedSoundIsValid(*decoded)) {
+          std::lock_guard<std::mutex> lock(decodedSoundsMutex);
+          for (const int wav : idsIt->second) {
+            decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
+          }
+          ++failedInBatch;
+          continue;
+        }
+
+        std::lock_guard<std::mutex> lock(decodedSoundsMutex);
+        for (const int wav : idsIt->second) {
+          if (decodedSounds.emplace(wav, decoded).second) {
+            ++decodedInBatch;
+          }
+        }
+      }
+    });
+    decodedCount += decodedInBatch.load(std::memory_order_relaxed);
+    if (failedInBatch.load(std::memory_order_relaxed) > 0) {
+      replayExportLog(log,
+                      "Replay export archived audio decode failures: %s "
+                      "count=%zu",
+                      path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+                      failedInBatch.load(std::memory_order_relaxed));
+    }
+    replayExportLog(log,
+                    "Replay export archived audio batch decode: %s time=%.2fs",
+                    path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+                    static_cast<double>(elapsedMicros(decodeStart)) / 1000000.0);
+  }
+  replayExportLog(log,
+                  "Replay export archived audio preload finished: decoded=%zu "
+                  "time=%.2fs",
+                  decodedCount,
+                  static_cast<double>(elapsedMicros(preloadStart)) / 1000000.0);
+}
+
 DecodedSound *
 loadDecodedSound(const bms_parser::Chart &chart, int wav,
-                 std::unordered_map<int, DecodedSound> &decodedSounds,
+                 DecodedSoundCache &decodedSounds,
                  std::atomic_bool &isCancelled) {
   if (const auto decodedIt = decodedSounds.find(wav);
       decodedIt != decodedSounds.end()) {
-    return &decodedIt->second;
+    return decodedIt->second.get();
   }
 
   const auto soundPath = resolveSoundPath(chart, wav);
   if (!soundPath.has_value()) {
     SDL_Log("Replay export missing sound %d", wav);
+    decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     return nullptr;
   }
 
-  DecodedSound decoded;
+  auto decoded = std::make_shared<DecodedSound>();
   const auto resolvedPath = soundPath.value();
-  if (!decodeAudioToPCM(fspath_to_path_t(resolvedPath), decoded.pcm,
-                        decoded.info, isCancelled)) {
+  if (!decodeAudioToPCM(fspath_to_path_t(resolvedPath), decoded->pcm,
+                        decoded->info, isCancelled)) {
     SDL_Log("Replay export failed to decode sound %d: %s", wav,
             resolvedPath.string().c_str());
+    if (!isCancelled) {
+      decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
+    }
     return nullptr;
   }
-  if (decoded.info.frames <= 0 || decoded.info.channels <= 0 ||
-      decoded.info.samplerate <= 0) {
+  if (!decodedSoundIsValid(*decoded)) {
     SDL_Log("Replay export decoded invalid sound %d: %s", wav,
             resolvedPath.string().c_str());
+    decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     return nullptr;
   }
 
   auto [insertedIt, _] = decodedSounds.emplace(wav, std::move(decoded));
-  return &insertedIt->second;
+  return insertedIt->second.get();
 }
 
 void ensureMixFrames(std::vector<float> &mix, size_t frames) {
@@ -708,7 +950,8 @@ bool writeWavFile(const std::filesystem::path &path,
 
 ReplayVideoExportResult
 writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
-                      const std::filesystem::path &path) {
+                      const std::filesystem::path &path,
+                      ReplayVideoExportLog *log) {
   long long durationMicros = 0;
   constexpr long long keySoundOffsetMicros = 0;
   const auto audioEvents =
@@ -719,8 +962,10 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
           1000000.0L +
       1.0L);
   std::vector<float> mix(initialFrames * kExportChannels, 0.0f);
-  std::unordered_map<int, DecodedSound> decodedSounds;
+  DecodedSoundCache decodedSounds;
   std::atomic_bool isCancelled = false;
+  preloadArchivedDecodedSounds(chart, audioEvents, decodedSounds, isCancelled,
+                               log);
 
   for (const auto &event : audioEvents) {
     DecodedSound *sound =
@@ -828,19 +1073,20 @@ bms_parser::Note *findReplayNote(
   return it == lookup.end() ? nullptr : it->second;
 }
 
-void applyReplayEventForVideo(
+bool applyReplayEventForVideo(
     BMSRenderer &renderer,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event, long long visualTimeMicros, bool gaugeAutoShift) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
-  auto applyHud = [&]() {
+  auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
-      return;
+      return false;
     }
     renderer.onJudge(recordedJudge, event.combo, event.score,
                      visualTimeMicros,
                      event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
+    return true;
   };
 
   switch (event.action) {
@@ -859,10 +1105,12 @@ void applyReplayEventForVideo(
       }
     }
     if (!suppressHudForLongNoteHead) {
-      applyHud();
+      const bool appliedHud = applyHud();
+      renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+      return appliedHud;
     }
     renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
-    break;
+    return false;
   }
   case ReplayEventAction::Release: {
     if (auto *note = findReplayNote(lookup, event);
@@ -872,13 +1120,12 @@ void applyReplayEventForVideo(
         longNote->Release(event.judgeTimeMicros);
       }
     }
-    applyHud();
+    const bool appliedHud = applyHud();
     renderer.onLaneReleased(event.lane, visualTimeMicros);
-    break;
+    return appliedHud;
   }
   case ReplayEventAction::Miss:
-    applyHud();
-    break;
+    return applyHud();
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(lookup, event); note != nullptr) {
       note->IsPlayed = true;
@@ -886,8 +1133,9 @@ void applyReplayEventForVideo(
       note->PlayedTime = event.judgeTimeMicros;
     }
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
-    break;
+    return false;
   }
+  return false;
 }
 
 std::string ffmpegError(int errorCode) {
@@ -1865,6 +2113,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   }
 
   ScopedReplayVideoBgfxAccess bgfxAccess(context);
+  ScopedReplayVideoRenderGeometry exportGeometry(width, height);
   const uint64_t requiredCaps =
       BGFX_CAPS_TEXTURE_BLIT | BGFX_CAPS_TEXTURE_READ_BACK;
   if ((bgfx::getCaps()->supported & requiredCaps) != requiredCaps) {
@@ -1906,6 +2155,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   auto cleanupBgfx = [&]() {
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
+    exportGeometry.restorePrimary();
     restorePrimaryRenderViews(&context);
     if (bgaBlurPass != nullptr) {
       bgaBlurPass->shutdown();
@@ -1957,11 +2207,24 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   bgaBlurPass->setCompositeEnabled(false);
   bgaBlurPass->setBlurStrength(settings.bgaBlurStrength);
 
+  exportGeometry.applyExport();
   configureReplayExportRenderViews(width, height, outputFrameBuffer,
                                    *bgaBlurPass, settings);
   auto restoreExportRenderViews = [&]() {
+    exportGeometry.applyExport();
     configureReplayExportRenderViews(width, height, outputFrameBuffer,
                                      *bgaBlurPass, settings);
+  };
+  auto allowUiFrame = [&]() {
+    exportGeometry.restorePrimary();
+    bool exportViewsRestored = false;
+    bgfxAccess.allowUiFrame([&]() {
+      restoreExportRenderViews();
+      exportViewsRestored = true;
+    });
+    if (!exportViewsRestored) {
+      restoreExportRenderViews();
+    }
   };
 
   ScopedChartNoteReset chartReset(chart);
@@ -1982,8 +2245,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                        settings.judgementIndicatorY,
                                        settings.judgementIndicatorWidthScale,
                                        judgementIndicatorHudMode);
+  renderer.setJudgementTextY(settings.judgementTextY);
+  renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
+  renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
+  renderer.setGaugeBarPosition(settings.gaugeBarPosition);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
                           gaugeInitialValue(replay.initialGaugeType));
+  renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
 
   const auto replayNotes = buildReplayNoteLookup(chart);
@@ -2017,6 +2285,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   frameBufferCount, replayVideoEncoderThreadCount());
   RenderContext renderContext;
   size_t replayCursor = 0;
+  std::map<Judgement, int> replayJudgeCounts;
+  for (int i = 0; i < JudgementCount; i++) {
+    replayJudgeCounts[static_cast<Judgement>(i)] = 0;
+  }
+  int replayComboBreak = 0;
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -2102,7 +2375,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     lastUiProgress = now;
     reportVideoPipelineProgress(renderedFrames, encoder.encodedFrames(),
                                 "Rendering / encoding video");
-    bgfxAccess.allowUiFrame(restoreExportRenderViews);
+    allowUiFrame();
   };
 
   for (size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
@@ -2137,9 +2410,17 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         std::max(0LL, songTimeMicros - visualOffsetMicros);
     while (replayCursor < replay.events.size() &&
            replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
-      applyReplayEventForVideo(renderer, replayNotes,
-                               replay.events[replayCursor], visualTimeMicros,
-                               replay.gaugeAutoShift);
+      const auto &event = replay.events[replayCursor];
+      const bool appliedHud =
+          applyReplayEventForVideo(renderer, replayNotes, event,
+                                   visualTimeMicros, replay.gaugeAutoShift);
+      if (appliedHud && event.judgement != None) {
+        replayJudgeCounts[event.judgement]++;
+        if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
+          replayComboBreak++;
+        }
+        renderer.setJudgementCounters(replayJudgeCounts, replayComboBreak);
+      }
       ++replayCursor;
     }
     releaseDueReplayLongNoteTails(replayAutoReleaseTails,
@@ -2305,7 +2586,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   wavPath.string().c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
-  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath);
+  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath, &exportLog);
   if (!audioResult.success) {
     replayExportLog(&exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());

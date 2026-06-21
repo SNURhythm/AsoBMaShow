@@ -14,6 +14,11 @@
 #include "../rendering/Color.h"
 #include "bgfx/bgfx.h"
 #include "bgfx/defines.h"
+
+namespace ui_theme {
+struct ShadowSpec;
+}
+
 enum class Edge {
   Left = YGEdgeLeft,
   Top = YGEdgeTop,
@@ -74,6 +79,8 @@ private:
 
 class View {
 public:
+  using ThemeColorProvider = std::function<Color()>;
+
   struct LayoutBatchScope {
     LayoutBatchScope() { View::beginLayoutBatch(); }
     ~LayoutBatchScope() { View::endLayoutBatch(); }
@@ -171,9 +178,7 @@ public:
       // Submit the draw call
       static const bgfx::ProgramHandle kSimpleProgram =
           rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-      bgfx::submit(
-          rendering::ui_view,
-          kSimpleProgram);
+      bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
 #endif
     renderBoxDecoration(context);
@@ -268,6 +273,20 @@ public:
   [[nodiscard]] inline int getHeight() const {
     return YGNodeLayoutGetHeight(node);
   }
+  [[nodiscard]] inline int getContentX() const {
+    return getX() + getLayoutInset(YGEdgeLeft);
+  }
+  [[nodiscard]] inline int getContentY() const {
+    return getY() + getLayoutInset(YGEdgeTop);
+  }
+  [[nodiscard]] inline int getContentWidth() const {
+    return std::max(0, getWidth() - getLayoutInset(YGEdgeLeft) -
+                           getLayoutInset(YGEdgeRight));
+  }
+  [[nodiscard]] inline int getContentHeight() const {
+    return std::max(0, getHeight() - getLayoutInset(YGEdgeTop) -
+                           getLayoutInset(YGEdgeBottom));
+  }
 
   virtual void onSelected() {}
   virtual void onUnselected() {}
@@ -295,8 +314,20 @@ public:
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
   View *setBackgroundColor(const Color &color);
+  View *setThemedBackgroundColor(ThemeColorProvider provider);
+  View *setBackgroundGradient(const Color &topColor, const Color &bottomColor);
   View *clearBackgroundColor();
+  View *setCornerRadius(float radius);
+  [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
+  View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
+  View *setShadow(const Color &color, const ui_theme::ShadowSpec &shadow);
+  View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
+                        int spread);
+  View *setThemedShadow(ThemeColorProvider provider,
+                        const ui_theme::ShadowSpec &shadow);
+  View *clearShadow();
   View *setBorderColor(const Color &color);
+  View *setThemedBorderColor(ThemeColorProvider provider);
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
@@ -309,6 +340,7 @@ public:
   bool drawBoundingBox = false;
   void applyYogaLayout();
   void applyYogaLayoutFromRoot();
+  virtual void propagateThemeChange();
   static void beginLayoutBatch() { ++layoutBatchDepth; }
   static void endLayoutBatch() {
     if (layoutBatchDepth == 0) {
@@ -323,6 +355,7 @@ public:
 protected:
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
+  virtual void onThemeChanged();
   // onResize
   virtual void onResize(int newWidth, int newHeight) {}
   // onMove
@@ -330,6 +363,56 @@ protected:
 
 private:
   void renderBoxDecoration(RenderContext &context) const;
+  [[nodiscard]] int getLayoutInset(YGEdge edge) const {
+    return (hasBorder ? std::max(0, borderWidth) : 0) + getStoredPadding(edge);
+  }
+  [[nodiscard]] int getStoredPadding(YGEdge edge) const {
+    switch (edge) {
+    case YGEdgeLeft:
+    case YGEdgeStart:
+      return paddingLeft;
+    case YGEdgeTop:
+      return paddingTop;
+    case YGEdgeRight:
+    case YGEdgeEnd:
+      return paddingRight;
+    case YGEdgeBottom:
+      return paddingBottom;
+    default:
+      return 0;
+    }
+  }
+  void updateStoredPadding(Edge edge, float padding) {
+    const int value =
+        std::max(0, static_cast<int>(std::round(std::max(0.0f, padding))));
+    switch (edge) {
+    case Edge::Left:
+    case Edge::Start:
+      paddingLeft = value;
+      break;
+    case Edge::Top:
+      paddingTop = value;
+      break;
+    case Edge::Right:
+    case Edge::End:
+      paddingRight = value;
+      break;
+    case Edge::Bottom:
+      paddingBottom = value;
+      break;
+    case Edge::All:
+      paddingLeft = value;
+      paddingTop = value;
+      paddingRight = value;
+      paddingBottom = value;
+      break;
+    }
+  }
+  void syncYogaBorderWidth() {
+    YGNodeStyleSetBorder(
+        node, YGEdgeAll,
+        hasBorder ? static_cast<float>(std::max(0, borderWidth)) : 0.0f);
+  }
   void markLayoutDirty() {
     View *root = this;
     while (root->parent != nullptr) {
@@ -383,13 +466,30 @@ private:
 
   Color dbgColor;
   Color backgroundColor;
+  Color backgroundGradientTopColor;
+  Color backgroundGradientBottomColor;
   Color borderColor;
+  Color shadowColor;
+  ThemeColorProvider themedBackgroundColorProvider;
+  ThemeColorProvider themedBorderColorProvider;
+  ThemeColorProvider themedShadowColorProvider;
   int absoluteX;
   int absoluteY;
   bool isVisible; // Visibility of the view
   bool hasBackground = false;
+  bool hasGradientBackground = false;
   bool hasBorder = false;
+  bool hasShadow = false;
   int borderWidth = 0;
+  int paddingLeft = 0;
+  int paddingTop = 0;
+  int paddingRight = 0;
+  int paddingBottom = 0;
+  float cornerRadius = 0.0f;
+  int shadowOffsetX = 0;
+  int shadowOffsetY = 0;
+  int shadowSpread = 0;
+  float shadowRadiusInset = 0.0f;
   YGNodeRef node;
   View *parent = nullptr;
 

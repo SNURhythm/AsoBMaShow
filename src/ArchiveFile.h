@@ -57,6 +57,21 @@ struct UnzipArchiveResult {
   std::uint64_t uncompressedSize = 0;
 };
 
+struct TemporaryCacheCleanupResult {
+  std::filesystem::path path;
+  bool cacheExisted = false;
+  std::uint64_t removedEntries = 0;
+  std::uint64_t removedBytes = 0;
+  std::uint64_t skippedEntries = 0;
+};
+
+struct TemporaryCacheUsageResult {
+  std::filesystem::path path;
+  bool cacheExisted = false;
+  std::uint64_t entries = 0;
+  std::uint64_t bytes = 0;
+};
+
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
@@ -117,6 +132,13 @@ std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
                      std::string *errorMessage = nullptr);
+bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
+                           const std::vector<std::filesystem::path>
+                               &protectedPaths = {},
+                           std::string *errorMessage = nullptr);
+bool measureTemporaryCache(TemporaryCacheUsageResult &result,
+                           std::string *errorMessage = nullptr,
+                           const std::stop_token *stopToken = nullptr);
 
 void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
                 bms_parser::Chart **chart, bool addReadyMeasure,

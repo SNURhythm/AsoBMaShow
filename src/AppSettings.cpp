@@ -138,6 +138,64 @@ const char *judgementIndicatorRenderModeToString(
   return "3d";
 }
 
+AppSettings::JudgementCounterPosition parseJudgementCounterPosition(
+    const std::string &value,
+    AppSettings::JudgementCounterPosition fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "top" || normalized == "0") {
+    return AppSettings::JudgementCounterPosition::Top;
+  }
+  if (normalized == "left" || normalized == "1") {
+    return AppSettings::JudgementCounterPosition::Left;
+  }
+  if (normalized == "right" || normalized == "2") {
+    return AppSettings::JudgementCounterPosition::Right;
+  }
+  return fallback;
+}
+
+const char *judgementCounterPositionToString(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return "top";
+  case AppSettings::JudgementCounterPosition::Left:
+    return "left";
+  case AppSettings::JudgementCounterPosition::Right:
+    return "right";
+  }
+  return "right";
+}
+
+AppSettings::GaugeBarPosition parseGaugeBarPosition(
+    const std::string &value, AppSettings::GaugeBarPosition fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "world" || normalized == "world-space" ||
+      normalized == "3d" || normalized == "0") {
+    return AppSettings::GaugeBarPosition::World;
+  }
+  if (normalized == "left" || normalized == "1") {
+    return AppSettings::GaugeBarPosition::Left;
+  }
+  if (normalized == "right" || normalized == "2") {
+    return AppSettings::GaugeBarPosition::Right;
+  }
+  return fallback;
+}
+
+const char *gaugeBarPositionToString(
+    AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+    return "world";
+  case AppSettings::GaugeBarPosition::Left:
+    return "left";
+  case AppSettings::GaugeBarPosition::Right:
+    return "right";
+  }
+  return "world";
+}
+
 AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
     const std::string &value, AppSettings::VisibleTimeBpmStrategy fallback) {
   const std::string normalized = normalizeSettingToken(value);
@@ -161,6 +219,28 @@ const char *visibleTimeBpmStrategyToString(
     return "most_prevalent";
   }
   return "chart";
+}
+
+AppSettings::UiThemeMode parseUiThemeMode(
+    const std::string &value, AppSettings::UiThemeMode fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "dark" || normalized == "0") {
+    return AppSettings::UiThemeMode::Dark;
+  }
+  if (normalized == "light" || normalized == "1") {
+    return AppSettings::UiThemeMode::Light;
+  }
+  return fallback;
+}
+
+const char *uiThemeModeToString(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return "dark";
+  case AppSettings::UiThemeMode::Light:
+    return "light";
+  }
+  return "dark";
 }
 
 std::string parseGaugeTypeId(const std::string &value,
@@ -269,6 +349,9 @@ void AppSettings::sanitize() {
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementTextY =
+      sanitizeFloat(judgementTextY, kDefaultJudgementTextY, kMinJudgementTextY,
+                    kMaxJudgementTextY);
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:
@@ -287,12 +370,38 @@ void AppSettings::sanitize() {
     judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
     break;
   }
+  switch (judgementCounterPosition) {
+  case JudgementCounterPosition::Top:
+  case JudgementCounterPosition::Left:
+  case JudgementCounterPosition::Right:
+    break;
+  default:
+    judgementCounterPosition = JudgementCounterPosition::Right;
+    break;
+  }
+  switch (gaugeBarPosition) {
+  case GaugeBarPosition::World:
+  case GaugeBarPosition::Left:
+  case GaugeBarPosition::Right:
+    break;
+  default:
+    gaugeBarPosition = GaugeBarPosition::World;
+    break;
+  }
   switch (visibleTimeBpmStrategy) {
   case VisibleTimeBpmStrategy::Chart:
   case VisibleTimeBpmStrategy::MostPrevalent:
     break;
   default:
     visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
+    break;
+  }
+  switch (uiThemeMode) {
+  case UiThemeMode::Dark:
+  case UiThemeMode::Light:
+    break;
+  default:
+    uiThemeMode = UiThemeMode::Dark;
     break;
   }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
@@ -414,6 +523,17 @@ bool AppSettings::save() const {
        << judgementIndicatorRenderModeToString(
               sanitized.judgementIndicatorRenderMode)
        << "\n";
+  file << "judgement_text_y=" << sanitized.judgementTextY << "\n";
+  file << "judgement_counter_enabled="
+       << (sanitized.judgementCounterEnabled ? 1 : 0) << "\n";
+  file << "judgement_counter_position="
+       << judgementCounterPositionToString(
+              sanitized.judgementCounterPosition)
+       << "\n";
+  file << "gauge_bar_position="
+       << gaugeBarPositionToString(sanitized.gaugeBarPosition) << "\n";
+  file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
+       << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   return file.good();
@@ -524,6 +644,22 @@ AppSettings AppSettings::load() {
         settings.judgementIndicatorRenderMode =
             parseJudgementIndicatorRenderMode(
                 value, settings.judgementIndicatorRenderMode);
+      } else if (key == "judgement_text_y") {
+        settings.judgementTextY = std::stof(value);
+      } else if (key == "judgement_counter_enabled") {
+        bool parsed = settings.judgementCounterEnabled;
+        if (parseBool(value, parsed)) {
+          settings.judgementCounterEnabled = parsed;
+        }
+      } else if (key == "judgement_counter_position") {
+        settings.judgementCounterPosition =
+            parseJudgementCounterPosition(value,
+                                          settings.judgementCounterPosition);
+      } else if (key == "gauge_bar_position") {
+        settings.gaugeBarPosition =
+            parseGaugeBarPosition(value, settings.gaugeBarPosition);
+      } else if (key == "ui_theme_mode") {
+        settings.uiThemeMode = parseUiThemeMode(value, settings.uiThemeMode);
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

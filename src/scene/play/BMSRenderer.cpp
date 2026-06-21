@@ -11,19 +11,42 @@
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
 #include "../../view/ClearLampColors.h"
+#include "../../view/UiTheme.h"
 
 #include <assert.h>
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr size_t kHudCounterItemCount = 7;
+
+constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
+    "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
+
+struct JudgementCounterLayout {
+  bool horizontal = true;
+  float x = 0.0f;
+  float y = 0.0f;
+  float itemWidth = 0.0f;
+  float itemHeight = 0.0f;
+  float gap = 0.0f;
+};
+
+struct UiPoint {
+  float x = 0.0f;
+  float y = 0.0f;
+};
 
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
@@ -66,7 +89,313 @@ void destroyNoteSheet(NoteSheet &sheet) {
   destroyTextureHandle(sheet.longBodyOffTexture);
   destroyTextureHandle(sheet.longBodyOnTexture);
 }
+
+Color hudPanelFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(250, 254, 255, 174)
+             : Color(7, 13, 22, 158);
+}
+
+Color hudPanelStrongFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(255, 255, 255, 206)
+             : Color(10, 18, 30, 190);
+}
+
+Color hudPanelBorder() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(60, 132, 138, 82)
+             : Color(110, 219, 213, 74);
+}
+
+Color hudCounterAccent(size_t index) {
+  switch (index) {
+  case 0:
+    return ui_theme::cyan();
+  case 1:
+    return ui_theme::lime();
+  case 2:
+    return ui_theme::amber();
+  case 3:
+    return Color(255, 132, 96, 255);
+  case 4:
+    return ui_theme::coral();
+  case 5:
+    return Color(255, 78, 102, 255);
+  case 6:
+    return ui_theme::coral();
+  default:
+    return ui_theme::textPrimary();
+  }
+}
+
+Color hudCounterFill(size_t index, bool active, bool topPosition) {
+  if (active) {
+    if (topPosition) {
+      return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+                 ? Color(255, 255, 255, 30)
+                 : Color(4, 9, 16, 42);
+    }
+    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+               ? Color(255, 255, 255, 226)
+               : Color(3, 8, 14, 218);
+  }
+
+  const Color accent = hudCounterAccent(index);
+  const uint8_t alpha = topPosition ? 0 : 7;
+  return Color(accent.r, accent.g, accent.b, alpha);
+}
+
+Color hudCounterBorder(size_t index, bool active, bool topPosition) {
+  const Color accent = hudCounterAccent(index);
+  if (active) {
+    const uint8_t alpha =
+        topPosition
+            ? (ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 72 : 92)
+            : (ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 188
+                                                                    : 214);
+    return Color(accent.r, accent.g, accent.b, alpha);
+  }
+
+  return Color(accent.r, accent.g, accent.b, topPosition ? 8 : 18);
+}
+
+Color hudCounterLabelColor(size_t index, int value, bool topPosition) {
+  if (value <= 0) {
+    const Color muted = ui_theme::textMuted();
+    return Color(muted.r, muted.g, muted.b, 16);
+  }
+  if (topPosition) {
+    const Color accent = hudCounterAccent(index);
+    return Color(accent.r, accent.g, accent.b, 210);
+  }
+  const Color text = ui_theme::textSecondary();
+  return Color(text.r, text.g, text.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 238
+                                                                    : 248);
+}
+
+Color hudCounterValueColor(size_t index, int value, bool topPosition) {
+  if (value <= 0) {
+    const Color muted = ui_theme::textMuted();
+    return Color(muted.r, muted.g, muted.b, 20);
+  }
+  if (topPosition) {
+    const Color accent = hudCounterAccent(index);
+    return Color(accent.r, accent.g, accent.b, 250);
+  }
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? ui_theme::darkText()
+             : Color(248, 253, 255, 255);
+}
+
+int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
+  switch (index) {
+  case 0:
+    return snapshot.pgreat;
+  case 1:
+    return snapshot.great;
+  case 2:
+    return snapshot.good;
+  case 3:
+    return snapshot.bad;
+  case 4:
+    return snapshot.poor;
+  case 5:
+    return snapshot.kpoor;
+  case 6:
+    return snapshot.comboBreak;
+  default:
+    return 0;
+  }
+}
+
+int counterIndexForJudgement(Judgement judgement) {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Poor:
+    return 4;
+  case Kpoor:
+    return 5;
+  case None:
+  case JudgementCount:
+    break;
+  }
+  return -1;
+}
+
+int judgeCountFor(const std::map<Judgement, int> &counts,
+                  Judgement judgement) {
+  const auto it = counts.find(judgement);
+  return it == counts.end() ? 0 : it->second;
+}
+
+void placeText(TextView *text, int x, int y, int width, int height) {
+  if (text == nullptr) {
+    return;
+  }
+  text->setPosition(x, y);
+  text->setSize(width, height);
+}
+
+float baseGameplayHudTitleWidth() {
+  return std::clamp(static_cast<float>(rendering::window_width) * 0.30f,
+                    430.0f, 620.0f);
+}
+
+float gameplayHudMetricsWidth() {
+  return std::clamp(static_cast<float>(rendering::window_width) * 0.28f,
+                    430.0f, 540.0f);
+}
+
+std::string formatGaugeBarLabel(GaugeType gaugeType, bool gaugeAutoShift,
+                                float currentGauge) {
+  char text[64];
+  std::snprintf(text, sizeof(text), "%s%s %.1f%%",
+                gaugeAutoShift ? "GAS " : "", gaugeTypeToShortLabel(gaugeType),
+                currentGauge);
+  return text;
+}
+
+Color gaugeAccentColor(GaugeType gaugeType, float currentGauge) {
+  const float border = gaugeBorderValue(gaugeType);
+  if (!gaugeIsSurvival(gaugeType) && border > 0.0f &&
+      currentGauge < border) {
+    return ui_theme::coral();
+  }
+  return clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+}
+
+Color gaugeTrackFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(255, 255, 255, 72)
+             : Color(4, 9, 15, 126);
+}
+
+Color gaugeTrackBorder(const Color &accent) {
+  return Color(accent.r, accent.g, accent.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 164
+                                                                    : 190);
+}
+
+Color gaugeFillColor(const Color &accent) {
+  return Color(accent.r, accent.g, accent.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 218
+                                                                    : 232);
+}
+
+Color gaugeMarkerColor() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(20, 38, 42, 168)
+             : Color(244, 250, 255, 174);
+}
+
+Color gaugeTextColor(const Color &accent) {
+  return ui_theme::textOn(gaugeFillColor(accent));
+}
+
+std::optional<UiPoint> projectWorldToUi(float worldX, float worldY) {
+  const Camera &camera = rendering::game_camera;
+  if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
+    return std::nullopt;
+  }
+
+  const bx::Vec3 screen = camera.project({worldX, worldY, 0.0f});
+  if (!std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+    return std::nullopt;
+  }
+
+  const float uiX =
+      (screen.x - static_cast<float>(camera.getViewX())) /
+      static_cast<float>(camera.getViewWidth()) *
+      static_cast<float>(rendering::window_width);
+  const float uiY =
+      (screen.y - static_cast<float>(camera.getViewY())) /
+      static_cast<float>(camera.getViewHeight()) *
+      static_cast<float>(rendering::window_height);
+  if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
+    return std::nullopt;
+  }
+  return UiPoint{uiX, uiY};
+}
+
+JudgementCounterLayout judgementCounterLayoutFor(
+    AppSettings::JudgementCounterPosition position, float titleWidth) {
+  JudgementCounterLayout layout;
+  layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
+  layout.gap = layout.horizontal ? 8.0f : 6.0f;
+  layout.itemWidth =
+      layout.horizontal
+          ? std::clamp((static_cast<float>(rendering::window_width) - 72.0f -
+                        layout.gap * 6.0f) /
+                           7.0f,
+                       92.0f, 118.0f)
+          : 118.0f;
+  layout.itemHeight = layout.horizontal ? 58.0f : 50.0f;
+
+  const float totalWidth =
+      layout.horizontal ? layout.itemWidth * 7.0f + layout.gap * 6.0f
+                        : layout.itemWidth;
+  const float totalHeight =
+      layout.horizontal ? layout.itemHeight
+                        : layout.itemHeight * 7.0f + layout.gap * 6.0f;
+
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top: {
+    layout.x = (static_cast<float>(rendering::window_width) - totalWidth) *
+               0.5f;
+    layout.y = 28.0f;
+    const float titleRight = 28.0f + titleWidth;
+    const float pauseLeft = static_cast<float>(rendering::window_width - 104);
+    if (layout.x < titleRight + 16.0f ||
+        layout.x + totalWidth > pauseLeft) {
+      layout.y = 124.0f;
+    }
+    break;
+  }
+  case AppSettings::JudgementCounterPosition::Left:
+    layout.x = 28.0f;
+    layout.y = std::max(
+        126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
+                    0.5f);
+    break;
+  case AppSettings::JudgementCounterPosition::Right:
+    layout.x =
+        static_cast<float>(rendering::window_width) - 28.0f - totalWidth;
+    layout.y = std::max(
+        126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
+                    0.5f);
+    break;
+  }
+
+  return layout;
+}
 } // namespace
+
+AtomicLaneState::AtomicLaneState(AtomicLaneState &&other) noexcept {
+  *this = std::move(other);
+}
+
+AtomicLaneState &
+AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
+  lastStateTime.store(other.lastStateTime.load(std::memory_order_relaxed),
+                      std::memory_order_relaxed);
+  isPressed.store(other.isPressed.load(std::memory_order_relaxed),
+                  std::memory_order_relaxed);
+  lastPressedJudgement.store(
+      other.lastPressedJudgement.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  lastPressedDiff.store(other.lastPressedDiff.load(std::memory_order_relaxed),
+                        std::memory_order_relaxed);
+  return *this;
+}
 
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
@@ -232,26 +561,54 @@ BMSRenderer::BMSRenderer(
   configureSheet(scratchSheet, spriteLoader3.getWidth(),
                  spriteLoader3.getHeight());
 
-  titleText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
+  titleText = std::make_unique<TextView>(kHudFontPath, 26);
   titleText->setText(chart->Meta.Title);
-  titleText->setPosition(10, 10);
   titleText->setAlign(TextView::LEFT);
-  judgeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
-  judgeText->setPosition(rendering::window_width / 2,
-                         rendering::window_height / 2);
+  titleText->setVAlign(TextView::MIDDLE);
+  titleText->setOverflow(TextView::TextOverflow::Marquee);
+  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+
+  judgeText = std::make_unique<TextView>(kHudFontPath, 38);
   judgeText->setAlign(TextView::CENTER);
-  scoreText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
-  scoreText->setPosition(0, rendering::window_height - 50);
+  judgeText->setVAlign(TextView::MIDDLE);
+  judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  layoutCenteredJudgementText();
+  scoreText = std::make_unique<TextView>(kHudFontPath, 34);
   scoreText->setAlign(TextView::LEFT);
-  scoreText->setText("Score: 0");
-  gaugeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 24);
-  gaugeText->setPosition(10, 50);
+  scoreText->setVAlign(TextView::MIDDLE);
+  scoreText->setText("SCORE 0");
+  scoreText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  comboText = std::make_unique<TextView>(kHudFontPath, 24);
+  comboText->setAlign(TextView::RIGHT);
+  comboText->setVAlign(TextView::MIDDLE);
+  comboText->setText("COMBO 0");
+  comboText->setColor(ui_theme::sdl(ui_theme::lime()));
+  gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
+  gaugeText->setAlign(TextView::CENTER);
+  gaugeText->setVAlign(TextView::MIDDLE);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
-  playOptionText =
-      std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 22);
-  playOptionText->setPosition(10, 82);
-  playOptionText->setColor({255, 205, 37, 255});
+  playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
+  playOptionText->setAlign(TextView::LEFT);
+  playOptionText->setVAlign(TextView::MIDDLE);
+  playOptionText->setOverflow(TextView::TextOverflow::Marquee);
+  playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
   playOptionText->setVisible(false);
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    auto &label = judgementCounterLabelTexts[i];
+    label = std::make_unique<TextView>(kHudFontPath, 14);
+    label->setText(kCounterLabels[i]);
+    label->setAlign(TextView::CENTER);
+    label->setVAlign(TextView::MIDDLE);
+    label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+
+    auto &value = judgementCounterValueTexts[i];
+    value = std::make_unique<TextView>(kHudFontPath, 24);
+    value->setText("0");
+    value->setAlign(TextView::CENTER);
+    value->setVAlign(TextView::MIDDLE);
+    value->setColor(ui_theme::sdl(hudCounterAccent(i)));
+  }
 
   refreshGeometry();
   textureGuard.dismiss();
@@ -316,34 +673,438 @@ void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
 }
 void BMSRenderer::drawGauge(RenderContext &context) const {
-  gaugeText->render(context);
+  if (gaugeText != nullptr) {
+    gaugeText->render(context);
+  }
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
 }
 
+void BMSRenderer::drawHudRoundedPanel(float x, float y, float width,
+                                      float height, float radius,
+                                      const Color &fill,
+                                      const Color &border) {
+  drawRoundedPanel(x, y, width, height, radius, 1.0f, fill, border);
+}
+
+void BMSRenderer::drawRoundedPanel(float x, float y, float width, float height,
+                                   float radius, float borderWidth,
+                                   const Color &fill, const Color &border) {
+  const float kBorder = std::max(0.0f, borderWidth);
+  simpleBatchRenderer.addRoundedRect(x, y, width, height, radius,
+                                     border.toABGR());
+  simpleBatchRenderer.addRoundedRect(
+      x + kBorder, y + kBorder, std::max(0.0f, width - kBorder * 2.0f),
+      std::max(0.0f, height - kBorder * 2.0f),
+      std::max(0.0f, radius - kBorder), fill.toABGR());
+}
+
+void BMSRenderer::drawGameplayHudPanels() {
+  constexpr float margin = 28.0f;
+  constexpr float radius = 12.0f;
+  const float titleWidth = gameplayHudTitleWidth();
+  const float metricsWidth = gameplayHudMetricsWidth();
+
+  if (titleWidth > 1.0f) {
+    drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
+                        hudPanelFill(), hudPanelBorder());
+  }
+  drawHudRoundedPanel(margin, rendering::window_height - 86.0f, metricsWidth,
+                      58.0f, radius, hudPanelStrongFill(), hudPanelBorder());
+}
+
+std::array<float, 4> BMSRenderer::worldGaugeRect() const {
+  const float width = std::max(0.1f, playAreaWidth * 0.84f);
+  const float height = std::max(0.055f, noteRenderHeight * 0.34f);
+  const float x = playAreaLeftX + (playAreaWidth - width) * 0.5f;
+  const float y = judgeY - std::max(0.12f, noteRenderHeight * 0.78f);
+  return {x, y, width, height};
+}
+
+std::array<float, 4> BMSRenderer::hudGaugeRect() const {
+  const float width =
+      std::clamp(static_cast<float>(rendering::window_width) * 0.018f, 20.0f,
+                 30.0f);
+  const float maxHeight =
+      std::max(220.0f, static_cast<float>(rendering::window_height) - 260.0f);
+  const float height =
+      std::min(std::max(220.0f,
+                        static_cast<float>(rendering::window_height) * 0.46f),
+               maxHeight);
+  float y = (static_cast<float>(rendering::window_height) - height) * 0.5f;
+  y = std::max(128.0f, y);
+
+  const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
+  float x = left ? 28.0f
+                 : static_cast<float>(rendering::window_width) - 28.0f - width;
+  const bool counterOnSameSide =
+      judgementCounterEnabled &&
+      ((left && judgementCounterPosition ==
+                    AppSettings::JudgementCounterPosition::Left) ||
+       (!left && judgementCounterPosition ==
+                     AppSettings::JudgementCounterPosition::Right));
+  if (counterOnSameSide) {
+    x += left ? 132.0f : -132.0f;
+  }
+  x = std::clamp(x, 12.0f,
+                 std::max(12.0f,
+                          static_cast<float>(rendering::window_width) - width -
+                              12.0f));
+  return {x, y, width, height};
+}
+
+void BMSRenderer::drawGaugeBar() {
+  if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    drawWorldGaugeBar();
+  } else {
+    drawHudGaugeBar();
+  }
+}
+
+void BMSRenderer::drawWorldGaugeBar() {
+  const auto rect = worldGaugeRect();
+  const float x = rect[0];
+  const float y = rect[1];
+  const float width = rect[2];
+  const float height = rect[3];
+  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const float radius = height * 0.5f;
+  const float borderWidth = std::max(0.008f, height * 0.12f);
+
+  simpleBatchRenderer.addRoundedRect(x + 0.025f, y - 0.018f, width, height,
+                                     radius,
+                                     Color(0, 0, 0, 82).toABGR());
+  drawRoundedPanel(x, y, width, height, radius, borderWidth, gaugeTrackFill(),
+                   gaugeTrackBorder(accent));
+
+  const float fillWidth = width * progress;
+  if (fillWidth > 0.0f) {
+    simpleBatchRenderer.addRoundedRect(x + borderWidth, y + borderWidth,
+                                       std::max(0.0f,
+                                                fillWidth - borderWidth * 2.0f),
+                                       std::max(0.0f,
+                                                height - borderWidth * 2.0f),
+                                       std::max(0.0f, radius - borderWidth),
+                                       gaugeFillColor(accent).toABGR());
+  }
+
+  const float borderValue = gaugeBorderValue(currentGaugeType);
+  if (borderValue > 0.0f) {
+    const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
+                                                1.0f);
+    const float markerWidth = std::max(0.01f, width * 0.004f);
+    simpleBatchRenderer.addRect(markerX - markerWidth * 0.5f,
+                                y - height * 0.18f, markerWidth,
+                                height * 1.36f, gaugeMarkerColor().toABGR());
+  }
+}
+
+void BMSRenderer::drawHudGaugeBar() {
+  const auto rect = hudGaugeRect();
+  const float x = rect[0];
+  const float y = rect[1];
+  const float width = rect[2];
+  const float height = rect[3];
+  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const float radius = width * 0.5f;
+
+  simpleBatchRenderer.addRoundedRect(x + 3.0f, y + 5.0f, width, height, radius,
+                                     Color(0, 0, 0, 48).toABGR());
+  drawRoundedPanel(x, y, width, height, radius, 1.0f, gaugeTrackFill(),
+                   gaugeTrackBorder(accent));
+
+  const float fillHeight = height * progress;
+  if (fillHeight > 0.0f) {
+    simpleBatchRenderer.addRoundedRect(
+        x + 2.0f, y + height - fillHeight + 2.0f, std::max(0.0f, width - 4.0f),
+        std::max(0.0f, fillHeight - 4.0f), std::max(0.0f, radius - 2.0f),
+        gaugeFillColor(accent).toABGR());
+  }
+
+  const float borderValue = gaugeBorderValue(currentGaugeType);
+  if (borderValue > 0.0f) {
+    const float markerY =
+        y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
+    simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
+                                gaugeMarkerColor().toABGR());
+  }
+}
+
+void BMSRenderer::drawJudgementCounterPanels() {
+  constexpr float radius = 10.0f;
+  const JudgementCounterLayout layout =
+      judgementCounterLayoutFor(judgementCounterPosition,
+                                gameplayHudTitleWidth());
+  const bool topPosition =
+      judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
+  if (topPosition) {
+    return;
+  }
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const float itemX =
+        layout.x +
+        (layout.horizontal ? (layout.itemWidth + layout.gap) * i : 0.0f);
+    const float itemY =
+        layout.y +
+        (layout.horizontal ? 0.0f : (layout.itemHeight + layout.gap) * i);
+    const int value = counterValueAt(renderedJudgementCounterSnapshot, i);
+    const bool active = value > 0;
+    drawHudRoundedPanel(itemX, itemY, layout.itemWidth, layout.itemHeight,
+                        radius,
+                        hudCounterFill(i, active, topPosition),
+                        hudCounterBorder(i, active, topPosition));
+  }
+}
+
+void BMSRenderer::layoutGameplayHud() {
+  constexpr int margin = 28;
+  const int titleWidth = static_cast<int>(gameplayHudTitleWidth());
+  const bool titleVisible = titleWidth > 48;
+  if (titleText != nullptr) {
+    titleText->setVisible(titleVisible);
+  }
+  placeText(titleText.get(), margin + 18, margin + 8,
+            std::max(1, titleWidth - 36), 34);
+  placeText(playOptionText.get(), margin + 18, margin + 44,
+            std::max(1, titleWidth - 36), 26);
+
+  const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
+  const int compactMetricsY = rendering::window_height - 86;
+  placeText(scoreText.get(), margin + 18, compactMetricsY + 9,
+            metricsWidth / 2, 40);
+  placeText(comboText.get(), margin + metricsWidth / 2 - 8,
+            compactMetricsY + 9, metricsWidth / 2 - 10, 40);
+  layoutGaugeText();
+
+  const JudgementCounterLayout layout =
+      judgementCounterLayoutFor(judgementCounterPosition,
+                                gameplayHudTitleWidth());
+  const int gap = static_cast<int>(layout.gap);
+  const int itemWidth = static_cast<int>(layout.itemWidth);
+  const int itemHeight = static_cast<int>(layout.itemHeight);
+  const int counterX = static_cast<int>(std::round(layout.x));
+  const int counterY = static_cast<int>(std::round(layout.y));
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const int itemX =
+        counterX +
+        (layout.horizontal ? (itemWidth + gap) * static_cast<int>(i) : 0);
+    const int itemY =
+        counterY +
+        (layout.horizontal ? 0 : (itemHeight + gap) * static_cast<int>(i));
+    placeText(judgementCounterLabelTexts[i].get(), itemX + 8, itemY + 6,
+              itemWidth - 16, layout.horizontal ? 18 : 16);
+    placeText(judgementCounterValueTexts[i].get(), itemX + 8,
+              itemY + (layout.horizontal ? 24 : 22), itemWidth - 16,
+              itemHeight - (layout.horizontal ? 28 : 24));
+  }
+}
+
+void BMSRenderer::layoutGaugeText() {
+  if (gaugeText == nullptr) {
+    return;
+  }
+
+  gaugeText->setVisible(true);
+  if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    const auto rect = worldGaugeRect();
+    const auto topLeft = projectWorldToUi(rect[0], rect[1] + rect[3]);
+    const auto topRight =
+        projectWorldToUi(rect[0] + rect[2], rect[1] + rect[3]);
+    const auto bottomLeft = projectWorldToUi(rect[0], rect[1]);
+    const auto bottomRight = projectWorldToUi(rect[0] + rect[2], rect[1]);
+    if (!topLeft || !topRight || !bottomLeft || !bottomRight) {
+      gaugeText->setVisible(false);
+      return;
+    }
+
+    const float minX =
+        std::min({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
+    const float maxX =
+        std::max({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
+    const float minY =
+        std::min({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
+    const float maxY =
+        std::max({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
+    const int textWidth =
+        std::max(120, static_cast<int>(std::round(maxX - minX)));
+    const int textHeight =
+        std::clamp(static_cast<int>(std::round((maxY - minY) + 12.0f)), 24,
+                   42);
+    const int x = static_cast<int>(std::round((minX + maxX) * 0.5f)) -
+                  textWidth / 2;
+    const int y = static_cast<int>(std::round((minY + maxY) * 0.5f)) -
+                  textHeight / 2;
+    placeText(gaugeText.get(), x, y, textWidth, textHeight);
+    return;
+  }
+
+  const auto rect = hudGaugeRect();
+  constexpr int textWidth = 126;
+  constexpr int textHeight = 44;
+  const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
+  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 10.0f))
+                     : static_cast<int>(
+                           std::round(rect[0] - textWidth - 10.0f));
+  const int y =
+      static_cast<int>(std::round(rect[1] + rect[3] - textHeight));
+  placeText(gaugeText.get(), x, y, textWidth, textHeight);
+}
+
+float BMSRenderer::gameplayHudTitleWidth() const {
+  constexpr float kTitleMargin = 28.0f;
+  constexpr float kLaneGap = 18.0f;
+  constexpr float kTitleTop = 28.0f;
+  constexpr float kTitleBottom = kTitleTop + 82.0f;
+
+  const float baseWidth = baseGameplayHudTitleWidth();
+  const float laneLeft = projectedLaneLeftUiInBand(kTitleTop, kTitleBottom);
+  if (!std::isfinite(laneLeft)) {
+    return baseWidth;
+  }
+
+  const float maxWidth = laneLeft - kTitleMargin - kLaneGap;
+  return std::clamp(maxWidth, 0.0f, baseWidth);
+}
+
+float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
+                                             float bandBottom) const {
+  auto projectToUi = [](float worldX,
+                        float worldY) -> std::optional<UiPoint> {
+    const Camera &camera = rendering::game_camera;
+    if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
+      return std::nullopt;
+    }
+
+    const bx::Vec3 screen = camera.project({worldX, worldY, 0.0f});
+    if (!std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+      return std::nullopt;
+    }
+
+    const float uiX =
+        (screen.x - static_cast<float>(camera.getViewX())) /
+        static_cast<float>(camera.getViewWidth()) *
+        static_cast<float>(rendering::window_width);
+    const float uiY =
+        (screen.y - static_cast<float>(camera.getViewY())) /
+        static_cast<float>(camera.getViewHeight()) *
+        static_cast<float>(rendering::window_height);
+    if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
+      return std::nullopt;
+    }
+    return UiPoint{uiX, uiY};
+  };
+
+  const auto leftBottom = projectToUi(playAreaLeftX, judgeY);
+  const auto rightBottom = projectToUi(playAreaLeftX + playAreaWidth, judgeY);
+  const auto leftTop = projectToUi(playAreaLeftX, upperBound);
+  const auto rightTop =
+      projectToUi(playAreaLeftX + playAreaWidth, upperBound);
+  if (!leftBottom || !rightBottom || !leftTop || !rightTop) {
+    return std::numeric_limits<float>::quiet_NaN();
+  }
+
+  float minX = std::numeric_limits<float>::infinity();
+  auto considerX = [&minX](float x) {
+    if (std::isfinite(x)) {
+      minX = std::min(minX, x);
+    }
+  };
+  auto considerPoint = [&](const UiPoint &point) {
+    if (point.y >= bandTop && point.y <= bandBottom) {
+      considerX(point.x);
+    }
+  };
+  auto considerEdge = [&](const UiPoint &a, const UiPoint &b) {
+    considerPoint(a);
+    considerPoint(b);
+
+    const float minY = std::min(a.y, b.y);
+    const float maxY = std::max(a.y, b.y);
+    const float dy = b.y - a.y;
+    if (std::abs(dy) <= 0.0001f) {
+      if (a.y >= bandTop && a.y <= bandBottom) {
+        considerX(std::min(a.x, b.x));
+      }
+      return;
+    }
+
+    auto considerAtY = [&](float targetY) {
+      if (targetY < minY || targetY > maxY) {
+        return;
+      }
+      const float t = (targetY - a.y) / dy;
+      if (t < 0.0f || t > 1.0f) {
+        return;
+      }
+      considerX(a.x + (b.x - a.x) * t);
+    };
+
+    considerAtY(bandTop);
+    considerAtY(bandBottom);
+  };
+
+  considerEdge(*leftBottom, *leftTop);
+  considerEdge(*leftTop, *rightTop);
+  considerEdge(*rightTop, *rightBottom);
+  considerEdge(*rightBottom, *leftBottom);
+
+  return std::isfinite(minX) ? minX
+                             : std::numeric_limits<float>::quiet_NaN();
+}
+
+void BMSRenderer::layoutCenteredJudgementText() {
+  if (judgementLayoutWidth == rendering::window_width &&
+      judgementLayoutHeight == rendering::window_height) {
+    return;
+  }
+
+  judgementLayoutWidth = rendering::window_width;
+  judgementLayoutHeight = rendering::window_height;
+
+  const int judgeWidth =
+      std::max(360, std::min(720, judgementLayoutWidth - 80));
+  const int judgeHeight = 96;
+  const float normalizedY =
+      std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
+                 AppSettings::kMaxJudgementTextY);
+  const int centerY = static_cast<int>(
+      std::round(static_cast<float>(judgementLayoutHeight) *
+                 (1.0f - normalizedY)));
+  const int judgeY =
+      std::clamp(centerY - judgeHeight / 2, 0,
+                 std::max(0, judgementLayoutHeight - judgeHeight));
+  judgeText->setPosition((judgementLayoutWidth - judgeWidth) / 2,
+                         judgeY);
+  judgeText->setSize(judgeWidth, judgeHeight);
+}
+
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
-  std::lock_guard<std::mutex> lock(laneMutex);
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = laneStatesByOrder[it->second];
-  laneState.isPressed = true;
-  laneState.lastPressedJudge = judge;
-  laneState.lastStateTime = time;
+  AtomicLaneState &laneState = laneStatesByOrder[it->second];
+  laneState.lastPressedJudgement.store(static_cast<int>(judge.judgement),
+                                       std::memory_order_relaxed);
+  laneState.lastPressedDiff.store(judge.Diff, std::memory_order_relaxed);
+  laneState.isPressed.store(true, std::memory_order_relaxed);
+  laneState.lastStateTime.store(time, std::memory_order_release);
 }
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
-  std::lock_guard<std::mutex> lock(laneMutex);
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = laneStatesByOrder[it->second];
-  laneState.isPressed = false;
-  laneState.lastStateTime = time;
+  AtomicLaneState &laneState = laneStatesByOrder[it->second];
+  laneState.isPressed.store(false, std::memory_order_relaxed);
+  laneState.lastStateTime.store(time, std::memory_order_release);
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
                           long long displayTimeMicros,
@@ -354,21 +1115,12 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
   if (recordTimingSample) {
     judgementIndicator.record(judgeResult, displayTimeMicros);
   }
-  state.latestJudgeResult = judgeResult;
-  state.latestJudgeResultTime = std::chrono::system_clock::now();
-  state.latestCombo = combo;
-  state.latestScore = score;
-
-  std::string judgeLine = judgeResult.toString();
-  if (combo > 0) {
-    judgeLine.push_back(' ');
-    judgeLine += std::to_string(combo);
-  }
   if (renderHud && judgeText != nullptr && scoreText != nullptr) {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    pendingJudgeText = std::move(judgeLine);
-    pendingScore = score;
-    hudDirty = true;
+    pendingJudge.store(static_cast<int>(judgeResult.judgement),
+                       std::memory_order_relaxed);
+    pendingScore.store(score, std::memory_order_relaxed);
+    pendingCombo.store(combo, std::memory_order_relaxed);
+    hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
 void BMSRenderer::drawLongNote(float headY, float tailY,
@@ -738,14 +1490,16 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
   applyPendingHudText();
+  updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
+  constexpr uint32_t kDepthBeams = 180;
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
-  constexpr uint32_t kDepthBeams = 300;
   constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
+  constexpr uint32_t kDepthGauge = 340;
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
@@ -939,11 +1693,17 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
                   std::chrono::steady_clock::now().time_since_epoch())
                   .count();
     laneStateSnapshot.clear();
-    {
-      std::lock_guard<std::mutex> lock(laneMutex);
-      for (size_t i = 0; i < laneOrder.size(); ++i) {
-        laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
-      }
+    for (size_t i = 0; i < laneOrder.size(); ++i) {
+      const AtomicLaneState &source = laneStatesByOrder[i];
+      LaneState snapshot;
+      snapshot.lastStateTime =
+          source.lastStateTime.load(std::memory_order_acquire);
+      snapshot.isPressed = source.isPressed.load(std::memory_order_relaxed);
+      snapshot.lastPressedJudge = JudgeResult(
+          static_cast<Judgement>(
+              source.lastPressedJudgement.load(std::memory_order_relaxed)),
+          source.lastPressedDiff.load(std::memory_order_relaxed));
+      laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
     for (const auto &entry : laneStateSnapshot) {
       drawLaneBeam(entry.first, entry.second, nowMicros);
@@ -977,40 +1737,127 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
 
   if (renderHud) {
+    if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+      simpleBatchRenderer.setSubmitView(rendering::main_view);
+      simpleBatchRenderer.setSubmitDepth(kDepthGauge);
+      simpleBatchRenderer.begin();
+      drawGaugeBar();
+      simpleBatchRenderer.flush();
+    }
+    layoutCenteredJudgementText();
+    layoutGameplayHud();
+    simpleBatchRenderer.setSubmitView(rendering::ui_view);
+    simpleBatchRenderer.setSubmitDepth(0);
+    simpleBatchRenderer.begin();
+    drawGameplayHudPanels();
+    if (gaugeBarPosition != AppSettings::GaugeBarPosition::World) {
+      drawGaugeBar();
+    }
+    if (judgementCounterEnabled) {
+      drawJudgementCounterPanels();
+    }
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
     drawJudgement(context);
     drawScore(context);
+    if (comboText != nullptr) {
+      comboText->render(context);
+    }
     drawGauge(context);
     drawPlayOption(context);
+    if (judgementCounterEnabled) {
+      for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+        if (judgementCounterLabelTexts[i] != nullptr) {
+          judgementCounterLabelTexts[i]->render(context);
+        }
+        if (judgementCounterValueTexts[i] != nullptr) {
+          judgementCounterValueTexts[i]->render(context);
+        }
+      }
+    }
   }
 }
 
 void BMSRenderer::applyPendingHudText() {
-  std::string judgeLine;
-  int score = 0;
-  {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    if (!hudDirty) {
-      return;
-    }
-    judgeLine = pendingJudgeText;
-    score = pendingScore;
-    hudDirty = false;
+  const uint32_t revision = hudRevision.load(std::memory_order_acquire);
+  if (revision == renderedHudRevision) {
+    return;
   }
+
+  const auto judgement =
+      static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed));
+  const int score = pendingScore.load(std::memory_order_relaxed);
+  const int combo = pendingCombo.load(std::memory_order_relaxed);
+  renderedHudRevision = revision;
+
+  std::string judgeLine;
+  if (judgement != None) {
+    judgeLine = JudgeResult(judgement, 0).toString();
+    if (combo > 0) {
+      judgeLine.push_back(' ');
+      judgeLine += std::to_string(combo);
+    }
+  }
+
   judgeText->setText(judgeLine);
-  scoreText->setText("Score: " + std::to_string(score));
+  scoreText->setText("SCORE " + std::to_string(score));
+  if (comboText != nullptr) {
+    comboText->setText("COMBO " + std::to_string(combo));
+  }
+}
+
+void BMSRenderer::updateJudgementCounterText() {
+  const uint32_t revision =
+      judgementCounterRevision.load(std::memory_order_acquire);
+  if (revision == renderedJudgementCounterRevision) {
+    return;
+  }
+
+  JudgementCounterSnapshot snapshot;
+  snapshot.pgreat = judgementCounterValues[0].load(std::memory_order_relaxed);
+  snapshot.great = judgementCounterValues[1].load(std::memory_order_relaxed);
+  snapshot.good = judgementCounterValues[2].load(std::memory_order_relaxed);
+  snapshot.bad = judgementCounterValues[3].load(std::memory_order_relaxed);
+  snapshot.poor = judgementCounterValues[4].load(std::memory_order_relaxed);
+  snapshot.kpoor = judgementCounterValues[5].load(std::memory_order_relaxed);
+  snapshot.comboBreak =
+      judgementCounterValues[6].load(std::memory_order_relaxed);
+  renderedJudgementCounterRevision = revision;
+  renderedJudgementCounterSnapshot = snapshot;
+  const bool topPosition =
+      judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const int value = counterValueAt(snapshot, i);
+    if (judgementCounterValueTexts[i] != nullptr) {
+      judgementCounterValueTexts[i]->setText(std::to_string(value));
+    }
+    if (judgementCounterLabelTexts[i] != nullptr) {
+      judgementCounterLabelTexts[i]->setColor(
+          ui_theme::sdl(hudCounterLabelColor(i, value, topPosition)));
+    }
+    if (judgementCounterValueTexts[i] != nullptr) {
+      judgementCounterValueTexts[i]->setColor(
+          ui_theme::sdl(hudCounterValueColor(i, value, topPosition)));
+    }
+  }
 }
 
 void BMSRenderer::reset() {
   state.reset();
   judgementIndicator.clear();
-  {
-    std::lock_guard<std::mutex> lock(laneMutex);
-    for (auto &laneState : laneStatesByOrder) {
-      laneState.lastStateTime = -1;
-      laneState.isPressed = false;
-      laneState.lastPressedJudge = JudgeResult(None, 0);
-    }
+  pendingJudge.store(None, std::memory_order_relaxed);
+  pendingScore.store(0, std::memory_order_relaxed);
+  pendingCombo.store(0, std::memory_order_relaxed);
+  hudRevision.fetch_add(1, std::memory_order_release);
+  publishJudgementCounterSnapshot({});
+  renderedJudgementCounterSnapshot = {};
+
+  for (auto &laneState : laneStatesByOrder) {
+    laneState.lastPressedJudgement.store(None, std::memory_order_relaxed);
+    laneState.lastPressedDiff.store(0, std::memory_order_relaxed);
+    laneState.isPressed.store(false, std::memory_order_relaxed);
+    laneState.lastStateTime.store(-1, std::memory_order_release);
   }
 }
 
@@ -1071,20 +1918,90 @@ void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
   judgementIndicator.configure(enabled, y, widthScale, hudMode);
 }
 
+void BMSRenderer::setJudgementTextY(float y) {
+  const float clamped =
+      std::clamp(y, AppSettings::kMinJudgementTextY,
+                 AppSettings::kMaxJudgementTextY);
+  if (std::abs(judgementTextY - clamped) <= 0.0001f) {
+    return;
+  }
+  judgementTextY = clamped;
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
+}
+
+void BMSRenderer::setJudgementCounterEnabled(bool enabled) {
+  judgementCounterEnabled = enabled;
+}
+
+void BMSRenderer::setJudgementCounterPosition(
+    AppSettings::JudgementCounterPosition position) {
+  if (judgementCounterPosition == position) {
+    return;
+  }
+  judgementCounterPosition = position;
+  renderedJudgementCounterRevision =
+      judgementCounterRevision.load(std::memory_order_relaxed) - 1;
+}
+
+void BMSRenderer::setGaugeBarPosition(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+  case AppSettings::GaugeBarPosition::Left:
+  case AppSettings::GaugeBarPosition::Right:
+    gaugeBarPosition = position;
+    break;
+  }
+}
+
+void BMSRenderer::publishJudgementCounterSnapshot(
+    const JudgementCounterSnapshot &snapshot) {
+  for (size_t i = 0; i < kJudgementCounterItemCount; ++i) {
+    judgementCounterValues[i].store(counterValueAt(snapshot, i),
+                                    std::memory_order_relaxed);
+  }
+  judgementCounterRevision.fetch_add(1, std::memory_order_release);
+}
+
+void BMSRenderer::setJudgementCounter(Judgement judgement, int count,
+                                      int comboBreak) {
+  const int index = counterIndexForJudgement(judgement);
+  if (index >= 0) {
+    judgementCounterValues[static_cast<size_t>(index)].store(
+        count, std::memory_order_relaxed);
+  }
+  judgementCounterValues[6].store(comboBreak, std::memory_order_relaxed);
+  judgementCounterRevision.fetch_add(1, std::memory_order_release);
+}
+
+void BMSRenderer::setJudgementCounters(
+    const std::map<Judgement, int> &judgeCounts, int comboBreak) {
+  JudgementCounterSnapshot snapshot;
+  snapshot.pgreat = judgeCountFor(judgeCounts, PGreat);
+  snapshot.great = judgeCountFor(judgeCounts, Great);
+  snapshot.good = judgeCountFor(judgeCounts, Good);
+  snapshot.bad = judgeCountFor(judgeCounts, Bad);
+  snapshot.poor = judgeCountFor(judgeCounts, Poor);
+  snapshot.kpoor = judgeCountFor(judgeCounts, Kpoor);
+  snapshot.comboBreak = comboBreak;
+
+  publishJudgementCounterSnapshot(snapshot);
+}
+
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                                  float currentGauge) {
+  currentGaugeType = gaugeType;
+  currentGaugeAutoShift = gaugeAutoShift;
+  currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
   if (gaugeText == nullptr) {
     return;
   }
 
-  char text[96];
-  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
-                gaugeAutoShift ? "GAS" : "Gauge",
-                gaugeTypeToShortLabel(gaugeType), currentGauge);
-  gaugeText->setText(text);
-
-  const Color color = clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
-  gaugeText->setColor({color.r, color.g, color.b, 255});
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  gaugeText->setText(formatGaugeBarLabel(currentGaugeType,
+                                         currentGaugeAutoShift,
+                                         currentGaugeValue));
+  gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
 }
 
 void BMSRenderer::setPlayOptionStatus(const std::string &label) {
@@ -1154,7 +2071,10 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   if (beamHeight <= 0.0f) {
     return;
   }
-  drawRect(noteRenderWidth, beamHeight, laneToX(lane), judgeY, color);
+  const auto fadedColor = Color(color.r, color.g, color.b, 0);
+  simpleBatchRenderer.addRectVerticalGradient(
+      laneToX(lane), judgeY, noteRenderWidth, beamHeight, color.toABGR(),
+      fadedColor.toABGR());
 }
 
 void BMSRenderer::drawLaneCover() {
@@ -1282,10 +2202,6 @@ void BMSRenderer::flushNoteTextureBatches() {
 void BMSRendererState::reset() {
   orphanLongNotes.clear();
   currentTimelineIndex = 0;
-  latestJudgeResult = JudgeResult(None, 0);
-  latestJudgeResultTime = std::chrono::system_clock::now();
-  latestCombo = 0;
-  latestScore = 0;
 }
 
 void BMSRenderer::destroyNoteSheetTextures() {

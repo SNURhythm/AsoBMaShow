@@ -14,6 +14,7 @@ public:
   void onUnselected() override;
 
 private:
+  View *contentCard;
   View *clearLamp;
   TextView *labelView;
   TextView *countView;

@@ -1,10 +1,216 @@
 #include "SettingsSceneShared.h"
+#include "../ArchiveFile.h"
+#include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+
+#include <iomanip>
+#include <sstream>
 
 using namespace settings_scene;
 
+namespace {
+std::string formatCacheBytes(std::uint64_t bytes) {
+  constexpr double kib = 1024.0;
+  constexpr double mib = kib * 1024.0;
+  constexpr double gib = mib * 1024.0;
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(bytes >= 10 * 1024 ? 1 : 0);
+  if (bytes >= static_cast<std::uint64_t>(gib)) {
+    stream << static_cast<double>(bytes) / gib << " GB";
+  } else if (bytes >= static_cast<std::uint64_t>(mib)) {
+    stream << static_cast<double>(bytes) / mib << " MB";
+  } else if (bytes >= static_cast<std::uint64_t>(kib)) {
+    stream << static_cast<double>(bytes) / kib << " KB";
+  } else {
+    stream.unsetf(std::ios::floatfield);
+    stream << bytes << " B";
+  }
+  return stream.str();
+}
+
+std::string formatCacheCleanupResult(
+    const archive_file::TemporaryCacheCleanupResult &result) {
+  if (!result.cacheExisted || result.removedEntries == 0) {
+    return result.skippedEntries == 0
+               ? "Temporary archive cache is already empty."
+               : "Temporary archive cache only contains active files.";
+  }
+  std::string message = "Removed " + formatCacheBytes(result.removedBytes) +
+                        " (" + std::to_string(result.removedEntries) +
+                        " entries).";
+  if (result.skippedEntries > 0) {
+    message += " Skipped " + std::to_string(result.skippedEntries) +
+               " active file";
+    if (result.skippedEntries != 1) {
+      message += "s";
+    }
+    message += ".";
+  }
+  return message;
+}
+
+std::string formatCacheUsageResult(
+    const archive_file::TemporaryCacheUsageResult &result) {
+  if (!result.cacheExisted || result.entries == 0) {
+    return "Temporary archive cache is empty.";
+  }
+  return "Temporary archive cache uses " + formatCacheBytes(result.bytes) +
+         " (" + std::to_string(result.entries) + " entries).";
+}
+} // namespace
+
+void SettingsScene::requestArchiveCacheCleanupStatus(const std::string &text,
+                                                     const SDL_Color &color) {
+  std::lock_guard<std::mutex> lock(archiveCacheCleanupStatusMutex);
+  pendingArchiveCacheCleanupStatus = true;
+  pendingArchiveCacheCleanupStatusText = text;
+  pendingArchiveCacheCleanupStatusColor = color;
+}
+
+void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
+  bool changed = false;
+  {
+    std::lock_guard<std::mutex> lock(archiveCacheCleanupStatusMutex);
+    if (!pendingArchiveCacheCleanupStatus) {
+      return;
+    }
+    archiveCacheCleanupStatusMessage = pendingArchiveCacheCleanupStatusText;
+    archiveCacheCleanupStatusColor = pendingArchiveCacheCleanupStatusColor;
+    pendingArchiveCacheCleanupStatus = false;
+    changed = true;
+  }
+
+  if (archiveCacheCleanupStatusText != nullptr) {
+    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
+  }
+  if (archiveCacheCleanupButtonText != nullptr) {
+    archiveCacheCleanupButtonText->setText(
+        archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up");
+  }
+  if (changed && rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+  if (changed && scrollView != nullptr) {
+    scrollView->refreshContentLayout();
+  }
+}
+
+void SettingsScene::cleanupTemporaryArchiveCache() {
+  bool expected = false;
+  if (!archiveCacheCleanupRunning.compare_exchange_strong(expected, true)) {
+    return;
+  }
+
+  const std::uint64_t generation =
+      archiveCacheStatusGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  if (archiveCacheCleanupThread.joinable()) {
+    archiveCacheCleanupThread.join();
+  }
+
+  archiveCacheCleanupStatusMessage = "Cleaning temporary archive cache...";
+  archiveCacheCleanupStatusColor = {239, 244, 251, 255};
+  if (archiveCacheCleanupStatusText != nullptr) {
+    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
+  }
+  if (archiveCacheCleanupButtonText != nullptr) {
+    archiveCacheCleanupButtonText->setText("Cleaning...");
+  }
+
+  archiveCacheCleanupThread =
+      std::jthread([this, generation](const std::stop_token &token) {
+        archive_file::TemporaryCacheCleanupResult result;
+        std::string errorMessage;
+        const std::vector<std::filesystem::path> protectedPaths =
+            context.jukebox.activeMaterializedVideoPaths();
+        const bool cleaned =
+            archive_file::cleanupTemporaryCache(result, protectedPaths,
+                                                &errorMessage);
+
+        if (token.stop_requested()) {
+          archiveCacheCleanupRunning = false;
+          return;
+        }
+
+        archiveCacheCleanupRunning = false;
+        if (archiveCacheStatusGeneration.load(std::memory_order_relaxed) !=
+            generation) {
+          return;
+        }
+        if (!cleaned) {
+          requestArchiveCacheCleanupStatus(
+              errorMessage.empty() ? "Archive cache cleanup failed."
+                                   : "Archive cache cleanup failed: " +
+                                         errorMessage,
+              {255, 177, 170, 255});
+          return;
+        }
+
+        requestArchiveCacheCleanupStatus(formatCacheCleanupResult(result),
+                                         {181, 228, 165, 255});
+      });
+}
+
+void SettingsScene::measureTemporaryArchiveCache() {
+  if (archiveCacheCleanupRunning.load(std::memory_order_relaxed)) {
+    return;
+  }
+
+  bool expected = false;
+  if (!archiveCacheMeasureRunning.compare_exchange_strong(expected, true)) {
+    return;
+  }
+
+  const std::uint64_t generation =
+      archiveCacheStatusGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  if (archiveCacheMeasureThread.joinable()) {
+    archiveCacheMeasureThread.join();
+  }
+
+  archiveCacheCleanupStatusMessage = "Measuring temporary archive cache...";
+  archiveCacheCleanupStatusColor = {239, 244, 251, 255};
+  if (archiveCacheCleanupStatusText != nullptr) {
+    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
+  }
+
+  archiveCacheMeasureThread =
+      std::jthread([this, generation](const std::stop_token &token) {
+        archive_file::TemporaryCacheUsageResult result;
+        std::string errorMessage;
+        const bool measured =
+            archive_file::measureTemporaryCache(result, &errorMessage, &token);
+
+        if (token.stop_requested()) {
+          archiveCacheMeasureRunning = false;
+          return;
+        }
+
+        archiveCacheMeasureRunning = false;
+        if (archiveCacheStatusGeneration.load(std::memory_order_relaxed) !=
+            generation) {
+          return;
+        }
+        if (!measured) {
+          requestArchiveCacheCleanupStatus(
+              errorMessage.empty() ? "Archive cache measurement failed."
+                                   : "Archive cache measurement failed: " +
+                                         errorMessage,
+              {255, 177, 170, 255});
+          return;
+        }
+
+        requestArchiveCacheCleanupStatus(formatCacheUsageResult(result),
+                                         {157, 177, 200, 255});
+      });
+}
+
 void SettingsScene::init() {
   lastLayoutWidth = -1;
+  observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
 }
 
@@ -20,6 +226,8 @@ void SettingsScene::update(float dt) {
     }
   }
   applyPendingDifficultyTableUpdates();
+  applyPendingArchiveCacheCleanupStatus();
+  refreshTablesIfLibraryChanged();
   ensureLayoutUpToDate();
 }
 
@@ -51,6 +259,12 @@ void SettingsScene::renderScene() {
         context.settings.judgementIndicatorWidthScale,
         context.settings.judgementIndicatorRenderMode ==
             AppSettings::JudgementIndicatorRenderMode::Hud2D);
+    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
+    previewRenderer->setJudgementCounterEnabled(
+        context.settings.judgementCounterEnabled);
+    previewRenderer->setJudgementCounterPosition(
+        context.settings.judgementCounterPosition);
+    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);
@@ -76,6 +290,16 @@ void SettingsScene::cleanupScene() {
     SDL_Log("Joining difficultyTableJobThread");
     difficultyTableJobThread.request_stop();
     difficultyTableJobThread.join();
+  }
+  if (archiveCacheCleanupThread.joinable()) {
+    SDL_Log("Joining archiveCacheCleanupThread");
+    archiveCacheCleanupThread.request_stop();
+    archiveCacheCleanupThread.join();
+  }
+  if (archiveCacheMeasureThread.joinable()) {
+    SDL_Log("Joining archiveCacheMeasureThread");
+    archiveCacheMeasureThread.request_stop();
+    archiveCacheMeasureThread.join();
   }
   pendingDeleteChartEntryPath.clear();
   difficultyTableImportModalVisible = false;
@@ -115,6 +339,8 @@ void SettingsScene::cleanupScene() {
   judgementIndicatorRenderModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
+  archiveCacheCleanupButtonText = nullptr;
+  archiveCacheCleanupStatusText = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -123,10 +349,19 @@ void SettingsScene::cleanupScene() {
   judgementIndicatorRenderModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
+  archiveCacheCleanupButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
-  tablesTabButton = nullptr;
+  miscTabButton = nullptr;
+  difficultyTablesTabButton = nullptr;
+  bmsLibraryTabButton = nullptr;
+  timingTabText = nullptr;
+  visualTabText = nullptr;
+  laneTabText = nullptr;
+  miscTabText = nullptr;
+  difficultyTablesTabText = nullptr;
+  bmsLibraryTabText = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
@@ -135,6 +370,7 @@ void SettingsScene::cleanupScene() {
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  chartFolderStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
   difficultyTableImportProgressFill = nullptr;
   difficultyTableImportTitleText = nullptr;

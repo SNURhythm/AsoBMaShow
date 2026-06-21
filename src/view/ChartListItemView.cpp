@@ -1,11 +1,16 @@
 #include "ChartListItemView.h"
 #include "ClearLampColors.h"
+#include "UiTheme.h"
 
 #include <cmath>
 #include <iomanip>
 #include <sstream>
 
 namespace {
+constexpr int kBottomGap = 8;
+constexpr int kArtworkFramePadding = 3;
+constexpr int kArtworkFrameBorderWidth = 1;
+
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
   if (std::fabs(level - rounded) < 0.001) {
@@ -37,6 +42,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const ChartMetaRecord &record)
     : View(x, y, width, height) {
   (void)record;
+  contentCard = new View();
   clearLamp = new View();
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
@@ -47,29 +53,40 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
 
-  // Configure root layout
-  this->setFlexDirection(FlexDirection::Row)
+  this->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPadding(Edge::Bottom, kBottomGap);
+
+  contentCard->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
+      ->setHeight(height > kBottomGap ? height - kBottomGap : height)
+      ->setFlexShrink(0)
       ->setPadding(Edge::All, 8)
       ->setPadding(Edge::End, 24)
       ->setGap(12);
+  this->addView(contentCard);
 
   clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
-  this->addView(clearLamp);
+  clearLamp->setCornerRadius(3.0f);
+  contentCard->addView(clearLamp);
 
   // Stage file jacket
   artworkFrame->setWidth(84)
       ->setHeight(84)
       ->setFlexShrink(0)
-      ->setPadding(Edge::All, 3)
+      ->setPadding(Edge::All, kArtworkFramePadding)
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
-      ->setBackgroundColor(Color(8, 14, 23, 224))
-      ->setBorderColor(Color(42, 58, 78, 255))
-      ->setBorderWidth(1);
+      ->setThemedBackgroundColor(ui_theme::panelSubtle)
+      ->setCornerRadius(ui_theme::controlRadius())
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(kArtworkFrameBorderWidth);
   jacketImage->setWidth(78)->setHeight(78);
+  jacketImage->setCornerRadius(ui_theme::childRadiusForInset(
+      ui_theme::controlRadius(), static_cast<float>(kArtworkFrameBorderWidth),
+      static_cast<float>(kArtworkFramePadding)));
   artworkFrame->addView(jacketImage);
-  this->addView(artworkFrame);
+  contentCard->addView(artworkFrame);
 
   // Main text
   textLayout->setFlexDirection(FlexDirection::Column)
@@ -79,7 +96,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setFlexShrink(1)
       ->setMinWidth(0)
       ->setGap(4);
-  this->addView(textLayout);
+  contentCard->addView(textLayout);
 
   titleView->setHeight(36);
   titleView->setVAlign(TextView::TextVAlign::BOTTOM);
@@ -105,7 +122,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setHeight(84)
       ->setFlexShrink(0)
       ->setGap(6);
-  this->addView(detailsLayout);
+  contentCard->addView(detailsLayout);
 
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
@@ -161,54 +178,60 @@ void ChartListItemView::setClearRank(int clearRank) {
 }
 
 void ChartListItemView::onSelected() {
-  setBackgroundColor(Color(32, 55, 82, 214));
-  setBorderColor(Color(93, 149, 208, 255));
-  setBorderWidth(1);
-  artworkFrame->setBackgroundColor(Color(13, 25, 39, 240));
-  artworkFrame->setBorderColor(Color(126, 185, 238, 255));
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
+  contentCard->setBorderWidth(1);
+  artworkFrame->setThemedBackgroundColor(ui_theme::controlHover);
+  artworkFrame->setThemedBorderColor(ui_theme::accentBorder);
   applyTextColors(true);
 }
 
 void ChartListItemView::onUnselected() {
-  setBackgroundColor(Color(7, 12, 20, 112));
-  setBorderColor(Color(27, 39, 55, 128));
-  setBorderWidth(1);
-  artworkFrame->setBackgroundColor(Color(8, 14, 23, 224));
-  artworkFrame->setBorderColor(Color(42, 58, 78, 255));
+  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
+  contentCard->setCornerRadius(ui_theme::controlRadius());
+  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
+  contentCard->setBorderWidth(1);
+  artworkFrame->setThemedBackgroundColor(ui_theme::control);
+  artworkFrame->setThemedBorderColor(ui_theme::hairlineStrong);
   applyTextColors(false);
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
   if (solidArchive) {
-    titleView->setColor(selected ? SDL_Color{255, 245, 214, 255}
-                                 : SDL_Color{236, 214, 158, 255});
-    artistView->setColor(selected ? SDL_Color{231, 220, 197, 255}
-                                  : SDL_Color{181, 164, 128, 255});
-    levelView->setColor(selected ? SDL_Color{255, 231, 174, 255}
-                                 : SDL_Color{216, 183, 108, 255});
-    keyModeView->setColor(selected ? SDL_Color{237, 211, 157, 255}
-                                  : SDL_Color{179, 145, 78, 255});
+    if (selected) {
+      titleView->setThemedColor(ui_theme::amber);
+    } else {
+      titleView->setColor(ui_theme::sdl(Color(226, 181, 82, 255)));
+    }
+    artistView->setThemedColor(selected ? ui_theme::textSecondary
+                                        : ui_theme::textMuted);
+    levelView->setThemedColor(ui_theme::amber);
+    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
+                                         : ui_theme::textMuted);
     return;
   }
 
   if (unavailable) {
-    titleView->setColor(selected ? SDL_Color{255, 192, 192, 255}
-                                 : SDL_Color{241, 96, 96, 255});
-    artistView->setColor(selected ? SDL_Color{247, 153, 153, 255}
-                                  : SDL_Color{204, 82, 82, 255});
-    levelView->setColor(selected ? SDL_Color{255, 216, 216, 255}
-                                 : SDL_Color{232, 118, 118, 255});
-    keyModeView->setColor(selected ? SDL_Color{244, 154, 154, 255}
-                                  : SDL_Color{190, 70, 70, 255});
+    titleView->setThemedColor(ui_theme::coral);
+    artistView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
+                                                : Color(219, 101, 94, 255)));
+    levelView->setColor(ui_theme::sdl(selected ? Color(255, 218, 208, 255)
+                                               : Color(240, 132, 116, 255)));
+    keyModeView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
+                                                 : Color(211, 91, 84, 255)));
     return;
   }
 
-  titleView->setColor(selected ? SDL_Color{255, 255, 255, 255}
-                               : SDL_Color{235, 242, 250, 255});
-  artistView->setColor(selected ? SDL_Color{219, 232, 247, 255}
-                                : SDL_Color{152, 174, 198, 255});
-  levelView->setColor(selected ? SDL_Color{245, 250, 255, 255}
-                               : SDL_Color{178, 224, 248, 255});
-  keyModeView->setColor(selected ? SDL_Color{180, 210, 239, 255}
-                                 : SDL_Color{113, 141, 169, 255});
+  titleView->setThemedColor(ui_theme::textPrimary);
+  artistView->setThemedColor(selected ? ui_theme::textSecondary
+                                      : ui_theme::textMuted);
+  if (selected) {
+    levelView->setThemedColor(ui_theme::lime);
+  } else {
+    levelView->setThemedColor(
+        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
+  }
+  keyModeView->setThemedColor(selected ? ui_theme::textSecondary
+                                       : ui_theme::textMuted);
 }

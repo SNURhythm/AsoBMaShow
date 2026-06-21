@@ -9,6 +9,8 @@ using namespace settings_scene;
 namespace {
 constexpr int kPreviewTimelineLanes = 16;
 constexpr double kPreviewBpm = 120.0;
+constexpr int kPreviewSampleCombo = 24;
+constexpr int kPreviewSampleScore = 123456;
 std::unique_ptr<bms_parser::TimeLine>
 makePreviewTimeline(long long timingMicros, bool firstInMeasure = false) {
   auto timeline =
@@ -94,6 +96,7 @@ void SettingsScene::startLanePreview() {
   previewPanelPage = 0;
   resetPreviewSimulation();
   ensurePreviewRenderer();
+  resetPreviewHudSample();
   lastLayoutWidth = -1;
 }
 
@@ -112,7 +115,7 @@ void SettingsScene::ensurePreviewRenderer() {
     Judge previewJudge(previewChart->Meta.Rank);
     previewRenderer = std::make_unique<BMSRenderer>(
         previewChart.get(), previewJudge.timingWindows,
-        context.settings.visibleTimeGreenNumber, false);
+        context.settings.visibleTimeGreenNumber, true);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
     previewRenderer->setPlayAreaWidth(
@@ -123,6 +126,13 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.noteStartPositionPercent);
     previewRenderer->setLaneBeamClockUsesRenderTime(true);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
+    previewRenderer->setJudgementCounterEnabled(
+        context.settings.judgementCounterEnabled);
+    previewRenderer->setJudgementCounterPosition(
+        context.settings.judgementCounterPosition);
+    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
+    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
+    resetPreviewHudSample();
   }
 }
 
@@ -162,6 +172,8 @@ void SettingsScene::destroyPreviewInputHandler() {
   previewLanePressed.clear();
   previewCombo = 0;
   previewScore = 0;
+  previewComboBreak = 0;
+  previewJudgeCount.clear();
 }
 
 void SettingsScene::syncPreviewInputPlayAreaWidth() {
@@ -235,6 +247,48 @@ void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
   }
 }
 
+void SettingsScene::resetPreviewHudSample() {
+  previewJudgeCount.clear();
+  for (int i = 0; i < JudgementCount; ++i) {
+    previewJudgeCount[static_cast<Judgement>(i)] = 0;
+  }
+  previewJudgeCount[PGreat] = 8;
+  previewJudgeCount[Great] = 3;
+  previewJudgeCount[Good] = 1;
+  previewCombo = kPreviewSampleCombo;
+  previewScore = kPreviewSampleScore;
+  previewComboBreak = 0;
+
+  if (previewRenderer == nullptr) {
+    return;
+  }
+  previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
+  previewRenderer->setGaugeStatus(GaugeType::Normal, false, 74.0f);
+  previewRenderer->onJudge(JudgeResult(PGreat, 0), previewCombo, previewScore,
+                           previewElapsedMicros, false);
+}
+
+void SettingsScene::publishPreviewJudgement(const JudgeResult &judgeResult) {
+  if (previewRenderer == nullptr) {
+    return;
+  }
+  if (judgeResult.isComboBreak()) {
+    previewCombo = 0;
+    previewComboBreak++;
+  } else if (judgeResult.judgement != Kpoor) {
+    previewCombo++;
+  }
+  if (!judgeResult.isComboBreak() && judgeResult.judgement != Kpoor) {
+    previewScore += 2;
+  }
+  previewJudgeCount[judgeResult.judgement]++;
+  previewRenderer->onJudge(judgeResult, previewCombo, previewScore,
+                           previewElapsedMicros, true);
+  previewRenderer->setJudgementCounter(
+      judgeResult.judgement, previewJudgeCount[judgeResult.judgement],
+      previewComboBreak);
+}
+
 bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
   if (!previewActive || previewLaneController == nullptr) {
     return nullptr;
@@ -256,16 +310,7 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
   auto result =
       previewLaneController->pressLane(mainLane, compensateLane, inputContext);
   if (result.hasJudge && previewRenderer != nullptr) {
-    if (result.judge.isComboBreak()) {
-      previewCombo = 0;
-    } else if (result.judge.judgement != Kpoor) {
-      previewCombo++;
-    }
-    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
-      previewScore += 2;
-    }
-    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
-                             previewElapsedMicros, true);
+    publishPreviewJudgement(result.judge);
   }
   return result.note;
 }
@@ -282,30 +327,20 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay) {
   };
   auto result = previewLaneController->releaseLane(lane, inputContext);
   if (result.hasJudge && previewRenderer != nullptr) {
-    if (result.judge.isComboBreak()) {
-      previewCombo = 0;
-    } else if (result.judge.judgement != Kpoor) {
-      previewCombo++;
-    }
-    if (!result.judge.isComboBreak() && result.judge.judgement != Kpoor) {
-      previewScore += 2;
-    }
-    previewRenderer->onJudge(result.judge, previewCombo, previewScore,
-                             previewElapsedMicros, true);
+    publishPreviewJudgement(result.judge);
   }
   return result.note;
 }
 
 void SettingsScene::resetPreviewSimulation() {
   previewElapsedMicros = 0;
-  previewCombo = 0;
-  previewScore = 0;
   if (previewLaneController != nullptr) {
     previewLaneController->resetLaneStates();
   }
   if (previewRenderer != nullptr) {
     previewRenderer->reset();
   }
+  resetPreviewHudSample();
   if (previewChart == nullptr) {
     return;
   }

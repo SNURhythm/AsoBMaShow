@@ -7,6 +7,7 @@
 #include "../view/Button.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include "../view/View.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -166,12 +168,95 @@ static LayoutMetrics resolveLayoutMetrics() {
   return metrics;
 }
 
+static bool sameColor(const Color &lhs, const Color &rhs) {
+  return lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b && lhs.a == rhs.a;
+}
+
+static View::ThemeColorProvider themeTextColorProvider(const Color &color) {
+  if (sameColor(color, ui_theme::textPrimary())) {
+    return ui_theme::textPrimary;
+  }
+  if (sameColor(color, ui_theme::textSecondary())) {
+    return ui_theme::textSecondary;
+  }
+  if (sameColor(color, ui_theme::textMuted())) {
+    return ui_theme::textMuted;
+  }
+  if (sameColor(color, ui_theme::cyan())) {
+    return ui_theme::cyan;
+  }
+  if (sameColor(color, ui_theme::lime())) {
+    return ui_theme::lime;
+  }
+  if (sameColor(color, ui_theme::amber())) {
+    return ui_theme::amber;
+  }
+  if (sameColor(color, ui_theme::coral())) {
+    return ui_theme::coral;
+  }
+  return {};
+}
+
+static View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
+  if (sameColor(color, ui_theme::control())) {
+    return ui_theme::control;
+  }
+  if (sameColor(color, ui_theme::controlHover())) {
+    return ui_theme::controlHover;
+  }
+  if (sameColor(color, ui_theme::controlPressed())) {
+    return ui_theme::controlPressed;
+  }
+  if (sameColor(color, ui_theme::panel())) {
+    return ui_theme::panel;
+  }
+  if (sameColor(color, ui_theme::panelStrong())) {
+    return ui_theme::panelStrong;
+  }
+  if (sameColor(color, ui_theme::panelSubtle())) {
+    return ui_theme::panelSubtle;
+  }
+  if (sameColor(color, ui_theme::hairline())) {
+    return ui_theme::hairline;
+  }
+  if (sameColor(color, ui_theme::hairlineSubtle())) {
+    return ui_theme::hairlineSubtle;
+  }
+  if (sameColor(color, ui_theme::hairlineStrong())) {
+    return ui_theme::hairlineStrong;
+  }
+  if (sameColor(color, ui_theme::accentBorder())) {
+    return ui_theme::accentBorder;
+  }
+  if (sameColor(color, ui_theme::accentBorderStrong())) {
+    return ui_theme::accentBorderStrong;
+  }
+  if (sameColor(color, ui_theme::cyan())) {
+    return ui_theme::cyan;
+  }
+  if (sameColor(color, ui_theme::coral())) {
+    return ui_theme::coral;
+  }
+  if (sameColor(color, ui_theme::lime())) {
+    return ui_theme::lime;
+  }
+  if (sameColor(color, ui_theme::amber())) {
+    return ui_theme::amber;
+  }
+  return {};
+}
+
 static TextView *makeText(const std::string &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
                           TextView::TextVAlign valign = TextView::TOP) {
   auto *view = new TextView(kFontPath, size);
   view->setText(text);
-  view->setColor({color.r, color.g, color.b, color.a});
+  const auto themedProvider = themeTextColorProvider(color);
+  if (themedProvider) {
+    view->setThemedColor(themedProvider);
+  } else {
+    view->setColor({color.r, color.g, color.b, color.a});
+  }
   view->setAlign(align);
   view->setVAlign(valign);
   return view;
@@ -191,37 +276,102 @@ static Button *makeButton(int width, int height, TextView *label,
                           const Color &hoverBackground,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
-                          const Color &pressedBorder, int borderWidth = 2) {
+                          const Color &pressedBorder, int borderWidth = 1) {
   auto *button = new Button(0, 0, width, height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
   button->setContentView(label);
+  button->setCornerRadius(ui_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
   button->setBorderColors(normalBorder, hoverBorder, pressedBorder);
+  const auto normalBackgroundProvider =
+      themeSurfaceColorProvider(normalBackground);
+  const auto hoverBackgroundProvider =
+      themeSurfaceColorProvider(hoverBackground);
+  const auto pressedBackgroundProvider =
+      themeSurfaceColorProvider(pressedBackground);
+  if (normalBackgroundProvider && hoverBackgroundProvider &&
+      pressedBackgroundProvider) {
+    button->setThemedBackgroundColors(normalBackgroundProvider,
+                                      hoverBackgroundProvider,
+                                      pressedBackgroundProvider);
+  }
+  const auto normalBorderProvider = themeSurfaceColorProvider(normalBorder);
+  const auto hoverBorderProvider = themeSurfaceColorProvider(hoverBorder);
+  const auto pressedBorderProvider = themeSurfaceColorProvider(pressedBorder);
+  if (normalBorderProvider && hoverBorderProvider && pressedBorderProvider) {
+    button->setThemedBorderColors(normalBorderProvider, hoverBorderProvider,
+                                  pressedBorderProvider);
+  }
   button->setStyledBorderWidth(borderWidth);
+  return button;
+}
+
+static Button *makeControlButton(int width, int height, TextView *label) {
+  auto *button = makeButton(
+      width, height, label, ui_theme::control(), ui_theme::controlHover(),
+      ui_theme::controlPressed(), ui_theme::hairline(),
+      ui_theme::accentBorder(), ui_theme::accentBorderStrong());
+  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
+                                    ui_theme::controlPressed);
+  button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
+                                ui_theme::accentBorderStrong);
+  return button;
+}
+
+static Button *makeAccentButton(int width, int height, TextView *label,
+                                const Color &accent) {
+  const auto accentProvider = themeSurfaceColorProvider(accent);
+  const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+  const uint8_t normalAlpha = light ? 54 : 82;
+  const uint8_t hoverAlpha = light ? 74 : 108;
+  const uint8_t pressedAlpha = light ? 100 : 136;
+  auto *button = makeButton(width, height, label,
+                            Color(accent.r, accent.g, accent.b, normalAlpha),
+                            Color(accent.r, accent.g, accent.b, hoverAlpha),
+                            Color(accent.r, accent.g, accent.b, pressedAlpha),
+                            Color(accent.r, accent.g, accent.b, 178),
+                            Color(accent.r, accent.g, accent.b, 216), accent);
+  if (accentProvider) {
+    auto withModeAlpha = [accentProvider](uint8_t lightAlpha,
+                                          uint8_t darkAlpha) {
+      return [accentProvider, lightAlpha, darkAlpha]() {
+        Color color = accentProvider();
+        color.a = ui_theme::activeMode() == ui_theme::ThemeMode::Light
+                      ? lightAlpha
+                      : darkAlpha;
+        return color;
+      };
+    };
+    button->setThemedBackgroundColors(
+        withModeAlpha(54, 82), withModeAlpha(74, 108), withModeAlpha(100, 136));
+    button->setThemedBorderColors(
+        [accentProvider]() {
+          return ui_theme::withAlpha(accentProvider(), 178);
+        },
+        [accentProvider]() {
+          return ui_theme::withAlpha(accentProvider(), 216);
+        },
+        accentProvider);
+  }
   return button;
 }
 
 static Button *makeStepButton(const LayoutMetrics &metrics, int width,
                               const std::string &label) {
-  return makeButton(width, metrics.actionButtonHeight,
-                    makeText(label, metrics.bodyTextSize + 4,
-                             Color(239, 244, 251), TextView::CENTER,
-                             TextView::MIDDLE),
-                    Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                    Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                    Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  return makeControlButton(width, metrics.actionButtonHeight,
+                           makeText(label, metrics.bodyTextSize + 4,
+                                    ui_theme::textPrimary(), TextView::CENTER,
+                                    TextView::MIDDLE));
 }
 
 static Button *makeResetButton(const LayoutMetrics &metrics) {
-  return makeButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
-                    makeText("Reset", metrics.bodyTextSize + 4,
-                             Color(248, 241, 236), TextView::CENTER,
-                             TextView::MIDDLE),
-                    Color(96, 57, 44, 255), Color(117, 72, 55, 255),
-                    Color(153, 96, 74, 255), Color(165, 105, 79, 255),
-                    Color(193, 124, 93, 255), Color(219, 145, 108, 255));
+  return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
+                          makeText("Reset", metrics.bodyTextSize + 4,
+                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   TextView::MIDDLE),
+                          ui_theme::coral());
 }
 
 static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
@@ -232,7 +382,7 @@ static TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   input->setBorderWidth(0);
   input->setAlign(TextView::CENTER);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor({244, 248, 255, 255});
+  input->setThemedColor(ui_theme::textPrimary);
   return input;
 }
 
@@ -240,11 +390,12 @@ static TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
   input->setText("");
   input->setSize(minWidth, metrics.actionButtonHeight);
-  input->setBackgroundColor(Color(10, 17, 28, 255));
-  input->setBorderColor(Color(78, 105, 140, 255));
-  input->setBorderWidth(2);
+  input->setThemedBackgroundColor(ui_theme::control);
+  input->setCornerRadius(ui_theme::controlRadius());
+  input->setThemedBorderColor(ui_theme::hairline);
+  input->setBorderWidth(1);
   input->setVAlign(TextView::MIDDLE);
-  input->setColor({244, 248, 255, 255});
+  input->setThemedColor(ui_theme::textPrimary);
   return input;
 }
 
@@ -252,9 +403,10 @@ static View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
   value->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  value->setBackgroundColor(Color(10, 17, 28, 255));
-  value->setBorderColor(Color(78, 105, 140, 255));
-  value->setBorderWidth(2);
+  value->setThemedBackgroundColor(ui_theme::control);
+  value->setCornerRadius(ui_theme::controlRadius());
+  value->setThemedBorderColor(ui_theme::hairline);
+  value->setBorderWidth(1);
   value->addView(input);
   return value;
 }
@@ -266,9 +418,11 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setBackgroundColor(Color(19, 30, 46, 245));
-  card->setBorderColor(Color(76, 104, 136, 255));
-  card->setBorderWidth(2);
+  card->setThemedBackgroundColor(ui_theme::panel);
+  card->setCornerRadius(ui_theme::panelRadius());
+  card->setThemedShadow(ui_theme::cardShadow, ui_theme::kCardShadow);
+  card->setThemedBorderColor(ui_theme::hairline);
+  card->setBorderWidth(1);
   card->setMinHeight(static_cast<float>(minHeight));
   if (width > 0) {
     card->setWidth(static_cast<float>(width));
@@ -278,10 +432,10 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   header->setFlexDirection(FlexDirection::Column);
   header->setGap(metrics.compact ? 6.0f : 8.0f);
   auto *titleText =
-      makeWrappedText(title, metrics.sectionTitleSize, Color(244, 248, 255));
+      makeWrappedText(title, metrics.sectionTitleSize, ui_theme::textPrimary());
   header->addView(titleText);
-  auto *descriptionText =
-      makeWrappedText(description, metrics.bodyTextSize, Color(168, 186, 209));
+  auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
+                                          ui_theme::textSecondary());
   header->addView(descriptionText);
   card->addView(header);
   card->addView(body);
@@ -295,9 +449,10 @@ static View *makeSummaryRow(const LayoutMetrics &metrics,
   row->setJustifyContent(YGJustifySpaceBetween);
   row->setAlignItems(YGAlignCenter);
 
-  row->addView(makeText(label, metrics.summaryValueSize, Color(164, 186, 206)));
-  auto *valueText = makeText("", metrics.summaryValueSize, Color(244, 248, 255),
-                             TextView::RIGHT);
+  row->addView(
+      makeText(label, metrics.summaryValueSize, ui_theme::textSecondary()));
+  auto *valueText = makeText("", metrics.summaryValueSize,
+                             ui_theme::textPrimary(), TextView::RIGHT);
   row->addView(valueText);
   if (valueOut != nullptr) {
     *valueOut = valueText;
@@ -382,6 +537,23 @@ static int judgementIndicatorYToPercent(float value) {
 
 static float judgementIndicatorPercentToY(int percent) {
   return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
+}
+
+static float clampJudgementTextY(float value) {
+  if (!std::isfinite(value)) {
+    return AppSettings::kDefaultJudgementTextY;
+  }
+  return std::clamp(value, AppSettings::kMinJudgementTextY,
+                    AppSettings::kMaxJudgementTextY);
+}
+
+static int judgementTextYToPercent(float value) {
+  return static_cast<int>(
+      std::lround(clampJudgementTextY(value) * 100.0f));
+}
+
+static float judgementTextPercentToY(int percent) {
+  return clampJudgementTextY(static_cast<float>(percent) / 100.0f);
 }
 
 static float clampJudgementIndicatorWidthScale(float value) {
@@ -491,6 +663,10 @@ static std::string formatNoteStartPositionLabel(int percent) {
   return std::to_string(clampNoteStartPositionPercent(percent)) + "%";
 }
 
+static std::string formatJudgementPercentLabel(int percent) {
+  return std::to_string(std::clamp(percent, 0, 100)) + "%";
+}
+
 static std::string formatPlayAreaWidthLabel(float width) {
   return formatFloatValue(clampPlayAreaWidth(width), 1);
 }
@@ -504,6 +680,32 @@ static std::string formatJudgementIndicatorRenderModeLabel(
     return "2D HUD";
   }
   return "3D Space";
+}
+
+static std::string formatJudgementCounterPositionLabel(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return "Top";
+  case AppSettings::JudgementCounterPosition::Left:
+    return "Left";
+  case AppSettings::JudgementCounterPosition::Right:
+    return "Right";
+  }
+  return "Top";
+}
+
+static std::string
+formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+    return "World";
+  case AppSettings::GaugeBarPosition::Left:
+    return "Left HUD";
+  case AppSettings::GaugeBarPosition::Right:
+    return "Right HUD";
+  }
+  return "World";
 }
 
 static std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
@@ -531,6 +733,16 @@ formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
     return "Score";
   }
   return "Lowest";
+}
+
+static std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return "Dark";
+  case AppSettings::UiThemeMode::Light:
+    return "Light";
+  }
+  return "Dark";
 }
 
 static std::string formatTableCount(int chartCount) {
@@ -604,8 +816,8 @@ nextNotePriorityMode(AppSettings::NotePriorityMode mode) {
   return AppSettings::NotePriorityMode::Lowest;
 }
 
-static AppSettings::VisibleTimeBpmStrategy nextVisibleTimeBpmStrategy(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
+static AppSettings::VisibleTimeBpmStrategy
+nextVisibleTimeBpmStrategy(AppSettings::VisibleTimeBpmStrategy strategy) {
   switch (strategy) {
   case AppSettings::VisibleTimeBpmStrategy::Chart:
     return AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
@@ -625,6 +837,43 @@ nextJudgementIndicatorRenderMode(
     return AppSettings::JudgementIndicatorRenderMode::World3D;
   }
   return AppSettings::JudgementIndicatorRenderMode::World3D;
+}
+
+static AppSettings::JudgementCounterPosition
+nextJudgementCounterPosition(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return AppSettings::JudgementCounterPosition::Left;
+  case AppSettings::JudgementCounterPosition::Left:
+    return AppSettings::JudgementCounterPosition::Right;
+  case AppSettings::JudgementCounterPosition::Right:
+    return AppSettings::JudgementCounterPosition::Top;
+  }
+  return AppSettings::JudgementCounterPosition::Top;
+}
+
+static AppSettings::GaugeBarPosition
+nextGaugeBarPosition(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+    return AppSettings::GaugeBarPosition::Left;
+  case AppSettings::GaugeBarPosition::Left:
+    return AppSettings::GaugeBarPosition::Right;
+  case AppSettings::GaugeBarPosition::Right:
+    return AppSettings::GaugeBarPosition::World;
+  }
+  return AppSettings::GaugeBarPosition::World;
+}
+
+static AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {
+  switch (mode) {
+  case AppSettings::UiThemeMode::Dark:
+    return AppSettings::UiThemeMode::Light;
+  case AppSettings::UiThemeMode::Light:
+    return AppSettings::UiThemeMode::Dark;
+  }
+  return AppSettings::UiThemeMode::Dark;
 }
 
 } // namespace settings_scene

@@ -14,6 +14,7 @@ public:
   void refreshContentLayout();
   void scrollToBottom();
   float getScrollOffset() const { return scrollOffset; }
+  void setScrollOffset(float offset);
 
 protected:
   void renderImpl(RenderContext &context) override;

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include "../path.h"
@@ -57,6 +58,7 @@ public:
   void stop();
   void render();
   bool hasActiveVisuals() const;
+  std::vector<std::filesystem::path> activeMaterializedVideoPaths() const;
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;
   void setBgaOffsetMs(int offsetMs);
@@ -131,7 +133,8 @@ private:
   size_t bmpLayerCursor = 0;
   std::unordered_map<int, path_t> wavTableAbs;
   std::unordered_map<int, std::unique_ptr<VideoPlayer>> videoPlayerTable;
-  std::mutex videoPlayerTableMutex;
+  std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;
+  mutable std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
   std::mutex imageTableMutex;
   std::atomic<int> currentBga{-1};

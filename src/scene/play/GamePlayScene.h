@@ -9,6 +9,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -54,6 +55,7 @@ public:
   ~GamePlayScene() override;
   void init() override;
   void update(float dt) override;
+  bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
@@ -129,5 +131,4 @@ private:
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();
   void updateLaneStateText();
-  std::mutex judgeMutex;
 };

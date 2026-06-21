@@ -28,6 +28,23 @@ public:
     MostPrevalent = 1,
   };
 
+  enum class JudgementCounterPosition {
+    Top = 0,
+    Left = 1,
+    Right = 2,
+  };
+
+  enum class GaugeBarPosition {
+    World = 0,
+    Left = 1,
+    Right = 2,
+  };
+
+  enum class UiThemeMode {
+    Dark = 0,
+    Light = 1,
+  };
+
   static constexpr int kMinAudioOffsetMs = -300;
   static constexpr int kMaxAudioOffsetMs = 300;
   static constexpr int kMinVisualOffsetMs = -500;
@@ -63,6 +80,9 @@ public:
   static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
   static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
   static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
+  static constexpr float kMinJudgementTextY = 0.0f;
+  static constexpr float kMaxJudgementTextY = 1.0f;
+  static constexpr float kDefaultJudgementTextY = 0.55f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
 
@@ -94,8 +114,14 @@ public:
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+  float judgementTextY = kDefaultJudgementTextY;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
+  bool judgementCounterEnabled = true;
+  JudgementCounterPosition judgementCounterPosition =
+      JudgementCounterPosition::Right;
+  GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
+  UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
 

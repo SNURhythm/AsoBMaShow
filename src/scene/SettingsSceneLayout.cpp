@@ -13,6 +13,26 @@ View *makeCardsColumn(const LayoutMetrics &metrics) {
   cardsColumn->setWidth(static_cast<float>(metrics.cardsWidth));
   return cardsColumn;
 }
+
+int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
+                             bool folded) {
+  if (folded) {
+    return foldButtonSize;
+  }
+  if (metrics.compact) {
+    return std::min(metrics.contentWidth, 520);
+  }
+
+  const int contentGap = metrics.compact ? 8 : 10;
+  const int requiredForTwoActions =
+      metrics.actionButtonWidth * 2 + contentGap + metrics.cardPadding * 2;
+  const int availableWidth = std::max(0, metrics.contentWidth);
+  const int maxPanelWidth = std::min(availableWidth, 760);
+  if (maxPanelWidth <= requiredForTwoActions) {
+    return maxPanelWidth;
+  }
+  return std::clamp(720, requiredForTwoActions, maxPanelWidth);
+}
 } // namespace
 
 void SettingsScene::resetViewState() {
@@ -38,7 +58,13 @@ void SettingsScene::resetViewState() {
   summaryLaneBeamLengthValueText = nullptr;
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
+  summaryJudgementTextYValueText = nullptr;
+  summaryJudgementIndicatorYValueText = nullptr;
+  summaryJudgementIndicatorWidthValueText = nullptr;
+  summaryJudgementCounterPositionValueText = nullptr;
+  summaryGaugeBarPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  summaryUiThemeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
   visibleTimeModeText = nullptr;
@@ -49,8 +75,14 @@ void SettingsScene::resetViewState() {
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
+  judgementCounterModeText = nullptr;
+  judgementCounterPositionText = nullptr;
+  gaugeBarPositionText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
+  uiThemeModeText = nullptr;
+  archiveCacheCleanupButtonText = nullptr;
+  archiveCacheCleanupStatusText = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -59,13 +91,25 @@ void SettingsScene::resetViewState() {
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
+  judgementCounterModeButton = nullptr;
+  judgementCounterPositionButton = nullptr;
+  gaugeBarPositionButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
+  uiThemeModeButton = nullptr;
+  archiveCacheCleanupButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
   miscTabButton = nullptr;
-  tablesTabButton = nullptr;
+  difficultyTablesTabButton = nullptr;
+  bmsLibraryTabButton = nullptr;
+  timingTabText = nullptr;
+  visualTabText = nullptr;
+  laneTabText = nullptr;
+  miscTabText = nullptr;
+  difficultyTablesTabText = nullptr;
+  bmsLibraryTabText = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
@@ -74,6 +118,7 @@ void SettingsScene::resetViewState() {
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  chartFolderStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
   difficultyTableImportProgressFill = nullptr;
   difficultyTableImportTitleText = nullptr;
@@ -92,6 +137,12 @@ void SettingsScene::ensureLayoutUpToDate() {
     return;
   }
 
+  const bool preserveScroll =
+      rootLayout != nullptr && scrollView != nullptr &&
+      activeTab == lastLaidOutTab;
+  const float preservedScrollOffset =
+      preserveScroll ? scrollView->getScrollOffset() : 0.0f;
+
   resetViewState();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
@@ -100,6 +151,10 @@ void SettingsScene::ensureLayoutUpToDate() {
   lastSafeBottom = safe.bottom;
   lastSafeRight = safe.right;
   initView();
+  lastLaidOutTab = activeTab;
+  if (preserveScroll && scrollView != nullptr) {
+    scrollView->setScrollOffset(preservedScrollOffset);
+  }
 }
 
 View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
@@ -117,17 +172,15 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
             : "Green Number is the legacy BMS unit for note visible time. "
               "600 green equals 60 frames on a 60 FPS system, which is "
               "1000 ms.",
-        metrics.bodyTextSize, Color(150, 171, 193)));
+        metrics.bodyTextSize, ui_theme::textSecondary()));
   }
 
   visibleTimeModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-      Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-      Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+  visibleTimeModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        visibleTimeModeText);
   visibleTimeModeButton->setOnClickListener([this]() {
     context.settings.visibleTimeUseMilliseconds =
         !context.settings.visibleTimeUseMilliseconds;
@@ -137,14 +190,11 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeControls->addView(visibleTimeModeButton);
 
   visibleTimeBpmStrategyText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  visibleTimeBpmStrategyButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      visibleTimeBpmStrategyText, Color(33, 56, 87, 255),
-      Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+  visibleTimeBpmStrategyButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        visibleTimeBpmStrategyText);
   visibleTimeBpmStrategyButton->setOnClickListener([this]() {
     context.settings.visibleTimeBpmStrategy =
         nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
@@ -160,7 +210,12 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
   visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  visibleTimeValueControls->setAlignItems(YGAlignFlexStart);
+  visibleTimeValueControls->setAlignItems(compactAdjustments ? YGAlignCenter
+                                                             : YGAlignFlexStart);
+  if (compactAdjustments) {
+    visibleTimeValueControls->setWidthPercent(100.0f);
+    visibleTimeValueControls->setJustifyContent(YGJustifyCenter);
+  }
 
   auto updateVisibleTime = [this](int delta) {
     context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
@@ -237,14 +292,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   rootLayout->setAlignItems(YGAlignFlexStart);
 
   const int foldButtonSize = metrics.compact ? 54 : 58;
-  constexpr int previewPanelPageCount = 2;
+  constexpr int previewPanelPageCount = 3;
   if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
     previewPanelPage = 0;
   }
   const int panelWidth =
-      previewPanelFolded
-          ? foldButtonSize
-          : (metrics.compact ? std::min(metrics.contentWidth, 520) : 380);
+      resolvePreviewPanelWidth(metrics, foldButtonSize, previewPanelFolded);
   auto *previewPanel = new View();
   previewPanel->setWidth(static_cast<float>(panelWidth));
   previewPanel->setPadding(
@@ -254,18 +307,17 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->setFlexDirection(FlexDirection::Column);
   previewPanel->setAlignItems(previewPanelFolded ? YGAlignFlexEnd
                                                  : YGAlignStretch);
-  previewPanel->setBackgroundColor(Color(12, 20, 32, 184));
-  previewPanel->setBorderColor(Color(78, 105, 140, 220));
-  previewPanel->setBorderWidth(2);
+  previewPanel->setThemedBackgroundColor(ui_theme::panel);
+  previewPanel->setCornerRadius(ui_theme::panelRadius());
+  previewPanel->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
+  previewPanel->setThemedBorderColor(ui_theme::hairline);
+  previewPanel->setBorderWidth(1);
 
   auto makeFoldButton = [this, foldButtonSize](const std::string &label) {
     auto *button =
-        makeButton(foldButtonSize, foldButtonSize,
-                   makeText(label, 28, Color(239, 244, 251), TextView::CENTER,
-                            TextView::MIDDLE),
-                   Color(22, 33, 49, 190), Color(31, 46, 67, 220),
-                   Color(53, 78, 110, 240), Color(96, 121, 156, 230),
-                   Color(120, 151, 190, 245), Color(148, 186, 231, 255));
+        makeControlButton(foldButtonSize, foldButtonSize,
+                          makeText(label, 18, ui_theme::textPrimary(),
+                                   TextView::CENTER, TextView::MIDDLE));
     button->setOnClickListener([this]() {
       previewPanelFolded = !previewPanelFolded;
       lastLayoutWidth = -1;
@@ -274,7 +326,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   };
 
   if (previewPanelFolded) {
-    previewPanel->addView(makeFoldButton("<"));
+    previewPanel->addView(makeFoldButton("Open"));
     rootLayout->addView(previewPanel);
     rootLayout->applyYogaLayout();
     refreshSettingsText();
@@ -286,39 +338,94 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setAlignItems(YGAlignCenter);
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
-      makeText("Preview", metrics.sectionTitleSize, Color(244, 248, 255)));
+      makeText("Preview", metrics.sectionTitleSize, ui_theme::textPrimary()));
 
-  auto *previewHeaderActions = new View();
-  previewHeaderActions->setFlexDirection(FlexDirection::Row);
-  previewHeaderActions->setGap(metrics.compact ? 8.0f : 10.0f);
-  previewHeaderActions->setAlignItems(YGAlignCenter);
-  auto *pageButton = makeButton(
-      metrics.compact ? 78 : 88, foldButtonSize,
-      makeText(std::to_string(previewPanelPage + 1) + "/2",
-               metrics.smallTextSize, Color(239, 244, 251), TextView::CENTER,
-               TextView::MIDDLE),
-      Color(22, 33, 49, 190), Color(31, 46, 67, 220),
-      Color(53, 78, 110, 240), Color(96, 121, 156, 230),
-      Color(120, 151, 190, 245), Color(148, 186, 231, 255));
-  pageButton->setOnClickListener([this]() {
-    previewPanelPage = (previewPanelPage + 1) % 2;
-    lastLayoutWidth = -1;
-  });
-  previewHeaderActions->addView(pageButton);
-  previewHeaderActions->addView(makeFoldButton(">"));
-  previewHeader->addView(previewHeaderActions);
+  previewHeader->addView(makeFoldButton("Hide"));
   previewPanel->addView(previewHeader);
+
+  auto *previewTabs = new View();
+  previewTabs->setFlexDirection(FlexDirection::Row);
+  previewTabs->setGap(metrics.compact ? 8.0f : 10.0f);
+  previewTabs->setAlignItems(YGAlignCenter);
+  previewTabs->setWidthPercent(100.0f);
+  previewTabs->setJustifyContent(YGJustifyCenter);
+  const int previewTabGap = metrics.compact ? 8 : 10;
+  const int previewTabWidth = std::max(
+      0, (panelWidth - metrics.cardPadding * 2 -
+          previewTabGap * (previewPanelPageCount - 1)) /
+             previewPanelPageCount);
+  auto makePreviewTab = [this, &metrics, previewTabWidth](int page,
+                                                          const char *label) {
+    auto *labelText =
+        makeText(label, metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    auto *button =
+        previewPanelPage == page
+            ? makeAccentButton(previewTabWidth, metrics.actionButtonHeight,
+                               labelText, ui_theme::cyan())
+            : makeControlButton(previewTabWidth, metrics.actionButtonHeight,
+                                labelText);
+    button->setOnClickListener([this, page]() {
+      if (previewPanelPage == page) {
+        return;
+      }
+      previewPanelPage = page;
+      lastLayoutWidth = -1;
+    });
+    return button;
+  };
+  previewTabs->addView(makePreviewTab(0, "Scroll"));
+  previewTabs->addView(makePreviewTab(1, "Lane"));
+  previewTabs->addView(makePreviewTab(2, "HUD"));
+  previewPanel->addView(previewTabs);
 
   if (previewPanelPage == 0) {
     previewPanel->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
     previewPanel->addView(buildVisibleTimeControls(metrics, false, true));
+
+    previewPanel->addView(makeSummaryRow(metrics, "Note Start",
+                                         &summaryNoteStartPositionValueText));
+    auto *noteStartControls = new View();
+    noteStartControls->setFlexDirection(FlexDirection::Row);
+    noteStartControls->setFlexWrap(YGWrapWrap);
+    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    noteStartControls->setAlignItems(YGAlignCenter);
+    noteStartControls->setWidthPercent(100.0f);
+    noteStartControls->setJustifyContent(YGJustifyCenter);
+    auto updateNoteStartPosition = [this](int deltaPercent) {
+      context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
+          context.settings.noteStartPositionPercent + deltaPercent);
+      persistSettings();
+    };
+    auto *minusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
+    noteStartControls->addView(minusNoteStart);
+    auto *plusNoteStart =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusNoteStart->setOnClickListener(
+        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
+    noteStartControls->addView(plusNoteStart);
+    auto *resetNoteStart = makeResetButton(metrics);
+    resetNoteStart->setOnClickListener([this]() {
+      context.settings.noteStartPositionPercent =
+          AppSettings::kDefaultNoteStartPositionPercent;
+      persistSettings();
+    });
+    noteStartControls->addView(resetNoteStart);
+    previewPanel->addView(noteStartControls);
+  } else if (previewPanelPage == 1) {
     previewPanel->addView(
         makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
     auto *angleControls = new View();
     angleControls->setFlexDirection(FlexDirection::Row);
     angleControls->setFlexWrap(YGWrapWrap);
     angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    angleControls->setAlignItems(YGAlignCenter);
+    angleControls->setWidthPercent(100.0f);
+    angleControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneAngle = [this](float delta) {
       context.settings.laneAngleDegrees =
           clampLaneAngle(context.settings.laneAngleDegrees + delta);
@@ -336,8 +443,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->addView(plusAngle);
     auto *resetAngle = makeResetButton(metrics);
     resetAngle->setOnClickListener([this]() {
-      context.settings.laneAngleDegrees =
-          AppSettings::kDefaultLaneAngleDegrees;
+      context.settings.laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees;
       persistSettings();
     });
     angleControls->addView(resetAngle);
@@ -349,6 +455,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->setFlexDirection(FlexDirection::Row);
     lengthControls->setFlexWrap(YGWrapWrap);
     lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    lengthControls->setAlignItems(YGAlignCenter);
+    lengthControls->setWidthPercent(100.0f);
+    lengthControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneLength = [this](float delta) {
       context.settings.laneLength =
           clampLaneLength(context.settings.laneLength + delta);
@@ -371,44 +480,16 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     lengthControls->addView(resetLength);
     previewPanel->addView(lengthControls);
-  } else {
-    previewPanel->addView(makeSummaryRow(
-        metrics, "Note Start", &summaryNoteStartPositionValueText));
-    auto *noteStartControls = new View();
-    noteStartControls->setFlexDirection(FlexDirection::Row);
-    noteStartControls->setFlexWrap(YGWrapWrap);
-    noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
-    auto updateNoteStartPosition = [this](int deltaPercent) {
-      context.settings.noteStartPositionPercent =
-          clampNoteStartPositionPercent(
-              context.settings.noteStartPositionPercent + deltaPercent);
-      persistSettings();
-    };
-    auto *minusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
-    minusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(-10); });
-    noteStartControls->addView(minusNoteStart);
-    auto *plusNoteStart =
-        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
-    plusNoteStart->setOnClickListener(
-        [updateNoteStartPosition]() { updateNoteStartPosition(10); });
-    noteStartControls->addView(plusNoteStart);
-    auto *resetNoteStart = makeResetButton(metrics);
-    resetNoteStart->setOnClickListener([this]() {
-      context.settings.noteStartPositionPercent =
-          AppSettings::kDefaultNoteStartPositionPercent;
-      persistSettings();
-    });
-    noteStartControls->addView(resetNoteStart);
-    previewPanel->addView(noteStartControls);
 
-    previewPanel->addView(makeSummaryRow(
-        metrics, "Beam Length", &summaryLaneBeamLengthValueText));
+    previewPanel->addView(makeSummaryRow(metrics, "Beam Length",
+                                         &summaryLaneBeamLengthValueText));
     auto *beamControls = new View();
     beamControls->setFlexDirection(FlexDirection::Row);
     beamControls->setFlexWrap(YGWrapWrap);
     beamControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    beamControls->setAlignItems(YGAlignCenter);
+    beamControls->setWidthPercent(100.0f);
+    beamControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneBeamLength = [this](int deltaPercent) {
       context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
           context.settings.laneBeamLengthPercent + deltaPercent);
@@ -439,6 +520,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     playAreaWidthControls->setFlexDirection(FlexDirection::Row);
     playAreaWidthControls->setFlexWrap(YGWrapWrap);
     playAreaWidthControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    playAreaWidthControls->setAlignItems(YGAlignCenter);
+    playAreaWidthControls->setWidthPercent(100.0f);
+    playAreaWidthControls->setJustifyContent(YGJustifyCenter);
     auto updatePreviewPlayAreaWidth = [this](float delta) {
       constexpr int previewKeyMode = 7;
       context.settings.setPlayAreaWidthForKeyMode(
@@ -466,27 +550,235 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     playAreaWidthControls->addView(resetWidth);
     previewPanel->addView(playAreaWidthControls);
+  } else {
+    auto makePreviewStepRow = [&metrics](Button *minus, Button *plus,
+                                         Button *reset) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row);
+      row->setFlexWrap(YGWrapWrap);
+      row->setGap(metrics.compact ? 8.0f : 10.0f);
+      row->setAlignItems(YGAlignCenter);
+      row->setWidthPercent(100.0f);
+      row->setJustifyContent(YGJustifyCenter);
+      row->addView(minus);
+      row->addView(plus);
+      row->addView(reset);
+      return row;
+    };
+
+    previewPanel->addView(makeSummaryRow(metrics, "Judge Text Y",
+                                         &summaryJudgementTextYValueText));
+    auto updateJudgementTextY = [this](int deltaPercent) {
+      const int currentPercent =
+          judgementTextYToPercent(context.settings.judgementTextY);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, 0, 100);
+      context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
+      persistSettings();
+    };
+    auto *minusJudgementTextY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusJudgementTextY->setOnClickListener(
+        [updateJudgementTextY]() { updateJudgementTextY(-10); });
+    auto *plusJudgementTextY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusJudgementTextY->setOnClickListener(
+        [updateJudgementTextY]() { updateJudgementTextY(10); });
+    auto *resetJudgementTextY = makeResetButton(metrics);
+    resetJudgementTextY->setOnClickListener([this]() {
+      context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
+      persistSettings();
+    });
+    previewPanel->addView(makePreviewStepRow(
+        minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
+
+    previewPanel->addView(
+        makeText("Indicator", metrics.summaryValueSize,
+                 ui_theme::textSecondary()));
+    auto *indicatorModeControls = new View();
+    indicatorModeControls->setFlexDirection(FlexDirection::Row);
+    indicatorModeControls->setFlexWrap(YGWrapWrap);
+    indicatorModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    indicatorModeControls->setAlignItems(YGAlignCenter);
+    indicatorModeControls->setWidthPercent(100.0f);
+    indicatorModeControls->setJustifyContent(YGJustifyCenter);
+    judgementIndicatorModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorModeButton =
+        makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                         judgementIndicatorModeText, ui_theme::lime());
+    judgementIndicatorModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorEnabled =
+          !context.settings.judgementIndicatorEnabled;
+      persistSettings();
+    });
+    indicatorModeControls->addView(judgementIndicatorModeButton);
+    judgementIndicatorRenderModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementIndicatorRenderModeButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementIndicatorRenderModeText);
+    judgementIndicatorRenderModeButton->setOnClickListener([this]() {
+      context.settings.judgementIndicatorRenderMode =
+          nextJudgementIndicatorRenderMode(
+              context.settings.judgementIndicatorRenderMode);
+      persistSettings();
+    });
+    indicatorModeControls->addView(judgementIndicatorRenderModeButton);
+    previewPanel->addView(indicatorModeControls);
+
+    previewPanel->addView(makeSummaryRow(metrics, "Indicator Y",
+                                         &summaryJudgementIndicatorYValueText));
+    auto updateIndicatorY = [this](int deltaPercent) {
+      const int currentPercent =
+          judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, 0, 100);
+      context.settings.judgementIndicatorY =
+          judgementIndicatorPercentToY(nextPercent);
+      persistSettings();
+    };
+    auto *minusIndicatorY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusIndicatorY->setOnClickListener(
+        [updateIndicatorY]() { updateIndicatorY(-10); });
+    auto *plusIndicatorY =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusIndicatorY->setOnClickListener(
+        [updateIndicatorY]() { updateIndicatorY(10); });
+    auto *resetIndicatorY = makeResetButton(metrics);
+    resetIndicatorY->setOnClickListener([this]() {
+      context.settings.judgementIndicatorY =
+          AppSettings::kDefaultJudgementIndicatorY;
+      persistSettings();
+    });
+    previewPanel->addView(
+        makePreviewStepRow(minusIndicatorY, plusIndicatorY, resetIndicatorY));
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Indicator Width", &summaryJudgementIndicatorWidthValueText));
+    auto updateIndicatorWidth = [this](int deltaPercent) {
+      const int currentPercent = judgementIndicatorWidthScaleToPercent(
+          context.settings.judgementIndicatorWidthScale);
+      const int minPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMinJudgementIndicatorWidthScale);
+      const int maxPercent = judgementIndicatorWidthScaleToPercent(
+          AppSettings::kMaxJudgementIndicatorWidthScale);
+      const int nextPercent =
+          std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
+      context.settings.judgementIndicatorWidthScale =
+          judgementIndicatorWidthPercentToScale(nextPercent);
+      persistSettings();
+    };
+    auto *minusIndicatorWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10%");
+    minusIndicatorWidth->setOnClickListener(
+        [updateIndicatorWidth]() { updateIndicatorWidth(-10); });
+    auto *plusIndicatorWidth =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10%");
+    plusIndicatorWidth->setOnClickListener(
+        [updateIndicatorWidth]() { updateIndicatorWidth(10); });
+    auto *resetIndicatorWidth = makeResetButton(metrics);
+    resetIndicatorWidth->setOnClickListener([this]() {
+      context.settings.judgementIndicatorWidthScale =
+          AppSettings::kDefaultJudgementIndicatorWidthScale;
+      persistSettings();
+    });
+    previewPanel->addView(makePreviewStepRow(
+        minusIndicatorWidth, plusIndicatorWidth, resetIndicatorWidth));
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Counter", &summaryJudgementCounterPositionValueText));
+    auto *counterControls = new View();
+    counterControls->setFlexDirection(FlexDirection::Row);
+    counterControls->setFlexWrap(YGWrapWrap);
+    counterControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    counterControls->setAlignItems(YGAlignCenter);
+    counterControls->setWidthPercent(100.0f);
+    counterControls->setJustifyContent(YGJustifyCenter);
+    judgementCounterModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementCounterModeButton =
+        makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                         judgementCounterModeText, ui_theme::lime());
+    judgementCounterModeButton->setOnClickListener([this]() {
+      context.settings.judgementCounterEnabled =
+          !context.settings.judgementCounterEnabled;
+      persistSettings();
+    });
+    counterControls->addView(judgementCounterModeButton);
+    judgementCounterPositionText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementCounterPositionButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementCounterPositionText);
+    judgementCounterPositionButton->setOnClickListener([this]() {
+      context.settings.judgementCounterPosition =
+          nextJudgementCounterPosition(
+              context.settings.judgementCounterPosition);
+      persistSettings();
+    });
+    counterControls->addView(judgementCounterPositionButton);
+    previewPanel->addView(counterControls);
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Gauge", &summaryGaugeBarPositionValueText));
+    auto *gaugeControls = new View();
+    gaugeControls->setFlexDirection(FlexDirection::Row);
+    gaugeControls->setFlexWrap(YGWrapWrap);
+    gaugeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    gaugeControls->setAlignItems(YGAlignCenter);
+    gaugeControls->setWidthPercent(100.0f);
+    gaugeControls->setJustifyContent(YGJustifyCenter);
+    gaugeBarPositionText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    gaugeBarPositionButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          gaugeBarPositionText);
+    gaugeBarPositionButton->setOnClickListener([this]() {
+      context.settings.gaugeBarPosition =
+          nextGaugeBarPosition(context.settings.gaugeBarPosition);
+      persistSettings();
+    });
+    gaugeControls->addView(gaugeBarPositionButton);
+    previewPanel->addView(gaugeControls);
   }
 
   auto *restartButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Restart", metrics.bodyTextSize + 4, Color(239, 244, 251),
+      makeText("Restart", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-      Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-      Color(139, 172, 217, 255));
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
-  previewPanel->addView(restartButton);
 
   auto *doneButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Done", metrics.bodyTextSize + 4, Color(237, 243, 252),
+      makeText("Done", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(22, 33, 49, 255), Color(31, 46, 67, 255), Color(53, 78, 110, 255),
-      Color(96, 121, 156, 255), Color(120, 151, 190, 255),
-      Color(148, 186, 231, 255));
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
-  previewPanel->addView(doneButton);
+
+  auto *previewActions = new View();
+  previewActions->setFlexDirection(metrics.compact ? FlexDirection::Column
+                                                   : FlexDirection::Row);
+  previewActions->setFlexWrap(YGWrapWrap);
+  previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
+  previewActions->setAlignItems(YGAlignCenter);
+  previewActions->setWidthPercent(100.0f);
+  previewActions->setJustifyContent(YGJustifyCenter);
+  previewActions->addView(restartButton);
+  previewActions->addView(doneButton);
+  previewPanel->addView(previewActions);
 
   rootLayout->addView(previewPanel);
   rootLayout->applyYogaLayout();
@@ -510,31 +802,22 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
   minusTen->setOnClickListener([updateOffset]() { updateOffset(-10); });
   offsetControls->addView(minusTen);
 
   auto *minusOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
   minusOne->setOnClickListener([updateOffset]() { updateOffset(-1); });
   offsetControls->addView(minusOne);
 
   auto *offsetValue = new View();
   offsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   offsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  offsetValue->setBackgroundColor(Color(10, 17, 28, 255));
-  offsetValue->setBorderColor(Color(78, 105, 140, 255));
-  offsetValue->setBorderWidth(2);
+  offsetValue->setThemedBackgroundColor(ui_theme::control);
+  offsetValue->setCornerRadius(ui_theme::controlRadius());
+  offsetValue->setThemedBorderColor(ui_theme::hairline);
+  offsetValue->setBorderWidth(1);
   offsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   offsetInput->setText("");
   offsetInput->setSize(metrics.offsetValueWidth, metrics.actionButtonHeight);
@@ -542,39 +825,22 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetInput->setBorderWidth(0);
   offsetInput->setAlign(TextView::CENTER);
   offsetInput->setVAlign(TextView::MIDDLE);
-  offsetInput->setColor({244, 248, 255, 255});
+  offsetInput->setThemedColor(ui_theme::textPrimary);
   offsetInput->onEditingFinished(
       [this](const std::string &) { commitOffsetInput(); });
   offsetValue->addView(offsetInput);
   offsetControls->addView(offsetValue);
 
-  auto *plusOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+  auto *plusOne = makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
   plusOne->setOnClickListener([updateOffset]() { updateOffset(1); });
   offsetControls->addView(plusOne);
 
   auto *plusTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
   plusTen->setOnClickListener([updateOffset]() { updateOffset(10); });
   offsetControls->addView(plusTen);
 
-  auto *resetOffset = makeButton(
-      metrics.resetButtonWidth, metrics.actionButtonHeight,
-      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(96, 57, 44, 255), Color(117, 72, 55, 255), Color(153, 96, 74, 255),
-      Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-      Color(219, 145, 108, 255));
+  auto *resetOffset = makeResetButton(metrics);
   resetOffset->setOnClickListener([this]() {
     context.settings.audioOffsetMs = 0;
     persistSettings();
@@ -604,23 +870,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   };
 
   auto *minusVisualTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("-10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
   minusVisualTen->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(-10); });
   visualOffsetControls->addView(minusVisualTen);
 
   auto *minusVisualOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("-1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
   minusVisualOne->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(-1); });
   visualOffsetControls->addView(minusVisualOne);
@@ -628,9 +884,10 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *visualOffsetValue = new View();
   visualOffsetValue->setWidth(static_cast<float>(metrics.offsetValueWidth));
   visualOffsetValue->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  visualOffsetValue->setBackgroundColor(Color(10, 17, 28, 255));
-  visualOffsetValue->setBorderColor(Color(78, 105, 140, 255));
-  visualOffsetValue->setBorderWidth(2);
+  visualOffsetValue->setThemedBackgroundColor(ui_theme::control);
+  visualOffsetValue->setCornerRadius(ui_theme::controlRadius());
+  visualOffsetValue->setThemedBorderColor(ui_theme::hairline);
+  visualOffsetValue->setBorderWidth(1);
   visualOffsetInput = new TextInputBox(kFontPath, metrics.bodyTextSize + 6);
   visualOffsetInput->setText("");
   visualOffsetInput->setSize(metrics.offsetValueWidth,
@@ -639,41 +896,25 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetInput->setBorderWidth(0);
   visualOffsetInput->setAlign(TextView::CENTER);
   visualOffsetInput->setVAlign(TextView::MIDDLE);
-  visualOffsetInput->setColor({244, 248, 255, 255});
+  visualOffsetInput->setThemedColor(ui_theme::textPrimary);
   visualOffsetInput->onEditingFinished(
       [this](const std::string &) { commitVisualOffsetInput(); });
   visualOffsetValue->addView(visualOffsetInput);
   visualOffsetControls->addView(visualOffsetValue);
 
   auto *plusVisualOne =
-      makeButton(metrics.offsetButtonWidthSmall, metrics.actionButtonHeight,
-                 makeText("+1", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
   plusVisualOne->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(1); });
   visualOffsetControls->addView(plusVisualOne);
 
   auto *plusVisualTen =
-      makeButton(metrics.offsetButtonWidthLarge, metrics.actionButtonHeight,
-                 makeText("+10", metrics.bodyTextSize + 4, Color(239, 244, 251),
-                          TextView::CENTER, TextView::MIDDLE),
-                 Color(28, 40, 58, 255), Color(36, 52, 75, 255),
-                 Color(61, 87, 118, 255), Color(84, 107, 139, 255),
-                 Color(108, 136, 174, 255), Color(139, 172, 217, 255));
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
   plusVisualTen->setOnClickListener(
       [updateVisualOffset]() { updateVisualOffset(10); });
   visualOffsetControls->addView(plusVisualTen);
 
-  auto *resetVisualOffset = makeButton(
-      metrics.resetButtonWidth, metrics.actionButtonHeight,
-      makeText("Reset", metrics.bodyTextSize + 4, Color(248, 241, 236),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(96, 57, 44, 255), Color(117, 72, 55, 255), Color(153, 96, 74, 255),
-      Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-      Color(219, 145, 108, 255));
+  auto *resetVisualOffset = makeResetButton(metrics);
   resetVisualOffset->setOnClickListener([this]() {
     context.settings.visualOffsetMs = 0;
     persistSettings();
@@ -698,17 +939,16 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorModeControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorModeControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorModeControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorModeControls->setWidthPercent(100.0f);
+  judgementIndicatorModeControls->setJustifyContent(YGJustifyCenter);
 
   judgementIndicatorModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementIndicatorModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 judgementIndicatorModeText, Color(35, 68, 62, 255),
-                 Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-                 Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-                 Color(145, 214, 195, 255));
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       judgementIndicatorModeText, ui_theme::lime());
   judgementIndicatorModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorEnabled =
         !context.settings.judgementIndicatorEnabled;
@@ -717,14 +957,11 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
 
   judgementIndicatorRenderModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   judgementIndicatorRenderModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 judgementIndicatorRenderModeText, Color(33, 56, 87, 255),
-                 Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-                 Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-                 Color(139, 189, 244, 255));
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementIndicatorRenderModeText);
   judgementIndicatorRenderModeButton->setOnClickListener([this]() {
     context.settings.judgementIndicatorRenderMode =
         nextJudgementIndicatorRenderMode(
@@ -735,12 +972,14 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorModeControls);
 
   judgementIndicatorControls->addView(
-      makeText("Y Position", metrics.bodyTextSize, Color(168, 186, 209)));
+      makeText("Y Position", metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *judgementIndicatorYControls = new View();
   judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorYControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorYControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorYControls->setWidthPercent(100.0f);
+  judgementIndicatorYControls->setJustifyContent(YGJustifyCenter);
   auto updateJudgementIndicatorY = [this](int deltaPercent) {
     const int currentPercent =
         judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
@@ -787,12 +1026,14 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorYControls);
 
   judgementIndicatorControls->addView(
-      makeText("Width", metrics.bodyTextSize, Color(168, 186, 209)));
+      makeText("Width", metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *judgementIndicatorWidthControls = new View();
   judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorWidthControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorWidthControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorWidthControls->setWidthPercent(100.0f);
+  judgementIndicatorWidthControls->setJustifyContent(YGJustifyCenter);
   auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
     const int currentPercent = judgementIndicatorWidthScaleToPercent(
         context.settings.judgementIndicatorWidthScale);
@@ -870,15 +1111,12 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
           ? "Switch between manual hits and chart-timed playback."
           : "Tap to switch modes. The current selection is shown on "
             "the right.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   keysoundModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  keysoundModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText,
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+  keysoundModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText);
   keysoundModeButton->setOnClickListener([this]() {
     context.settings.inputKeysoundEnabled =
         !context.settings.inputKeysoundEnabled;
@@ -903,15 +1141,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
           ? "Choose which hittable note a lane press judges first."
           : "Choose which hittable note a lane press judges first when "
             "multiple notes are inside the input window.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   notePriorityModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  notePriorityModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      notePriorityModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-      Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-      Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+  notePriorityModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        notePriorityModeText);
   notePriorityModeButton->setOnClickListener([this]() {
     context.settings.notePriorityMode =
         nextNotePriorityMode(context.settings.notePriorityMode);
@@ -941,14 +1177,11 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Toggle BGA rendering for previews and gameplay."
                       : "Tap to switch BGA rendering on or off for future "
                         "previews and charts.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
-  bgaModeText = makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  bgaModeText = makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
-  bgaModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 bgaModeText, Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-                 Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-                 Color(118, 163, 217, 255), Color(139, 189, 244, 255));
+  bgaModeButton = makeControlButton(metrics.actionButtonWidth,
+                                    metrics.actionButtonHeight, bgaModeText);
   bgaModeButton->setOnClickListener([this]() {
     context.settings.bgaEnabled = !context.settings.bgaEnabled;
     persistSettings();
@@ -971,16 +1204,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Draw hidden notes as temporary lane markers."
                       : "Draw invisible chart notes as temporary lane "
                         "markers. Judgement and scoring stay unchanged.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   showInvisibleNotesModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   showInvisibleNotesModeButton =
-      makeButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                 showInvisibleNotesModeText, Color(33, 56, 87, 255),
-                 Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-                 Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-                 Color(139, 189, 244, 255));
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        showInvisibleNotesModeText);
   showInvisibleNotesModeButton->setOnClickListener([this]() {
     context.settings.showInvisibleNotes = !context.settings.showInvisibleNotes;
     persistSettings();
@@ -998,6 +1228,94 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
             "skin system exposes dedicated artwork.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+  auto *judgementCounterControls = new View();
+  judgementCounterControls->setFlexDirection(FlexDirection::Column);
+  judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  judgementCounterControls->setAlignItems(YGAlignFlexStart);
+  judgementCounterControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Enable totals and choose where they sit."
+          : "Enable realtime judgement totals and choose where they sit "
+            "during gameplay. Top uses a horizontal strip; Left and Right use "
+            "vertical stacks.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *judgementCounterModeControls = new View();
+  judgementCounterModeControls->setFlexDirection(FlexDirection::Row);
+  judgementCounterModeControls->setFlexWrap(YGWrapWrap);
+  judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+  judgementCounterModeControls->setAlignItems(YGAlignCenter);
+  judgementCounterModeControls->setWidthPercent(100.0f);
+  judgementCounterModeControls->setJustifyContent(YGJustifyCenter);
+  judgementCounterModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementCounterModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       judgementCounterModeText, ui_theme::lime());
+  judgementCounterModeButton->setOnClickListener([this]() {
+    context.settings.judgementCounterEnabled =
+        !context.settings.judgementCounterEnabled;
+    persistSettings();
+  });
+  judgementCounterModeControls->addView(judgementCounterModeButton);
+  judgementCounterPositionText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementCounterPositionButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementCounterPositionText);
+  judgementCounterPositionButton->setOnClickListener([this]() {
+    context.settings.judgementCounterPosition =
+        nextJudgementCounterPosition(
+            context.settings.judgementCounterPosition);
+    persistSettings();
+  });
+  judgementCounterModeControls->addView(judgementCounterPositionButton);
+  judgementCounterControls->addView(judgementCounterModeControls);
+  cardsColumn->addView(makeCard(
+      metrics, "Judgement Counter",
+      metrics.compact ? "Realtime judgement counts during gameplay."
+                      : "Show realtime judgement totals in the gameplay HUD "
+                        "without changing lane rendering.",
+      judgementCounterControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *gaugeControls = new View();
+  gaugeControls->setFlexDirection(FlexDirection::Column);
+  gaugeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  gaugeControls->setAlignItems(YGAlignFlexStart);
+  gaugeControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Choose world-space bar or side HUD bar."
+          : "World draws a horizontal gauge below the judgement line. Left "
+            "and Right draw a vertical 2D HUD gauge on that side.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *gaugePositionControls = new View();
+  gaugePositionControls->setFlexDirection(FlexDirection::Row);
+  gaugePositionControls->setFlexWrap(YGWrapWrap);
+  gaugePositionControls->setGap(metrics.compact ? 8.0f : 10.0f);
+  gaugePositionControls->setAlignItems(YGAlignCenter);
+  gaugePositionControls->setWidthPercent(100.0f);
+  gaugePositionControls->setJustifyContent(YGJustifyCenter);
+  gaugeBarPositionText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  gaugeBarPositionButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        gaugeBarPositionText);
+  gaugeBarPositionButton->setOnClickListener([this]() {
+    context.settings.gaugeBarPosition =
+        nextGaugeBarPosition(context.settings.gaugeBarPosition);
+    persistSettings();
+  });
+  gaugePositionControls->addView(gaugeBarPositionButton);
+  gaugeControls->addView(gaugePositionControls);
+  cardsColumn->addView(makeCard(
+      metrics, "Gauge Bar",
+      metrics.compact ? "Gameplay gauge placement."
+                      : "Render the current gauge as a live bar instead of a "
+                        "text-only HUD line.",
+      gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *bgaDisplayControls = new View();
   bgaDisplayControls->setFlexDirection(FlexDirection::Column);
   bgaDisplayControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1009,15 +1327,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
           : "Fit preserves the whole BGA with letterboxing. Fill preserves "
             "aspect and crops edges. Stretch fills the screen without "
             "preserving aspect.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   bgaDisplayModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  bgaDisplayModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, bgaDisplayModeText,
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+  bgaDisplayModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        bgaDisplayModeText);
   bgaDisplayModeButton->setOnClickListener([this]() {
     context.settings.bgaDisplayMode =
         nextBgaDisplayMode(context.settings.bgaDisplayMode);
@@ -1131,6 +1447,32 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+
+  auto *previewControls = new View();
+  previewControls->setFlexDirection(FlexDirection::Column);
+  previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  previewControls->setAlignItems(YGAlignFlexStart);
+  previewControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Open a live gameplay preview with falling notes."
+          : "Open a live gameplay preview with falling notes. It uses the "
+            "same lane renderer, camera, viewport, notes, and HUD as "
+            "gameplay.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *previewButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::lime());
+  previewButton->setOnClickListener([this]() { startLanePreview(); });
+  previewControls->addView(previewButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Gameplay Preview",
+      metrics.compact ? "Test lane and HUD setup in the gameplay renderer."
+                      : "Test lane and HUD setup in the gameplay renderer "
+                        "before entering a chart.",
+      previewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, false);
   cardsColumn->addView(makeCard(
       metrics, "Visible Time",
@@ -1309,7 +1651,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
 
     auto *label =
         makeText(std::to_string(keyMode) + "K", metrics.bodyTextSize + 4,
-                 Color(244, 248, 255), TextView::CENTER, TextView::MIDDLE);
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
     label->setWidth(metrics.compact ? 54.0f : 64.0f);
     label->setHeight(static_cast<float>(metrics.actionButtonHeight));
     row->addView(label);
@@ -1334,21 +1676,21 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     });
     row->addView(minusWidth);
 
-    input->onEditingFinished([this, keyMode, input,
-                              applyWidth](const std::string &) {
-      const std::string rawText = input->getText();
-      if (rawText.empty()) {
-        input->setEditingText(formatPlayAreaWidthLabel(
-            context.settings.playAreaWidthForKeyMode(keyMode)));
-        return;
-      }
-      try {
-        applyWidth(std::stof(rawText));
-      } catch (const std::exception &) {
-        input->setEditingText(formatPlayAreaWidthLabel(
-            context.settings.playAreaWidthForKeyMode(keyMode)));
-      }
-    });
+    input->onEditingFinished(
+        [this, keyMode, input, applyWidth](const std::string &) {
+          const std::string rawText = input->getText();
+          if (rawText.empty()) {
+            input->setEditingText(formatPlayAreaWidthLabel(
+                context.settings.playAreaWidthForKeyMode(keyMode)));
+            return;
+          }
+          try {
+            applyWidth(std::stof(rawText));
+          } catch (const std::exception &) {
+            input->setEditingText(formatPlayAreaWidthLabel(
+                context.settings.playAreaWidthForKeyMode(keyMode)));
+          }
+        });
     row->addView(makeInputFrame(metrics, input));
 
     auto *plusWidth =
@@ -1359,9 +1701,8 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     row->addView(plusWidth);
 
     auto *resetWidth = makeResetButton(metrics);
-    resetWidth->setOnClickListener([applyWidth]() {
-      applyWidth(AppSettings::kDefaultPlayAreaWidth);
-    });
+    resetWidth->setOnClickListener(
+        [applyWidth]() { applyWidth(AppSettings::kDefaultPlayAreaWidth); });
     row->addView(resetWidth);
 
     syncInput();
@@ -1432,37 +1773,42 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "beam.",
       beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
-  auto *previewControls = new View();
-  previewControls->setFlexDirection(FlexDirection::Column);
-  previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  previewControls->setAlignItems(YGAlignFlexStart);
-  previewControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Open a live gameplay preview with falling notes."
-          : "Open a live gameplay preview with falling notes. It uses the "
-            "same lane renderer, camera, viewport, and note textures as "
-            "gameplay.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
-  auto *previewButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Preview", metrics.bodyTextSize + 4, Color(239, 244, 251),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
-  previewButton->setOnClickListener([this]() { startLanePreview(); });
-  previewControls->addView(previewButton);
-  cardsColumn->addView(makeCard(
-      metrics, "Gameplay Preview",
-      metrics.compact ? "Test lane setup in the gameplay renderer."
-                      : "Test lane setup in the gameplay renderer before "
-                        "entering a chart.",
-      previewControls, metrics.modeCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
 
 View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+  measureTemporaryArchiveCache();
+
+  auto *themeControls = new View();
+  themeControls->setFlexDirection(FlexDirection::Column);
+  themeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  themeControls->setAlignItems(YGAlignFlexStart);
+  themeControls->addView(makeWrappedText(
+      metrics.compact ? "Switch the UI palette."
+                      : "Switch between the dark prismatic palette and a "
+                        "light high-contrast palette.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  uiThemeModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  uiThemeModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       uiThemeModeText, ui_theme::cyan());
+  uiThemeModeButton->setOnClickListener([this]() {
+    context.settings.uiThemeMode =
+        nextUiThemeMode(context.settings.uiThemeMode);
+    persistSettings();
+    lastLayoutWidth = -1;
+  });
+  themeControls->addView(uiThemeModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Theme",
+      metrics.compact ? "Dark stays colorful without the old graphite panels."
+                      : "Dark keeps the stage-light rhythm-game mood without "
+                        "the old graphite panels. Light is available for "
+                        "brighter environments.",
+      themeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *archivePreviewControls = new View();
   archivePreviewControls->setFlexDirection(FlexDirection::Column);
@@ -1472,16 +1818,13 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
       metrics.compact ? "Preview selected charts inside non-solid archives."
                       : "Preview selected charts inside non-solid archives "
                         "from the song select screen.",
-      metrics.bodyTextSize, Color(150, 171, 193)));
+      metrics.bodyTextSize, ui_theme::textSecondary()));
   archiveChartPreviewModeText =
-      makeText("", metrics.bodyTextSize + 6, Color(245, 248, 252),
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  archiveChartPreviewModeButton = makeButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      archiveChartPreviewModeText, Color(35, 68, 62, 255),
-      Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+  archiveChartPreviewModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       archiveChartPreviewModeText, ui_theme::lime());
   archiveChartPreviewModeButton->setOnClickListener([this]() {
     context.settings.archiveChartPreviewEnabled =
         !context.settings.archiveChartPreviewEnabled;
@@ -1496,19 +1839,54 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
                         "feel heavy on large packs.",
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+  auto *cacheCleanupControls = new View();
+  cacheCleanupControls->setFlexDirection(FlexDirection::Column);
+  cacheCleanupControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  cacheCleanupControls->setAlignItems(YGAlignFlexStart);
+  cacheCleanupControls->addView(makeWrappedText(
+      metrics.compact ? "Remove temporary files extracted from archives."
+                      : "Remove temporary BGA and video files extracted from "
+                        "archives. They will be recreated when needed.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  archiveCacheCleanupButtonText =
+      makeText(archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up",
+               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  archiveCacheCleanupButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       archiveCacheCleanupButtonText, ui_theme::coral());
+  archiveCacheCleanupButton->setOnClickListener(
+      [this]() { cleanupTemporaryArchiveCache(); });
+  cacheCleanupControls->addView(archiveCacheCleanupButton);
+  archiveCacheCleanupStatusText =
+      makeWrappedText(archiveCacheCleanupStatusMessage, metrics.bodyTextSize,
+                      ui_theme::textSecondary());
+  archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
+  cacheCleanupControls->addView(archiveCacheCleanupStatusText);
+  cardsColumn->addView(makeCard(
+      metrics, "Archive Temporary Cache",
+      metrics.compact ? "Clear extracted archive media."
+                      : "Clear temporary files made while playing media from "
+                        "archives.",
+      cacheCleanupControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   return cardsColumn;
 }
 
-View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
+View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
-  loadChartEntries();
-  refreshChartEntryBackupStatuses();
+
+  const std::string tableCardDescription =
+      metrics.compact ? "Import a bmstable page, header, or table list URL."
+                      : "Import a bmstable page URL or a direct header JSON "
+                        "URL. Table-list JSON URLs import each listed table.";
 
   auto *addControls = new View();
   addControls->setFlexDirection(FlexDirection::Column);
   addControls->setGap(metrics.compact ? 12.0f : 16.0f);
   addControls->setAlignItems(YGAlignFlexStart);
+  addControls->setAlignSelf(YGAlignStretch);
 
   const int addRowGap = metrics.compact ? 8 : 12;
   const int addButtonWidth = metrics.compact ? 150 : 170;
@@ -1533,13 +1911,11 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   });
   urlRow->addView(tableUrlInput);
 
-  auto *addButton = makeButton(
+  auto *addButton = makeAccentButton(
       addButtonWidth, metrics.actionButtonHeight,
-      makeText("Add Table", metrics.bodyTextSize + 4, Color(239, 244, 251),
+      makeText("Add Table", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+      ui_theme::lime());
   addButton->setOnClickListener([this]() { addDifficultyTableFromUrl(); });
   urlRow->addView(addButton);
   addControls->addView(urlRow);
@@ -1550,31 +1926,147 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
             difficultyTableStatusColor.b, difficultyTableStatusColor.a));
   addControls->addView(difficultyTableStatusText);
 
-  cardsColumn->addView(makeCard(
-      metrics, "Add Difficulty Table",
-      metrics.compact ? "Import a bmstable page, header, or table list URL."
-                      : "Import a bmstable page URL or a direct header JSON "
-                        "URL. Table-list JSON URLs import each listed table.",
-      addControls, metrics.modeCardHeight, metrics.cardsWidth));
+  auto *tableList = new View();
+  tableList->setFlexDirection(FlexDirection::Column);
+  tableList->setGap(metrics.compact ? 10.0f : 12.0f);
+  tableList->setAlignSelf(YGAlignStretch);
+
+  if (difficultyTables.empty()) {
+    tableList->addView(makeWrappedText("No difficulty tables are installed.",
+                                       metrics.bodyTextSize,
+                                       ui_theme::textSecondary()));
+  } else {
+    for (const auto &table : difficultyTables) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Column);
+      row->setGap(metrics.compact ? 8.0f : 10.0f);
+      row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
+      row->setThemedBackgroundColor(ui_theme::panelSubtle);
+      row->setCornerRadius(ui_theme::controlRadius());
+      row->setThemedBorderColor(ui_theme::hairline);
+      row->setBorderWidth(1);
+
+      auto *titleRow = new View();
+      titleRow->setFlexDirection(FlexDirection::Row);
+      titleRow->setFlexWrap(YGWrapWrap);
+      titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
+      titleRow->setAlignItems(YGAlignCenter);
+      titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
+                                        ui_theme::textPrimary()));
+      titleRow->addView(
+          makeText(table.symbol, metrics.bodyTextSize, ui_theme::cyan()));
+      titleRow->addView(makeText(formatTableCount(table.chartCount),
+                                 metrics.bodyTextSize,
+                                 ui_theme::textSecondary()));
+      row->addView(titleRow);
+
+      row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
+                                   metrics.smallTextSize,
+                                   ui_theme::textMuted()));
+
+      auto *actions = new View();
+      actions->setFlexDirection(FlexDirection::Row);
+      actions->setFlexWrap(YGWrapWrap);
+      actions->setGap(metrics.compact ? 8.0f : 10.0f);
+
+      const int smallActionWidth = metrics.compact ? 136 : 156;
+      auto *updateButton = makeControlButton(
+          smallActionWidth, metrics.actionButtonHeight,
+          makeText("Update", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      updateButton->setOnClickListener([this, tableId = table.id]() {
+        updateDifficultyTableFromSource(tableId);
+      });
+      actions->addView(updateButton);
+
+      const bool confirmingDelete = pendingDeleteDifficultyTableId == table.id;
+      auto *deleteButton = makeAccentButton(
+          smallActionWidth, metrics.actionButtonHeight,
+          makeText(confirmingDelete ? "Confirm" : "Delete",
+                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          ui_theme::coral());
+      deleteButton->setOnClickListener(
+          [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
+      actions->addView(deleteButton);
+
+      row->addView(actions);
+      tableList->addView(row);
+    }
+  }
+
+  auto *installedTablesBody = new View();
+  installedTablesBody->setFlexDirection(FlexDirection::Column);
+  installedTablesBody->setGap(metrics.compact ? 14.0f : 18.0f);
+  installedTablesBody->setAlignSelf(YGAlignStretch);
+  installedTablesBody->addView(addControls);
+  installedTablesBody->addView(tableList);
+
+  cardsColumn->addView(makeCard(metrics, "Installed Difficulty Tables",
+                                tableCardDescription, installedTablesBody,
+                                metrics.modeCardHeight, metrics.cardsWidth));
+  return cardsColumn;
+}
+
+View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
+  auto *cardsColumn = makeCardsColumn(metrics);
+  loadChartEntries();
+  refreshChartEntryBackupStatuses();
 
   auto *folderList = new View();
   folderList->setFlexDirection(FlexDirection::Column);
   folderList->setGap(metrics.compact ? 10.0f : 12.0f);
 
-  auto *refreshFoldersButton = makeButton(
-      metrics.compact ? 160 : 180, metrics.actionButtonHeight,
-      makeText("Refresh List", metrics.bodyTextSize + 2, Color(239, 244, 251),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(35, 68, 62, 255), Color(45, 88, 80, 255), Color(63, 118, 107, 255),
-      Color(97, 157, 142, 255), Color(120, 187, 169, 255),
-      Color(145, 214, 195, 255));
+  auto *folderActions = new View();
+  folderActions->setFlexDirection(FlexDirection::Row);
+  folderActions->setFlexWrap(YGWrapWrap);
+  folderActions->setGap(metrics.compact ? 8.0f : 10.0f);
+  folderActions->setAlignItems(YGAlignFlexStart);
+
+  auto *refreshFoldersButton = makeAccentButton(
+      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+      makeText("Refresh List", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      ui_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
-  folderList->addView(refreshFoldersButton);
+  folderActions->addView(refreshFoldersButton);
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  auto *addFolderButton = makeAccentButton(
+      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+      makeText("Add Folder", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      ui_theme::cyan());
+  addFolderButton->setOnClickListener([this]() {
+    if (context.requestAddChartFolderFromFiles) {
+      context.requestAddChartFolderFromFiles();
+      chartFolderStatusMessage = "Choose a folder to add.";
+      chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+    } else {
+      chartFolderStatusMessage = "Add Folder is unavailable.";
+      chartFolderStatusColor = {255, 177, 170, 255};
+    }
+
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
+    }
+  });
+  folderActions->addView(addFolderButton);
+#endif
+
+  folderList->addView(folderActions);
+
+  chartFolderStatusText = makeWrappedText(
+      chartFolderStatusMessage, metrics.bodyTextSize,
+      Color(chartFolderStatusColor.r, chartFolderStatusColor.g,
+            chartFolderStatusColor.b, chartFolderStatusColor.a));
+  folderList->addView(chartFolderStatusText);
 
   if (chartEntries.empty()) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
                                         metrics.bodyTextSize,
-                                        Color(165, 185, 205)));
+                                        ui_theme::textSecondary()));
   } else {
     for (const auto &entry : chartEntries) {
       const std::string entryPathText = formatChartEntryPath(entry);
@@ -1583,16 +2075,17 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       row->setFlexDirection(FlexDirection::Column);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(Color(12, 21, 34, 230));
-      row->setBorderColor(Color(63, 86, 113, 255));
-      row->setBorderWidth(2);
+      row->setThemedBackgroundColor(ui_theme::panelSubtle);
+      row->setCornerRadius(ui_theme::controlRadius());
+      row->setThemedBorderColor(ui_theme::hairline);
+      row->setBorderWidth(1);
 
       row->addView(makeWrappedText(formatChartEntryName(entry),
                                    metrics.bodyTextSize + 6,
-                                   Color(244, 248, 255)));
+                                   ui_theme::textPrimary()));
       row->addView(makeWrappedText(formatChartEntrySource(entry),
                                    metrics.smallTextSize,
-                                   Color(142, 164, 189)));
+                                   ui_theme::textMuted()));
 
       auto *actions = new View();
       actions->setFlexDirection(FlexDirection::Row);
@@ -1602,16 +2095,12 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
       const int folderActionWidth = metrics.compact ? 136 : 156;
       const bool confirmingDelete =
           pendingDeleteChartEntryPath == entryPathText;
-      auto *deleteButton = makeButton(
+      auto *deleteButton = makeAccentButton(
           folderActionWidth, metrics.actionButtonHeight,
           makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, Color(248, 241, 236),
+                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          confirmingDelete ? Color(130, 58, 45, 255) : Color(96, 57, 44, 255),
-          confirmingDelete ? Color(153, 75, 58, 255) : Color(117, 72, 55, 255),
-          confirmingDelete ? Color(184, 96, 74, 255) : Color(153, 96, 74, 255),
-          Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-          Color(219, 145, 108, 255));
+          ui_theme::coral());
       deleteButton->setOnClickListener(
           [this, entryPathText]() { deleteChartEntry(entryPathText); });
       actions->addView(deleteButton);
@@ -1623,20 +2112,13 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
           backupStatusIt != chartEntryICloudBackupExcluded.end() &&
           backupStatusIt->second;
       const int backupActionWidth = metrics.compact ? 224 : 260;
-      auto *backupButton = makeButton(
+      auto *backupButton = makeAccentButton(
           backupActionWidth, metrics.actionButtonHeight,
           makeText(backupExcluded ? "Enable iCloud Backup"
                                   : "Disable iCloud Backup",
-                   metrics.smallTextSize, Color(239, 244, 251),
+                   metrics.smallTextSize, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          backupExcluded ? Color(33, 56, 87, 255) : Color(35, 68, 62, 255),
-          backupExcluded ? Color(43, 72, 110, 255) : Color(45, 88, 80, 255),
-          backupExcluded ? Color(59, 98, 147, 255) : Color(63, 118, 107, 255),
-          backupExcluded ? Color(92, 131, 177, 255) : Color(97, 157, 142, 255),
-          backupExcluded ? Color(118, 163, 217, 255)
-                         : Color(120, 187, 169, 255),
-          backupExcluded ? Color(139, 189, 244, 255)
-                         : Color(145, 214, 195, 255));
+          backupExcluded ? ui_theme::cyan() : ui_theme::lime());
       backupButton->setOnClickListener([this, entryPathText]() {
         toggleChartEntryICloudBackup(entryPathText);
       });
@@ -1654,86 +2136,6 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
                       : "Remove a folder entry and cached charts under it "
                         "from the library database.",
       folderList, metrics.modeCardHeight, metrics.cardsWidth));
-
-  auto *tableList = new View();
-  tableList->setFlexDirection(FlexDirection::Column);
-  tableList->setGap(metrics.compact ? 10.0f : 12.0f);
-
-  if (difficultyTables.empty()) {
-    tableList->addView(makeWrappedText("No difficulty tables are installed.",
-                                       metrics.bodyTextSize,
-                                       Color(165, 185, 205)));
-  } else {
-    for (const auto &table : difficultyTables) {
-      auto *row = new View();
-      row->setFlexDirection(FlexDirection::Column);
-      row->setGap(metrics.compact ? 8.0f : 10.0f);
-      row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setBackgroundColor(Color(12, 21, 34, 230));
-      row->setBorderColor(Color(63, 86, 113, 255));
-      row->setBorderWidth(2);
-
-      auto *titleRow = new View();
-      titleRow->setFlexDirection(FlexDirection::Row);
-      titleRow->setFlexWrap(YGWrapWrap);
-      titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
-      titleRow->setAlignItems(YGAlignCenter);
-      titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
-                                        Color(244, 248, 255)));
-      titleRow->addView(
-          makeText(table.symbol, metrics.bodyTextSize, Color(181, 207, 236)));
-      titleRow->addView(makeText(formatTableCount(table.chartCount),
-                                 metrics.bodyTextSize, Color(165, 185, 205)));
-      row->addView(titleRow);
-
-      row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
-                                   metrics.smallTextSize,
-                                   Color(142, 164, 189)));
-
-      auto *actions = new View();
-      actions->setFlexDirection(FlexDirection::Row);
-      actions->setFlexWrap(YGWrapWrap);
-      actions->setGap(metrics.compact ? 8.0f : 10.0f);
-
-      const int smallActionWidth = metrics.compact ? 136 : 156;
-      auto *updateButton = makeButton(
-          smallActionWidth, metrics.actionButtonHeight,
-          makeText("Update", metrics.bodyTextSize + 2, Color(239, 244, 251),
-                   TextView::CENTER, TextView::MIDDLE),
-          Color(33, 56, 87, 255), Color(43, 72, 110, 255),
-          Color(59, 98, 147, 255), Color(92, 131, 177, 255),
-          Color(118, 163, 217, 255), Color(139, 189, 244, 255));
-      updateButton->setOnClickListener([this, tableId = table.id]() {
-        updateDifficultyTableFromSource(tableId);
-      });
-      actions->addView(updateButton);
-
-      const bool confirmingDelete = pendingDeleteDifficultyTableId == table.id;
-      auto *deleteButton = makeButton(
-          smallActionWidth, metrics.actionButtonHeight,
-          makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, Color(248, 241, 236),
-                   TextView::CENTER, TextView::MIDDLE),
-          confirmingDelete ? Color(130, 58, 45, 255) : Color(96, 57, 44, 255),
-          confirmingDelete ? Color(153, 75, 58, 255) : Color(117, 72, 55, 255),
-          confirmingDelete ? Color(184, 96, 74, 255) : Color(153, 96, 74, 255),
-          Color(165, 105, 79, 255), Color(193, 124, 93, 255),
-          Color(219, 145, 108, 255));
-      deleteButton->setOnClickListener(
-          [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
-      actions->addView(deleteButton);
-
-      row->addView(actions);
-      tableList->addView(row);
-    }
-  }
-
-  cardsColumn->addView(makeCard(
-      metrics, "Installed Tables",
-      metrics.compact ? "Update from source URL or remove a table."
-                      : "Update a table from its stored source URL or remove "
-                        "it from the chart database.",
-      tableList, metrics.modeCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
 
@@ -1749,7 +2151,7 @@ void SettingsScene::buildDifficultyTableImportModal(
   difficultyTableImportModalRoot->setFlexDirection(FlexDirection::Column);
   difficultyTableImportModalRoot->setAlignItems(YGAlignCenter);
   difficultyTableImportModalRoot->setJustifyContent(YGJustifyCenter);
-  difficultyTableImportModalRoot->setBackgroundColor(Color(0, 0, 0, 164));
+  difficultyTableImportModalRoot->setThemedBackgroundColor(ui_theme::scrim);
 
   auto *importPanel = new View();
   importPanel
@@ -1761,44 +2163,47 @@ void SettingsScene::buildDifficultyTableImportModal(
       ->setAlignItems(YGAlignStretch)
       ->setGap(metrics.compact ? 14.0f : 18.0f)
       ->setPadding(Edge::All, static_cast<float>(metrics.cardPadding))
-      ->setBackgroundColor(Color(17, 27, 42, 248))
-      ->setBorderColor(Color(88, 118, 154, 255))
-      ->setBorderWidth(2);
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(ui_theme::hairline)
+      ->setBorderWidth(1);
 
   difficultyTableImportTitleText =
       makeWrappedText("Importing Difficulty Tables", metrics.sectionTitleSize,
-                      Color(244, 248, 255));
+                      ui_theme::textPrimary());
   importPanel->addView(difficultyTableImportTitleText);
 
   difficultyTableImportStatusText = makeWrappedText(
-      "Preparing import...", metrics.bodyTextSize, Color(181, 207, 236));
+      "Preparing import...", metrics.bodyTextSize, ui_theme::textSecondary());
   importPanel->addView(difficultyTableImportStatusText);
 
   difficultyTableImportTableText =
       makeWrappedText("Current table: Resolving table URL",
-                      metrics.bodyTextSize, Color(239, 244, 251));
+                      metrics.bodyTextSize, ui_theme::textPrimary());
   importPanel->addView(difficultyTableImportTableText);
 
   auto *progressRow = new View();
   progressRow->setFlexDirection(FlexDirection::Column);
   progressRow->setGap(metrics.compact ? 8.0f : 10.0f);
   difficultyTableImportProgressText =
-      makeText("0 / 1 table", metrics.bodyTextSize, Color(165, 185, 205));
+      makeText("0 / 1 table", metrics.bodyTextSize, ui_theme::textMuted());
   progressRow->addView(difficultyTableImportProgressText);
 
   auto *progressTrack = new View();
   progressTrack->setHeight(static_cast<float>(metrics.compact ? 16 : 18));
   progressTrack->setAlignSelf(YGAlignStretch);
   progressTrack->setFlexDirection(FlexDirection::Row);
-  progressTrack->setBackgroundColor(Color(8, 14, 24, 255));
-  progressTrack->setBorderColor(Color(66, 91, 122, 255));
-  progressTrack->setBorderWidth(2);
+  progressTrack->setThemedBackgroundColor(ui_theme::control);
+  progressTrack->setCornerRadius(ui_theme::controlRadius());
+  progressTrack->setThemedBorderColor(ui_theme::hairline);
+  progressTrack->setBorderWidth(1);
   difficultyTableImportProgressFill = new View();
   difficultyTableImportProgressFill->setWidthPercent(0.0f);
   difficultyTableImportProgressFill->setHeight(
       static_cast<float>(metrics.compact ? 16 : 18));
-  difficultyTableImportProgressFill->setBackgroundColor(
-      Color(97, 157, 142, 255));
+  difficultyTableImportProgressFill->setThemedBackgroundColor(
+      ui_theme::progressFill);
   progressTrack->addView(difficultyTableImportProgressFill);
   progressRow->addView(progressTrack);
   importPanel->addView(progressRow);
@@ -1806,13 +2211,10 @@ void SettingsScene::buildDifficultyTableImportModal(
   auto *modalActions = new View();
   modalActions->setFlexDirection(FlexDirection::Row);
   modalActions->setJustifyContent(YGJustifyFlexEnd);
-  difficultyTableImportCloseButton = makeButton(
+  difficultyTableImportCloseButton = makeControlButton(
       160, 60,
-      makeText("Close", metrics.bodyTextSize + 2, Color(239, 244, 251),
-               TextView::CENTER, TextView::MIDDLE),
-      Color(33, 56, 87, 255), Color(43, 72, 110, 255), Color(59, 98, 147, 255),
-      Color(92, 131, 177, 255), Color(118, 163, 217, 255),
-      Color(139, 189, 244, 255));
+      makeText("Close", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE));
   difficultyTableImportCloseButton->setOnClickListener(
       [this]() { hideDifficultyTableImportModal(); });
   modalActions->addView(difficultyTableImportCloseButton);
@@ -1849,20 +2251,7 @@ void SettingsScene::initView() {
     return;
   }
 
-  rootLayout->setBackgroundColor(Color(10, 18, 30));
-
-  if (!metrics.compact) {
-    auto *accentA = new View(110, 86, 480, 180);
-    accentA->setPositionType(YGPositionTypeAbsolute);
-    accentA->setBackgroundColor(Color(39, 101, 160, 96));
-    rootLayout->addView(accentA);
-
-    auto *accentB = new View(rendering::window_width - 520,
-                             rendering::window_height - 250, 420, 160);
-    accentB->setPositionType(YGPositionTypeAbsolute);
-    accentB->setBackgroundColor(Color(207, 110, 62, 72));
-    rootLayout->addView(accentB);
-  }
+  rootLayout->setThemedBackgroundColor(ui_theme::backdrop);
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -1873,23 +2262,22 @@ void SettingsScene::initView() {
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
-      makeText("Settings", metrics.titleSize, Color(244, 248, 255)));
+      makeText("Settings", metrics.titleSize, ui_theme::textPrimary()));
   headerText->addView(makeWrappedText(
       metrics.compact
           ? "Timing, keysound, and visual preferences."
           : "Persistent player preferences for timing, keysounds, and visual "
             "load.",
-      metrics.subtitleSize, Color(162, 183, 205)));
+      metrics.subtitleSize, ui_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =
-      makeText("Back", metrics.bodyTextSize + 6, Color(237, 243, 252),
+      makeText("Back", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
-  auto *backButton =
-      makeButton(metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
-                 Color(22, 33, 49, 255), Color(31, 46, 67, 255),
-                 Color(53, 78, 110, 255), Color(96, 121, 156, 255),
-                 Color(120, 151, 190, 255), Color(148, 186, 231, 255));
+  auto *backButton = makeButton(
+      metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
+      ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
+      ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   backButton->setOnClickListener(
       [this]() { context.sceneManager->changeScene("MainMenu"); });
   header->addView(backButton);
@@ -1918,14 +2306,19 @@ void SettingsScene::initView() {
   tabControls->setGap(metrics.compact ? 8.0f : 12.0f);
   tabControls->setWidth(static_cast<float>(tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
-  auto makeTabButton = [&](SettingsTab tab, const std::string &label) {
-    auto *button = makeButton(
-        tabColumnWidth, metrics.actionButtonHeight,
-        makeText(label, metrics.bodyTextSize + 4, Color(239, 244, 251),
-                 TextView::CENTER, TextView::MIDDLE),
-        Color(28, 40, 58, 255), Color(36, 52, 75, 255), Color(61, 87, 118, 255),
-        Color(84, 107, 139, 255), Color(108, 136, 174, 255),
-        Color(139, 172, 217, 255));
+  auto makeTabButton = [&](SettingsTab tab, const std::string &label,
+                           TextView **labelOut) {
+    auto *labelText =
+        makeText(label, metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    if (labelOut != nullptr) {
+      *labelOut = labelText;
+    }
+    auto *button =
+        makeButton(tabColumnWidth, metrics.actionButtonHeight, labelText,
+                   ui_theme::control(), ui_theme::controlHover(),
+                   ui_theme::controlPressed(), ui_theme::hairline(),
+                   ui_theme::accentBorder(), ui_theme::accentBorderStrong());
     button->setOnClickListener([this, tab]() {
       if (activeTab == tab) {
         return;
@@ -1935,16 +2328,23 @@ void SettingsScene::initView() {
     });
     return button;
   };
-  timingTabButton = makeTabButton(SettingsTab::Timing, "Timing");
-  visualTabButton = makeTabButton(SettingsTab::Visual, "Visual");
-  laneTabButton = makeTabButton(SettingsTab::Lane, "Lane");
-  miscTabButton = makeTabButton(SettingsTab::Misc, "Misc");
-  tablesTabButton = makeTabButton(SettingsTab::Tables, "Tables");
+  timingTabButton =
+      makeTabButton(SettingsTab::Timing, "Timing", &timingTabText);
+  visualTabButton =
+      makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
+  laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
+  miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
+  difficultyTablesTabButton = makeTabButton(
+      SettingsTab::DifficultyTables, "Difficulty Tables",
+      &difficultyTablesTabText);
+  bmsLibraryTabButton = makeTabButton(SettingsTab::BmsLibrary, "BMS Library",
+                                      &bmsLibraryTabText);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
   tabControls->addView(miscTabButton);
-  tabControls->addView(tablesTabButton);
+  tabControls->addView(difficultyTablesTabButton);
+  tabControls->addView(bmsLibraryTabButton);
   content->addView(tabControls);
 
   scrollView = new ScrollView();
@@ -1968,8 +2368,11 @@ void SettingsScene::initView() {
   case SettingsTab::Misc:
     cardsColumn = buildMiscTab(metrics);
     break;
-  case SettingsTab::Tables:
-    cardsColumn = buildTablesTab(metrics);
+  case SettingsTab::DifficultyTables:
+    cardsColumn = buildDifficultyTablesTab(metrics);
+    break;
+  case SettingsTab::BmsLibrary:
+    cardsColumn = buildBmsLibraryTab(metrics);
     break;
   }
   if (cardsColumn != nullptr) {
@@ -1978,14 +2381,15 @@ void SettingsScene::initView() {
 
   auto *footer = new View();
   footer->setPadding(Edge::All, static_cast<float>(metrics.cardPadding - 4));
-  footer->setBackgroundColor(Color(14, 22, 34, 220));
-  footer->setBorderColor(Color(59, 80, 108, 255));
-  footer->setBorderWidth(2);
+  footer->setThemedBackgroundColor(ui_theme::panelSubtle);
+  footer->setCornerRadius(ui_theme::panelRadius());
+  footer->setThemedBorderColor(ui_theme::hairline);
+  footer->setBorderWidth(1);
   footer->addView(makeWrappedText(
       metrics.compact
           ? "Settings save automatically in the app documents directory."
           : "Settings are saved automatically in the app documents directory.",
-      metrics.bodyTextSize, Color(165, 185, 205)));
+      metrics.bodyTextSize, ui_theme::textMuted()));
   scrollContent->addView(footer);
 
   scrollView->setContentView(scrollContent);

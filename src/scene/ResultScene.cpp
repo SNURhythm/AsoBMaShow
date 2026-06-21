@@ -4,6 +4,7 @@
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 
 #include "../rendering/Color.h"
@@ -105,18 +106,27 @@ void ResultScene::addRetryButtons() {
     return;
   }
 
+  View *actionHost = rootLayout->findViewByName("resultActions");
+  if (actionHost == nullptr) {
+    actionHost = rootLayout;
+  }
+
   auto retryRow = new View();
   retryRow->setFlexDirection(FlexDirection::Row);
   retryRow->setAlignItems(YGAlignCenter);
   retryRow->setJustifyContent(YGJustifyCenter);
-  retryRow->setGap(12);
+  retryRow->setFlexWrap(YGWrapWrap);
+  retryRow->setGap(14);
 
   auto makeButton = [this](const std::string &label, bool samePattern,
-                           bool replay) {
+                           bool replay, Color normal, Color hover,
+                           Color pressed, Color border) {
     auto button = new Button();
-    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener([this, samePattern, replay]() {
       if (replay) {
@@ -125,19 +135,46 @@ void ResultScene::addRetryButtons() {
         startRetry(samePattern);
       }
     });
-    button->setSize(220, 70);
+    button->setSize(232, 64);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
+    button->setStyledBorderWidth(1);
     return button;
   };
 
   if (replayResult) {
-    retryRow->addView(makeButton("Replay", true, true));
+    retryRow->addView(makeButton("Replay", true, true, ui_theme::infoAction(),
+                                 ui_theme::infoActionHover(),
+                                 ui_theme::infoActionPressed(),
+                                 ui_theme::cyan()));
   } else if (practiceOptions.enabled) {
-    retryRow->addView(makeButton("Retry", true, false));
+    retryRow->addView(makeButton("Retry", true, false,
+                                 ui_theme::primaryAction(),
+                                 ui_theme::primaryActionHover(),
+                                 ui_theme::primaryActionPressed(),
+                                 ui_theme::cyan()));
   } else {
-    retryRow->addView(makeButton("Retry", false, false));
-    retryRow->addView(makeButton("Retry Same", true, false));
+    retryRow->addView(makeButton("Retry", false, false,
+                                 ui_theme::primaryAction(),
+                                 ui_theme::primaryActionHover(),
+                                 ui_theme::primaryActionPressed(),
+                                 ui_theme::cyan()));
+    const bool canRetrySame =
+        retryData.has_value()
+            ? play_options::hasSamePatternRandomization(*retryData)
+            : play_options::hasSamePatternRandomization(meta);
+    if (canRetrySame) {
+      retryRow->addView(makeButton("Retry Same", true, false,
+                                   ui_theme::successAction(),
+                                   ui_theme::successActionHover(),
+                                   ui_theme::successActionPressed(),
+                                   ui_theme::lime()));
+    }
   }
-  rootLayout->addView(retryRow);
+  actionHost->addView(retryRow);
 }
 
 void ResultScene::startRetry(bool samePattern) {
@@ -189,7 +226,7 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (retrySource.playOption.has_value()) {
           if (samePattern &&
-              !play_options::isNormalPlayOption(*retrySource.playOption) &&
+              play_options::usesRandomizer(*retrySource.playOption) &&
               !retrySource.playOptionSeed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing play option seed");
             return true;
@@ -206,7 +243,7 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (retryChart->Meta.IsDP && retrySource.playOption2.has_value()) {
           if (samePattern &&
-              !play_options::isNormalPlayOption(*retrySource.playOption2) &&
+              play_options::usesRandomizer(*retrySource.playOption2) &&
               !retrySource.playOption2Seed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing P2 play option seed");
             return true;

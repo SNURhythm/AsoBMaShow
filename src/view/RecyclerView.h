@@ -48,8 +48,9 @@ private:
       }
     }
     {
-      ScissorScope scissor(context, this->getX(), this->getY(),
-                           this->getWidth(), this->getHeight());
+      ScissorScope scissor(context, this->getContentX(), this->getContentY(),
+                           this->getContentWidth(),
+                           this->getContentHeight());
       for (const auto &entry : viewEntries) {
         entry.first->render(context);
       }
@@ -105,8 +106,9 @@ private:
         if (selectedY < scrollOffset) {
           scrollOffset = selectedY;
         }
-        if (selectedY > scrollOffset + this->getHeight() - itemHeight) {
-          scrollOffset = selectedY - this->getHeight() + itemHeight;
+        if (selectedY >
+            scrollOffset + this->getContentHeight() - itemHeight) {
+          scrollOffset = selectedY - this->getContentHeight() + itemHeight;
         }
         clampScrollOffset();
         if (std::fabs(scrollOffset - previousOffset) > 0.001f) {
@@ -120,10 +122,17 @@ private:
       // check mouse position
       int x, y;
       SDL_GetMouseState(&x, &y);
-      if (x < this->getX() || x > this->getX() + this->getWidth()) {
+      x = static_cast<int>(x * rendering::widthScale);
+      y = static_cast<int>(y * rendering::heightScale);
+      int uiX = 0;
+      int uiY = 0;
+      rendering::screenToUi(x, y, uiX, uiY);
+      if (uiX < this->getContentX() ||
+          uiX > this->getContentX() + this->getContentWidth()) {
         return true;
       }
-      if (y < this->getY() || y > this->getY() + this->getHeight()) {
+      if (uiY < this->getContentY() ||
+          uiY > this->getContentY() + this->getContentHeight()) {
         return true;
       }
       touchMomentum.stop();
@@ -140,9 +149,9 @@ private:
           event.button.button != SDL_BUTTON_LEFT) {
         return true;
       }
-      // ignore touch
-      if (event.button.which == SDL_TOUCH_MOUSEID &&
-          event.type == SDL_MOUSEBUTTONDOWN) {
+      // Touch selection is handled by FINGERDOWN/FINGERUP so release cannot
+      // select a row unless this recycler accepted the matching press.
+      if (event.button.which == SDL_TOUCH_MOUSEID) {
         return true;
       }
 
@@ -160,23 +169,11 @@ private:
       int uiX = 0;
       int uiY = 0;
       rendering::screenToUi(x, y, uiX, uiY);
-      if (uiX < this->getX() || uiX > this->getX() + this->getWidth()) {
-        return true;
-      }
-      if (uiY < this->getY() || uiY > this->getY() + this->getHeight()) {
+      if (!isInsideContent(uiX, uiY)) {
         return true;
       }
       touchMomentum.stop();
-      int index = (uiY - this->getY() + scrollOffset) / itemHeight;
-      if (index >= 0 && index < itemCount()) {
-        if (selectedIndex != -1 && onUnselected) {
-          onUnselected(itemAt(selectedIndex), selectedIndex);
-        }
-        selectedIndex = index;
-        if (onSelected) {
-          onSelected(itemAt(selectedIndex), selectedIndex);
-        }
-      }
+      selectIndex(indexAtUiY(uiY));
       break;
     }
     case SDL_FINGERDOWN: {
@@ -189,16 +186,14 @@ private:
       float touchY = 0.0f;
       rendering::normalizedToUi(normX, normY, touchX, touchY);
 
-      if (touchX < this->getX() || touchX > this->getX() + this->getWidth()) {
-        return true;
-      }
-      if (touchY < this->getY() || touchY > this->getY() + this->getHeight()) {
+      if (!isInsideContent(touchX, touchY)) {
         return true;
       }
       touchMomentum.stop();
       touchLastY = touchY;
       touchDragging = false;
       touchId = event.tfinger.fingerId;
+      touchPressIndex = indexAtUiY(touchY);
       break;
     }
     case SDL_FINGERMOTION: {
@@ -214,10 +209,9 @@ private:
       float touchY = 0.0f;
       rendering::normalizedToUi(normX, normY, touchX, touchY);
 
-      if (touchX < this->getX() || touchX > this->getX() + this->getWidth()) {
-        return true;
-      }
-      if (touchY < this->getY() || touchY > this->getY() + this->getHeight()) {
+      if (!isInsideContent(touchX, touchY)) {
+        touchDragging = true;
+        touchPressIndex = -1;
         return true;
       }
       const float delta = touchLastY - touchY;
@@ -238,8 +232,18 @@ private:
         touchMomentum.release();
       } else {
         touchMomentum.stop();
+        float touchX = 0.0f;
+        float touchY = 0.0f;
+        rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, touchX,
+                                  touchY);
+        const int releaseIndex = indexAtUiY(touchY);
+        if (touchPressIndex >= 0 && touchPressIndex == releaseIndex &&
+            isInsideContent(touchX, touchY)) {
+          selectIndex(releaseIndex);
+        }
       }
       touchId = -1;
+      touchPressIndex = -1;
       break;
     }
     }
@@ -358,6 +362,22 @@ public:
     updateVisibleItems();
   }
 
+  inline void propagateThemeChange() override {
+    View::propagateThemeChange();
+    std::unordered_set<View *> themedViews;
+    for (auto &entry : viewEntries) {
+      themedViews.insert(entry.first);
+    }
+    for (auto *view : recycledViewEntries) {
+      themedViews.insert(view);
+    }
+    for (auto *view : themedViews) {
+      if (view != nullptr) {
+        view->propagateThemeChange();
+      }
+    }
+  }
+
 private:
   std::vector<T> items;
   int externalItemCount = 0;
@@ -369,6 +389,7 @@ private:
   float touchLastY = 0;
   ScrollMomentum touchMomentum;
   SDL_FingerID touchId = -1;
+  int touchPressIndex = -1;
   bool touchDragging = false;
   Uint64 scrollbarFadeInStartedAt = 0;
   Uint64 scrollbarLastActivityAt = 0;
@@ -392,7 +413,7 @@ private:
   static constexpr Uint64 kScrollbarFadeOutMs = 480;
 
   inline bool canScroll() const {
-    return itemCount() * itemHeight > this->getHeight();
+    return itemCount() * itemHeight > this->getContentHeight();
   }
 
   inline int itemCount() const {
@@ -403,17 +424,43 @@ private:
     return itemProvider ? itemProvider(index) : items[index];
   }
 
+  inline bool isInsideContent(float uiX, float uiY) const {
+    return uiX >= this->getContentX() &&
+           uiX <= this->getContentX() + this->getContentWidth() &&
+           uiY >= this->getContentY() &&
+           uiY <= this->getContentY() + this->getContentHeight();
+  }
+
+  inline int indexAtUiY(float uiY) const {
+    return static_cast<int>((uiY - this->getContentY() + scrollOffset) /
+                            itemHeight);
+  }
+
+  inline void selectIndex(int index) {
+    if (index < 0 || index >= itemCount()) {
+      return;
+    }
+    if (selectedIndex != -1 && onUnselected) {
+      onUnselected(itemAt(selectedIndex), selectedIndex);
+    }
+    selectedIndex = index;
+    if (onSelected) {
+      onSelected(itemAt(selectedIndex), selectedIndex);
+    }
+  }
+
   inline int visibleItemWidth() const {
     const int reservedWidth =
         reserveScrollbarGutter && canScroll() ? kScrollbarContentInset : 0;
-    return std::max(0, this->getWidth() - reservedWidth);
+    return std::max(0, this->getContentWidth() - reservedWidth);
   }
 
   inline bool visibleItemsNeedLayout() const {
-    return visibleItemsLayoutDirty || visibleItemsLayoutX != this->getX() ||
-           visibleItemsLayoutY != this->getY() ||
+    return visibleItemsLayoutDirty ||
+           visibleItemsLayoutX != this->getContentX() ||
+           visibleItemsLayoutY != this->getContentY() ||
            visibleItemsLayoutWidth != visibleItemWidth() ||
-           visibleItemsLayoutHeight != this->getHeight() ||
+           visibleItemsLayoutHeight != this->getContentHeight() ||
            visibleItemsLayoutItemHeight != itemHeight ||
            std::fabs(visibleItemsLayoutScrollOffset - scrollOffset) > 0.001f;
   }
@@ -498,23 +545,22 @@ private:
       return;
     }
 
-    const int itemsSize =
-        std::max(1, itemCount()) * itemHeight;
+    const int itemsSize = std::max(1, itemCount()) * itemHeight;
     const int trackHeight =
-        std::max(0, this->getHeight() - (kScrollbarVerticalInset * 2));
+        std::max(0, this->getContentHeight() - (kScrollbarVerticalInset * 2));
     if (trackHeight <= 0) {
       return;
     }
 
-    const int maxOffset = std::max(1, itemsSize - this->getHeight());
+    const int maxOffset = std::max(1, itemsSize - this->getContentHeight());
     const int thumbHeight =
-        std::clamp(this->getHeight() * trackHeight / itemsSize,
+        std::clamp(this->getContentHeight() * trackHeight / itemsSize,
                    kScrollbarMinThumbHeight, trackHeight);
     const float progress =
         std::clamp(scrollOffset / static_cast<float>(maxOffset), 0.0f, 1.0f);
-    const int trackX = this->getX() + this->getWidth() - kScrollbarRightInset -
-                       kScrollbarWidth;
-    const int trackY = this->getY() + kScrollbarVerticalInset;
+    const int trackX = this->getContentX() + this->getContentWidth() -
+                       kScrollbarRightInset - kScrollbarWidth;
+    const int trackY = this->getContentY() + kScrollbarVerticalInset;
     const int thumbY =
         trackY +
         static_cast<int>(std::round((trackHeight - thumbHeight) * progress));
@@ -528,10 +574,10 @@ private:
   }
 
   inline void clampScrollOffset() {
-    const int itemsSize =
-        std::max(1, itemCount()) * itemHeight;
+    const int itemsSize = std::max(1, itemCount()) * itemHeight;
     const float maxOffset =
-        std::max(0.0f, static_cast<float>(itemsSize - this->getHeight()));
+        std::max(0.0f,
+                 static_cast<float>(itemsSize - this->getContentHeight()));
     scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
   }
 
@@ -548,16 +594,16 @@ private:
   }
 
   inline void updateVisibleItems() {
-    const int layoutX = this->getX();
-    const int layoutY = this->getY();
+    const int layoutX = this->getContentX();
+    const int layoutY = this->getContentY();
     const int layoutWidth = visibleItemWidth();
-    const int layoutHeight = this->getHeight();
+    const int layoutHeight = this->getContentHeight();
 
     // Determine the range of visible items
     int startIndex = getStartIndex();
     int endIndex = getEndIndex();
     // if all items are visible
-    if (itemCount() * itemHeight < this->getHeight()) {
+    if (itemCount() * itemHeight < this->getContentHeight()) {
       startIndex = 0;
       endIndex = itemCount() - 1;
       scrollOffset = 0;
@@ -627,8 +673,7 @@ private:
   }
 
   inline int getEndIndex() {
-    int viewportHeight =
-        this->getHeight(); // Assuming RecyclerView has a getHeight method
+    int viewportHeight = this->getContentHeight();
     int lastPossibleIndex =
         (scrollOffset + viewportHeight) / itemHeight + bottomMargin;
     return std::min(itemCount() - 1, lastPossibleIndex);

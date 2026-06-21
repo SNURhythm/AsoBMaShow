@@ -11,6 +11,7 @@
 #include "../view/ReplaySummaryListView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "../view/UiTheme.h"
 #include <filesystem>
 #include <deque>
 #include <thread>
@@ -52,6 +53,7 @@ private:
   std::unique_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
+  std::atomic_bool selectedChartReusableForStart = false;
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
@@ -346,8 +348,10 @@ private:
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
   std::uint64_t parseLogDisplayedRevision = 0;
+  ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
 
   void initView(ApplicationContext &context);
+  void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
@@ -393,7 +397,8 @@ private:
   void refreshPlayOptionButtons();
   void refreshReadySettingsSummary();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
-                                      bool mediaReady);
+                                      bool mediaReady,
+                                      bool reusableForStart = true);
   void clearSelectedChart();
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo

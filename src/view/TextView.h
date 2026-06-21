@@ -18,6 +18,7 @@ public:
 
   void setText(const std::string &newText);
   void setColor(SDL_Color newColor);
+  void setThemedColor(ThemeColorProvider provider);
   void setAlign(TextAlign newAlign);
   void setVAlign(TextVAlign newVAlign);
   void setOverflow(TextOverflow newOverflow);
@@ -41,10 +42,13 @@ protected:
   };
 
   void renderImpl(RenderContext &context) override;
+  void onThemeChanged() override;
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
+  [[nodiscard]] int rasterTextLineHeight() const;
   [[nodiscard]] int measureTextWidth(const std::string &utf8);
+  [[nodiscard]] int measureRasterTextWidth(const std::string &utf8);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
   [[nodiscard]] bool sameFontSource(const SelectedFont &lhs,
@@ -73,6 +77,7 @@ protected:
   size_t nextFallbackFontPath = 0;
   std::unordered_map<Uint32, SelectedFont> fontSelectionCache;
   int fontSize = 0;
+  int fontRasterSize = 0;
   int fontLineHeight = 0;
   int fontAscent = 0;
   int fontDescent = 0;
@@ -83,6 +88,7 @@ protected:
   bool ttfInitialized = false;
 
   SDL_Color color{};
+  ThemeColorProvider themedColorProvider;
   SDL_Rect rect{};
   std::string text;
   bool wrapEnabled = false;

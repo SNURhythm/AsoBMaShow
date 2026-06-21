@@ -27,6 +27,7 @@ std::mutex g_fontCacheMutex;
 constexpr float kMarqueePixelsPerSecond = 48.0f;
 constexpr Uint64 kMarqueeStartDelayMs = 700;
 constexpr Uint64 kMarqueeEdgeDelayMs = 850;
+constexpr int kTextRasterScale = 2;
 constexpr std::string_view kReplacementUtf8 = "\xEF\xBF\xBD";
 
 struct CachedFont {
@@ -283,11 +284,25 @@ int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
   return width;
 }
 
+int rasterFontSizeFor(int logicalFontSize) {
+  return std::max(1, logicalFontSize * kTextRasterScale);
+}
+
+int rasterLengthFor(int logicalLength) {
+  return std::max(0, logicalLength * kTextRasterScale);
+}
+
+int logicalLengthFor(int rasterLength) {
+  return std::max(0, (rasterLength + kTextRasterScale - 1) /
+                         kTextRasterScale);
+}
+
 } // namespace
 
 TextView::TextView(const std::string &fontPath, int fontSize)
     : View(), texture(BGFX_INVALID_HANDLE) {
   this->fontSize = fontSize;
+  this->fontRasterSize = rasterFontSizeFor(fontSize);
   fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = acquireTtf();
   if (ttfInitialized) {
@@ -319,7 +334,7 @@ TextView::~TextView() {
 
   for (auto &face : fontFaces) {
     if (face.font != nullptr) {
-      releaseFontCandidate(face.path, fontSize, face.font);
+      releaseFontCandidate(face.path, fontRasterSize, face.font);
       face.font = nullptr;
     }
   }
@@ -424,6 +439,10 @@ SDL_Rect TextView::resolvedTextRect() const {
 }
 
 int TextView::textLineHeight() const {
+  return logicalLengthFor(rasterTextLineHeight());
+}
+
+int TextView::rasterTextLineHeight() const {
   return std::max(fontLineHeight, fontAscent + fontDescent);
 }
 
@@ -443,7 +462,7 @@ void TextView::includeIOSSystemFontMetrics() {
     return;
   }
 
-  const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontSize);
+  const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontRasterSize);
   iosSystemFontLineHeight = metrics.height;
   iosSystemFontAscent = metrics.ascent;
   iosSystemFontDescent = metrics.descent;
@@ -460,7 +479,7 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
   }
 
   const std::string &path = fallbackFontPaths[pathIndex];
-  TTF_Font *opened = acquireFontCandidate(path, fontSize, required);
+  TTF_Font *opened = acquireFontCandidate(path, fontRasterSize, required);
   if (opened == nullptr) {
     return nullptr;
   }
@@ -491,7 +510,7 @@ int TextView::measureFontSourceTextWidth(const SelectedFont &source,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
-    return MeasureIOSSystemTextWidth(utf8, fontSize);
+    return MeasureIOSSystemTextWidth(utf8, fontRasterSize);
   }
 #endif
 
@@ -514,7 +533,7 @@ SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
-    return RenderIOSSystemTextSurface(utf8, fontSize, color);
+    return RenderIOSSystemTextSurface(utf8, fontRasterSize, color);
   }
 #endif
 
@@ -589,6 +608,10 @@ bool TextView::primaryFontSupportsText(const std::string &utf8) const {
 }
 
 int TextView::measureTextWidth(const std::string &utf8) {
+  return logicalLengthFor(measureRasterTextWidth(utf8));
+}
+
+int TextView::measureRasterTextWidth(const std::string &utf8) {
   if (utf8.empty() || fontFaces.empty()) {
     return 0;
   }
@@ -664,7 +687,7 @@ std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) {
       continue;
     }
 
-    const int currentWidth = measureTextWidth(currentLine);
+    const int currentWidth = measureRasterTextWidth(currentLine);
     if (wrapWidth > 0 && currentWidth > wrapWidth && currentLine.size() > 0) {
       if (lastBreak != std::string::npos && lastBreak > 0) {
         std::string nextLine = currentLine.substr(lastBreak);
@@ -725,7 +748,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
 
   ensureFontsForText(text);
 
-  TextLineMetrics metrics = {fontAscent, fontDescent, textLineHeight()};
+  TextLineMetrics metrics = {fontAscent, fontDescent, rasterTextLineHeight()};
   if (metrics.height <= 0) {
     return nullptr;
   }
@@ -734,7 +757,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       wrapWidth > 0 ? wrappedTextLines(wrapWidth) : wrappedTextLines(0);
   int width = 0;
   for (const auto &line : lines) {
-    width = std::max(width, measureTextWidth(line));
+    width = std::max(width, measureRasterTextWidth(line));
   }
 
   const int targetWidth = std::max(1, width);
@@ -838,12 +861,45 @@ float TextView::marqueeOffset(int viewportWidth) {
 }
 
 void TextView::setColor(SDL_Color newColor) {
+  themedColorProvider = nullptr;
   if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
       newColor.a == color.a) {
     return;
   }
   this->color = newColor;
   createTexture(); // Update the texture since newColor has changed
+}
+
+void TextView::setThemedColor(ThemeColorProvider provider) {
+  themedColorProvider = std::move(provider);
+  if (!themedColorProvider) {
+    return;
+  }
+  const Color themedColor = themedColorProvider();
+  SDL_Color newColor{themedColor.r, themedColor.g, themedColor.b,
+                     themedColor.a};
+  if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
+      newColor.a == color.a) {
+    return;
+  }
+  color = newColor;
+  createTexture();
+}
+
+void TextView::onThemeChanged() {
+  View::onThemeChanged();
+  if (!themedColorProvider) {
+    return;
+  }
+  const Color themedColor = themedColorProvider();
+  SDL_Color newColor{themedColor.r, themedColor.g, themedColor.b,
+                     themedColor.a};
+  if (newColor.r == color.r && newColor.g == color.g && newColor.b == color.b &&
+      newColor.a == color.a) {
+    return;
+  }
+  color = newColor;
+  createTexture();
 }
 
 void TextView::createTexture(bool markDirty, bool force,
@@ -854,6 +910,7 @@ void TextView::createTexture(bool markDirty, bool force,
       wrapEnabled ? std::max(0, requestedWrapWidth >= 0 ? requestedWrapWidth
                                                         : currentWrapWidth)
                   : 0;
+  const int rasterWrapWidth = rasterLengthFor(effectiveWrapWidth);
   if (!force && effectiveWrapWidth == currentWrapWidth &&
       bgfx::isValid(texture)) {
     return;
@@ -878,27 +935,31 @@ void TextView::createTexture(bool markDirty, bool force,
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
   const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
-  if (usePrimaryFont && wrapEnabled && effectiveWrapWidth > 0) {
+  if (usePrimaryFont && wrapEnabled && rasterWrapWidth > 0) {
     surface.reset(TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
-                                                 effectiveWrapWidth));
+                                                 rasterWrapWidth));
   } else if (usePrimaryFont) {
     surface.reset(TTF_RenderUTF8_Blended(font, text.c_str(), color));
   } else {
     surface.reset(renderFallbackTextSurface(
-        wrapEnabled && effectiveWrapWidth > 0 ? effectiveWrapWidth : 0,
+        wrapEnabled && rasterWrapWidth > 0 ? rasterWrapWidth : 0,
         fallbackSurfaceWidth, fallbackSurfaceHeight));
   }
   if (surface == nullptr && usePrimaryFont && fontFaces.size() > 1) {
     surface.reset(renderFallbackTextSurface(
-        wrapEnabled && effectiveWrapWidth > 0 ? effectiveWrapWidth : 0,
+        wrapEnabled && rasterWrapWidth > 0 ? rasterWrapWidth : 0,
         fallbackSurfaceWidth, fallbackSurfaceHeight));
   }
   if (!surface) {
     SDL_Log("Failed to render text: %s", TTF_GetError());
     return;
   }
-  rect.w = fallbackSurfaceHeight > 0 ? fallbackSurfaceWidth : surface->w;
-  rect.h = fallbackSurfaceHeight > 0 ? fallbackSurfaceHeight : surface->h;
+  const int rasterWidth =
+      fallbackSurfaceHeight > 0 ? fallbackSurfaceWidth : surface->w;
+  const int rasterHeight =
+      fallbackSurfaceHeight > 0 ? fallbackSurfaceHeight : surface->h;
+  rect.w = logicalLengthFor(rasterWidth);
+  rect.h = logicalLengthFor(rasterHeight);
   texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
   if (markDirty && (rect.w != previousWidth || rect.h != previousHeight)) {
     YGNodeMarkDirty(getNode());
