@@ -11,6 +11,7 @@
 #include "rendering/common.h"
 #include "skin/DefaultSkin.h"
 #include "targets.h"
+#include "view/UiTheme.h"
 #include "view/View.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "iOSNatives.hpp"
@@ -270,6 +271,12 @@ bool writeBgraPng(const std::filesystem::path &path,
   return true;
 }
 
+void forceBgraOpaque(std::vector<unsigned char> &bgra) {
+  for (size_t i = 3; i < bgra.size(); i += 4) {
+    bgra[i] = 255;
+  }
+}
+
 void configureResultImageViews(int width, int height,
                                bgfx::FrameBufferHandle frameBuffer) {
   const auto viewWidth = static_cast<uint16_t>(width);
@@ -289,6 +296,8 @@ void configureResultImageViews(int width, int height,
   bgfx::setViewTransform(rendering::main_view, nullptr, ortho);
   bgfx::setViewRect(rendering::main_view, 0, 0, viewWidth, viewHeight);
   bgfx::setViewRect(rendering::readback_view, 0, 0, viewWidth, viewHeight);
+  rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
+                            rendering::final_view);
 }
 
 void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
@@ -405,9 +414,16 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultRoot->applyYogaLayout();
 
   RenderContext renderContext;
+  rendering::SimpleBatchRenderer backdropBatch;
   rendering::SimpleBatchRenderer graphBatch;
   bgfx::touch(rendering::clear_view);
   bgfx::touch(rendering::ui_view);
+  backdropBatch.setSubmitView(rendering::ui_view);
+  backdropBatch.begin();
+  backdropBatch.addRect(0.0f, 0.0f, static_cast<float>(rendering::window_width),
+                        static_cast<float>(rendering::window_height),
+                        ui_theme::backdrop().toABGR());
+  backdropBatch.end();
   resultRoot->render(renderContext);
   drawResultGaugeGraph(graphBatch, state, graphPlaceHolder);
   bgfx::blit(rendering::readback_view, readbackTexture, 0, 0, outputTexture);
@@ -420,6 +436,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   while (currentFrame < expectedFrame) {
     currentFrame = bgfx::frame();
   }
+  forceBgraOpaque(pixels);
 
   resultRoot.reset();
   cleanupBgfx.runNow();
