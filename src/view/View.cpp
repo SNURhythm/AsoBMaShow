@@ -468,6 +468,7 @@ View *View::setBorderColor(const Color &color) {
   themedBorderColorProvider = nullptr;
   borderColor = color;
   hasBorder = true;
+  syncYogaBorderWidth();
   return this;
 }
 
@@ -477,17 +478,20 @@ View *View::setThemedBorderColor(ThemeColorProvider provider) {
     borderColor = themedBorderColorProvider();
     hasBorder = true;
   }
+  syncYogaBorderWidth();
   return this;
 }
 
 View *View::clearBorderColor() {
   themedBorderColorProvider = nullptr;
   hasBorder = false;
+  syncYogaBorderWidth();
   return this;
 }
 
 View *View::setBorderWidth(int width) {
   borderWidth = std::max(0, width);
+  syncYogaBorderWidth();
   return this;
 }
 

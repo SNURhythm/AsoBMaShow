@@ -341,6 +341,11 @@ protected:
 
 private:
   void renderBoxDecoration(RenderContext &context) const;
+  void syncYogaBorderWidth() {
+    YGNodeStyleSetBorder(
+        node, YGEdgeAll,
+        hasBorder ? static_cast<float>(std::max(0, borderWidth)) : 0.0f);
+  }
   void markLayoutDirty() {
     View *root = this;
     while (root->parent != nullptr) {
