@@ -719,11 +719,38 @@ void run() {
       return true;
     };
 
+#if TARGET_OS_IPHONE
+    auto restoreIOSViewportAfterKeyboardFocus = [&]() {
+      RestoreIOSViewportAfterKeyboardFocus();
+
+      int logicalW = 0;
+      int logicalH = 0;
+      if (s_window != nullptr) {
+        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+      }
+      if (logicalW > 0 && logicalH > 0 &&
+          !applyWindowResize(logicalW, logicalH)) {
+        deferWindowResize(logicalW, logicalH);
+      }
+    };
+#endif
+
     auto processEvent = [&](SDL_Event event) {
       ++processedEventsInWindow;
       if (event.type == SDL_QUIT) {
         context.quitFlag = true;
       }
+
+#if TARGET_OS_IPHONE
+      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
+          event.type == SDL_APP_DIDENTERFOREGROUND ||
+          (event.type == SDL_WINDOWEVENT &&
+           (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
+            event.window.event == SDL_WINDOWEVENT_RESTORED ||
+            event.window.event == SDL_WINDOWEVENT_SHOWN))) {
+        restoreIOSViewportAfterKeyboardFocus();
+      }
+#endif
 
       if (shouldDispatchToScene(event.type)) {
         auto result = sceneManager.handleEvents(event);

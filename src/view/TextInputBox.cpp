@@ -133,6 +133,11 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
   const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
   viewRect = nativeRectFromUiRect(cursorX, cursorY, lineWidth, lineHeight);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (nativeTextEditorVisible) {
+    viewRect.h = std::max(1, viewRect.h + GetIOSNativeTextEditorHeight());
+  }
+#endif
   SDL_SetTextInputRect(&viewRect);
 }
 
@@ -631,6 +636,11 @@ void TextInputBox::setCursor(size_t newCursorPos, bool extendSelection) {
     selectionAnchor = cursorPos;
   }
   lastRenderedCaretCursor = static_cast<size_t>(-1);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (nativeTextEditorVisible) {
+    syncNativeTextEditorSelection();
+  }
+#endif
 }
 
 bool TextInputBox::deleteSelection() {
@@ -869,6 +879,8 @@ void TextInputBox::showNativeTextEditor() {
 
   IOSNativeTextEditorConfig config;
   config.text = editingText;
+  config.selectionStart = selectionStart();
+  config.selectionEnd = selectionEnd();
   config.fontSize = std::max(12, fontSize);
   ShowIOSNativeTextEditor(config, this,
                           &TextInputBox::handleNativeTextEditorEvent);
@@ -881,32 +893,53 @@ void TextInputBox::hideNativeTextEditor(bool notifyFinished) {
   nativeTextEditorVisible = false;
 }
 
-bool TextInputBox::syncNativeTextEditorText(const std::string &newText) {
-  const bool textChanged = editingText != newText || !composition.empty();
-  if (!textChanged) {
-    return false;
+bool TextInputBox::syncNativeTextEditorState(
+    const IOSNativeTextEditorState &state, bool &selectionChanged) {
+  const bool textChanged = editingText != state.text || !composition.empty();
+  if (textChanged) {
+    editingText = state.text;
+    clearComposition();
   }
-  editingText = newText;
-  clearComposition();
-  cursorPos = editingText.size();
-  selectionAnchor = cursorPos;
-  lastRenderedCaretCursor = static_cast<size_t>(-1);
-  return true;
+
+  const size_t newSelectionStart =
+      clampUtf8Boundary(editingText, state.selectionStart);
+  const size_t newSelectionEnd =
+      clampUtf8Boundary(editingText, state.selectionEnd);
+  selectionChanged =
+      selectionAnchor != newSelectionStart || cursorPos != newSelectionEnd;
+  if (selectionChanged) {
+    selectionAnchor = newSelectionStart;
+    cursorPos = newSelectionEnd;
+    lastRenderedCaretCursor = static_cast<size_t>(-1);
+  }
+
+  return textChanged;
+}
+
+void TextInputBox::syncNativeTextEditorSelection() {
+  SetIOSNativeTextEditorSelection(this, selectionStart(), selectionEnd());
 }
 
 void TextInputBox::handleNativeTextEditorEvent(
-    IOSNativeTextEditorEvent event, const std::string &text) {
+    IOSNativeTextEditorEvent event, const IOSNativeTextEditorState &state) {
   if (!isSelected) {
     isSelected = true;
     registerPointerDownListener();
   }
-  const bool textChanged = syncNativeTextEditorText(text);
+  bool selectionChanged = false;
+  const bool textChanged = syncNativeTextEditorState(state, selectionChanged);
 
   switch (event) {
   case IOSNativeTextEditorEvent::Changed:
     nativeTextEditorVisible = true;
-    if (textChanged) {
-      refreshDisplay(true);
+    if (textChanged || selectionChanged) {
+      refreshDisplay(textChanged);
+    }
+    return;
+  case IOSNativeTextEditorEvent::SelectionChanged:
+    nativeTextEditorVisible = true;
+    if (textChanged || selectionChanged) {
+      refreshDisplay(textChanged);
     }
     return;
   case IOSNativeTextEditorEvent::Submitted:
@@ -928,12 +961,13 @@ void TextInputBox::handleNativeTextEditorEvent(
 }
 
 void TextInputBox::handleNativeTextEditorEvent(
-    void *context, IOSNativeTextEditorEvent event, const std::string &text) {
+    void *context, IOSNativeTextEditorEvent event,
+    const IOSNativeTextEditorState &state) {
   if (context == nullptr) {
     return;
   }
   static_cast<TextInputBox *>(context)->handleNativeTextEditorEvent(event,
-                                                                    text);
+                                                                    state);
 }
 #endif
 

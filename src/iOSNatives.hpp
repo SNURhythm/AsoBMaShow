@@ -2,6 +2,7 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <SDL2/SDL.h>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -28,19 +29,28 @@ struct IOSReplayVideoWriterProfile {
 
 enum class IOSNativeTextEditorEvent {
   Changed,
+  SelectionChanged,
   Submitted,
   Finished,
+};
+
+struct IOSNativeTextEditorState {
+  std::string text;
+  std::size_t selectionStart = 0;
+  std::size_t selectionEnd = 0;
 };
 
 struct IOSNativeTextEditorConfig {
   std::string text;
   std::string placeholder;
+  std::size_t selectionStart = 0;
+  std::size_t selectionEnd = 0;
   int fontSize = 17;
 };
 
 using IOSNativeTextEditorCallback =
     void (*)(void *context, IOSNativeTextEditorEvent event,
-             const std::string &text);
+             const IOSNativeTextEditorState &state);
 using IOSDownloadProgressCallback =
     void (*)(void *context, std::uint64_t downloadedBytes,
              std::uint64_t totalBytes);
@@ -49,6 +59,8 @@ using IOSDownloadProgressCallback =
 std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
+void RestoreIOSViewportAfterKeyboardFocus();
+int GetIOSNativeTextEditorHeight();
 std::vector<std::string> ListDocumentFilesRecursively();
 bool PickIOSFolder(std::string &path, std::string &bookmark,
                    std::string &errorMessage);
@@ -102,4 +114,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
                              void *context,
                              IOSNativeTextEditorCallback callback);
 void HideIOSNativeTextEditor(void *context, bool notifyFinished);
+void SetIOSNativeTextEditorSelection(void *context,
+                                     std::size_t selectionStart,
+                                     std::size_t selectionEnd);
 #endif

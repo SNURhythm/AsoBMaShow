@@ -46,6 +46,54 @@ std::string NSStringToString(NSString *value) {
   return utf8 != nullptr ? std::string(utf8) : std::string();
 }
 
+bool IsUtf8ContinuationByte(unsigned char value) {
+  return (value & 0b11000000) == 0b10000000;
+}
+
+std::size_t ClampUtf8ByteOffset(const std::string &utf8,
+                                std::size_t byteOffset) {
+  byteOffset = std::min(byteOffset, utf8.size());
+  while (byteOffset < utf8.size() &&
+         IsUtf8ContinuationByte(static_cast<unsigned char>(utf8[byteOffset]))) {
+    ++byteOffset;
+  }
+  return byteOffset;
+}
+
+std::size_t Utf8ByteOffsetFromUtf16Offset(NSString *value,
+                                          NSInteger utf16Offset) {
+  if (value == nil) {
+    return 0;
+  }
+  const NSInteger clampedOffset =
+      std::max<NSInteger>(0, std::min<NSInteger>(utf16Offset, value.length));
+  if (clampedOffset <= 0) {
+    return 0;
+  }
+  NSString *prefix = [value substringToIndex:clampedOffset];
+  return static_cast<std::size_t>(
+      [prefix lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+}
+
+NSInteger Utf16OffsetFromUtf8ByteOffset(NSString *value,
+                                        std::size_t byteOffset) {
+  if (value == nil) {
+    return 0;
+  }
+  const std::string utf8 = NSStringToString(value);
+  byteOffset = ClampUtf8ByteOffset(utf8, byteOffset);
+  if (byteOffset <= 0) {
+    return 0;
+  }
+  if (byteOffset >= utf8.size()) {
+    return value.length;
+  }
+  NSString *prefix = [[NSString alloc] initWithBytes:utf8.data()
+                                              length:byteOffset
+                                            encoding:NSUTF8StringEncoding];
+  return prefix != nil ? prefix.length : value.length;
+}
+
 CTFontRef CreateIOSSystemFont(int fontSize) {
   const CGFloat pointSize = std::max(1, fontSize);
   UIFont *font = [UIFont systemFontOfSize:pointSize];
@@ -98,6 +146,42 @@ UIWindow *FindActiveWindow() {
     }
   }
   return UIApplication.sharedApplication.keyWindow;
+}
+
+void RestoreIOSViewportAfterKeyboardFocusOnce() {
+  @autoreleasepool {
+    UIWindow *window = FindActiveWindow();
+    if (window == nil) {
+      return;
+    }
+
+    UIViewController *rootController = window.rootViewController;
+    UIView *rootView = rootController.view;
+    if (rootController == nil || rootView == nil) {
+      return;
+    }
+
+    @try {
+      if ([rootController
+              respondsToSelector:NSSelectorFromString(@"setKeyboardHeight:")]) {
+        [rootController setValue:@0 forKey:@"keyboardHeight"];
+      }
+      if ([rootController
+              respondsToSelector:NSSelectorFromString(@"setKeyboardVisible:")]) {
+        [rootController setValue:@NO forKey:@"keyboardVisible"];
+      }
+    } @catch (NSException *exception) {
+      (void)exception;
+    }
+
+    const CGRect windowBounds = window.bounds;
+    if (!CGRectIsEmpty(windowBounds) &&
+        !CGRectEqualToRect(rootView.frame, windowBounds)) {
+      rootView.frame = windowBounds;
+    }
+    [rootView setNeedsLayout];
+    [rootView layoutIfNeeded];
+  }
 }
 
 int RoundedCGFloat(CGFloat value) {
@@ -863,7 +947,9 @@ private:
 @interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
 @private
   UITextField *_textField;
-  __unsafe_unretained UIView *_rootView;
+  __unsafe_unretained UIView *_containerView;
+  std::size_t _initialSelectionStart;
+  std::size_t _initialSelectionEnd;
   void *_context;
   IOSNativeTextEditorCallback _callback;
   CGRect _lastKeyboardFrame;
@@ -874,16 +960,19 @@ private:
                        context:(void *)context
                       callback:(IOSNativeTextEditorCallback)callback;
 - (void *)context;
-- (void)showInView:(UIView *)rootView;
+- (void)showInView:(UIView *)containerView;
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished;
 - (void)keyboardFrameChanged:(NSNotification *)notification;
 - (void)keyboardWillHide:(NSNotification *)notification;
+- (void)setSelectionStart:(std::size_t)selectionStart
+                      end:(std::size_t)selectionEnd;
 - (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
     (NSNotification *)notification;
 - (void)updateFrameAnimated:(BOOL)animated
                    duration:(NSTimeInterval)duration
                     options:(UIViewAnimationOptions)options;
 - (void)textFieldEditingChanged:(UITextField *)textField;
+- (void)textFieldDidChangeSelection:(UITextField *)textField;
 - (void)emitEvent:(IOSNativeTextEditorEvent)event;
 @end
 
@@ -903,6 +992,8 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 
   _context = context;
   _callback = callback;
+  _initialSelectionStart = config.selectionStart;
+  _initialSelectionEnd = config.selectionEnd;
   _lastKeyboardFrame = CGRectZero;
   _keyboardVisible = NO;
   _hiding = NO;
@@ -935,7 +1026,8 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   _textField.returnKeyType = UIReturnKeyDone;
   _textField.enablesReturnKeyAutomatically = NO;
   _textField.delegate = self;
-  _textField.text = NSStringFromUtf8(config.text);
+  NSString *text = NSStringFromUtf8(config.text);
+  _textField.text = text != nil ? text : @"";
   _textField.placeholder = NSStringFromUtf8(config.placeholder);
   [_textField addTarget:self
                  action:@selector(textFieldEditingChanged:)
@@ -949,12 +1041,12 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   return _context;
 }
 
-- (void)showInView:(UIView *)rootView {
-  if (rootView == nil) {
+- (void)showInView:(UIView *)containerView {
+  if (containerView == nil) {
     return;
   }
-  _rootView = rootView;
-  [rootView addSubview:self];
+  _containerView = containerView;
+  [containerView addSubview:self];
   [[NSNotificationCenter defaultCenter]
       addObserver:self
          selector:@selector(keyboardFrameChanged:)
@@ -967,6 +1059,7 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
            object:nil];
   [self updateFrameAnimated:NO duration:0.0 options:0];
   [_textField becomeFirstResponder];
+  [self setSelectionStart:_initialSelectionStart end:_initialSelectionEnd];
 }
 
 - (void)dealloc {
@@ -1011,6 +1104,32 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   [self updateFrameAnimated:YES duration:duration options:options];
 }
 
+- (void)setSelectionStart:(std::size_t)selectionStart
+                      end:(std::size_t)selectionEnd {
+  NSString *text = _textField.text != nil ? _textField.text : @"";
+  selectionStart = ClampUtf8ByteOffset(NSStringToString(text), selectionStart);
+  selectionEnd = ClampUtf8ByteOffset(NSStringToString(text), selectionEnd);
+  if (selectionEnd < selectionStart) {
+    std::swap(selectionStart, selectionEnd);
+  }
+
+  const NSInteger start = Utf16OffsetFromUtf8ByteOffset(text, selectionStart);
+  const NSInteger end = Utf16OffsetFromUtf8ByteOffset(text, selectionEnd);
+  UITextPosition *beginning = _textField.beginningOfDocument;
+  UITextPosition *startPosition =
+      [_textField positionFromPosition:beginning offset:start];
+  UITextPosition *endPosition =
+      [_textField positionFromPosition:beginning offset:end];
+  if (startPosition == nil || endPosition == nil) {
+    return;
+  }
+  UITextRange *range =
+      [_textField textRangeFromPosition:startPosition toPosition:endPosition];
+  if (range != nil) {
+    _textField.selectedTextRange = range;
+  }
+}
+
 - (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
     (NSNotification *)notification {
   NSNumber *curveValue =
@@ -1024,20 +1143,21 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
 - (void)updateFrameAnimated:(BOOL)animated
                    duration:(NSTimeInterval)duration
                     options:(UIViewAnimationOptions)options {
-  UIView *rootView = _rootView;
-  if (rootView == nil) {
+  UIView *containerView = _containerView;
+  if (containerView == nil) {
     return;
   }
 
   UIEdgeInsets safeInsets = UIEdgeInsetsZero;
   if (@available(iOS 11.0, *)) {
-    safeInsets = rootView.safeAreaInsets;
+    safeInsets = containerView.safeAreaInsets;
   }
 
-  CGRect bounds = rootView.bounds;
+  CGRect bounds = containerView.bounds;
   CGFloat keyboardTop = bounds.size.height - safeInsets.bottom;
   if (_keyboardVisible && !CGRectIsEmpty(_lastKeyboardFrame)) {
-    CGRect keyboardFrame = [rootView convertRect:_lastKeyboardFrame fromView:nil];
+    CGRect keyboardFrame =
+        [containerView convertRect:_lastKeyboardFrame fromView:nil];
     if (CGRectIntersectsRect(bounds, keyboardFrame)) {
       keyboardTop = std::max<CGFloat>(
           0.0, std::min<CGFloat>(keyboardTop, CGRectGetMinY(keyboardFrame)));
@@ -1074,6 +1194,11 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   [self emitEvent:IOSNativeTextEditorEvent::Changed];
 }
 
+- (void)textFieldDidChangeSelection:(UITextField *)textField {
+  (void)textField;
+  [self emitEvent:IOSNativeTextEditorEvent::SelectionChanged];
+}
+
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
   (void)textField;
   [self emitEvent:IOSNativeTextEditorEvent::Submitted];
@@ -1094,8 +1219,25 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   if (_callback == nullptr) {
     return;
   }
-  const std::string text = NSStringToString(_textField.text);
-  _callback(_context, event, text);
+  NSString *nativeText = _textField.text != nil ? _textField.text : @"";
+  IOSNativeTextEditorState state;
+  state.text = NSStringToString(nativeText);
+  state.selectionStart = state.text.size();
+  state.selectionEnd = state.text.size();
+
+  UITextRange *selectedRange = _textField.selectedTextRange;
+  UITextPosition *beginning = _textField.beginningOfDocument;
+  if (selectedRange != nil && beginning != nil) {
+    const NSInteger selectionStart =
+        [_textField offsetFromPosition:beginning toPosition:selectedRange.start];
+    const NSInteger selectionEnd =
+        [_textField offsetFromPosition:beginning toPosition:selectedRange.end];
+    state.selectionStart =
+        Utf8ByteOffsetFromUtf16Offset(nativeText, selectionStart);
+    state.selectionEnd = Utf8ByteOffsetFromUtf16Offset(nativeText, selectionEnd);
+  }
+
+  _callback(_context, event, state);
 }
 
 - (void)hideWithNotifyFinished:(BOOL)notifyFinished {
@@ -1127,8 +1269,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
         return;
       }
       UIWindow *window = FindActiveWindow();
-      UIView *rootView = window.rootViewController.view;
-      if (rootView == nil) {
+      if (window == nil) {
         return;
       }
       if (gNativeTextEditor != nil) {
@@ -1141,7 +1282,7 @@ void ShowIOSNativeTextEditor(const IOSNativeTextEditorConfig &config,
           [[AsoNativeTextEditorView alloc] initWithConfig:editorConfig
                                                   context:editorContext
                                                  callback:editorCallback];
-      [gNativeTextEditor showInView:rootView];
+      [gNativeTextEditor showInView:window];
     }
   };
 
@@ -1172,6 +1313,52 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished) {
   } else {
     dispatch_async(dispatch_get_main_queue(), hideBlock);
   }
+}
+
+void SetIOSNativeTextEditorSelection(void *context,
+                                     std::size_t selectionStart,
+                                     std::size_t selectionEnd) {
+  void *editorContext = context;
+  auto selectionBlock = ^{
+    @autoreleasepool {
+      if (gNativeTextEditor == nil) {
+        return;
+      }
+      if (editorContext != nullptr &&
+          [gNativeTextEditor context] != editorContext) {
+        return;
+      }
+      [gNativeTextEditor setSelectionStart:selectionStart end:selectionEnd];
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    selectionBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), selectionBlock);
+  }
+}
+
+int GetIOSNativeTextEditorHeight() {
+  return RoundedCGFloat(kNativeTextEditorHeight);
+}
+
+void RestoreIOSViewportAfterKeyboardFocus() {
+  auto restoreIfNoEditor = ^{
+    if (gNativeTextEditor != nil) {
+      return;
+    }
+    RestoreIOSViewportAfterKeyboardFocusOnce();
+  };
+  auto scheduleRestore = ^(NSTimeInterval delaySeconds) {
+    const dispatch_time_t when =
+        dispatch_time(DISPATCH_TIME_NOW,
+                      static_cast<int64_t>(delaySeconds * NSEC_PER_SEC));
+    dispatch_after(when, dispatch_get_main_queue(), restoreIfNoEditor);
+  };
+  dispatch_async(dispatch_get_main_queue(), restoreIfNoEditor);
+  scheduleRestore(0.12);
+  scheduleRestore(0.35);
 }
 
 @interface AsoFolderPickerDelegate : NSObject <UIDocumentPickerDelegate> {

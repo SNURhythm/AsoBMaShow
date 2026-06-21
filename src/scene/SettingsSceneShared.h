@@ -695,6 +695,36 @@ static std::string formatJudgementCounterPositionLabel(
   return "Top";
 }
 
+static std::string formatJudgementTimingDisplayModeLabel(
+    AppSettings::JudgementTimingDisplayMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementTimingDisplayMode::Both:
+    return "Both";
+  case AppSettings::JudgementTimingDisplayMode::Direction:
+    return "FAST/SLOW";
+  case AppSettings::JudgementTimingDisplayMode::Ms:
+    return "ms";
+  case AppSettings::JudgementTimingDisplayMode::Off:
+    return "Off";
+  }
+  return "Both";
+}
+
+static std::string formatJudgementTimingDisplayCriteriaLabel(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  switch (criteria) {
+  case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
+    return "PGREAT OR BELOW";
+  case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
+    return "GREAT OR BELOW";
+  case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
+    return "GOOD OR BELOW";
+  case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
+    return "BAD OR BELOW";
+  }
+  return "GREAT OR BELOW";
+}
+
 static std::string
 formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
   switch (position) {
@@ -851,6 +881,38 @@ nextJudgementCounterPosition(
     return AppSettings::JudgementCounterPosition::Top;
   }
   return AppSettings::JudgementCounterPosition::Top;
+}
+
+static AppSettings::JudgementTimingDisplayMode
+nextJudgementTimingDisplayMode(
+    AppSettings::JudgementTimingDisplayMode mode) {
+  switch (mode) {
+  case AppSettings::JudgementTimingDisplayMode::Both:
+    return AppSettings::JudgementTimingDisplayMode::Direction;
+  case AppSettings::JudgementTimingDisplayMode::Direction:
+    return AppSettings::JudgementTimingDisplayMode::Ms;
+  case AppSettings::JudgementTimingDisplayMode::Ms:
+    return AppSettings::JudgementTimingDisplayMode::Off;
+  case AppSettings::JudgementTimingDisplayMode::Off:
+    return AppSettings::JudgementTimingDisplayMode::Both;
+  }
+  return AppSettings::JudgementTimingDisplayMode::Both;
+}
+
+static AppSettings::JudgementTimingDisplayCriteria
+nextJudgementTimingDisplayCriteria(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  switch (criteria) {
+  case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
+    return AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow;
+  case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
+    return AppSettings::JudgementTimingDisplayCriteria::BadOrBelow;
+  case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
+    return AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+  case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
+    return AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
+  }
+  return AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
 }
 
 static AppSettings::GaugeBarPosition

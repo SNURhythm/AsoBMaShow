@@ -62,6 +62,8 @@ void SettingsScene::resetViewState() {
   summaryJudgementIndicatorYValueText = nullptr;
   summaryJudgementIndicatorWidthValueText = nullptr;
   summaryJudgementCounterPositionValueText = nullptr;
+  summaryJudgementTimingDisplayValueText = nullptr;
+  summaryJudgementTimingCriteriaValueText = nullptr;
   summaryGaugeBarPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryUiThemeValueText = nullptr;
@@ -75,6 +77,8 @@ void SettingsScene::resetViewState() {
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
+  judgementTimingDisplayModeText = nullptr;
+  judgementTimingCriteriaText = nullptr;
   judgementCounterModeText = nullptr;
   judgementCounterPositionText = nullptr;
   gaugeBarPositionText = nullptr;
@@ -91,6 +95,8 @@ void SettingsScene::resetViewState() {
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
+  judgementTimingDisplayModeButton = nullptr;
+  judgementTimingCriteriaButton = nullptr;
   judgementCounterModeButton = nullptr;
   judgementCounterPositionButton = nullptr;
   gaugeBarPositionButton = nullptr;
@@ -315,6 +321,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   }
   const int panelWidth =
       resolvePreviewPanelWidth(metrics, foldButtonSize, previewPanelFolded);
+  const int panelHeight = std::max(
+      foldButtonSize,
+      rendering::window_height - metrics.safe.top - metrics.safe.bottom -
+          metrics.verticalPadding * 2);
   auto *previewPanel = new View();
   previewPanel->setWidth(static_cast<float>(panelWidth));
   previewPanel->setPadding(
@@ -349,6 +359,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     refreshSettingsText();
     return;
   }
+
+  previewPanel->setHeight(static_cast<float>(panelHeight));
 
   auto *previewHeader = new View();
   previewHeader->setFlexDirection(FlexDirection::Row);
@@ -396,13 +408,25 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewTabs->addView(makePreviewTab(2, "HUD"));
   previewPanel->addView(previewTabs);
 
-  if (previewPanelPage == 0) {
-    previewPanel->addView(
-        makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
-    previewPanel->addView(buildVisibleTimeControls(metrics, false, true));
+  auto *previewScroll = new ScrollView();
+  previewScroll->setFlex(1.0f);
+  previewScroll->setFlexShrink(1.0f);
+  previewScroll->setWidthPercent(100.0f);
 
-    previewPanel->addView(makeSummaryRow(metrics, "Note Start",
-                                         &summaryNoteStartPositionValueText));
+  auto *previewControls = new View();
+  previewControls->setFlexDirection(FlexDirection::Column);
+  previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  previewControls->setAlignItems(YGAlignStretch);
+  previewScroll->setContentView(previewControls);
+  previewPanel->addView(previewScroll);
+
+  if (previewPanelPage == 0) {
+    previewControls->addView(
+        makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
+    previewControls->addView(buildVisibleTimeControls(metrics, false, true));
+
+    previewControls->addView(makeSummaryRow(
+        metrics, "Note Start", &summaryNoteStartPositionValueText));
     auto *noteStartControls = new View();
     noteStartControls->setFlexDirection(FlexDirection::Row);
     noteStartControls->setFlexWrap(YGWrapWrap);
@@ -432,9 +456,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     noteStartControls->addView(resetNoteStart);
-    previewPanel->addView(noteStartControls);
+    previewControls->addView(noteStartControls);
   } else if (previewPanelPage == 1) {
-    previewPanel->addView(
+    previewControls->addView(
         makeSummaryRow(metrics, "Lane Angle", &summaryLaneAngleValueText));
     auto *angleControls = new View();
     angleControls->setFlexDirection(FlexDirection::Row);
@@ -464,9 +488,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     angleControls->addView(resetAngle);
-    previewPanel->addView(angleControls);
+    previewControls->addView(angleControls);
 
-    previewPanel->addView(
+    previewControls->addView(
         makeSummaryRow(metrics, "Lane Length", &summaryLaneLengthValueText));
     auto *lengthControls = new View();
     lengthControls->setFlexDirection(FlexDirection::Row);
@@ -496,10 +520,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     lengthControls->addView(resetLength);
-    previewPanel->addView(lengthControls);
+    previewControls->addView(lengthControls);
 
-    previewPanel->addView(makeSummaryRow(metrics, "Beam Length",
-                                         &summaryLaneBeamLengthValueText));
+    previewControls->addView(makeSummaryRow(
+        metrics, "Beam Length", &summaryLaneBeamLengthValueText));
     auto *beamControls = new View();
     beamControls->setFlexDirection(FlexDirection::Row);
     beamControls->setFlexWrap(YGWrapWrap);
@@ -529,9 +553,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     beamControls->addView(resetBeam);
-    previewPanel->addView(beamControls);
+    previewControls->addView(beamControls);
 
-    previewPanel->addView(makeSummaryRow(
+    previewControls->addView(makeSummaryRow(
         metrics, "Play Width 7K", &summaryPreviewPlayAreaWidthValueText));
     auto *playAreaWidthControls = new View();
     playAreaWidthControls->setFlexDirection(FlexDirection::Row);
@@ -566,7 +590,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     playAreaWidthControls->addView(resetWidth);
-    previewPanel->addView(playAreaWidthControls);
+    previewControls->addView(playAreaWidthControls);
   } else {
     auto makePreviewStepRow = [&metrics](Button *minus, Button *plus,
                                          Button *reset) {
@@ -583,8 +607,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       return row;
     };
 
-    previewPanel->addView(makeSummaryRow(metrics, "Judge Text Y",
-                                         &summaryJudgementTextYValueText));
+    previewControls->addView(makeSummaryRow(
+        metrics, "Judge Text Y", &summaryJudgementTextYValueText));
     auto updateJudgementTextY = [this](int deltaPercent) {
       const int currentPercent =
           judgementTextYToPercent(context.settings.judgementTextY);
@@ -606,10 +630,60 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
       persistSettings();
     });
-    previewPanel->addView(makePreviewStepRow(
+    previewControls->addView(makePreviewStepRow(
         minusJudgementTextY, plusJudgementTextY, resetJudgementTextY));
 
-    previewPanel->addView(
+    previewControls->addView(makeSummaryRow(
+        metrics, "Timing Display", &summaryJudgementTimingDisplayValueText));
+    auto *timingDisplayControls = new View();
+    timingDisplayControls->setFlexDirection(FlexDirection::Row);
+    timingDisplayControls->setFlexWrap(YGWrapWrap);
+    timingDisplayControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    timingDisplayControls->setAlignItems(YGAlignCenter);
+    timingDisplayControls->setWidthPercent(100.0f);
+    timingDisplayControls->setJustifyContent(YGJustifyCenter);
+    judgementTimingDisplayModeText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementTimingDisplayModeButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementTimingDisplayModeText);
+    judgementTimingDisplayModeButton->setOnClickListener([this]() {
+      context.settings.judgementTimingDisplayMode =
+          nextJudgementTimingDisplayMode(
+              context.settings.judgementTimingDisplayMode);
+      persistSettings();
+    });
+    timingDisplayControls->addView(judgementTimingDisplayModeButton);
+    previewControls->addView(timingDisplayControls);
+
+    previewControls->addView(makeSummaryRow(
+        metrics, "Timing Criteria", &summaryJudgementTimingCriteriaValueText));
+    auto *timingCriteriaControls = new View();
+    timingCriteriaControls->setFlexDirection(FlexDirection::Row);
+    timingCriteriaControls->setFlexWrap(YGWrapWrap);
+    timingCriteriaControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    timingCriteriaControls->setAlignItems(YGAlignCenter);
+    timingCriteriaControls->setWidthPercent(100.0f);
+    timingCriteriaControls->setJustifyContent(YGJustifyCenter);
+    judgementTimingCriteriaText =
+        makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    judgementTimingCriteriaButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          judgementTimingCriteriaText);
+    judgementTimingCriteriaButton->setOnClickListener([this]() {
+      context.settings.judgementTimingDisplayCriteria =
+          nextJudgementTimingDisplayCriteria(
+              context.settings.judgementTimingDisplayCriteria);
+      persistSettings();
+    });
+    timingCriteriaControls->addView(judgementTimingCriteriaButton);
+    previewControls->addView(timingCriteriaControls);
+
+    previewControls->addView(
         makeText("Indicator", metrics.summaryValueSize,
                  ui_theme::textSecondary()));
     auto *indicatorModeControls = new View();
@@ -645,10 +719,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     indicatorModeControls->addView(judgementIndicatorRenderModeButton);
-    previewPanel->addView(indicatorModeControls);
+    previewControls->addView(indicatorModeControls);
 
-    previewPanel->addView(makeSummaryRow(metrics, "Indicator Y",
-                                         &summaryJudgementIndicatorYValueText));
+    previewControls->addView(makeSummaryRow(
+        metrics, "Indicator Y", &summaryJudgementIndicatorYValueText));
     auto updateIndicatorY = [this](int deltaPercent) {
       const int currentPercent =
           judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
@@ -672,10 +746,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
           AppSettings::kDefaultJudgementIndicatorY;
       persistSettings();
     });
-    previewPanel->addView(
+    previewControls->addView(
         makePreviewStepRow(minusIndicatorY, plusIndicatorY, resetIndicatorY));
 
-    previewPanel->addView(makeSummaryRow(
+    previewControls->addView(makeSummaryRow(
         metrics, "Indicator Width", &summaryJudgementIndicatorWidthValueText));
     auto updateIndicatorWidth = [this](int deltaPercent) {
       const int currentPercent = judgementIndicatorWidthScaleToPercent(
@@ -704,10 +778,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
           AppSettings::kDefaultJudgementIndicatorWidthScale;
       persistSettings();
     });
-    previewPanel->addView(makePreviewStepRow(
+    previewControls->addView(makePreviewStepRow(
         minusIndicatorWidth, plusIndicatorWidth, resetIndicatorWidth));
 
-    previewPanel->addView(makeSummaryRow(
+    previewControls->addView(makeSummaryRow(
         metrics, "Counter", &summaryJudgementCounterPositionValueText));
     auto *counterControls = new View();
     counterControls->setFlexDirection(FlexDirection::Row);
@@ -742,9 +816,9 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     counterControls->addView(judgementCounterPositionButton);
-    previewPanel->addView(counterControls);
+    previewControls->addView(counterControls);
 
-    previewPanel->addView(makeSummaryRow(
+    previewControls->addView(makeSummaryRow(
         metrics, "Gauge", &summaryGaugeBarPositionValueText));
     auto *gaugeControls = new View();
     gaugeControls->setFlexDirection(FlexDirection::Row);
@@ -766,7 +840,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       persistSettings();
     });
     gaugeControls->addView(gaugeBarPositionButton);
-    previewPanel->addView(gaugeControls);
+    previewControls->addView(gaugeControls);
   }
 
   auto *restartButton = makeButton(
