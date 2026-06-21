@@ -58,6 +58,8 @@ void *StartIOSSecurityScopedResource(const std::string &path,
                                       std::string &errorMessage);
 void StopIOSSecurityScopedResource(void *resource);
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
+bool GetIOSWindowDrawablePixelSize(int &width, int &height);
+bool ConsumeIOSDisplayRefreshRequest();
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool PostURLTextIOS(const std::string &url, std::string &body,

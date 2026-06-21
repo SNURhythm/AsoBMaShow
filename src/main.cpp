@@ -144,6 +144,51 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   }
 }
 
+#if TARGET_OS_IPHONE
+void orientDrawableSizeForLogicalSize(int logicalW, int logicalH, int &renderW,
+                                      int &renderH) {
+  if (logicalW <= 0 || logicalH <= 0 || renderW <= 0 || renderH <= 0) {
+    return;
+  }
+  const bool logicalLandscape = logicalW >= logicalH;
+  const bool renderLandscape = renderW >= renderH;
+  if (logicalLandscape != renderLandscape) {
+    std::swap(renderW, renderH);
+  }
+}
+
+void getIOSRendererOutputSize(SDL_Renderer *renderer, int logicalW,
+                              int logicalH, int &renderW, int &renderH) {
+  renderW = 0;
+  renderH = 0;
+  if (renderer != nullptr) {
+    SDL_GetRendererOutputSize(renderer, &renderW, &renderH);
+  }
+
+  int nativeW = 0;
+  int nativeH = 0;
+  if (!GetIOSWindowDrawablePixelSize(nativeW, nativeH)) {
+    if (renderW <= 0 || renderH <= 0) {
+      renderW = scaledDimension(logicalW);
+      renderH = scaledDimension(logicalH);
+    }
+    return;
+  }
+
+  orientDrawableSizeForLogicalSize(logicalW, logicalH, nativeW, nativeH);
+  orientDrawableSizeForLogicalSize(logicalW, logicalH, renderW, renderH);
+  const bool rendererSizeInvalid = renderW <= 0 || renderH <= 0;
+  const bool rendererSizeIsTransientlyLow =
+      !rendererSizeInvalid &&
+      (renderW < static_cast<int>(std::lround(nativeW * 0.9)) ||
+       renderH < static_cast<int>(std::lround(nativeH * 0.9)));
+  if (rendererSizeInvalid || rendererSizeIsTransientlyLow) {
+    renderW = nativeW;
+    renderH = nativeH;
+  }
+}
+#endif
+
 } // namespace
 
 // static rendering::PosColorVertex cubeVertices[] = {
@@ -417,8 +462,14 @@ int main(int argv, char **args) {
     return EXIT_FAILURE;
   }
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+  SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
+  if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
+    windowLogicalWidth = windowCreateWidth;
+    windowLogicalHeight = windowCreateHeight;
+  }
   int rw = 0, rh = 0;
-  SDL_GetRendererOutputSize(s_renderer, &rw, &rh);
+  getIOSRendererOutputSize(s_renderer, windowLogicalWidth, windowLogicalHeight,
+                           rw, rh);
   rendering::widthScale =
       static_cast<float>(rw) / static_cast<float>(windowLogicalWidth);
   rendering::heightScale =
@@ -604,6 +655,10 @@ void run() {
   int deferredScaleDropFrames = 0;
   int deferredScaleDropRenderW = 0;
   int deferredScaleDropRenderH = 0;
+#if TARGET_OS_IPHONE
+  constexpr int kIOSForcedDrawableRefreshFrames = 6;
+  int iosForcedDrawableRefreshFrames = 0;
+#endif
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -700,14 +755,16 @@ void run() {
       return false;
     };
 
-    auto applyWindowResize = [&](int logicalW, int logicalH) {
+    auto applyWindowResize = [&](int logicalW, int logicalH,
+                                 bool forceReset = false) {
       if (logicalW <= 0 || logicalH <= 0) {
         return true;
       }
 #if TARGET_OS_IPHONE
       int targetRenderW = 0;
       int targetRenderH = 0;
-      SDL_GetRendererOutputSize(s_renderer, &targetRenderW, &targetRenderH);
+      getIOSRendererOutputSize(s_renderer, logicalW, logicalH, targetRenderW,
+                               targetRenderH);
 #else
       int targetRenderW = 0;
       int targetRenderH = 0;
@@ -718,12 +775,13 @@ void run() {
         return true;
       }
       if (targetRenderW == rendering::render_width &&
-          targetRenderH == rendering::render_height) {
+          targetRenderH == rendering::render_height && !forceReset) {
         deferredScaleDropFrames = 0;
         return true;
       }
 
-      if (shouldDeferDrawableScaleDrop(logicalW, logicalH, targetRenderW,
+      if (!forceReset &&
+          shouldDeferDrawableScaleDrop(logicalW, logicalH, targetRenderW,
                                        targetRenderH)) {
         return false;
       }
@@ -742,6 +800,12 @@ void run() {
       rendering::heightScale =
           static_cast<float>(targetRenderH) / static_cast<float>(logicalH);
       rendering::updateUIScale(targetRenderW, targetRenderH);
+#if TARGET_OS_IPHONE
+      if (s_renderer != nullptr) {
+        SDL_RenderSetScale(s_renderer, rendering::widthScale,
+                           rendering::heightScale);
+      }
+#endif
       activeWindowLogicalW = logicalW;
       activeWindowLogicalH = logicalH;
       deferredScaleDropFrames = 0;
@@ -780,6 +844,13 @@ void run() {
           deferWindowResize(logicalW, logicalH);
         }
       }
+
+#if TARGET_OS_IPHONE
+      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
+          event.type == SDL_APP_DIDENTERFOREGROUND) {
+        iosForcedDrawableRefreshFrames = kIOSForcedDrawableRefreshFrames;
+      }
+#endif
 
       if (event.type == SDL_TEXTEDITING_EXT) {
         SDL_free(event.editExt.text);
@@ -850,6 +921,29 @@ void run() {
         applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
       hasDeferredRenderResize = false;
     }
+#if TARGET_OS_IPHONE
+    if (ConsumeIOSDisplayRefreshRequest()) {
+      iosForcedDrawableRefreshFrames = kIOSForcedDrawableRefreshFrames;
+    }
+    if (iosForcedDrawableRefreshFrames > 0 &&
+        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+      int logicalW = 0;
+      int logicalH = 0;
+      if (s_window != nullptr) {
+        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+      }
+      if (logicalW <= 0) {
+        logicalW = activeWindowLogicalW;
+      }
+      if (logicalH <= 0) {
+        logicalH = activeWindowLogicalH;
+      }
+      if (logicalW > 0 && logicalH > 0 &&
+          applyWindowResize(logicalW, logicalH, true)) {
+        --iosForcedDrawableRefreshFrames;
+      }
+    }
+#endif
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);

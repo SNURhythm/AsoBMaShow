@@ -11,6 +11,7 @@
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -27,6 +28,7 @@ constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
 constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 UIDocumentInteractionController *gIOSRevealFileController = nil;
+std::atomic_bool gIOSDisplayRefreshRequested{false};
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -97,6 +99,33 @@ UIWindow *FindActiveWindow() {
     }
   }
   return UIApplication.sharedApplication.keyWindow;
+}
+
+void EnsureIOSDisplayRefreshObservers() {
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    void (^requestRefresh)(NSNotification *) = ^(NSNotification *notification) {
+      (void)notification;
+      gIOSDisplayRefreshRequested.store(true, std::memory_order_release);
+    };
+    [center addObserverForName:UIApplicationUserDidTakeScreenshotNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:requestRefresh];
+    [center addObserverForName:UIApplicationWillEnterForegroundNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:requestRefresh];
+    [center addObserverForName:UIApplicationDidBecomeActiveNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:requestRefresh];
+    [center addObserverForName:UIScreenModeDidChangeNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:requestRefresh];
+  });
 }
 
 UIViewController *TopViewController(UIViewController *viewController) {
@@ -1968,6 +1997,42 @@ IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
   insets.bottom = safeInsets.bottom / bounds.size.height;
   insets.right = safeInsets.right / bounds.size.width;
   return insets;
+}
+
+bool GetIOSWindowDrawablePixelSize(int &width, int &height) {
+  width = 0;
+  height = 0;
+  @autoreleasepool {
+    UIWindow *window = FindActiveWindow();
+    UIScreen *screen = window != nil ? window.screen : UIScreen.mainScreen;
+    if (screen == nil) {
+      return false;
+    }
+
+    CGSize pointSize = CGSizeZero;
+    if (window != nil && !CGSizeEqualToSize(window.bounds.size, CGSizeZero)) {
+      pointSize = window.bounds.size;
+    } else if (!CGSizeEqualToSize(screen.bounds.size, CGSizeZero)) {
+      pointSize = screen.bounds.size;
+    }
+
+    const CGFloat scale =
+        screen.nativeScale > 0.0 ? screen.nativeScale : screen.scale;
+    if (scale <= 0.0 || pointSize.width <= 0.0 || pointSize.height <= 0.0) {
+      return false;
+    }
+
+    width = std::max(1, static_cast<int>(std::lround(pointSize.width * scale)));
+    height =
+        std::max(1, static_cast<int>(std::lround(pointSize.height * scale)));
+    return true;
+  }
+  return false;
+}
+
+bool ConsumeIOSDisplayRefreshRequest() {
+  EnsureIOSDisplayRefreshObservers();
+  return gIOSDisplayRefreshRequested.exchange(false, std::memory_order_acq_rel);
 }
 
 IOSSystemTextMetrics GetIOSSystemTextMetrics(int fontSize) {
