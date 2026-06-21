@@ -80,6 +80,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(1);
   jacketImage->setWidth(78)->setHeight(78);
+  jacketImage->setCornerRadius(ui_theme::controlRadius() - 3.0f);
   artworkFrame->addView(jacketImage);
   contentCard->addView(artworkFrame);
 

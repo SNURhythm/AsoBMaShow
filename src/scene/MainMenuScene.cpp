@@ -1715,10 +1715,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
   };
 
+  static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
-    return new LibraryFolderItemView(0, 0, 260, 44);
+    return new LibraryFolderItemView(0, 0, 260, kFolderListItemHeight);
   };
-  folderRecyclerView->itemHeight = 44;
+  folderRecyclerView->itemHeight = kFolderListItemHeight;
   folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
                                       int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
@@ -2096,7 +2097,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketCard->setCornerRadius(ui_theme::panelRadius());
   jacketCard->setThemedBorderColor(ui_theme::hairlineSubtle);
   jacketCard->setBorderWidth(1);
-  jacketView->setWidth(200)->setHeight(200);
+  jacketView->setWidth(198)->setHeight(198);
+  jacketView->setCornerRadius(ui_theme::panelRadius() - 1.0f);
   jacketCard->addView(jacketView);
   startButton->setHeight(86);
   right->addView(jacketCard);
