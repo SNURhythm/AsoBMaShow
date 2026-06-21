@@ -160,6 +160,11 @@ private:
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
+  AppSettings::GaugeBarPosition gaugeBarPosition =
+      AppSettings::GaugeBarPosition::World;
+  GaugeType currentGaugeType = GaugeType::Normal;
+  bool currentGaugeAutoShift = false;
+  float currentGaugeValue = 0.0f;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
@@ -181,9 +186,18 @@ private:
   void drawHudRoundedPanel(float x, float y, float width, float height,
                            float radius, const Color &fill,
                            const Color &border);
+  void drawRoundedPanel(float x, float y, float width, float height,
+                        float radius, float borderWidth, const Color &fill,
+                        const Color &border);
   void drawGameplayHudPanels();
+  void drawGaugeBar();
+  void drawWorldGaugeBar();
+  void drawHudGaugeBar();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
+  void layoutGaugeText();
+  std::array<float, 4> worldGaugeRect() const;
+  std::array<float, 4> hudGaugeRect() const;
   float gameplayHudTitleWidth() const;
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
@@ -268,6 +282,7 @@ public:
   void setJudgementCounter(Judgement judgement, int count, int comboBreak);
   void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,
                             int comboBreak);
+  void setGaugeBarPosition(AppSettings::GaugeBarPosition position);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);

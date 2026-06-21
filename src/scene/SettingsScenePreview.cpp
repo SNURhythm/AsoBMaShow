@@ -130,6 +130,7 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.judgementCounterEnabled);
     previewRenderer->setJudgementCounterPosition(
         context.settings.judgementCounterPosition);
+    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
     resetPreviewHudSample();
   }
@@ -262,6 +263,7 @@ void SettingsScene::resetPreviewHudSample() {
     return;
   }
   previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
+  previewRenderer->setGaugeStatus(GaugeType::Normal, false, 74.0f);
   previewRenderer->onJudge(JudgeResult(PGreat, 0), previewCombo, previewScore,
                            previewElapsedMicros, false);
 }

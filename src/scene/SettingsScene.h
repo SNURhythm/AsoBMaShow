@@ -79,6 +79,7 @@ private:
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
   TextView *summaryJudgementCounterPositionValueText = nullptr;
+  TextView *summaryGaugeBarPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextView *summaryUiThemeValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
@@ -93,6 +94,7 @@ private:
   TextView *judgementIndicatorRenderModeText = nullptr;
   TextView *judgementCounterModeText = nullptr;
   TextView *judgementCounterPositionText = nullptr;
+  TextView *gaugeBarPositionText = nullptr;
   TextView *bgaModeText = nullptr;
   TextView *bgaDisplayModeText = nullptr;
   TextView *uiThemeModeText = nullptr;
@@ -108,6 +110,7 @@ private:
   Button *judgementIndicatorRenderModeButton = nullptr;
   Button *judgementCounterModeButton = nullptr;
   Button *judgementCounterPositionButton = nullptr;
+  Button *gaugeBarPositionButton = nullptr;
   Button *bgaModeButton = nullptr;
   Button *bgaDisplayModeButton = nullptr;
   Button *uiThemeModeButton = nullptr;

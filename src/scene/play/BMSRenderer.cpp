@@ -255,6 +255,77 @@ float gameplayHudMetricsWidth() {
                     430.0f, 540.0f);
 }
 
+std::string formatGaugeBarLabel(GaugeType gaugeType, bool gaugeAutoShift,
+                                float currentGauge) {
+  char text[64];
+  std::snprintf(text, sizeof(text), "%s%s %.1f%%",
+                gaugeAutoShift ? "GAS " : "", gaugeTypeToShortLabel(gaugeType),
+                currentGauge);
+  return text;
+}
+
+Color gaugeAccentColor(GaugeType gaugeType, float currentGauge) {
+  const float border = gaugeBorderValue(gaugeType);
+  if (!gaugeIsSurvival(gaugeType) && border > 0.0f &&
+      currentGauge < border) {
+    return ui_theme::coral();
+  }
+  return clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+}
+
+Color gaugeTrackFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(255, 255, 255, 72)
+             : Color(4, 9, 15, 126);
+}
+
+Color gaugeTrackBorder(const Color &accent) {
+  return Color(accent.r, accent.g, accent.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 164
+                                                                    : 190);
+}
+
+Color gaugeFillColor(const Color &accent) {
+  return Color(accent.r, accent.g, accent.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 218
+                                                                    : 232);
+}
+
+Color gaugeMarkerColor() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(20, 38, 42, 168)
+             : Color(244, 250, 255, 174);
+}
+
+Color gaugeTextColor(const Color &accent) {
+  return ui_theme::textOn(gaugeFillColor(accent));
+}
+
+std::optional<UiPoint> projectWorldToUi(float worldX, float worldY) {
+  const Camera &camera = rendering::game_camera;
+  if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
+    return std::nullopt;
+  }
+
+  const bx::Vec3 screen = camera.project({worldX, worldY, 0.0f});
+  if (!std::isfinite(screen.x) || !std::isfinite(screen.y)) {
+    return std::nullopt;
+  }
+
+  const float uiX =
+      (screen.x - static_cast<float>(camera.getViewX())) /
+      static_cast<float>(camera.getViewWidth()) *
+      static_cast<float>(rendering::window_width);
+  const float uiY =
+      (screen.y - static_cast<float>(camera.getViewY())) /
+      static_cast<float>(camera.getViewHeight()) *
+      static_cast<float>(rendering::window_height);
+  if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
+    return std::nullopt;
+  }
+  return UiPoint{uiX, uiY};
+}
+
 JudgementCounterLayout judgementCounterLayoutFor(
     AppSettings::JudgementCounterPosition position, float titleWidth) {
   JudgementCounterLayout layout;
@@ -512,8 +583,8 @@ BMSRenderer::BMSRenderer(
   comboText->setVAlign(TextView::MIDDLE);
   comboText->setText("COMBO 0");
   comboText->setColor(ui_theme::sdl(ui_theme::lime()));
-  gaugeText = std::make_unique<TextView>(kHudFontPath, 22);
-  gaugeText->setAlign(TextView::LEFT);
+  gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
+  gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
@@ -602,7 +673,9 @@ void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
 }
 void BMSRenderer::drawGauge(RenderContext &context) const {
-  gaugeText->render(context);
+  if (gaugeText != nullptr) {
+    gaugeText->render(context);
+  }
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
@@ -612,7 +685,13 @@ void BMSRenderer::drawHudRoundedPanel(float x, float y, float width,
                                       float height, float radius,
                                       const Color &fill,
                                       const Color &border) {
-  constexpr float kBorder = 1.0f;
+  drawRoundedPanel(x, y, width, height, radius, 1.0f, fill, border);
+}
+
+void BMSRenderer::drawRoundedPanel(float x, float y, float width, float height,
+                                   float radius, float borderWidth,
+                                   const Color &fill, const Color &border) {
+  const float kBorder = std::max(0.0f, borderWidth);
   simpleBatchRenderer.addRoundedRect(x, y, width, height, radius,
                                      border.toABGR());
   simpleBatchRenderer.addRoundedRect(
@@ -631,8 +710,127 @@ void BMSRenderer::drawGameplayHudPanels() {
     drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
                         hudPanelFill(), hudPanelBorder());
   }
-  drawHudRoundedPanel(margin, rendering::window_height - 108.0f, metricsWidth,
-                      80.0f, radius, hudPanelStrongFill(), hudPanelBorder());
+  drawHudRoundedPanel(margin, rendering::window_height - 86.0f, metricsWidth,
+                      58.0f, radius, hudPanelStrongFill(), hudPanelBorder());
+}
+
+std::array<float, 4> BMSRenderer::worldGaugeRect() const {
+  const float width = std::max(0.1f, playAreaWidth * 0.84f);
+  const float height = std::max(0.055f, noteRenderHeight * 0.34f);
+  const float x = playAreaLeftX + (playAreaWidth - width) * 0.5f;
+  const float y = judgeY - std::max(0.12f, noteRenderHeight * 0.78f);
+  return {x, y, width, height};
+}
+
+std::array<float, 4> BMSRenderer::hudGaugeRect() const {
+  const float width =
+      std::clamp(static_cast<float>(rendering::window_width) * 0.018f, 20.0f,
+                 30.0f);
+  const float maxHeight =
+      std::max(220.0f, static_cast<float>(rendering::window_height) - 260.0f);
+  const float height =
+      std::min(std::max(220.0f,
+                        static_cast<float>(rendering::window_height) * 0.46f),
+               maxHeight);
+  float y = (static_cast<float>(rendering::window_height) - height) * 0.5f;
+  y = std::max(128.0f, y);
+
+  const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
+  float x = left ? 28.0f
+                 : static_cast<float>(rendering::window_width) - 28.0f - width;
+  const bool counterOnSameSide =
+      judgementCounterEnabled &&
+      ((left && judgementCounterPosition ==
+                    AppSettings::JudgementCounterPosition::Left) ||
+       (!left && judgementCounterPosition ==
+                     AppSettings::JudgementCounterPosition::Right));
+  if (counterOnSameSide) {
+    x += left ? 132.0f : -132.0f;
+  }
+  x = std::clamp(x, 12.0f,
+                 std::max(12.0f,
+                          static_cast<float>(rendering::window_width) - width -
+                              12.0f));
+  return {x, y, width, height};
+}
+
+void BMSRenderer::drawGaugeBar() {
+  if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    drawWorldGaugeBar();
+  } else {
+    drawHudGaugeBar();
+  }
+}
+
+void BMSRenderer::drawWorldGaugeBar() {
+  const auto rect = worldGaugeRect();
+  const float x = rect[0];
+  const float y = rect[1];
+  const float width = rect[2];
+  const float height = rect[3];
+  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const float radius = height * 0.5f;
+  const float borderWidth = std::max(0.008f, height * 0.12f);
+
+  simpleBatchRenderer.addRoundedRect(x + 0.025f, y - 0.018f, width, height,
+                                     radius,
+                                     Color(0, 0, 0, 82).toABGR());
+  drawRoundedPanel(x, y, width, height, radius, borderWidth, gaugeTrackFill(),
+                   gaugeTrackBorder(accent));
+
+  const float fillWidth = width * progress;
+  if (fillWidth > 0.0f) {
+    simpleBatchRenderer.addRoundedRect(x + borderWidth, y + borderWidth,
+                                       std::max(0.0f,
+                                                fillWidth - borderWidth * 2.0f),
+                                       std::max(0.0f,
+                                                height - borderWidth * 2.0f),
+                                       std::max(0.0f, radius - borderWidth),
+                                       gaugeFillColor(accent).toABGR());
+  }
+
+  const float borderValue = gaugeBorderValue(currentGaugeType);
+  if (borderValue > 0.0f) {
+    const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
+                                                1.0f);
+    const float markerWidth = std::max(0.01f, width * 0.004f);
+    simpleBatchRenderer.addRect(markerX - markerWidth * 0.5f,
+                                y - height * 0.18f, markerWidth,
+                                height * 1.36f, gaugeMarkerColor().toABGR());
+  }
+}
+
+void BMSRenderer::drawHudGaugeBar() {
+  const auto rect = hudGaugeRect();
+  const float x = rect[0];
+  const float y = rect[1];
+  const float width = rect[2];
+  const float height = rect[3];
+  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const float radius = width * 0.5f;
+
+  simpleBatchRenderer.addRoundedRect(x + 3.0f, y + 5.0f, width, height, radius,
+                                     Color(0, 0, 0, 48).toABGR());
+  drawRoundedPanel(x, y, width, height, radius, 1.0f, gaugeTrackFill(),
+                   gaugeTrackBorder(accent));
+
+  const float fillHeight = height * progress;
+  if (fillHeight > 0.0f) {
+    simpleBatchRenderer.addRoundedRect(
+        x + 2.0f, y + height - fillHeight + 2.0f, std::max(0.0f, width - 4.0f),
+        std::max(0.0f, fillHeight - 4.0f), std::max(0.0f, radius - 2.0f),
+        gaugeFillColor(accent).toABGR());
+  }
+
+  const float borderValue = gaugeBorderValue(currentGaugeType);
+  if (borderValue > 0.0f) {
+    const float markerY =
+        y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
+    simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
+                                gaugeMarkerColor().toABGR());
+  }
 }
 
 void BMSRenderer::drawJudgementCounterPanels() {
@@ -674,13 +872,13 @@ void BMSRenderer::layoutGameplayHud() {
   placeText(playOptionText.get(), margin + 18, margin + 44,
             std::max(1, titleWidth - 36), 26);
 
-  const int metricsY = rendering::window_height - 108;
   const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
-  placeText(scoreText.get(), margin + 18, metricsY + 8, metricsWidth / 2, 38);
-  placeText(comboText.get(), margin + metricsWidth / 2 - 8, metricsY + 8,
-            metricsWidth / 2 - 10, 38);
-  placeText(gaugeText.get(), margin + 18, metricsY + 46, metricsWidth - 36,
-            24);
+  const int compactMetricsY = rendering::window_height - 86;
+  placeText(scoreText.get(), margin + 18, compactMetricsY + 9,
+            metricsWidth / 2, 40);
+  placeText(comboText.get(), margin + metricsWidth / 2 - 8,
+            compactMetricsY + 9, metricsWidth / 2 - 10, 40);
+  layoutGaugeText();
 
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
@@ -704,6 +902,57 @@ void BMSRenderer::layoutGameplayHud() {
               itemY + (layout.horizontal ? 24 : 22), itemWidth - 16,
               itemHeight - (layout.horizontal ? 28 : 24));
   }
+}
+
+void BMSRenderer::layoutGaugeText() {
+  if (gaugeText == nullptr) {
+    return;
+  }
+
+  gaugeText->setVisible(true);
+  if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    const auto rect = worldGaugeRect();
+    const auto topLeft = projectWorldToUi(rect[0], rect[1] + rect[3]);
+    const auto topRight =
+        projectWorldToUi(rect[0] + rect[2], rect[1] + rect[3]);
+    const auto bottomLeft = projectWorldToUi(rect[0], rect[1]);
+    const auto bottomRight = projectWorldToUi(rect[0] + rect[2], rect[1]);
+    if (!topLeft || !topRight || !bottomLeft || !bottomRight) {
+      gaugeText->setVisible(false);
+      return;
+    }
+
+    const float minX =
+        std::min({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
+    const float maxX =
+        std::max({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
+    const float minY =
+        std::min({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
+    const float maxY =
+        std::max({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
+    const int textWidth =
+        std::max(120, static_cast<int>(std::round(maxX - minX)));
+    const int textHeight =
+        std::clamp(static_cast<int>(std::round((maxY - minY) + 12.0f)), 24,
+                   42);
+    const int x = static_cast<int>(std::round((minX + maxX) * 0.5f)) -
+                  textWidth / 2;
+    const int y = static_cast<int>(std::round((minY + maxY) * 0.5f)) -
+                  textHeight / 2;
+    placeText(gaugeText.get(), x, y, textWidth, textHeight);
+    return;
+  }
+
+  const auto rect = hudGaugeRect();
+  constexpr int textWidth = 126;
+  constexpr int textHeight = 44;
+  const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
+  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 10.0f))
+                     : static_cast<int>(
+                           std::round(rect[0] - textWidth - 10.0f));
+  const int y =
+      static_cast<int>(std::round(rect[1] + rect[3] - textHeight));
+  placeText(gaugeText.get(), x, y, textWidth, textHeight);
 }
 
 float BMSRenderer::gameplayHudTitleWidth() const {
@@ -1250,6 +1499,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   constexpr uint32_t kDepthBeams = 300;
   constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
+  constexpr uint32_t kDepthGauge = 340;
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
@@ -1487,12 +1737,22 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
 
   if (renderHud) {
+    if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+      simpleBatchRenderer.setSubmitView(rendering::main_view);
+      simpleBatchRenderer.setSubmitDepth(kDepthGauge);
+      simpleBatchRenderer.begin();
+      drawGaugeBar();
+      simpleBatchRenderer.flush();
+    }
     layoutCenteredJudgementText();
     layoutGameplayHud();
     simpleBatchRenderer.setSubmitView(rendering::ui_view);
     simpleBatchRenderer.setSubmitDepth(0);
     simpleBatchRenderer.begin();
     drawGameplayHudPanels();
+    if (gaugeBarPosition != AppSettings::GaugeBarPosition::World) {
+      drawGaugeBar();
+    }
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
@@ -1684,6 +1944,16 @@ void BMSRenderer::setJudgementCounterPosition(
       judgementCounterRevision.load(std::memory_order_relaxed) - 1;
 }
 
+void BMSRenderer::setGaugeBarPosition(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+  case AppSettings::GaugeBarPosition::Left:
+  case AppSettings::GaugeBarPosition::Right:
+    gaugeBarPosition = position;
+    break;
+  }
+}
+
 void BMSRenderer::publishJudgementCounterSnapshot(
     const JudgementCounterSnapshot &snapshot) {
   for (size_t i = 0; i < kJudgementCounterItemCount; ++i) {
@@ -1720,18 +1990,18 @@ void BMSRenderer::setJudgementCounters(
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                                  float currentGauge) {
+  currentGaugeType = gaugeType;
+  currentGaugeAutoShift = gaugeAutoShift;
+  currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
   if (gaugeText == nullptr) {
     return;
   }
 
-  char text[96];
-  std::snprintf(text, sizeof(text), "%s: %s %.1f%%",
-                gaugeAutoShift ? "GAS" : "Gauge",
-                gaugeTypeToShortLabel(gaugeType), currentGauge);
-  gaugeText->setText(text);
-
-  const Color color = clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
-  gaugeText->setColor({color.r, color.g, color.b, 255});
+  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  gaugeText->setText(formatGaugeBarLabel(currentGaugeType,
+                                         currentGaugeAutoShift,
+                                         currentGaugeValue));
+  gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
 }
 
 void BMSRenderer::setPlayOptionStatus(const std::string &label) {

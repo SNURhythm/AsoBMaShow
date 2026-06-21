@@ -1988,6 +1988,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setJudgementTextY(settings.judgementTextY);
   renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
   renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
+  renderer.setGaugeBarPosition(settings.gaugeBarPosition);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
                           gaugeInitialValue(replay.initialGaugeType));
   renderer.setReplayData(&replay);

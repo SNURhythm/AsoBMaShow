@@ -34,6 +34,12 @@ public:
     Right = 2,
   };
 
+  enum class GaugeBarPosition {
+    World = 0,
+    Left = 1,
+    Right = 2,
+  };
+
   enum class UiThemeMode {
     Dark = 0,
     Light = 1,
@@ -114,6 +120,7 @@ public:
   bool judgementCounterEnabled = true;
   JudgementCounterPosition judgementCounterPosition =
       JudgementCounterPosition::Right;
+  GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;

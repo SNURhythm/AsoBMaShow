@@ -203,6 +203,7 @@ void GamePlayScene::init() {
       context.settings.judgementCounterEnabled);
   renderer->setJudgementCounterPosition(
       context.settings.judgementCounterPosition);
+  renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
   renderer->setReplayData(options.replayData.get());
   renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));

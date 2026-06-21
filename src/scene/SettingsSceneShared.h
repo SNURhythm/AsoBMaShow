@@ -695,6 +695,19 @@ static std::string formatJudgementCounterPositionLabel(
   return "Top";
 }
 
+static std::string
+formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+    return "World";
+  case AppSettings::GaugeBarPosition::Left:
+    return "Left HUD";
+  case AppSettings::GaugeBarPosition::Right:
+    return "Right HUD";
+  }
+  return "World";
+}
+
 static std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -838,6 +851,19 @@ nextJudgementCounterPosition(
     return AppSettings::JudgementCounterPosition::Top;
   }
   return AppSettings::JudgementCounterPosition::Top;
+}
+
+static AppSettings::GaugeBarPosition
+nextGaugeBarPosition(AppSettings::GaugeBarPosition position) {
+  switch (position) {
+  case AppSettings::GaugeBarPosition::World:
+    return AppSettings::GaugeBarPosition::Left;
+  case AppSettings::GaugeBarPosition::Left:
+    return AppSettings::GaugeBarPosition::Right;
+  case AppSettings::GaugeBarPosition::Right:
+    return AppSettings::GaugeBarPosition::World;
+  }
+  return AppSettings::GaugeBarPosition::World;
 }
 
 static AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {

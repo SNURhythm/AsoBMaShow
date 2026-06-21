@@ -62,6 +62,7 @@ void SettingsScene::resetViewState() {
   summaryJudgementIndicatorYValueText = nullptr;
   summaryJudgementIndicatorWidthValueText = nullptr;
   summaryJudgementCounterPositionValueText = nullptr;
+  summaryGaugeBarPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryUiThemeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
@@ -76,6 +77,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorRenderModeText = nullptr;
   judgementCounterModeText = nullptr;
   judgementCounterPositionText = nullptr;
+  gaugeBarPositionText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   uiThemeModeText = nullptr;
@@ -91,6 +93,7 @@ void SettingsScene::resetViewState() {
   judgementIndicatorRenderModeButton = nullptr;
   judgementCounterModeButton = nullptr;
   judgementCounterPositionButton = nullptr;
+  gaugeBarPositionButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   uiThemeModeButton = nullptr;
@@ -209,6 +212,10 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
   visibleTimeValueControls->setAlignItems(compactAdjustments ? YGAlignCenter
                                                              : YGAlignFlexStart);
+  if (compactAdjustments) {
+    visibleTimeValueControls->setWidthPercent(100.0f);
+    visibleTimeValueControls->setJustifyContent(YGJustifyCenter);
+  }
 
   auto updateVisibleTime = [this](int delta) {
     context.settings.visibleTimeGreenNumber = adjustVisibleTimeGreenNumber(
@@ -340,6 +347,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewTabs->setFlexDirection(FlexDirection::Row);
   previewTabs->setGap(metrics.compact ? 8.0f : 10.0f);
   previewTabs->setAlignItems(YGAlignCenter);
+  previewTabs->setWidthPercent(100.0f);
+  previewTabs->setJustifyContent(YGJustifyCenter);
   const int previewTabGap = metrics.compact ? 8 : 10;
   const int previewTabWidth = std::max(
       0, (panelWidth - metrics.cardPadding * 2 -
@@ -382,6 +391,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     noteStartControls->setFlexWrap(YGWrapWrap);
     noteStartControls->setGap(metrics.compact ? 8.0f : 10.0f);
     noteStartControls->setAlignItems(YGAlignCenter);
+    noteStartControls->setWidthPercent(100.0f);
+    noteStartControls->setJustifyContent(YGJustifyCenter);
     auto updateNoteStartPosition = [this](int deltaPercent) {
       context.settings.noteStartPositionPercent = clampNoteStartPositionPercent(
           context.settings.noteStartPositionPercent + deltaPercent);
@@ -413,6 +424,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     angleControls->setFlexWrap(YGWrapWrap);
     angleControls->setGap(metrics.compact ? 8.0f : 10.0f);
     angleControls->setAlignItems(YGAlignCenter);
+    angleControls->setWidthPercent(100.0f);
+    angleControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneAngle = [this](float delta) {
       context.settings.laneAngleDegrees =
           clampLaneAngle(context.settings.laneAngleDegrees + delta);
@@ -443,6 +456,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->setFlexWrap(YGWrapWrap);
     lengthControls->setGap(metrics.compact ? 8.0f : 10.0f);
     lengthControls->setAlignItems(YGAlignCenter);
+    lengthControls->setWidthPercent(100.0f);
+    lengthControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneLength = [this](float delta) {
       context.settings.laneLength =
           clampLaneLength(context.settings.laneLength + delta);
@@ -473,6 +488,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     beamControls->setFlexWrap(YGWrapWrap);
     beamControls->setGap(metrics.compact ? 8.0f : 10.0f);
     beamControls->setAlignItems(YGAlignCenter);
+    beamControls->setWidthPercent(100.0f);
+    beamControls->setJustifyContent(YGJustifyCenter);
     auto updateLaneBeamLength = [this](int deltaPercent) {
       context.settings.laneBeamLengthPercent = clampLaneBeamLengthPercent(
           context.settings.laneBeamLengthPercent + deltaPercent);
@@ -504,6 +521,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     playAreaWidthControls->setFlexWrap(YGWrapWrap);
     playAreaWidthControls->setGap(metrics.compact ? 8.0f : 10.0f);
     playAreaWidthControls->setAlignItems(YGAlignCenter);
+    playAreaWidthControls->setWidthPercent(100.0f);
+    playAreaWidthControls->setJustifyContent(YGJustifyCenter);
     auto updatePreviewPlayAreaWidth = [this](float delta) {
       constexpr int previewKeyMode = 7;
       context.settings.setPlayAreaWidthForKeyMode(
@@ -539,6 +558,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       row->setFlexWrap(YGWrapWrap);
       row->setGap(metrics.compact ? 8.0f : 10.0f);
       row->setAlignItems(YGAlignCenter);
+      row->setWidthPercent(100.0f);
+      row->setJustifyContent(YGJustifyCenter);
       row->addView(minus);
       row->addView(plus);
       row->addView(reset);
@@ -579,6 +600,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     indicatorModeControls->setFlexWrap(YGWrapWrap);
     indicatorModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
     indicatorModeControls->setAlignItems(YGAlignCenter);
+    indicatorModeControls->setWidthPercent(100.0f);
+    indicatorModeControls->setJustifyContent(YGJustifyCenter);
     judgementIndicatorModeText =
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
@@ -674,6 +697,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     counterControls->setFlexWrap(YGWrapWrap);
     counterControls->setGap(metrics.compact ? 8.0f : 10.0f);
     counterControls->setAlignItems(YGAlignCenter);
+    counterControls->setWidthPercent(100.0f);
+    counterControls->setJustifyContent(YGJustifyCenter);
     judgementCounterModeText =
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
@@ -701,6 +726,30 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     });
     counterControls->addView(judgementCounterPositionButton);
     previewPanel->addView(counterControls);
+
+    previewPanel->addView(makeSummaryRow(
+        metrics, "Gauge", &summaryGaugeBarPositionValueText));
+    auto *gaugeControls = new View();
+    gaugeControls->setFlexDirection(FlexDirection::Row);
+    gaugeControls->setFlexWrap(YGWrapWrap);
+    gaugeControls->setGap(metrics.compact ? 8.0f : 10.0f);
+    gaugeControls->setAlignItems(YGAlignCenter);
+    gaugeControls->setWidthPercent(100.0f);
+    gaugeControls->setJustifyContent(YGJustifyCenter);
+    gaugeBarPositionText =
+        makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    gaugeBarPositionButton =
+        makeControlButton(metrics.actionButtonWidth,
+                          metrics.actionButtonHeight,
+                          gaugeBarPositionText);
+    gaugeBarPositionButton->setOnClickListener([this]() {
+      context.settings.gaugeBarPosition =
+          nextGaugeBarPosition(context.settings.gaugeBarPosition);
+      persistSettings();
+    });
+    gaugeControls->addView(gaugeBarPositionButton);
+    previewPanel->addView(gaugeControls);
   }
 
   auto *restartButton = makeButton(
@@ -725,6 +774,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewActions->setFlexWrap(YGWrapWrap);
   previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
   previewActions->setAlignItems(YGAlignCenter);
+  previewActions->setWidthPercent(100.0f);
+  previewActions->setJustifyContent(YGJustifyCenter);
   previewActions->addView(restartButton);
   previewActions->addView(doneButton);
   previewPanel->addView(previewActions);
@@ -888,7 +939,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorModeControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorModeControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorModeControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorModeControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorModeControls->setWidthPercent(100.0f);
+  judgementIndicatorModeControls->setJustifyContent(YGJustifyCenter);
 
   judgementIndicatorModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
@@ -924,7 +977,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorYControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorYControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorYControls->setWidthPercent(100.0f);
+  judgementIndicatorYControls->setJustifyContent(YGJustifyCenter);
   auto updateJudgementIndicatorY = [this](int deltaPercent) {
     const int currentPercent =
         judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
@@ -976,7 +1031,9 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
   judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
   judgementIndicatorWidthControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
+  judgementIndicatorWidthControls->setAlignItems(YGAlignCenter);
+  judgementIndicatorWidthControls->setWidthPercent(100.0f);
+  judgementIndicatorWidthControls->setJustifyContent(YGJustifyCenter);
   auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
     const int currentPercent = judgementIndicatorWidthScaleToPercent(
         context.settings.judgementIndicatorWidthScale);
@@ -1187,6 +1244,8 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   judgementCounterModeControls->setFlexWrap(YGWrapWrap);
   judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
   judgementCounterModeControls->setAlignItems(YGAlignCenter);
+  judgementCounterModeControls->setWidthPercent(100.0f);
+  judgementCounterModeControls->setJustifyContent(YGJustifyCenter);
   judgementCounterModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1219,6 +1278,43 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
                       : "Show realtime judgement totals in the gameplay HUD "
                         "without changing lane rendering.",
       judgementCounterControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *gaugeControls = new View();
+  gaugeControls->setFlexDirection(FlexDirection::Column);
+  gaugeControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  gaugeControls->setAlignItems(YGAlignFlexStart);
+  gaugeControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Choose world-space bar or side HUD bar."
+          : "World draws a horizontal gauge below the judgement line. Left "
+            "and Right draw a vertical 2D HUD gauge on that side.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *gaugePositionControls = new View();
+  gaugePositionControls->setFlexDirection(FlexDirection::Row);
+  gaugePositionControls->setFlexWrap(YGWrapWrap);
+  gaugePositionControls->setGap(metrics.compact ? 8.0f : 10.0f);
+  gaugePositionControls->setAlignItems(YGAlignCenter);
+  gaugePositionControls->setWidthPercent(100.0f);
+  gaugePositionControls->setJustifyContent(YGJustifyCenter);
+  gaugeBarPositionText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  gaugeBarPositionButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        gaugeBarPositionText);
+  gaugeBarPositionButton->setOnClickListener([this]() {
+    context.settings.gaugeBarPosition =
+        nextGaugeBarPosition(context.settings.gaugeBarPosition);
+    persistSettings();
+  });
+  gaugePositionControls->addView(gaugeBarPositionButton);
+  gaugeControls->addView(gaugePositionControls);
+  cardsColumn->addView(makeCard(
+      metrics, "Gauge Bar",
+      metrics.compact ? "Gameplay gauge placement."
+                      : "Render the current gauge as a live bar instead of a "
+                        "text-only HUD line.",
+      gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *bgaDisplayControls = new View();
   bgaDisplayControls->setFlexDirection(FlexDirection::Column);

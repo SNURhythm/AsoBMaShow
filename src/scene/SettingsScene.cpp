@@ -264,6 +264,7 @@ void SettingsScene::renderScene() {
         context.settings.judgementCounterEnabled);
     previewRenderer->setJudgementCounterPosition(
         context.settings.judgementCounterPosition);
+    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);

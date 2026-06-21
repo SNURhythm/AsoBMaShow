@@ -205,6 +205,8 @@ void SettingsScene::refreshSettingsText() {
   const std::string judgementCounterSummaryLabel =
       context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
                                                : "Disabled";
+  const std::string gaugeBarPositionLabel =
+      formatGaugeBarPositionLabel(context.settings.gaugeBarPosition);
   const std::string uiThemeLabel =
       formatUiThemeModeLabel(context.settings.uiThemeMode);
 
@@ -270,6 +272,9 @@ void SettingsScene::refreshSettingsText() {
     summaryJudgementCounterPositionValueText->setText(
         judgementCounterSummaryLabel);
   }
+  if (summaryGaugeBarPositionValueText != nullptr) {
+    summaryGaugeBarPositionValueText->setText(gaugeBarPositionLabel);
+  }
   if (summaryNotePriorityValueText != nullptr) {
     summaryNotePriorityValueText->setText(notePriorityLabel);
   }
@@ -302,6 +307,9 @@ void SettingsScene::refreshSettingsText() {
   }
   if (judgementCounterModeText != nullptr) {
     judgementCounterModeText->setText(judgementCounterModeLabel);
+  }
+  if (gaugeBarPositionText != nullptr) {
+    gaugeBarPositionText->setText(gaugeBarPositionLabel);
   }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
@@ -373,6 +381,11 @@ void SettingsScene::refreshSettingsText() {
   applySemanticButtonStyle(
       judgementCounterPositionButton, judgementCounterPositionText,
       judgementCounterPositionTone);
+  applySemanticButtonStyle(
+      gaugeBarPositionButton, gaugeBarPositionText,
+      context.settings.gaugeBarPosition == AppSettings::GaugeBarPosition::World
+          ? SettingsButtonTone::Info
+          : SettingsButtonTone::Success);
   applySemanticButtonStyle(bgaModeButton, bgaModeText,
                            context.settings.bgaEnabled
                                ? SettingsButtonTone::Success
