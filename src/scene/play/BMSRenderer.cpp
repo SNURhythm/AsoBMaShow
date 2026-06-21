@@ -189,6 +189,37 @@ Color hudCounterValueColor(size_t index, int value, bool topPosition) {
              : Color(248, 253, 255, 255);
 }
 
+Color hudJudgementAccent(Judgement judgement) {
+  switch (judgement) {
+  case PGreat:
+    return hudCounterAccent(0);
+  case Great:
+    return hudCounterAccent(1);
+  case Good:
+    return hudCounterAccent(2);
+  case Bad:
+    return hudCounterAccent(3);
+  case Poor:
+    return hudCounterAccent(4);
+  case Kpoor:
+    return hudCounterAccent(5);
+  case None:
+  case JudgementCount:
+    break;
+  }
+  return ui_theme::textPrimary();
+}
+
+Color hudJudgementTextColor(Judgement judgement) {
+  const Color accent = hudJudgementAccent(judgement);
+  return Color(accent.r, accent.g, accent.b, 255);
+}
+
+Color hudJudgementComboColor(Judgement judgement) {
+  const Color accent = hudJudgementAccent(judgement);
+  return Color(accent.r, accent.g, accent.b, judgement == None ? 168 : 242);
+}
+
 int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
   switch (index) {
   case 0:
@@ -572,6 +603,14 @@ BMSRenderer::BMSRenderer(
   judgeText->setAlign(TextView::CENTER);
   judgeText->setVAlign(TextView::MIDDLE);
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  judgeText->setOverflow(TextView::TextOverflow::Hidden);
+  judgeText->setVisible(false);
+  judgeComboText = std::make_unique<TextView>(kHudFontPath, 24);
+  judgeComboText->setAlign(TextView::CENTER);
+  judgeComboText->setVAlign(TextView::MIDDLE);
+  judgeComboText->setColor(ui_theme::sdl(ui_theme::lime()));
+  judgeComboText->setOverflow(TextView::TextOverflow::Hidden);
+  judgeComboText->setVisible(false);
   layoutCenteredJudgementText();
   scoreText = std::make_unique<TextView>(kHudFontPath, 34);
   scoreText->setAlign(TextView::LEFT);
@@ -668,6 +707,9 @@ void BMSRenderer::drawTitle(RenderContext &context) const {
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
   judgeText->render(context);
+  if (judgeComboText != nullptr) {
+    judgeComboText->render(context);
+  }
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
@@ -830,6 +872,35 @@ void BMSRenderer::drawHudGaugeBar() {
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
+  }
+}
+
+void BMSRenderer::drawJudgementTextPanel() {
+  if (renderedJudgement == None || judgementPanelWidth <= 0 ||
+      judgementPanelHeight <= 0) {
+    return;
+  }
+
+  const float x = static_cast<float>(judgementPanelX);
+  const float y = static_cast<float>(judgementPanelY);
+  const float width = static_cast<float>(judgementPanelWidth);
+  const float height = static_cast<float>(judgementPanelHeight);
+  const Color accent = hudJudgementAccent(renderedJudgement);
+
+  simpleBatchRenderer.addRoundedRect(
+      x + 12.0f, y + 15.0f, 5.0f, std::max(0.0f, height - 30.0f), 2.5f,
+      Color(accent.r, accent.g, accent.b, 180).toABGR());
+  simpleBatchRenderer.addRect(x + 28.0f, y + height - 9.0f,
+                              std::max(0.0f, width - 56.0f), 2.0f,
+                              Color(accent.r, accent.g, accent.b, 48)
+                                  .toABGR());
+
+  if (judgementLayoutHasCombo) {
+    const float dividerX = x + width * 0.58f;
+    simpleBatchRenderer.addRect(dividerX, y + 16.0f, 1.0f,
+                                std::max(0.0f, height - 32.0f),
+                                Color(accent.r, accent.g, accent.b, 62)
+                                    .toABGR());
   }
 }
 
@@ -1058,29 +1129,65 @@ float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
 }
 
 void BMSRenderer::layoutCenteredJudgementText() {
+  const bool hasCombo = renderedJudgement != None && renderedCombo > 0;
   if (judgementLayoutWidth == rendering::window_width &&
-      judgementLayoutHeight == rendering::window_height) {
+      judgementLayoutHeight == rendering::window_height &&
+      judgementLayoutHasCombo == hasCombo) {
     return;
   }
 
   judgementLayoutWidth = rendering::window_width;
   judgementLayoutHeight = rendering::window_height;
+  judgementLayoutHasCombo = hasCombo;
 
-  const int judgeWidth =
-      std::max(360, std::min(720, judgementLayoutWidth - 80));
-  const int judgeHeight = 96;
+  const int maxAvailablePanelWidth = std::max(1, judgementLayoutWidth - 48);
+  const int minPanelWidth =
+      std::min(hasCombo ? 420 : 300, maxAvailablePanelWidth);
+  const int maxPanelWidth =
+      std::min(hasCombo ? 560 : 420, maxAvailablePanelWidth);
+  const int panelWidth = std::clamp(
+      static_cast<int>(std::round(static_cast<float>(judgementLayoutWidth) *
+                                  (hasCombo ? 0.34f : 0.26f))),
+      minPanelWidth, maxPanelWidth);
+  const int panelHeight = hasCombo ? 84 : 76;
   const float normalizedY =
       std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
                  AppSettings::kMaxJudgementTextY);
   const int centerY = static_cast<int>(
       std::round(static_cast<float>(judgementLayoutHeight) *
                  (1.0f - normalizedY)));
-  const int judgeY =
-      std::clamp(centerY - judgeHeight / 2, 0,
-                 std::max(0, judgementLayoutHeight - judgeHeight));
-  judgeText->setPosition((judgementLayoutWidth - judgeWidth) / 2,
-                         judgeY);
-  judgeText->setSize(judgeWidth, judgeHeight);
+  judgementPanelWidth = std::max(1, panelWidth);
+  judgementPanelHeight = panelHeight;
+  judgementPanelX = (judgementLayoutWidth - judgementPanelWidth) / 2;
+  judgementPanelY =
+      std::clamp(centerY - judgementPanelHeight / 2, 0,
+                 std::max(0, judgementLayoutHeight - judgementPanelHeight));
+
+  if (hasCombo) {
+    const int dividerX =
+        judgementPanelX +
+        static_cast<int>(std::round(static_cast<float>(judgementPanelWidth) *
+                                    0.58f));
+    const int judgeX = judgementPanelX + 22;
+    const int judgeWidth = std::max(1, dividerX - judgeX - 12);
+    const int comboX = dividerX + 12;
+    const int comboWidth =
+        std::max(1, judgementPanelX + judgementPanelWidth - comboX - 16);
+    judgeText->setPosition(judgeX, judgementPanelY + 8);
+    judgeText->setSize(judgeWidth, judgementPanelHeight - 16);
+    if (judgeComboText != nullptr) {
+      judgeComboText->setPosition(comboX, judgementPanelY + 16);
+      judgeComboText->setSize(comboWidth, judgementPanelHeight - 32);
+    }
+  } else {
+    judgeText->setPosition(judgementPanelX + 24, judgementPanelY + 8);
+    judgeText->setSize(std::max(1, judgementPanelWidth - 48),
+                       judgementPanelHeight - 16);
+    if (judgeComboText != nullptr) {
+      judgeComboText->setPosition(judgementPanelX, judgementPanelY);
+      judgeComboText->setSize(1, 1);
+    }
+  }
 }
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
@@ -1756,6 +1863,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
+    drawJudgementTextPanel();
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -1790,21 +1898,36 @@ void BMSRenderer::applyPendingHudText() {
   const int score = pendingScore.load(std::memory_order_relaxed);
   const int combo = pendingCombo.load(std::memory_order_relaxed);
   renderedHudRevision = revision;
+  renderedJudgement = judgement;
+  renderedCombo = combo;
 
-  std::string judgeLine;
-  if (judgement != None) {
-    judgeLine = JudgeResult(judgement, 0).toString();
-    if (combo > 0) {
-      judgeLine.push_back(' ');
-      judgeLine += std::to_string(combo);
-    }
+  const bool hasJudgement = judgement != None;
+  const bool hasCombo = hasJudgement && combo > 0;
+  if (judgeText != nullptr) {
+    judgeText->setVisible(hasJudgement);
+    judgeText->setText(hasJudgement ? JudgeResult(judgement, 0).toString()
+                                    : "");
+    judgeText->setColor(ui_theme::sdl(hasJudgement
+                                          ? hudJudgementTextColor(judgement)
+                                          : ui_theme::textPrimary()));
+  }
+  if (judgeComboText != nullptr) {
+    judgeComboText->setVisible(hasCombo);
+    judgeComboText->setText(hasCombo ? std::to_string(combo) + " COMBO" : "");
+    judgeComboText->setColor(
+        ui_theme::sdl(hasJudgement ? hudJudgementComboColor(judgement)
+                                   : ui_theme::lime()));
   }
 
-  judgeText->setText(judgeLine);
   scoreText->setText("SCORE " + std::to_string(score));
   if (comboText != nullptr) {
     comboText->setText("COMBO " + std::to_string(combo));
+    comboText->setColor(
+        ui_theme::sdl(hasJudgement ? hudJudgementComboColor(judgement)
+                                   : ui_theme::lime()));
   }
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
 }
 
 void BMSRenderer::updateJudgementCounterText() {

@@ -99,6 +99,7 @@ public:
 private:
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
+  std::unique_ptr<TextView> judgeComboText;
   std::unique_ptr<TextView> scoreText;
   std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> gaugeText;
@@ -113,6 +114,8 @@ private:
   std::atomic<int> pendingJudge{None};
   std::atomic<int> pendingScore{0};
   std::atomic<int> pendingCombo{0};
+  Judgement renderedJudgement = None;
+  int renderedCombo = 0;
   std::array<std::atomic<int>, kJudgementCounterItemCount>
       judgementCounterValues{};
   std::atomic<uint32_t> judgementCounterRevision{1};
@@ -181,6 +184,11 @@ private:
   uint32_t noteSheetSubmitDepth = 0;
   int judgementLayoutWidth = 0;
   int judgementLayoutHeight = 0;
+  bool judgementLayoutHasCombo = false;
+  int judgementPanelX = 0;
+  int judgementPanelY = 0;
+  int judgementPanelWidth = 0;
+  int judgementPanelHeight = 0;
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawHudRoundedPanel(float x, float y, float width, float height,
@@ -193,6 +201,7 @@ private:
   void drawGaugeBar();
   void drawWorldGaugeBar();
   void drawHudGaugeBar();
+  void drawJudgementTextPanel();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
   void layoutGaugeText();
