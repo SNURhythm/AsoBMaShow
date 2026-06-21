@@ -13,6 +13,26 @@ View *makeCardsColumn(const LayoutMetrics &metrics) {
   cardsColumn->setWidth(static_cast<float>(metrics.cardsWidth));
   return cardsColumn;
 }
+
+int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
+                             bool folded) {
+  if (folded) {
+    return foldButtonSize;
+  }
+  if (metrics.compact) {
+    return std::min(metrics.contentWidth, 520);
+  }
+
+  const int contentGap = metrics.compact ? 8 : 10;
+  const int requiredForTwoActions =
+      metrics.actionButtonWidth * 2 + contentGap + metrics.cardPadding * 2;
+  const int availableWidth = std::max(0, metrics.contentWidth);
+  const int maxPanelWidth = std::min(availableWidth, 760);
+  if (maxPanelWidth <= requiredForTwoActions) {
+    return maxPanelWidth;
+  }
+  return std::clamp(720, requiredForTwoActions, maxPanelWidth);
+}
 } // namespace
 
 void SettingsScene::resetViewState() {
@@ -267,9 +287,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     previewPanelPage = 0;
   }
   const int panelWidth =
-      previewPanelFolded
-          ? foldButtonSize
-          : (metrics.compact ? std::min(metrics.contentWidth, 520) : 380);
+      resolvePreviewPanelWidth(metrics, foldButtonSize, previewPanelFolded);
   auto *previewPanel = new View();
   previewPanel->setWidth(static_cast<float>(panelWidth));
   previewPanel->setPadding(
@@ -644,7 +662,6 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
       ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   restartButton->setOnClickListener([this]() { resetPreviewSimulation(); });
-  previewPanel->addView(restartButton);
 
   auto *doneButton = makeButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -653,7 +670,15 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
       ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
   doneButton->setOnClickListener([this]() { stopLanePreview(); });
-  previewPanel->addView(doneButton);
+
+  auto *previewActions = new View();
+  previewActions->setFlexDirection(metrics.compact ? FlexDirection::Column
+                                                   : FlexDirection::Row);
+  previewActions->setFlexWrap(YGWrapWrap);
+  previewActions->setGap(metrics.compact ? 12.0f : 10.0f);
+  previewActions->addView(restartButton);
+  previewActions->addView(doneButton);
+  previewPanel->addView(previewActions);
 
   rootLayout->addView(previewPanel);
   rootLayout->applyYogaLayout();
