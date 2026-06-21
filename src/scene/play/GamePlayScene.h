@@ -9,6 +9,7 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../view/TextView.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -130,5 +131,4 @@ private:
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();
   void updateLaneStateText();
-  std::mutex judgeMutex;
 };

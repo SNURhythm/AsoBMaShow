@@ -18,11 +18,10 @@
 #include "Judge.h"
 #include <bx/math.h>
 #include <array>
-#include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,6 +39,20 @@ struct LaneState {
   bool isPressed = false;
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
 };
+
+struct AtomicLaneState {
+  std::atomic<long long> lastStateTime{-1};
+  std::atomic<bool> isPressed{false};
+  std::atomic<int> lastPressedJudgement{None};
+  std::atomic<long long> lastPressedDiff{0};
+
+  AtomicLaneState() = default;
+  AtomicLaneState(const AtomicLaneState &) = delete;
+  AtomicLaneState &operator=(const AtomicLaneState &) = delete;
+  AtomicLaneState(AtomicLaneState &&other) noexcept;
+  AtomicLaneState &operator=(AtomicLaneState &&other) noexcept;
+};
+
 class JudgeResult;
 
 struct NoteUvRegion {
@@ -66,10 +79,6 @@ public:
   std::unordered_set<bms_parser::LongNote *>
       orphanLongNotes; // long note whose head is dead but tail is alive
   size_t currentTimelineIndex = 0;
-  JudgeResult latestJudgeResult = JudgeResult(None, 0);
-  std::chrono::system_clock::time_point latestJudgeResultTime;
-  int latestCombo = 0;
-  int latestScore = 0;
   void reset();
 };
 
@@ -99,17 +108,18 @@ private:
       judgementCounterLabelTexts;
   std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
       judgementCounterValueTexts;
-  std::mutex hudMutex;
-  bool hudDirty = false;
-  std::string pendingJudgeText;
-  int pendingScore = 0;
-  int pendingCombo = 0;
-  bool judgementCounterDirty = true;
-  JudgementCounterSnapshot judgementCounterSnapshot;
+  std::atomic<uint32_t> hudRevision{1};
+  uint32_t renderedHudRevision = 0;
+  std::atomic<int> pendingJudge{None};
+  std::atomic<int> pendingScore{0};
+  std::atomic<int> pendingCombo{0};
+  std::array<std::atomic<int>, kJudgementCounterItemCount>
+      judgementCounterValues{};
+  std::atomic<uint32_t> judgementCounterRevision{1};
+  uint32_t renderedJudgementCounterRevision = 0;
   JudgementCounterSnapshot renderedJudgementCounterSnapshot;
-  std::mutex laneMutex;
   std::vector<int> laneOrder;
-  std::vector<LaneState> laneStatesByOrder;
+  std::vector<AtomicLaneState> laneStatesByOrder;
   std::unordered_map<int, size_t> laneToOrderIndex;
   std::vector<std::pair<int, LaneState>> laneStateSnapshot;
   std::vector<float> laneXLookup;
@@ -176,6 +186,8 @@ private:
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
   void updateJudgementCounterText();
+  void publishJudgementCounterSnapshot(
+      const JudgementCounterSnapshot &snapshot);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawLaneCover();
   void drawTitle(RenderContext &context) const;
@@ -249,6 +261,7 @@ public:
                                    bool hudMode);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
+  void setJudgementCounter(Judgement judgement, int count, int comboBreak);
   void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,
                             int comboBreak);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

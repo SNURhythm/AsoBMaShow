@@ -320,7 +320,6 @@ public:
   int combo = 0;
   int maxCombo = 0;
   int comboBreak = 0;
-  JudgeResult latestJudgeResult = JudgeResult(None, 0);
   // judge count. default 0
   std::map<Judgement, int> judgeCount;
 

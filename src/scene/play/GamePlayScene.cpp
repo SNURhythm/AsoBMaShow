@@ -1108,10 +1108,7 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             bool recordTimingSample) {
-  std::lock_guard<std::mutex> lock(judgeMutex);
-  state->latestJudgeResult = judgeResult;
-
-  state->judgeCount[judgeResult.judgement]++;
+  const int judgementCount = ++state->judgeCount[judgeResult.judgement];
   if (judgeResult.isComboBreak()) {
     state->combo = 0;
     state->comboBreak++;
@@ -1125,7 +1122,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                     getVisualTimeMicros(
                         getGameplayTimeMicros(context.jukebox.getTimeMicros())),
                     recordTimingSample);
-  renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
+  renderer->setJudgementCounter(judgeResult.judgement, judgementCount,
+                                state->comboBreak);
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);

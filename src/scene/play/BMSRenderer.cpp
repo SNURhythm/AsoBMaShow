@@ -16,6 +16,7 @@
 #include <assert.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -201,6 +202,27 @@ int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
   }
 }
 
+int counterIndexForJudgement(Judgement judgement) {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Poor:
+    return 4;
+  case Kpoor:
+    return 5;
+  case None:
+  case JudgementCount:
+    break;
+  }
+  return -1;
+}
+
 int judgeCountFor(const std::map<Judgement, int> &counts,
                   Judgement judgement) {
   const auto it = counts.find(judgement);
@@ -277,6 +299,24 @@ JudgementCounterLayout judgementCounterLayoutFor(
   return layout;
 }
 } // namespace
+
+AtomicLaneState::AtomicLaneState(AtomicLaneState &&other) noexcept {
+  *this = std::move(other);
+}
+
+AtomicLaneState &
+AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
+  lastStateTime.store(other.lastStateTime.load(std::memory_order_relaxed),
+                      std::memory_order_relaxed);
+  isPressed.store(other.isPressed.load(std::memory_order_relaxed),
+                  std::memory_order_relaxed);
+  lastPressedJudgement.store(
+      other.lastPressedJudgement.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  lastPressedDiff.store(other.lastPressedDiff.load(std::memory_order_relaxed),
+                        std::memory_order_relaxed);
+  return *this;
+}
 
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
@@ -776,26 +816,26 @@ void BMSRenderer::layoutCenteredJudgementText() {
 
 void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
                                 long long time) {
-  std::lock_guard<std::mutex> lock(laneMutex);
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = laneStatesByOrder[it->second];
-  laneState.isPressed = true;
-  laneState.lastPressedJudge = judge;
-  laneState.lastStateTime = time;
+  AtomicLaneState &laneState = laneStatesByOrder[it->second];
+  laneState.lastPressedJudgement.store(static_cast<int>(judge.judgement),
+                                       std::memory_order_relaxed);
+  laneState.lastPressedDiff.store(judge.Diff, std::memory_order_relaxed);
+  laneState.isPressed.store(true, std::memory_order_relaxed);
+  laneState.lastStateTime.store(time, std::memory_order_release);
 }
 
 void BMSRenderer::onLaneReleased(int lane, long long time) {
-  std::lock_guard<std::mutex> lock(laneMutex);
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
     return;
   }
-  LaneState &laneState = laneStatesByOrder[it->second];
-  laneState.isPressed = false;
-  laneState.lastStateTime = time;
+  AtomicLaneState &laneState = laneStatesByOrder[it->second];
+  laneState.isPressed.store(false, std::memory_order_relaxed);
+  laneState.lastStateTime.store(time, std::memory_order_release);
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
                           long long displayTimeMicros,
@@ -806,22 +846,12 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
   if (recordTimingSample) {
     judgementIndicator.record(judgeResult, displayTimeMicros);
   }
-  state.latestJudgeResult = judgeResult;
-  state.latestJudgeResultTime = std::chrono::system_clock::now();
-  state.latestCombo = combo;
-  state.latestScore = score;
-
-  std::string judgeLine = judgeResult.toString();
-  if (combo > 0) {
-    judgeLine.push_back(' ');
-    judgeLine += std::to_string(combo);
-  }
   if (renderHud && judgeText != nullptr && scoreText != nullptr) {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    pendingJudgeText = std::move(judgeLine);
-    pendingScore = score;
-    pendingCombo = combo;
-    hudDirty = true;
+    pendingJudge.store(static_cast<int>(judgeResult.judgement),
+                       std::memory_order_relaxed);
+    pendingScore.store(score, std::memory_order_relaxed);
+    pendingCombo.store(combo, std::memory_order_relaxed);
+    hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
 void BMSRenderer::drawLongNote(float headY, float tailY,
@@ -1393,11 +1423,17 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
                   std::chrono::steady_clock::now().time_since_epoch())
                   .count();
     laneStateSnapshot.clear();
-    {
-      std::lock_guard<std::mutex> lock(laneMutex);
-      for (size_t i = 0; i < laneOrder.size(); ++i) {
-        laneStateSnapshot.emplace_back(laneOrder[i], laneStatesByOrder[i]);
-      }
+    for (size_t i = 0; i < laneOrder.size(); ++i) {
+      const AtomicLaneState &source = laneStatesByOrder[i];
+      LaneState snapshot;
+      snapshot.lastStateTime =
+          source.lastStateTime.load(std::memory_order_acquire);
+      snapshot.isPressed = source.isPressed.load(std::memory_order_relaxed);
+      snapshot.lastPressedJudge = JudgeResult(
+          static_cast<Judgement>(
+              source.lastPressedJudgement.load(std::memory_order_relaxed)),
+          source.lastPressedDiff.load(std::memory_order_relaxed));
+      laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
     for (const auto &entry : laneStateSnapshot) {
       drawLaneBeam(entry.first, entry.second, nowMicros);
@@ -1460,19 +1496,26 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 }
 
 void BMSRenderer::applyPendingHudText() {
-  std::string judgeLine;
-  int score = 0;
-  int combo = 0;
-  {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    if (!hudDirty) {
-      return;
-    }
-    judgeLine = pendingJudgeText;
-    score = pendingScore;
-    combo = pendingCombo;
-    hudDirty = false;
+  const uint32_t revision = hudRevision.load(std::memory_order_acquire);
+  if (revision == renderedHudRevision) {
+    return;
   }
+
+  const auto judgement =
+      static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed));
+  const int score = pendingScore.load(std::memory_order_relaxed);
+  const int combo = pendingCombo.load(std::memory_order_relaxed);
+  renderedHudRevision = revision;
+
+  std::string judgeLine;
+  if (judgement != None) {
+    judgeLine = JudgeResult(judgement, 0).toString();
+    if (combo > 0) {
+      judgeLine.push_back(' ');
+      judgeLine += std::to_string(combo);
+    }
+  }
+
   judgeText->setText(judgeLine);
   scoreText->setText("SCORE " + std::to_string(score));
   if (comboText != nullptr) {
@@ -1481,15 +1524,22 @@ void BMSRenderer::applyPendingHudText() {
 }
 
 void BMSRenderer::updateJudgementCounterText() {
-  JudgementCounterSnapshot snapshot;
-  {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    if (!judgementCounterDirty) {
-      return;
-    }
-    snapshot = judgementCounterSnapshot;
-    judgementCounterDirty = false;
+  const uint32_t revision =
+      judgementCounterRevision.load(std::memory_order_acquire);
+  if (revision == renderedJudgementCounterRevision) {
+    return;
   }
+
+  JudgementCounterSnapshot snapshot;
+  snapshot.pgreat = judgementCounterValues[0].load(std::memory_order_relaxed);
+  snapshot.great = judgementCounterValues[1].load(std::memory_order_relaxed);
+  snapshot.good = judgementCounterValues[2].load(std::memory_order_relaxed);
+  snapshot.bad = judgementCounterValues[3].load(std::memory_order_relaxed);
+  snapshot.poor = judgementCounterValues[4].load(std::memory_order_relaxed);
+  snapshot.kpoor = judgementCounterValues[5].load(std::memory_order_relaxed);
+  snapshot.comboBreak =
+      judgementCounterValues[6].load(std::memory_order_relaxed);
+  renderedJudgementCounterRevision = revision;
   renderedJudgementCounterSnapshot = snapshot;
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     const int value = counterValueAt(snapshot, i);
@@ -1510,23 +1560,18 @@ void BMSRenderer::updateJudgementCounterText() {
 void BMSRenderer::reset() {
   state.reset();
   judgementIndicator.clear();
-  {
-    std::lock_guard<std::mutex> lock(hudMutex);
-    pendingJudgeText.clear();
-    pendingScore = 0;
-    pendingCombo = 0;
-    hudDirty = true;
-    judgementCounterSnapshot = {};
-    renderedJudgementCounterSnapshot = {};
-    judgementCounterDirty = true;
-  }
-  {
-    std::lock_guard<std::mutex> lock(laneMutex);
-    for (auto &laneState : laneStatesByOrder) {
-      laneState.lastStateTime = -1;
-      laneState.isPressed = false;
-      laneState.lastPressedJudge = JudgeResult(None, 0);
-    }
+  pendingJudge.store(None, std::memory_order_relaxed);
+  pendingScore.store(0, std::memory_order_relaxed);
+  pendingCombo.store(0, std::memory_order_relaxed);
+  hudRevision.fetch_add(1, std::memory_order_release);
+  publishJudgementCounterSnapshot({});
+  renderedJudgementCounterSnapshot = {};
+
+  for (auto &laneState : laneStatesByOrder) {
+    laneState.lastPressedJudgement.store(None, std::memory_order_relaxed);
+    laneState.lastPressedDiff.store(0, std::memory_order_relaxed);
+    laneState.isPressed.store(false, std::memory_order_relaxed);
+    laneState.lastStateTime.store(-1, std::memory_order_release);
   }
 }
 
@@ -1592,6 +1637,26 @@ void BMSRenderer::setJudgementCounterPosition(
   judgementCounterPosition = position;
 }
 
+void BMSRenderer::publishJudgementCounterSnapshot(
+    const JudgementCounterSnapshot &snapshot) {
+  for (size_t i = 0; i < kJudgementCounterItemCount; ++i) {
+    judgementCounterValues[i].store(counterValueAt(snapshot, i),
+                                    std::memory_order_relaxed);
+  }
+  judgementCounterRevision.fetch_add(1, std::memory_order_release);
+}
+
+void BMSRenderer::setJudgementCounter(Judgement judgement, int count,
+                                      int comboBreak) {
+  const int index = counterIndexForJudgement(judgement);
+  if (index >= 0) {
+    judgementCounterValues[static_cast<size_t>(index)].store(
+        count, std::memory_order_relaxed);
+  }
+  judgementCounterValues[6].store(comboBreak, std::memory_order_relaxed);
+  judgementCounterRevision.fetch_add(1, std::memory_order_release);
+}
+
 void BMSRenderer::setJudgementCounters(
     const std::map<Judgement, int> &judgeCounts, int comboBreak) {
   JudgementCounterSnapshot snapshot;
@@ -1603,9 +1668,7 @@ void BMSRenderer::setJudgementCounters(
   snapshot.kpoor = judgeCountFor(judgeCounts, Kpoor);
   snapshot.comboBreak = comboBreak;
 
-  std::lock_guard<std::mutex> lock(hudMutex);
-  judgementCounterSnapshot = snapshot;
-  judgementCounterDirty = true;
+  publishJudgementCounterSnapshot(snapshot);
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
@@ -1819,10 +1882,6 @@ void BMSRenderer::flushNoteTextureBatches() {
 void BMSRendererState::reset() {
   orphanLongNotes.clear();
   currentTimelineIndex = 0;
-  latestJudgeResult = JudgeResult(None, 0);
-  latestJudgeResultTime = std::chrono::system_clock::now();
-  latestCombo = 0;
-  latestScore = 0;
 }
 
 void BMSRenderer::destroyNoteSheetTextures() {
