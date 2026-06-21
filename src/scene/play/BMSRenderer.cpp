@@ -160,10 +160,14 @@ Color hudCounterBorder(size_t index, bool active, bool topPosition) {
   return Color(accent.r, accent.g, accent.b, topPosition ? 8 : 18);
 }
 
-Color hudCounterLabelColor(int value) {
+Color hudCounterLabelColor(size_t index, int value, bool topPosition) {
   if (value <= 0) {
     const Color muted = ui_theme::textMuted();
     return Color(muted.r, muted.g, muted.b, 16);
+  }
+  if (topPosition) {
+    const Color accent = hudCounterAccent(index);
+    return Color(accent.r, accent.g, accent.b, 210);
   }
   const Color text = ui_theme::textSecondary();
   return Color(text.r, text.g, text.b,
@@ -171,10 +175,14 @@ Color hudCounterLabelColor(int value) {
                                                                     : 248);
 }
 
-Color hudCounterValueColor(int value) {
+Color hudCounterValueColor(size_t index, int value, bool topPosition) {
   if (value <= 0) {
     const Color muted = ui_theme::textMuted();
     return Color(muted.r, muted.g, muted.b, 20);
+  }
+  if (topPosition) {
+    const Color accent = hudCounterAccent(index);
+    return Color(accent.r, accent.g, accent.b, 250);
   }
   return ui_theme::activeMode() == ui_theme::ThemeMode::Light
              ? ui_theme::darkText()
@@ -1544,6 +1552,8 @@ void BMSRenderer::updateJudgementCounterText() {
       judgementCounterValues[6].load(std::memory_order_relaxed);
   renderedJudgementCounterRevision = revision;
   renderedJudgementCounterSnapshot = snapshot;
+  const bool topPosition =
+      judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     const int value = counterValueAt(snapshot, i);
     if (judgementCounterValueTexts[i] != nullptr) {
@@ -1551,11 +1561,11 @@ void BMSRenderer::updateJudgementCounterText() {
     }
     if (judgementCounterLabelTexts[i] != nullptr) {
       judgementCounterLabelTexts[i]->setColor(
-          ui_theme::sdl(hudCounterLabelColor(value)));
+          ui_theme::sdl(hudCounterLabelColor(i, value, topPosition)));
     }
     if (judgementCounterValueTexts[i] != nullptr) {
       judgementCounterValueTexts[i]->setColor(
-          ui_theme::sdl(hudCounterValueColor(value)));
+          ui_theme::sdl(hudCounterValueColor(i, value, topPosition)));
     }
   }
 }
