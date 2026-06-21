@@ -162,11 +162,17 @@ void ResultScene::addRetryButtons() {
                                  ui_theme::primaryActionHover(),
                                  ui_theme::primaryActionPressed(),
                                  ui_theme::cyan()));
-    retryRow->addView(makeButton("Retry Same", true, false,
-                                 ui_theme::successAction(),
-                                 ui_theme::successActionHover(),
-                                 ui_theme::successActionPressed(),
-                                 ui_theme::lime()));
+    const bool canRetrySame =
+        retryData.has_value()
+            ? play_options::hasSamePatternRandomization(*retryData)
+            : play_options::hasSamePatternRandomization(meta);
+    if (canRetrySame) {
+      retryRow->addView(makeButton("Retry Same", true, false,
+                                   ui_theme::successAction(),
+                                   ui_theme::successActionHover(),
+                                   ui_theme::successActionPressed(),
+                                   ui_theme::lime()));
+    }
   }
   actionHost->addView(retryRow);
 }
@@ -220,7 +226,7 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (retrySource.playOption.has_value()) {
           if (samePattern &&
-              !play_options::isNormalPlayOption(*retrySource.playOption) &&
+              play_options::usesRandomizer(*retrySource.playOption) &&
               !retrySource.playOptionSeed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing play option seed");
             return true;
@@ -237,7 +243,7 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (retryChart->Meta.IsDP && retrySource.playOption2.has_value()) {
           if (samePattern &&
-              !play_options::isNormalPlayOption(*retrySource.playOption2) &&
+              play_options::usesRandomizer(*retrySource.playOption2) &&
               !retrySource.playOption2Seed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing P2 play option seed");
             return true;

@@ -53,6 +53,7 @@ private:
   std::unique_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
+  std::atomic_bool selectedChartReusableForStart = false;
 
   std::thread loadThread;
   std::jthread checkEntriesThread;
@@ -396,7 +397,8 @@ private:
   void refreshPlayOptionButtons();
   void refreshReadySettingsSummary();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
-                                      bool mediaReady);
+                                      bool mediaReady,
+                                      bool reusableForStart = true);
   void clearSelectedChart();
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo

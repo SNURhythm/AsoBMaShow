@@ -2730,6 +2730,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         }
 
         selectedChartMediaReady.store(false);
+        selectedChartReusableForStart.store(false);
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> preparedChart;
         try {
@@ -2752,7 +2753,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           context.jukebox.loadChart(*preparedChart, true, parseCancelled);
           bms_parser::Chart *loadedChart = nullptr;
           if (!parseCancelled) {
-            loadedChart = setSelectedChart(std::move(preparedChart), true);
+            loadedChart = setSelectedChart(
+                std::move(preparedChart), true,
+                play_options::isNormalPlayOption(playOption));
           }
           if (parseCancelled) {
             preparedChart.reset();
@@ -4944,7 +4947,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return failReplayLoad();
         }
 
-        auto *chart = setSelectedChart(std::move(replayChart), true);
+        auto *chart = setSelectedChart(std::move(replayChart), true, false);
         if (chart == nullptr) {
           return failReplayLoad();
         }
@@ -4970,7 +4973,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
 
 bms_parser::Chart *
 MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
-                                bool mediaReady) {
+                                bool mediaReady, bool reusableForStart) {
   bms_parser::Chart *raw = chart.get();
   std::unique_ptr<bms_parser::Chart> previous;
   {
@@ -4978,6 +4981,7 @@ MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
     previous = std::move(selectedChart);
     selectedChart = std::move(chart);
     selectedChartMediaReady.store(mediaReady);
+    selectedChartReusableForStart.store(reusableForStart);
   }
   return raw;
 }
@@ -4988,6 +4992,7 @@ void MainMenuScene::clearSelectedChart() {
     std::lock_guard<std::mutex> lock(selectedChartMutex);
     previous = std::move(selectedChart);
     selectedChartMediaReady.store(false);
+    selectedChartReusableForStart.store(false);
   }
 }
 
@@ -5001,7 +5006,7 @@ MainMenuScene::selectedChartRandomInfoForPath(
     const std::filesystem::path &path) const {
   SelectedChartRandomInfo info;
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (selectedChart == nullptr ||
+  if (!selectedChartReusableForStart.load() || selectedChart == nullptr ||
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return info;
   }
@@ -5016,7 +5021,8 @@ MainMenuScene::selectedChartRandomInfoForPath(
 bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
     const std::filesystem::path &path) const {
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (!selectedChartMediaReady.load() || selectedChart == nullptr ||
+  if (!selectedChartMediaReady.load() || !selectedChartReusableForStart.load() ||
+      selectedChart == nullptr ||
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
@@ -5057,6 +5063,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   willStart.store(true);
   previewLoadCancelled = true;
   selectedChartMediaReady.store(false);
+  selectedChartReusableForStart.store(false);
   {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress.reset();
@@ -5459,6 +5466,7 @@ void MainMenuScene::cleanupScene() {
   displayedLibraryProgressRevision = 0;
   displayedLibraryTasksButtonText.clear();
   selectedChartMediaReady.store(false);
+  selectedChartReusableForStart.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;

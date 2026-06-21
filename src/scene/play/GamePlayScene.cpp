@@ -89,6 +89,23 @@ std::string gameplayPlayOptionLabel(const StartOptions &options) {
   return label.empty() ? "" : "Option: " + label;
 }
 
+bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
+                                         const StartOptions &options) {
+  std::optional<std::string> option = options.playOption;
+  std::optional<std::string> option2 = options.playOption2;
+
+  if (options.replayData != nullptr) {
+    if (!option.has_value()) {
+      option = options.replayData->playOption;
+    }
+    if (!option2.has_value()) {
+      option2 = options.replayData->playOption2;
+    }
+  }
+
+  return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
+}
+
 bool prepareRetryChart(const bms_parser::ChartMeta &meta,
                        const StartOptions &sourceOptions,
                        std::unique_ptr<bms_parser::Chart> &retryChart,
@@ -284,7 +301,9 @@ void GamePlayScene::init() {
               retryWithNewPattern();
             }
           }));
-      if (!isReplayPlayback() && !options.practiceMode) {
+      if (!isReplayPlayback() && !options.practiceMode &&
+          chart != nullptr && gameplayHasSamePatternRandomization(*chart,
+                                                                  options)) {
         pauseScreen->addView(makePauseButton(
             "Retry Same", ui_theme::control(), ui_theme::controlHover(),
             ui_theme::controlPressed(), ui_theme::hairline(),

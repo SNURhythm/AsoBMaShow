@@ -138,6 +138,32 @@ inline bool isNormalPlayOption(const std::string &option) {
   return normalizePlayOption(option) == "NORMAL";
 }
 
+inline bool usesRandomizer(const std::string &option) {
+  const std::string normalized = normalizePlayOption(option);
+  return normalized == "RANDOM" || normalized == "R-RANDOM" ||
+         normalized == "S-RANDOM" || normalized == "SPIRAL" ||
+         normalized == "H-RANDOM" || normalized == "ALL-SCR" ||
+         normalized == "RANDOM-EX" || normalized == "S-RANDOM-EX";
+}
+
+inline bool usesRandomizer(const std::optional<std::string> &option) {
+  return option.has_value() && usesRandomizer(*option);
+}
+
+inline bool hasSamePatternRandomization(
+    const bms_parser::ChartMeta &meta,
+    const std::optional<std::string> &option = std::nullopt,
+    const std::optional<std::string> &option2 = std::nullopt) {
+  return !meta.RandomValues.empty() || usesRandomizer(option) ||
+         usesRandomizer(option2);
+}
+
+inline bool hasSamePatternRandomization(const ReplayData &replay) {
+  return !replay.randomValues.empty() ||
+         hasSamePatternRandomization(replay.chartMeta, replay.playOption,
+                                     replay.playOption2);
+}
+
 inline std::string
 formatPlayOptionLabel(const std::optional<std::string> &option,
                       const std::optional<long long> &seed = std::nullopt,
@@ -208,9 +234,9 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
 
   modifier->Modify(chart);
   appliedOption = modifier->Name();
-  appliedSeed = laneAssignNotationFromOption(*appliedOption).has_value()
-                    ? std::nullopt
-                    : std::optional<long long>(modifier->GetSeed());
+  appliedSeed = usesRandomizer(*appliedOption)
+                    ? std::optional<long long>(modifier->GetSeed())
+                    : std::nullopt;
   if (appliedLaneOrder != nullptr) {
     *appliedLaneOrder = modifier->GetLaneOrder(chart.Meta);
   }
