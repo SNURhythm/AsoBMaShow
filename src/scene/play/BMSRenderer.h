@@ -17,6 +17,7 @@
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include <bx/math.h>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -71,6 +72,17 @@ public:
   int latestScore = 0;
   void reset();
 };
+
+struct JudgementCounterSnapshot {
+  int pgreat = 0;
+  int great = 0;
+  int good = 0;
+  int bad = 0;
+  int poor = 0;
+  int kpoor = 0;
+  int comboBreak = 0;
+};
+
 class BMSRenderer {
 public:
   ~BMSRenderer();
@@ -79,12 +91,21 @@ private:
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
   std::unique_ptr<TextView> scoreText;
+  std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<TextView> playOptionText;
+  static constexpr size_t kJudgementCounterItemCount = 7;
+  std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
+      judgementCounterLabelTexts;
+  std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
+      judgementCounterValueTexts;
   std::mutex hudMutex;
   bool hudDirty = false;
   std::string pendingJudgeText;
   int pendingScore = 0;
+  int pendingCombo = 0;
+  bool judgementCounterDirty = true;
+  JudgementCounterSnapshot judgementCounterSnapshot;
   std::mutex laneMutex;
   std::vector<int> laneOrder;
   std::vector<LaneState> laneStatesByOrder;
@@ -124,6 +145,8 @@ private:
       AppSettings::VisibleTimeBpmStrategy::Chart;
   double mostPrevalentBpm = 0.0;
   bool renderHud = true;
+  AppSettings::JudgementCounterPosition judgementCounterPosition =
+      AppSettings::JudgementCounterPosition::Top;
   bool renderLaneBeams = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
@@ -142,7 +165,14 @@ private:
   int judgementLayoutHeight = 0;
 
   void drawRect(float width, float height, float x, float y, Color color);
+  void drawHudRoundedPanel(float x, float y, float width, float height,
+                           float radius, const Color &fill,
+                           const Color &border);
+  void drawGameplayHudPanels();
+  void drawJudgementCounterPanels();
+  void layoutGameplayHud();
   void layoutCenteredJudgementText();
+  void updateJudgementCounterText();
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawLaneCover();
   void drawTitle(RenderContext &context) const;
@@ -214,6 +244,10 @@ public:
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
                                    bool hudMode);
+  void setJudgementCounterPosition(
+      AppSettings::JudgementCounterPosition position);
+  void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,
+                            int comboBreak);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);

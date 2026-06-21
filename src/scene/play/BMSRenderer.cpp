@@ -11,9 +11,11 @@
 #include "../../rendering/common.h"
 #include "../../utils/SpriteLoader.h"
 #include "../../view/ClearLampColors.h"
+#include "../../view/UiTheme.h"
 
 #include <assert.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -24,6 +26,20 @@
 
 namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr size_t kHudCounterItemCount = 7;
+
+constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
+    "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
+
+struct JudgementCounterLayout {
+  bool horizontal = true;
+  float x = 0.0f;
+  float y = 0.0f;
+  float itemWidth = 0.0f;
+  float itemHeight = 0.0f;
+  float gap = 0.0f;
+};
 
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
@@ -65,6 +81,175 @@ void destroyNoteSheet(NoteSheet &sheet) {
   destroyTextureHandle(sheet.texture);
   destroyTextureHandle(sheet.longBodyOffTexture);
   destroyTextureHandle(sheet.longBodyOnTexture);
+}
+
+Color hudPanelFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(250, 254, 255, 174)
+             : Color(7, 13, 22, 158);
+}
+
+Color hudPanelStrongFill() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(255, 255, 255, 206)
+             : Color(10, 18, 30, 190);
+}
+
+Color hudPanelBorder() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(60, 132, 138, 82)
+             : Color(110, 219, 213, 74);
+}
+
+Color hudCounterFill(size_t index) {
+  const Color accent = [&]() {
+    switch (index) {
+    case 0:
+      return ui_theme::cyan();
+    case 1:
+      return ui_theme::lime();
+    case 2:
+      return ui_theme::amber();
+    case 3:
+      return Color(255, 132, 96, 255);
+    case 4:
+      return ui_theme::coral();
+    case 5:
+      return Color(255, 78, 102, 255);
+    case 6:
+      return ui_theme::coral();
+    default:
+      return ui_theme::textMuted();
+    }
+  }();
+  const uint8_t alpha =
+      ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 34 : 44;
+  return Color(accent.r, accent.g, accent.b, alpha);
+}
+
+Color hudCounterBorder(size_t index) {
+  const Color fill = hudCounterFill(index);
+  return Color(fill.r, fill.g, fill.b,
+               ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 108
+                                                                    : 124);
+}
+
+Color hudCounterAccent(size_t index) {
+  switch (index) {
+  case 0:
+    return ui_theme::cyan();
+  case 1:
+    return ui_theme::lime();
+  case 2:
+    return ui_theme::amber();
+  case 3:
+    return Color(255, 132, 96, 255);
+  case 4:
+    return ui_theme::coral();
+  case 5:
+    return Color(255, 78, 102, 255);
+  case 6:
+    return ui_theme::coral();
+  default:
+    return ui_theme::textPrimary();
+  }
+}
+
+int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
+  switch (index) {
+  case 0:
+    return snapshot.pgreat;
+  case 1:
+    return snapshot.great;
+  case 2:
+    return snapshot.good;
+  case 3:
+    return snapshot.bad;
+  case 4:
+    return snapshot.poor;
+  case 5:
+    return snapshot.kpoor;
+  case 6:
+    return snapshot.comboBreak;
+  default:
+    return 0;
+  }
+}
+
+int judgeCountFor(const std::map<Judgement, int> &counts,
+                  Judgement judgement) {
+  const auto it = counts.find(judgement);
+  return it == counts.end() ? 0 : it->second;
+}
+
+void placeText(TextView *text, int x, int y, int width, int height) {
+  if (text == nullptr) {
+    return;
+  }
+  text->setPosition(x, y);
+  text->setSize(width, height);
+}
+
+float gameplayHudTitleWidth() {
+  return std::clamp(static_cast<float>(rendering::window_width) * 0.30f,
+                    430.0f, 620.0f);
+}
+
+float gameplayHudMetricsWidth() {
+  return std::clamp(static_cast<float>(rendering::window_width) * 0.28f,
+                    430.0f, 540.0f);
+}
+
+JudgementCounterLayout judgementCounterLayoutFor(
+    AppSettings::JudgementCounterPosition position) {
+  JudgementCounterLayout layout;
+  layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
+  layout.gap = layout.horizontal ? 8.0f : 6.0f;
+  layout.itemWidth =
+      layout.horizontal
+          ? std::clamp((static_cast<float>(rendering::window_width) - 72.0f -
+                        layout.gap * 6.0f) /
+                           7.0f,
+                       92.0f, 118.0f)
+          : 118.0f;
+  layout.itemHeight = layout.horizontal ? 58.0f : 50.0f;
+
+  const float totalWidth =
+      layout.horizontal ? layout.itemWidth * 7.0f + layout.gap * 6.0f
+                        : layout.itemWidth;
+  const float totalHeight =
+      layout.horizontal ? layout.itemHeight
+                        : layout.itemHeight * 7.0f + layout.gap * 6.0f;
+
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top: {
+    layout.x = (static_cast<float>(rendering::window_width) - totalWidth) *
+               0.5f;
+    layout.y = 28.0f;
+    const float titleRight = 28.0f + gameplayHudTitleWidth();
+    const float pauseLeft = static_cast<float>(rendering::window_width - 104);
+    if (layout.x < titleRight + 16.0f ||
+        layout.x + totalWidth > pauseLeft) {
+      layout.y = 124.0f;
+    }
+    break;
+  }
+  case AppSettings::JudgementCounterPosition::Left:
+    layout.x = 28.0f;
+    layout.y = std::max(
+        126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
+                    0.5f);
+    break;
+  case AppSettings::JudgementCounterPosition::Right:
+    layout.x =
+        static_cast<float>(rendering::window_width) - 28.0f - totalWidth;
+    layout.y = std::max(
+        126.0f, (static_cast<float>(rendering::window_height) - totalHeight) *
+                    0.5f);
+    break;
+  }
+
+  return layout;
 }
 } // namespace
 
@@ -232,26 +417,54 @@ BMSRenderer::BMSRenderer(
   configureSheet(scratchSheet, spriteLoader3.getWidth(),
                  spriteLoader3.getHeight());
 
-  titleText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
+  titleText = std::make_unique<TextView>(kHudFontPath, 26);
   titleText->setText(chart->Meta.Title);
-  titleText->setPosition(10, 10);
   titleText->setAlign(TextView::LEFT);
-  judgeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
+  titleText->setVAlign(TextView::MIDDLE);
+  titleText->setOverflow(TextView::TextOverflow::Marquee);
+  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+
+  judgeText = std::make_unique<TextView>(kHudFontPath, 38);
   judgeText->setAlign(TextView::CENTER);
   judgeText->setVAlign(TextView::MIDDLE);
+  judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   layoutCenteredJudgementText();
-  scoreText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 32);
-  scoreText->setPosition(0, rendering::window_height - 50);
+  scoreText = std::make_unique<TextView>(kHudFontPath, 34);
   scoreText->setAlign(TextView::LEFT);
-  scoreText->setText("Score: 0");
-  gaugeText = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 24);
-  gaugeText->setPosition(10, 50);
+  scoreText->setVAlign(TextView::MIDDLE);
+  scoreText->setText("SCORE 0");
+  scoreText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  comboText = std::make_unique<TextView>(kHudFontPath, 24);
+  comboText->setAlign(TextView::RIGHT);
+  comboText->setVAlign(TextView::MIDDLE);
+  comboText->setText("COMBO 0");
+  comboText->setColor(ui_theme::sdl(ui_theme::lime()));
+  gaugeText = std::make_unique<TextView>(kHudFontPath, 22);
+  gaugeText->setAlign(TextView::LEFT);
+  gaugeText->setVAlign(TextView::MIDDLE);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
-  playOptionText =
-      std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 22);
-  playOptionText->setPosition(10, 82);
-  playOptionText->setColor({255, 205, 37, 255});
+  playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
+  playOptionText->setAlign(TextView::LEFT);
+  playOptionText->setVAlign(TextView::MIDDLE);
+  playOptionText->setOverflow(TextView::TextOverflow::Marquee);
+  playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
   playOptionText->setVisible(false);
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    auto &label = judgementCounterLabelTexts[i];
+    label = std::make_unique<TextView>(kHudFontPath, 14);
+    label->setText(kCounterLabels[i]);
+    label->setAlign(TextView::CENTER);
+    label->setVAlign(TextView::MIDDLE);
+    label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+
+    auto &value = judgementCounterValueTexts[i];
+    value = std::make_unique<TextView>(kHudFontPath, 24);
+    value->setText("0");
+    value->setAlign(TextView::CENTER);
+    value->setVAlign(TextView::MIDDLE);
+    value->setColor(ui_theme::sdl(hudCounterAccent(i)));
+  }
 
   refreshGeometry();
   textureGuard.dismiss();
@@ -322,6 +535,87 @@ void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
 }
 
+void BMSRenderer::drawHudRoundedPanel(float x, float y, float width,
+                                      float height, float radius,
+                                      const Color &fill,
+                                      const Color &border) {
+  constexpr float kBorder = 1.0f;
+  simpleBatchRenderer.addRoundedRect(x, y, width, height, radius,
+                                     border.toABGR());
+  simpleBatchRenderer.addRoundedRect(
+      x + kBorder, y + kBorder, std::max(0.0f, width - kBorder * 2.0f),
+      std::max(0.0f, height - kBorder * 2.0f),
+      std::max(0.0f, radius - kBorder), fill.toABGR());
+}
+
+void BMSRenderer::drawGameplayHudPanels() {
+  constexpr float margin = 28.0f;
+  constexpr float radius = 12.0f;
+  const float titleWidth = gameplayHudTitleWidth();
+  const float metricsWidth = gameplayHudMetricsWidth();
+
+  drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
+                      hudPanelFill(), hudPanelBorder());
+  drawHudRoundedPanel(margin, rendering::window_height - 108.0f, metricsWidth,
+                      80.0f, radius, hudPanelStrongFill(), hudPanelBorder());
+}
+
+void BMSRenderer::drawJudgementCounterPanels() {
+  constexpr float radius = 10.0f;
+  const JudgementCounterLayout layout =
+      judgementCounterLayoutFor(judgementCounterPosition);
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const float itemX =
+        layout.x +
+        (layout.horizontal ? (layout.itemWidth + layout.gap) * i : 0.0f);
+    const float itemY =
+        layout.y +
+        (layout.horizontal ? 0.0f : (layout.itemHeight + layout.gap) * i);
+    drawHudRoundedPanel(itemX, itemY, layout.itemWidth, layout.itemHeight,
+                        radius,
+                        hudCounterFill(i), hudCounterBorder(i));
+  }
+}
+
+void BMSRenderer::layoutGameplayHud() {
+  constexpr int margin = 28;
+  const int titleWidth = static_cast<int>(gameplayHudTitleWidth());
+  placeText(titleText.get(), margin + 18, margin + 8, titleWidth - 36, 34);
+  placeText(playOptionText.get(), margin + 18, margin + 44, titleWidth - 36,
+            26);
+
+  const int metricsY = rendering::window_height - 108;
+  const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
+  placeText(scoreText.get(), margin + 18, metricsY + 8, metricsWidth / 2, 38);
+  placeText(comboText.get(), margin + metricsWidth / 2 - 8, metricsY + 8,
+            metricsWidth / 2 - 10, 38);
+  placeText(gaugeText.get(), margin + 18, metricsY + 46, metricsWidth - 36,
+            24);
+
+  const JudgementCounterLayout layout =
+      judgementCounterLayoutFor(judgementCounterPosition);
+  const int gap = static_cast<int>(layout.gap);
+  const int itemWidth = static_cast<int>(layout.itemWidth);
+  const int itemHeight = static_cast<int>(layout.itemHeight);
+  const int counterX = static_cast<int>(std::round(layout.x));
+  const int counterY = static_cast<int>(std::round(layout.y));
+
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    const int itemX =
+        counterX +
+        (layout.horizontal ? (itemWidth + gap) * static_cast<int>(i) : 0);
+    const int itemY =
+        counterY +
+        (layout.horizontal ? 0 : (itemHeight + gap) * static_cast<int>(i));
+    placeText(judgementCounterLabelTexts[i].get(), itemX + 8, itemY + 6,
+              itemWidth - 16, layout.horizontal ? 18 : 16);
+    placeText(judgementCounterValueTexts[i].get(), itemX + 8,
+              itemY + (layout.horizontal ? 24 : 22), itemWidth - 16,
+              itemHeight - (layout.horizontal ? 28 : 24));
+  }
+}
+
 void BMSRenderer::layoutCenteredJudgementText() {
   if (judgementLayoutWidth == rendering::window_width &&
       judgementLayoutHeight == rendering::window_height) {
@@ -385,6 +679,7 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     std::lock_guard<std::mutex> lock(hudMutex);
     pendingJudgeText = std::move(judgeLine);
     pendingScore = score;
+    pendingCombo = combo;
     hudDirty = true;
   }
 }
@@ -755,6 +1050,7 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
   applyPendingHudText();
+  updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthLongBodies = 190;
@@ -995,17 +1291,37 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   if (renderHud) {
     layoutCenteredJudgementText();
+    layoutGameplayHud();
+    simpleBatchRenderer.setSubmitView(rendering::ui_view);
+    simpleBatchRenderer.setSubmitDepth(0);
+    simpleBatchRenderer.begin();
+    drawGameplayHudPanels();
+    drawJudgementCounterPanels();
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
     drawJudgement(context);
     drawScore(context);
+    if (comboText != nullptr) {
+      comboText->render(context);
+    }
     drawGauge(context);
     drawPlayOption(context);
+    for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+      if (judgementCounterLabelTexts[i] != nullptr) {
+        judgementCounterLabelTexts[i]->render(context);
+      }
+      if (judgementCounterValueTexts[i] != nullptr) {
+        judgementCounterValueTexts[i]->render(context);
+      }
+    }
   }
 }
 
 void BMSRenderer::applyPendingHudText() {
   std::string judgeLine;
   int score = 0;
+  int combo = 0;
   {
     std::lock_guard<std::mutex> lock(hudMutex);
     if (!hudDirty) {
@@ -1013,15 +1329,55 @@ void BMSRenderer::applyPendingHudText() {
     }
     judgeLine = pendingJudgeText;
     score = pendingScore;
+    combo = pendingCombo;
     hudDirty = false;
   }
   judgeText->setText(judgeLine);
-  scoreText->setText("Score: " + std::to_string(score));
+  scoreText->setText("SCORE " + std::to_string(score));
+  if (comboText != nullptr) {
+    comboText->setText("COMBO " + std::to_string(combo));
+  }
+}
+
+void BMSRenderer::updateJudgementCounterText() {
+  JudgementCounterSnapshot snapshot;
+  {
+    std::lock_guard<std::mutex> lock(hudMutex);
+    if (!judgementCounterDirty) {
+      return;
+    }
+    snapshot = judgementCounterSnapshot;
+    judgementCounterDirty = false;
+  }
+  for (size_t i = 0; i < kHudCounterItemCount; ++i) {
+    if (judgementCounterValueTexts[i] != nullptr) {
+      judgementCounterValueTexts[i]->setText(
+          std::to_string(counterValueAt(snapshot, i)));
+    }
+    if (judgementCounterLabelTexts[i] != nullptr) {
+      judgementCounterLabelTexts[i]->setColor(
+          ui_theme::sdl(ui_theme::textSecondary()));
+    }
+    if (judgementCounterValueTexts[i] != nullptr) {
+      judgementCounterValueTexts[i]->setColor(ui_theme::sdl(
+          counterValueAt(snapshot, i) > 0 ? hudCounterAccent(i)
+                                          : ui_theme::textMuted()));
+    }
+  }
 }
 
 void BMSRenderer::reset() {
   state.reset();
   judgementIndicator.clear();
+  {
+    std::lock_guard<std::mutex> lock(hudMutex);
+    pendingJudgeText.clear();
+    pendingScore = 0;
+    pendingCombo = 0;
+    hudDirty = true;
+    judgementCounterSnapshot = {};
+    judgementCounterDirty = true;
+  }
   {
     std::lock_guard<std::mutex> lock(laneMutex);
     for (auto &laneState : laneStatesByOrder) {
@@ -1087,6 +1443,27 @@ void BMSRenderer::setShowInvisibleNotes(bool enabled) {
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
                                               float widthScale, bool hudMode) {
   judgementIndicator.configure(enabled, y, widthScale, hudMode);
+}
+
+void BMSRenderer::setJudgementCounterPosition(
+    AppSettings::JudgementCounterPosition position) {
+  judgementCounterPosition = position;
+}
+
+void BMSRenderer::setJudgementCounters(
+    const std::map<Judgement, int> &judgeCounts, int comboBreak) {
+  JudgementCounterSnapshot snapshot;
+  snapshot.pgreat = judgeCountFor(judgeCounts, PGreat);
+  snapshot.great = judgeCountFor(judgeCounts, Great);
+  snapshot.good = judgeCountFor(judgeCounts, Good);
+  snapshot.bad = judgeCountFor(judgeCounts, Bad);
+  snapshot.poor = judgeCountFor(judgeCounts, Poor);
+  snapshot.kpoor = judgeCountFor(judgeCounts, Kpoor);
+  snapshot.comboBreak = comboBreak;
+
+  std::lock_guard<std::mutex> lock(hudMutex);
+  judgementCounterSnapshot = snapshot;
+  judgementCounterDirty = true;
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,

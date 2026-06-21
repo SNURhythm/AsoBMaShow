@@ -189,6 +189,9 @@ void SettingsScene::refreshSettingsText() {
   const std::string judgementIndicatorRenderModeLabel =
       formatJudgementIndicatorRenderModeLabel(
           context.settings.judgementIndicatorRenderMode);
+  const std::string judgementCounterPositionLabel =
+      formatJudgementCounterPositionLabel(
+          context.settings.judgementCounterPosition);
   const std::string uiThemeLabel =
       formatUiThemeModeLabel(context.settings.uiThemeMode);
 
@@ -267,6 +270,9 @@ void SettingsScene::refreshSettingsText() {
     judgementIndicatorRenderModeText->setText(
         judgementIndicatorRenderModeLabel);
   }
+  if (judgementCounterPositionText != nullptr) {
+    judgementCounterPositionText->setText(judgementCounterPositionLabel);
+  }
   if (bgaModeText != nullptr) {
     bgaModeText->setText(bgaLabel);
   }
@@ -322,6 +328,12 @@ void SettingsScene::refreshSettingsText() {
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
+      judgementCounterPositionButton, judgementCounterPositionText,
+      context.settings.judgementCounterPosition ==
+              AppSettings::JudgementCounterPosition::Top
+          ? SettingsButtonTone::Info
+          : SettingsButtonTone::Success);
   applySemanticButtonStyle(bgaModeButton, bgaModeText,
                            context.settings.bgaEnabled
                                ? SettingsButtonTone::Success

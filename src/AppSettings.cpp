@@ -138,6 +138,35 @@ const char *judgementIndicatorRenderModeToString(
   return "3d";
 }
 
+AppSettings::JudgementCounterPosition parseJudgementCounterPosition(
+    const std::string &value,
+    AppSettings::JudgementCounterPosition fallback) {
+  const std::string normalized = normalizeSettingToken(value);
+  if (normalized == "top" || normalized == "0") {
+    return AppSettings::JudgementCounterPosition::Top;
+  }
+  if (normalized == "left" || normalized == "1") {
+    return AppSettings::JudgementCounterPosition::Left;
+  }
+  if (normalized == "right" || normalized == "2") {
+    return AppSettings::JudgementCounterPosition::Right;
+  }
+  return fallback;
+}
+
+const char *judgementCounterPositionToString(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return "top";
+  case AppSettings::JudgementCounterPosition::Left:
+    return "left";
+  case AppSettings::JudgementCounterPosition::Right:
+    return "right";
+  }
+  return "top";
+}
+
 AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
     const std::string &value, AppSettings::VisibleTimeBpmStrategy fallback) {
   const std::string normalized = normalizeSettingToken(value);
@@ -309,6 +338,15 @@ void AppSettings::sanitize() {
     judgementIndicatorRenderMode = JudgementIndicatorRenderMode::World3D;
     break;
   }
+  switch (judgementCounterPosition) {
+  case JudgementCounterPosition::Top:
+  case JudgementCounterPosition::Left:
+  case JudgementCounterPosition::Right:
+    break;
+  default:
+    judgementCounterPosition = JudgementCounterPosition::Top;
+    break;
+  }
   switch (visibleTimeBpmStrategy) {
   case VisibleTimeBpmStrategy::Chart:
   case VisibleTimeBpmStrategy::MostPrevalent:
@@ -444,6 +482,10 @@ bool AppSettings::save() const {
        << judgementIndicatorRenderModeToString(
               sanitized.judgementIndicatorRenderMode)
        << "\n";
+  file << "judgement_counter_position="
+       << judgementCounterPositionToString(
+              sanitized.judgementCounterPosition)
+       << "\n";
   file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
        << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
@@ -556,6 +598,10 @@ AppSettings AppSettings::load() {
         settings.judgementIndicatorRenderMode =
             parseJudgementIndicatorRenderMode(
                 value, settings.judgementIndicatorRenderMode);
+      } else if (key == "judgement_counter_position") {
+        settings.judgementCounterPosition =
+            parseJudgementCounterPosition(value,
+                                          settings.judgementCounterPosition);
       } else if (key == "ui_theme_mode") {
         settings.uiThemeMode = parseUiThemeMode(value, settings.uiThemeMode);
       } else if (key == "selected_gauge_type") {

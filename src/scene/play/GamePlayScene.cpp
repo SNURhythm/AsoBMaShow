@@ -198,6 +198,8 @@ void GamePlayScene::init() {
       context.settings.judgementIndicatorWidthScale,
       context.settings.judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D);
+  renderer->setJudgementCounterPosition(
+      context.settings.judgementCounterPosition);
   renderer->setReplayData(options.replayData.get());
   renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
@@ -413,6 +415,7 @@ void GamePlayScene::reset() {
   state->configureGauge(initialGaugeType, gaugeAutoShift);
   initializeStartPositionState();
   state->isPlaying = true;
+  renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
   buildReplayNoteLookup();
@@ -1122,6 +1125,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                     getVisualTimeMicros(
                         getGameplayTimeMicros(context.jukebox.getTimeMicros())),
                     recordTimingSample);
+  renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   // CurrentRhythmHUD->OnJudge(state);
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);

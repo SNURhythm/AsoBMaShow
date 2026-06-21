@@ -661,6 +661,19 @@ static std::string formatJudgementIndicatorRenderModeLabel(
   return "3D Space";
 }
 
+static std::string formatJudgementCounterPositionLabel(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return "Top";
+  case AppSettings::JudgementCounterPosition::Left:
+    return "Left";
+  case AppSettings::JudgementCounterPosition::Right:
+    return "Right";
+  }
+  return "Top";
+}
+
 static std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -790,6 +803,20 @@ nextJudgementIndicatorRenderMode(
     return AppSettings::JudgementIndicatorRenderMode::World3D;
   }
   return AppSettings::JudgementIndicatorRenderMode::World3D;
+}
+
+static AppSettings::JudgementCounterPosition
+nextJudgementCounterPosition(
+    AppSettings::JudgementCounterPosition position) {
+  switch (position) {
+  case AppSettings::JudgementCounterPosition::Top:
+    return AppSettings::JudgementCounterPosition::Left;
+  case AppSettings::JudgementCounterPosition::Left:
+    return AppSettings::JudgementCounterPosition::Right;
+  case AppSettings::JudgementCounterPosition::Right:
+    return AppSettings::JudgementCounterPosition::Top;
+  }
+  return AppSettings::JudgementCounterPosition::Top;
 }
 
 static AppSettings::UiThemeMode nextUiThemeMode(AppSettings::UiThemeMode mode) {

@@ -828,19 +828,20 @@ bms_parser::Note *findReplayNote(
   return it == lookup.end() ? nullptr : it->second;
 }
 
-void applyReplayEventForVideo(
+bool applyReplayEventForVideo(
     BMSRenderer &renderer,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event, long long visualTimeMicros, bool gaugeAutoShift) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
-  auto applyHud = [&]() {
+  auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
-      return;
+      return false;
     }
     renderer.onJudge(recordedJudge, event.combo, event.score,
                      visualTimeMicros,
                      event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
+    return true;
   };
 
   switch (event.action) {
@@ -859,10 +860,12 @@ void applyReplayEventForVideo(
       }
     }
     if (!suppressHudForLongNoteHead) {
-      applyHud();
+      const bool appliedHud = applyHud();
+      renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+      return appliedHud;
     }
     renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
-    break;
+    return false;
   }
   case ReplayEventAction::Release: {
     if (auto *note = findReplayNote(lookup, event);
@@ -872,13 +875,12 @@ void applyReplayEventForVideo(
         longNote->Release(event.judgeTimeMicros);
       }
     }
-    applyHud();
+    const bool appliedHud = applyHud();
     renderer.onLaneReleased(event.lane, visualTimeMicros);
-    break;
+    return appliedHud;
   }
   case ReplayEventAction::Miss:
-    applyHud();
-    break;
+    return applyHud();
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(lookup, event); note != nullptr) {
       note->IsPlayed = true;
@@ -886,8 +888,9 @@ void applyReplayEventForVideo(
       note->PlayedTime = event.judgeTimeMicros;
     }
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge);
-    break;
+    return false;
   }
+  return false;
 }
 
 std::string ffmpegError(int errorCode) {
@@ -1982,6 +1985,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                        settings.judgementIndicatorY,
                                        settings.judgementIndicatorWidthScale,
                                        judgementIndicatorHudMode);
+  renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
                           gaugeInitialValue(replay.initialGaugeType));
   renderer.setReplayData(&replay);
@@ -2017,6 +2021,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   frameBufferCount, replayVideoEncoderThreadCount());
   RenderContext renderContext;
   size_t replayCursor = 0;
+  std::map<Judgement, int> replayJudgeCounts;
+  for (int i = 0; i < JudgementCount; i++) {
+    replayJudgeCounts[static_cast<Judgement>(i)] = 0;
+  }
+  int replayComboBreak = 0;
   uint32_t currentFrame = bgfx::frame();
   const auto exportStart = std::chrono::steady_clock::now();
   auto lastUiProgress =
@@ -2137,9 +2146,17 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         std::max(0LL, songTimeMicros - visualOffsetMicros);
     while (replayCursor < replay.events.size() &&
            replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
-      applyReplayEventForVideo(renderer, replayNotes,
-                               replay.events[replayCursor], visualTimeMicros,
-                               replay.gaugeAutoShift);
+      const auto &event = replay.events[replayCursor];
+      const bool appliedHud =
+          applyReplayEventForVideo(renderer, replayNotes, event,
+                                   visualTimeMicros, replay.gaugeAutoShift);
+      if (appliedHud && event.judgement != None) {
+        replayJudgeCounts[event.judgement]++;
+        if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
+          replayComboBreak++;
+        }
+        renderer.setJudgementCounters(replayJudgeCounts, replayComboBreak);
+      }
       ++replayCursor;
     }
     releaseDueReplayLongNoteTails(replayAutoReleaseTails,

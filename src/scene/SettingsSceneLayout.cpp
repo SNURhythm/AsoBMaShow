@@ -50,6 +50,7 @@ void SettingsScene::resetViewState() {
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
+  judgementCounterPositionText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
   uiThemeModeText = nullptr;
@@ -63,6 +64,7 @@ void SettingsScene::resetViewState() {
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
+  judgementCounterPositionButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   uiThemeModeButton = nullptr;
@@ -943,6 +945,36 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
           : "Invisible notes use orange placeholder rectangles until the "
             "skin system exposes dedicated artwork.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *judgementCounterControls = new View();
+  judgementCounterControls->setFlexDirection(FlexDirection::Column);
+  judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  judgementCounterControls->setAlignItems(YGAlignFlexStart);
+  judgementCounterControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Top is horizontal. Left and Right are vertical."
+          : "Choose where the live judgement counter sits during gameplay. "
+            "Top uses a horizontal strip; Left and Right use vertical stacks.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  judgementCounterPositionText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementCounterPositionButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementCounterPositionText);
+  judgementCounterPositionButton->setOnClickListener([this]() {
+    context.settings.judgementCounterPosition =
+        nextJudgementCounterPosition(
+            context.settings.judgementCounterPosition);
+    persistSettings();
+  });
+  judgementCounterControls->addView(judgementCounterPositionButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Judgement Counter",
+      metrics.compact ? "Realtime judgement counts during gameplay."
+                      : "Show realtime judgement totals in the gameplay HUD "
+                        "without changing lane rendering.",
+      judgementCounterControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *bgaDisplayControls = new View();
   bgaDisplayControls->setFlexDirection(FlexDirection::Column);

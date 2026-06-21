@@ -28,6 +28,12 @@ public:
     MostPrevalent = 1,
   };
 
+  enum class JudgementCounterPosition {
+    Top = 0,
+    Left = 1,
+    Right = 2,
+  };
+
   enum class UiThemeMode {
     Dark = 0,
     Light = 1,
@@ -101,6 +107,8 @@ public:
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
+  JudgementCounterPosition judgementCounterPosition =
+      JudgementCounterPosition::Top;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
