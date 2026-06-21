@@ -1572,6 +1572,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                  kChartListItemHeight, item);
   };
   recyclerView->itemHeight = kChartListItemHeight;
+  recyclerView->topMargin = 8;
+  recyclerView->bottomMargin = 8;
   recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
