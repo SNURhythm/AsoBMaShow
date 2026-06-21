@@ -48,6 +48,7 @@ protected:
   [[nodiscard]] int textLineHeight() const;
   [[nodiscard]] int rasterTextLineHeight() const;
   [[nodiscard]] int measureTextWidth(const std::string &utf8);
+  [[nodiscard]] int measureRasterTextWidth(const std::string &utf8);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
   [[nodiscard]] bool sameFontSource(const SelectedFont &lhs,

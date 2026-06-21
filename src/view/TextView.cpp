@@ -608,6 +608,10 @@ bool TextView::primaryFontSupportsText(const std::string &utf8) const {
 }
 
 int TextView::measureTextWidth(const std::string &utf8) {
+  return logicalLengthFor(measureRasterTextWidth(utf8));
+}
+
+int TextView::measureRasterTextWidth(const std::string &utf8) {
   if (utf8.empty() || fontFaces.empty()) {
     return 0;
   }
@@ -683,7 +687,7 @@ std::vector<std::string> TextView::wrappedTextLines(int wrapWidth) {
       continue;
     }
 
-    const int currentWidth = measureTextWidth(currentLine);
+    const int currentWidth = measureRasterTextWidth(currentLine);
     if (wrapWidth > 0 && currentWidth > wrapWidth && currentLine.size() > 0) {
       if (lastBreak != std::string::npos && lastBreak > 0) {
         std::string nextLine = currentLine.substr(lastBreak);
@@ -753,7 +757,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       wrapWidth > 0 ? wrappedTextLines(wrapWidth) : wrappedTextLines(0);
   int width = 0;
   for (const auto &line : lines) {
-    width = std::max(width, measureTextWidth(line));
+    width = std::max(width, measureRasterTextWidth(line));
   }
 
   const int targetWidth = std::max(1, width);
