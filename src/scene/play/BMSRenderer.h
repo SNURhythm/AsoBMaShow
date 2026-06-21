@@ -118,6 +118,8 @@ private:
   std::atomic<long long> pendingJudgeDiffMicros{0};
   Judgement renderedJudgement = None;
   int renderedCombo = 0;
+  bool renderedTimingFastShown = false;
+  bool renderedTimingSlowShown = false;
   std::array<std::atomic<int>, kJudgementCounterItemCount>
       judgementCounterValues{};
   std::atomic<uint32_t> judgementCounterRevision{1};

@@ -941,14 +941,32 @@ void BMSRenderer::drawJudgementAccentBar() {
   const float width = 6.0f;
   const float height =
       std::max(16.0f, static_cast<float>(judgeText->getHeight()) - 28.0f);
-  const float x =
-      std::max(0.0f, static_cast<float>(judgeText->getX()) - 15.0f);
   const float y = static_cast<float>(judgeText->getY()) +
                   (static_cast<float>(judgeText->getHeight()) - height) * 0.5f;
   const Color accent = hudJudgementAccent(renderedJudgement);
-  simpleBatchRenderer.addRoundedRect(
-      x, y, width, height, width * 0.5f,
-      Color(accent.r, accent.g, accent.b, 210).toABGR());
+  const uint32_t color = Color(accent.r, accent.g, accent.b, 210).toABGR();
+  const bool showLeft =
+      renderedTimingFastShown ||
+      (!renderedTimingFastShown && !renderedTimingSlowShown);
+  const bool showRight =
+      renderedTimingSlowShown ||
+      (!renderedTimingFastShown && !renderedTimingSlowShown);
+  if (showLeft) {
+    const float x =
+        std::max(0.0f, static_cast<float>(judgeText->getX()) - 15.0f);
+    simpleBatchRenderer.addRoundedRect(x, y, width, height, width * 0.5f,
+                                       color);
+  }
+  if (showRight) {
+    const float rightX = static_cast<float>(judgeText->getX() +
+                                           judgeText->getWidth()) +
+                         9.0f;
+    const float x = std::min(
+        static_cast<float>(std::max(0, rendering::window_width)) - width,
+        rightX);
+    simpleBatchRenderer.addRoundedRect(std::max(0.0f, x), y, width, height,
+                                       width * 0.5f, color);
+  }
 }
 
 void BMSRenderer::drawJudgementCounterPanels() {
@@ -1983,6 +2001,8 @@ void BMSRenderer::applyPendingHudText() {
            AppSettings::JudgementTimingDisplayMode::Both ||
        judgementTimingDisplayMode ==
            AppSettings::JudgementTimingDisplayMode::Ms);
+  renderedTimingFastShown = showTimingDirection && diffMicros < 0;
+  renderedTimingSlowShown = showTimingDirection && diffMicros > 0;
   if (judgeText != nullptr) {
     judgeText->setVisible(hasJudgement);
     std::string judgeLine;
