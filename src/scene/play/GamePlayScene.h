@@ -54,6 +54,7 @@ public:
   ~GamePlayScene() override;
   void init() override;
   void update(float dt) override;
+  bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;

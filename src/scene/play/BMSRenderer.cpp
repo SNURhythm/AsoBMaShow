@@ -976,23 +976,21 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
   if (judgementIndicator.isEnabled()) {
     const bool indicatorHudMode = judgementIndicator.isHudMode();
-    if (!indicatorHudMode || !hudSuppressed) {
-      simpleBatchRenderer.setSubmitView(indicatorHudMode ? rendering::ui_view
-                                                         : rendering::main_view);
-      simpleBatchRenderer.setSubmitDepth(indicatorHudMode
-                                             ? 0
-                                             : kDepthJudgementIndicator);
-      simpleBatchRenderer.begin();
-      judgementIndicator.render(simpleBatchRenderer, micro,
-                                {.judgeY = judgeY,
-                                 .upperBound = upperBound,
-                                 .playAreaLeftX = playAreaLeftX,
-                                 .playAreaWidth = playAreaWidth,
-                                 .noteRenderWidth = noteRenderWidth,
-                                 .noteRenderHeight = noteRenderHeight});
-      simpleBatchRenderer.flush();
-      simpleBatchRenderer.setSubmitView(rendering::main_view);
-    }
+    simpleBatchRenderer.setSubmitView(indicatorHudMode ? rendering::ui_view
+                                                       : rendering::main_view);
+    simpleBatchRenderer.setSubmitDepth(indicatorHudMode
+                                           ? 0
+                                           : kDepthJudgementIndicator);
+    simpleBatchRenderer.begin();
+    judgementIndicator.render(simpleBatchRenderer, micro,
+                              {.judgeY = judgeY,
+                               .upperBound = upperBound,
+                               .playAreaLeftX = playAreaLeftX,
+                               .playAreaWidth = playAreaWidth,
+                               .noteRenderWidth = noteRenderWidth,
+                               .noteRenderHeight = noteRenderHeight});
+    simpleBatchRenderer.flush();
+    simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
 
   if (renderHud && !hudSuppressed) {

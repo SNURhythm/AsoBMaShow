@@ -703,6 +703,11 @@ void GamePlayScene::renderScene() {
     laneStateText->render(renderContext);
   }
 }
+
+bool GamePlayScene::renderViewBeforeScene(const View *view) const {
+  return view != pauseLayout && view != pauseButton;
+}
+
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
   context.jukebox.removeOnTick();

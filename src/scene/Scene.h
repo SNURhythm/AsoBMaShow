@@ -72,9 +72,16 @@ public:
   void render() {
     RenderContext context;
     for (auto view : views) {
-      view->render(context);
+      if (renderViewBeforeScene(view)) {
+        view->render(context);
+      }
     }
     renderScene(); // Additional custom rendering
+    for (auto view : views) {
+      if (!renderViewBeforeScene(view)) {
+        view->render(context);
+      }
+    }
   }
 
   // Cleanup resources when exiting the scene (non-virtual public method)
@@ -107,6 +114,8 @@ public:
 
 protected:
   // Protected virtual methods for customization by derived classes
+  virtual bool renderViewBeforeScene(const View *view) const { return true; }
+
   virtual void renderScene() = 0;
 
   virtual void cleanupScene() = 0;
