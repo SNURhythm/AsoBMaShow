@@ -99,12 +99,14 @@ private:
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void showNativeTextEditor();
   void hideNativeTextEditor(bool notifyFinished = false);
-  bool syncNativeTextEditorText(const std::string &newText);
+  bool syncNativeTextEditorState(const IOSNativeTextEditorState &state,
+                                 bool &selectionChanged);
+  void syncNativeTextEditorSelection();
   void handleNativeTextEditorEvent(IOSNativeTextEditorEvent event,
-                                   const std::string &text);
+                                   const IOSNativeTextEditorState &state);
   static void handleNativeTextEditorEvent(void *context,
                                           IOSNativeTextEditorEvent event,
-                                          const std::string &text);
+                                          const IOSNativeTextEditorState &state);
 #endif
   void registerPointerDownListener();
   void unregisterPointerDownListener();
