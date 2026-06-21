@@ -4,9 +4,20 @@
 #include "../scene/play/RhythmState.h"
 #include "../context.h"
 
+#include <optional>
 #include <string>
 
 class View;
+
+struct ResultPreviousBestData {
+  int score = 0;
+  int maxScore = 0;
+  int maxCombo = 0;
+  int comboBreak = 0;
+  float finalGauge = 0.0f;
+  int clearType = kClearTypeFailedRank;
+  std::string createdAt;
+};
 
 struct ResultSkinData {
   const RhythmState *state;
@@ -15,4 +26,5 @@ struct ResultSkinData {
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   std::string playModeLabel;
+  std::optional<ResultPreviousBestData> previousBest;
 };

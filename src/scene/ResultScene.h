@@ -4,6 +4,7 @@
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
+#include "../skin/SkinTypes.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -42,6 +43,7 @@ public:
   void cleanupScene() override;
 
 private:
+  void loadPreviousBest();
   void saveScore();
   void saveReplay();
   void addRetryButtons();
@@ -54,6 +56,7 @@ private:
   RhythmState resultState;
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
+  std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   std::string playModeLabel;
   View *rootLayout = nullptr;
@@ -65,5 +68,6 @@ private:
   bool replayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
+  bool previousBestLoaded = false;
   bool resultPhotoExportInProgress = false;
 };

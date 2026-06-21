@@ -4,8 +4,10 @@
 #include "bms_parser.hpp"
 #include "context.h"
 #include "scene/play/RhythmState.h"
+#include "skin/SkinTypes.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 struct ResultImageExportResult {
@@ -19,7 +21,10 @@ public:
   static ResultImageExportResult Export(ApplicationContext &context,
                                         const bms_parser::ChartMeta &meta,
                                         const RhythmState &state,
-                                        const std::string &playModeLabel = {});
+                                        const std::string &playModeLabel = {},
+                                        const std::optional<
+                                            ResultPreviousBestData>
+                                            &previousBest = std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay);

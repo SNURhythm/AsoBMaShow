@@ -4,6 +4,7 @@
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
+#include "ScoreDBHelper.h"
 #include "Utils.h"
 #include "audio/decoder.h"
 #include "main.h"
@@ -2381,10 +2382,27 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                         rendering::window_height);
+    std::optional<ResultPreviousBestData> previousBest;
+    std::optional<std::string> beforeCreatedAt;
+    if (!replay.createdAt.empty()) {
+      beforeCreatedAt = replay.createdAt;
+    }
+    if (const auto best =
+            ScoreDBHelper::GetInstance().LoadBestScore(chart.Meta, beforeCreatedAt);
+        best.has_value()) {
+      previousBest = {.score = best->score,
+                      .maxScore = best->maxScore,
+                      .maxCombo = best->maxCombo,
+                      .comboBreak = best->comboBreak,
+                      .finalGauge = best->finalGauge,
+                      .clearType = best->clearType,
+                      .createdAt = best->createdAt};
+    }
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
     resultSkinData.playModeLabel = play_options::formatPlayModeLabel(replay);
+    resultSkinData.previousBest = previousBest;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultRoot->applyYogaLayout();

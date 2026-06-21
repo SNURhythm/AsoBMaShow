@@ -106,6 +106,17 @@ std::string resultPlayModeLabel(
   }
   return play_options::formatPlayModeLabel(meta, std::nullopt);
 }
+
+ResultPreviousBestData toResultPreviousBestData(
+    const ScoreBestSnapshot &snapshot) {
+  return {.score = snapshot.score,
+          .maxScore = snapshot.maxScore,
+          .maxCombo = snapshot.maxCombo,
+          .comboBreak = snapshot.comboBreak,
+          .finalGauge = snapshot.finalGauge,
+          .clearType = snapshot.clearType,
+          .createdAt = snapshot.createdAt};
+}
 } // namespace
 
 ResultScene::ResultScene(ApplicationContext &context,
@@ -138,6 +149,24 @@ void ResultScene::saveScore() {
 
   if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
     SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
+  }
+}
+
+void ResultScene::loadPreviousBest() {
+  if (previousBestLoaded) {
+    return;
+  }
+  previousBestLoaded = true;
+
+  std::optional<std::string> beforeCreatedAt;
+  if (!shouldSaveScore && retryData.has_value() && !retryData->createdAt.empty()) {
+    beforeCreatedAt = retryData->createdAt;
+  }
+
+  const auto best =
+      ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+  if (best.has_value()) {
+    previousBest = toResultPreviousBestData(*best);
   }
 }
 
@@ -257,8 +286,8 @@ void ResultScene::exportPhoto() {
 
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
-  const auto result =
-      ResultImageExporter::Export(context, meta, resultState, playModeLabel);
+  const auto result = ResultImageExporter::Export(
+      context, meta, resultState, playModeLabel, previousBest);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -436,6 +465,7 @@ void ResultScene::startReplay() {
 }
 
 void ResultScene::init() {
+  loadPreviousBest();
   saveScore();
   saveReplay();
 
@@ -445,6 +475,7 @@ void ResultScene::init() {
 
   ResultSkinData data = {&resultState, &meta, &context};
   data.playModeLabel = playModeLabel;
+  data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();
 

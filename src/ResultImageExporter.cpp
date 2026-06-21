@@ -3,6 +3,7 @@
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
+#include "ScoreDBHelper.h"
 #include "Utils.h"
 #include "path.h"
 #include "rendering/Color.h"
@@ -34,6 +35,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -387,10 +389,23 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
   batch.end();
 }
 
+ResultPreviousBestData toResultPreviousBestData(
+    const ScoreBestSnapshot &snapshot) {
+  return {.score = snapshot.score,
+          .maxScore = snapshot.maxScore,
+          .maxCombo = snapshot.maxCombo,
+          .comboBreak = snapshot.comboBreak,
+          .finalGauge = snapshot.finalGauge,
+          .clearType = snapshot.clearType,
+          .createdAt = snapshot.createdAt};
+}
+
 ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const bms_parser::ChartMeta &meta,
                                           const RhythmState &state,
                                           const std::string &playModeLabel,
+                                          const std::optional<ResultPreviousBestData>
+                                              &previousBest,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const int height = rendering::render_height;
@@ -458,6 +473,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
   resultSkinData.playModeLabel = playModeLabel;
+  resultSkinData.previousBest = previousBest;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
   resultRoot->applyYogaLayout();
@@ -511,7 +527,9 @@ ResultImageExportResult
 ResultImageExporter::Export(ApplicationContext &context,
                             const bms_parser::ChartMeta &meta,
                             const RhythmState &state,
-                            const std::string &playModeLabel) {
+                            const std::string &playModeLabel,
+                            const std::optional<ResultPreviousBestData>
+                                &previousBest) {
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("result_exports");
   std::filesystem::create_directories(outputDir, ec);
@@ -523,7 +541,8 @@ ResultImageExporter::Export(ApplicationContext &context,
   const auto outputPath =
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
-  return renderResultImage(context, meta, state, playModeLabel, outputPath);
+  return renderResultImage(context, meta, state, playModeLabel, previousBest,
+                           outputPath);
 }
 
 ResultImageExportResult
@@ -531,6 +550,16 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
                                   const ReplayData &replay) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
+  std::optional<ResultPreviousBestData> previousBest;
+  std::optional<std::string> beforeCreatedAt;
+  if (!replay.createdAt.empty()) {
+    beforeCreatedAt = replay.createdAt;
+  }
+  if (const auto best =
+          ScoreDBHelper::GetInstance().LoadBestScore(chart.Meta, beforeCreatedAt);
+      best.has_value()) {
+    previousBest = toResultPreviousBestData(*best);
+  }
   return Export(context, chart.Meta, state,
-                play_options::formatPlayModeLabel(replay));
+                play_options::formatPlayModeLabel(replay), previousBest);
 }
