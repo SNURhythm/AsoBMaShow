@@ -28,6 +28,7 @@
 
 namespace {
 constexpr long long kDefaultLatePoorTimingMicros = 200000LL;
+constexpr long long kJudgementTimingTextLingerMicros = 450000LL;
 constexpr const char *kHudFontPath = "assets/fonts/notosanscjkjp.ttf";
 constexpr size_t kHudCounterItemCount = 7;
 
@@ -1307,6 +1308,8 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     pendingScore.store(score, std::memory_order_relaxed);
     pendingCombo.store(combo, std::memory_order_relaxed);
     pendingJudgeDiffMicros.store(judgeResult.Diff, std::memory_order_relaxed);
+    pendingJudgeDisplayMicros.store(displayTimeMicros,
+                                    std::memory_order_relaxed);
     hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
@@ -1676,7 +1679,7 @@ float BMSRenderer::calculateLanePlaneScreenTopIntersection() {
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro) {
-  applyPendingHudText();
+  applyPendingHudText(micro);
   updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
@@ -1967,9 +1970,35 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   }
 }
 
-void BMSRenderer::applyPendingHudText() {
+void BMSRenderer::expireLingeringTimingText(long long currentMicros) {
+  if (renderedTimingTextUntilMicros <= 0 ||
+      currentMicros <= renderedTimingTextUntilMicros) {
+    return;
+  }
+
+  bool changed = false;
+  if (judgementTimingDirectionText != nullptr &&
+      judgementTimingDirectionText->getVisible()) {
+    judgementTimingDirectionText->setVisible(false);
+    judgementTimingDirectionText->setText("");
+    changed = true;
+  }
+  if (judgementTimingMsText != nullptr && judgementTimingMsText->getVisible()) {
+    judgementTimingMsText->setVisible(false);
+    judgementTimingMsText->setText("");
+    changed = true;
+  }
+  renderedTimingTextUntilMicros = 0;
+  if (changed) {
+    judgementLayoutWidth = 0;
+    judgementLayoutHeight = 0;
+  }
+}
+
+void BMSRenderer::applyPendingHudText(long long currentMicros) {
   const uint32_t revision = hudRevision.load(std::memory_order_acquire);
   if (revision == renderedHudRevision) {
+    expireLingeringTimingText(currentMicros);
     return;
   }
 
@@ -1979,6 +2008,8 @@ void BMSRenderer::applyPendingHudText() {
   const int combo = pendingCombo.load(std::memory_order_relaxed);
   const long long diffMicros =
       pendingJudgeDiffMicros.load(std::memory_order_relaxed);
+  const long long displayTimeMicros =
+      pendingJudgeDisplayMicros.load(std::memory_order_relaxed);
   renderedHudRevision = revision;
   renderedJudgement = judgement;
   renderedCombo = combo;
@@ -2019,24 +2050,42 @@ void BMSRenderer::applyPendingHudText() {
                                           : ui_theme::textPrimary()));
   }
   const Color timingColor = hudTimingColor(diffMicros);
+  const bool refreshedTimingText = showTimingDirection || showTimingMs;
+  if (refreshedTimingText) {
+    renderedTimingTextUntilMicros =
+        displayTimeMicros + kJudgementTimingTextLingerMicros;
+  }
+  const bool keepLingeringTimingText =
+      !refreshedTimingText &&
+      judgementTimingDisplayMode !=
+          AppSettings::JudgementTimingDisplayMode::Off &&
+      renderedTimingTextUntilMicros > currentMicros;
+  if (!refreshedTimingText && !keepLingeringTimingText) {
+    renderedTimingTextUntilMicros = 0;
+  }
   if (judgementTimingDirectionText != nullptr) {
-    judgementTimingDirectionText->setVisible(showTimingDirection);
-    judgementTimingDirectionText->setText(
-        showTimingDirection ? (diffMicros < 0 ? "FAST" : "SLOW") : "");
-    judgementTimingDirectionText->setColor(ui_theme::sdl(timingColor));
+    if (refreshedTimingText || !keepLingeringTimingText) {
+      judgementTimingDirectionText->setVisible(showTimingDirection);
+      judgementTimingDirectionText->setText(
+          showTimingDirection ? (diffMicros < 0 ? "FAST" : "SLOW") : "");
+      judgementTimingDirectionText->setColor(ui_theme::sdl(timingColor));
+    }
   }
   if (judgementTimingMsText != nullptr) {
     const long long absDiffMicros =
         diffMicros < 0 ? -diffMicros : diffMicros;
     const long long ms = (absDiffMicros + 500LL) / 1000LL;
-    judgementTimingMsText->setVisible(showTimingMs);
-    judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
-                                                : "");
-    const Color msColor =
-        judgementTimingDisplayMode == AppSettings::JudgementTimingDisplayMode::Ms
-            ? timingColor
-            : ui_theme::textSecondary();
-    judgementTimingMsText->setColor(ui_theme::sdl(msColor));
+    if (refreshedTimingText || !keepLingeringTimingText) {
+      judgementTimingMsText->setVisible(showTimingMs);
+      judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
+                                                  : "");
+      const Color msColor =
+          judgementTimingDisplayMode ==
+                  AppSettings::JudgementTimingDisplayMode::Ms
+              ? timingColor
+              : ui_theme::textSecondary();
+      judgementTimingMsText->setColor(ui_theme::sdl(msColor));
+    }
   }
 
   scoreText->setText("SCORE " + std::to_string(score));
@@ -2093,6 +2142,10 @@ void BMSRenderer::reset() {
   pendingScore.store(0, std::memory_order_relaxed);
   pendingCombo.store(0, std::memory_order_relaxed);
   pendingJudgeDiffMicros.store(0, std::memory_order_relaxed);
+  pendingJudgeDisplayMicros.store(0, std::memory_order_relaxed);
+  renderedTimingTextUntilMicros = 0;
+  renderedTimingFastShown = false;
+  renderedTimingSlowShown = false;
   hudRevision.fetch_add(1, std::memory_order_release);
   publishJudgementCounterSnapshot({});
   renderedJudgementCounterSnapshot = {};

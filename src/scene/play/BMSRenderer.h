@@ -116,10 +116,12 @@ private:
   std::atomic<int> pendingScore{0};
   std::atomic<int> pendingCombo{0};
   std::atomic<long long> pendingJudgeDiffMicros{0};
+  std::atomic<long long> pendingJudgeDisplayMicros{0};
   Judgement renderedJudgement = None;
   int renderedCombo = 0;
   bool renderedTimingFastShown = false;
   bool renderedTimingSlowShown = false;
+  long long renderedTimingTextUntilMicros = 0;
   std::array<std::atomic<int>, kJudgementCounterItemCount>
       judgementCounterValues{};
   std::atomic<uint32_t> judgementCounterRevision{1};
@@ -239,7 +241,8 @@ private:
   double calculateMostPrevalentBpm() const;
   double visibleTimeReferenceBpm() const;
   double scrollPositionAtTime(long long timeMicros) const;
-  void applyPendingHudText();
+  void applyPendingHudText(long long currentMicros);
+  void expireLingeringTimingText(long long currentMicros);
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
                                          int width, int height,
