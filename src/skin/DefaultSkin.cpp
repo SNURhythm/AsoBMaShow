@@ -201,7 +201,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   header->setFlexDirection(FlexDirection::Row);
   header->setAlignItems(YGAlignCenter);
   header->setGap(20);
-  header->setMinHeight(data->playModeLabel.empty() ? 96 : 122);
+  header->setMinHeight(96);
 
   auto *titleStack = new View();
   titleStack->setFlexDirection(FlexDirection::Column);
@@ -223,15 +223,6 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   artistText->setName("artist");
   titleStack->addView(artistText);
 
-  if (!data->playModeLabel.empty()) {
-    auto playModeText = new TextView("assets/fonts/notosanscjkjp.ttf", 23);
-    playModeText->setText("PLAY MODE: " + data->playModeLabel);
-    playModeText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-    playModeText->setHeight(34);
-    playModeText->setOverflow(TextView::TextOverflow::Hidden);
-    playModeText->setName("playMode");
-    titleStack->addView(playModeText);
-  }
   header->addView(titleStack);
   rootLayout->addView(header);
 
@@ -516,12 +507,13 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
 
   auto addInfoTile = [&](const std::string &label, const std::string &value,
                          const std::string &subValue, Color accent,
-                         Color valueColor = ui_theme::textPrimary()) {
+                         Color valueColor = ui_theme::textPrimary(),
+                         float flexGrow = 1.0f, int valueSize = 31) {
     if (!infoGrid->getChildren().empty()) {
       infoGrid->addView(makeDivider());
     }
     auto *tile = new View();
-    tile->setFlexGrow(1);
+    tile->setFlexGrow(flexGrow);
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
@@ -535,7 +527,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     labelView->setOverflow(TextView::TextOverflow::Hidden);
     tile->addView(labelView);
 
-    auto *valueView = makeLabel(value, 31, valueColor);
+    auto *valueView = makeLabel(value, valueSize, valueColor);
     valueView->setHeight(38);
     valueView->setAlign(TextView::CENTER);
     valueView->setOverflow(TextView::TextOverflow::Hidden);
@@ -564,6 +556,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
               ui_theme::violetActionHover());
   addInfoTile("KEY MODE", formatKeyModeLabel(meta), difficultyLabel,
               ui_theme::coral());
+  addInfoTile("PLAY MODE",
+              data->playModeLabel.empty() ? std::string("NORMAL")
+                                          : data->playModeLabel,
+              "", ui_theme::amber(), ui_theme::amber(), 2.0f, 25);
   rootLayout->addView(infoGrid);
 
   auto detailsGrid =
@@ -702,15 +698,15 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   actionsRow->setGap(14);
   actionsRow->setName("resultActions");
 
-  auto btn = new Button(0, 0, 300, 80);
-  auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
+  auto btn = new Button(0, 0, 232, 64);
+  auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   btnText->setText("Back to Menu");
   btnText->setAlign(TextView::CENTER);
   btnText->setVAlign(TextView::MIDDLE);
   btnText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
   btn->setContentView(btnText);
   btn->setName("backButton");
-  btn->setSize(252, 70);
+  btn->setSize(232, 64);
   btn->setCornerRadius(ui_theme::controlRadius());
   btn->setBackgroundColors(
       ui_theme::withAlpha(ui_theme::primaryAction(), 182),
