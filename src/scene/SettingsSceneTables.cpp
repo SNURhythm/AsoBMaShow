@@ -75,8 +75,8 @@ void SettingsScene::loadChartEntries() {
   sqlite3 *settingsDb = settingsDbHandle.get();
   if (settingsDb == nullptr) {
     chartEntries.clear();
-    difficultyTableStatusMessage = "Could not open chart database.";
-    difficultyTableStatusColor = {255, 177, 170, 255};
+    chartFolderStatusMessage = "Could not open chart database.";
+    chartFolderStatusColor = {255, 177, 170, 255};
     return;
   }
 
@@ -122,6 +122,16 @@ void SettingsScene::refreshChartEntryBackupStatuses() {
 
 void SettingsScene::toggleChartEntryICloudBackup(
     const std::string &entryPathText) {
+  auto setFolderStatus = [this](const std::string &message,
+                                const SDL_Color &color) {
+    chartFolderStatusMessage = message;
+    chartFolderStatusColor = color;
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
+    }
+  };
+
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const auto entryIt =
       std::find_if(chartEntries.begin(), chartEntries.end(),
@@ -129,12 +139,7 @@ void SettingsScene::toggleChartEntryICloudBackup(
                      return formatChartEntryPath(entry) == entryPathText;
                    });
   if (entryIt == chartEntries.end()) {
-    difficultyTableStatusMessage = "Folder entry was not found.";
-    difficultyTableStatusColor = {255, 177, 170, 255};
-    if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
-      difficultyTableStatusText->setColor(difficultyTableStatusColor);
-    }
+    setFolderStatus("Folder entry was not found.", {255, 177, 170, 255});
     return;
   }
 
@@ -148,48 +153,28 @@ void SettingsScene::toggleChartEntryICloudBackup(
   std::string errorMessage;
   if (!GetIOSFileExcludedFromBackup(access.resolvedPath, excluded,
                                     errorMessage)) {
-    difficultyTableStatusMessage =
-        "Could not check iCloud Backup: " + errorMessage;
-    difficultyTableStatusColor = {255, 177, 170, 255};
-    if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
-      difficultyTableStatusText->setColor(difficultyTableStatusColor);
-    }
+    setFolderStatus("Could not check iCloud Backup: " + errorMessage,
+                    {255, 177, 170, 255});
     return;
   }
 
   const bool shouldExclude = !excluded;
   if (!SetIOSFileExcludedFromBackup(access.resolvedPath, shouldExclude,
                                     errorMessage)) {
-    difficultyTableStatusMessage =
-        "Could not update iCloud Backup: " + errorMessage;
-    difficultyTableStatusColor = {255, 177, 170, 255};
-    if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
-      difficultyTableStatusText->setColor(difficultyTableStatusColor);
-    }
+    setFolderStatus("Could not update iCloud Backup: " + errorMessage,
+                    {255, 177, 170, 255});
     return;
   }
 
   chartEntryICloudBackupExcluded[entryPathText] = shouldExclude;
-  difficultyTableStatusMessage =
-      shouldExclude ? "iCloud Backup disabled for folder."
-                    : "iCloud Backup enabled for folder.";
-  difficultyTableStatusColor = {181, 228, 165, 255};
-  if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
-    difficultyTableStatusText->setColor(difficultyTableStatusColor);
-  }
+  setFolderStatus(shouldExclude ? "iCloud Backup disabled for folder."
+                                : "iCloud Backup enabled for folder.",
+                  {181, 228, 165, 255});
   lastLayoutWidth = -1;
 #else
   (void)entryPathText;
-  difficultyTableStatusMessage =
-      "iCloud Backup settings are only available on iOS.";
-  difficultyTableStatusColor = {255, 177, 170, 255};
-  if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
-    difficultyTableStatusText->setColor(difficultyTableStatusColor);
-  }
+  setFolderStatus("iCloud Backup settings are only available on iOS.",
+                  {255, 177, 170, 255});
 #endif
 }
 
@@ -200,6 +185,16 @@ void SettingsScene::requestDifficultyTableStatus(const std::string &text,
   pendingDifficultyTableStatus = true;
   pendingDifficultyTableStatusText = text;
   pendingDifficultyTableStatusColor = color;
+  pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
+}
+
+void SettingsScene::requestChartFolderStatus(const std::string &text,
+                                             const SDL_Color &color,
+                                             bool reloadTables) {
+  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
+  pendingChartFolderStatus = true;
+  pendingChartFolderStatusText = text;
+  pendingChartFolderStatusColor = color;
   pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
 }
 
@@ -229,6 +224,15 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
         difficultyTableStatusText->setColor(difficultyTableStatusColor);
       }
       pendingDifficultyTableStatus = false;
+    }
+    if (pendingChartFolderStatus) {
+      chartFolderStatusMessage = pendingChartFolderStatusText;
+      chartFolderStatusColor = pendingChartFolderStatusColor;
+      if (chartFolderStatusText != nullptr) {
+        chartFolderStatusText->setText(chartFolderStatusMessage);
+        chartFolderStatusText->setColor(chartFolderStatusColor);
+      }
+      pendingChartFolderStatus = false;
     }
     if (pendingDifficultyTableImportProgress) {
       difficultyTableImportCurrent = pendingDifficultyTableImportCurrent;
@@ -538,11 +542,11 @@ void SettingsScene::refreshChartLibrary() {
   difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = "Refreshing chart list...";
-  difficultyTableStatusColor = {239, 244, 251, 255};
-  if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
-    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  chartFolderStatusMessage = "Refreshing chart list...";
+  chartFolderStatusColor = {239, 244, 251, 255};
+  if (chartFolderStatusText != nullptr) {
+    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
   difficultyTableJobThread =
@@ -552,8 +556,8 @@ void SettingsScene::refreshChartLibrary() {
         sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {
           if (!token.stop_requested()) {
-            requestDifficultyTableStatus("Could not open chart database.",
-                                         {255, 177, 170, 255});
+            requestChartFolderStatus("Could not open chart database.",
+                                     {255, 177, 170, 255});
             difficultyTableJobRunning = false;
           }
           return;
@@ -615,7 +619,7 @@ void SettingsScene::refreshChartLibrary() {
           statusText = "Chart list refreshed. Updated " +
                        std::to_string(changedCount) + " chart entries.";
         }
-        requestDifficultyTableStatus(
+        requestChartFolderStatus(
             statusText,
             succeeded ? SDL_Color{181, 228, 165, 255}
                       : SDL_Color{255, 177, 170, 255},
@@ -632,8 +636,6 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   if (pendingDeleteChartEntryPath != entryPathText) {
     pendingDeleteChartEntryPath = entryPathText;
     pendingDeleteDifficultyTableId = 0;
-    difficultyTableStatusMessage = "Tap Confirm on that folder to remove it.";
-    difficultyTableStatusColor = {255, 213, 151, 255};
     lastLayoutWidth = -1;
     return;
   }
@@ -644,11 +646,11 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
   difficultyTableJobRunning = true;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = "Removing folder...";
-  difficultyTableStatusColor = {239, 244, 251, 255};
-  if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
-    difficultyTableStatusText->setColor(difficultyTableStatusColor);
+  chartFolderStatusMessage = "Removing folder...";
+  chartFolderStatusColor = {239, 244, 251, 255};
+  if (chartFolderStatusText != nullptr) {
+    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
   difficultyTableJobThread =
@@ -658,8 +660,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {
           if (!token.stop_requested()) {
-            requestDifficultyTableStatus("Could not open chart database.",
-                                         {255, 177, 170, 255});
+            requestChartFolderStatus("Could not open chart database.",
+                                     {255, 177, 170, 255});
             difficultyTableJobRunning = false;
           }
           return;
@@ -677,8 +679,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
         if (entryIt == entries.end()) {
           if (!token.stop_requested()) {
-            requestDifficultyTableStatus("Folder entry was not found.",
-                                         {255, 177, 170, 255}, true);
+            requestChartFolderStatus("Folder entry was not found.",
+                                     {255, 177, 170, 255}, true);
             difficultyTableJobRunning = false;
           }
           return;
@@ -711,10 +713,10 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         } else {
           statusText = "Remove failed.";
         }
-        requestDifficultyTableStatus(statusText,
-                                     removed ? SDL_Color{181, 228, 165, 255}
-                                             : SDL_Color{255, 177, 170, 255},
-                                     true);
+        requestChartFolderStatus(statusText,
+                                 removed ? SDL_Color{181, 228, 165, 255}
+                                         : SDL_Color{255, 177, 170, 255},
+                                 true);
         difficultyTableJobRunning = false;
       });
 }

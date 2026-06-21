@@ -82,6 +82,7 @@ void SettingsScene::resetViewState() {
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  chartFolderStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
   difficultyTableImportProgressFill = nullptr;
   difficultyTableImportTitleText = nullptr;
@@ -100,6 +101,12 @@ void SettingsScene::ensureLayoutUpToDate() {
     return;
   }
 
+  const bool preserveScroll =
+      rootLayout != nullptr && scrollView != nullptr &&
+      activeTab == lastLaidOutTab;
+  const float preservedScrollOffset =
+      preserveScroll ? scrollView->getScrollOffset() : 0.0f;
+
   resetViewState();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
@@ -108,6 +115,10 @@ void SettingsScene::ensureLayoutUpToDate() {
   lastSafeBottom = safe.bottom;
   lastSafeRight = safe.right;
   initView();
+  lastLaidOutTab = activeTab;
+  if (preserveScroll && scrollView != nullptr) {
+    scrollView->setScrollOffset(preservedScrollOffset);
+  }
 }
 
 View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
@@ -1457,6 +1468,9 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
   loadChartEntries();
   refreshChartEntryBackupStatuses();
 
+  const int tableCardWidth =
+      metrics.useDualCardRow ? metrics.secondaryCardWidth : metrics.cardsWidth;
+
   auto *addControls = new View();
   addControls->setFlexDirection(FlexDirection::Column);
   addControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -1500,24 +1514,145 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
             difficultyTableStatusColor.b, difficultyTableStatusColor.a));
   addControls->addView(difficultyTableStatusText);
 
-  cardsColumn->addView(makeCard(
+  auto *addTableCard = makeCard(
       metrics, "Add Difficulty Table",
       metrics.compact ? "Import a bmstable page, header, or table list URL."
                       : "Import a bmstable page URL or a direct header JSON "
                         "URL. Table-list JSON URLs import each listed table.",
-      addControls, metrics.modeCardHeight, metrics.cardsWidth));
+      addControls, metrics.modeCardHeight, tableCardWidth);
+
+  auto *tableList = new View();
+  tableList->setFlexDirection(FlexDirection::Column);
+  tableList->setGap(metrics.compact ? 10.0f : 12.0f);
+
+  if (difficultyTables.empty()) {
+    tableList->addView(makeWrappedText("No difficulty tables are installed.",
+                                       metrics.bodyTextSize,
+                                       ui_theme::textSecondary()));
+  } else {
+    for (const auto &table : difficultyTables) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Column);
+      row->setGap(metrics.compact ? 8.0f : 10.0f);
+      row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
+      row->setThemedBackgroundColor(ui_theme::panelSubtle);
+      row->setCornerRadius(ui_theme::controlRadius());
+      row->setThemedBorderColor(ui_theme::hairline);
+      row->setBorderWidth(1);
+
+      auto *titleRow = new View();
+      titleRow->setFlexDirection(FlexDirection::Row);
+      titleRow->setFlexWrap(YGWrapWrap);
+      titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
+      titleRow->setAlignItems(YGAlignCenter);
+      titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
+                                        ui_theme::textPrimary()));
+      titleRow->addView(
+          makeText(table.symbol, metrics.bodyTextSize, ui_theme::cyan()));
+      titleRow->addView(makeText(formatTableCount(table.chartCount),
+                                 metrics.bodyTextSize,
+                                 ui_theme::textSecondary()));
+      row->addView(titleRow);
+
+      row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
+                                   metrics.smallTextSize,
+                                   ui_theme::textMuted()));
+
+      auto *actions = new View();
+      actions->setFlexDirection(FlexDirection::Row);
+      actions->setFlexWrap(YGWrapWrap);
+      actions->setGap(metrics.compact ? 8.0f : 10.0f);
+
+      const int smallActionWidth = metrics.compact ? 136 : 156;
+      auto *updateButton = makeControlButton(
+          smallActionWidth, metrics.actionButtonHeight,
+          makeText("Update", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      updateButton->setOnClickListener([this, tableId = table.id]() {
+        updateDifficultyTableFromSource(tableId);
+      });
+      actions->addView(updateButton);
+
+      const bool confirmingDelete = pendingDeleteDifficultyTableId == table.id;
+      auto *deleteButton = makeAccentButton(
+          smallActionWidth, metrics.actionButtonHeight,
+          makeText(confirmingDelete ? "Confirm" : "Delete",
+                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          ui_theme::coral());
+      deleteButton->setOnClickListener(
+          [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
+      actions->addView(deleteButton);
+
+      row->addView(actions);
+      tableList->addView(row);
+    }
+  }
+
+  auto *installedTablesCard = makeCard(
+      metrics, "Installed Tables",
+      metrics.compact ? "Update from source URL or remove a table."
+                      : "Update a table from its stored source URL or remove "
+                        "it from the chart database.",
+      tableList, metrics.modeCardHeight, tableCardWidth);
+
+  auto *tableCards = new View();
+  tableCards->setFlexDirection(
+      metrics.useDualCardRow ? FlexDirection::Row : FlexDirection::Column);
+  tableCards->setGap(static_cast<float>(metrics.secondaryGap));
+  tableCards->addView(addTableCard);
+  tableCards->addView(installedTablesCard);
+  cardsColumn->addView(tableCards);
 
   auto *folderList = new View();
   folderList->setFlexDirection(FlexDirection::Column);
   folderList->setGap(metrics.compact ? 10.0f : 12.0f);
 
+  auto *folderActions = new View();
+  folderActions->setFlexDirection(FlexDirection::Row);
+  folderActions->setFlexWrap(YGWrapWrap);
+  folderActions->setGap(metrics.compact ? 8.0f : 10.0f);
+  folderActions->setAlignItems(YGAlignFlexStart);
+
   auto *refreshFoldersButton = makeAccentButton(
-      metrics.compact ? 160 : 180, metrics.actionButtonHeight,
+      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
       makeText("Refresh List", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
-  folderList->addView(refreshFoldersButton);
+  folderActions->addView(refreshFoldersButton);
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  auto *addFolderButton = makeAccentButton(
+      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+      makeText("Add Folder", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      ui_theme::cyan());
+  addFolderButton->setOnClickListener([this]() {
+    if (context.requestAddChartFolderFromFiles) {
+      context.requestAddChartFolderFromFiles();
+      chartFolderStatusMessage = "Choose a folder to add.";
+      chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+    } else {
+      chartFolderStatusMessage = "Add Folder is unavailable.";
+      chartFolderStatusColor = {255, 177, 170, 255};
+    }
+
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
+    }
+  });
+  folderActions->addView(addFolderButton);
+#endif
+
+  folderList->addView(folderActions);
+
+  chartFolderStatusText = makeWrappedText(
+      chartFolderStatusMessage, metrics.bodyTextSize,
+      Color(chartFolderStatusColor.r, chartFolderStatusColor.g,
+            chartFolderStatusColor.b, chartFolderStatusColor.a));
+  folderList->addView(chartFolderStatusText);
 
   if (chartEntries.empty()) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
@@ -1592,81 +1727,6 @@ View *SettingsScene::buildTablesTab(const LayoutMetrics &metrics) {
                       : "Remove a folder entry and cached charts under it "
                         "from the library database.",
       folderList, metrics.modeCardHeight, metrics.cardsWidth));
-
-  auto *tableList = new View();
-  tableList->setFlexDirection(FlexDirection::Column);
-  tableList->setGap(metrics.compact ? 10.0f : 12.0f);
-
-  if (difficultyTables.empty()) {
-    tableList->addView(makeWrappedText("No difficulty tables are installed.",
-                                       metrics.bodyTextSize,
-                                       ui_theme::textSecondary()));
-  } else {
-    for (const auto &table : difficultyTables) {
-      auto *row = new View();
-      row->setFlexDirection(FlexDirection::Column);
-      row->setGap(metrics.compact ? 8.0f : 10.0f);
-      row->setPadding(Edge::All, static_cast<float>(metrics.compact ? 14 : 16));
-      row->setThemedBackgroundColor(ui_theme::panelSubtle);
-      row->setCornerRadius(ui_theme::controlRadius());
-      row->setThemedBorderColor(ui_theme::hairline);
-      row->setBorderWidth(1);
-
-      auto *titleRow = new View();
-      titleRow->setFlexDirection(FlexDirection::Row);
-      titleRow->setFlexWrap(YGWrapWrap);
-      titleRow->setGap(metrics.compact ? 8.0f : 12.0f);
-      titleRow->setAlignItems(YGAlignCenter);
-      titleRow->addView(makeWrappedText(table.name, metrics.bodyTextSize + 6,
-                                        ui_theme::textPrimary()));
-      titleRow->addView(
-          makeText(table.symbol, metrics.bodyTextSize, ui_theme::cyan()));
-      titleRow->addView(makeText(formatTableCount(table.chartCount),
-                                 metrics.bodyTextSize,
-                                 ui_theme::textSecondary()));
-      row->addView(titleRow);
-
-      row->addView(makeWrappedText(formatTableSource(table.sourceUrl),
-                                   metrics.smallTextSize,
-                                   ui_theme::textMuted()));
-
-      auto *actions = new View();
-      actions->setFlexDirection(FlexDirection::Row);
-      actions->setFlexWrap(YGWrapWrap);
-      actions->setGap(metrics.compact ? 8.0f : 10.0f);
-
-      const int smallActionWidth = metrics.compact ? 136 : 156;
-      auto *updateButton = makeControlButton(
-          smallActionWidth, metrics.actionButtonHeight,
-          makeText("Update", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      updateButton->setOnClickListener([this, tableId = table.id]() {
-        updateDifficultyTableFromSource(tableId);
-      });
-      actions->addView(updateButton);
-
-      const bool confirmingDelete = pendingDeleteDifficultyTableId == table.id;
-      auto *deleteButton = makeAccentButton(
-          smallActionWidth, metrics.actionButtonHeight,
-          makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE),
-          ui_theme::coral());
-      deleteButton->setOnClickListener(
-          [this, tableId = table.id]() { deleteDifficultyTable(tableId); });
-      actions->addView(deleteButton);
-
-      row->addView(actions);
-      tableList->addView(row);
-    }
-  }
-
-  cardsColumn->addView(makeCard(
-      metrics, "Installed Tables",
-      metrics.compact ? "Update from source URL or remove a table."
-                      : "Update a table from its stored source URL or remove "
-                        "it from the chart database.",
-      tableList, metrics.modeCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
 

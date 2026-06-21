@@ -115,6 +115,7 @@ private:
   TextInputBox *noteStartPositionInput = nullptr;
   TextInputBox *tableUrlInput = nullptr;
   TextView *difficultyTableStatusText = nullptr;
+  TextView *chartFolderStatusText = nullptr;
   View *difficultyTableImportModalRoot = nullptr;
   View *difficultyTableImportProgressFill = nullptr;
   TextView *difficultyTableImportTitleText = nullptr;
@@ -141,6 +142,7 @@ private:
   std::atomic_bool difficultyTableJobRunning = false;
   std::mutex difficultyTableStatusMutex;
   bool pendingDifficultyTableStatus = false;
+  bool pendingChartFolderStatus = false;
   bool pendingDifficultyTableReload = false;
   bool pendingDifficultyTableImportProgress = false;
   bool pendingDifficultyTableImportFinished = false;
@@ -150,9 +152,13 @@ private:
   std::string pendingDifficultyTableImportName;
   std::string pendingDifficultyTableImportStatusText;
   std::string pendingDifficultyTableStatusText;
+  std::string pendingChartFolderStatusText;
   SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
+  SDL_Color pendingChartFolderStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
+  std::string chartFolderStatusMessage;
+  SDL_Color chartFolderStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;
   bool difficultyTableImportSucceeded = false;
@@ -170,6 +176,7 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
+  SettingsTab lastLaidOutTab = SettingsTab::Timing;
 
   void initView();
   void resetViewState();
@@ -199,6 +206,9 @@ private:
   void requestDifficultyTableStatus(const std::string &text,
                                     const SDL_Color &color,
                                     bool reloadTables = false);
+  void requestChartFolderStatus(const std::string &text,
+                                const SDL_Color &color,
+                                bool reloadTables = false);
   void requestDifficultyTableImportProgress(int current, int total,
                                             const std::string &tableName,
                                             const std::string &statusText,

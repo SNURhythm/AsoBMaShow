@@ -141,6 +141,7 @@ void SettingsScene::cleanupScene() {
   noteStartPositionInput = nullptr;
   tableUrlInput = nullptr;
   difficultyTableStatusText = nullptr;
+  chartFolderStatusText = nullptr;
   difficultyTableImportModalRoot = nullptr;
   difficultyTableImportProgressFill = nullptr;
   difficultyTableImportTitleText = nullptr;
