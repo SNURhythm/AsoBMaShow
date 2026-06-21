@@ -9,8 +9,7 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
 bool prepareShadowRenderContext(const RenderContext &context,
-                                RenderContext &shadowContext, int x, int y,
-                                int width, int height, int spread,
+                                RenderContext &shadowContext, int spread,
                                 int offsetX, int offsetY) {
   shadowContext = context;
   if (context.scissor.width < 0 || context.scissor.height < 0) {
@@ -18,19 +17,6 @@ bool prepareShadowRenderContext(const RenderContext &context,
   }
 
   if (context.scissor.width <= 0 || context.scissor.height <= 0) {
-    return false;
-  }
-
-  const int clipLeft = context.scissor.x;
-  const int clipTop = context.scissor.y;
-  const int clipRight = context.scissor.x + context.scissor.width;
-  const int clipBottom = context.scissor.y + context.scissor.height;
-  const int ownerLeft = x;
-  const int ownerTop = y;
-  const int ownerRight = x + width;
-  const int ownerBottom = y + height;
-  if (ownerRight <= clipLeft || ownerLeft >= clipRight ||
-      ownerBottom <= clipTop || ownerTop >= clipBottom) {
     return false;
   }
 
@@ -582,9 +568,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
 
   if (hasShadow) {
     RenderContext shadowContext;
-    if (prepareShadowRenderContext(context, shadowContext, x, y, width, height,
-                                   shadowSpread, shadowOffsetX,
-                                   shadowOffsetY)) {
+    if (prepareShadowRenderContext(context, shadowContext, shadowSpread,
+                                   shadowOffsetX, shadowOffsetY)) {
       submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
                        width, height, cornerRadius, shadowSpread, shadowColor);
     }
