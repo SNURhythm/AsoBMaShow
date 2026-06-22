@@ -260,6 +260,8 @@ int judgementTimingCriteriaRank(
     return 2;
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
     return 3;
+  case AppSettings::JudgementTimingDisplayCriteria::Off:
+    return 100;
   }
   return 1;
 }
@@ -2015,23 +2017,13 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   renderedCombo = combo;
 
   const bool hasJudgement = judgement != None;
-  const bool hasTiming = hasJudgement && diffMicros != 0 &&
-                         judgementMeetsTimingCriteria(
-                             judgement, judgementTimingDisplayCriteria) &&
-                         judgementTimingDisplayMode !=
-                             AppSettings::JudgementTimingDisplayMode::Off;
+  const bool hasTiming = hasJudgement && diffMicros != 0;
   const bool showTimingDirection =
-      hasTiming &&
-      (judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Both ||
-       judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Direction);
+      hasTiming && judgementMeetsTimingCriteria(
+                       judgement, judgementTimingFastSlowCriteria);
   const bool showTimingMs =
-      hasTiming &&
-      (judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Both ||
-       judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Ms);
+      hasTiming && judgementMeetsTimingCriteria(
+                       judgement, judgementTimingMillisecondsCriteria);
   renderedTimingFastShown = showTimingDirection && diffMicros < 0;
   renderedTimingSlowShown = showTimingDirection && diffMicros > 0;
   if (judgeText != nullptr) {
@@ -2057,8 +2049,10 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   }
   const bool keepLingeringTimingText =
       !refreshedTimingText &&
-      judgementTimingDisplayMode !=
-          AppSettings::JudgementTimingDisplayMode::Off &&
+      (judgementTimingFastSlowCriteria !=
+           AppSettings::JudgementTimingDisplayCriteria::Off ||
+       judgementTimingMillisecondsCriteria !=
+           AppSettings::JudgementTimingDisplayCriteria::Off) &&
       renderedTimingTextUntilMicros > currentMicros;
   if (!refreshedTimingText && !keepLingeringTimingText) {
     renderedTimingTextUntilMicros = 0;
@@ -2079,12 +2073,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
       judgementTimingMsText->setVisible(showTimingMs);
       judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
                                                   : "");
-      const Color msColor =
-          judgementTimingDisplayMode ==
-                  AppSettings::JudgementTimingDisplayMode::Ms
-              ? timingColor
-              : ui_theme::textSecondary();
-      judgementTimingMsText->setColor(ui_theme::sdl(msColor));
+      judgementTimingMsText->setColor(ui_theme::sdl(timingColor));
     }
   }
 
@@ -2241,21 +2230,21 @@ void BMSRenderer::setJudgementCounterPosition(
       judgementCounterRevision.load(std::memory_order_relaxed) - 1;
 }
 
-void BMSRenderer::setJudgementTimingDisplayMode(
-    AppSettings::JudgementTimingDisplayMode mode) {
-  if (judgementTimingDisplayMode == mode) {
+void BMSRenderer::setJudgementTimingFastSlowCriteria(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  if (judgementTimingFastSlowCriteria == criteria) {
     return;
   }
-  judgementTimingDisplayMode = mode;
+  judgementTimingFastSlowCriteria = criteria;
   hudRevision.fetch_add(1, std::memory_order_release);
 }
 
-void BMSRenderer::setJudgementTimingDisplayCriteria(
+void BMSRenderer::setJudgementTimingMillisecondsCriteria(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
-  if (judgementTimingDisplayCriteria == criteria) {
+  if (judgementTimingMillisecondsCriteria == criteria) {
     return;
   }
-  judgementTimingDisplayCriteria = criteria;
+  judgementTimingMillisecondsCriteria = criteria;
   hudRevision.fetch_add(1, std::memory_order_release);
 }
 

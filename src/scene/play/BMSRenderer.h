@@ -169,10 +169,11 @@ private:
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;
-  AppSettings::JudgementTimingDisplayMode judgementTimingDisplayMode =
-      AppSettings::JudgementTimingDisplayMode::Both;
-  AppSettings::JudgementTimingDisplayCriteria judgementTimingDisplayCriteria =
+  AppSettings::JudgementTimingDisplayCriteria judgementTimingFastSlowCriteria =
       AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
+  AppSettings::JudgementTimingDisplayCriteria
+      judgementTimingMillisecondsCriteria =
+          AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
   AppSettings::GaugeBarPosition gaugeBarPosition =
       AppSettings::GaugeBarPosition::World;
   GaugeType currentGaugeType = GaugeType::Normal;
@@ -296,9 +297,9 @@ public:
   void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(
       AppSettings::JudgementCounterPosition position);
-  void setJudgementTimingDisplayMode(
-      AppSettings::JudgementTimingDisplayMode mode);
-  void setJudgementTimingDisplayCriteria(
+  void setJudgementTimingFastSlowCriteria(
+      AppSettings::JudgementTimingDisplayCriteria criteria);
+  void setJudgementTimingMillisecondsCriteria(
       AppSettings::JudgementTimingDisplayCriteria criteria);
   void setJudgementCounter(Judgement judgement, int count, int comboBreak);
   void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,

@@ -205,12 +205,12 @@ void SettingsScene::refreshSettingsText() {
   const std::string judgementCounterSummaryLabel =
       context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
                                                : "Disabled";
-  const std::string judgementTimingDisplayLabel =
-      formatJudgementTimingDisplayModeLabel(
-          context.settings.judgementTimingDisplayMode);
-  const std::string judgementTimingCriteriaLabel =
+  const std::string judgementTimingFastSlowLabel =
       formatJudgementTimingDisplayCriteriaLabel(
-          context.settings.judgementTimingDisplayCriteria);
+          context.settings.judgementTimingFastSlowCriteria);
+  const std::string judgementTimingMillisecondsLabel =
+      formatJudgementTimingDisplayCriteriaLabel(
+          context.settings.judgementTimingMillisecondsCriteria);
   const std::string gaugeBarPositionLabel =
       formatGaugeBarPositionLabel(context.settings.gaugeBarPosition);
   const std::string uiThemeLabel =
@@ -278,13 +278,13 @@ void SettingsScene::refreshSettingsText() {
     summaryJudgementCounterPositionValueText->setText(
         judgementCounterSummaryLabel);
   }
-  if (summaryJudgementTimingDisplayValueText != nullptr) {
-    summaryJudgementTimingDisplayValueText->setText(
-        judgementTimingDisplayLabel);
+  if (summaryJudgementTimingFastSlowValueText != nullptr) {
+    summaryJudgementTimingFastSlowValueText->setText(
+        judgementTimingFastSlowLabel);
   }
-  if (summaryJudgementTimingCriteriaValueText != nullptr) {
-    summaryJudgementTimingCriteriaValueText->setText(
-        judgementTimingCriteriaLabel);
+  if (summaryJudgementTimingMillisecondsValueText != nullptr) {
+    summaryJudgementTimingMillisecondsValueText->setText(
+        judgementTimingMillisecondsLabel);
   }
   if (summaryGaugeBarPositionValueText != nullptr) {
     summaryGaugeBarPositionValueText->setText(gaugeBarPositionLabel);
@@ -322,11 +322,13 @@ void SettingsScene::refreshSettingsText() {
   if (judgementCounterModeText != nullptr) {
     judgementCounterModeText->setText(judgementCounterModeLabel);
   }
-  if (judgementTimingDisplayModeText != nullptr) {
-    judgementTimingDisplayModeText->setText(judgementTimingDisplayLabel);
+  if (judgementTimingFastSlowCriteriaText != nullptr) {
+    judgementTimingFastSlowCriteriaText->setText(
+        judgementTimingFastSlowLabel);
   }
-  if (judgementTimingCriteriaText != nullptr) {
-    judgementTimingCriteriaText->setText(judgementTimingCriteriaLabel);
+  if (judgementTimingMillisecondsCriteriaText != nullptr) {
+    judgementTimingMillisecondsCriteriaText->setText(
+        judgementTimingMillisecondsLabel);
   }
   if (gaugeBarPositionText != nullptr) {
     gaugeBarPositionText->setText(gaugeBarPositionLabel);
@@ -401,30 +403,33 @@ void SettingsScene::refreshSettingsText() {
   applySemanticButtonStyle(
       judgementCounterPositionButton, judgementCounterPositionText,
       judgementCounterPositionTone);
-  SettingsButtonTone judgementTimingDisplayTone = SettingsButtonTone::Info;
-  if (context.settings.judgementTimingDisplayMode ==
-      AppSettings::JudgementTimingDisplayMode::Off) {
-    judgementTimingDisplayTone = SettingsButtonTone::Danger;
-  } else if (context.settings.judgementTimingDisplayMode ==
-             AppSettings::JudgementTimingDisplayMode::Both) {
-    judgementTimingDisplayTone = SettingsButtonTone::Success;
-  }
-  applySemanticButtonStyle(judgementTimingDisplayModeButton,
-                           judgementTimingDisplayModeText,
-                           judgementTimingDisplayTone);
-  SettingsButtonTone judgementTimingCriteriaTone = SettingsButtonTone::Info;
-  if (context.settings.judgementTimingDisplayCriteria ==
-          AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow ||
-      context.settings.judgementTimingDisplayCriteria ==
-          AppSettings::JudgementTimingDisplayCriteria::BadOrBelow) {
-    judgementTimingCriteriaTone = SettingsButtonTone::Success;
-  } else if (context.settings.judgementTimingDisplayCriteria ==
-             AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow) {
-    judgementTimingCriteriaTone = SettingsButtonTone::Warning;
-  }
-  applySemanticButtonStyle(judgementTimingCriteriaButton,
-                           judgementTimingCriteriaText,
-                           judgementTimingCriteriaTone);
+  auto judgementTimingCriteriaTone =
+      [](AppSettings::JudgementTimingDisplayCriteria criteria) {
+        if (criteria == AppSettings::JudgementTimingDisplayCriteria::Off) {
+          return SettingsButtonTone::Danger;
+        }
+        if (criteria ==
+                AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow ||
+            criteria ==
+                AppSettings::JudgementTimingDisplayCriteria::BadOrBelow) {
+          return SettingsButtonTone::Success;
+        }
+        if (criteria ==
+            AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow) {
+          return SettingsButtonTone::Warning;
+        }
+        return SettingsButtonTone::Info;
+      };
+  applySemanticButtonStyle(
+      judgementTimingFastSlowCriteriaButton,
+      judgementTimingFastSlowCriteriaText,
+      judgementTimingCriteriaTone(
+          context.settings.judgementTimingFastSlowCriteria));
+  applySemanticButtonStyle(
+      judgementTimingMillisecondsCriteriaButton,
+      judgementTimingMillisecondsCriteriaText,
+      judgementTimingCriteriaTone(
+          context.settings.judgementTimingMillisecondsCriteria));
   applySemanticButtonStyle(
       gaugeBarPositionButton, gaugeBarPositionText,
       context.settings.gaugeBarPosition == AppSettings::GaugeBarPosition::World

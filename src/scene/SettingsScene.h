@@ -79,8 +79,8 @@ private:
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
   TextView *summaryJudgementCounterPositionValueText = nullptr;
-  TextView *summaryJudgementTimingDisplayValueText = nullptr;
-  TextView *summaryJudgementTimingCriteriaValueText = nullptr;
+  TextView *summaryJudgementTimingFastSlowValueText = nullptr;
+  TextView *summaryJudgementTimingMillisecondsValueText = nullptr;
   TextView *summaryGaugeBarPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextView *summaryUiThemeValueText = nullptr;
@@ -94,8 +94,8 @@ private:
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
-  TextView *judgementTimingDisplayModeText = nullptr;
-  TextView *judgementTimingCriteriaText = nullptr;
+  TextView *judgementTimingFastSlowCriteriaText = nullptr;
+  TextView *judgementTimingMillisecondsCriteriaText = nullptr;
   TextView *judgementCounterModeText = nullptr;
   TextView *judgementCounterPositionText = nullptr;
   TextView *gaugeBarPositionText = nullptr;
@@ -112,8 +112,8 @@ private:
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;
-  Button *judgementTimingDisplayModeButton = nullptr;
-  Button *judgementTimingCriteriaButton = nullptr;
+  Button *judgementTimingFastSlowCriteriaButton = nullptr;
+  Button *judgementTimingMillisecondsCriteriaButton = nullptr;
   Button *judgementCounterModeButton = nullptr;
   Button *judgementCounterPositionButton = nullptr;
   Button *gaugeBarPositionButton = nullptr;
