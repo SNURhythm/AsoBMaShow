@@ -1231,18 +1231,6 @@ void BMSRenderer::layoutCenteredJudgementText() {
     judgeWidth = std::clamp(judgeText->textureWidth() + 28, minJudgeWidth,
                             maxAvailableWidth);
   }
-  const int directionWidth =
-      hasTimingDirection
-          ? std::clamp(judgementTimingDirectionText->textureWidth() + 10, 54,
-                       104)
-          : 0;
-  const int msWidth =
-      hasTimingMs
-          ? std::clamp(judgementTimingMsText->textureWidth() + 10, 48, 96)
-          : 0;
-  const int timingInnerGap = hasTimingDirection && hasTimingMs ? 6 : 0;
-  const int timingContentWidth = directionWidth + timingInnerGap + msWidth;
-
   const int judgeY =
       std::clamp(centerY - judgeLineHeight / 2, 0,
                  std::max(0, judgementLayoutHeight - judgeLineHeight));
@@ -1252,9 +1240,12 @@ void BMSRenderer::layoutCenteredJudgementText() {
     judgeText->setSize(judgeWidth, judgeLineHeight);
   }
 
+  constexpr int kTimingDirectionMaxWidth = 104;
+  constexpr int kTimingMsMaxWidth = 96;
+  constexpr int kTimingInnerGap = 6;
   const int timingWidth =
-      std::clamp(std::max(judgeWidth, timingContentWidth), 1,
-                 maxAvailableWidth);
+      std::min(maxAvailableWidth, kTimingDirectionMaxWidth + kTimingInnerGap +
+                                      kTimingMsMaxWidth);
   const int timingX = (judgementLayoutWidth - timingWidth) / 2;
   const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
   if (hasTimingDirection) {
