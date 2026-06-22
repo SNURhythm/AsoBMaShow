@@ -117,6 +117,7 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.playOptionSeed = replay.playOptionSeed;
   summary.playOption2 = replay.playOption2;
   summary.playOption2Seed = replay.playOption2Seed;
+  summary.assistOption = replay.assistOption;
   return summary;
 }
 
@@ -1950,6 +1951,8 @@ ChartViewerScene::ChartViewerScene(
   if (randomValues.has_value()) {
     selectedRandomValues = *randomValues;
   }
+  viewerAssistOption =
+      assist_options::normalize(context.settings.selectedAssistOption);
   const std::optional<std::string> selectedPlayOption =
       context.settings.selectedPlayOption;
   setViewerPlayOptions(selectedPlayOption, std::nullopt,
@@ -2056,6 +2059,11 @@ void ChartViewerScene::cleanupScene() {
   ghostReplayListView = nullptr;
   optionsDrawerRoot = nullptr;
   viewerOptionText = nullptr;
+  viewerAssistOptionText = nullptr;
+  viewerAssistOffButton = nullptr;
+  viewerAssistDragButton = nullptr;
+  viewerAssistOffButtonText = nullptr;
+  viewerAssistDragButtonText = nullptr;
   laneAssignInput = nullptr;
   laneAssignStatusText = nullptr;
   randomDrawerRoot = nullptr;
@@ -3052,7 +3060,7 @@ void ChartViewerScene::rebuildOptionsDrawer() {
 
   auto *panel = new View();
   panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
-      ->setHeight(std::min<float>(540, rendering::window_height - 36))
+      ->setHeight(std::min<float>(610, rendering::window_height - 36))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(16)
@@ -3126,6 +3134,41 @@ void ChartViewerScene::rebuildOptionsDrawer() {
     }
     panel->addView(optionRow);
   }
+
+  auto *assistRow = new View();
+  assistRow->setFlexDirection(FlexDirection::Row);
+  assistRow->setAlignItems(YGAlignCenter);
+  assistRow->setGap(12);
+  assistRow->setHeight(52);
+
+  auto *assistLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+  assistLabel->setText("Assist");
+  assistLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  assistLabel->setVAlign(TextView::MIDDLE);
+  assistLabel->setWidth(86);
+  assistLabel->setHeight(44);
+  assistRow->addView(assistLabel);
+
+  viewerAssistOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  viewerAssistOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
+  viewerAssistOptionText->setVAlign(TextView::MIDDLE);
+  viewerAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
+  viewerAssistOptionText->setFlex(1);
+  viewerAssistOptionText->setHeight(44);
+  assistRow->addView(viewerAssistOptionText);
+
+  viewerAssistOffButton =
+      makeButton(assist_options::kOff, 98, 18, &viewerAssistOffButtonText);
+  viewerAssistOffButton->setOnClickListener(
+      [this]() { setViewerAssistOption(assist_options::kOff); });
+  assistRow->addView(viewerAssistOffButton);
+
+  viewerAssistDragButton =
+      makeButton(assist_options::kDrag, 98, 18, &viewerAssistDragButtonText);
+  viewerAssistDragButton->setOnClickListener(
+      [this]() { setViewerAssistOption(assist_options::kDrag); });
+  assistRow->addView(viewerAssistDragButton);
+  panel->addView(assistRow);
 
   auto *assignRow = new View();
   assignRow->setFlexDirection(FlexDirection::Row);
@@ -3205,6 +3248,10 @@ void ChartViewerScene::refreshOptionsDrawer() {
   if (viewerOptionText != nullptr) {
     viewerOptionText->setText(viewerPlayOptionLabel());
   }
+  if (viewerAssistOptionText != nullptr) {
+    viewerAssistOptionText->setText(viewerAssistOption);
+  }
+  refreshViewerAssistOptionButtons();
   if (laneAssignInput != nullptr) {
     const auto assign = viewerPlayOption.has_value()
                             ? play_options::laneAssignNotationFromOption(
@@ -3215,6 +3262,46 @@ void ChartViewerScene::refreshOptionsDrawer() {
   if (laneAssignStatusText != nullptr) {
     laneAssignStatusText->setText("");
   }
+}
+
+void ChartViewerScene::setViewerAssistOption(const std::string &option) {
+  viewerAssistOption = assist_options::normalize(option);
+  context.settings.selectedAssistOption = viewerAssistOption;
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save chart viewer assist option");
+  }
+  refreshOptionsDrawer();
+}
+
+void ChartViewerScene::refreshViewerAssistOptionButtons() {
+  auto styleButton = [](Button *button, TextView *text, bool selected) {
+    if (button == nullptr || text == nullptr) {
+      return;
+    }
+    if (selected) {
+      button->setBackgroundColors(ui_theme::primaryAction(),
+                                  ui_theme::primaryActionHover(),
+                                  ui_theme::primaryActionPressed());
+      button->setBorderColors(ui_theme::accentBorderStrong(),
+                              ui_theme::accentBorderStrong(),
+                              ui_theme::accentBorderStrong());
+      text->setColor(ui_theme::sdl(ui_theme::textOn(
+          ui_theme::primaryAction())));
+    } else {
+      button->setBackgroundColors(ui_theme::control(),
+                                  ui_theme::controlHover(),
+                                  ui_theme::controlPressed());
+      button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
+                              ui_theme::cyan());
+      text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    }
+  };
+
+  styleButton(viewerAssistOffButton, viewerAssistOffButtonText,
+              viewerAssistOption == assist_options::kOff);
+  styleButton(viewerAssistDragButton, viewerAssistDragButtonText,
+              viewerAssistOption == assist_options::kDrag);
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
@@ -3480,6 +3567,7 @@ void ChartViewerScene::startPracticeFromSelection() {
   const GaugeSelection gaugeSelection =
       gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const std::string assistOption = viewerAssistOption;
 
   stopListening();
   if (statusText != nullptr) {
@@ -3488,7 +3576,7 @@ void ChartViewerScene::startPracticeFromSelection() {
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       gaugeSelection, autoKeySound]() {
+       gaugeSelection, autoKeySound, assistOption]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -3544,6 +3632,7 @@ void ChartViewerScene::startPracticeFromSelection() {
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,
                     .playOption2Seed = viewerPlayOption2Seed,
+                    .assistOption = assistOption,
                     .ownsChart = true,
                     .practiceMode = true,
                     .practiceLeadInMicros =

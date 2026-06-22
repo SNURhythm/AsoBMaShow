@@ -279,6 +279,9 @@ ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn,
   if (sqlite3_column_type(stmt, 15) != SQLITE_NULL) {
     summary.playOption2Seed = sqlite3_column_int64(stmt, 15);
   }
+  if (sqlite3_column_type(stmt, 16) != SQLITE_NULL) {
+    summary.assistOption = assist_options::normalize(readText(stmt, 16));
+  }
   summary.eventCount = sqlite3_column_int(stmt, eventCountColumn);
   summary.touchSampleCount = sqlite3_column_int(stmt, touchSampleCountColumn);
   return summary;
@@ -342,6 +345,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
                             "play_option_seed INTEGER,"
                             "play_option2 TEXT,"
                             "play_option2_seed INTEGER,"
+                            "assist_option TEXT,"
                             "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
                             ")";
   if (!execSql(db, replayQuery, "creating replay table")) {
@@ -380,6 +384,11 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!tableHasColumn(db, "replays", "play_option2_seed") &&
       !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
                "adding replay 2P play option seed column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "assist_option") &&
+      !execSql(db, "ALTER TABLE replays ADD COLUMN assist_option TEXT",
+               "adding replay assist option column")) {
     return false;
   }
 
@@ -458,12 +467,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
       "gauge_type, gauge_auto_shift, final_score, final_gauge, clear_type,"
       "random_seed, random_prng, random_values, play_option, play_option_seed,"
-      "play_option2, play_option2_seed"
+      "play_option2, play_option2_seed, assist_option"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
       "@gauge_type, @gauge_auto_shift, @final_score, @final_gauge,"
       "@clear_type, @random_seed, @random_prng, @random_values,"
-      "@play_option, @play_option_seed, @play_option2, @play_option2_seed"
+      "@play_option, @play_option_seed, @play_option2, @play_option2_seed,"
+      "@assist_option"
       ")";
 
   SqliteStatementHandle replayStmt;
@@ -509,6 +519,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
+  bindText(replayStmt.get(), bindIndex++,
+           assist_options::normalize(replay.assistOption));
 
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -603,7 +615,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
       "r.play_option, r.play_option_seed, r.play_option2,"
-      "r.play_option2_seed,"
+      "r.play_option2_seed, r.assist_option,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id) "
       "FROM replays r "
@@ -623,7 +635,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   sqlite3_bind_int(stmt.get(), bindIndex++, limit);
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    replays.push_back(readReplaySummary(stmt.get(), 16, 17));
+    replays.push_back(readReplaySummary(stmt.get(), 17, 18));
   }
   return replays;
 }
@@ -647,7 +659,7 @@ ReplayDBHelper::LoadReplay(int replayId,
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
       "clear_type, created_at, random_seed, random_prng, random_values,"
       "play_option,"
-      "play_option_seed, play_option2, play_option2_seed "
+      "play_option_seed, play_option2, play_option2_seed, assist_option "
       "FROM replays WHERE id = ? AND "
       "((? != '' AND chart_sha256 = ?) OR "
       "(? != '' AND chart_md5 = ?) OR "
@@ -706,6 +718,9 @@ ReplayDBHelper::LoadReplay(int replayId,
     }
     if (sqlite3_column_type(stmt.get(), 18) != SQLITE_NULL) {
       loaded.playOption2Seed = sqlite3_column_int64(stmt.get(), 18);
+    }
+    if (sqlite3_column_type(stmt.get(), 19) != SQLITE_NULL) {
+      loaded.assistOption = assist_options::normalize(readText(stmt.get(), 19));
     }
     replay = std::move(loaded);
   }

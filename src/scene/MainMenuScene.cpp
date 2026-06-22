@@ -862,6 +862,7 @@ void MainMenuScene::applyThemeChange() {
   }
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
+  refreshAssistOptionButtons();
   refreshReplayModalActions();
   refreshReplayExportOptionButtons();
   refreshFindBmsModal();
@@ -1501,6 +1502,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
   readyPlayOptionText = nullptr;
+  readyAssistOptionText = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -1570,6 +1572,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
+  assistOptionButtons.clear();
 
   appliedUiThemeMode = ui_theme::activeMode();
 
@@ -1970,6 +1973,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedGaugeAutoShift = savedGaugeSelection.autoShift;
   selectedPlayOption =
       play_options::normalizePlayOption(context.settings.selectedPlayOption);
+  selectedAssistOption =
+      assist_options::normalize(context.settings.selectedAssistOption);
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
@@ -1997,8 +2002,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
+  readyAssistOptionText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
   readySettings->addView(readyPlayOptionText);
+  readySettings->addView(readyAssistOptionText);
 
   auto *playOptionsButton = new Button(0, 0, 220, 54);
   auto *playOptionsButtonText =
@@ -2663,6 +2670,30 @@ void MainMenuScene::refreshPlayOptionButtons() {
   refreshReadySettingsSummary();
 }
 
+void MainMenuScene::setAssistOptionSelection(const std::string &option) {
+  selectedAssistOption = assist_options::normalize(option);
+  context.settings.selectedAssistOption = selectedAssistOption;
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save assist option selection");
+  }
+  refreshAssistOptionButtons();
+}
+
+void MainMenuScene::refreshAssistOptionButtons() {
+  for (auto &item : assistOptionButtons) {
+    if (item.button == nullptr || item.text == nullptr) {
+      continue;
+    }
+
+    item.text->setText(item.option);
+    styleOptionButton(item.button, item.text,
+                      assist_options::normalize(item.option) ==
+                          selectedAssistOption);
+  }
+  refreshReadySettingsSummary();
+}
+
 void MainMenuScene::refreshReadySettingsSummary() {
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(
@@ -2672,6 +2703,9 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
   if (readyPlayOptionText != nullptr) {
     readyPlayOptionText->setText("Option: " + selectedPlayOption);
+  }
+  if (readyAssistOptionText != nullptr) {
+    readyAssistOptionText->setText("Assist: " + selectedAssistOption);
   }
 }
 
@@ -2715,6 +2749,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const bool gaugeAutoShift = selectedGaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = selectedPlayOption;
+  const std::string assistOption = selectedAssistOption;
   const std::string normalizedPlayOption =
       play_options::normalizePlayOption(playOption);
   const bool canReusePreviewForStart =
@@ -2724,7 +2759,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       canReusePreviewForStart, chartRandomInfo]() {
+       assistOption, canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -2752,6 +2787,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .autoPlay = false,
                                     .gaugeType = gaugeType,
                                     .gaugeAutoShift = gaugeAutoShift,
+                                    .assistOption = assistOption,
                                 });
           return finishStart();
         }
@@ -2798,6 +2834,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .playOptionSeed = playInfo.seed,
                                       .playOption2 = playInfo.option2,
                                       .playOption2Seed = playInfo.seed2,
+                                      .assistOption = assistOption,
                                   });
             return finishStart();
           }
@@ -2815,6 +2852,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .autoPlay = false,
                                          .gaugeType = gaugeType,
                                          .gaugeAutoShift = gaugeAutoShift,
+                                         .assistOption = assistOption,
                                      });
         return finishStart();
       },
@@ -4422,7 +4460,7 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
-      ->setHeight(640)
+      ->setHeight(720)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
@@ -4496,6 +4534,27 @@ void MainMenuScene::buildPlayOptionsModal() {
   panel->addView(playOptionRowB);
   panel->addView(playOptionRowC);
 
+  panel->addView(makeModalLabel("Assist Option"));
+
+  auto makeAssistOptionButton = [this](std::string option) {
+    TextView *text = nullptr;
+    auto *button = makeModalButton(option, 18, &text);
+    button->setFlex(1);
+    button->setOnClickListener(
+        [this, option]() { setAssistOptionSelection(option); });
+    assistOptionButtons.push_back({
+        .button = button,
+        .text = text,
+        .option = option,
+    });
+    return button;
+  };
+
+  auto *assistOptionRow = makeModalOptionRow(58);
+  assistOptionRow->addView(makeAssistOptionButton(assist_options::kOff));
+  assistOptionRow->addView(makeAssistOptionButton(assist_options::kDrag));
+  panel->addView(assistOptionRow);
+
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
@@ -4512,6 +4571,7 @@ void MainMenuScene::buildPlayOptionsModal() {
   rootLayout->addView(playOptionsModalRoot);
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
+  refreshAssistOptionButtons();
   styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
                           true, ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
@@ -4524,6 +4584,7 @@ void MainMenuScene::showPlayOptionsModal() {
 
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
+  refreshAssistOptionButtons();
   playOptionsModalRoot->setSize(rendering::window_width,
                                 rendering::window_height);
   playOptionsModalRoot->setVisible(true);
@@ -5725,6 +5786,7 @@ void MainMenuScene::cleanupScene() {
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
   readyPlayOptionText = nullptr;
+  readyAssistOptionText = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -5813,6 +5875,7 @@ void MainMenuScene::cleanupScene() {
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
+  assistOptionButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

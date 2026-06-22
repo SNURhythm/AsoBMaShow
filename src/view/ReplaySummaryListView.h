@@ -89,6 +89,9 @@ public:
     if (!optionLabel.empty()) {
       detail += "  " + optionLabel;
     }
+    if (assist_options::isEnabled(summary.assistOption)) {
+      detail += "  Assist " + assist_options::normalize(summary.assistOption);
+    }
     detailText->setText(detail);
     scoreText->setText(std::to_string(summary.finalScore));
 

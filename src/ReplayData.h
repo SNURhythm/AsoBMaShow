@@ -4,9 +4,48 @@
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
+#include <algorithm>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace assist_options {
+inline constexpr const char *kOff = "OFF";
+inline constexpr const char *kDrag = "DRAG";
+
+inline std::string normalize(std::string option) {
+  option.erase(option.begin(),
+               std::find_if_not(option.begin(), option.end(),
+                                [](unsigned char ch) {
+                                  return std::isspace(ch) != 0;
+                                }));
+  option.erase(std::find_if_not(option.rbegin(), option.rend(),
+                                [](unsigned char ch) {
+                                  return std::isspace(ch) != 0;
+                                }).base(),
+               option.end());
+  std::transform(option.begin(), option.end(), option.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::toupper(ch));
+                 });
+  if (option == "DRAG" || option == "DRAG-MODE") {
+    return kDrag;
+  }
+  return kOff;
+}
+
+inline bool isEnabled(const std::string &option) {
+  return normalize(option) != kOff;
+}
+
+inline bool isDragMode(const std::string &option) {
+  return normalize(option) == kDrag;
+}
+} // namespace assist_options
 
 enum class ReplayEventAction {
   Press = 0,
@@ -54,6 +93,7 @@ struct ReplayData {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;

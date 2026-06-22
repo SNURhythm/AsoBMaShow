@@ -20,6 +20,7 @@ struct ResultPracticeOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  std::string assistOption = assist_options::kOff;
   unsigned long long leadInMicros = 0;
   Scene *returnScene = nullptr;
   std::function<void(const ReplayData &)> practiceGhostCallback;

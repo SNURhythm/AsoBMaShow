@@ -340,6 +340,30 @@ std::string parsePlayOptionId(const std::string &value,
   return fallback;
 }
 
+std::string normalizeAssistOptionId(std::string value) {
+  value = trim(value);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::toupper(ch));
+                 });
+  if (value == "DRAG" || value == "DRAG-MODE") {
+    return "DRAG";
+  }
+  return AppSettings::kDefaultAssistOption;
+}
+
+std::string parseAssistOptionId(const std::string &value,
+                                const std::string &fallback) {
+  const std::string normalized = normalizeAssistOptionId(value);
+  if (normalized == "OFF" || normalized == "DRAG") {
+    return normalized;
+  }
+  return fallback;
+}
+
 float sanitizePlayAreaWidth(float width) {
   return sanitizeFloat(width, AppSettings::kDefaultPlayAreaWidth,
                        AppSettings::kMinPlayAreaWidth,
@@ -469,6 +493,8 @@ void AppSettings::sanitize() {
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
+  selectedAssistOption =
+      parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
@@ -608,6 +634,7 @@ bool AppSettings::save() const {
        << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
+  file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
   return file.good();
 }
 
@@ -751,6 +778,9 @@ AppSettings AppSettings::load() {
       } else if (key == "selected_play_option") {
         settings.selectedPlayOption =
             parsePlayOptionId(value, settings.selectedPlayOption);
+      } else if (key == "selected_assist_option") {
+        settings.selectedAssistOption =
+            parseAssistOptionId(value, settings.selectedAssistOption);
       }
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),

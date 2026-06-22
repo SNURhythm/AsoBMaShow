@@ -22,6 +22,7 @@ struct ReplaySummary {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  std::string assistOption = assist_options::kOff;
 };
 
 class ReplayDBHelper {
