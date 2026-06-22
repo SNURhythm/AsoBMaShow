@@ -8,13 +8,6 @@
 #include <sstream>
 
 namespace {
-enum class LegacyJudgementTimingDisplayMode {
-  Both,
-  Direction,
-  Ms,
-  Off,
-};
-
 std::string trim(std::string value) {
   auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
   value.erase(value.begin(),
@@ -172,28 +165,6 @@ const char *judgementCounterPositionToString(
     return "right";
   }
   return "right";
-}
-
-LegacyJudgementTimingDisplayMode parseLegacyJudgementTimingDisplayMode(
-    const std::string &value, LegacyJudgementTimingDisplayMode fallback) {
-  const std::string normalized = normalizeSettingToken(value);
-  if (normalized == "both" || normalized == "all" || normalized == "0") {
-    return LegacyJudgementTimingDisplayMode::Both;
-  }
-  if (normalized == "direction" || normalized == "fast-slow" ||
-      normalized == "fastslow" || normalized == "label" ||
-      normalized == "1") {
-    return LegacyJudgementTimingDisplayMode::Direction;
-  }
-  if (normalized == "ms" || normalized == "milliseconds" ||
-      normalized == "timing" || normalized == "2") {
-    return LegacyJudgementTimingDisplayMode::Ms;
-  }
-  if (normalized == "off" || normalized == "none" ||
-      normalized == "disabled" || normalized == "3") {
-    return LegacyJudgementTimingDisplayMode::Off;
-  }
-  return fallback;
 }
 
 AppSettings::JudgementTimingDisplayCriteria
@@ -647,15 +618,6 @@ AppSettings AppSettings::load() {
     return settings;
   }
 
-  bool hasLegacyTimingDisplayMode = false;
-  bool hasLegacyTimingDisplayCriteria = false;
-  bool hasNewTimingFastSlowCriteria = false;
-  bool hasNewTimingMillisecondsCriteria = false;
-  LegacyJudgementTimingDisplayMode legacyTimingDisplayMode =
-      LegacyJudgementTimingDisplayMode::Both;
-  AppSettings::JudgementTimingDisplayCriteria legacyTimingDisplayCriteria =
-      settings.judgementTimingFastSlowCriteria;
-
   std::string line;
   while (std::getline(file, line)) {
     line = trim(line);
@@ -763,25 +725,14 @@ AppSettings AppSettings::load() {
         settings.judgementCounterPosition =
             parseJudgementCounterPosition(value,
                                           settings.judgementCounterPosition);
-      } else if (key == "judgement_timing_display_mode") {
-        legacyTimingDisplayMode = parseLegacyJudgementTimingDisplayMode(
-            value, legacyTimingDisplayMode);
-        hasLegacyTimingDisplayMode = true;
-      } else if (key == "judgement_timing_display_criteria") {
-        legacyTimingDisplayCriteria =
-            parseJudgementTimingDisplayCriteria(
-                value, legacyTimingDisplayCriteria);
-        hasLegacyTimingDisplayCriteria = true;
       } else if (key == "judgement_timing_fast_slow_criteria") {
         settings.judgementTimingFastSlowCriteria =
             parseJudgementTimingDisplayCriteria(
                 value, settings.judgementTimingFastSlowCriteria);
-        hasNewTimingFastSlowCriteria = true;
       } else if (key == "judgement_timing_milliseconds_criteria") {
         settings.judgementTimingMillisecondsCriteria =
             parseJudgementTimingDisplayCriteria(
                 value, settings.judgementTimingMillisecondsCriteria);
-        hasNewTimingMillisecondsCriteria = true;
       } else if (key == "gauge_bar_position") {
         settings.gaugeBarPosition =
             parseGaugeBarPosition(value, settings.gaugeBarPosition);
@@ -797,60 +748,6 @@ AppSettings AppSettings::load() {
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),
               e.what());
-    }
-  }
-
-  if (hasLegacyTimingDisplayCriteria) {
-    if (!hasNewTimingFastSlowCriteria) {
-      settings.judgementTimingFastSlowCriteria = legacyTimingDisplayCriteria;
-    }
-    if (!hasNewTimingMillisecondsCriteria) {
-      settings.judgementTimingMillisecondsCriteria =
-          legacyTimingDisplayCriteria;
-    }
-  }
-  if (hasLegacyTimingDisplayMode) {
-    const auto activeCriteria =
-        hasLegacyTimingDisplayCriteria
-            ? legacyTimingDisplayCriteria
-            : AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;
-    switch (legacyTimingDisplayMode) {
-    case LegacyJudgementTimingDisplayMode::Both:
-      if (!hasNewTimingFastSlowCriteria) {
-        settings.judgementTimingFastSlowCriteria = activeCriteria;
-      }
-      if (!hasNewTimingMillisecondsCriteria) {
-        settings.judgementTimingMillisecondsCriteria = activeCriteria;
-      }
-      break;
-    case LegacyJudgementTimingDisplayMode::Direction:
-      if (!hasNewTimingFastSlowCriteria) {
-        settings.judgementTimingFastSlowCriteria = activeCriteria;
-      }
-      if (!hasNewTimingMillisecondsCriteria) {
-        settings.judgementTimingMillisecondsCriteria =
-            AppSettings::JudgementTimingDisplayCriteria::Off;
-      }
-      break;
-    case LegacyJudgementTimingDisplayMode::Ms:
-      if (!hasNewTimingFastSlowCriteria) {
-        settings.judgementTimingFastSlowCriteria =
-            AppSettings::JudgementTimingDisplayCriteria::Off;
-      }
-      if (!hasNewTimingMillisecondsCriteria) {
-        settings.judgementTimingMillisecondsCriteria = activeCriteria;
-      }
-      break;
-    case LegacyJudgementTimingDisplayMode::Off:
-      if (!hasNewTimingFastSlowCriteria) {
-        settings.judgementTimingFastSlowCriteria =
-            AppSettings::JudgementTimingDisplayCriteria::Off;
-      }
-      if (!hasNewTimingMillisecondsCriteria) {
-        settings.judgementTimingMillisecondsCriteria =
-            AppSettings::JudgementTimingDisplayCriteria::Off;
-      }
-      break;
     }
   }
 
