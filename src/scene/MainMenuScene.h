@@ -259,6 +259,14 @@ private:
   Button *replayResolutionFullButton = nullptr;
   Button *replayResultIncludeButton = nullptr;
   Button *replayResultSkipButton = nullptr;
+  Button *replayTouchShowButton = nullptr;
+  Button *replayTouchHideButton = nullptr;
+  Button *replayGhostShowButton = nullptr;
+  Button *replayGhostHideButton = nullptr;
+  Button *replayExportTouchShowButton = nullptr;
+  Button *replayExportTouchHideButton = nullptr;
+  Button *replayExportGhostShowButton = nullptr;
+  Button *replayExportGhostHideButton = nullptr;
   TextView *replayWatchButtonText = nullptr;
   TextView *replayModalPhotoButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
@@ -269,6 +277,14 @@ private:
   TextView *replayResolutionFullButtonText = nullptr;
   TextView *replayResultIncludeButtonText = nullptr;
   TextView *replayResultSkipButtonText = nullptr;
+  TextView *replayTouchShowButtonText = nullptr;
+  TextView *replayTouchHideButtonText = nullptr;
+  TextView *replayGhostShowButtonText = nullptr;
+  TextView *replayGhostHideButtonText = nullptr;
+  TextView *replayExportTouchShowButtonText = nullptr;
+  TextView *replayExportTouchHideButtonText = nullptr;
+  TextView *replayExportGhostShowButtonText = nullptr;
+  TextView *replayExportGhostHideButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
     bool photo = false;
@@ -332,6 +348,8 @@ private:
   int selectedExportFps = 120;
   bool selectedExportFullResolution = true;
   bool selectedExportIncludeResultScreen = true;
+  bool selectedReplayRenderTouchPoints = true;
+  bool selectedReplayRenderGhosts = true;
   double replayExportProgressFraction = 0.0;
   struct GaugeSelectionButton {
     Button *button = nullptr;

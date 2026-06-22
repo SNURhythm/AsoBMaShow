@@ -22,6 +22,9 @@
 #include <utility>
 
 namespace {
+constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
+constexpr float kReplayTouchMoveMinDistance = 0.002f;
+
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -210,6 +213,11 @@ void GamePlayScene::init() {
   renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
   renderer->setReplayData(options.replayData.get());
   renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
+  renderer->setTouchVisualizationEnabled(
+      options.touchVisualizationEnabled.value_or(
+          context.settings.touchVisualizationEnabled));
+  renderer->setReplayGhostRenderingEnabled(
+      options.replayGhostRenderingEnabled.value_or(true));
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
   context.jukebox.stop();
   reset();
@@ -218,6 +226,11 @@ void GamePlayScene::init() {
         this, chart->Meta,
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler = ownedInputHandler.get();
+    inputHandler->setTouchEventCallback(
+        [this](SDL_FingerID fingerIndex, ReplayTouchAction action,
+               Vector3 normalizedLocation) {
+          handleTouchInput(fingerIndex, action, normalizedLocation);
+        });
     inputHandler->discardPendingTouchEvents();
     inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
@@ -363,6 +376,9 @@ void GamePlayScene::init() {
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
     context.jukebox.pause();
+    if (renderer != nullptr) {
+      renderer->clearLiveTouchPoints();
+    }
     pauseLayout->setVisible(true);
     pauseButton->setVisible(false);
   });
@@ -500,6 +516,7 @@ bool GamePlayScene::shouldPersistRecordedReplay() const {
 
 void GamePlayScene::beginReplayRecording() {
   practiceGhostPublished = false;
+  lastRecordedTouchSamples.clear();
   if (!shouldRecordReplay()) {
     recordedReplay = {};
     return;
@@ -521,6 +538,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.clearType = kClearTypeFailedRank;
   recordedReplay.events.reserve(
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
+  recordedReplay.touchSamples.reserve(1024);
 }
 
 void GamePlayScene::finishReplayRecording() {
@@ -707,8 +725,10 @@ void GamePlayScene::renderScene() {
   if (pauseButton != nullptr) {
     pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
   }
-  renderer->render(renderContext, getVisualTimeMicros(getGameplayTimeMicros(
-                                      context.jukebox.getTimeMicros())));
+  const long long gameplayTimeMicros =
+      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  renderer->render(renderContext, getVisualTimeMicros(gameplayTimeMicros),
+                   gameplayTimeMicros);
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
@@ -1168,6 +1188,65 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
   recordedReplay.events.push_back(event);
 }
 
+void GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
+                                     ReplayTouchAction action,
+                                     Vector3 normalizedLocation) {
+  if (state == nullptr || !state->isPlaying || state->isEnding ||
+      context.jukebox.isPaused()) {
+    return;
+  }
+
+  const long long gameplayTimeMicros =
+      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (renderer != nullptr) {
+    renderer->setLiveTouchPoint(static_cast<long long>(fingerIndex), action,
+                                normalizedLocation.x, normalizedLocation.y,
+                                gameplayTimeMicros);
+  }
+  appendReplayTouchSample(fingerIndex, action, normalizedLocation,
+                          gameplayTimeMicros);
+}
+
+void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,
+                                            ReplayTouchAction action,
+                                            Vector3 normalizedLocation,
+                                            long long songTimeMicros) {
+  if (!shouldRecordReplay() || state == nullptr || !state->isPlaying ||
+      state->isEnding || context.jukebox.isPaused()) {
+    return;
+  }
+
+  ReplayTouchSample sample;
+  sample.action = action;
+  sample.fingerId = static_cast<long long>(fingerIndex);
+  sample.songTimeMicros = songTimeMicros;
+  sample.x = std::clamp(normalizedLocation.x, 0.0f, 1.0f);
+  sample.y = std::clamp(normalizedLocation.y, 0.0f, 1.0f);
+
+  const auto lastIt = lastRecordedTouchSamples.find(sample.fingerId);
+  if (action == ReplayTouchAction::Move &&
+      lastIt != lastRecordedTouchSamples.end()) {
+    const ReplayTouchSample &last = lastIt->second;
+    const long long deltaMicros = sample.songTimeMicros - last.songTimeMicros;
+    const float dx = sample.x - last.x;
+    const float dy = sample.y - last.y;
+    if (deltaMicros >= 0 &&
+        deltaMicros < kReplayTouchMoveMinIntervalMicros &&
+        dx * dx + dy * dy <
+            kReplayTouchMoveMinDistance * kReplayTouchMoveMinDistance) {
+      return;
+    }
+  }
+
+  recordedReplay.touchSamples.push_back(sample);
+  if (action == ReplayTouchAction::Up ||
+      action == ReplayTouchAction::Cancel) {
+    lastRecordedTouchSamples.erase(sample.fingerId);
+  } else {
+    lastRecordedTouchSamples[sample.fingerId] = sample;
+  }
+}
+
 JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      long long pressedTime,
                                      const JudgeResult *precomputedJudge,
@@ -1259,6 +1338,9 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
         }
       } else {
         context.jukebox.pause();
+        if (renderer != nullptr) {
+          renderer->clearLiveTouchPoints();
+        }
         pauseLayout->setVisible(true);
         if (pauseButton != nullptr) {
           pauseButton->setVisible(false);

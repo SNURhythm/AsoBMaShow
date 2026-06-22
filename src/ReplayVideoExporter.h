@@ -23,6 +23,8 @@ struct ReplayVideoExportOptions {
   int height = 0;
   int fps = 0;
   bool includeResultScreen = false;
+  bool renderTouchPoints = true;
+  bool renderReplayGhosts = true;
   ReplayVideoExportProgressCallback progressCallback;
 };
 

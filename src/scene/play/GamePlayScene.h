@@ -4,6 +4,7 @@
 
 #pragma once
 #include "../../ReplayData.h"
+#include "../../math/Vector3.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
@@ -32,6 +33,8 @@ struct StartOptions {
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   Scene *returnScene = nullptr;
+  std::optional<bool> touchVisualizationEnabled;
+  std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
 };
 class RhythmInputHandler;
@@ -106,6 +109,12 @@ private:
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
                          const JudgeResult &judgeResult);
+  void handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
+                        Vector3 normalizedLocation);
+  void appendReplayTouchSample(SDL_FingerID fingerIndex,
+                               ReplayTouchAction action,
+                               Vector3 normalizedLocation,
+                               long long songTimeMicros);
   JudgeResult pressNote(bms_parser::Note *note, long long pressedTime,
                         const JudgeResult *precomputedJudge = nullptr,
                         long long songTimeMicros = -1, bool recordEvent = true);
@@ -123,6 +132,7 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
+  std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;

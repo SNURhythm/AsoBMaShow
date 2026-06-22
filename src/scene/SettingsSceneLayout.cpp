@@ -73,6 +73,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
+  touchVisualizationModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
@@ -91,6 +92,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
+  touchVisualizationModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
@@ -1423,6 +1425,35 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
           : "Invisible notes use orange placeholder rectangles until the "
             "skin system exposes dedicated artwork.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *touchVisualizationControls = new View();
+  touchVisualizationControls->setFlexDirection(FlexDirection::Column);
+  touchVisualizationControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  touchVisualizationControls->setAlignItems(YGAlignFlexStart);
+  touchVisualizationControls->addView(makeWrappedText(
+      metrics.compact ? "Draw active finger positions over gameplay."
+                      : "Draw active finger positions as translucent circles "
+                        "during gameplay. Replay watch and export can still "
+                        "override this per replay.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+  touchVisualizationModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  touchVisualizationModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        touchVisualizationModeText);
+  touchVisualizationModeButton->setOnClickListener([this]() {
+    context.settings.touchVisualizationEnabled =
+        !context.settings.touchVisualizationEnabled;
+    persistSettings();
+  });
+  touchVisualizationControls->addView(touchVisualizationModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Touch Points",
+      metrics.compact ? "Show touch locations while playing."
+                      : "Show touch locations while playing and use the same "
+                        "default when opening replay tools.",
+      touchVisualizationControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *judgementCounterControls = new View();
   judgementCounterControls->setFlexDirection(FlexDirection::Column);

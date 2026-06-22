@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include "../ReplayData.h"
 #include "IInputHandler.h"
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"
 #include "IInputSource.h"
+#include <functional>
 #include <memory>
 #include <map>
 #include <vector>
@@ -33,6 +35,10 @@ private:
   bool isScratchLane(int lane) const;
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
+  std::function<void(SDL_FingerID, ReplayTouchAction, Vector3)>
+      touchEventCallback;
+  void notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
+                        Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
 
@@ -55,5 +61,7 @@ public:
   void pumpPendingTouchEvents();
   int touchToLane(Vector3 location);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
+  void setTouchEventCallback(
+      std::function<void(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
   std::map<SDL_Keycode, int> keyMap;
 };

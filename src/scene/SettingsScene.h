@@ -90,6 +90,7 @@ private:
   TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
+  TextView *touchVisualizationModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
@@ -108,6 +109,7 @@ private:
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
+  Button *touchVisualizationModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;
