@@ -349,6 +349,7 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.playOptionSeed = practiceOptions.playOptionSeed;
     retrySource.playOption2 = practiceOptions.playOption2;
     retrySource.playOption2Seed = practiceOptions.playOption2Seed;
+    retrySource.assistOption = practiceOptions.assistOption;
     retrySource.initialGaugeType = practiceOptions.gaugeType;
     retrySource.gaugeAutoShift = practiceOptions.gaugeAutoShift;
   }
@@ -372,6 +373,7 @@ void ResultScene::startRetry(bool samePattern) {
         options.autoPlay = false;
         options.gaugeType = retrySource.initialGaugeType;
         options.gaugeAutoShift = retrySource.gaugeAutoShift;
+        options.assistOption = retrySource.assistOption;
         options.ownsChart = true;
         if (practiceOptions.enabled) {
           options.practiceMode = true;

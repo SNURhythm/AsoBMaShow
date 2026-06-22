@@ -84,6 +84,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
   const auto lookup = buildReplayNoteLookup(chart);
   RhythmState state(&chart, false);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift);
+  state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Mine) {

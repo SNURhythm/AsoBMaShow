@@ -348,6 +348,7 @@ public:
   float currentGauge = 100.0f;
   GaugeType gaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
+  bool assistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
@@ -379,6 +380,8 @@ public:
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
     gaugeHistory.clear();
   }
+
+  void setAssistClearMark(bool enabled) { assistClearMark = enabled; }
 
   void applyGaugeJudgement(Judgement judgement) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
@@ -439,6 +442,27 @@ public:
   }
 
   [[nodiscard]] ClearType getClearType() const {
+    const ClearType gaugeClearType = getGaugeClearType();
+    if (assistClearMark) {
+      return gaugeClearType == ClearType::Failed
+                 ? ClearType::Failed
+                 : ClearType::AssistedEasyClear;
+    }
+    return gaugeClearType;
+  }
+
+  [[nodiscard]] int getClearTypeRank() const {
+    return clearTypeToRank(getClearType());
+  }
+
+  [[nodiscard]] const char *getClearTypeLabel() const {
+    return clearTypeToLabel(getClearType());
+  }
+
+  ~RhythmState() {}
+
+private:
+  [[nodiscard]] ClearType getGaugeClearType() const {
     if (!gaugeAutoShift) {
       return clearTypeForGauge(gaugeType, currentGauge,
                                gaugeSurvivalFailed[gaugeTypeIndex(gaugeType)]);
@@ -456,17 +480,6 @@ public:
     return best;
   }
 
-  [[nodiscard]] int getClearTypeRank() const {
-    return clearTypeToRank(getClearType());
-  }
-
-  [[nodiscard]] const char *getClearTypeLabel() const {
-    return clearTypeToLabel(getClearType());
-  }
-
-  ~RhythmState() {}
-
-private:
   [[nodiscard]] GaugeType bestAdmittedGaugeType() const {
     for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);

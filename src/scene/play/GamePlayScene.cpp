@@ -226,6 +226,8 @@ void GamePlayScene::init() {
         this, chart->Meta,
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler = ownedInputHandler.get();
+    inputHandler->setDragModeEnabled(
+        assist_options::isDragMode(options.assistOption));
     inputHandler->setTouchEventCallback(
         [this](SDL_FingerID fingerIndex, ReplayTouchAction action,
                Vector3 normalizedLocation) {
@@ -437,6 +439,10 @@ void GamePlayScene::reset() {
                                   ? options.replayData->gaugeAutoShift
                                   : options.gaugeAutoShift;
   state->configureGauge(initialGaugeType, gaugeAutoShift);
+  const std::string assistOption =
+      isReplayPlayback() ? options.replayData->assistOption
+                         : options.assistOption;
+  state->setAssistClearMark(assist_options::isEnabled(assistOption));
   initializeStartPositionState();
   state->isPlaying = true;
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
@@ -531,6 +537,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.playOptionSeed = options.playOptionSeed;
   recordedReplay.playOption2 = options.playOption2;
   recordedReplay.playOption2Seed = options.playOption2Seed;
+  recordedReplay.assistOption = assist_options::normalize(options.assistOption);
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.finalScore = 0;
@@ -703,6 +710,7 @@ void GamePlayScene::update(float dt) {
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
           practiceResultOptions.playOption2 = options.playOption2;
           practiceResultOptions.playOption2Seed = options.playOption2Seed;
+          practiceResultOptions.assistOption = options.assistOption;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
           practiceResultOptions.returnScene = options.returnScene;
           practiceResultOptions.practiceGhostCallback =

@@ -93,6 +93,7 @@ public:
   static constexpr float kDefaultJudgementTextY = 0.55f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
+  static constexpr const char *kDefaultAssistOption = "OFF";
 
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
@@ -137,6 +138,7 @@ public:
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
+  std::string selectedAssistOption = kDefaultAssistOption;
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;

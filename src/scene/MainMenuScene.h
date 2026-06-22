@@ -246,6 +246,7 @@ private:
   TextView *findBmsRefreshButtonText = nullptr;
   TextView *readyGaugeText = nullptr;
   TextView *readyPlayOptionText = nullptr;
+  TextView *readyAssistOptionText = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
@@ -367,6 +368,13 @@ private:
   };
   std::vector<PlayOptionButton> playOptionButtons;
   std::string selectedPlayOption = "NORMAL";
+  struct AssistOptionButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::string option;
+  };
+  std::vector<AssistOptionButton> assistOptionButtons;
+  std::string selectedAssistOption = assist_options::kOff;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -421,6 +429,8 @@ private:
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();
+  void setAssistOptionSelection(const std::string &option);
+  void refreshAssistOptionButtons();
   void refreshReadySettingsSummary();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,

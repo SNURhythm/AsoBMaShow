@@ -74,6 +74,11 @@ private:
   ReplaySummaryListView *ghostReplayListView = nullptr;
   View *optionsDrawerRoot = nullptr;
   TextView *viewerOptionText = nullptr;
+  TextView *viewerAssistOptionText = nullptr;
+  Button *viewerAssistOffButton = nullptr;
+  Button *viewerAssistDragButton = nullptr;
+  TextView *viewerAssistOffButtonText = nullptr;
+  TextView *viewerAssistDragButtonText = nullptr;
   TextInputBox *laneAssignInput = nullptr;
   TextView *laneAssignStatusText = nullptr;
   View *randomDrawerRoot = nullptr;
@@ -97,6 +102,7 @@ private:
   std::optional<std::string> viewerPlayOption2;
   std::optional<long long> viewerPlayOption2Seed;
   std::optional<std::string> viewerLaneOrderSummary;
+  std::string viewerAssistOption = assist_options::kOff;
 
   void initView();
   void rebuildRandomDrawer();
@@ -124,6 +130,8 @@ private:
   void hideOptionsDrawer();
   void refreshOptionsDrawer();
   void setViewerNamedPlayOption(const std::string &option);
+  void setViewerAssistOption(const std::string &option);
+  void refreshViewerAssistOptionButtons();
   void setViewerLaneAssign(const std::string &notation);
   void setViewerPlayOptions(const std::optional<std::string> &option,
                             const std::optional<long long> &seed,
