@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <string>
@@ -190,11 +191,15 @@ void GamePlayScene::init() {
   renderer = ownedRenderer.get();
   renderer->setVisibleTimeBpmStrategy(
       context.settings.visibleTimeBpmStrategy);
+  renderer->setVisibleTimeUseMilliseconds(
+      context.settings.visibleTimeUseMilliseconds);
   renderer->setPlayAreaWidth(
       context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
   renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
   renderer->setNoteStartPositionPercent(
       context.settings.noteStartPositionPercent);
+  renderer->setLaneCoverFloatingEnabled(
+      context.settings.floatingLaneCoverEnabled);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,
@@ -231,7 +236,7 @@ void GamePlayScene::init() {
     inputHandler->setTouchEventCallback(
         [this](SDL_FingerID fingerIndex, ReplayTouchAction action,
                Vector3 normalizedLocation) {
-          handleTouchInput(fingerIndex, action, normalizedLocation);
+          return handleTouchInput(fingerIndex, action, normalizedLocation);
         });
     inputHandler->discardPendingTouchEvents();
     inputHandler->startListenSDL();
@@ -430,6 +435,10 @@ void GamePlayScene::reset() {
   if (audioSeekPosition > 0) {
     context.jukebox.seek(audioSeekPosition);
   }
+  currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
+  if (renderer != nullptr) {
+    renderer->setCurrentBpm(currentGameplayBpm);
+  }
   ownedState = std::make_unique<RhythmState>(chart, false);
   state = ownedState.get();
   const GaugeType initialGaugeType = isReplayPlayback()
@@ -448,6 +457,16 @@ void GamePlayScene::reset() {
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
+  replayLaneCoverCursor = 0;
+  floatingLaneCoverDragActive = false;
+  floatingLaneCoverDragChanged = false;
+  floatingLaneCoverFinger = -1;
+  floatingLaneCoverDragOffsetY = 0.0f;
+  if (isReplayPlayback()) {
+    const long long initialReplayTime =
+        getGameplayTimeMicros(context.jukebox.getTimeMicros());
+    processReplayLaneCoverEvents(initialReplayTime);
+  }
   buildReplayNoteLookup();
   beginReplayRecording();
   updateGaugeStatusText();
@@ -546,6 +565,9 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.events.reserve(
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   recordedReplay.touchSamples.reserve(1024);
+  recordedReplay.laneCoverEvents.reserve(128);
+  appendReplayLaneCoverEvent(context.settings.noteStartPositionPercent, 0,
+                             false);
 }
 
 void GamePlayScene::finishReplayRecording() {
@@ -616,6 +638,10 @@ void GamePlayScene::initializeStartPositionState() {
         continue;
       }
 
+      if (timeline->Timing <= startPosition) {
+        applyTimelineBpm(timeline);
+      }
+
       if (timeline->Timing >= startPosition) {
         state->passedMeasureCount = measureIndex;
         state->passedTimelineCount = timelineIndex;
@@ -639,6 +665,20 @@ void GamePlayScene::initializeStartPositionState() {
   if (!foundStartTimeline) {
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
+  }
+}
+
+void GamePlayScene::applyTimelineBpm(const bms_parser::TimeLine *timeline) {
+  if (timeline == nullptr || !timeline->BpmChange ||
+      !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0) {
+    return;
+  }
+  if (std::abs(currentGameplayBpm - timeline->Bpm) <= 0.0001) {
+    return;
+  }
+  currentGameplayBpm = timeline->Bpm;
+  if (renderer != nullptr) {
+    renderer->setCurrentBpm(currentGameplayBpm);
   }
 }
 
@@ -681,6 +721,9 @@ void GamePlayScene::update(float dt) {
     processReplayEvents(gameplayTimeMicros);
   }
   checkPassedTimeline(gameplayTimeMicros);
+  if (isReplayPlayback()) {
+    processReplayLaneCoverEvents(gameplayTimeMicros);
+  }
   if (state->passedMeasureCount != chart->Measures.size()) {
     return;
   }
@@ -852,6 +895,9 @@ void GamePlayScene::checkPassedTimeline(long long time) {
     for (size_t j = isFirstMeasure ? state->passedTimelineCount : 0;
          j < measure->TimeLines.size(); j++) {
       const auto &timeline = measure->TimeLines[j];
+      if (timeline->Timing <= judgedTime) {
+        applyTimelineBpm(timeline);
+      }
       if (timeline->Timing < poorCutoff) {
         if (isFirstMeasure) {
           state->passedTimelineCount++;
@@ -1039,6 +1085,29 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   }
 }
 
+void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
+  if (!isReplayPlayback() || options.replayData == nullptr ||
+      renderer == nullptr) {
+    return;
+  }
+
+  const auto &events = options.replayData->laneCoverEvents;
+  while (replayLaneCoverCursor < events.size() &&
+         events[replayLaneCoverCursor].songTimeMicros <= gameplayTimeMicros) {
+    applyReplayLaneCoverEvent(events[replayLaneCoverCursor]);
+    replayLaneCoverCursor++;
+  }
+}
+
+void GamePlayScene::applyReplayLaneCoverEvent(
+    const ReplayLaneCoverEvent &event) {
+  if (renderer == nullptr) {
+    return;
+  }
+  renderer->applyLaneCoverState(event.noteStartPositionPercent,
+                                event.resetVisibleTimeReference);
+}
+
 void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
                                      long long visualTimeMicros) {
   if (state == nullptr || !state->isPlaying || state->isEnding) {
@@ -1196,12 +1265,40 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
   recordedReplay.events.push_back(event);
 }
 
-void GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
+void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
+                                               long long songTimeMicros,
+                                               bool resetVisibleTimeReference) {
+  if (!shouldRecordReplay() || state == nullptr) {
+    return;
+  }
+
+  ReplayLaneCoverEvent event;
+  event.songTimeMicros = std::max(0LL, songTimeMicros);
+  event.noteStartPositionPercent =
+      std::clamp(noteStartPositionPercent,
+                 AppSettings::kMinNoteStartPositionPercent,
+                 AppSettings::kMaxNoteStartPositionPercent);
+  event.resetVisibleTimeReference = resetVisibleTimeReference;
+  recordedReplay.laneCoverEvents.push_back(event);
+}
+
+bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
                                      Vector3 normalizedLocation) {
+  const bool activeFloatingDrag =
+      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
   if (state == nullptr || !state->isPlaying || state->isEnding ||
       context.jukebox.isPaused()) {
-    return;
+    if (activeFloatingDrag &&
+        (action == ReplayTouchAction::Up ||
+         action == ReplayTouchAction::Cancel)) {
+      floatingLaneCoverDragActive = false;
+      floatingLaneCoverDragChanged = false;
+      floatingLaneCoverFinger = -1;
+      floatingLaneCoverDragOffsetY = 0.0f;
+      persistFloatingLaneCoverSettings();
+    }
+    return activeFloatingDrag;
   }
 
   const long long gameplayTimeMicros =
@@ -1213,6 +1310,83 @@ void GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
   }
   appendReplayTouchSample(fingerIndex, action, normalizedLocation,
                           gameplayTimeMicros);
+  return handleFloatingLaneCoverInput(fingerIndex, action, normalizedLocation,
+                                      gameplayTimeMicros);
+}
+
+bool GamePlayScene::handleFloatingLaneCoverInput(
+    SDL_FingerID fingerIndex, ReplayTouchAction action,
+    Vector3 normalizedLocation, long long songTimeMicros) {
+  if (renderer == nullptr || !context.settings.floatingLaneCoverEnabled) {
+    return false;
+  }
+
+  const float renderX = normalizedLocation.x * rendering::render_width;
+  const float renderY = normalizedLocation.y * rendering::render_height;
+  const bool activeFinger =
+      floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
+
+  auto applyDrag = [&]() -> bool {
+    const int previous = context.settings.noteStartPositionPercent;
+    const int next = renderer->dragLaneCoverHandleTo(
+        renderX, renderY, floatingLaneCoverDragOffsetY);
+    context.settings.noteStartPositionPercent = next;
+    if (next == previous) {
+      return false;
+    }
+    renderer->applyLaneCoverState(next, true);
+    floatingLaneCoverDragChanged = true;
+    floatingLaneCoverSettingsDirty = true;
+    appendReplayLaneCoverEvent(next, songTimeMicros, true);
+    return true;
+  };
+
+  switch (action) {
+  case ReplayTouchAction::Down:
+    if (const auto grabOffset =
+            renderer->laneCoverHandleGrabOffset(renderX, renderY);
+        grabOffset.has_value()) {
+      floatingLaneCoverDragActive = true;
+      floatingLaneCoverDragChanged = false;
+      floatingLaneCoverFinger = fingerIndex;
+      floatingLaneCoverDragOffsetY = *grabOffset;
+      return true;
+    }
+    return false;
+  case ReplayTouchAction::Move:
+    if (!activeFinger) {
+      return false;
+    }
+    (void)applyDrag();
+    return true;
+  case ReplayTouchAction::Up:
+  case ReplayTouchAction::Cancel:
+    if (!activeFinger) {
+      return false;
+    }
+    if (action == ReplayTouchAction::Up && floatingLaneCoverDragChanged) {
+      (void)applyDrag();
+    }
+    floatingLaneCoverDragActive = false;
+    floatingLaneCoverDragChanged = false;
+    floatingLaneCoverFinger = -1;
+    floatingLaneCoverDragOffsetY = 0.0f;
+    persistFloatingLaneCoverSettings();
+    return true;
+  }
+
+  return false;
+}
+
+void GamePlayScene::persistFloatingLaneCoverSettings() {
+  if (!floatingLaneCoverSettingsDirty) {
+    return;
+  }
+  floatingLaneCoverSettingsDirty = false;
+  context.settings.sanitize();
+  if (!context.settings.save()) {
+    SDL_Log("Failed to save floating lane cover settings");
+  }
 }
 
 void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,

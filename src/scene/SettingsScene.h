@@ -91,6 +91,7 @@ private:
   TextView *keysoundModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
   TextView *touchVisualizationModeText = nullptr;
+  TextView *floatingLaneCoverModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
@@ -110,6 +111,7 @@ private:
   Button *keysoundModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
+  Button *floatingLaneCoverModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;

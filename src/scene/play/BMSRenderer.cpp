@@ -49,11 +49,6 @@ struct JudgementCounterLayout {
   float gap = 0.0f;
 };
 
-struct UiPoint {
-  float x = 0.0f;
-  float y = 0.0f;
-};
-
 uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
                              uint32_t submitDepth) {
   return (static_cast<uint64_t>(submitDepth) << 16U) |
@@ -393,7 +388,8 @@ Color gaugeTextColor(const Color &accent) {
   return ui_theme::textOn(gaugeFillColor(accent));
 }
 
-std::optional<UiPoint> projectWorldToUi(float worldX, float worldY) {
+std::optional<std::pair<float, float>> projectWorldToUi(float worldX,
+                                                        float worldY) {
   const Camera &camera = rendering::game_camera;
   if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
     return std::nullopt;
@@ -415,7 +411,7 @@ std::optional<UiPoint> projectWorldToUi(float worldX, float worldY) {
   if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
     return std::nullopt;
   }
-  return UiPoint{uiX, uiY};
+  return std::make_pair(uiX, uiY);
 }
 
 JudgementCounterLayout judgementCounterLayoutFor(
@@ -497,6 +493,7 @@ BMSRenderer::BMSRenderer(
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
       visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
       chart(chart) {
+  setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
   auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
 
   scratchLaneCount = chart->Meta.GetScratchLaneCount();
@@ -699,6 +696,12 @@ BMSRenderer::BMSRenderer(
   playOptionText->setOverflow(TextView::TextOverflow::Marquee);
   playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
   playOptionText->setVisible(false);
+  laneCoverVisibleTimeText = std::make_unique<TextView>(kHudFontPath, 24);
+  laneCoverVisibleTimeText->setAlign(TextView::CENTER);
+  laneCoverVisibleTimeText->setVAlign(TextView::MIDDLE);
+  laneCoverVisibleTimeText->setOverflow(TextView::TextOverflow::Hidden);
+  laneCoverVisibleTimeText->setColor(ui_theme::sdl(ui_theme::lime()));
+  laneCoverVisibleTimeText->setVisible(false);
 
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     auto &label = judgementCounterLabelTexts[i];
@@ -1071,14 +1074,18 @@ void BMSRenderer::layoutGaugeText() {
       return;
     }
 
-    const float minX =
-        std::min({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
-    const float maxX =
-        std::max({topLeft->x, topRight->x, bottomLeft->x, bottomRight->x});
-    const float minY =
-        std::min({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
-    const float maxY =
-        std::max({topLeft->y, topRight->y, bottomLeft->y, bottomRight->y});
+    const float minX = std::min(
+        {topLeft->first, topRight->first, bottomLeft->first,
+         bottomRight->first});
+    const float maxX = std::max(
+        {topLeft->first, topRight->first, bottomLeft->first,
+         bottomRight->first});
+    const float minY = std::min(
+        {topLeft->second, topRight->second, bottomLeft->second,
+         bottomRight->second});
+    const float maxY = std::max(
+        {topLeft->second, topRight->second, bottomLeft->second,
+         bottomRight->second});
     const int textWidth =
         std::max(120, static_cast<int>(std::round(maxX - minX)));
     const int textHeight =
@@ -1120,39 +1127,19 @@ float BMSRenderer::gameplayHudTitleWidth() const {
   return std::clamp(maxWidth, 0.0f, baseWidth);
 }
 
+std::optional<std::pair<float, float>>
+BMSRenderer::projectLanePointToUi(float worldX, float worldY) const {
+  return projectWorldToUi(worldX, worldY);
+}
+
 float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
                                              float bandBottom) const {
-  auto projectToUi = [](float worldX,
-                        float worldY) -> std::optional<UiPoint> {
-    const Camera &camera = rendering::game_camera;
-    if (camera.getViewWidth() == 0 || camera.getViewHeight() == 0) {
-      return std::nullopt;
-    }
-
-    const bx::Vec3 screen = camera.project({worldX, worldY, 0.0f});
-    if (!std::isfinite(screen.x) || !std::isfinite(screen.y)) {
-      return std::nullopt;
-    }
-
-    const float uiX =
-        (screen.x - static_cast<float>(camera.getViewX())) /
-        static_cast<float>(camera.getViewWidth()) *
-        static_cast<float>(rendering::window_width);
-    const float uiY =
-        (screen.y - static_cast<float>(camera.getViewY())) /
-        static_cast<float>(camera.getViewHeight()) *
-        static_cast<float>(rendering::window_height);
-    if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
-      return std::nullopt;
-    }
-    return UiPoint{uiX, uiY};
-  };
-
-  const auto leftBottom = projectToUi(playAreaLeftX, judgeY);
-  const auto rightBottom = projectToUi(playAreaLeftX + playAreaWidth, judgeY);
-  const auto leftTop = projectToUi(playAreaLeftX, upperBound);
+  const auto leftBottom = projectLanePointToUi(playAreaLeftX, judgeY);
+  const auto rightBottom =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth, judgeY);
+  const auto leftTop = projectLanePointToUi(playAreaLeftX, upperBound);
   const auto rightTop =
-      projectToUi(playAreaLeftX + playAreaWidth, upperBound);
+      projectLanePointToUi(playAreaLeftX + playAreaWidth, upperBound);
   if (!leftBottom || !rightBottom || !leftTop || !rightTop) {
     return std::numeric_limits<float>::quiet_NaN();
   }
@@ -1163,21 +1150,22 @@ float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
       minX = std::min(minX, x);
     }
   };
-  auto considerPoint = [&](const UiPoint &point) {
-    if (point.y >= bandTop && point.y <= bandBottom) {
-      considerX(point.x);
+  auto considerPoint = [&](const std::pair<float, float> &point) {
+    if (point.second >= bandTop && point.second <= bandBottom) {
+      considerX(point.first);
     }
   };
-  auto considerEdge = [&](const UiPoint &a, const UiPoint &b) {
+  auto considerEdge = [&](const std::pair<float, float> &a,
+                          const std::pair<float, float> &b) {
     considerPoint(a);
     considerPoint(b);
 
-    const float minY = std::min(a.y, b.y);
-    const float maxY = std::max(a.y, b.y);
-    const float dy = b.y - a.y;
+    const float minY = std::min(a.second, b.second);
+    const float maxY = std::max(a.second, b.second);
+    const float dy = b.second - a.second;
     if (std::abs(dy) <= 0.0001f) {
-      if (a.y >= bandTop && a.y <= bandBottom) {
-        considerX(std::min(a.x, b.x));
+      if (a.second >= bandTop && a.second <= bandBottom) {
+        considerX(std::min(a.first, b.first));
       }
       return;
     }
@@ -1186,11 +1174,11 @@ float BMSRenderer::projectedLaneLeftUiInBand(float bandTop,
       if (targetY < minY || targetY > maxY) {
         return;
       }
-      const float t = (targetY - a.y) / dy;
+      const float t = (targetY - a.second) / dy;
       if (t < 0.0f || t > 1.0f) {
         return;
       }
-      considerX(a.x + (b.x - a.x) * t);
+      considerX(a.first + (b.first - a.first) * t);
     };
 
     considerAtY(bandTop);
@@ -1453,6 +1441,12 @@ double BMSRenderer::calculateMostPrevalentBpm() const {
 }
 
 double BMSRenderer::visibleTimeReferenceBpm() const {
+  if (floatingVisibleTimeReferenceBpm.has_value() &&
+      std::isfinite(*floatingVisibleTimeReferenceBpm) &&
+      *floatingVisibleTimeReferenceBpm > 0.0) {
+    return *floatingVisibleTimeReferenceBpm;
+  }
+
   double referenceBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (visibleTimeBpmStrategy ==
           AppSettings::VisibleTimeBpmStrategy::MostPrevalent &&
@@ -1463,6 +1457,34 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
     return 1.0;
   }
   return referenceBpm;
+}
+
+int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
+  const double referenceBpm = visibleTimeReferenceBpm();
+  const double bpm =
+      currentBpm > 0.0 && std::isfinite(currentBpm) ? currentBpm : referenceBpm;
+  if (!std::isfinite(referenceBpm) || referenceBpm <= 0.0 ||
+      !std::isfinite(bpm) || bpm <= 0.0) {
+    return std::max(1, visibleTimeGreenNumber);
+  }
+
+  const double scaled =
+      static_cast<double>(visibleTimeGreenNumber) * referenceBpm / bpm;
+  if (!std::isfinite(scaled)) {
+    return std::max(1, visibleTimeGreenNumber);
+  }
+  return std::max(1, static_cast<int>(std::lround(scaled)));
+}
+
+std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
+  const int greenNumber = effectiveVisibleTimeGreenNumber();
+  if (visibleTimeUseMilliseconds) {
+    const int milliseconds = std::max(
+        1, static_cast<int>(std::lround(static_cast<double>(greenNumber) *
+                                        1000.0 / 600.0)));
+    return std::to_string(milliseconds) + " ms";
+  }
+  return std::to_string(greenNumber);
 }
 
 double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
@@ -2042,6 +2064,10 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   simpleBatchRenderer.begin();
   drawLaneCover();
   simpleBatchRenderer.flush();
+  layoutLaneCoverVisibleTimeText();
+  if (laneCoverVisibleTimeText != nullptr) {
+    laneCoverVisibleTimeText->render(context);
+  }
 
   if (judgementIndicator.isEnabled()) {
     const bool indicatorHudMode = judgementIndicator.isHudMode();
@@ -2270,6 +2296,7 @@ void BMSRenderer::updateJudgementCounterText() {
 
 void BMSRenderer::reset() {
   state.reset();
+  floatingVisibleTimeReferenceBpm.reset();
   judgementIndicator.clear();
   pendingJudge.store(None, std::memory_order_relaxed);
   pendingScore.store(0, std::memory_order_relaxed);
@@ -2306,6 +2333,16 @@ void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
   visibleTimeGreenNumber = greenNumber;
 }
 
+void BMSRenderer::setVisibleTimeUseMilliseconds(bool enabled) {
+  visibleTimeUseMilliseconds = enabled;
+}
+
+void BMSRenderer::setCurrentBpm(double bpm) {
+  if (std::isfinite(bpm) && bpm > 0.0) {
+    currentBpm = bpm;
+  }
+}
+
 void BMSRenderer::setVisibleTimeBpmStrategy(
     AppSettings::VisibleTimeBpmStrategy strategy) {
   visibleTimeBpmStrategy = strategy;
@@ -2329,6 +2366,10 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
   renderLaneBeams = enabled;
 }
 
+void BMSRenderer::setLaneCoverFloatingEnabled(bool enabled) {
+  laneCoverFloatingEnabled = enabled;
+}
+
 void BMSRenderer::setLaneBeamLengthPercent(int percent) {
   laneBeamLengthPercent =
       std::clamp(percent, AppSettings::kMinLaneBeamLengthPercent,
@@ -2339,6 +2380,189 @@ void BMSRenderer::setNoteStartPositionPercent(int percent) {
   noteStartPositionPercent =
       std::clamp(percent, AppSettings::kMinNoteStartPositionPercent,
                  AppSettings::kMaxNoteStartPositionPercent);
+}
+
+void BMSRenderer::applyLaneCoverState(int percent,
+                                      bool resetVisibleTimeReference) {
+  setNoteStartPositionPercent(percent);
+  if (resetVisibleTimeReference) {
+    floatingVisibleTimeReferenceBpm =
+        currentBpm > 0.0 ? currentBpm : visibleTimeReferenceBpm();
+  }
+}
+
+std::optional<bx::Vec3>
+BMSRenderer::lanePlanePointAtRenderPosition(float renderX,
+                                            float renderY) const {
+  if (!std::isfinite(renderX) || !std::isfinite(renderY)) {
+    return std::nullopt;
+  }
+
+  const bx::Vec3 nearPoint = rendering::game_camera.deproject(
+      renderX, renderY, rendering::game_camera.getNearClip());
+  const bx::Vec3 farPoint = rendering::game_camera.deproject(
+      renderX, renderY, rendering::game_camera.getFarClip());
+  const bx::Vec3 ray = {farPoint.x - nearPoint.x, farPoint.y - nearPoint.y,
+                        farPoint.z - nearPoint.z};
+  if (std::abs(ray.z) <= 0.0001f) {
+    return std::nullopt;
+  }
+
+  const float t = -nearPoint.z / ray.z;
+  if (!std::isfinite(t)) {
+    return std::nullopt;
+  }
+  return bx::Vec3{nearPoint.x + ray.x * t, nearPoint.y + ray.y * t, 0.0f};
+}
+
+BMSRenderer::LaneCoverHandleGeometry
+BMSRenderer::laneCoverHandleGeometry() const {
+  const float coverHeight = std::max(0.0f, upperBound - noteVisibleUpperBound);
+  const float handleWidth = std::clamp(playAreaWidth * 0.28f,
+                                       noteRenderWidth * 1.75f,
+                                       playAreaWidth * 0.48f);
+  if (coverHeight <= 0.001f) {
+    return {.x = playAreaLeftX + (playAreaWidth - handleWidth) * 0.5f,
+            .y = noteVisibleUpperBound,
+            .width = handleWidth,
+            .height = 0.0f};
+  }
+
+  const float desiredHeight = std::max(noteRenderHeight * 0.85f, 0.10f);
+  const float edgeInset =
+      std::min(std::max(noteRenderHeight * 0.16f, 0.025f),
+               coverHeight * 0.28f);
+  const float handleHeight =
+      std::min(desiredHeight, std::max(0.0f, coverHeight - edgeInset));
+  const float handleY =
+      std::clamp(noteVisibleUpperBound + edgeInset, noteVisibleUpperBound,
+                 std::max(noteVisibleUpperBound, upperBound - handleHeight));
+  return {.x = playAreaLeftX + (playAreaWidth - handleWidth) * 0.5f,
+          .y = handleY,
+          .width = handleWidth,
+          .height = handleHeight};
+}
+
+std::optional<BMSRenderer::LaneCoverVirtualHandleGeometry>
+BMSRenderer::laneCoverVirtualHandleGeometry() const {
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  if (handle.width <= 0.0f || handle.height <= 0.0f) {
+    return std::nullopt;
+  }
+
+  const float handleBottomWorldY = handle.y;
+  const float handleTopWorldY = handle.y + handle.height;
+  const float handleCenterWorldX = handle.x + handle.width * 0.5f;
+  const auto bottomCenter =
+      projectLanePointToUi(handleCenterWorldX, handleBottomWorldY);
+  const auto bottomLeft = projectLanePointToUi(handle.x, handleBottomWorldY);
+  const auto bottomRight =
+      projectLanePointToUi(handle.x + handle.width, handleBottomWorldY);
+  const auto topCenter =
+      projectLanePointToUi(handleCenterWorldX, handleTopWorldY);
+  if (!bottomCenter || !bottomLeft || !bottomRight || !topCenter) {
+    return std::nullopt;
+  }
+
+  const float projectedWidth =
+      std::abs(bottomRight->first - bottomLeft->first);
+  const float projectedHeight =
+      std::abs(bottomCenter->second - topCenter->second);
+  const float minWidth = std::clamp(
+      static_cast<float>(rendering::window_width) * 0.16f, 110.0f, 220.0f);
+  const float maxWidth =
+      std::max(minWidth, std::min(static_cast<float>(rendering::window_width) *
+                                      0.44f,
+                                  360.0f));
+  const float minHeight = std::clamp(
+      static_cast<float>(rendering::window_height) * 0.055f, 48.0f, 82.0f);
+  const float maxHeight =
+      std::max(minHeight, std::min(static_cast<float>(rendering::window_height) *
+                                       0.13f,
+                                   112.0f));
+  const float width =
+      std::clamp(std::max(projectedWidth, minWidth), minWidth, maxWidth);
+  const float height =
+      std::clamp(std::max(projectedHeight, minHeight), minHeight, maxHeight);
+  return LaneCoverVirtualHandleGeometry{
+      .x = bottomCenter->first - width * 0.5f,
+      .y = bottomCenter->second - height,
+      .width = width,
+      .height = height,
+  };
+}
+
+bool BMSRenderer::isLaneCoverHandleHit(float renderX, float renderY) const {
+  return laneCoverHandleGrabOffset(renderX, renderY).has_value();
+}
+
+std::optional<float>
+BMSRenderer::laneCoverHandleGrabOffset(float renderX, float renderY) const {
+  if (!laneCoverFloatingEnabled) {
+    return std::nullopt;
+  }
+  const auto point = lanePlanePointAtRenderPosition(renderX, renderY);
+  if (!point.has_value()) {
+    return std::nullopt;
+  }
+
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  if (handle.width <= 0.0f || handle.height <= 0.0f) {
+    return std::nullopt;
+  }
+
+  const float hitSlopX = std::max(noteRenderWidth * 0.35f, 0.12f);
+  const float hitSlopY = std::max(noteRenderHeight * 0.55f, 0.10f);
+  const float coverHeight = std::max(0.0f, upperBound - noteVisibleUpperBound);
+  const float hitMinY = std::max(noteVisibleUpperBound, handle.y - hitSlopY);
+  const float hitMaxY =
+      std::min(upperBound, handle.y + handle.height + hitSlopY);
+  if (point->x < handle.x - hitSlopX ||
+      point->x > handle.x + handle.width + hitSlopX || point->y < hitMinY ||
+      point->y > hitMaxY) {
+    if (const auto virtualHandle = laneCoverVirtualHandleGeometry();
+        virtualHandle.has_value()) {
+      float uiX = 0.0f;
+      float uiY = 0.0f;
+      rendering::screenToUi(renderX, renderY, uiX, uiY);
+      const bool insideVirtualHandle =
+          uiX >= virtualHandle->x &&
+          uiX <= virtualHandle->x + virtualHandle->width &&
+          uiY >= virtualHandle->y &&
+          uiY <= virtualHandle->y + virtualHandle->height;
+      if (!insideVirtualHandle) {
+        return std::nullopt;
+      }
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  return std::clamp(point->y - noteVisibleUpperBound, 0.0f, coverHeight);
+}
+
+int BMSRenderer::dragLaneCoverHandleTo(float renderX, float renderY,
+                                       float lanePointYOffset) {
+  const auto point = lanePlanePointAtRenderPosition(renderX, renderY);
+  if (!point.has_value()) {
+    return noteStartPositionPercent;
+  }
+
+  const float laneHeight = std::max(0.001f, upperBound - judgeY);
+  const float maxHiddenRatio =
+      static_cast<float>(AppSettings::kMaxNoteStartPositionPercent) / 100.0f;
+  const float minVisibleY = judgeY + laneHeight * (1.0f - maxHiddenRatio);
+  const float anchorOffset =
+      std::isfinite(lanePointYOffset) ? std::max(0.0f, lanePointYOffset)
+                                      : 0.0f;
+  const float targetY =
+      std::clamp(point->y - anchorOffset, minVisibleY, upperBound);
+  const float hiddenRatio = 1.0f - ((targetY - judgeY) / laneHeight);
+  setNoteStartPositionPercent(std::clamp(
+      static_cast<int>(std::lround(hiddenRatio * 100.0f)),
+      AppSettings::kMinNoteStartPositionPercent,
+      AppSettings::kMaxNoteStartPositionPercent));
+  return noteStartPositionPercent;
 }
 
 void BMSRenderer::setLaneBeamClockUsesRenderTime(bool enabled) {
@@ -2566,19 +2790,97 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
       fadedColor.toABGR());
 }
 
-void BMSRenderer::drawLaneCover() {
-  const float coverHeight = upperBound - noteVisibleUpperBound;
-  if (coverHeight <= 0.001f) {
+void BMSRenderer::layoutLaneCoverVisibleTimeText() {
+  if (laneCoverVisibleTimeText == nullptr) {
     return;
   }
 
-  drawRect(playAreaWidth, coverHeight, playAreaLeftX, noteVisibleUpperBound,
-           Color(9, 12, 18, 255));
+  const float coverHeight = upperBound - noteVisibleUpperBound;
+  if (coverHeight <= std::max(0.18f, noteRenderHeight * 1.2f)) {
+    laneCoverVisibleTimeText->setVisible(false);
+    return;
+  }
 
-  const float edgeHeight = std::max(0.025f, noteRenderHeight * 0.12f);
-  drawRect(playAreaWidth, edgeHeight, playAreaLeftX,
-           noteVisibleUpperBound - edgeHeight * 0.5f,
-           Color(214, 224, 236, 255));
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  const bool handleVisible = laneCoverFloatingEnabled && handle.height > 0.0f;
+  const float labelBottomWorldY =
+      handleVisible ? handle.y + handle.height : noteVisibleUpperBound;
+  if (labelBottomWorldY >= upperBound) {
+    laneCoverVisibleTimeText->setVisible(false);
+    return;
+  }
+
+  const auto center =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth * 0.5f,
+                           labelBottomWorldY);
+  const auto left = projectLanePointToUi(playAreaLeftX, labelBottomWorldY);
+  const auto right =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth, labelBottomWorldY);
+  const auto coverTop =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth * 0.5f, upperBound);
+  if (!center || !left || !right || !coverTop) {
+    laneCoverVisibleTimeText->setVisible(false);
+    return;
+  }
+
+  laneCoverVisibleTimeText->setText(laneCoverVisibleTimeLabel());
+  const int maxProjectedWidth =
+      static_cast<int>(std::round(std::abs(right->first - left->first)));
+  const int textWidth = std::clamp(laneCoverVisibleTimeText->textureWidth() + 28,
+                                   72, std::max(72, maxProjectedWidth - 24));
+  constexpr int kTextHeight = 34;
+  const int x = std::clamp(
+      static_cast<int>(std::round(center->first)) - textWidth / 2, 0,
+      std::max(0, rendering::window_width - textWidth));
+  constexpr int kLabelEdgeGap = 6;
+  const int labelBottomY =
+      static_cast<int>(std::round(center->second)) - kLabelEdgeGap;
+  const int coverTopY =
+      static_cast<int>(std::floor(std::min(coverTop->second, center->second)));
+  if (labelBottomY - kTextHeight < coverTopY) {
+    laneCoverVisibleTimeText->setVisible(false);
+    return;
+  }
+  const int y = std::clamp(
+      labelBottomY - kTextHeight, 0,
+      std::max(0, rendering::window_height - kTextHeight));
+  laneCoverVisibleTimeText->setPositionNoLayout(x, y);
+  laneCoverVisibleTimeText->setSize(textWidth, kTextHeight);
+  laneCoverVisibleTimeText->setVisible(true);
+}
+
+void BMSRenderer::drawLaneCover() {
+  const float coverHeight = upperBound - noteVisibleUpperBound;
+  if (coverHeight > 0.001f) {
+    drawRect(playAreaWidth, coverHeight, playAreaLeftX, noteVisibleUpperBound,
+             Color(9, 12, 18, 255));
+
+    const float edgeHeight = std::max(0.025f, noteRenderHeight * 0.12f);
+    drawRect(playAreaWidth, edgeHeight, playAreaLeftX,
+             noteVisibleUpperBound - edgeHeight * 0.5f,
+             Color(214, 224, 236, 255));
+  }
+
+  if (!laneCoverFloatingEnabled) {
+    return;
+  }
+
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  if (handle.width <= 0.0f || handle.height <= 0.0f) {
+    return;
+  }
+  drawRect(handle.width, handle.height, handle.x, handle.y,
+           Color(214, 224, 236, 246));
+
+  const float grooveWidth = handle.width * 0.48f;
+  const float grooveHeight = std::max(0.012f, handle.height * 0.11f);
+  const float grooveX = handle.x + (handle.width - grooveWidth) * 0.5f;
+  const float grooveGap = grooveHeight * 1.75f;
+  const float grooveY = handle.y + handle.height * 0.34f;
+  drawRect(grooveWidth, grooveHeight, grooveX, grooveY,
+           Color(31, 43, 58, 210));
+  drawRect(grooveWidth, grooveHeight, grooveX, grooveY + grooveGap,
+           Color(31, 43, 58, 210));
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const {

@@ -257,6 +257,23 @@ bool insertReplayTouchSample(sqlite3_stmt *stmt, int replayId, int sampleIndex,
   return sqlite3_step(stmt) == SQLITE_DONE;
 }
 
+bool insertReplayLaneCoverEvent(sqlite3_stmt *stmt, int replayId,
+                                int eventIndex,
+                                const ReplayLaneCoverEvent &event) {
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+
+  int bindIndex = 1;
+  sqlite3_bind_int(stmt, bindIndex++, replayId);
+  sqlite3_bind_int(stmt, bindIndex++, eventIndex);
+  sqlite3_bind_int64(stmt, bindIndex++, event.songTimeMicros);
+  sqlite3_bind_int(stmt, bindIndex++, event.noteStartPositionPercent);
+  sqlite3_bind_int(stmt, bindIndex++,
+                   event.resetVisibleTimeReference ? 1 : 0);
+
+  return sqlite3_step(stmt) == SQLITE_DONE;
+}
+
 ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn,
                                 int touchSampleCountColumn) {
   ReplaySummary summary;
@@ -430,6 +447,21 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
     return false;
   }
 
+  const char *laneCoverEventQuery =
+      "CREATE TABLE IF NOT EXISTS replay_lane_cover_events ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "replay_id INTEGER NOT NULL,"
+      "event_index INTEGER NOT NULL,"
+      "song_time_micros INTEGER NOT NULL,"
+      "note_start_position_percent INTEGER NOT NULL,"
+      "reset_visible_time_reference INTEGER NOT NULL,"
+      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+      ")";
+  if (!execSql(db, laneCoverEventQuery,
+               "creating replay lane cover event table")) {
+    return false;
+  }
+
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_replays_chart_sha256 ON "
       "replays(chart_sha256, id)",
@@ -441,6 +473,8 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
       "replay_events(replay_id, event_index)",
       "CREATE INDEX IF NOT EXISTS idx_replay_touch_samples_replay_order ON "
       "replay_touch_samples(replay_id, sample_index)",
+      "CREATE INDEX IF NOT EXISTS idx_replay_lane_cover_events_replay_order ON "
+      "replay_lane_cover_events(replay_id, event_index)",
   };
   for (const auto *indexQuery : indexes) {
     if (!execSql(db, indexQuery, "creating replay index")) {
@@ -585,7 +619,35 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   }
   touchSampleStmt.reset();
 
-  if (!eventOk || !touchSampleOk ||
+  const char *laneCoverEventInsert =
+      "INSERT INTO replay_lane_cover_events ("
+      "replay_id, event_index, song_time_micros,"
+      "note_start_position_percent, reset_visible_time_reference"
+      ") VALUES (?, ?, ?, ?, ?)";
+
+  SqliteStatementHandle laneCoverEventStmt;
+  rc = prepareSqliteStatement(db, laneCoverEventInsert, laneCoverEventStmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing replay lane cover event insert: %s",
+            sqlite3_errmsg(db));
+    execSql(db, "ROLLBACK", "rolling back replay save");
+    return std::nullopt;
+  }
+
+  bool laneCoverEventOk = true;
+  for (size_t i = 0; i < replay.laneCoverEvents.size(); ++i) {
+    if (!insertReplayLaneCoverEvent(laneCoverEventStmt.get(), replayId,
+                                    static_cast<int>(i),
+                                    replay.laneCoverEvents[i])) {
+      SDL_Log("SQL error while saving replay lane cover event: %s",
+              sqlite3_errmsg(db));
+      laneCoverEventOk = false;
+      break;
+    }
+  }
+  laneCoverEventStmt.reset();
+
+  if (!eventOk || !touchSampleOk || !laneCoverEventOk ||
       !execSql(db, "COMMIT", "committing replay save")) {
     execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
@@ -784,6 +846,31 @@ ReplayDBHelper::LoadReplay(int replayId,
     sample.y =
         static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 4));
     replay->touchSamples.push_back(sample);
+  }
+  touchSampleStmt.reset();
+
+  const char *laneCoverEventQuery =
+      "SELECT song_time_micros, note_start_position_percent,"
+      "reset_visible_time_reference "
+      "FROM replay_lane_cover_events WHERE replay_id = ? "
+      "ORDER BY event_index";
+  SqliteStatementHandle laneCoverEventStmt;
+  rc = prepareSqliteStatement(db, laneCoverEventQuery, laneCoverEventStmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing replay lane cover event load: %s",
+            sqlite3_errmsg(db));
+    return std::nullopt;
+  }
+  sqlite3_bind_int(laneCoverEventStmt.get(), 1, replay->id);
+
+  while (sqlite3_step(laneCoverEventStmt.get()) == SQLITE_ROW) {
+    ReplayLaneCoverEvent event;
+    event.songTimeMicros = sqlite3_column_int64(laneCoverEventStmt.get(), 0);
+    event.noteStartPositionPercent =
+        sqlite3_column_int(laneCoverEventStmt.get(), 1);
+    event.resetVisibleTimeReference =
+        sqlite3_column_int(laneCoverEventStmt.get(), 2) != 0;
+    replay->laneCoverEvents.push_back(event);
   }
 
   return replay;

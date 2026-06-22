@@ -83,6 +83,12 @@ struct ReplayTouchSample {
   float y = 0.0f;
 };
 
+struct ReplayLaneCoverEvent {
+  long long songTimeMicros = 0;
+  int noteStartPositionPercent = 0;
+  bool resetVisibleTimeReference = false;
+};
+
 struct ReplayData {
   int id = 0;
   bms_parser::ChartMeta chartMeta;
@@ -102,4 +108,5 @@ struct ReplayData {
   std::string createdAt;
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;
+  std::vector<ReplayLaneCoverEvent> laneCoverEvents;
 };

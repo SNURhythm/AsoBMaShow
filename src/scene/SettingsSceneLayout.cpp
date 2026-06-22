@@ -74,6 +74,7 @@ void SettingsScene::resetViewState() {
   keysoundModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
+  floatingLaneCoverModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
@@ -93,6 +94,7 @@ void SettingsScene::resetViewState() {
   keysoundModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
+  floatingLaneCoverModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
@@ -194,6 +196,10 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
         !context.settings.visibleTimeUseMilliseconds;
     persistSettings();
     syncVisibleTimeInputText(true);
+    if (previewRenderer != nullptr) {
+      previewRenderer->setVisibleTimeUseMilliseconds(
+          context.settings.visibleTimeUseMilliseconds);
+    }
   });
   View *visibleTimeModeRow = nullptr;
   if (compactAdjustments) {
@@ -1707,6 +1713,11 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "or direct milliseconds, and choose which BPM anchors that time.",
       visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
 
+  auto *noteStartPanel = new View();
+  noteStartPanel->setFlexDirection(FlexDirection::Column);
+  noteStartPanel->setGap(metrics.compact ? 12.0f : 16.0f);
+  noteStartPanel->setAlignItems(YGAlignFlexStart);
+
   auto *noteStartControls = new View();
   noteStartControls->setFlexDirection(FlexDirection::Row);
   noteStartControls->setFlexWrap(YGWrapWrap);
@@ -1750,6 +1761,20 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     syncNoteStartPositionInputText(true);
   });
   noteStartControls->addView(resetNoteStart);
+  noteStartPanel->addView(noteStartControls);
+
+  floatingLaneCoverModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  floatingLaneCoverModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        floatingLaneCoverModeText);
+  floatingLaneCoverModeButton->setOnClickListener([this]() {
+    context.settings.floatingLaneCoverEnabled =
+        !context.settings.floatingLaneCoverEnabled;
+    persistSettings();
+  });
+  noteStartPanel->addView(floatingLaneCoverModeButton);
   cardsColumn->addView(makeCard(
       metrics, "Note Start Position",
       metrics.compact
@@ -1759,7 +1784,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
             "position. The renderer scales scroll distance so the current "
             "green number still describes the time from appearance to the "
             "judgement line.",
-      noteStartControls, metrics.offsetCardHeight, metrics.cardsWidth));
+      noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);

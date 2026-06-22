@@ -244,6 +244,8 @@ void SettingsScene::renderScene() {
         context.settings.visibleTimeGreenNumber);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    previewRenderer->setVisibleTimeUseMilliseconds(
+        context.settings.visibleTimeUseMilliseconds);
     if (previewChart != nullptr) {
       previewRenderer->setPlayAreaWidth(
           context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
@@ -252,6 +254,8 @@ void SettingsScene::renderScene() {
         context.settings.laneBeamLengthPercent);
     previewRenderer->setNoteStartPositionPercent(
         context.settings.noteStartPositionPercent);
+    previewRenderer->setLaneCoverFloatingEnabled(
+        context.settings.floatingLaneCoverEnabled);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementIndicatorConfig(
         context.settings.judgementIndicatorEnabled,
@@ -340,6 +344,7 @@ void SettingsScene::cleanupScene() {
   keysoundModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
+  floatingLaneCoverModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -352,6 +357,7 @@ void SettingsScene::cleanupScene() {
   keysoundModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
+  floatingLaneCoverModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;

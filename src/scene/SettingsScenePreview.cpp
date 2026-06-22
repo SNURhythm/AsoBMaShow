@@ -118,12 +118,16 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.visibleTimeGreenNumber, true);
     previewRenderer->setVisibleTimeBpmStrategy(
         context.settings.visibleTimeBpmStrategy);
+    previewRenderer->setVisibleTimeUseMilliseconds(
+        context.settings.visibleTimeUseMilliseconds);
     previewRenderer->setPlayAreaWidth(
         context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
     previewRenderer->setLaneBeamLengthPercent(
         context.settings.laneBeamLengthPercent);
     previewRenderer->setNoteStartPositionPercent(
         context.settings.noteStartPositionPercent);
+    previewRenderer->setLaneCoverFloatingEnabled(
+        context.settings.floatingLaneCoverEnabled);
     previewRenderer->setLaneBeamClockUsesRenderTime(true);
     previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
     previewRenderer->setJudgementCounterEnabled(

@@ -47,9 +47,9 @@ private:
                          Vector3 normalizedLocation);
   std::map<SDL_FingerID, FlickState> flickStates;
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
-  std::function<void(SDL_FingerID, ReplayTouchAction, Vector3)>
+  std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)>
       touchEventCallback;
-  void notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
+  bool notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
@@ -75,6 +75,6 @@ public:
   void setPlayAreaWidth(float configuredPlayAreaWidth);
   void setDragModeEnabled(bool enabled);
   void setTouchEventCallback(
-      std::function<void(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
+      std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
   std::map<SDL_Keycode, int> keyMap;
 };

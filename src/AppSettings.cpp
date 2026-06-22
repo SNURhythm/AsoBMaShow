@@ -595,6 +595,8 @@ bool AppSettings::save() const {
        << "\n";
   file << "note_start_position_percent="
        << sanitized.noteStartPositionPercent << "\n";
+  file << "floating_lane_cover_enabled="
+       << (sanitized.floatingLaneCoverEnabled ? 1 : 0) << "\n";
   file << "play_area_width_4k=" << sanitized.playAreaWidth4K << "\n";
   file << "play_area_width_5k=" << sanitized.playAreaWidth5K << "\n";
   file << "play_area_width_6k=" << sanitized.playAreaWidth6K << "\n";
@@ -718,6 +720,11 @@ AppSettings AppSettings::load() {
         settings.laneBeamLengthPercent = std::stoi(value);
       } else if (key == "note_start_position_percent") {
         settings.noteStartPositionPercent = std::stoi(value);
+      } else if (key == "floating_lane_cover_enabled") {
+        bool parsed = settings.floatingLaneCoverEnabled;
+        if (parseBool(value, parsed)) {
+          settings.floatingLaneCoverEnabled = parsed;
+        }
       } else if (key == "play_area_width_4k") {
         settings.playAreaWidth4K = std::stof(value);
       } else if (key == "play_area_width_5k") {
