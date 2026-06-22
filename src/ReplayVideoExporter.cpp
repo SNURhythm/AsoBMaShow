@@ -658,6 +658,29 @@ long long calculateExportDurationMicros(bms_parser::Chart &chart,
   return std::max(0LL, durationMicros) + kAudioTailMicros;
 }
 
+std::vector<const bms_parser::TimeLine *>
+collectBpmChangeTimelines(const bms_parser::Chart &chart) {
+  std::vector<const bms_parser::TimeLine *> timelines;
+  for (const auto &measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || !timeline->BpmChange ||
+          !std::isfinite(timeline->Bpm) || timeline->Bpm <= 0.0) {
+        continue;
+      }
+      timelines.push_back(timeline);
+    }
+  }
+  std::sort(timelines.begin(), timelines.end(),
+            [](const bms_parser::TimeLine *lhs,
+               const bms_parser::TimeLine *rhs) {
+              return lhs->Timing < rhs->Timing;
+            });
+  return timelines;
+}
+
 std::vector<AudioEvent> collectAudioEvents(bms_parser::Chart &chart,
                                            const ReplayData &replay,
                                            long long keySoundOffsetMicros,
@@ -2338,12 +2361,39 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   BMSRenderer renderer(&chart, judge.timingWindows,
                        settings.visibleTimeGreenNumber);
   renderer.setVisibleTimeBpmStrategy(settings.visibleTimeBpmStrategy);
+  renderer.setVisibleTimeUseMilliseconds(settings.visibleTimeUseMilliseconds);
   renderer.setPlayAreaWidth(
       settings.playAreaWidthForKeyMode(chart.Meta.KeyMode));
   renderer.setLaneBeamLengthPercent(settings.laneBeamLengthPercent);
   renderer.setNoteStartPositionPercent(settings.noteStartPositionPercent);
   renderer.setLaneBeamClockUsesRenderTime(true);
   renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
+  const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
+  size_t bpmChangeCursor = 0;
+  double currentExportBpm = chart.Meta.Bpm;
+  renderer.setCurrentBpm(currentExportBpm);
+  auto applyExportBpm = [&](long long songTimeMicros) {
+    while (bpmChangeCursor < bpmChangeTimelines.size() &&
+           bpmChangeTimelines[bpmChangeCursor]->Timing <= songTimeMicros) {
+      const double bpm = bpmChangeTimelines[bpmChangeCursor]->Bpm;
+      if (std::abs(currentExportBpm - bpm) > 0.0001) {
+        currentExportBpm = bpm;
+        renderer.setCurrentBpm(currentExportBpm);
+      }
+      ++bpmChangeCursor;
+    }
+  };
+  size_t laneCoverEventCursor = 0;
+  auto applyReplayLaneCoverEvents = [&](long long songTimeMicros) {
+    while (laneCoverEventCursor < replay.laneCoverEvents.size() &&
+           replay.laneCoverEvents[laneCoverEventCursor].songTimeMicros <=
+               songTimeMicros) {
+      const auto &event = replay.laneCoverEvents[laneCoverEventCursor];
+      renderer.applyLaneCoverState(event.noteStartPositionPercent,
+                                   event.resetVisibleTimeReference);
+      ++laneCoverEventCursor;
+    }
+  };
   const bool judgementIndicatorHudMode =
       settings.judgementIndicatorRenderMode ==
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
@@ -2610,6 +2660,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     }
     releaseDueReplayLongNoteTails(replayAutoReleaseTails,
                                   replayAutoReleaseTailCursor, songTimeMicros);
+    applyExportBpm(songTimeMicros);
+    applyReplayLaneCoverEvents(songTimeMicros);
 
     if (!renderAndQueueFrame(frameIndex, songTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);

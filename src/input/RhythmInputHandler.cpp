@@ -26,12 +26,13 @@ namespace {
 constexpr Uint32 kCancelledTouchGraceMs = 50;
 } // namespace
 
-void RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
+bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
                                           ReplayTouchAction action,
                                           Vector3 normalizedLocation) {
   if (touchEventCallback != nullptr) {
-    touchEventCallback(fingerIndex, action, normalizedLocation);
+    return touchEventCallback(fingerIndex, action, normalizedLocation);
   }
+  return false;
 }
 
 void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
@@ -167,7 +168,10 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
 void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
                                       Vector3 normalizedLocation) {
   cancelGraceExpiry.erase(fingerIndex);
-  notifyTouchEvent(fingerIndex, ReplayTouchAction::Down, normalizedLocation);
+  if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Down,
+                       normalizedLocation)) {
+    return;
+  }
 
   const Vector3 renderLocation =
       normalizedTouchToRenderLocation(normalizedLocation);
@@ -183,7 +187,10 @@ void RhythmInputHandler::onFingerDown(SDL_FingerID fingerIndex,
 void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
                                     Vector3 normalizedLocation) {
   cancelGraceExpiry.erase(fingerIndex);
-  notifyTouchEvent(fingerIndex, ReplayTouchAction::Up, normalizedLocation);
+  if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Up,
+                       normalizedLocation)) {
+    return;
+  }
   SDL_Log("FingerUp: %lld, (%f, %f, %f)", static_cast<long long>(fingerIndex),
           normalizedLocation.x, normalizedLocation.y, normalizedLocation.z);
   if (flickStates.contains(fingerIndex)) {
@@ -197,7 +204,10 @@ void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
 }
 void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
                                       Vector3 normalizedLocation) {
-  notifyTouchEvent(fingerIndex, ReplayTouchAction::Move, normalizedLocation);
+  if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Move,
+                       normalizedLocation)) {
+    return;
+  }
   //  SDL_Log("FingerMove: %d, (%f, %f, %f)", fingerIndex, normalizedLocation.x,
   //  normalizedLocation.y,
   //          normalizedLocation.z);
@@ -243,8 +253,10 @@ void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
 }
 void RhythmInputHandler::onFingerCancel(SDL_FingerID fingerIndex,
                                         Vector3 normalizedLocation) {
-  notifyTouchEvent(fingerIndex, ReplayTouchAction::Cancel,
-                   normalizedLocation);
+  if (notifyTouchEvent(fingerIndex, ReplayTouchAction::Cancel,
+                       normalizedLocation)) {
+    return;
+  }
   (void)normalizedLocation;
   if (!fingerToLane.contains(fingerIndex)) {
     flickStates.erase(fingerIndex);
@@ -360,7 +372,7 @@ void RhythmInputHandler::setPlayAreaWidth(float configuredPlayAreaWidth) {
 }
 
 void RhythmInputHandler::setTouchEventCallback(
-    std::function<void(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
+    std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback) {
   touchEventCallback = std::move(callback);
 }
 

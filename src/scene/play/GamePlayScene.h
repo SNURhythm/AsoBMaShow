@@ -71,6 +71,7 @@ public:
 private:
   void reset();
   void initializeStartPositionState();
+  void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void restartCurrentPattern();
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
@@ -82,7 +83,9 @@ private:
   void buildReplayNoteLookup();
   void processReplayKeySounds(long long rawSongTimeMicros);
   void processReplayEvents(long long gameplayTimeMicros);
+  void processReplayLaneCoverEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
+  void applyReplayLaneCoverEvent(const ReplayLaneCoverEvent &event);
   void applyReplayGauge(const ReplayEvent &event);
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
   [[nodiscard]] long long getAudioOffsetMicros() const;
@@ -110,8 +113,16 @@ private:
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
                          const JudgeResult &judgeResult);
-  void handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
+  void appendReplayLaneCoverEvent(int noteStartPositionPercent,
+                                  long long songTimeMicros,
+                                  bool resetVisibleTimeReference);
+  bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
+  bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
+                                    ReplayTouchAction action,
+                                    Vector3 normalizedLocation,
+                                    long long songTimeMicros);
+  void persistFloatingLaneCoverSettings();
   void appendReplayTouchSample(SDL_FingerID fingerIndex,
                                ReplayTouchAction action,
                                Vector3 normalizedLocation,
@@ -137,7 +148,14 @@ private:
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
+  size_t replayLaneCoverCursor = 0;
   bool practiceGhostPublished = false;
+  bool floatingLaneCoverDragActive = false;
+  bool floatingLaneCoverDragChanged = false;
+  bool floatingLaneCoverSettingsDirty = false;
+  SDL_FingerID floatingLaneCoverFinger = -1;
+  float floatingLaneCoverDragOffsetY = 0.0f;
+  double currentGameplayBpm = 0.0;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void updateGaugeStatusText();

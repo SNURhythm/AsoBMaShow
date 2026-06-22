@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -105,6 +106,7 @@ private:
   std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<TextView> playOptionText;
+  std::unique_ptr<TextView> laneCoverVisibleTimeText;
   static constexpr size_t kJudgementCounterItemCount = 7;
   std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
       judgementCounterLabelTexts;
@@ -172,6 +174,9 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
+  bool visibleTimeUseMilliseconds = false;
+  double currentBpm = 0.0;
+  std::optional<double> floatingVisibleTimeReferenceBpm;
   AppSettings::VisibleTimeBpmStrategy visibleTimeBpmStrategy =
       AppSettings::VisibleTimeBpmStrategy::Chart;
   double mostPrevalentBpm = 0.0;
@@ -191,6 +196,7 @@ private:
   bool currentGaugeAutoShift = false;
   float currentGaugeValue = 0.0f;
   bool renderLaneBeams = true;
+  bool laneCoverFloatingEnabled = true;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
@@ -238,6 +244,7 @@ private:
       const JudgementCounterSnapshot &snapshot);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawLaneCover();
+  void layoutLaneCoverVisibleTimeText();
   void drawTitle(RenderContext &context) const;
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
@@ -277,6 +284,27 @@ private:
   bool isLeftScratch(int lane) const;
   bool isRightScratch(int lane) const;
   bool isScratch(int lane) const;
+  struct LaneCoverHandleGeometry {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+  struct LaneCoverVirtualHandleGeometry {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+  };
+  LaneCoverHandleGeometry laneCoverHandleGeometry() const;
+  std::optional<LaneCoverVirtualHandleGeometry>
+  laneCoverVirtualHandleGeometry() const;
+  std::optional<bx::Vec3> lanePlanePointAtRenderPosition(float renderX,
+                                                         float renderY) const;
+  std::optional<std::pair<float, float>> projectLanePointToUi(
+      float worldX, float worldY) const;
+  int effectiveVisibleTimeGreenNumber() const;
+  std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
   float laneToX(int lane) const;
@@ -311,12 +339,21 @@ public:
   void reset();
   void refreshGeometry();
   void setVisibleTimeGreenNumber(int greenNumber);
+  void setVisibleTimeUseMilliseconds(bool enabled);
+  void setCurrentBpm(double bpm);
   void setVisibleTimeBpmStrategy(
       AppSettings::VisibleTimeBpmStrategy strategy);
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
+  void setLaneCoverFloatingEnabled(bool enabled);
   void setLaneBeamLengthPercent(int percent);
   void setNoteStartPositionPercent(int percent);
+  void applyLaneCoverState(int percent, bool resetVisibleTimeReference);
+  bool isLaneCoverHandleHit(float renderX, float renderY) const;
+  std::optional<float> laneCoverHandleGrabOffset(float renderX,
+                                                float renderY) const;
+  int dragLaneCoverHandleTo(float renderX, float renderY,
+                            float lanePointYOffset);
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,

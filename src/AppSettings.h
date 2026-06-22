@@ -113,6 +113,7 @@ public:
   float laneLength = kDefaultLaneLength;
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
+  bool floatingLaneCoverEnabled = true;
   float playAreaWidth4K = kDefaultPlayAreaWidth;
   float playAreaWidth5K = kDefaultPlayAreaWidth;
   float playAreaWidth6K = kDefaultPlayAreaWidth;
