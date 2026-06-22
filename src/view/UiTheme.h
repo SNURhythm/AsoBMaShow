@@ -96,6 +96,11 @@ inline Color cyan() { return activePalette().cyan; }
 inline Color coral() { return activePalette().coral; }
 inline Color lime() { return activePalette().lime; }
 inline Color amber() { return activePalette().amber; }
+inline Color fastFeedback() { return cyan(); }
+inline Color slowFeedback() {
+  return activeMode() == ThemeMode::Light ? Color(218, 56, 66, 255)
+                                          : Color(255, 88, 104, 255);
+}
 inline Color textPrimary() { return activePalette().textPrimary; }
 inline Color textSecondary() { return activePalette().textSecondary; }
 inline Color textMuted() { return activePalette().textMuted; }

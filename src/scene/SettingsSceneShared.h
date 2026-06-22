@@ -695,21 +695,6 @@ static std::string formatJudgementCounterPositionLabel(
   return "Top";
 }
 
-static std::string formatJudgementTimingDisplayModeLabel(
-    AppSettings::JudgementTimingDisplayMode mode) {
-  switch (mode) {
-  case AppSettings::JudgementTimingDisplayMode::Both:
-    return "Both";
-  case AppSettings::JudgementTimingDisplayMode::Direction:
-    return "FAST/SLOW";
-  case AppSettings::JudgementTimingDisplayMode::Ms:
-    return "ms";
-  case AppSettings::JudgementTimingDisplayMode::Off:
-    return "Off";
-  }
-  return "Both";
-}
-
 static std::string formatJudgementTimingDisplayCriteriaLabel(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
   switch (criteria) {
@@ -721,6 +706,8 @@ static std::string formatJudgementTimingDisplayCriteriaLabel(
     return "GOOD OR BELOW";
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
     return "BAD OR BELOW";
+  case AppSettings::JudgementTimingDisplayCriteria::Off:
+    return "OFF";
   }
   return "GREAT OR BELOW";
 }
@@ -883,22 +870,6 @@ nextJudgementCounterPosition(
   return AppSettings::JudgementCounterPosition::Top;
 }
 
-static AppSettings::JudgementTimingDisplayMode
-nextJudgementTimingDisplayMode(
-    AppSettings::JudgementTimingDisplayMode mode) {
-  switch (mode) {
-  case AppSettings::JudgementTimingDisplayMode::Both:
-    return AppSettings::JudgementTimingDisplayMode::Direction;
-  case AppSettings::JudgementTimingDisplayMode::Direction:
-    return AppSettings::JudgementTimingDisplayMode::Ms;
-  case AppSettings::JudgementTimingDisplayMode::Ms:
-    return AppSettings::JudgementTimingDisplayMode::Off;
-  case AppSettings::JudgementTimingDisplayMode::Off:
-    return AppSettings::JudgementTimingDisplayMode::Both;
-  }
-  return AppSettings::JudgementTimingDisplayMode::Both;
-}
-
 static AppSettings::JudgementTimingDisplayCriteria
 nextJudgementTimingDisplayCriteria(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
@@ -908,6 +879,8 @@ nextJudgementTimingDisplayCriteria(
   case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
     return AppSettings::JudgementTimingDisplayCriteria::BadOrBelow;
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
+    return AppSettings::JudgementTimingDisplayCriteria::Off;
+  case AppSettings::JudgementTimingDisplayCriteria::Off:
     return AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
     return AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow;

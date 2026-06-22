@@ -34,18 +34,12 @@ public:
     Right = 2,
   };
 
-  enum class JudgementTimingDisplayMode {
-    Both = 0,
-    Direction = 1,
-    Ms = 2,
-    Off = 3,
-  };
-
   enum class JudgementTimingDisplayCriteria {
     GreatOrBelow = 0,
     PGreatOrBelow = 1,
     GoodOrBelow = 2,
     BadOrBelow = 3,
+    Off = 4,
   };
 
   enum class GaugeBarPosition {
@@ -134,9 +128,9 @@ public:
   bool judgementCounterEnabled = true;
   JudgementCounterPosition judgementCounterPosition =
       JudgementCounterPosition::Right;
-  JudgementTimingDisplayMode judgementTimingDisplayMode =
-      JudgementTimingDisplayMode::Both;
-  JudgementTimingDisplayCriteria judgementTimingDisplayCriteria =
+  JudgementTimingDisplayCriteria judgementTimingFastSlowCriteria =
+      JudgementTimingDisplayCriteria::GreatOrBelow;
+  JudgementTimingDisplayCriteria judgementTimingMillisecondsCriteria =
       JudgementTimingDisplayCriteria::GreatOrBelow;
   GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;

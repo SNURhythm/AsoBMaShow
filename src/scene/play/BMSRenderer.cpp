@@ -221,9 +221,9 @@ Color hudJudgementComboColor(Judgement judgement) {
   return Color(accent.r, accent.g, accent.b, judgement == None ? 168 : 242);
 }
 
-Color hudFastColor() { return ui_theme::cyan(); }
+Color hudFastColor() { return ui_theme::fastFeedback(); }
 
-Color hudSlowColor() { return ui_theme::amber(); }
+Color hudSlowColor() { return ui_theme::slowFeedback(); }
 
 Color hudTimingColor(long long diffMicros) {
   return diffMicros < 0 ? hudFastColor() : hudSlowColor();
@@ -260,6 +260,8 @@ int judgementTimingCriteriaRank(
     return 2;
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
     return 3;
+  case AppSettings::JudgementTimingDisplayCriteria::Off:
+    return 100;
   }
   return 1;
 }
@@ -655,13 +657,13 @@ BMSRenderer::BMSRenderer(
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
   judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingDirectionText->setAlign(TextView::CENTER);
+  judgementTimingDirectionText->setAlign(TextView::LEFT);
   judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
   judgementTimingDirectionText->setColor(ui_theme::sdl(ui_theme::cyan()));
   judgementTimingDirectionText->setOverflow(TextView::TextOverflow::Hidden);
   judgementTimingDirectionText->setVisible(false);
   judgementTimingMsText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingMsText->setAlign(TextView::CENTER);
+  judgementTimingMsText->setAlign(TextView::RIGHT);
   judgementTimingMsText->setVAlign(TextView::MIDDLE);
   judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   judgementTimingMsText->setOverflow(TextView::TextOverflow::Hidden);
@@ -1229,18 +1231,6 @@ void BMSRenderer::layoutCenteredJudgementText() {
     judgeWidth = std::clamp(judgeText->textureWidth() + 28, minJudgeWidth,
                             maxAvailableWidth);
   }
-  const int directionWidth =
-      hasTimingDirection
-          ? std::clamp(judgementTimingDirectionText->textureWidth() + 10, 54,
-                       104)
-          : 0;
-  const int msWidth =
-      hasTimingMs
-          ? std::clamp(judgementTimingMsText->textureWidth() + 10, 48, 96)
-          : 0;
-  const int timingInnerGap = hasTimingDirection && hasTimingMs ? 6 : 0;
-  const int timingWidth = directionWidth + timingInnerGap + msWidth;
-
   const int judgeY =
       std::clamp(centerY - judgeLineHeight / 2, 0,
                  std::max(0, judgementLayoutHeight - judgeLineHeight));
@@ -1250,20 +1240,24 @@ void BMSRenderer::layoutCenteredJudgementText() {
     judgeText->setSize(judgeWidth, judgeLineHeight);
   }
 
-  int timingX =
-      (judgementLayoutWidth - std::min(timingWidth, maxAvailableWidth)) / 2;
+  constexpr int kTimingDirectionMaxWidth = 104;
+  constexpr int kTimingMsMaxWidth = 96;
+  constexpr int kTimingInnerGap = 6;
+  const int timingWidth =
+      std::min(maxAvailableWidth, kTimingDirectionMaxWidth + kTimingInnerGap +
+                                      kTimingMsMaxWidth);
+  const int timingX = (judgementLayoutWidth - timingWidth) / 2;
   const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
   if (hasTimingDirection) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
-    judgementTimingDirectionText->setSize(directionWidth, timingLineHeight);
-    timingX += directionWidth + timingInnerGap;
+    judgementTimingDirectionText->setSize(timingWidth, timingLineHeight);
   } else if (judgementTimingDirectionText != nullptr) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
     judgementTimingDirectionText->setSize(1, 1);
   }
   if (hasTimingMs) {
     judgementTimingMsText->setPosition(timingX, timingY);
-    judgementTimingMsText->setSize(msWidth, timingLineHeight);
+    judgementTimingMsText->setSize(timingWidth, timingLineHeight);
   } else if (judgementTimingMsText != nullptr) {
     judgementTimingMsText->setPosition(timingX, timingY);
     judgementTimingMsText->setSize(1, 1);
@@ -2015,25 +2009,16 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   renderedCombo = combo;
 
   const bool hasJudgement = judgement != None;
-  const bool hasTiming = hasJudgement && diffMicros != 0 &&
-                         judgementMeetsTimingCriteria(
-                             judgement, judgementTimingDisplayCriteria) &&
-                         judgementTimingDisplayMode !=
-                             AppSettings::JudgementTimingDisplayMode::Off;
+  const bool hasTiming = hasJudgement && diffMicros != 0;
   const bool showTimingDirection =
-      hasTiming &&
-      (judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Both ||
-       judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Direction);
+      hasTiming && judgementMeetsTimingCriteria(
+                       judgement, judgementTimingFastSlowCriteria);
   const bool showTimingMs =
-      hasTiming &&
-      (judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Both ||
-       judgementTimingDisplayMode ==
-           AppSettings::JudgementTimingDisplayMode::Ms);
-  renderedTimingFastShown = showTimingDirection && diffMicros < 0;
-  renderedTimingSlowShown = showTimingDirection && diffMicros > 0;
+      hasTiming && judgementMeetsTimingCriteria(
+                       judgement, judgementTimingMillisecondsCriteria);
+  const bool showTimingFeedback = showTimingDirection || showTimingMs;
+  renderedTimingFastShown = showTimingFeedback && diffMicros < 0;
+  renderedTimingSlowShown = showTimingFeedback && diffMicros > 0;
   if (judgeText != nullptr) {
     judgeText->setVisible(hasJudgement);
     std::string judgeLine;
@@ -2057,8 +2042,10 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   }
   const bool keepLingeringTimingText =
       !refreshedTimingText &&
-      judgementTimingDisplayMode !=
-          AppSettings::JudgementTimingDisplayMode::Off &&
+      (judgementTimingFastSlowCriteria !=
+           AppSettings::JudgementTimingDisplayCriteria::Off ||
+       judgementTimingMillisecondsCriteria !=
+           AppSettings::JudgementTimingDisplayCriteria::Off) &&
       renderedTimingTextUntilMicros > currentMicros;
   if (!refreshedTimingText && !keepLingeringTimingText) {
     renderedTimingTextUntilMicros = 0;
@@ -2079,12 +2066,7 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
       judgementTimingMsText->setVisible(showTimingMs);
       judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
                                                   : "");
-      const Color msColor =
-          judgementTimingDisplayMode ==
-                  AppSettings::JudgementTimingDisplayMode::Ms
-              ? timingColor
-              : ui_theme::textSecondary();
-      judgementTimingMsText->setColor(ui_theme::sdl(msColor));
+      judgementTimingMsText->setColor(ui_theme::sdl(timingColor));
     }
   }
 
@@ -2241,21 +2223,21 @@ void BMSRenderer::setJudgementCounterPosition(
       judgementCounterRevision.load(std::memory_order_relaxed) - 1;
 }
 
-void BMSRenderer::setJudgementTimingDisplayMode(
-    AppSettings::JudgementTimingDisplayMode mode) {
-  if (judgementTimingDisplayMode == mode) {
+void BMSRenderer::setJudgementTimingFastSlowCriteria(
+    AppSettings::JudgementTimingDisplayCriteria criteria) {
+  if (judgementTimingFastSlowCriteria == criteria) {
     return;
   }
-  judgementTimingDisplayMode = mode;
+  judgementTimingFastSlowCriteria = criteria;
   hudRevision.fetch_add(1, std::memory_order_release);
 }
 
-void BMSRenderer::setJudgementTimingDisplayCriteria(
+void BMSRenderer::setJudgementTimingMillisecondsCriteria(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
-  if (judgementTimingDisplayCriteria == criteria) {
+  if (judgementTimingMillisecondsCriteria == criteria) {
     return;
   }
-  judgementTimingDisplayCriteria = criteria;
+  judgementTimingMillisecondsCriteria = criteria;
   hudRevision.fetch_add(1, std::memory_order_release);
 }
 

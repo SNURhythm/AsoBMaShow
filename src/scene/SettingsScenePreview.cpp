@@ -132,10 +132,10 @@ void SettingsScene::ensurePreviewRenderer() {
         context.settings.judgementCounterPosition);
     previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
-    previewRenderer->setJudgementTimingDisplayMode(
-        context.settings.judgementTimingDisplayMode);
-    previewRenderer->setJudgementTimingDisplayCriteria(
-        context.settings.judgementTimingDisplayCriteria);
+    previewRenderer->setJudgementTimingFastSlowCriteria(
+        context.settings.judgementTimingFastSlowCriteria);
+    previewRenderer->setJudgementTimingMillisecondsCriteria(
+        context.settings.judgementTimingMillisecondsCriteria);
     resetPreviewHudSample();
   }
 }

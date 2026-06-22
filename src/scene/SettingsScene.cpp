@@ -260,10 +260,10 @@ void SettingsScene::renderScene() {
         context.settings.judgementIndicatorRenderMode ==
             AppSettings::JudgementIndicatorRenderMode::Hud2D);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
-    previewRenderer->setJudgementTimingDisplayMode(
-        context.settings.judgementTimingDisplayMode);
-    previewRenderer->setJudgementTimingDisplayCriteria(
-        context.settings.judgementTimingDisplayCriteria);
+    previewRenderer->setJudgementTimingFastSlowCriteria(
+        context.settings.judgementTimingFastSlowCriteria);
+    previewRenderer->setJudgementTimingMillisecondsCriteria(
+        context.settings.judgementTimingMillisecondsCriteria);
     previewRenderer->setJudgementCounterEnabled(
         context.settings.judgementCounterEnabled);
     previewRenderer->setJudgementCounterPosition(
