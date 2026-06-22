@@ -657,13 +657,13 @@ BMSRenderer::BMSRenderer(
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
   judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingDirectionText->setAlign(TextView::CENTER);
+  judgementTimingDirectionText->setAlign(TextView::LEFT);
   judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
   judgementTimingDirectionText->setColor(ui_theme::sdl(ui_theme::cyan()));
   judgementTimingDirectionText->setOverflow(TextView::TextOverflow::Hidden);
   judgementTimingDirectionText->setVisible(false);
   judgementTimingMsText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingMsText->setAlign(TextView::CENTER);
+  judgementTimingMsText->setAlign(TextView::RIGHT);
   judgementTimingMsText->setVAlign(TextView::MIDDLE);
   judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   judgementTimingMsText->setOverflow(TextView::TextOverflow::Hidden);
@@ -1241,7 +1241,7 @@ void BMSRenderer::layoutCenteredJudgementText() {
           ? std::clamp(judgementTimingMsText->textureWidth() + 10, 48, 96)
           : 0;
   const int timingInnerGap = hasTimingDirection && hasTimingMs ? 6 : 0;
-  const int timingWidth = directionWidth + timingInnerGap + msWidth;
+  const int timingContentWidth = directionWidth + timingInnerGap + msWidth;
 
   const int judgeY =
       std::clamp(centerY - judgeLineHeight / 2, 0,
@@ -1252,20 +1252,21 @@ void BMSRenderer::layoutCenteredJudgementText() {
     judgeText->setSize(judgeWidth, judgeLineHeight);
   }
 
-  int timingX =
-      (judgementLayoutWidth - std::min(timingWidth, maxAvailableWidth)) / 2;
+  const int timingWidth =
+      std::clamp(std::max(judgeWidth, timingContentWidth), 1,
+                 maxAvailableWidth);
+  const int timingX = (judgementLayoutWidth - timingWidth) / 2;
   const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
   if (hasTimingDirection) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
-    judgementTimingDirectionText->setSize(directionWidth, timingLineHeight);
-    timingX += directionWidth + timingInnerGap;
+    judgementTimingDirectionText->setSize(timingWidth, timingLineHeight);
   } else if (judgementTimingDirectionText != nullptr) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
     judgementTimingDirectionText->setSize(1, 1);
   }
   if (hasTimingMs) {
     judgementTimingMsText->setPosition(timingX, timingY);
-    judgementTimingMsText->setSize(msWidth, timingLineHeight);
+    judgementTimingMsText->setSize(timingWidth, timingLineHeight);
   } else if (judgementTimingMsText != nullptr) {
     judgementTimingMsText->setPosition(timingX, timingY);
     judgementTimingMsText->setSize(1, 1);
