@@ -221,9 +221,9 @@ Color hudJudgementComboColor(Judgement judgement) {
   return Color(accent.r, accent.g, accent.b, judgement == None ? 168 : 242);
 }
 
-Color hudFastColor() { return ui_theme::cyan(); }
+Color hudFastColor() { return ui_theme::fastFeedback(); }
 
-Color hudSlowColor() { return ui_theme::amber(); }
+Color hudSlowColor() { return ui_theme::slowFeedback(); }
 
 Color hudTimingColor(long long diffMicros) {
   return diffMicros < 0 ? hudFastColor() : hudSlowColor();

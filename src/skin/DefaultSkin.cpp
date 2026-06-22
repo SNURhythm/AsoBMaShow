@@ -783,7 +783,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     timingRow->setHeight(24);
 
     auto *fastText =
-        makeLabel(std::to_string(timing.fast), 20, ui_theme::cyan());
+        makeLabel(std::to_string(timing.fast), 20, ui_theme::fastFeedback());
     fastText->setWidth(52);
     fastText->setHeight(24);
     fastText->setAlign(TextView::RIGHT);
@@ -797,7 +797,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     timingRow->addView(slashText);
 
     auto *slowText =
-        makeLabel(std::to_string(timing.slow), 20, ui_theme::amber());
+        makeLabel(std::to_string(timing.slow), 20, ui_theme::slowFeedback());
     slowText->setWidth(52);
     slowText->setHeight(24);
     slowText->setAlign(TextView::LEFT);
@@ -815,8 +815,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   addJudgementMetric("POOR", Poor, ui_theme::coral(), "poor");
   addJudgementMetric("KPOOR", Kpoor, Color(255, 78, 102, 255), "kpoor");
   addMetric("BREAK", resultState.comboBreak, ui_theme::coral(), "break");
-  addMetric("FAST", resultState.fastCount, ui_theme::cyan(), "fast");
-  addMetric("SLOW", resultState.slowCount, ui_theme::amber(), "slow");
+  addMetric("FAST", resultState.fastCount, ui_theme::fastFeedback(), "fast");
+  addMetric("SLOW", resultState.slowCount, ui_theme::slowFeedback(), "slow");
 
   rootLayout->addView(detailsGrid);
 
