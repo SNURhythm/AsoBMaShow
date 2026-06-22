@@ -1023,6 +1023,115 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
             "audio timeline.",
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
+  auto *judgementFeedbackControls = new View();
+  judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
+  judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
+  judgementFeedbackControls->addView(makeWrappedText(
+      metrics.compact
+          ? "Place judgement text and choose timing feedback thresholds."
+          : "Place the judgement/combo text and choose when FAST/SLOW and "
+            "millisecond timing feedback appear.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+
+  judgementFeedbackControls->addView(makeSummaryRow(
+      metrics, "Judge Text Y", &summaryJudgementTextYValueText));
+  auto *judgementTextYControls = new View();
+  judgementTextYControls->setFlexDirection(FlexDirection::Row);
+  judgementTextYControls->setFlexWrap(YGWrapWrap);
+  judgementTextYControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  judgementTextYControls->setAlignItems(YGAlignFlexStart);
+  auto updateJudgementTextY = [this](int deltaPercent) {
+    const int currentPercent =
+        judgementTextYToPercent(context.settings.judgementTextY);
+    const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
+    context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
+    persistSettings();
+  };
+  auto *minusJudgementTextYLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10%");
+  minusJudgementTextYLarge->setOnClickListener(
+      [updateJudgementTextY]() { updateJudgementTextY(-10); });
+  judgementTextYControls->addView(minusJudgementTextYLarge);
+  auto *minusJudgementTextYSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
+  minusJudgementTextYSmall->setOnClickListener(
+      [updateJudgementTextY]() { updateJudgementTextY(-1); });
+  judgementTextYControls->addView(minusJudgementTextYSmall);
+  auto *plusJudgementTextYSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
+  plusJudgementTextYSmall->setOnClickListener(
+      [updateJudgementTextY]() { updateJudgementTextY(1); });
+  judgementTextYControls->addView(plusJudgementTextYSmall);
+  auto *plusJudgementTextYLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10%");
+  plusJudgementTextYLarge->setOnClickListener(
+      [updateJudgementTextY]() { updateJudgementTextY(10); });
+  judgementTextYControls->addView(plusJudgementTextYLarge);
+  auto *resetJudgementTextY = makeResetButton(metrics);
+  resetJudgementTextY->setOnClickListener([this]() {
+    context.settings.judgementTextY = AppSettings::kDefaultJudgementTextY;
+    persistSettings();
+  });
+  judgementTextYControls->addView(resetJudgementTextY);
+  judgementFeedbackControls->addView(judgementTextYControls);
+
+  auto *timingCriteriaControls = new View();
+  timingCriteriaControls->setFlexDirection(FlexDirection::Row);
+  timingCriteriaControls->setFlexWrap(YGWrapWrap);
+  timingCriteriaControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  timingCriteriaControls->setAlignItems(YGAlignFlexStart);
+
+  auto *timingFastSlowGroup = new View();
+  timingFastSlowGroup->setFlexDirection(FlexDirection::Column);
+  timingFastSlowGroup->setGap(metrics.compact ? 6.0f : 8.0f);
+  timingFastSlowGroup->addView(
+      makeText("FAST/SLOW", metrics.bodyTextSize, ui_theme::textSecondary()));
+  judgementTimingFastSlowCriteriaText =
+      makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementTimingFastSlowCriteriaButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementTimingFastSlowCriteriaText);
+  judgementTimingFastSlowCriteriaButton->setOnClickListener([this]() {
+    context.settings.judgementTimingFastSlowCriteria =
+        nextJudgementTimingDisplayCriteria(
+            context.settings.judgementTimingFastSlowCriteria);
+    persistSettings();
+  });
+  timingFastSlowGroup->addView(judgementTimingFastSlowCriteriaButton);
+  timingCriteriaControls->addView(timingFastSlowGroup);
+
+  auto *timingMillisecondsGroup = new View();
+  timingMillisecondsGroup->setFlexDirection(FlexDirection::Column);
+  timingMillisecondsGroup->setGap(metrics.compact ? 6.0f : 8.0f);
+  timingMillisecondsGroup->addView(makeText(
+      "Milliseconds", metrics.bodyTextSize, ui_theme::textSecondary()));
+  judgementTimingMillisecondsCriteriaText =
+      makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  judgementTimingMillisecondsCriteriaButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        judgementTimingMillisecondsCriteriaText);
+  judgementTimingMillisecondsCriteriaButton->setOnClickListener([this]() {
+    context.settings.judgementTimingMillisecondsCriteria =
+        nextJudgementTimingDisplayCriteria(
+            context.settings.judgementTimingMillisecondsCriteria);
+    persistSettings();
+  });
+  timingMillisecondsGroup->addView(judgementTimingMillisecondsCriteriaButton);
+  timingCriteriaControls->addView(timingMillisecondsGroup);
+  judgementFeedbackControls->addView(timingCriteriaControls);
+
+  cardsColumn->addView(makeCard(
+      metrics, "Judgement Feedback",
+      metrics.compact
+          ? "Configure judgement text and timing feedback display."
+          : "Configure judgement/combo placement and separate FAST/SLOW and "
+            "millisecond display thresholds.",
+      judgementFeedbackControls, metrics.visibleTimeCardHeight,
+      metrics.cardsWidth));
+
   auto *judgementIndicatorControls = new View();
   judgementIndicatorControls->setFlexDirection(FlexDirection::Column);
   judgementIndicatorControls->setGap(metrics.compact ? 12.0f : 16.0f);
