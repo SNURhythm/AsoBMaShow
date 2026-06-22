@@ -188,6 +188,20 @@ ReplayEventAction actionFromInt(int value) {
   }
 }
 
+ReplayTouchAction touchActionFromInt(int value) {
+  switch (value) {
+  case 0:
+    return ReplayTouchAction::Down;
+  case 2:
+    return ReplayTouchAction::Up;
+  case 3:
+    return ReplayTouchAction::Cancel;
+  case 1:
+  default:
+    return ReplayTouchAction::Move;
+  }
+}
+
 GaugeType gaugeTypeFromInt(int value) {
   if (value < 0 || value >= static_cast<int>(kGaugeTypeCount)) {
     return GaugeType::Normal;
@@ -225,7 +239,26 @@ bool insertReplayEvent(sqlite3_stmt *stmt, int replayId, int eventIndex,
   return sqlite3_step(stmt) == SQLITE_DONE;
 }
 
-ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn) {
+bool insertReplayTouchSample(sqlite3_stmt *stmt, int replayId, int sampleIndex,
+                             const ReplayTouchSample &sample) {
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+
+  int bindIndex = 1;
+  sqlite3_bind_int(stmt, bindIndex++, replayId);
+  sqlite3_bind_int(stmt, bindIndex++, sampleIndex);
+  sqlite3_bind_int(stmt, bindIndex++, static_cast<int>(sample.action));
+  sqlite3_bind_int64(stmt, bindIndex++,
+                     static_cast<sqlite3_int64>(sample.fingerId));
+  sqlite3_bind_int64(stmt, bindIndex++, sample.songTimeMicros);
+  sqlite3_bind_double(stmt, bindIndex++, sample.x);
+  sqlite3_bind_double(stmt, bindIndex++, sample.y);
+
+  return sqlite3_step(stmt) == SQLITE_DONE;
+}
+
+ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn,
+                                int touchSampleCountColumn) {
   ReplaySummary summary;
   summary.id = sqlite3_column_int(stmt, 0);
   summary.initialGaugeType = gaugeTypeFromInt(sqlite3_column_int(stmt, 6));
@@ -247,6 +280,7 @@ ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int eventCountColumn) {
     summary.playOption2Seed = sqlite3_column_int64(stmt, 15);
   }
   summary.eventCount = sqlite3_column_int(stmt, eventCountColumn);
+  summary.touchSampleCount = sqlite3_column_int(stmt, touchSampleCountColumn);
   return summary;
 }
 } // namespace
@@ -371,6 +405,22 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
     return false;
   }
 
+  const char *touchSampleQuery =
+      "CREATE TABLE IF NOT EXISTS replay_touch_samples ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "replay_id INTEGER NOT NULL,"
+      "sample_index INTEGER NOT NULL,"
+      "action INTEGER NOT NULL,"
+      "finger_id INTEGER NOT NULL,"
+      "song_time_micros INTEGER NOT NULL,"
+      "x REAL NOT NULL,"
+      "y REAL NOT NULL,"
+      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+      ")";
+  if (!execSql(db, touchSampleQuery, "creating replay touch sample table")) {
+    return false;
+  }
+
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_replays_chart_sha256 ON "
       "replays(chart_sha256, id)",
@@ -380,6 +430,8 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
       "replays(chart_path, id)",
       "CREATE INDEX IF NOT EXISTS idx_replay_events_replay_order ON "
       "replay_events(replay_id, event_index)",
+      "CREATE INDEX IF NOT EXISTS idx_replay_touch_samples_replay_order ON "
+      "replay_touch_samples(replay_id, sample_index)",
   };
   for (const auto *indexQuery : indexes) {
     if (!execSql(db, indexQuery, "creating replay index")) {
@@ -494,7 +546,35 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   }
   eventStmt.reset();
 
-  if (!eventOk || !execSql(db, "COMMIT", "committing replay save")) {
+  const char *touchSampleInsert =
+      "INSERT INTO replay_touch_samples ("
+      "replay_id, sample_index, action, finger_id, song_time_micros, x, y"
+      ") VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+  SqliteStatementHandle touchSampleStmt;
+  rc = prepareSqliteStatement(db, touchSampleInsert, touchSampleStmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing replay touch sample insert: %s",
+            sqlite3_errmsg(db));
+    execSql(db, "ROLLBACK", "rolling back replay save");
+    return std::nullopt;
+  }
+
+  bool touchSampleOk = true;
+  for (size_t i = 0; i < replay.touchSamples.size(); ++i) {
+    if (!insertReplayTouchSample(touchSampleStmt.get(), replayId,
+                                 static_cast<int>(i),
+                                 replay.touchSamples[i])) {
+      SDL_Log("SQL error while saving replay touch sample: %s",
+              sqlite3_errmsg(db));
+      touchSampleOk = false;
+      break;
+    }
+  }
+  touchSampleStmt.reset();
+
+  if (!eventOk || !touchSampleOk ||
+      !execSql(db, "COMMIT", "committing replay save")) {
     execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
@@ -524,13 +604,12 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
       "r.play_option, r.play_option_seed, r.play_option2,"
       "r.play_option2_seed,"
-      "COUNT(e.id) "
+      "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
+      "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id) "
       "FROM replays r "
-      "LEFT JOIN replay_events e ON e.replay_id = r.id "
       "WHERE ((? != '' AND r.chart_sha256 = ?) OR "
       "(? != '' AND r.chart_md5 = ?) OR "
       "(? != '' AND r.chart_path = ?)) "
-      "GROUP BY r.id "
       "ORDER BY r.id DESC LIMIT ?";
 
   SqliteStatementHandle stmt;
@@ -544,7 +623,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   sqlite3_bind_int(stmt.get(), bindIndex++, limit);
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    replays.push_back(readReplaySummary(stmt.get(), 16));
+    replays.push_back(readReplaySummary(stmt.get(), 16, 17));
   }
   return replays;
 }
@@ -664,6 +743,32 @@ ReplayDBHelper::LoadReplay(int replayId,
     event.combo = sqlite3_column_int(eventStmt.get(), 9);
     event.score = sqlite3_column_int(eventStmt.get(), 10);
     replay->events.push_back(event);
+  }
+  eventStmt.reset();
+
+  const char *touchSampleQuery =
+      "SELECT action, finger_id, song_time_micros, x, y "
+      "FROM replay_touch_samples WHERE replay_id = ? ORDER BY sample_index";
+  SqliteStatementHandle touchSampleStmt;
+  rc = prepareSqliteStatement(db, touchSampleQuery, touchSampleStmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing replay touch sample load: %s",
+            sqlite3_errmsg(db));
+    return std::nullopt;
+  }
+  sqlite3_bind_int(touchSampleStmt.get(), 1, replay->id);
+
+  while (sqlite3_step(touchSampleStmt.get()) == SQLITE_ROW) {
+    ReplayTouchSample sample;
+    sample.action =
+        touchActionFromInt(sqlite3_column_int(touchSampleStmt.get(), 0));
+    sample.fingerId = sqlite3_column_int64(touchSampleStmt.get(), 1);
+    sample.songTimeMicros = sqlite3_column_int64(touchSampleStmt.get(), 2);
+    sample.x =
+        static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 3));
+    sample.y =
+        static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 4));
+    replay->touchSamples.push_back(sample);
   }
 
   return replay;

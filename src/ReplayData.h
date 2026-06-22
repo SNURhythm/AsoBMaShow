@@ -15,6 +15,13 @@ enum class ReplayEventAction {
   Mine = 3,
 };
 
+enum class ReplayTouchAction {
+  Down = 0,
+  Move = 1,
+  Up = 2,
+  Cancel = 3,
+};
+
 struct ReplayEvent {
   ReplayEventAction action = ReplayEventAction::Press;
   int lane = -1;
@@ -27,6 +34,14 @@ struct ReplayEvent {
   GaugeType gaugeType = GaugeType::Normal;
   int combo = 0;
   int score = 0;
+};
+
+struct ReplayTouchSample {
+  ReplayTouchAction action = ReplayTouchAction::Move;
+  long long fingerId = 0;
+  long long songTimeMicros = 0;
+  float x = 0.0f;
+  float y = 0.0f;
 };
 
 struct ReplayData {
@@ -46,4 +61,5 @@ struct ReplayData {
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
   std::vector<ReplayEvent> events;
+  std::vector<ReplayTouchSample> touchSamples;
 };

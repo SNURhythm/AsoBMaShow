@@ -137,6 +137,8 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.fps =
       std::clamp(options.fps > 0 ? options.fps : kDefaultExportFps, 1, 120);
   resolved.includeResultScreen = options.includeResultScreen;
+  resolved.renderTouchPoints = options.renderTouchPoints;
+  resolved.renderReplayGhosts = options.renderReplayGhosts;
   resolved.progressCallback = options.progressCallback;
   return resolved;
 }
@@ -649,6 +651,9 @@ long long calculateExportDurationMicros(bms_parser::Chart &chart,
   for (const auto &event : replay.events) {
     durationMicros = std::max(durationMicros, event.songTimeMicros);
     durationMicros = std::max(durationMicros, event.noteTimeMicros);
+  }
+  for (const auto &sample : replay.touchSamples) {
+    durationMicros = std::max(durationMicros, sample.songTimeMicros);
   }
   return std::max(0LL, durationMicros) + kAudioTailMicros;
 }
@@ -2354,6 +2359,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                           gaugeInitialValue(replay.initialGaugeType));
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
+  renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
+  renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
 
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
@@ -2613,7 +2620,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           rendering::renderFullscreenTextureTint(
               bgaBlurPass->outputTexture(), rendering::final_view,
               static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
-          renderer.render(renderContext, visualTimeMicros);
+          renderer.render(renderContext, visualTimeMicros, songTimeMicros);
         })) {
       bgfxCleanup.runNow();
       return {

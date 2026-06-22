@@ -1514,6 +1514,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResolutionFullButton = nullptr;
   replayResultIncludeButton = nullptr;
   replayResultSkipButton = nullptr;
+  replayTouchShowButton = nullptr;
+  replayTouchHideButton = nullptr;
+  replayGhostShowButton = nullptr;
+  replayGhostHideButton = nullptr;
+  replayExportTouchShowButton = nullptr;
+  replayExportTouchHideButton = nullptr;
+  replayExportGhostShowButton = nullptr;
+  replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
   replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
@@ -1524,6 +1532,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResolutionFullButtonText = nullptr;
   replayResultIncludeButtonText = nullptr;
   replayResultSkipButtonText = nullptr;
+  replayTouchShowButtonText = nullptr;
+  replayTouchHideButtonText = nullptr;
+  replayGhostShowButtonText = nullptr;
+  replayGhostHideButtonText = nullptr;
+  replayExportTouchShowButtonText = nullptr;
+  replayExportTouchHideButtonText = nullptr;
+  replayExportGhostShowButtonText = nullptr;
+  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -1549,6 +1565,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
+  selectedReplayRenderTouchPoints = true;
+  selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();
@@ -4586,6 +4604,64 @@ void MainMenuScene::buildReplayModal() {
   replayListView->setThemedBorderColor(ui_theme::hairline);
   replayListView->setBorderWidth(1);
   replayListContent->addView(replayListView);
+  auto *replayTouchRow = makeModalOptionRow(52.0f);
+  auto *replayTouchLabel = makeModalLabel("Touch Points");
+  replayTouchLabel->setWidth(180);
+  replayTouchLabel->setHeight(52);
+  replayTouchLabel->setVAlign(TextView::MIDDLE);
+  replayTouchShowButton =
+      makeModalButton("Show", 18, &replayTouchShowButtonText);
+  replayTouchHideButton =
+      makeModalButton("Hide", 18, &replayTouchHideButtonText);
+  replayTouchShowButton->setFlex(1);
+  replayTouchHideButton->setFlex(1);
+  replayTouchShowButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderTouchPoints = true;
+    refreshReplayExportOptionButtons();
+  });
+  replayTouchHideButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderTouchPoints = false;
+    refreshReplayExportOptionButtons();
+  });
+  replayTouchRow->addView(replayTouchLabel);
+  replayTouchRow->addView(replayTouchShowButton);
+  replayTouchRow->addView(replayTouchHideButton);
+  replayListContent->addView(replayTouchRow);
+  auto *replayGhostRow = makeModalOptionRow(52.0f);
+  auto *replayGhostLabel = makeModalLabel("Ghosts");
+  replayGhostLabel->setWidth(180);
+  replayGhostLabel->setHeight(52);
+  replayGhostLabel->setVAlign(TextView::MIDDLE);
+  replayGhostShowButton =
+      makeModalButton("Show", 18, &replayGhostShowButtonText);
+  replayGhostHideButton =
+      makeModalButton("Hide", 18, &replayGhostHideButtonText);
+  replayGhostShowButton->setFlex(1);
+  replayGhostHideButton->setFlex(1);
+  replayGhostShowButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderGhosts = true;
+    refreshReplayExportOptionButtons();
+  });
+  replayGhostHideButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderGhosts = false;
+    refreshReplayExportOptionButtons();
+  });
+  replayGhostRow->addView(replayGhostLabel);
+  replayGhostRow->addView(replayGhostShowButton);
+  replayGhostRow->addView(replayGhostHideButton);
+  replayListContent->addView(replayGhostRow);
   replayModalContentFrame->addView(replayListContent);
 
   replayExportOptionsContent = new View();
@@ -4597,7 +4673,7 @@ void MainMenuScene::buildReplayModal() {
       ->setWidth(kModalContentWidth)
       ->setHeight(kModalContentHeight)
       ->setJustifyContent(YGJustifyCenter)
-      ->setGap(18);
+      ->setGap(6);
   replayExportOptionsContent->setVisible(false);
 
   replayExportOptionsContent->addView(makeModalLabel("Frame Rate"));
@@ -4675,6 +4751,66 @@ void MainMenuScene::buildReplayModal() {
   resultRow->addView(replayResultIncludeButton);
   resultRow->addView(replayResultSkipButton);
   replayExportOptionsContent->addView(resultRow);
+
+  auto *exportTouchRow = makeModalOptionRow();
+  auto *exportTouchLabel = makeModalLabel("Touch Points");
+  exportTouchLabel->setWidth(180);
+  exportTouchLabel->setHeight(58);
+  exportTouchLabel->setVAlign(TextView::MIDDLE);
+  replayExportTouchShowButton =
+      makeModalButton("Show", 18, &replayExportTouchShowButtonText);
+  replayExportTouchHideButton =
+      makeModalButton("Hide", 18, &replayExportTouchHideButtonText);
+  replayExportTouchShowButton->setFlex(1);
+  replayExportTouchHideButton->setFlex(1);
+  replayExportTouchShowButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderTouchPoints = true;
+    refreshReplayExportOptionButtons();
+  });
+  replayExportTouchHideButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderTouchPoints = false;
+    refreshReplayExportOptionButtons();
+  });
+  exportTouchRow->addView(exportTouchLabel);
+  exportTouchRow->addView(replayExportTouchShowButton);
+  exportTouchRow->addView(replayExportTouchHideButton);
+  replayExportOptionsContent->addView(exportTouchRow);
+
+  auto *exportGhostRow = makeModalOptionRow();
+  auto *exportGhostLabel = makeModalLabel("Ghosts");
+  exportGhostLabel->setWidth(180);
+  exportGhostLabel->setHeight(58);
+  exportGhostLabel->setVAlign(TextView::MIDDLE);
+  replayExportGhostShowButton =
+      makeModalButton("Show", 18, &replayExportGhostShowButtonText);
+  replayExportGhostHideButton =
+      makeModalButton("Hide", 18, &replayExportGhostHideButtonText);
+  replayExportGhostShowButton->setFlex(1);
+  replayExportGhostHideButton->setFlex(1);
+  replayExportGhostShowButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderGhosts = true;
+    refreshReplayExportOptionButtons();
+  });
+  replayExportGhostHideButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    selectedReplayRenderGhosts = false;
+    refreshReplayExportOptionButtons();
+  });
+  exportGhostRow->addView(exportGhostLabel);
+  exportGhostRow->addView(replayExportGhostShowButton);
+  exportGhostRow->addView(replayExportGhostHideButton);
+  replayExportOptionsContent->addView(exportGhostRow);
   replayModalContentFrame->addView(replayExportOptionsContent);
 
   replayExportProgressContent = new View();
@@ -4793,6 +4929,8 @@ void MainMenuScene::buildReplayModal() {
       ReplayVideoExportOptions options;
       options.fps = selectedExportFps;
       options.includeResultScreen = selectedExportIncludeResultScreen;
+      options.renderTouchPoints = selectedReplayRenderTouchPoints;
+      options.renderReplayGhosts = selectedReplayRenderGhosts;
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
@@ -4827,6 +4965,8 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   }
 
   selectedReplayIndex = -1;
+  selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
+  selectedReplayRenderGhosts = true;
   replayModalTitleText->setText("Replay");
   replayListContent->setVisible(true);
   replayExportOptionsContent->setVisible(false);
@@ -4834,6 +4974,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayListView->setReplaySummaries(replaySummaries);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
+  refreshReplayExportOptionButtons();
   refreshReplayModalActions();
   replayModalRoot->applyYogaLayoutFromRoot();
 }
@@ -4964,6 +5105,26 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
                     selectedExportIncludeResultScreen);
   styleOptionButton(replayResultSkipButton, replayResultSkipButtonText,
                     !selectedExportIncludeResultScreen);
+  styleOptionButton(replayTouchShowButton, replayTouchShowButtonText,
+                    selectedReplayRenderTouchPoints);
+  styleOptionButton(replayTouchHideButton, replayTouchHideButtonText,
+                    !selectedReplayRenderTouchPoints);
+  styleOptionButton(replayExportTouchShowButton,
+                    replayExportTouchShowButtonText,
+                    selectedReplayRenderTouchPoints);
+  styleOptionButton(replayExportTouchHideButton,
+                    replayExportTouchHideButtonText,
+                    !selectedReplayRenderTouchPoints);
+  styleOptionButton(replayGhostShowButton, replayGhostShowButtonText,
+                    selectedReplayRenderGhosts);
+  styleOptionButton(replayGhostHideButton, replayGhostHideButtonText,
+                    !selectedReplayRenderGhosts);
+  styleOptionButton(replayExportGhostShowButton,
+                    replayExportGhostShowButtonText,
+                    selectedReplayRenderGhosts);
+  styleOptionButton(replayExportGhostHideButton,
+                    replayExportGhostHideButtonText,
+                    !selectedReplayRenderGhosts);
 }
 
 void MainMenuScene::updateReplayExportProgressUi(double fraction,
@@ -5046,6 +5207,10 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                   .gaugeType = replayData->initialGaugeType,
                                   .gaugeAutoShift = replayData->gaugeAutoShift,
                                   .replayData = replayData,
+                                  .touchVisualizationEnabled =
+                                      selectedReplayRenderTouchPoints,
+                                  .replayGhostRenderingEnabled =
+                                      selectedReplayRenderGhosts,
                               });
         willStart.store(false);
         return true;
@@ -5573,6 +5738,14 @@ void MainMenuScene::cleanupScene() {
   replayResolutionFullButton = nullptr;
   replayResultIncludeButton = nullptr;
   replayResultSkipButton = nullptr;
+  replayTouchShowButton = nullptr;
+  replayTouchHideButton = nullptr;
+  replayGhostShowButton = nullptr;
+  replayGhostHideButton = nullptr;
+  replayExportTouchShowButton = nullptr;
+  replayExportTouchHideButton = nullptr;
+  replayExportGhostShowButton = nullptr;
+  replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
   replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
@@ -5583,6 +5756,14 @@ void MainMenuScene::cleanupScene() {
   replayResolutionFullButtonText = nullptr;
   replayResultIncludeButtonText = nullptr;
   replayResultSkipButtonText = nullptr;
+  replayTouchShowButtonText = nullptr;
+  replayTouchHideButtonText = nullptr;
+  replayGhostShowButtonText = nullptr;
+  replayGhostHideButtonText = nullptr;
+  replayExportTouchShowButtonText = nullptr;
+  replayExportTouchHideButtonText = nullptr;
+  replayExportGhostShowButtonText = nullptr;
+  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -5627,6 +5808,8 @@ void MainMenuScene::cleanupScene() {
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
+  selectedReplayRenderTouchPoints = true;
+  selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
   playOptionButtons.clear();

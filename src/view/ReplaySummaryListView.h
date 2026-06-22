@@ -82,6 +82,9 @@ public:
                          "  Gauge " +
                          replay_summary_ui::formatGauge(summary.finalGauge) +
                          "  Events " + std::to_string(summary.eventCount);
+    if (summary.touchSampleCount > 0) {
+      detail += "  Touches " + std::to_string(summary.touchSampleCount);
+    }
     const std::string optionLabel = replay_summary_ui::playOptionLabel(summary);
     if (!optionLabel.empty()) {
       detail += "  " + optionLabel;

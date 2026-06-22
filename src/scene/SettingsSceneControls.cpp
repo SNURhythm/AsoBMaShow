@@ -190,6 +190,8 @@ void SettingsScene::refreshSettingsText() {
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
       context.settings.showInvisibleNotes ? "Shown" : "Hidden";
+  const std::string touchVisualizationLabel =
+      context.settings.touchVisualizationEnabled ? "Shown" : "Hidden";
   const std::string archiveChartPreviewLabel =
       context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
   const std::string judgementIndicatorLabel =
@@ -306,6 +308,9 @@ void SettingsScene::refreshSettingsText() {
   if (showInvisibleNotesModeText != nullptr) {
     showInvisibleNotesModeText->setText(invisibleNotesLabel);
   }
+  if (touchVisualizationModeText != nullptr) {
+    touchVisualizationModeText->setText(touchVisualizationLabel);
+  }
   if (archiveChartPreviewModeText != nullptr) {
     archiveChartPreviewModeText->setText(archiveChartPreviewLabel);
   }
@@ -374,6 +379,10 @@ void SettingsScene::refreshSettingsText() {
       showInvisibleNotesModeButton, showInvisibleNotesModeText,
       context.settings.showInvisibleNotes ? SettingsButtonTone::Success
                                           : SettingsButtonTone::Info);
+  applySemanticButtonStyle(
+      touchVisualizationModeButton, touchVisualizationModeText,
+      context.settings.touchVisualizationEnabled ? SettingsButtonTone::Success
+                                                 : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       archiveChartPreviewModeButton, archiveChartPreviewModeText,
       context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success

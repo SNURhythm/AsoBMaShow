@@ -338,6 +338,8 @@ void SettingsScene::cleanupScene() {
   visibleTimeModeText = nullptr;
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
+  showInvisibleNotesModeText = nullptr;
+  touchVisualizationModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -348,6 +350,8 @@ void SettingsScene::cleanupScene() {
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
+  showInvisibleNotesModeButton = nullptr;
+  touchVisualizationModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;

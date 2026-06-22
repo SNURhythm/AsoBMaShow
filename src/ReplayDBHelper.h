@@ -17,6 +17,7 @@ struct ReplaySummary {
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
   int eventCount = 0;
+  int touchSampleCount = 0;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

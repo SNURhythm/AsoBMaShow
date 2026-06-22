@@ -143,6 +143,17 @@ private:
   std::vector<std::vector<bms_parser::Note *>> groupedTimelineNotes;
   std::vector<ReplayGhostEvent> replayGhostEvents;
   std::vector<ReplayMissMarker> replayMissMarkers;
+  std::vector<ReplayTouchSample> replayTouchSamples;
+  struct TouchPointVisual {
+    float x = 0.0f;
+    float y = 0.0f;
+    long long eventTimeMicros = 0;
+    long long releaseTimeMicros = -1;
+  };
+  std::unordered_map<long long, TouchPointVisual> replayActiveTouchSamples;
+  std::vector<TouchPointVisual> replayReleasedTouchSamples;
+  std::unordered_map<long long, TouchPointVisual> liveTouchSamples;
+  std::vector<TouchPointVisual> liveReleasedTouchSamples;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
@@ -185,6 +196,10 @@ private:
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent =
       AppSettings::kDefaultNoteStartPositionPercent;
+  size_t replayTouchCursor = 0;
+  long long lastReplayTouchTimeMicros = -1;
+  bool touchVisualizationEnabled = true;
+  bool replayGhostRenderingEnabled = true;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -238,6 +253,17 @@ private:
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
   void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
   void drawMissMarkerX(float y, const ReplayMissMarker &marker);
+  void drawTouchPoints(long long replayTouchTimeMicros);
+  void advanceReplayTouches(long long replayTouchTimeMicros);
+  void applyTouchSample(
+      std::unordered_map<long long, TouchPointVisual> &activeTouches,
+      std::vector<TouchPointVisual> &releasedTouches,
+      const ReplayTouchSample &sample);
+  void pruneReleasedTouchSamples(
+      std::vector<TouchPointVisual> &releasedTouches,
+      long long currentTimeMicros);
+  void drawTouchSample(const TouchPointVisual &sample,
+                       long long currentTimeMicros);
   void buildTimelineScrollPositions();
   double calculateMostPrevalentBpm() const;
   double visibleTimeReferenceBpm() const;
@@ -280,6 +306,8 @@ public:
                        int visibleTimeGreenNumber, bool renderHud = true);
 
   void render(RenderContext &context, long long micro);
+  void render(RenderContext &context, long long micro,
+              long long replayTouchTimeMicros);
   void reset();
   void refreshGeometry();
   void setVisibleTimeGreenNumber(int greenNumber);
@@ -309,4 +337,9 @@ public:
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
+  void setTouchVisualizationEnabled(bool enabled);
+  void setReplayGhostRenderingEnabled(bool enabled);
+  void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
+                         float y, long long songTimeMicros);
+  void clearLiveTouchPoints();
 };
