@@ -2024,8 +2024,9 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   const bool showTimingMs =
       hasTiming && judgementMeetsTimingCriteria(
                        judgement, judgementTimingMillisecondsCriteria);
-  renderedTimingFastShown = showTimingDirection && diffMicros < 0;
-  renderedTimingSlowShown = showTimingDirection && diffMicros > 0;
+  const bool showTimingFeedback = showTimingDirection || showTimingMs;
+  renderedTimingFastShown = showTimingFeedback && diffMicros < 0;
+  renderedTimingSlowShown = showTimingFeedback && diffMicros > 0;
   if (judgeText != nullptr) {
     judgeText->setVisible(hasJudgement);
     std::string judgeLine;
