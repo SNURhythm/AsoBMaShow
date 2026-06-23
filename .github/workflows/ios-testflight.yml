@@ -47,3 +47,32 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SPACESHIP_ONLY_ALLOW_INTERACTIVE_2FA: 1
           APP_STORE_KEY: ${{ secrets.APP_STORE_KEY }}
+
+  android-firebase:
+    name: Deploy Android beta
+    runs-on: [self-hosted, macOS]
+    needs: appstore
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && needs.appstore.result == 'success' }}
+    timeout-minutes: 60
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      ANDROID_HOME: /opt/homebrew/share/android-commandlinetools
+      ANDROID_SDK_ROOT: /opt/homebrew/share/android-commandlinetools
+      VCPKG_ROOT: /Users/xf/vcpkg
+      FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+      FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT }}
+      FIREBASE_SERVICE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_CREDENTIALS_JSON }}
+      FIREBASE_CLI_TOKEN: ${{ secrets.FIREBASE_CLI_TOKEN }}
+      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_GROUPS || 'internal' }}
+      FIREBASE_APP_DISTRIBUTION_TESTERS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_TESTERS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: ./scripts/android_firebase_deploy.sh

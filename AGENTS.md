@@ -31,6 +31,7 @@
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
+- GitHub Actions deploys Android from `.github/workflows/ios-testflight.yml` only for commits pushed to `develop`, and only after the iOS/TestFlight job succeeds. Keep iOS first unless the user asks to change release ordering.
 
 ## Android Emulator Testing
 
