@@ -42,7 +42,7 @@
 #define ASOBMSHOW_HAS_LIBARCHIVE 0
 #endif
 
-#if __has_include(<iconv.h>)
+#if !TARGET_OS_ANDROID && __has_include(<iconv.h>)
 #include <iconv.h>
 #define ASOBMSHOW_HAS_ICONV 1
 #else

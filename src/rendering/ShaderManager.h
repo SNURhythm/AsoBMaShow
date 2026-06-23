@@ -22,22 +22,22 @@ private:
     case bgfx::RendererType::Noop:
     case bgfx::RendererType::Direct3D11:
     case bgfx::RendererType::Direct3D12:
-      shaderPath = "./shaders/dx11/";
+      shaderPath = "shaders/dx11/";
       break;
     case bgfx::RendererType::Gnm:
-      shaderPath = "./shaders/pssl/";
+      shaderPath = "shaders/pssl/";
       break;
     case bgfx::RendererType::Metal:
-      shaderPath = "./shaders/metal/";
+      shaderPath = "shaders/metal/";
       break;
     case bgfx::RendererType::OpenGL:
-      shaderPath = "./shaders/glsl/";
+      shaderPath = "shaders/glsl/";
       break;
     case bgfx::RendererType::OpenGLES:
-      shaderPath = "./shaders/essl/";
+      shaderPath = "shaders/essl/";
       break;
     case bgfx::RendererType::Vulkan:
-      shaderPath = "./shaders/spirv/";
+      shaderPath = "shaders/spirv/";
       break;
     default:
       throw std::runtime_error("Unknown renderer type");

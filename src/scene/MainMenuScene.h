@@ -6,6 +6,7 @@
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
 #include "../ScoreDBHelper.h"
+#include "../ThreadCompat.h"
 #include "../path.h"
 #include "../view/ImageView.h"
 #include "../view/ReplaySummaryListView.h"
@@ -26,7 +27,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <unordered_map>
 
@@ -509,6 +509,9 @@ private:
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void addIOSFolderEntryFromFiles();
 #endif
+#if TARGET_OS_ANDROID
+  void addAndroidFolderEntryFromPicker();
+#endif
   static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token,
@@ -525,7 +528,7 @@ private:
                            const std::unordered_set<path_t> &oldFilesWs,
                            std::vector<path_t> &directoriesToVisit,
                            const std::stop_token &stop_token);
-#elif TARGET_OS_OSX || TARGET_OS_LINUX
+#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_ANDROID
   static void
   FindFilesUnix(const std::filesystem::path &path, std::vector<Diff> &diffs,
                 const std::unordered_set<path_t> &oldFilesWs,

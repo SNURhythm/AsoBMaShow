@@ -2,13 +2,13 @@
 
 #pragma once
 
+#include "ThreadCompat.h"
 #include "bms_parser.hpp"
 #include "path.h"
 #include "sqlite3.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <stop_token>
 #include <string>
 #include <vector>
 

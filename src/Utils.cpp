@@ -6,6 +6,8 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
 #include <CoreFoundation/CoreFoundation.h>
+#elif TARGET_OS_ANDROID
+#include "AndroidNatives.h"
 #endif
 void parallel_for(size_t n, std::function<void(int start, int end)> f) {
   if (n == 0) {
@@ -70,7 +72,7 @@ std::filesystem::path
 Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return GetIOSDocumentsPath() / SubPath;
-#elif PLATFORM_ANDROID
+#elif TARGET_OS_ANDROID
   return GetAndroidExternalFilesDir() / SubPath;
 #else
 #ifdef _WIN32

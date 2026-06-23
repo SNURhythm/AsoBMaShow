@@ -3,11 +3,13 @@
 //
 
 #include "SpriteLoader.h"
+#include "../ArchiveFile.h"
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
 #include <stb_image.h>
 #include <limits>
+#include <vector>
 
 SpriteLoader::SpriteLoader(const path_t& path) {
   if (path.empty()) {
@@ -25,10 +27,24 @@ bool SpriteLoader::load() {
   }
   const std::string utf8Path = path_t_to_utf8(path);
   constexpr int kRequestedChannels = 4;
-  data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
-                       kRequestedChannels));
+  std::vector<unsigned char> bytes;
+  std::string errorMessage;
+  if (archive_file::readFile(std::filesystem::path(path), bytes,
+                             &errorMessage) &&
+      !bytes.empty() &&
+      bytes.size() <= static_cast<size_t>(std::numeric_limits<int>::max())) {
+    data.reset(stbi_load_from_memory(
+        bytes.data(), static_cast<int>(bytes.size()), &width, &height,
+        &channels, kRequestedChannels));
+  }
   if (!data) {
-    SDL_Log("Failed to load image: %s", SDL_GetError());
+    data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
+                         kRequestedChannels));
+  }
+  if (!data) {
+    SDL_Log("Failed to load image %s: %s",
+            utf8Path.c_str(),
+            errorMessage.empty() ? SDL_GetError() : errorMessage.c_str());
     return false;
   }
   channels = kRequestedChannels;

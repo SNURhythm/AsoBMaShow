@@ -64,6 +64,9 @@ def compile_all_shaders():
         dst = "../shaders/spirv/" + fs_shader.replace(".sc", ".bin")
         if should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "spirv")
+        dst = "../shaders/essl/" + fs_shader.replace(".sc", ".bin")
+        if should_recompile_shader(fs_shader, dst):
+            compile_shader(fs_shader, dst, "f", "android", "100_es")
         dst = "../shaders/dx11/" + fs_shader.replace(".sc", ".bin")
         if compile_dx11 and should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "s_5_0")
@@ -80,6 +83,9 @@ def compile_all_shaders():
         dst = "../shaders/spirv/" + vs_shader.replace(".sc", ".bin")
         if should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "spirv")
+        dst = "../shaders/essl/" + vs_shader.replace(".sc", ".bin")
+        if should_recompile_shader(vs_shader, dst):
+            compile_shader(vs_shader, dst, "v", "android", "100_es")
         dst = "../shaders/dx11/" + vs_shader.replace(".sc", ".bin")
         if compile_dx11 and should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "s_5_0")
@@ -90,7 +96,8 @@ def compile_all_shaders():
 if __name__ == "__main__":
     args = sys.argv[1:]
     if len(args) > 0 and args[0] == "clean":
-        shutil.rmtree("../shaders/metal")
-        shutil.rmtree("../shaders/spirv")
+        shutil.rmtree("../shaders/metal", ignore_errors=True)
+        shutil.rmtree("../shaders/spirv", ignore_errors=True)
+        shutil.rmtree("../shaders/essl", ignore_errors=True)
     else:
         compile_all_shaders()

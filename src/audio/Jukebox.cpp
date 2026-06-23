@@ -1,4 +1,9 @@
 #include "Jukebox.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 #include "../ArchiveFile.h"
 #include "../RAII.h"
 #include "../StbImageRAII.h"
@@ -30,6 +35,21 @@
 namespace {
 constexpr long long kSchedulerTickMicros = 1000000LL / 8000;
 constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
+
+#if TARGET_OS_ANDROID
+struct UniqueFd {
+  explicit UniqueFd(int fd) : value(fd) {}
+  ~UniqueFd() {
+    if (value >= 0) {
+      close(value);
+    }
+  }
+  UniqueFd(const UniqueFd &) = delete;
+  UniqueFd &operator=(const UniqueFd &) = delete;
+
+  int value;
+};
+#endif
 
 std::vector<std::string_view> toExtensionViews(const std::string *extensions,
                                                size_t count) {
@@ -594,6 +614,27 @@ bool Jukebox::loadMaterializedVideoPath(
 
 bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
                             std::atomic_bool &isCancelled) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string fdError;
+    const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
+    if (!fd.has_value()) {
+      SDL_Log("Failed to open Android video descriptor: %s", fdError.c_str());
+      return false;
+    }
+
+    UniqueFd fdGuard(*fd);
+    const std::filesystem::path playablePath =
+        std::filesystem::path("/proc/self/fd") / std::to_string(*fd);
+    const bool loaded = loadMaterializedVideoPath(id, playablePath, path,
+                                                  isCancelled);
+    if (loaded) {
+      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+      videoMaterializedPathTable.erase(id);
+    }
+    return loaded;
+  }
+#endif
   std::string materializeError;
   const auto playablePath =
       archive_file::materializeFile(path, &materializeError);

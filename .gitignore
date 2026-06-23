@@ -7,6 +7,9 @@ CMakeUserPresets.json
 .metals/
 cmake-build-*/
 /.cache
+android/.gradle/
+android/app/.cxx/
+android/app/build/
 # Prerequisites
 *.d
 

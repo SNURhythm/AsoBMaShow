@@ -1,6 +1,10 @@
 #include "ArchiveFile.h"
 
+#include "targets.h"
 #include "RAII.h"
+#if TARGET_OS_ANDROID
+#include "AndroidNatives.h"
+#endif
 
 #include <SDL2/SDL.h>
 #if __has_include(<TargetConditionals.h>)
@@ -58,7 +62,7 @@
 #define ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP 0
 #endif
 
-#if __has_include(<iconv.h>)
+#if !TARGET_OS_ANDROID && __has_include(<iconv.h>)
 #include <iconv.h>
 #define ASOBMSHOW_ARCHIVEFILE_HAS_ICONV 1
 #else
@@ -545,6 +549,42 @@ bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
   std::ifstream file(path, std::ios::binary);
+#if TARGET_OS_ANDROID
+  if (!file) {
+    const std::string assetPath = path.generic_string();
+    UniqueResource<SDL_RWops, SDL_RWclose> rw(
+        SDL_RWFromFile(assetPath.c_str(), "rb"));
+    if (rw) {
+      bytes.clear();
+      const Sint64 size = SDL_RWsize(rw.get());
+      if (size > 0) {
+        bytes.resize(static_cast<size_t>(size));
+        const size_t read =
+            SDL_RWread(rw.get(), bytes.data(), 1, bytes.size());
+        if (read != bytes.size()) {
+          if (errorMessage != nullptr) {
+            *errorMessage = "Could not read Android asset: " + assetPath;
+          }
+          bytes.clear();
+          return false;
+        }
+      } else {
+        std::array<unsigned char, 64 * 1024> buffer{};
+        for (;;) {
+          const size_t read =
+              SDL_RWread(rw.get(), buffer.data(), 1, buffer.size());
+          if (read > 0) {
+            bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + read);
+          }
+          if (read < buffer.size()) {
+            break;
+          }
+        }
+      }
+      return true;
+    }
+  }
+#endif
   if (!file) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not open file: " + path.string();
@@ -3876,6 +3916,11 @@ bool splitVirtualPath(const std::filesystem::path &path,
 }
 
 bool isVirtualPath(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    return true;
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   return splitVirtualPath(path, archivePath, innerPath);
@@ -4196,6 +4241,12 @@ entryRangeForFolder(const std::filesystem::path &folderPath) {
 }
 
 bool exists(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string errorMessage;
+    return ExistsAndroidTreeFile(path, errorMessage);
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
@@ -4290,6 +4341,18 @@ SourcePreference sourcePreferenceForPath(const std::filesystem::path &path) {
 
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes, std::string *errorMessage) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string androidError;
+    if (!ReadAndroidTreeFile(path, bytes, androidError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = androidError;
+      }
+      return false;
+    }
+    return true;
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
@@ -4878,6 +4941,15 @@ findFileWithExtensions(const std::filesystem::path &basePath,
 
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path, std::string *errorMessage) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Android SAF files are not copied into the temporary "
+                      "cache. Use the Android file descriptor bridge instead.";
+    }
+    return std::nullopt;
+  }
+#endif
   if (!isVirtualPath(path)) {
     return path;
   }
@@ -5062,6 +5134,31 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
     return;
   }
   *chart = nullptr;
+
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::vector<unsigned char> bytes;
+    std::string errorMessage;
+    appendDebugLogLineImpl("Reading Android SAF chart: " + pathForLog(path));
+    if (!readFile(path, bytes, &errorMessage)) {
+      SDL_Log("Failed to read Android SAF chart %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+              errorMessage.c_str());
+      appendDebugLogLineImpl("Failed to read Android SAF chart: " +
+                             pathForLog(path) + ": " + errorMessage);
+      return;
+    }
+    parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled);
+    if (*chart != nullptr) {
+      (*chart)->Meta.BmsPath = path;
+      (*chart)->Meta.Folder = path.parent_path();
+      appendDebugLogLineImpl("Parsed Android SAF chart: " + pathForLog(path) +
+                             " measures=" +
+                             std::to_string((*chart)->Measures.size()));
+    }
+    return;
+  }
+#endif
 
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;

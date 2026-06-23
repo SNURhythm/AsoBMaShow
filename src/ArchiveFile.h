@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ThreadCompat.h"
 #include "bms_parser.hpp"
 #include "path.h"
 
@@ -9,7 +10,6 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>

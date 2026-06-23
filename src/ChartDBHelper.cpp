@@ -31,6 +31,9 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
+#elif TARGET_OS_ANDROID
+#include "AndroidNatives.h"
+#include "CurlRAII.h"
 #else
 #include "CurlRAII.h"
 #endif
@@ -3530,6 +3533,42 @@ int ChartDBHelper::ScanChartRoots(
     }
     reportProgress(scannedRootCount, rootCount,
                    ChartScanProgressStage::ScanningRoots);
+#if TARGET_OS_ANDROID
+    if (IsAndroidTreePath(root)) {
+      std::vector<std::filesystem::path> androidChartPaths;
+      std::string androidError;
+      if (!ListAndroidTreeChartFiles(root, androidChartPaths, androidError,
+                                     stopToken)) {
+        if (!androidError.empty()) {
+          SDL_Log("Failed while scanning Android chart folder %s: %s",
+                  path_t_to_utf8(fspath_to_path_t(root)).c_str(),
+                  androidError.c_str());
+        }
+        ++scannedRootCount;
+        continue;
+      }
+      for (const auto &path : androidChartPaths) {
+        if (shouldStop()) {
+          return 0;
+        }
+        if (isBmsChartFile(path)) {
+          const path_t key = fspath_to_path_t(path);
+          if (knownChartPaths.find(key) == knownChartPaths.end()) {
+            diffs.push_back({.path = path, .deleted = false});
+            knownChartPaths.insert(key);
+          }
+          continue;
+        }
+        if (archive_file::hasSupportedArchiveExtension(path)) {
+          archive_file::appendDebugLogLine(
+              "Skipping Android SAF archive during library scan: " +
+              path_t_to_utf8(fspath_to_path_t(path)));
+        }
+      }
+      ++scannedRootCount;
+      continue;
+    }
+#endif
     std::error_code error;
     if (!std::filesystem::exists(root, error) || error) {
       error.clear();

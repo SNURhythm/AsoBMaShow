@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ChartDBHelper.h"
+#include "../ThreadCompat.h"
 #include "Scene.h"
 #include "play/Judge.h"
 #include <atomic>
