@@ -1,4 +1,4 @@
-name: Build & Deploy iOS
+name: Build & Deploy Mobile Betas
 
 on:
   push:
@@ -60,11 +60,6 @@ jobs:
       ANDROID_HOME: /opt/homebrew/share/android-commandlinetools
       ANDROID_SDK_ROOT: /opt/homebrew/share/android-commandlinetools
       VCPKG_ROOT: /Users/xf/vcpkg
-      FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
-      FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT }}
-      FIREBASE_SERVICE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_CREDENTIALS_JSON }}
-      FIREBASE_CLI_TOKEN: ${{ secrets.FIREBASE_CLI_TOKEN }}
-      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
       FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_GROUPS || 'internal' }}
       FIREBASE_APP_DISTRIBUTION_TESTERS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_TESTERS }}
     steps:
