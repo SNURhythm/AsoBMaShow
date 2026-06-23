@@ -58,6 +58,7 @@ private:
   std::thread loadThread;
   std::jthread checkEntriesThread;
   std::jthread addFolderPickerThread;
+  std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
   std::jthread replayExportThread;
   std::jthread unzipThread;
@@ -66,6 +67,7 @@ private:
   std::atomic_bool replayExportInProgress = false;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
+  std::atomic_bool archiveImportPickerInProgress = false;
   std::atomic_bool libraryTaskWorkerPaused = false;
   enum class LibraryTaskStatus {
     Queued,
@@ -319,6 +321,10 @@ private:
   std::optional<PendingUnzipResult> pendingUnzipResult;
   std::mutex unzipProgressMutex;
   std::optional<PendingUnzipProgress> pendingUnzipProgress;
+  std::mutex androidArchiveImportMutex;
+  std::optional<std::filesystem::path> pendingAndroidArchiveImportPath;
+  std::optional<std::string> pendingAndroidArchiveImportError;
+  std::uint64_t nextAndroidArchiveImportPollMs = 0;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
   std::optional<std::filesystem::path> unzipDeleteCandidatePath;
@@ -511,6 +517,10 @@ private:
 #endif
 #if TARGET_OS_ANDROID
   void addAndroidFolderEntryFromPicker();
+  void importAndroidArchiveFromPicker();
+  void pollPendingAndroidArchiveImport();
+  void applyPendingAndroidArchiveImport();
+  void startImportedAndroidArchive(const std::filesystem::path &archivePath);
 #endif
   static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,

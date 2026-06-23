@@ -42,6 +42,10 @@ android {
     namespace 'com.snurhythm.asobmashow'
     compileSdk 35
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         applicationId 'com.snurhythm.asobmashow'
         minSdk 28
@@ -70,6 +74,19 @@ android {
     externalNativeBuild {
         cmake {
             path "${repoRoot}/CMakeLists.txt"
+        }
+    }
+
+    flavorDimensions 'distribution'
+    productFlavors {
+        play {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'false'
+        }
+        firebase {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'true'
+            signingConfig signingConfigs.debug
         }
     }
 

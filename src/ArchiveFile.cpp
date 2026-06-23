@@ -4729,6 +4729,147 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   return outputChartPath;
 }
 
+bool extractArchiveFullyWithBatchReader(
+    const std::filesystem::path &archivePath,
+    const std::filesystem::path &outputFolder,
+    const std::vector<Entry> &entries,
+    const std::stop_token *stopToken,
+    const UnzipProgressCallback &progressCallback,
+    std::string *errorMessage) {
+  static constexpr std::size_t kMaxBatchFiles = 128;
+  static constexpr std::uint64_t kMaxBatchBytes = 64ull * 1024ull * 1024ull;
+
+  struct FileEntryRef {
+    const Entry *entry = nullptr;
+  };
+
+  std::vector<FileEntryRef> filesToExtract;
+  filesToExtract.reserve(entries.size());
+  for (const Entry &entry : entries) {
+    if (entry.directory) {
+      continue;
+    }
+    std::filesystem::path safePath;
+    if (!safeEntryPath(entry.path.generic_string(), safePath) ||
+        isSystemEntryPath(safePath)) {
+      continue;
+    }
+    filesToExtract.push_back(FileEntryRef{.entry = &entry});
+  }
+
+  if (filesToExtract.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive does not contain files to unzip.";
+    }
+    return false;
+  }
+
+  appendDebugLogLineImpl("Starting batched full unzip: " +
+                         pathForLog(archivePath) + " output=" +
+                         pathForLog(outputFolder) + " files=" +
+                         std::to_string(filesToExtract.size()));
+
+  std::uint64_t writtenCount = 0;
+  std::size_t nextFile = 0;
+  while (nextFile < filesToExtract.size()) {
+    if (stopRequested(stopToken)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Unzip cancelled";
+      }
+      return false;
+    }
+
+    std::vector<std::filesystem::path> batchPaths;
+    batchPaths.reserve(kMaxBatchFiles);
+    const std::size_t batchStartOrder = filesToExtract[nextFile].entry->order;
+    std::size_t batchEndOrder = batchStartOrder;
+    std::uint64_t batchBytes = 0;
+    do {
+      const Entry &entry = *filesToExtract[nextFile].entry;
+      batchPaths.push_back(entry.path);
+      batchEndOrder = entry.order;
+      const std::uint64_t remaining =
+          std::numeric_limits<std::uint64_t>::max() - batchBytes;
+      batchBytes += std::min(entry.size, remaining);
+      ++nextFile;
+    } while (nextFile < filesToExtract.size() &&
+             batchPaths.size() < kMaxBatchFiles &&
+             batchBytes < kMaxBatchBytes);
+
+    std::vector<FileData> batchFiles;
+    const EntryRange range{.start = batchStartOrder, .end = batchEndOrder};
+    const auto keepGoing = [stopToken]() { return !stopRequested(stopToken); };
+    if (!readArchiveEntriesInRange(archivePath, batchPaths, range, batchFiles,
+                                   errorMessage, keepGoing)) {
+      return false;
+    }
+    if (batchFiles.empty() && !batchPaths.empty()) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive extraction read no files.";
+      }
+      return false;
+    }
+
+    for (const FileData &file : batchFiles) {
+      if (stopRequested(stopToken)) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Unzip cancelled";
+        }
+        return false;
+      }
+
+      std::filesystem::path relativePath;
+      if (!safeEntryPath(file.path.generic_string(), relativePath) ||
+          isSystemEntryPath(relativePath)) {
+        continue;
+      }
+
+      std::error_code error;
+      const std::filesystem::path outputPath = outputFolder / relativePath;
+      std::filesystem::create_directories(outputPath.parent_path(), error);
+      if (error) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not create unzip subfolder: " +
+                          error.message();
+        }
+        return false;
+      }
+
+      std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+      if (!output) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not write unzipped file: " +
+                          outputPath.string();
+        }
+        return false;
+      }
+      if (!file.bytes.empty()) {
+        output.write(reinterpret_cast<const char *>(file.bytes.data()),
+                     static_cast<std::streamsize>(file.bytes.size()));
+      }
+      if (!output) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Failed while writing unzipped file: " +
+                          outputPath.string();
+        }
+        return false;
+      }
+
+      ++writtenCount;
+      reportUnzipProgress(
+          progressCallback,
+          0.12 + 0.84 * (static_cast<double>(writtenCount) /
+                         static_cast<double>(filesToExtract.size())),
+          writtenCount, filesToExtract.size(), "Writing unzipped files");
+    }
+  }
+
+  appendDebugLogLineImpl("Finished batched full unzip: " +
+                         pathForLog(outputFolder) + " files=" +
+                         std::to_string(writtenCount));
+  return true;
+}
+
 std::optional<UnzipArchiveResult>
 unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
@@ -4872,6 +5013,11 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
         errorMessage);
   }
 #endif
+  if (!extracted && !stopRequested(stopToken)) {
+    extracted = extractArchiveFullyWithBatchReader(
+        archivePath, outputFolder, index->entries, stopToken, progressCallback,
+        errorMessage);
+  }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {
       *errorMessage = stopRequested(stopToken)

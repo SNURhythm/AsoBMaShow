@@ -4,10 +4,16 @@
 
 #include "SpriteLoader.h"
 #include "../ArchiveFile.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
 #include <stb_image.h>
+#include <cstdio>
 #include <limits>
 #include <vector>
 
@@ -27,9 +33,27 @@ bool SpriteLoader::load() {
   }
   const std::string utf8Path = path_t_to_utf8(path);
   constexpr int kRequestedChannels = 4;
-  std::vector<unsigned char> bytes;
   std::string errorMessage;
-  if (archive_file::readFile(std::filesystem::path(path), bytes,
+#if TARGET_OS_ANDROID
+  const std::filesystem::path fsPath(path);
+  if (IsAndroidTreePath(fsPath)) {
+    const auto fd = OpenAndroidTreeFileDescriptor(fsPath, errorMessage);
+    if (fd.has_value()) {
+      FILE *file = fdopen(*fd, "rb");
+      if (file != nullptr) {
+        data.reset(stbi_load_from_file(file, &width, &height, &channels,
+                                       kRequestedChannels));
+        fclose(file);
+      } else {
+        close(*fd);
+        errorMessage = "Failed to create FILE for Android image descriptor.";
+      }
+    }
+  }
+#endif
+  std::vector<unsigned char> bytes;
+  if (!data &&
+      archive_file::readFile(std::filesystem::path(path), bytes,
                              &errorMessage) &&
       !bytes.empty() &&
       bytes.size() <= static_cast<size_t>(std::numeric_limits<int>::max())) {

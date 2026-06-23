@@ -7,6 +7,8 @@
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_system.h>
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -17,6 +19,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
@@ -30,6 +33,19 @@ std::condition_variable gExternalActivityPauseCv;
 bool gExternalActivityPauseRequested = false;
 bool gExternalActivityPauseAcknowledged = false;
 constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
+
+struct UniqueFd {
+  explicit UniqueFd(int fd) : value(fd) {}
+  ~UniqueFd() {
+    if (value >= 0) {
+      close(value);
+    }
+  }
+  UniqueFd(const UniqueFd &) = delete;
+  UniqueFd &operator=(const UniqueFd &) = delete;
+
+  int value;
+};
 
 std::uint64_t fnv1a64(const std::string &value) {
   std::uint64_t hash = 14695981039346656037ull;
@@ -231,83 +247,6 @@ std::string callActivityStringMethod2(const char *methodName,
   return result;
 }
 
-bool callActivityByteArrayMethod2(const char *methodName,
-                                  const char *signature,
-                                  const char *argument1,
-                                  const char *argument2,
-                                  std::vector<unsigned char> &bytes,
-                                  std::string &errorMessage) {
-  errorMessage.clear();
-  bytes.clear();
-  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
-  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
-  if (env == nullptr || activity == nullptr) {
-    errorMessage = "Android activity is not available.";
-    return false;
-  }
-
-  jclass activityClass = env->GetObjectClass(activity);
-  if (activityClass == nullptr) {
-    errorMessage = "Android activity class is not available.";
-    env->DeleteLocalRef(activity);
-    return false;
-  }
-
-  jmethodID method = env->GetMethodID(activityClass, methodName, signature);
-  if (method == nullptr) {
-    errorMessage = std::string("Android activity method missing: ") +
-                   methodName;
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-    return false;
-  }
-
-  jstring javaArgument1 = env->NewStringUTF(argument1 != nullptr ? argument1 : "");
-  jstring javaArgument2 = env->NewStringUTF(argument2 != nullptr ? argument2 : "");
-  auto javaResult = static_cast<jbyteArray>(
-      env->CallObjectMethod(activity, method, javaArgument1, javaArgument2));
-
-  if (clearPendingJavaException(env, errorMessage)) {
-    env->DeleteLocalRef(javaArgument1);
-    env->DeleteLocalRef(javaArgument2);
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-    return false;
-  }
-
-  if (javaResult == nullptr) {
-    errorMessage = "Android file read failed.";
-    env->DeleteLocalRef(javaArgument1);
-    env->DeleteLocalRef(javaArgument2);
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-    return false;
-  }
-
-  const jsize length = env->GetArrayLength(javaResult);
-  if (length < 0) {
-    errorMessage = "Android file read returned invalid data.";
-    env->DeleteLocalRef(javaResult);
-    env->DeleteLocalRef(javaArgument1);
-    env->DeleteLocalRef(javaArgument2);
-    env->DeleteLocalRef(activityClass);
-    env->DeleteLocalRef(activity);
-    return false;
-  }
-  bytes.resize(static_cast<std::size_t>(length));
-  if (length > 0) {
-    env->GetByteArrayRegion(
-        javaResult, 0, length, reinterpret_cast<jbyte *>(bytes.data()));
-  }
-
-  env->DeleteLocalRef(javaResult);
-  env->DeleteLocalRef(javaArgument1);
-  env->DeleteLocalRef(javaArgument2);
-  env->DeleteLocalRef(activityClass);
-  env->DeleteLocalRef(activity);
-  return true;
-}
-
 std::optional<int> callActivityIntMethod2(const char *methodName,
                                           const char *signature,
                                           const char *argument1,
@@ -397,6 +336,22 @@ std::string GetAndroidExternalFilesDir() {
   return ".";
 }
 
+std::string GetAndroidInternalFilesDir() {
+  if (const char *internal = SDL_AndroidGetInternalStoragePath();
+      internal != nullptr && internal[0] != '\0') {
+    return internal;
+  }
+
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "getInternalFilesDirPath", "()Ljava/lang/String;", nullptr, callError);
+  if (callError.empty() && !result.empty() &&
+      result.rfind(kErrorPrefix, 0) != 0) {
+    return result;
+  }
+  return GetAndroidExternalFilesDir();
+}
+
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
                             std::string &errorMessage) {
@@ -406,6 +361,22 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
   struct ExternalActivityPauseReset {
     ~ExternalActivityPauseReset() { FinishAndroidExternalActivityRenderPause(); }
   } externalActivityPauseReset;
+
+  {
+    std::string permissionError;
+    const std::string permissionResult = callActivityStringMethod(
+        "ensureManageExternalStorageAccess", "()Ljava/lang/String;", nullptr,
+        permissionError);
+    if (!permissionError.empty()) {
+      SDL_Log("Android all-files permission request failed: %s",
+              permissionError.c_str());
+    } else if (permissionResult.rfind(kErrorPrefix, 0) == 0) {
+      SDL_Log("Android all-files permission unavailable: %s",
+              permissionResult
+                  .substr(std::char_traits<char>::length(kErrorPrefix))
+                  .c_str());
+    }
+  }
 
   std::string callError;
   const std::string result =
@@ -425,10 +396,66 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
     return false;
   }
   treeUri = value.substr(0, separator);
-  const std::string displayName = value.substr(separator + 1);
+  const std::size_t secondSeparator = value.find('\n', separator + 1);
+  const std::string displayName =
+      secondSeparator == std::string::npos
+          ? value.substr(separator + 1)
+          : value.substr(separator + 1, secondSeparator - separator - 1);
+  const std::string directPath =
+      secondSeparator == std::string::npos ? std::string()
+                                           : value.substr(secondSeparator + 1);
+  if (!directPath.empty()) {
+    rootPath = std::filesystem::path(directPath).lexically_normal();
+    treeUri.clear();
+    return true;
+  }
   rootPath = makeAndroidTreeRootPath(treeUri, displayName);
   RegisterAndroidChartFolder(rootPath, treeUri);
   return true;
+}
+
+bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
+                                 std::string &errorMessage) {
+  archivePath.clear();
+  RequestAndroidExternalActivityRenderPause();
+  struct ExternalActivityPauseReset {
+    ~ExternalActivityPauseReset() { FinishAndroidExternalActivityRenderPause(); }
+  } externalActivityPauseReset;
+
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "pickArchiveForImport", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string value;
+  if (!parseBridgeResult(result, value, errorMessage)) {
+    return false;
+  }
+  archivePath = std::filesystem::path(value).lexically_normal();
+  return true;
+}
+
+std::optional<std::filesystem::path>
+ConsumePendingAndroidArchiveImport(std::string &errorMessage) {
+  errorMessage.clear();
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "consumePendingArchiveImport", "()Ljava/lang/String;", nullptr,
+      callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return std::nullopt;
+  }
+  if (result.empty()) {
+    return std::nullopt;
+  }
+  if (result.rfind(kErrorPrefix, 0) == 0) {
+    errorMessage = result.substr(std::char_traits<char>::length(kErrorPrefix));
+    return std::nullopt;
+  }
+  return std::filesystem::path(result).lexically_normal();
 }
 
 void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,
@@ -523,26 +550,73 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
   return true;
 }
 
-bool ReadAndroidTreeFile(const std::filesystem::path &path,
-                         std::vector<unsigned char> &bytes,
-                         std::string &errorMessage) {
-  bytes.clear();
+bool ClearAndroidTreeTransientFileCache(std::string &errorMessage) {
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "clearTransientTreeFileCache", "()Ljava/lang/String;", nullptr,
+      callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string value;
+  return parseBridgeResult(result, value, errorMessage);
+}
+
+bool CacheAndroidTreeDirectory(const std::filesystem::path &directoryPath,
+                               std::string &errorMessage) {
   std::string treeId;
   std::filesystem::path relativePath;
-  if (!splitAndroidTreePath(path, treeId, relativePath) ||
-      relativePath.empty()) {
-    errorMessage = "Android file path is invalid.";
+  if (!splitAndroidTreePath(directoryPath, treeId, relativePath)) {
+    errorMessage = "Android directory path is invalid.";
     return false;
   }
   const auto treeUri = treeUriForId(treeId);
   if (!treeUri.has_value()) {
-    errorMessage = "Android file permission is not registered.";
+    errorMessage = "Android directory permission is not registered.";
     return false;
   }
-  return callActivityByteArrayMethod2(
-      "readTreeFile", "(Ljava/lang/String;Ljava/lang/String;)[B",
-      treeUri->c_str(), relativePath.generic_string().c_str(), bytes,
-      errorMessage);
+
+  std::string callError;
+  const std::string result = callActivityStringMethod2(
+      "cacheTreeDirectory", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      treeUri->c_str(), relativePath.generic_string().c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool ReadAndroidTreeFile(const std::filesystem::path &path,
+                         std::vector<unsigned char> &bytes,
+                         std::string &errorMessage) {
+  bytes.clear();
+  const auto fd = OpenAndroidTreeFileDescriptor(path, errorMessage);
+  if (!fd.has_value()) {
+    return false;
+  }
+
+  UniqueFd fdGuard(*fd);
+  std::array<unsigned char, 64 * 1024> buffer{};
+  while (true) {
+    const ssize_t readCount = read(fdGuard.value, buffer.data(), buffer.size());
+    if (readCount > 0) {
+      bytes.insert(bytes.end(), buffer.begin(),
+                   buffer.begin() + static_cast<std::ptrdiff_t>(readCount));
+      continue;
+    }
+    if (readCount == 0) {
+      return true;
+    }
+    if (errno == EINTR) {
+      continue;
+    }
+    errorMessage = "Android file descriptor read failed.";
+    bytes.clear();
+    return false;
+  }
 }
 
 std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &path,

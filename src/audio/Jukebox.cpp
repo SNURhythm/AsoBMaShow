@@ -18,6 +18,7 @@
 #include <stb_image.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cctype>
 #include <cstdint>
 #include <iterator>
@@ -49,6 +50,114 @@ struct UniqueFd {
 
   int value;
 };
+
+std::optional<std::filesystem::path>
+normalizedAndroidAssetReference(const std::string &assetPath) {
+  if (assetPath.empty()) {
+    return std::nullopt;
+  }
+  std::string normalized = assetPath;
+  std::replace(normalized.begin(), normalized.end(), '\\', '/');
+  while (!normalized.empty() && normalized.front() == '/') {
+    normalized.erase(normalized.begin());
+  }
+
+  std::filesystem::path relativePath(normalized);
+  relativePath = relativePath.lexically_normal();
+  if (relativePath.empty() || relativePath == "." ||
+      relativePath.is_absolute() || relativePath.has_root_path()) {
+    return std::nullopt;
+  }
+  for (const auto &part : relativePath) {
+    if (part == "." || part == "..") {
+      return std::nullopt;
+    }
+  }
+  return relativePath;
+}
+
+void addAndroidAssetDirectory(
+    const std::filesystem::path &chartFolder, const std::string &assetPath,
+    std::vector<std::filesystem::path> &directories,
+    std::unordered_set<path_t> &directoryKeys) {
+  const auto relativePath = normalizedAndroidAssetReference(assetPath);
+  if (!relativePath.has_value()) {
+    return;
+  }
+  std::filesystem::path directory =
+      (chartFolder / *relativePath).parent_path().lexically_normal();
+  if (!IsAndroidTreePath(directory)) {
+    return;
+  }
+  const path_t key = fspath_to_path_t(directory);
+  if (directoryKeys.insert(key).second) {
+    directories.push_back(std::move(directory));
+  }
+}
+
+void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
+                                            bool loadVisualAssets,
+                                            std::atomic_bool &isCancelled) {
+  if (!IsAndroidTreePath(chart.Meta.Folder)) {
+    return;
+  }
+
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  std::vector<std::filesystem::path> directories;
+  std::unordered_set<path_t> directoryKeys;
+  std::filesystem::path chartFolder = chart.Meta.Folder.lexically_normal();
+  const path_t chartFolderKey = fspath_to_path_t(chartFolder);
+  directoryKeys.insert(chartFolderKey);
+  directories.push_back(chartFolder);
+
+  for (const auto &wav : chart.WavTable) {
+    if (isCancelled) {
+      return;
+    }
+    addAndroidAssetDirectory(chartFolder, wav.second, directories,
+                             directoryKeys);
+  }
+  if (loadVisualAssets) {
+    for (const auto &bmp : chart.BmpTable) {
+      if (isCancelled) {
+        return;
+      }
+      addAndroidAssetDirectory(chartFolder, bmp.second, directories,
+                               directoryKeys);
+    }
+  }
+
+  std::string errorMessage;
+  if (!ClearAndroidTreeTransientFileCache(errorMessage)) {
+    SDL_Log("Failed to clear Android SAF transient file cache: %s",
+            errorMessage.c_str());
+  }
+
+  std::size_t warmedDirectories = 0;
+  for (const auto &directory : directories) {
+    if (isCancelled) {
+      return;
+    }
+    errorMessage.clear();
+    if (!CacheAndroidTreeDirectory(directory, errorMessage)) {
+      SDL_Log("Failed to cache Android SAF directory %s: %s",
+              path_t_to_utf8(fspath_to_path_t(directory)).c_str(),
+              errorMessage.c_str());
+      continue;
+    }
+    warmedDirectories++;
+  }
+
+  const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             Clock::now() - start)
+                             .count();
+  archive_file::appendDebugLogLine(
+      "Warmed Android SAF chart directories: requested=" +
+      std::to_string(directories.size()) +
+      " warmed=" + std::to_string(warmedDirectories) + " ms=" +
+      std::to_string(elapsedMs));
+}
 #endif
 
 std::vector<std::string_view> toExtensionViews(const std::string *extensions,
@@ -88,6 +197,28 @@ unsigned char *decodeImageBytes(const std::vector<unsigned char> &bytes,
 unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
                              int *height, int *channels,
                              int requestedChannels) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string fdError;
+    const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
+    if (!fd.has_value()) {
+      SDL_Log("Failed to open Android image descriptor %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(), fdError.c_str());
+      return nullptr;
+    }
+    FILE *file = fdopen(*fd, "rb");
+    if (file == nullptr) {
+      close(*fd);
+      SDL_Log("Failed to create FILE for Android image descriptor: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+      return nullptr;
+    }
+    unsigned char *data =
+        stbi_load_from_file(file, width, height, channels, requestedChannels);
+    fclose(file);
+    return data;
+  }
+#endif
   if (!archive_file::isVirtualPath(path)) {
     const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
     return stbi_load(utf8Path.c_str(), width, height, channels,
@@ -752,9 +883,18 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
     return;
   }
 
+  using Clock = std::chrono::steady_clock;
+  const auto loadStart = Clock::now();
+  const std::size_t wavCount = chart.WavTable.size();
+  const unsigned int workerCount = parallel_worker_count(wavCount);
+  SDL_Log("Loading %zu sounds using %u workers", wavCount, workerCount);
+
   std::mutex wavTableLock;
   std::mutex loadedPathsLock;
   std::unordered_set<path_t> loadedPaths;
+  std::atomic_size_t loadedCount{0};
+  std::atomic_size_t duplicateCount{0};
+  std::atomic_size_t failedCount{0};
   const auto audioExtensionViews =
       toExtensionViews(audioExtensions, std::size(audioExtensions));
 
@@ -780,14 +920,18 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
         }
 
         if (needsLoad && !audio.loadSound(soundPath, isCancelled)) {
+          failedCount.fetch_add(1, std::memory_order_relaxed);
           continue;
         }
 
         if (needsLoad) {
           std::lock_guard<std::mutex> lock(loadedPathsLock);
           loadedPaths.insert(soundPath);
-          SDL_Log("Loaded sound %d: %s", wav->first,
-                  path_t_to_utf8(soundPath).c_str());
+          loadedCount.fetch_add(1, std::memory_order_relaxed);
+          SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION, "Loaded sound %d: %s",
+                         wav->first, path_t_to_utf8(soundPath).c_str());
+        } else {
+          duplicateCount.fetch_add(1, std::memory_order_relaxed);
         }
 
         {
@@ -799,11 +943,21 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
         found = true;
       }
       if (!found) {
+        failedCount.fetch_add(1, std::memory_order_relaxed);
         SDL_Log("Failed to load sound for all extensions: %s",
                 basePath.c_str());
       }
     }
   });
+
+  const double elapsedSeconds =
+      std::chrono::duration<double>(Clock::now() - loadStart).count();
+  SDL_Log("Loaded sounds summary: wav=%zu loaded=%zu duplicate=%zu failed=%zu "
+          "workers=%u time=%.2fs",
+          wavCount, loadedCount.load(std::memory_order_relaxed),
+          duplicateCount.load(std::memory_order_relaxed),
+          failedCount.load(std::memory_order_relaxed), workerCount,
+          elapsedSeconds);
 }
 
 bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
@@ -1587,6 +1741,11 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
     return;
 
   const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
+#if TARGET_OS_ANDROID
+  prepareAndroidChartAssetDirectoryCache(chart, loadVisualAssets, isCancelled);
+  if (isCancelled)
+    return;
+#endif
   if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
     if (isCancelled)
       return;

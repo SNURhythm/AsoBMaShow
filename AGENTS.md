@@ -27,9 +27,13 @@
 - For a fast local compile check without upload, run:
   `scripts/android_firebase_deploy.sh --build-only`
 - The Android deploy script loads `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
+- The script defaults to the `firebaseRelease` flavor and will use `/usr/libexec/java_home -v 17` on this machine if the active shell Java is too new for Gradle.
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
+- Firebase Android builds request `MANAGE_EXTERNAL_STORAGE`; Play builds opt out via the `play` flavor. For a local Play compile check, run:
+  `scripts/android_firebase_deploy.sh --build-only --variant playDebug`
+- `firebaseRelease` is debug-signed so Firebase App Distribution uploads are installable from local and self-hosted runner builds. Do not apply that signing choice to Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
 - GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `develop`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
 
@@ -42,12 +46,14 @@
   `scripts/android_firebase_deploy.sh --build-only`
 - Boot the emulator:
   `/opt/homebrew/share/android-commandlinetools/emulator/emulator -avd android10 -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim`
+- When the user wants to see the emulator window, use the Android 13 AVD without `-no-window`:
+  `/opt/homebrew/share/android-commandlinetools/emulator/emulator -avd Pixel_7a_API_33_GooglePlay -gpu host -feature -Vulkan -no-snapshot -no-audio -no-boot-anim`
 - Wait for boot and confirm the user is unlocked:
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb wait-for-device`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell getprop sys.boot_completed`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell dumpsys user | sed -n '1,35p'`
 - Install and launch with the explicit component. `monkey -p` may fail to resolve the launcher in headless emulator tests:
-  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk`
+  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb install -r android/app/build/outputs/apk/firebase/release/app-firebase-release.apk`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb logcat -c`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 -n com.snurhythm.asobmashow/.AsoBMaShowActivity`
 - Useful runtime checks:
@@ -55,7 +61,11 @@
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell dumpsys activity activities | rg -n "ResumedActivity|com.snurhythm|documentsui|AsoBMaShow"`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell logcat -d -v time | rg -i "AsoBMaShow|SDL|bgfx|AndroidRuntime|FATAL EXCEPTION|Fatal signal|tombstone|ANR|renderer|Vulkan|OpenGLES"`
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb exec-out screencap -p > /tmp/asobmashow-android.png`
-- On first launch with an empty library, the app intentionally opens Android's `ACTION_OPEN_DOCUMENT_TREE` picker. In logs, a good graphics startup includes `bgfx renderer: Vulkan`; the current foreground UI may be `com.android.documentsui/.picker.PickActivity` until a folder is granted.
+- In Firebase builds, Add Folder requests Android all-files access first, then opens `ACTION_OPEN_DOCUMENT_TREE`; if access is granted and the picker returns primary external storage, the app stores a direct `/storage/emulated/0/...` path instead of an `@androidtree@` SAF path. In logs, a good real-device graphics startup includes `bgfx renderer: Vulkan`; the Android emulator may intentionally use OpenGL ES.
+- Archive import can be tested without tapping UI by pushing a zip to Downloads, resolving its MediaStore `content://media/external/file/<id>` URI, then launching either:
+  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 --grant-read-uri-permission -a android.intent.action.VIEW -d content://media/external/file/<id> -t application/zip -n com.snurhythm.asobmashow/.AsoBMaShowActivity`
+  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb shell am start --user 0 --grant-read-uri-permission -a android.intent.action.SEND -t application/zip --eu android.intent.extra.STREAM content://media/external/file/<id> -n com.snurhythm.asobmashow/.AsoBMaShowActivity`
+  A successful import logs `Android archive import result: Imported archive. Library refreshed.` and extracts under the app's internal `files/ImportedCharts`.
 - Stop the emulator when done:
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb emu kill`
 

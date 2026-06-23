@@ -1498,6 +1498,232 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
                                   treeUri);
       });
 }
+
+void MainMenuScene::importAndroidArchiveFromPicker() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      unzipInProgress.load() || archiveImportPickerInProgress.load()) {
+    return;
+  }
+  if (archiveImportPickerThread.joinable()) {
+    archiveImportPickerThread.join();
+  }
+  if (archiveImportPickerInProgress.exchange(true)) {
+    return;
+  }
+
+  archiveImportPickerThread =
+      std::jthread([this](const std::stop_token &stopToken) {
+        struct PickerFlagReset {
+          std::atomic_bool &flag;
+          ~PickerFlagReset() { flag.store(false); }
+        } reset{archiveImportPickerInProgress};
+
+        std::filesystem::path archivePath;
+        std::string errorMessage;
+        if (!PickAndroidArchiveForImport(archivePath, errorMessage)) {
+          std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+          pendingAndroidArchiveImportError =
+              errorMessage.empty() ? "Archive import cancelled." : errorMessage;
+          return;
+        }
+        if (stopToken.stop_requested()) {
+          return;
+        }
+
+        std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+        pendingAndroidArchiveImportPath = archivePath;
+      });
+}
+
+void MainMenuScene::pollPendingAndroidArchiveImport() {
+  const std::uint64_t now = SDL_GetTicks64();
+  if (now < nextAndroidArchiveImportPollMs) {
+    return;
+  }
+  nextAndroidArchiveImportPollMs = now + 1000;
+
+  std::string errorMessage;
+  const auto archivePath = ConsumePendingAndroidArchiveImport(errorMessage);
+  if (!archivePath.has_value() && errorMessage.empty()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+  if (archivePath.has_value()) {
+    pendingAndroidArchiveImportPath = *archivePath;
+  } else {
+    pendingAndroidArchiveImportError = errorMessage;
+  }
+}
+
+void MainMenuScene::applyPendingAndroidArchiveImport() {
+  std::optional<std::filesystem::path> archivePath;
+  std::optional<std::string> errorMessage;
+  {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    if (pendingAndroidArchiveImportError.has_value()) {
+      errorMessage = std::move(pendingAndroidArchiveImportError);
+      pendingAndroidArchiveImportError.reset();
+    }
+    if (!unzipInProgress.load() && pendingAndroidArchiveImportPath.has_value()) {
+      archivePath = std::move(pendingAndroidArchiveImportPath);
+      pendingAndroidArchiveImportPath.reset();
+    }
+  }
+
+  if (errorMessage.has_value()) {
+    SDL_Log("Android archive import failed: %s", errorMessage->c_str());
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText("Archive import failed");
+    }
+  }
+  if (archivePath.has_value()) {
+    startImportedAndroidArchive(*archivePath);
+  }
+}
+
+void MainMenuScene::startImportedAndroidArchive(
+    const std::filesystem::path &archivePath) {
+  if (willStart.load() || replayExportInProgress.load() ||
+      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
+      folderItemsReloadRequested.load() || archivePath.empty()) {
+    return;
+  }
+  if (unzipInProgress.exchange(true)) {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    pendingAndroidArchiveImportPath = archivePath;
+    return;
+  }
+
+  if (unzipThread.joinable()) {
+    unzipThread.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(unzipResultMutex);
+    pendingUnzipResult.reset();
+  }
+  {
+    std::lock_guard<std::mutex> lock(unzipProgressMutex);
+    pendingUnzipProgress.reset();
+  }
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  stopAndClearSelectedChart();
+  unzipEstimatedUncompressedSize = 0;
+
+  if (unzipButtonText != nullptr) {
+    unzipButtonText->setText("Importing...");
+  }
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText("Importing archive...");
+  }
+  setUnzipButtonVisible(true);
+  showUnzipProgressModal();
+  if (unzipModalTitleText != nullptr) {
+    unzipModalTitleText->setText("Import Archive");
+  }
+  updateUnzipProgressUi(0.0, "Preparing import", 0, 0);
+
+  const std::filesystem::path outputRoot =
+      std::filesystem::path(GetAndroidInternalFilesDir()) / "ImportedCharts";
+  archive_file::appendDebugLogLine(
+      "Archive import requested: " +
+      path_t_to_utf8(fspath_to_path_t(archivePath)) + " outputRoot=" +
+      path_t_to_utf8(fspath_to_path_t(outputRoot)));
+
+  unzipThread = std::jthread(
+      [this, archivePath, outputRoot](const std::stop_token &stopToken) {
+        PendingUnzipResult result;
+        result.rootPath = outputRoot;
+        result.archivePath = archivePath;
+        result.canDeleteArchive = false;
+        auto postProgress = [this](const archive_file::UnzipProgress &progress) {
+          std::lock_guard<std::mutex> lock(unzipProgressMutex);
+          pendingUnzipProgress = PendingUnzipProgress{
+              .fraction = progress.fraction,
+              .current = progress.current,
+              .total = progress.total,
+              .message = progress.message,
+          };
+        };
+
+        std::string errorMessage;
+        std::error_code fsError;
+        std::filesystem::create_directories(outputRoot, fsError);
+        if (fsError) {
+          result.success = false;
+          result.message =
+              "Import failed: could not create internal import folder.";
+        } else {
+          const auto unzippedArchive = archive_file::unzipArchiveFully(
+              archivePath, outputRoot, &errorMessage, &stopToken, postProgress);
+          if (unzippedArchive.has_value()) {
+            result.outputFolder = unzippedArchive->outputFolder;
+          }
+
+          if (result.outputFolder.empty()) {
+            result.success = false;
+            result.message =
+                stopToken.stop_requested()
+                    ? "Import cancelled"
+                    : (errorMessage.empty() ? "Import failed"
+                                            : "Import failed: " + errorMessage);
+          } else if (stopToken.stop_requested()) {
+            result.success = false;
+            result.message = "Import cancelled";
+          } else {
+            auto &dbHelper = ChartDBHelper::GetInstance();
+            SqliteConnectionHandle importDbHandle(dbHelper.Connect());
+            sqlite3 *importDb = importDbHandle.get();
+            if (importDb == nullptr) {
+              result.success = false;
+              result.message = "Imported archive. Failed to refresh library.";
+            } else {
+              dbHelper.CreateEntriesTable(importDb);
+              dbHelper.CreateChartMetaTable(importDb);
+              dbHelper.CreateSolidArchiveTable(importDb);
+              dbHelper.CreateDifficultyTableTables(importDb);
+              dbHelper.InsertEntry(importDb, outputRoot);
+
+              std::vector<std::filesystem::path> roots{result.outputFolder};
+              postProgress(archive_file::UnzipProgress{
+                  .fraction = 0.98, .message = "Refreshing library"});
+              const int changedCount =
+                  dbHelper.ScanChartRoots(importDb, roots, &stopToken);
+              if (!stopToken.stop_requested()) {
+                std::vector<bms_parser::ChartMeta> chartMetas;
+                dbHelper.SelectAllChartMeta(importDb, chartMetas);
+                for (const auto &meta : chartMetas) {
+                  if (pathIsInsideDirectoryForMenu(meta.BmsPath,
+                                                   result.outputFolder)) {
+                    result.chartPath = meta.BmsPath;
+                    break;
+                  }
+                }
+              }
+
+              result.success = true;
+              result.message =
+                  changedCount > 0
+                      ? "Imported archive. Library refreshed."
+                      : "Imported archive. Library already current.";
+              if (!stopToken.stop_requested()) {
+                std::filesystem::remove(archivePath, fsError);
+                requestLibraryReload(true);
+              }
+            }
+          }
+        }
+
+        {
+          SDL_Log("Android archive import result: %s", result.message.c_str());
+          std::lock_guard<std::mutex> lock(unzipResultMutex);
+          pendingUnzipResult = std::move(result);
+        }
+      });
+}
 #endif
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -1672,6 +1898,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
+  dbHelper.CreateEntriesTable(db);
+#if TARGET_OS_ANDROID
+  (void)dbHelper.SelectAllEntries(db);
+#endif
   dbHelper.CreateDifficultyTableTables(db);
 
   static constexpr int kChartListItemHeight = 108;
@@ -1916,6 +2146,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
       [this]() { addIOSFolderEntryFromFiles(); });
 #endif
   nav->addView(addFolderButton);
+#if TARGET_OS_ANDROID
+  auto *importArchiveButton = new Button(0, 0, 252, 50);
+  auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  importArchiveText->setText("Import Archive");
+  importArchiveText->setAlign(TextView::CENTER);
+  importArchiveText->setVAlign(TextView::MIDDLE);
+  importArchiveButton->setContentView(importArchiveText);
+  styleThemedActionButton(importArchiveButton, importArchiveText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  importArchiveButton->setCornerRadius(ui_theme::controlRadius());
+  importArchiveButton->setStyledBorderWidth(1);
+  importArchiveButton->setOnClickListener(
+      [this]() { importAndroidArchiveFromPicker(); });
+  nav->addView(importArchiveButton);
+#endif
 #endif
 
   folderRecyclerView->setFlex(1);
@@ -5714,6 +5961,10 @@ void MainMenuScene::update(float dt) {
   applyUnzipResult();
   applyReplayVideoExportProgress();
   applyReplayVideoExportResult();
+#if TARGET_OS_ANDROID
+  pollPendingAndroidArchiveImport();
+  applyPendingAndroidArchiveImport();
+#endif
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
@@ -5787,6 +6038,14 @@ void MainMenuScene::cleanupScene() {
     addFolderPickerThread.join();
   }
   addFolderPickerInProgress = false;
+#if TARGET_OS_ANDROID
+  if (archiveImportPickerThread.joinable()) {
+    SDL_Log("Joining archiveImportPickerThread");
+    archiveImportPickerThread.request_stop();
+    archiveImportPickerThread.join();
+  }
+  archiveImportPickerInProgress = false;
+#endif
   stopLibraryTaskWorker();
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");

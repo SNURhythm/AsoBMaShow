@@ -9,9 +9,9 @@
 #elif TARGET_OS_ANDROID
 #include "AndroidNatives.h"
 #endif
-void parallel_for(size_t n, std::function<void(int start, int end)> f) {
+unsigned int parallel_worker_count(size_t n) {
   if (n == 0) {
-    return;
+    return 0;
   }
 
   unsigned int hwThreads = std::thread::hardware_concurrency();
@@ -29,8 +29,14 @@ void parallel_for(size_t n, std::function<void(int start, int end)> f) {
 
   unsigned int workerThreads =
       hwThreads > reservedThreads ? hwThreads - reservedThreads : 1;
-  workerThreads = std::min<unsigned int>(workerThreads,
-                                         static_cast<unsigned int>(n));
+  return std::min<unsigned int>(workerThreads, static_cast<unsigned int>(n));
+}
+
+void parallel_for(size_t n, std::function<void(int start, int end)> f) {
+  const unsigned int workerThreads = parallel_worker_count(n);
+  if (workerThreads == 0) {
+    return;
+  }
 
   if (workerThreads <= 1) {
     f(0, static_cast<int>(n));

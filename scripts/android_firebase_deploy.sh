@@ -7,7 +7,7 @@ ANDROID_DIR="${ROOT_DIR}/android"
 GRADLEW="${ROOT_DIR}/SDL/android-project/gradlew"
 BUILD_ONLY=0
 SKIP_BUILD=0
-VARIANT="debug"
+VARIANT="firebaseRelease"
 APK_PATH=""
 FIREBASE_CLI_BIN="${FIREBASE_CLI_BIN:-firebase}"
 SERVICE_CREDENTIALS_FILE=""
@@ -34,7 +34,7 @@ Options:
   --env-file PATH       Load an additional env file.
   --build-only          Build only; do not upload.
   --skip-build          Upload an existing APK from --apk.
-  --variant NAME        Gradle build variant to assemble. Default: debug.
+  --variant NAME        Gradle build variant to assemble. Default: firebaseRelease.
   --apk PATH            APK to upload. Defaults to android/app/build/outputs/apk/<variant>/app-<variant>.apk.
   --build-number N      Override automatic versionCode with N.
   --version-code N      Override automatic ANDROID_VERSION_CODE with N.
@@ -260,6 +260,8 @@ set_android_version_code() {
 }
 
 setup_android_env() {
+  local ndk_candidate=""
+
   if [ -z "${ANDROID_HOME:-}" ] &&
      [ -n "${ANDROID_SDK_ROOT:-}" ] &&
      [ -d "${ANDROID_SDK_ROOT}" ]; then
@@ -280,11 +282,94 @@ setup_android_env() {
       export ANDROID_SDK_ROOT="${ANDROID_HOME}"
     fi
   fi
+  if [ -z "${ANDROID_NDK_HOME:-}" ] ||
+     [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
+    if [ -n "${ANDROID_HOME:-}" ] &&
+       [ -f "${ANDROID_HOME}/ndk-bundle/build/cmake/android.toolchain.cmake" ]; then
+      ndk_candidate="${ANDROID_HOME}/ndk-bundle"
+    elif [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/ndk" ]; then
+      ndk_candidate="$(
+        find "${ANDROID_HOME}/ndk" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' 2>/dev/null |
+          sort -r |
+          head -n 1
+      )"
+    fi
+    if [ -n "${ndk_candidate}" ]; then
+      export ANDROID_NDK_HOME="${ndk_candidate}"
+    fi
+  fi
+  if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+    export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+  fi
   if [ -z "${VCPKG_ROOT:-}" ] && [ -d "/Users/xf/vcpkg" ]; then
     export VCPKG_ROOT="/Users/xf/vcpkg"
   fi
 
-  require_env ANDROID_HOME ANDROID_SDK_ROOT VCPKG_ROOT
+  require_env ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME VCPKG_ROOT
+
+  if [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
+    echo "ANDROID_NDK_HOME does not contain build/cmake/android.toolchain.cmake: ${ANDROID_NDK_HOME}" >&2
+    exit 1
+  fi
+}
+
+java_major_for_binary() {
+  local java_bin="$1"
+  local version major
+  version="$("${java_bin}" -version 2>&1 | awk -F '"' '/version/ { print $2; exit }')"
+  [ -n "${version}" ] || return 1
+  case "${version}" in
+    1.*)
+      major="$(printf '%s' "${version}" | cut -d. -f2)"
+      ;;
+    *)
+      major="$(printf '%s' "${version}" | cut -d. -f1)"
+      ;;
+  esac
+  is_positive_int "${major}" || return 1
+  printf '%s\n' "${major}"
+}
+
+is_supported_gradle_java_major() {
+  local major="$1"
+  is_positive_int "${major}" &&
+    [ "${major}" -ge 17 ] &&
+    [ "${major}" -le 21 ]
+}
+
+setup_java_env() {
+  local java_bin="${JAVA_HOME:+${JAVA_HOME}/bin/java}"
+  local major=""
+
+  if [ -z "${java_bin}" ] || [ ! -x "${java_bin}" ]; then
+    java_bin="$(command -v java 2>/dev/null || true)"
+  fi
+  if [ -n "${java_bin}" ]; then
+    major="$(java_major_for_binary "${java_bin}" || true)"
+    if is_supported_gradle_java_major "${major}"; then
+      return 0
+    fi
+  fi
+
+  if [ -x /usr/libexec/java_home ]; then
+    local requested candidate candidate_major
+    for requested in 17 21; do
+      candidate="$(/usr/libexec/java_home -v "${requested}" 2>/dev/null || true)"
+      if [ -n "${candidate}" ] && [ -x "${candidate}/bin/java" ]; then
+        candidate_major="$(java_major_for_binary "${candidate}/bin/java" || true)"
+        if is_supported_gradle_java_major "${candidate_major}"; then
+          export JAVA_HOME="${candidate}"
+          export PATH="${JAVA_HOME}/bin:${PATH}"
+          echo "Using JAVA_HOME=${JAVA_HOME}"
+          return 0
+        fi
+      fi
+    done
+  fi
+
+  if [ -n "${major}" ]; then
+    echo "Warning: current Java major version ${major} may be unsupported by Gradle." >&2
+  fi
 }
 
 setup_build_metadata() {
@@ -336,10 +421,30 @@ artifact_path_for_variant() {
     fi
     return 0
   fi
+
+  local variant_dir="${VARIANT}"
+  local apk_variant="${VARIANT}"
+  case "${VARIANT}" in
+    *Debug)
+      local flavor="${VARIANT%Debug}"
+      local flavor_lower
+      flavor_lower="$(printf '%s' "${flavor}" | tr '[:upper:]' '[:lower:]')"
+      variant_dir="${flavor_lower}/debug"
+      apk_variant="${flavor_lower}-debug"
+      ;;
+    *Release)
+      local flavor="${VARIANT%Release}"
+      local flavor_lower
+      flavor_lower="$(printf '%s' "${flavor}" | tr '[:upper:]' '[:lower:]')"
+      variant_dir="${flavor_lower}/release"
+      apk_variant="${flavor_lower}-release"
+      ;;
+  esac
+
   printf '%s/app/build/outputs/apk/%s/app-%s.apk\n' \
     "${ANDROID_DIR}" \
-    "${VARIANT}" \
-    "${VARIANT}"
+    "${variant_dir}" \
+    "${apk_variant}"
 }
 
 run_gradle_build() {
@@ -449,6 +554,7 @@ done
 apply_cli_overrides
 capture_version_fixed_flags
 setup_android_env
+setup_java_env
 setup_build_metadata
 
 if [ "${BUILD_ONLY}" -eq 0 ]; then

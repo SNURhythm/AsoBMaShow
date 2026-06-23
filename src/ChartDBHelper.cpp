@@ -3225,6 +3225,9 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
     const char *bookmark =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
     entry.iosBookmark = bookmark != nullptr ? bookmark : "";
+#if TARGET_OS_ANDROID
+    RegisterAndroidChartFolder(path, entry.iosBookmark);
+#endif
     entries.push_back(std::move(entry));
   }
   return entries;

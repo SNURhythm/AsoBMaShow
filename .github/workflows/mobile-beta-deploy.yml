@@ -69,4 +69,4 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - run: ./scripts/android_firebase_deploy.sh
+      - run: ./scripts/android_firebase_deploy.sh --variant firebaseRelease

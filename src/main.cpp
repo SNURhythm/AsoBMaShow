@@ -52,6 +52,7 @@
 #elif defined(__ANDROID__)
 #include "AndroidNatives.h"
 #include <dirent.h>
+#include <sys/system_properties.h>
 #include <sys/stat.h>
 #elif __linux
 // linux
@@ -293,12 +294,42 @@ private:
   static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
 };
 
+#if TARGET_OS_ANDROID
+static std::string getAndroidSystemProperty(const char *name) {
+  char value[PROP_VALUE_MAX] = {};
+  if (__system_property_get(name, value) <= 0) {
+    return {};
+  }
+  return value;
+}
+
+static bool isAndroidEmulator() {
+  const std::string qemu = getAndroidSystemProperty("ro.kernel.qemu");
+  if (qemu == "1") {
+    return true;
+  }
+
+  const std::string hardware = getAndroidSystemProperty("ro.hardware");
+  return hardware == "ranchu" || hardware == "goldfish";
+}
+#endif
+
+static uint32_t withoutMsaaResetFlags(uint32_t flags) {
+  constexpr uint32_t msaaMask = BGFX_RESET_MSAA_X2 | BGFX_RESET_MSAA_X4 |
+                                BGFX_RESET_MSAA_X8 | BGFX_RESET_MSAA_X16;
+  return flags & ~msaaMask;
+}
+
 static int runApplication(const bgfx::Init &bgfxInit) {
   SDL_Log("bgfx_init: %d x %d", bgfxInit.resolution.width,
           bgfxInit.resolution.height);
   std::vector<bgfx::RendererType::Enum> rendererCandidates;
 #if TARGET_OS_ANDROID
-  rendererCandidates.push_back(bgfx::RendererType::Vulkan);
+  if (!isAndroidEmulator()) {
+    rendererCandidates.push_back(bgfx::RendererType::Vulkan);
+  } else {
+    SDL_Log("Android emulator detected; skipping Vulkan renderer");
+  }
   rendererCandidates.push_back(bgfx::RendererType::OpenGLES);
 #elif __APPLE__
   rendererCandidates.push_back(bgfx::RendererType::Metal);
@@ -309,6 +340,12 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   bgfx::Init selectedInit = bgfxInit;
   for (const auto rendererType : rendererCandidates) {
     selectedInit.type = rendererType;
+#if TARGET_OS_ANDROID
+    selectedInit.resolution.formatColor =
+        rendererType == bgfx::RendererType::Vulkan
+            ? bgfx::TextureFormat::RGBA8
+            : bgfx::TextureFormat::BGRA8;
+#endif
     SDL_Log("Trying bgfx renderer: %s",
             rendererType == bgfx::RendererType::Count
                 ? "auto"
@@ -448,6 +485,15 @@ int main(int argv, char **args) {
   }
   s_renderScale = resolveRenderScale();
   s_bgfxResetFlags = resolveResetFlags();
+#if TARGET_OS_ANDROID
+  if (isAndroidEmulator()) {
+    const uint32_t adjustedResetFlags = withoutMsaaResetFlags(s_bgfxResetFlags);
+    if (adjustedResetFlags != s_bgfxResetFlags) {
+      SDL_Log("Android emulator detected; disabling bgfx MSAA reset flags");
+    }
+    s_bgfxResetFlags = adjustedResetFlags;
+  }
+#endif
   SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
           s_bgfxResetFlags);
 
@@ -556,9 +602,6 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-#if TARGET_OS_ANDROID
-  bgfx_init.resolution.formatColor = bgfx::TextureFormat::RGBA8;
-#endif
   bgfx_init.platformData = pd;
   SDL_Log("Using bgfx internal multithreaded mode");
 
