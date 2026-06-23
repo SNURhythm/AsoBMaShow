@@ -51,8 +51,7 @@ jobs:
   android-firebase:
     name: Deploy Android beta
     runs-on: [self-hosted, macOS]
-    needs: appstore
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && needs.appstore.result == 'success' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
     timeout-minutes: 60
     env:
       LANG: en_US.UTF-8
