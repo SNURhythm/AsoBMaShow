@@ -778,6 +778,9 @@ static std::string formatChartEntryPath(const ChartEntry &entry) {
 }
 
 static std::string formatChartEntryName(const ChartEntry &entry) {
+  if (!entry.removable) {
+    return "Default BMS";
+  }
   const std::filesystem::path path(entry.path);
   const std::filesystem::path name = path.filename();
   if (name.empty()) {
@@ -788,6 +791,11 @@ static std::string formatChartEntryName(const ChartEntry &entry) {
 
 static std::string formatChartEntrySource(const ChartEntry &entry) {
   const std::string pathText = formatChartEntryPath(entry);
+  if (!entry.removable) {
+    return pathText +
+           "\nBuilt-in folder. Archive imports and Find BMS downloads are "
+           "stored here.";
+  }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (!entry.iosBookmark.empty()) {
     return pathText + "\nFiles access saved for future scans.";

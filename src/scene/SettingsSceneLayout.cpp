@@ -2341,17 +2341,22 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int folderActionWidth = metrics.compact ? 136 : 156;
-      const bool confirmingDelete =
-          pendingDeleteChartEntryPath == entryPathText;
-      auto *deleteButton = makeAccentButton(
-          folderActionWidth, metrics.actionButtonHeight,
-          makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE),
-          ui_theme::coral());
-      deleteButton->setOnClickListener(
-          [this, entryPathText]() { deleteChartEntry(entryPathText); });
-      actions->addView(deleteButton);
+      if (entry.removable) {
+        const bool confirmingDelete =
+            pendingDeleteChartEntryPath == entryPathText;
+        auto *deleteButton = makeAccentButton(
+            folderActionWidth, metrics.actionButtonHeight,
+            makeText(confirmingDelete ? "Confirm" : "Delete",
+                     metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE),
+            ui_theme::coral());
+        deleteButton->setOnClickListener(
+            [this, entryPathText]() { deleteChartEntry(entryPathText); });
+        actions->addView(deleteButton);
+      } else {
+        actions->addView(makeWrappedText("Built-in", metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
       const auto backupStatusIt =

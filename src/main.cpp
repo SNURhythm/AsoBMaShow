@@ -312,6 +312,20 @@ static bool isAndroidEmulator() {
   const std::string hardware = getAndroidSystemProperty("ro.hardware");
   return hardware == "ranchu" || hardware == "goldfish";
 }
+
+static int getAndroidSdkVersion() {
+  const std::string sdk = getAndroidSystemProperty("ro.build.version.sdk");
+  if (sdk.empty()) {
+    return 0;
+  }
+  char *end = nullptr;
+  const long value = std::strtol(sdk.c_str(), &end, 10);
+  if (end == sdk.c_str() || value <= 0 || value > 1000) {
+    return 0;
+  }
+  return static_cast<int>(value);
+}
+
 #endif
 
 static uint32_t withoutMsaaResetFlags(uint32_t flags) {
@@ -325,10 +339,15 @@ static int runApplication(const bgfx::Init &bgfxInit) {
           bgfxInit.resolution.height);
   std::vector<bgfx::RendererType::Enum> rendererCandidates;
 #if TARGET_OS_ANDROID
-  if (!isAndroidEmulator()) {
-    rendererCandidates.push_back(bgfx::RendererType::Vulkan);
+  const bool androidEmulator = isAndroidEmulator();
+  const int androidSdkVersion = getAndroidSdkVersion();
+  const bool skipAndroidEmulatorVulkan =
+      androidEmulator && androidSdkVersion >= 33;
+  if (skipAndroidEmulatorVulkan) {
+    SDL_Log("Android emulator API %d detected; skipping Vulkan stub renderer",
+            androidSdkVersion);
   } else {
-    SDL_Log("Android emulator detected; skipping Vulkan renderer");
+    rendererCandidates.push_back(bgfx::RendererType::Vulkan);
   }
   rendererCandidates.push_back(bgfx::RendererType::OpenGLES);
 #elif __APPLE__
@@ -341,10 +360,7 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   for (const auto rendererType : rendererCandidates) {
     selectedInit.type = rendererType;
 #if TARGET_OS_ANDROID
-    selectedInit.resolution.formatColor =
-        rendererType == bgfx::RendererType::Vulkan
-            ? bgfx::TextureFormat::RGBA8
-            : bgfx::TextureFormat::BGRA8;
+    selectedInit.resolution.formatColor = bgfx::TextureFormat::RGBA8;
 #endif
     SDL_Log("Trying bgfx renderer: %s",
             rendererType == bgfx::RendererType::Count

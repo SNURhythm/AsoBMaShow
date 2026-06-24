@@ -62,8 +62,6 @@
 namespace asobmshow::bms_search {
 using json = nlohmann::json;
 
-inline constexpr std::uint64_t kMaxDownloadBytes =
-    1024ull * 1024ull * 1024ull * 4ull;
 inline constexpr const char *kHorieApiOrigin = "https://horie.synology.me:8443";
 
 struct ParsedUrl {

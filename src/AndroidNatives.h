@@ -4,10 +4,17 @@
 
 #include "ThreadCompat.h"
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
+
+using AndroidDownloadProgressCallback =
+    std::function<void(std::uint64_t downloadedBytes,
+                       std::uint64_t totalBytes)>;
 
 std::string GetAndroidExternalFilesDir();
 std::string GetAndroidInternalFilesDir();
@@ -37,6 +44,15 @@ std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &pa
                                                  std::string &errorMessage);
 bool OpenURLInAndroidBrowser(const std::string &url,
                              std::string &errorMessage);
+bool DownloadURLTextAndroid(const std::string &url, std::string &body,
+                            std::string &errorMessage);
+bool PostURLTextAndroid(const std::string &url, std::string &body,
+                        std::string &errorMessage);
+bool DownloadURLToFileAndroid(const std::string &url,
+                              const std::filesystem::path &path,
+                              std::atomic_bool &cancelled,
+                              AndroidDownloadProgressCallback progressCallback,
+                              std::string &errorMessage);
 void RequestAndroidExternalActivityRenderPause();
 void FinishAndroidExternalActivityRenderPause();
 bool IsAndroidExternalActivityRenderPauseRequested();

@@ -1291,7 +1291,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }
-  auto entries = dbHelper.SelectAllEntries(taskDb);
+  auto entries = dbHelper.SelectEffectiveEntries(taskDb);
 
   if (stopToken.stop_requested()) {
     return;
@@ -1309,12 +1309,12 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     std::string errorMessage;
     if (PickIOSFolder(folder, bookmark, errorMessage)) {
       dbHelper.InsertEntry(taskDb, std::filesystem::path(folder), bookmark);
-      entries = dbHelper.SelectAllEntries(taskDb);
+      entries = dbHelper.SelectEffectiveEntries(taskDb);
     } else {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
-      auto path = Utils::GetDocumentsPath("BMS");
+      auto path = ChartDBHelper::DefaultBmsFolderPath();
       std::filesystem::create_directories(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
@@ -1327,13 +1327,13 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     std::string errorMessage;
     if (PickAndroidChartFolder(folder, treeUri, errorMessage)) {
       dbHelper.InsertEntry(taskDb, folder, treeUri);
-      entries = dbHelper.SelectAllEntries(taskDb);
+      entries = dbHelper.SelectEffectiveEntries(taskDb);
     } else {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to pick Android library folder: %s",
                 errorMessage.c_str());
       }
-      auto path = Utils::GetDocumentsPath("BMS");
+      auto path = ChartDBHelper::DefaultBmsFolderPath();
       std::filesystem::create_directories(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
@@ -1378,7 +1378,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
     std::filesystem::path path(folder);
     dbHelper.InsertEntry(taskDb, path);
-    entries = dbHelper.SelectAllEntries(taskDb);
+    entries = dbHelper.SelectEffectiveEntries(taskDb);
 #endif
   }
 
@@ -1900,7 +1900,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateEntriesTable(db);
 #if TARGET_OS_ANDROID
-  (void)dbHelper.SelectAllEntries(db);
+  (void)dbHelper.SelectEffectiveEntries(db);
 #endif
   dbHelper.CreateDifficultyTableTables(db);
 
@@ -3851,19 +3851,21 @@ void MainMenuScene::openFindBmsForSelection() {
 std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   auto &dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateEntriesTable(db);
-  auto entries = dbHelper.SelectAllEntries(db);
+  auto entries = dbHelper.SelectEffectiveEntries(db);
   if (entries.empty()) {
-    const auto path = Utils::GetDocumentsPath("BMS");
+    const auto path = ChartDBHelper::DefaultBmsFolderPath();
     std::error_code errorCode;
     std::filesystem::create_directories(path, errorCode);
+#if !(TARGET_OS_ANDROID)
     dbHelper.InsertEntry(db, path);
+#endif
     return path;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return ResolveIOSFolderEntryPath(entries.front());
 #elif TARGET_OS_ANDROID
-  const auto path = Utils::GetDocumentsPath("BMS");
+  const auto path = ChartDBHelper::DefaultBmsFolderPath();
   std::error_code errorCode;
   std::filesystem::create_directories(path, errorCode);
   return path;

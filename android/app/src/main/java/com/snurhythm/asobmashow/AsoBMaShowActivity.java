@@ -18,9 +18,15 @@ import android.provider.Settings;
 
 import org.libsdl.app.SDLActivity;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -31,6 +37,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
     private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 0x41534f45;
     private static final String ERROR_PREFIX = "__ERROR__:";
+    private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
 
     private final Object pickerLock = new Object();
     private CountDownLatch pickerLatch;
@@ -82,6 +89,11 @@ public class AsoBMaShowActivity extends SDLActivity {
                 "main"
         };
     }
+
+    private static native void nativeDownloadUrlToFileProgress(long progressToken,
+                                                               long downloadedBytes,
+                                                               long totalBytes);
+    private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
 
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
@@ -355,6 +367,195 @@ public class AsoBMaShowActivity extends SDLActivity {
         } catch (Exception e) {
             return ERROR_PREFIX + e.getMessage();
         }
+    }
+
+    public String downloadUrlText(String urlText) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Network download cannot block the UI thread.";
+        }
+
+        HttpURLConnection connection = null;
+        try {
+            connection = openHttpConnection(urlText, "GET", 8);
+
+            int statusCode = connection.getResponseCode();
+            if (statusCode >= 400) {
+                return ERROR_PREFIX + "HTTP " + statusCode + " while downloading " + urlText;
+            }
+
+            try (InputStream input = connection.getInputStream()) {
+                return readTextResponse(input);
+            }
+        } catch (Exception e) {
+            String message = e.getMessage();
+            return ERROR_PREFIX + (message == null || message.isEmpty()
+                    ? e.getClass().getSimpleName()
+                    : message);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    public String postUrlText(String urlText) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Network request cannot block the UI thread.";
+        }
+
+        HttpURLConnection connection = null;
+        try {
+            connection = openHttpConnection(urlText, "POST", 8);
+
+            int statusCode = connection.getResponseCode();
+            if (statusCode >= 400) {
+                return ERROR_PREFIX + "HTTP " + statusCode + " while posting " + urlText;
+            }
+
+            try (InputStream input = connection.getInputStream()) {
+                return readTextResponse(input);
+            }
+        } catch (Exception e) {
+            String message = e.getMessage();
+            return ERROR_PREFIX + (message == null || message.isEmpty()
+                    ? e.getClass().getSimpleName()
+                    : message);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    public String downloadUrlToFile(String urlText, String pathText, long progressToken) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Network download cannot block the UI thread.";
+        }
+
+        File target = new File(pathText);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            return ERROR_PREFIX + "Could not create download directory.";
+        }
+
+        HttpURLConnection connection = null;
+        try {
+            connection = openHttpConnection(urlText, "GET", 8);
+
+            int statusCode = connection.getResponseCode();
+            if (statusCode >= 400) {
+                return ERROR_PREFIX + "HTTP " + statusCode + " while downloading " + urlText;
+            }
+
+            long contentLength = Math.max(0, connection.getContentLengthLong());
+            nativeDownloadUrlToFileProgress(progressToken, 0, contentLength);
+
+            try (InputStream input = connection.getInputStream();
+                 FileOutputStream output = new FileOutputStream(target, false)) {
+                copyBinaryResponse(input, output, progressToken, contentLength);
+            } catch (Exception e) {
+                target.delete();
+                throw e;
+            }
+            return "OK";
+        } catch (Exception e) {
+            String message = e.getMessage();
+            return ERROR_PREFIX + (message == null || message.isEmpty()
+                    ? e.getClass().getSimpleName()
+                    : message);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private HttpURLConnection openHttpConnection(String urlText, String method,
+                                                 int maxRedirects) throws IOException {
+        String currentUrl = urlText;
+        String currentMethod = method;
+        for (int i = 0; i <= maxRedirects; i++) {
+            URL url = new URL(currentUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestMethod(currentMethod);
+            connection.setRequestProperty("User-Agent", "AsoBMaShow");
+            connection.setConnectTimeout(10_000);
+            connection.setReadTimeout(180_000);
+            if ("POST".equals(currentMethod)) {
+                connection.setDoOutput(true);
+                connection.setFixedLengthStreamingMode(0);
+                try (OutputStream ignored = connection.getOutputStream()) {
+                    // Send an explicit empty POST body.
+                }
+            }
+
+            int statusCode = connection.getResponseCode();
+            if (!isRedirectStatus(statusCode)) {
+                return connection;
+            }
+
+            String location = connection.getHeaderField("Location");
+            connection.disconnect();
+            if (location == null || location.isEmpty()) {
+                throw new IOException("Redirect did not include a Location header.");
+            }
+            currentUrl = new URL(url, location).toString();
+            if (statusCode != 307 && statusCode != 308) {
+                currentMethod = "GET";
+            }
+        }
+        throw new IOException("Too many redirects.");
+    }
+
+    private boolean isRedirectStatus(int statusCode) {
+        return statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
+                statusCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+                statusCode == HttpURLConnection.HTTP_SEE_OTHER ||
+                statusCode == 307 ||
+                statusCode == 308;
+    }
+
+    private String readTextResponse(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[16 * 1024];
+        int total = 0;
+        while (true) {
+            int read = input.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            total += read;
+            if (total > MAX_TEXT_DOWNLOAD_BYTES) {
+                throw new IOException("Downloaded text response is too large.");
+            }
+            output.write(buffer, 0, read);
+        }
+        return output.toString(StandardCharsets.UTF_8.name());
+    }
+
+    private void copyBinaryResponse(InputStream input, FileOutputStream output,
+                                    long progressToken, long totalBytes) throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        long total = 0;
+        long nextProgressAt = 0;
+        while (true) {
+            if (nativeDownloadUrlToFileCancelled(progressToken)) {
+                throw new IOException("Download cancelled.");
+            }
+            int read = input.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            output.write(buffer, 0, read);
+            total += read;
+            long now = System.nanoTime();
+            if (now >= nextProgressAt) {
+                nativeDownloadUrlToFileProgress(progressToken, total, totalBytes);
+                nextProgressAt = now + 100_000_000L;
+            }
+        }
+        nativeDownloadUrlToFileProgress(progressToken, total, totalBytes > 0 ? totalBytes : total);
     }
 
     private void finishPicker() {

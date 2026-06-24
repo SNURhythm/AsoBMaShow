@@ -8,6 +8,7 @@
 #include <SDL2/SDL_system.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -33,6 +34,16 @@ std::condition_variable gExternalActivityPauseCv;
 bool gExternalActivityPauseRequested = false;
 bool gExternalActivityPauseAcknowledged = false;
 constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
+
+struct AndroidDownloadProgressBridge {
+  std::atomic_bool *cancelled = nullptr;
+  AndroidDownloadProgressCallback *progressCallback = nullptr;
+};
+
+std::mutex gAndroidDownloadProgressMutex;
+std::unordered_map<jlong, AndroidDownloadProgressBridge *>
+    gAndroidDownloadProgressBridges;
+jlong gNextAndroidDownloadProgressToken = 1;
 
 struct UniqueFd {
   explicit UniqueFd(int fd) : value(fd) {}
@@ -134,6 +145,28 @@ bool clearPendingJavaException(JNIEnv *env, std::string &errorMessage) {
   env->ExceptionClear();
   errorMessage = "Android Java call failed.";
   return true;
+}
+
+jlong registerAndroidDownloadProgressBridge(
+    AndroidDownloadProgressBridge &bridge) {
+  std::lock_guard<std::mutex> lock(gAndroidDownloadProgressMutex);
+  const jlong token = gNextAndroidDownloadProgressToken++;
+  if (gNextAndroidDownloadProgressToken <= 0) {
+    gNextAndroidDownloadProgressToken = 1;
+  }
+  gAndroidDownloadProgressBridges[token] = &bridge;
+  return token;
+}
+
+void unregisterAndroidDownloadProgressBridge(jlong token) {
+  std::lock_guard<std::mutex> lock(gAndroidDownloadProgressMutex);
+  gAndroidDownloadProgressBridges.erase(token);
+}
+
+AndroidDownloadProgressBridge *androidDownloadProgressBridge(jlong token) {
+  std::lock_guard<std::mutex> lock(gAndroidDownloadProgressMutex);
+  const auto it = gAndroidDownloadProgressBridges.find(token);
+  return it == gAndroidDownloadProgressBridges.end() ? nullptr : it->second;
 }
 
 std::string callActivityStringMethod(const char *methodName,
@@ -247,6 +280,62 @@ std::string callActivityStringMethod2(const char *methodName,
   return result;
 }
 
+std::string callActivityStringMethod2Long(const char *methodName,
+                                          const char *signature,
+                                          const char *argument1,
+                                          const char *argument2,
+                                          jlong argument3,
+                                          std::string &errorMessage) {
+  errorMessage.clear();
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errorMessage = "Android activity is not available.";
+    return {};
+  }
+
+  jclass activityClass = env->GetObjectClass(activity);
+  if (activityClass == nullptr) {
+    errorMessage = "Android activity class is not available.";
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jmethodID method = env->GetMethodID(activityClass, methodName, signature);
+  if (method == nullptr) {
+    errorMessage = std::string("Android activity method missing: ") +
+                   methodName;
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jstring javaArgument1 =
+      env->NewStringUTF(argument1 != nullptr ? argument1 : "");
+  jstring javaArgument2 =
+      env->NewStringUTF(argument2 != nullptr ? argument2 : "");
+  jobject javaResult = env->CallObjectMethod(
+      activity, method, javaArgument1, javaArgument2, argument3);
+
+  if (clearPendingJavaException(env, errorMessage)) {
+    env->DeleteLocalRef(javaArgument1);
+    env->DeleteLocalRef(javaArgument2);
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  std::string result = jstringToUtf8(env, static_cast<jstring>(javaResult));
+  if (javaResult != nullptr) {
+    env->DeleteLocalRef(javaResult);
+  }
+  env->DeleteLocalRef(javaArgument1);
+  env->DeleteLocalRef(javaArgument2);
+  env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  return result;
+}
+
 std::optional<int> callActivityIntMethod2(const char *methodName,
                                           const char *signature,
                                           const char *argument1,
@@ -323,6 +412,38 @@ std::vector<std::string> splitLines(const std::string &value) {
 }
 
 } // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileProgress(
+    JNIEnv *, jclass, jlong progressToken, jlong downloadedBytes,
+    jlong totalBytes) {
+  AndroidDownloadProgressCallback *progressCallback = nullptr;
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(progressToken);
+      bridge != nullptr) {
+    progressCallback = bridge->progressCallback;
+  }
+  if (progressCallback == nullptr || !*progressCallback) {
+    return;
+  }
+  (*progressCallback)(downloadedBytes > 0
+                          ? static_cast<std::uint64_t>(downloadedBytes)
+                          : 0,
+                      totalBytes > 0 ? static_cast<std::uint64_t>(totalBytes)
+                                     : 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelled(
+    JNIEnv *, jclass, jlong progressToken) {
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(progressToken);
+      bridge != nullptr && bridge->cancelled != nullptr &&
+      bridge->cancelled->load()) {
+    return JNI_TRUE;
+  }
+  return JNI_FALSE;
+}
 
 std::string GetAndroidExternalFilesDir() {
   if (const char *external = SDL_AndroidGetExternalStoragePath();
@@ -656,6 +777,65 @@ bool OpenURLInAndroidBrowser(const std::string &url,
       callActivityStringMethod("openExternalUrl", "(Ljava/lang/String;)"
                                                   "Ljava/lang/String;",
                                url.c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool DownloadURLTextAndroid(const std::string &url, std::string &body,
+                            std::string &errorMessage) {
+  body.clear();
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("downloadUrlText", "(Ljava/lang/String;)"
+                                                  "Ljava/lang/String;",
+                               url.c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  return parseBridgeResult(result, body, errorMessage);
+}
+
+bool PostURLTextAndroid(const std::string &url, std::string &body,
+                        std::string &errorMessage) {
+  body.clear();
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("postUrlText", "(Ljava/lang/String;)"
+                                              "Ljava/lang/String;",
+                               url.c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  return parseBridgeResult(result, body, errorMessage);
+}
+
+bool DownloadURLToFileAndroid(const std::string &url,
+                              const std::filesystem::path &path,
+                              std::atomic_bool &cancelled,
+                              AndroidDownloadProgressCallback progressCallback,
+                              std::string &errorMessage) {
+  AndroidDownloadProgressBridge bridge{.cancelled = &cancelled,
+                                       .progressCallback = &progressCallback};
+  const jlong progressToken = registerAndroidDownloadProgressBridge(bridge);
+  struct ProgressBridgeCleanup {
+    jlong token;
+    ~ProgressBridgeCleanup() {
+      unregisterAndroidDownloadProgressBridge(token);
+    }
+  } cleanup{progressToken};
+
+  std::string callError;
+  const std::string pathText = path.string();
+  const std::string result = callActivityStringMethod2Long(
+      "downloadUrlToFile",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;", url.c_str(),
+      pathText.c_str(), progressToken, callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

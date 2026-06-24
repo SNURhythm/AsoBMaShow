@@ -3,6 +3,9 @@
 
 #include "../RAII.h"
 
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
 #include "../CurlRAII.h"
 #endif
@@ -144,10 +147,6 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
     errorMessage = "Download cancelled.";
     return false;
   }
-  if (data.size() > kMaxDownloadBytes) {
-    errorMessage = "Download is too large.";
-    return false;
-  }
   std::ofstream file(path, std::ios::binary);
   if (!file) {
     errorMessage = "Could not create downloaded archive.";
@@ -179,6 +178,16 @@ size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
 
 std::optional<std::string> fetchUrlText(const std::string &url,
                                         std::string &errorMessage) {
+#if TARGET_OS_ANDROID
+  std::string body;
+  if (!DownloadURLTextAndroid(url, body, errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Failed to download " + url;
+    }
+    return std::nullopt;
+  }
+  return body;
+#else
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
   CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
@@ -199,6 +208,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -214,10 +224,21 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     return std::nullopt;
   }
   return body;
+#endif
 }
 
 std::optional<std::string> postUrlText(const std::string &url,
                                        std::string &errorMessage) {
+#if TARGET_OS_ANDROID
+  std::string body;
+  if (!PostURLTextAndroid(url, body, errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Failed to post " + url;
+    }
+    return std::nullopt;
+  }
+  return body;
+#else
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
   CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
@@ -239,6 +260,7 @@ std::optional<std::string> postUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -254,6 +276,7 @@ std::optional<std::string> postUrlText(const std::string &url,
     return std::nullopt;
   }
   return body;
+#endif
 }
 
 struct CurlDownloadContext {
@@ -284,16 +307,50 @@ int curlProgress(void *userdata, curl_off_t downloadTotal,
          .downloadedBytes = static_cast<std::uint64_t>(downloadNow),
          .totalBytes = static_cast<std::uint64_t>(downloadTotal)});
   }
-  if (downloadTotal > 0 &&
-      static_cast<std::uint64_t>(downloadTotal) > kMaxDownloadBytes) {
-    return 1;
-  }
   return 0;
 }
 
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback) {
+#if TARGET_OS_ANDROID
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (progressCallback) {
+    progressCallback({.message = "Downloading archive"});
+  }
+  auto androidProgressCallback = [&progressCallback](
+                                     std::uint64_t downloadedBytes,
+                                     std::uint64_t totalBytes) {
+    if (progressCallback) {
+      progressCallback({.message = "Downloading archive",
+                        .downloadedBytes = downloadedBytes,
+                        .totalBytes = totalBytes});
+    }
+  };
+  if (!DownloadURLToFileAndroid(url, path, cancelled, androidProgressCallback,
+                                errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Download failed.";
+    }
+    return false;
+  }
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (progressCallback) {
+    std::error_code fsError;
+    const auto size = std::filesystem::file_size(path, fsError);
+    const auto byteCount = fsError ? 0 : static_cast<std::uint64_t>(size);
+    progressCallback({.message = "Download complete",
+                      .downloadedBytes = byteCount,
+                      .totalBytes = byteCount});
+  }
+  return true;
+#else
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
   CurlEasyHandle curl(curl_easy_init());
   if (curl == nullptr) {
@@ -325,6 +382,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -345,6 +403,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
     return false;
   }
   return true;
+#endif
 }
 #endif
 

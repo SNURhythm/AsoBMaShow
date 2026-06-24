@@ -39,6 +39,7 @@ struct ChartMetaRecord {
 struct ChartEntry {
   path_t path;
   std::string iosBookmark;
+  bool removable = true;
 };
 
 struct DifficultyTableInfo {
@@ -153,8 +154,11 @@ public:
   bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
                    const std::string &iosBookmark = "");
   std::vector<ChartEntry> SelectAllEntries(sqlite3 *db);
+  std::vector<ChartEntry> SelectEffectiveEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
+  static std::filesystem::path DefaultBmsFolderPath();
+  static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
   int ScanChartRoots(sqlite3 *db,
                      const std::vector<std::filesystem::path> &roots,
                      const std::stop_token *stopToken = nullptr,
