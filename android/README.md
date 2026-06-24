@@ -45,7 +45,8 @@ runs both use a compact UTC timestamp version code. `firebaseRelease` and
 `playRelease` builds also require release signing env values:
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
 `ANDROID_KEY_PASSWORD`. The same signing config is used for Firebase and Google
-Play release builds. The script builds first, then uploads the APK with
+Play release builds. In GitHub Actions, these values are supplied by secrets on
+the Android beta deploy job. The script builds first, then uploads the APK with
 `firebase appdistribution:distribute`.
 
 Before building after shader changes, generate all shader profiles:

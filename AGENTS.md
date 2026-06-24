@@ -31,12 +31,12 @@
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
-- Android release builds require `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The same release signing config is used for Firebase App Distribution and Google Play builds. Keep real values in private env files or runner environment only.
+- Android release builds require `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The same release signing config is used for Firebase App Distribution and Google Play builds. Keep real values in private env files, runner environment, or GitHub Actions secrets only.
 - Firebase Android builds request `MANAGE_EXTERNAL_STORAGE`; Play builds opt out via the `play` flavor. For a local Play compile check, run:
   `scripts/android_firebase_deploy.sh --build-only --variant playDebug`
 - Debug variants remain debug-signed. Do not use debug signing for Firebase or Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
-- GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `develop`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
+- GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `develop`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The job reads Android signing values from GitHub Actions secrets, and the self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
 
 ## Android Emulator Testing
 
