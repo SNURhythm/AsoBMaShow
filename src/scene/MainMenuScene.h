@@ -21,6 +21,7 @@
 #include "../targets.h"
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
+#include "MainMenuLibrary.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -141,6 +142,7 @@ private:
       SolidArchives,
       DifficultyTable,
       DifficultyLevel,
+      DifficultyClearMark,
       CoursesRoot,
       CourseGroup,
       Course
@@ -157,6 +159,10 @@ private:
     int courseTableId = 0;
     std::string courseGroupName;
     int clearRank = kNoClearTypeRank;
+    int clearMarkRank = kNoClearTypeRank;
+    bool clearMarkFolder = false;
+    bool expandable = false;
+    bool expanded = false;
   };
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
@@ -356,6 +362,8 @@ private:
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
   std::unordered_map<std::string, int> folderClearRanks;
+  main_menu_library::FolderClearMarkCounts folderClearMarkCounts;
+  std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
   std::vector<ReplaySummary> replaySummaries;
@@ -404,6 +412,7 @@ private:
   void reloadFolderItems(bool preserveViewState = false);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
+  void rebuildScoreClearRankTempTable();
   void refreshScoreClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
@@ -450,6 +459,7 @@ private:
   void refreshTasksButton();
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
+  int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
   void requestLibraryReload(bool includeFolders);
   void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);

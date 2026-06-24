@@ -74,6 +74,10 @@ extern char **environ;
 
 namespace {
 constexpr int kRootPadding = 28;
+constexpr int kLibraryPanelWidth = 360;
+constexpr int kLibraryPanelPadding = 14;
+constexpr int kLibraryControlWidth =
+    kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
@@ -89,6 +93,26 @@ struct SafeAreaInsets {
   int bottom = 0;
   int right = 0;
 };
+
+struct ClearMarkFilterDefinition {
+  const char *label;
+  int rank;
+};
+
+constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
+    {"FULL COMBO", kClearTypeFullComboRank},
+    {"EXH-CLEAR", kClearTypeExHardClearRank},
+    {"H-CLEAR", kClearTypeHardClearRank},
+    {"CLEAR", kClearTypeNormalClearRank},
+    {"E-CLEAR", kClearTypeEasyClearRank},
+    {"A-CLEAR", kClearTypeAssistedEasyClearRank},
+    {"FAILED", kClearTypeFailedRank},
+    {"NO PLAY", kNoClearTypeRank},
+};
+
+std::string clearMarkFolderKey(const std::string &parentKey, int clearRank) {
+  return parentKey + ":clear:" + std::to_string(clearRank);
+}
 
 std::string findBmsManualSourceUrl(const BmsSearchResult &result) {
   if (!result.fallbackUrl.empty()) {
@@ -2248,7 +2272,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
-    return new LibraryFolderItemView(0, 0, 260, kFolderListItemHeight);
+    return new LibraryFolderItemView(0, 0, kLibraryControlWidth,
+                                     kFolderListItemHeight);
   };
   folderRecyclerView->itemHeight = kFolderListItemHeight;
   folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
@@ -2256,7 +2281,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
       folderView->setItem(item.label, item.depth, item.count, isSelected,
-                          clearRankForFolder(item.key));
+                          item.clearMarkFolder ? item.clearMarkRank
+                                               : clearRankForFolder(item.key),
+                          item.clearMarkFolder, item.expandable,
+                          item.expanded);
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -2297,9 +2325,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
   nav->setAlignItems(YGAlignStretch);
-  nav->setWidth(280);
+  nav->setWidth(kLibraryPanelWidth);
   nav->setGap(12);
-  nav->setPadding(Edge::All, 14);
+  nav->setPadding(Edge::All, kLibraryPanelPadding);
   nav->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   nav->setCornerRadius(ui_theme::panelRadius());
   nav->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
@@ -2322,7 +2350,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       androidFullFileAccessBuild ? "Add Folder" : "Import Folder";
 #endif
   if (showAddFolderButton) {
-    auto *addFolderButton = new Button(0, 0, 252, 50);
+    auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, 50);
     auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     addFolderText->setText(addFolderButtonLabel);
     addFolderText->setAlign(TextView::CENTER);
@@ -2350,7 +2378,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     nav->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
-  auto *importArchiveButton = new Button(0, 0, 252, 50);
+  auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, 50);
   auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   importArchiveText->setText("Import Archive");
   importArchiveText->setAlign(TextView::CENTER);
@@ -2770,13 +2798,44 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   int allSongCount = 0;
   allSongCount = dbHelper.CountAllChartMeta(db);
 
-  folders.push_back({
+  auto isExpanded = [this](const std::string &key) {
+    return expandedLibraryFolders.find(key) != expandedLibraryFolders.end();
+  };
+  auto appendClearMarkFilters = [&](const LibraryFolderItem &parent,
+                                    int childDepth) {
+    for (const auto &filter : kDifficultyClearMarkFilters) {
+      const int count = clearMarkCountForFolder(parent.key, filter.rank);
+      if (count <= 0) {
+        continue;
+      }
+      folders.push_back({
+          .key = clearMarkFolderKey(parent.key, filter.rank),
+          .label = filter.label,
+          .type = LibraryFolderItem::Type::DifficultyClearMark,
+          .depth = childDepth,
+          .count = count,
+          .tableId = parent.tableId,
+          .tableLevel = parent.tableLevel,
+          .clearRank = filter.rank,
+          .clearMarkRank = filter.rank,
+          .clearMarkFolder = true,
+      });
+    }
+  };
+
+  const LibraryFolderItem allSongsItem{
       .key = "all",
       .label = "All songs",
       .type = LibraryFolderItem::Type::AllSongs,
       .depth = 0,
       .count = allSongCount,
-  });
+      .expandable = true,
+      .expanded = isExpanded("all"),
+  };
+  folders.push_back(allSongsItem);
+  if (allSongsItem.expanded) {
+    appendClearMarkFilters(allSongsItem, 1);
+  }
 
   const int solidArchiveCount = dbHelper.CountSolidArchives(db);
   if (solidArchiveCount > 0) {
@@ -2791,26 +2850,43 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const auto tables = dbHelper.SelectDifficultyTables(db);
   for (const auto &table : tables) {
-    folders.push_back({
-        .key = folderKeyForTable(table.id),
+    const std::string tableKey = folderKeyForTable(table.id);
+    const LibraryFolderItem tableItem{
+        .key = tableKey,
         .label = table.name,
         .type = LibraryFolderItem::Type::DifficultyTable,
         .depth = 0,
         .count = table.chartCount,
         .tableId = table.id,
-    });
+        .expandable = true,
+        .expanded = isExpanded(tableKey),
+    };
+    folders.push_back(tableItem);
+    if (!tableItem.expanded) {
+      continue;
+    }
+
+    appendClearMarkFilters(tableItem, 1);
 
     const auto levels = dbHelper.SelectDifficultyLevels(db, table.id);
     for (const auto &level : levels) {
-      folders.push_back({
-          .key = folderKeyForLevel(level.tableId, level.level),
+      const std::string levelKey =
+          folderKeyForLevel(level.tableId, level.level);
+      const LibraryFolderItem levelItem{
+          .key = levelKey,
           .label = level.tableSymbol + level.level,
           .type = LibraryFolderItem::Type::DifficultyLevel,
           .depth = 1,
           .count = level.chartCount,
           .tableId = level.tableId,
           .tableLevel = level.level,
-      });
+          .expandable = true,
+          .expanded = isExpanded(levelKey),
+      };
+      folders.push_back(levelItem);
+      if (levelItem.expanded) {
+        appendClearMarkFilters(levelItem, 2);
+      }
     }
   }
 
@@ -2820,49 +2896,63 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     for (const auto &group : courseGroups) {
       coursesCount += group.matchedChartCount;
     }
-    folders.push_back({
+    const LibraryFolderItem coursesRootItem{
         .key = "courses",
         .label = "Courses",
         .type = LibraryFolderItem::Type::CoursesRoot,
         .depth = 0,
         .count = coursesCount,
-    });
+        .expandable = true,
+        .expanded = isExpanded("courses"),
+    };
+    folders.push_back(coursesRootItem);
+    if (coursesRootItem.expanded) {
+      for (const auto &group : courseGroups) {
+        const std::string label = group.groupName.empty()
+                                      ? group.tableName + " Courses"
+                                      : group.groupName;
+        const std::string groupKey =
+            folderKeyForCourseGroup(group.tableId, group.groupName);
+        const LibraryFolderItem groupItem{
+            .key = groupKey,
+            .label = label,
+            .type = LibraryFolderItem::Type::CourseGroup,
+            .depth = 1,
+            .count = group.matchedChartCount,
+            .courseTableId = group.tableId,
+            .courseGroupName = group.groupName,
+            .expandable = true,
+            .expanded = isExpanded(groupKey),
+        };
+        folders.push_back(groupItem);
+        if (!groupItem.expanded) {
+          continue;
+        }
 
-    for (const auto &group : courseGroups) {
-      const std::string label = group.groupName.empty()
-                                    ? group.tableName + " Courses"
-                                    : group.groupName;
-      folders.push_back({
-          .key = folderKeyForCourseGroup(group.tableId, group.groupName),
-          .label = label,
-          .type = LibraryFolderItem::Type::CourseGroup,
-          .depth = 1,
-          .count = group.matchedChartCount,
-          .courseTableId = group.tableId,
-          .courseGroupName = group.groupName,
-      });
-
-      const auto courses =
-          dbHelper.SelectDifficultyCourses(db, group.tableId, group.groupName);
-      for (const auto &course : courses) {
-        const std::string courseLabel =
-            course.level.empty() ? course.name : course.level;
-        folders.push_back({
-            .key = folderKeyForCourse(course.id),
-            .label = courseLabel,
-            .type = LibraryFolderItem::Type::Course,
-            .depth = 2,
-            .count = course.matchedChartCount,
-            .courseId = course.id,
-            .courseTableId = course.tableId,
-            .courseGroupName = course.groupName,
-        });
+        const auto courses = dbHelper.SelectDifficultyCourses(
+            db, group.tableId, group.groupName);
+        for (const auto &course : courses) {
+          const std::string courseLabel =
+              course.level.empty() ? course.name : course.level;
+          folders.push_back({
+              .key = folderKeyForCourse(course.id),
+              .label = courseLabel,
+              .type = LibraryFolderItem::Type::Course,
+              .depth = 2,
+              .count = course.matchedChartCount,
+              .courseId = course.id,
+              .courseTableId = course.tableId,
+              .courseGroupName = course.groupName,
+          });
+        }
       }
     }
   }
 
   for (auto &folder : folders) {
-    folder.clearRank = clearRankForFolder(folder.key);
+    folder.clearRank =
+        folder.clearMarkFolder ? folder.clearMarkRank
+                               : clearRankForFolder(folder.key);
   }
 
   if (activeFolder.key.empty()) {
@@ -2934,6 +3024,12 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     query.tableId = activeFolder.tableId;
     query.tableLevel = activeFolder.tableLevel;
     break;
+  case LibraryFolderItem::Type::DifficultyClearMark:
+    query.tableId = activeFolder.tableId;
+    query.tableLevel = activeFolder.tableLevel;
+    query.clearMarkFilter = true;
+    query.clearMarkRank = activeFolder.clearMarkRank;
+    break;
   case LibraryFolderItem::Type::CoursesRoot:
     query.coursesOnly = true;
     break;
@@ -2949,15 +3045,16 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     break;
   }
 
-  const int count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
-  chartListCache.reset(db, query, count);
+  int count = 0;
   if (!preserveViewState || previousSelectedPath.empty()) {
     refreshReplayAvailability(nullptr);
   }
-  recyclerView->setItemProvider(count,
-                                [this](int index) -> const ChartMetaRecord & {
-                                  return chartListCache.get(index);
-                                });
+  count = ChartDBHelper::GetInstance().CountChartMeta(db, query);
+  chartListCache.reset(db, query, count);
+  recyclerView->setItemProvider(
+      count, [this](int index) -> const ChartMetaRecord & {
+        return chartListCache.get(index);
+      });
   if (!preserveViewState) {
     return;
   }
@@ -2973,7 +3070,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (index < 0 || index >= count || previousSelectedPath.empty()) {
       return false;
     }
-    return fspath_to_path_t(chartListCache.get(index).meta.BmsPath) ==
+    return fspath_to_path_t(recyclerView->get(index).meta.BmsPath) ==
            previousSelectedPath;
   };
 
@@ -3007,17 +3104,93 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
 void MainMenuScene::reloadScoreClearRanks() {
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
   scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
+  rebuildScoreClearRankTempTable();
   folderClearRanks =
       main_menu_library::LoadFolderClearRanks(db, scoreClearRanks);
+  folderClearMarkCounts =
+      main_menu_library::LoadFolderClearMarkCounts(db, scoreClearRanks);
+}
+
+void MainMenuScene::rebuildScoreClearRankTempTable() {
+  if (db == nullptr) {
+    return;
+  }
+
+  auto exec = [this](const char *query, const char *context) {
+    SqliteErrorMessageHandle error;
+    const int rc = sqlite3_exec(db, query, nullptr, nullptr, error.out());
+    if (rc != SQLITE_OK) {
+      SDL_Log("SQL error while %s: %s", context,
+              error.get() != nullptr ? error.get() : sqlite3_errmsg(db));
+      return false;
+    }
+    return true;
+  };
+
+  if (!exec("DROP TABLE IF EXISTS temp.score_clear_rank_cache",
+            "dropping score clear rank cache") ||
+      !exec("CREATE TEMP TABLE score_clear_rank_cache ("
+            "kind INTEGER NOT NULL,"
+            "key TEXT NOT NULL,"
+            "rank INTEGER NOT NULL,"
+            "PRIMARY KEY(kind, key)"
+            ") WITHOUT ROWID",
+            "creating score clear rank cache") ||
+      !exec("BEGIN", "starting score clear rank cache rebuild")) {
+    return;
+  }
+
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(
+      db,
+      "INSERT INTO temp.score_clear_rank_cache(kind, key, rank) VALUES (?, ?, "
+      "?)",
+      stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing score clear rank cache insert: %s",
+            sqlite3_errmsg(db));
+    exec("ROLLBACK", "rolling back score clear rank cache rebuild");
+    return;
+  }
+
+  auto insertRanks = [&](int kind, const ScoreRankMap &ranks) {
+    for (const auto &[key, rank] : ranks) {
+      if (key.empty()) {
+        continue;
+      }
+      sqlite3_reset(stmt.get());
+      sqlite3_clear_bindings(stmt.get());
+      sqlite3_bind_int(stmt.get(), 1, kind);
+      sqlite3_bind_text(stmt.get(), 2, key.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int(stmt.get(), 3, rank);
+      if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        SDL_Log("SQL error while inserting score clear rank cache row: %s",
+                sqlite3_errmsg(db));
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const bool ok = insertRanks(0, scoreClearRanks.rankBySha256) &&
+                  insertRanks(1, scoreClearRanks.rankByMd5) &&
+                  insertRanks(2, scoreClearRanks.rankByPath);
+  exec(ok ? "COMMIT" : "ROLLBACK",
+       ok ? "committing score clear rank cache rebuild"
+          : "rolling back score clear rank cache rebuild");
 }
 
 void MainMenuScene::refreshScoreClearRankViews() {
   reloadScoreClearRanks();
   if (folderRecyclerView != nullptr) {
-    folderRecyclerView->rebindVisibleItems();
+    reloadFolderItems(true);
   }
   if (recyclerView != nullptr) {
-    recyclerView->rebindVisibleItems();
+    if (activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark) {
+      reloadChartList(true);
+    } else {
+      recyclerView->rebindVisibleItems();
+    }
   }
 }
 
@@ -3059,6 +3232,16 @@ int MainMenuScene::clearRankForFolder(const std::string &key) const {
   return it == folderClearRanks.end() ? kNoClearTypeRank : it->second;
 }
 
+int MainMenuScene::clearMarkCountForFolder(const std::string &key,
+                                           int clearMarkRank) const {
+  const auto folderIt = folderClearMarkCounts.find(key);
+  if (folderIt == folderClearMarkCounts.end()) {
+    return 0;
+  }
+  const auto countIt = folderIt->second.find(clearMarkRank);
+  return countIt == folderIt->second.end() ? 0 : countIt->second;
+}
+
 void MainMenuScene::requestLibraryReload(bool includeFolders) {
   if (includeFolders) {
     folderItemsReloadRequested = true;
@@ -3096,7 +3279,7 @@ void MainMenuScene::selectChartByPathAfterReload(
   }
   const path_t target = fspath_to_path_t(path);
   for (int i = 0; i < recyclerView->size(); ++i) {
-    const ChartMetaRecord &record = chartListCache.get(i);
+    const ChartMetaRecord &record = recyclerView->get(i);
     if (fspath_to_path_t(record.meta.BmsPath) != target) {
       continue;
     }
@@ -3142,6 +3325,15 @@ void MainMenuScene::selectChartByPathAfterReload(
 
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
   activeFolder = item;
+  if (item.expandable) {
+    const auto it = expandedLibraryFolders.find(item.key);
+    if (it == expandedLibraryFolders.end()) {
+      expandedLibraryFolders.insert(item.key);
+    } else {
+      expandedLibraryFolders.erase(it);
+    }
+    reloadFolderItems(true);
+  }
   reloadChartList();
 }
 

@@ -8,6 +8,9 @@ inline bool hasClearLampColor(int clearTypeRank) {
 }
 
 inline Color clearLampColorForRank(int clearTypeRank) {
+  if (clearTypeRank >= kClearTypeFullComboRank) {
+    return Color(102, 218, 255, 242);
+  }
   if (clearTypeRank >= kClearTypeExHardClearRank) {
     return Color(255, 205, 37, 242);
   }
