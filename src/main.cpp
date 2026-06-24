@@ -359,6 +359,12 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   bgfx::Init selectedInit = bgfxInit;
   for (const auto rendererType : rendererCandidates) {
     selectedInit.type = rendererType;
+#if TARGET_OS_ANDROID
+    selectedInit.resolution.formatColor =
+        rendererType == bgfx::RendererType::Vulkan
+            ? bgfx::TextureFormat::RGBA8
+            : bgfx::TextureFormat::BGRA8;
+#endif
     SDL_Log("Trying bgfx renderer: %s",
             rendererType == bgfx::RendererType::Count
                 ? "auto"
