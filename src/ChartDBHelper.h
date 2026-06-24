@@ -22,6 +22,7 @@ struct ChartMetaQuery {
   int courseTableId = 0;
   std::string courseGroupName;
   std::string difficultyText;
+  int clearMarkRank = -1;
   int limit = 0;
   int offset = 0;
 };

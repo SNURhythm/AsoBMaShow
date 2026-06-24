@@ -109,6 +109,9 @@ std::string formatGauge(float gauge) {
 }
 
 std::string clearTypeLabelForRank(int rank) {
+  if (rank >= kClearTypeFullComboRank) {
+    return "FULL COMBO";
+  }
   if (rank >= kClearTypeExHardClearRank) {
     return "EX-HARD CLEAR";
   }

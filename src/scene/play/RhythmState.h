@@ -23,6 +23,7 @@ inline constexpr int kClearTypeEasyClearRank = 200;
 inline constexpr int kClearTypeNormalClearRank = 300;
 inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
+inline constexpr int kClearTypeFullComboRank = 600;
 inline constexpr size_t kGaugeTypeCount = 5;
 
 struct JudgementFastSlowCount {

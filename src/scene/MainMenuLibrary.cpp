@@ -103,6 +103,14 @@ void addFolderChart(
   }
   aggregate.addChart(scoreRanks.bestRankForStoredKeys(sha256, md5, path));
 }
+
+void addClearMarkCount(FolderClearMarkCounts &counts,
+                       const std::string &folderKey, int clearRank) {
+  if (clearRank < kClearTypeFailedRank) {
+    return;
+  }
+  counts[folderKey][clearRank]++;
+}
 } // namespace
 
 std::unordered_map<std::string, int>
@@ -208,6 +216,69 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
     }
   }
   return folderClearRanks;
+}
+
+FolderClearMarkCounts
+LoadFolderClearMarkCounts(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
+  FolderClearMarkCounts counts;
+
+  {
+    const std::string query =
+        "SELECT cm.sha256, cm.md5, cm.path FROM chart_meta cm WHERE " +
+        preferredChartPredicate("cm");
+    SqliteStatementHandle stmt;
+    const int rc = prepareSqliteStatement(db, query, stmt);
+    if (rc != SQLITE_OK) {
+      SDL_Log("SQL error while loading all-song clear mark counts: %s",
+              sqlite3_errmsg(db));
+    } else {
+      while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        const int clearRank = scoreRanks.bestRankForStoredKeys(
+            columnText(stmt.get(), 0), columnText(stmt.get(), 1),
+            columnText(stmt.get(), 2));
+        addClearMarkCount(counts, "all", clearRank);
+      }
+    }
+  }
+
+  const char *query =
+      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5 "
+      "FROM difficulty_table_entries dte "
+      "ORDER BY dte.table_id, dte.level";
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while loading folder clear mark counts: %s",
+            sqlite3_errmsg(db));
+    return counts;
+  }
+
+  int currentTableId = 0;
+  std::string currentTableKey;
+  std::string currentLevel;
+  std::string currentLevelKey;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    const int tableId = sqlite3_column_int(stmt.get(), 0);
+    const std::string_view level = columnText(stmt.get(), 1);
+    if (tableId != currentTableId) {
+      currentTableId = tableId;
+      currentTableKey = folderKeyForTable(tableId);
+      currentLevel.clear();
+      currentLevelKey.clear();
+    }
+    if (level != std::string_view(currentLevel)) {
+      currentLevel = std::string(level);
+      currentLevelKey = folderKeyForLevel(tableId, currentLevel);
+    }
+
+    const std::string sha256(columnText(stmt.get(), 2));
+    const std::string md5(columnText(stmt.get(), 3));
+    const int clearRank = scoreRanks.bestRankForHashes(sha256, md5);
+    addClearMarkCount(counts, currentTableKey, clearRank);
+    addClearMarkCount(counts, currentLevelKey, clearRank);
+  }
+
+  return counts;
 }
 
 } // namespace main_menu_library

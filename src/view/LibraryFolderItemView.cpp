@@ -5,10 +5,7 @@
 
 namespace {
 constexpr int kBottomGap = 6;
-
-std::string indentLabel(const std::string &label, int depth) {
-  return std::string(static_cast<size_t>(std::max(0, depth)) * 2, ' ') + label;
-}
+constexpr int kDepthIndent = 18;
 } // namespace
 
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
@@ -27,6 +24,15 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   contentCard->setPadding(Edge::End, 24);
   contentCard->setGap(8);
   addView(contentCard);
+
+  disclosureView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  disclosureView->setWidth(14);
+  disclosureView->setHeight(26);
+  disclosureView->setAlign(TextView::CENTER);
+  disclosureView->setVAlign(TextView::MIDDLE);
+  disclosureView->setOverflow(TextView::TextOverflow::Hidden);
+  disclosureView->setFlexShrink(0);
+  contentCard->addView(disclosureView);
 
   clearLamp = new View();
   clearLamp->setWidth(5)->setHeight(26)->setFlexShrink(0);
@@ -50,12 +56,24 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
 }
 
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
-                                    int count, bool selected, int clearRank) {
+                                    int count, bool selected, int clearRank,
+                                    bool clearMarkFolder, bool expandable,
+                                    bool expanded) {
   itemDepth = depth;
-  labelView->setText(indentLabel(label, itemDepth));
+  itemClearRank = clearRank;
+  itemClearMarkFolder = clearMarkFolder;
+  contentCard->setMargin(Edge::Left,
+                         static_cast<float>(std::max(0, itemDepth) *
+                                            kDepthIndent));
+  disclosureView->setText(expandable ? (expanded ? "v" : ">") : "");
+  labelView->setText(label);
   countView->setText(count >= 0 ? std::to_string(count) : "");
   if (hasClearLampColor(clearRank)) {
-    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+    const Color clearColor = clearLampColorForRank(clearRank);
+    clearLamp->setBackgroundColor(
+        itemClearMarkFolder ? ui_theme::withAlpha(ui_theme::textOn(clearColor),
+                                                  176)
+                            : clearColor);
   } else {
     clearLamp->clearBackgroundColor();
   }
@@ -67,19 +85,49 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 }
 
 void LibraryFolderItemView::onSelected() {
+  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
+    const Color accent = clearLampColorForRank(itemClearRank);
+    contentCard->setBackgroundColor(Color(accent.r, accent.g, accent.b, 255));
+    contentCard->setCornerRadius(ui_theme::controlRadius());
+    contentCard->setBorderColor(
+        ui_theme::withAlpha(ui_theme::textOn(accent), 230));
+    contentCard->setBorderWidth(1);
+    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
+    disclosureView->setColor(text);
+    labelView->setColor(text);
+    countView->setColor(text);
+    return;
+  }
+
   contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
   contentCard->setBorderWidth(1);
+  disclosureView->setThemedColor(ui_theme::textSecondary);
   labelView->setThemedColor(ui_theme::textPrimary);
   countView->setThemedColor(ui_theme::lime);
 }
 
 void LibraryFolderItemView::onUnselected() {
+  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
+    const Color accent = clearLampColorForRank(itemClearRank);
+    contentCard->setBackgroundColor(accent);
+    contentCard->setCornerRadius(ui_theme::controlRadius());
+    contentCard->setBorderColor(
+        ui_theme::withAlpha(ui_theme::textOn(accent), 112));
+    contentCard->setBorderWidth(1);
+    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
+    disclosureView->setColor(text);
+    labelView->setColor(text);
+    countView->setColor(text);
+    return;
+  }
+
   contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
   contentCard->setBorderWidth(1);
+  disclosureView->setThemedColor(ui_theme::textMuted);
   labelView->setThemedColor(ui_theme::textPrimary);
   countView->setThemedColor(ui_theme::textMuted);
 }
