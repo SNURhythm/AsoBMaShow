@@ -106,7 +106,7 @@ void addFolderChart(
 
 void addClearMarkCount(FolderClearMarkCounts &counts,
                        const std::string &folderKey, int clearRank) {
-  if (clearRank < kClearTypeFailedRank) {
+  if (clearRank < kNoClearTypeRank) {
     return;
   }
   counts[folderKey][clearRank]++;

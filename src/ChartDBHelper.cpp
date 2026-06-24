@@ -69,6 +69,7 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_scratch_notes,"
                                                 "cm.total_backspin_notes";
 constexpr int kChartMetaColumnCount = 27;
+constexpr int kNoPlayClearMarkRank = -1;
 
 constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.path, ''),"
@@ -1138,13 +1139,14 @@ std::string scoreRankLookupExpr(const std::string &kind,
 std::string chartClearMarkPredicate(const std::string &alias) {
   return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256") + ", " +
          scoreRankLookupExpr("1", alias + ".md5") + ", " +
-         scoreRankLookupExpr("2", alias + ".path") +
-         ") = @clear_mark_rank";
+         scoreRankLookupExpr("2", alias + ".path") + ", " +
+         std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
 std::string difficultyEntryClearMarkPredicate(const std::string &alias) {
   return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256") + ", " +
-         scoreRankLookupExpr("1", alias + ".md5") + ") = @clear_mark_rank";
+         scoreRankLookupExpr("1", alias + ".md5") + ", " +
+         std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
 bool updateChartSourcePreferenceValues(sqlite3 *db,
@@ -2525,7 +2527,7 @@ void ChartDBHelper::QueryChartMeta(
           "@difficulty_like "
           "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
     }
-    if (chartQuery.clearMarkRank >= 0) {
+    if (chartQuery.clearMarkFilter) {
       query += " AND ";
       query += difficultyEntryClearMarkPredicate("dte");
     }
@@ -2559,7 +2561,7 @@ void ChartDBHelper::QueryChartMeta(
       bindText(stmt, bindIndex++, difficulty);
       bindText(stmt, bindIndex++, "%" + difficulty + "%");
     }
-    if (chartQuery.clearMarkRank >= 0) {
+    if (chartQuery.clearMarkFilter) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
     }
     if (chartQuery.limit > 0) {
@@ -2650,7 +2652,7 @@ void ChartDBHelper::QueryChartMeta(
     query += difficultyClause;
     query += "))";
   }
-  if (chartQuery.clearMarkRank >= 0) {
+  if (chartQuery.clearMarkFilter) {
     query += " AND ";
     query += chartClearMarkPredicate("cm");
   }
@@ -2698,7 +2700,7 @@ void ChartDBHelper::QueryChartMeta(
     bindText(stmt, bindIndex++, difficulty);
     bindText(stmt, bindIndex++, "%" + difficulty + "%");
   }
-  if (chartQuery.clearMarkRank >= 0) {
+  if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
   }
   if (chartQuery.limit > 0) {
@@ -2771,7 +2773,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
           "@difficulty_like "
           "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
     }
-    if (chartQuery.clearMarkRank >= 0) {
+    if (chartQuery.clearMarkFilter) {
       query += " AND ";
       query += difficultyEntryClearMarkPredicate("dte");
     }
@@ -2798,7 +2800,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       bindText(stmt, bindIndex++, difficulty);
       bindText(stmt, bindIndex++, "%" + difficulty + "%");
     }
-    if (chartQuery.clearMarkRank >= 0) {
+    if (chartQuery.clearMarkFilter) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
     }
 
@@ -2884,7 +2886,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     query += difficultyClause;
     query += "))";
   }
-  if (chartQuery.clearMarkRank >= 0) {
+  if (chartQuery.clearMarkFilter) {
     query += " AND ";
     query += chartClearMarkPredicate("cm");
   }
@@ -2928,7 +2930,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     bindText(stmt, bindIndex++, difficulty);
     bindText(stmt, bindIndex++, "%" + difficulty + "%");
   }
-  if (chartQuery.clearMarkRank >= 0) {
+  if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
   }
 

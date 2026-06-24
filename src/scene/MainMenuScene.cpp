@@ -107,6 +107,7 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"E-CLEAR", kClearTypeEasyClearRank},
     {"A-CLEAR", kClearTypeAssistedEasyClearRank},
     {"FAILED", kClearTypeFailedRank},
+    {"NO PLAY", kNoClearTypeRank},
 };
 
 std::string clearMarkFolderKey(const std::string &parentKey, int clearRank) {
@@ -3026,6 +3027,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   case LibraryFolderItem::Type::DifficultyClearMark:
     query.tableId = activeFolder.tableId;
     query.tableLevel = activeFolder.tableLevel;
+    query.clearMarkFilter = true;
     query.clearMarkRank = activeFolder.clearMarkRank;
     break;
   case LibraryFolderItem::Type::CoursesRoot:
