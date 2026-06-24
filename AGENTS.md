@@ -24,16 +24,17 @@
 
 - To deploy an Android build to Firebase App Distribution from this machine, use:
   `scripts/android_firebase_deploy.sh`
-- For a fast local compile check without upload, run:
+- For a fast local release compile check without upload, run with Android signing env configured:
   `scripts/android_firebase_deploy.sh --build-only`
 - The Android deploy script loads `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
 - The script defaults to the `firebaseRelease` flavor and will use `/usr/libexec/java_home -v 17` on this machine if the active shell Java is too new for Gradle.
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.
+- Android release builds require `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The same release signing config is used for Firebase App Distribution and Google Play builds. Keep real values in private env files or runner environment only.
 - Firebase Android builds request `MANAGE_EXTERNAL_STORAGE`; Play builds opt out via the `play` flavor. For a local Play compile check, run:
   `scripts/android_firebase_deploy.sh --build-only --variant playDebug`
-- `firebaseRelease` is debug-signed so Firebase App Distribution uploads are installable from local and self-hosted runner builds. Do not apply that signing choice to Play release builds.
+- Debug variants remain debug-signed. Do not use debug signing for Firebase or Play release builds.
 - Running the deploy script uploads a build. Only run it without `--build-only` when the user explicitly asks for deployment.
 - GitHub Actions deploys Android from `.github/workflows/mobile-beta-deploy.yml` only for commits pushed to `develop`. The Android job has no dependency on the iOS/TestFlight job, so they can run in parallel when matching self-hosted runners are available. The self-hosted runner is expected to have an authenticated Firebase CLI session; do not add Android Firebase auth secrets unless the user asks.
 
@@ -42,7 +43,7 @@
 - The Homebrew Android SDK root on this machine is:
   `/opt/homebrew/share/android-commandlinetools`
 - For headless smoke tests, prefer the `android10` AVD. `Pixel_7a_API_33_GooglePlay` has been observed to boot as `RUNNING_LOCKED` in headless mode and can reject app launches with a misleading `Activity class ... does not exist` error.
-- Build first:
+- Build first with Android signing env configured:
   `scripts/android_firebase_deploy.sh --build-only`
 - Boot the emulator:
   `/opt/homebrew/share/android-commandlinetools/emulator/emulator -avd android10 -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim`

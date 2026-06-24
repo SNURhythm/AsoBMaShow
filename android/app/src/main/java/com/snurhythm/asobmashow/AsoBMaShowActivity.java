@@ -27,6 +27,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -36,7 +37,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int REQUEST_OPEN_TREE = 0x41534f42;
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
     private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 0x41534f45;
+    private static final int REQUEST_OPEN_IMPORT_FOLDER = 0x41534f46;
     private static final String ERROR_PREFIX = "__ERROR__:";
+    private static final String PENDING_IMPORT_RESULT = "__PENDING_ARCHIVE_IMPORT__";
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
 
     private final Object pickerLock = new Object();
@@ -46,14 +49,29 @@ public class AsoBMaShowActivity extends SDLActivity {
     private CountDownLatch archivePickerLatch;
     private final AtomicReference<Uri> archivePickerUri = new AtomicReference<>(null);
     private final AtomicReference<String> archivePickerName = new AtomicReference<>("");
+    private final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
+    private final AtomicReference<String> archivePickerError = new AtomicReference<>("");
     private final Object manageStorageLock = new Object();
     private CountDownLatch manageStorageLatch;
     private final Object pendingArchiveImportLock = new Object();
-    private String pendingArchiveImportPath = "";
-    private String pendingArchiveImportError = "";
+    private final ArrayDeque<PendingImportRequest> pendingArchiveImportRequests =
+            new ArrayDeque<>();
+    private final ArrayDeque<String> pendingArchiveImportResults = new ArrayDeque<>();
     private boolean pendingArchiveImportCopyRunning = false;
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
+
+    private static class PendingImportRequest {
+        final Uri uri;
+        final String displayName;
+        final boolean isTree;
+
+        PendingImportRequest(Uri uri, String displayName, boolean isTree) {
+            this.uri = uri;
+            this.displayName = displayName;
+            this.isTree = isTree;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,6 +115,10 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
+    }
+
+    public String hasManageExternalStorageBuildVariant() {
+        return BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE ? "1" : "0";
     }
 
     public String ensureManageExternalStorageAccess() {
@@ -212,14 +234,52 @@ public class AsoBMaShowActivity extends SDLActivity {
             finishPicker();
             return;
         }
-        if (requestCode == REQUEST_OPEN_ARCHIVE) {
+        if (requestCode == REQUEST_OPEN_ARCHIVE ||
+                requestCode == REQUEST_OPEN_IMPORT_FOLDER) {
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
-                Uri archiveUri = data.getData();
-                archivePickerUri.set(archiveUri);
-                archivePickerName.set(displayNameForUri(archiveUri));
+                Uri importUri = data.getData();
+                boolean isTree = DocumentsContract.isTreeUri(importUri);
+                boolean wantsTree = requestCode == REQUEST_OPEN_IMPORT_FOLDER;
+                if (isTree != wantsTree) {
+                    archivePickerUri.set(null);
+                    archivePickerName.set("");
+                    archivePickerTree.set(false);
+                    archivePickerError.set(wantsTree
+                            ? "Selected item is not a folder."
+                            : "Selected item is not an archive file.");
+                    finishArchivePicker();
+                    return;
+                }
+                String displayName = isTree ? displayNameForTree(importUri)
+                        : displayNameForUri(importUri);
+                if (!isTree && !isSupportedArchiveUri(importUri, displayName)) {
+                    archivePickerUri.set(null);
+                    archivePickerName.set("");
+                    archivePickerTree.set(false);
+                    archivePickerError.set("Selected file is not a supported archive.");
+                    finishArchivePicker();
+                    return;
+                }
+                if (isTree) {
+                    int flags = data.getFlags()
+                            & (Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    try {
+                        getContentResolver().takePersistableUriPermission(
+                                importUri, flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Exception ignored) {
+                        // Some providers grant transient access only; keep using it for this copy.
+                    }
+                }
+                archivePickerUri.set(importUri);
+                archivePickerName.set(displayName);
+                archivePickerTree.set(isTree);
+                archivePickerError.set("");
             } else {
                 archivePickerUri.set(null);
                 archivePickerName.set("");
+                archivePickerTree.set(false);
+                archivePickerError.set("");
             }
             finishArchivePicker();
             return;
@@ -301,21 +361,26 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             archivePickerUri.set(null);
             archivePickerName.set("");
+            archivePickerTree.set(false);
+            archivePickerError.set("");
             latch = new CountDownLatch(1);
             archivePickerLatch = latch;
         }
 
         runOnUiThread(() -> {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("*/*");
-            intent.putExtra(Intent.EXTRA_MIME_TYPES, archiveMimeTypes());
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent archiveIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            archiveIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            archiveIntent.setType("*/*");
+            archiveIntent.putExtra(Intent.EXTRA_MIME_TYPES, archiveMimeTypes());
+            archiveIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
             try {
-                startActivityForResult(intent, REQUEST_OPEN_ARCHIVE);
+                startActivityForResult(archiveIntent, REQUEST_OPEN_ARCHIVE);
             } catch (Exception e) {
                 archivePickerUri.set(null);
                 archivePickerName.set("");
+                archivePickerTree.set(false);
+                archivePickerError.set("Could not open archive picker.");
                 finishArchivePicker();
             }
         });
@@ -333,26 +398,75 @@ public class AsoBMaShowActivity extends SDLActivity {
 
         Uri uri = archivePickerUri.get();
         if (uri == null) {
+            String pickerError = archivePickerError.get();
+            if (!pickerError.isEmpty()) {
+                return ERROR_PREFIX + pickerError;
+            }
             return ERROR_PREFIX + "Archive selection was cancelled.";
         }
-        try {
-            return copyArchiveUriToInternalStorage(uri, archivePickerName.get());
-        } catch (Exception e) {
-            return ERROR_PREFIX + e.getMessage();
+        return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get());
+    }
+
+    public String pickFolderForImport() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Folder import picker cannot block the UI thread.";
         }
+
+        CountDownLatch latch;
+        synchronized (archivePickerLock) {
+            if (archivePickerLatch != null) {
+                return ERROR_PREFIX + "Import picker is already open.";
+            }
+            archivePickerUri.set(null);
+            archivePickerName.set("");
+            archivePickerTree.set(false);
+            archivePickerError.set("");
+            latch = new CountDownLatch(1);
+            archivePickerLatch = latch;
+        }
+
+        runOnUiThread(() -> {
+            Intent folderIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            folderIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            try {
+                startActivityForResult(folderIntent, REQUEST_OPEN_IMPORT_FOLDER);
+            } catch (Exception e) {
+                archivePickerUri.set(null);
+                archivePickerName.set("");
+                archivePickerTree.set(false);
+                archivePickerError.set("Could not open folder picker.");
+                finishArchivePicker();
+            }
+        });
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ERROR_PREFIX + "Folder import picker was interrupted.";
+        }
+
+        synchronized (archivePickerLock) {
+            archivePickerLatch = null;
+        }
+
+        Uri uri = archivePickerUri.get();
+        if (uri == null) {
+            String pickerError = archivePickerError.get();
+            if (!pickerError.isEmpty()) {
+                return ERROR_PREFIX + pickerError;
+            }
+            return ERROR_PREFIX + "Folder selection was cancelled.";
+        }
+        return startPendingImportCopy(uri, archivePickerName.get(), true);
     }
 
     public String consumePendingArchiveImport() {
         synchronized (pendingArchiveImportLock) {
-            if (!pendingArchiveImportPath.isEmpty()) {
-                String path = pendingArchiveImportPath;
-                pendingArchiveImportPath = "";
-                return path;
-            }
-            if (!pendingArchiveImportError.isEmpty()) {
-                String error = pendingArchiveImportError;
-                pendingArchiveImportError = "";
-                return ERROR_PREFIX + error;
+            if (!pendingArchiveImportResults.isEmpty()) {
+                return pendingArchiveImportResults.removeFirst();
             }
             return "";
         }
@@ -785,11 +899,58 @@ public class AsoBMaShowActivity extends SDLActivity {
                 "application/x-rar-compressed",
                 "application/x-lha",
                 "application/x-lzh-compressed",
+                "application/x-lzh",
                 "application/x-tar",
                 "application/gzip",
                 "application/x-gzip",
-                "application/octet-stream"
+                "application/x-bzip2",
+                "application/x-xz",
+                "application/zstd",
+                "application/x-zstd"
         };
+    }
+
+    private boolean isSupportedArchiveMimeType(String mimeType) {
+        if (mimeType == null) {
+            return false;
+        }
+        String lower = mimeType.toLowerCase(Locale.US);
+        for (String archiveMimeType : archiveMimeTypes()) {
+            if (lower.equals(archiveMimeType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSupportedArchiveFileName(String displayName) {
+        if (displayName == null) {
+            return false;
+        }
+        String lower = displayName.toLowerCase(Locale.US);
+        String[] archiveExtensions = new String[] {
+                ".tar.bz2", ".tar.gz", ".tar.xz", ".tar.zst", ".tbz2",
+                ".tgz", ".txz", ".tzst", ".zip", ".zipx", ".cbz", ".7z",
+                ".cb7", ".rar", ".cbr", ".lzh", ".lha", ".tar", ".gz",
+                ".bz2", ".xz", ".zst"
+        };
+        for (String extension : archiveExtensions) {
+            if (lower.endsWith(extension)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSupportedArchiveUri(Uri uri, String displayName) {
+        if (isSupportedArchiveFileName(displayName)) {
+            return true;
+        }
+        try {
+            return isSupportedArchiveMimeType(getContentResolver().getType(uri));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void handleArchiveImportIntent(Intent intent) {
@@ -798,28 +959,50 @@ public class AsoBMaShowActivity extends SDLActivity {
             return;
         }
         String displayName = displayNameForUri(archiveUri);
-        synchronized (pendingArchiveImportLock) {
-            if (pendingArchiveImportCopyRunning) {
-                pendingArchiveImportError = "Archive import is already running.";
-                return;
+        if (!isSupportedArchiveUri(archiveUri, displayName)) {
+            synchronized (pendingArchiveImportLock) {
+                pendingArchiveImportResults.addLast(
+                        ERROR_PREFIX + "Selected file is not a supported archive.");
             }
-            pendingArchiveImportCopyRunning = true;
-            pendingArchiveImportError = "";
+            return;
         }
+        startPendingImportCopy(archiveUri, displayName, false);
+    }
+
+    private String startPendingImportCopy(Uri importUri, String displayName,
+                                          boolean isTree) {
+        synchronized (pendingArchiveImportLock) {
+            pendingArchiveImportRequests.addLast(
+                    new PendingImportRequest(importUri, displayName, isTree));
+            startNextPendingImportCopyLocked();
+        }
+        return PENDING_IMPORT_RESULT;
+    }
+
+    private void startNextPendingImportCopyLocked() {
+        if (pendingArchiveImportCopyRunning ||
+                pendingArchiveImportRequests.isEmpty()) {
+            return;
+        }
+        PendingImportRequest request = pendingArchiveImportRequests.removeFirst();
+        pendingArchiveImportCopyRunning = true;
         new Thread(() -> {
             String path = "";
             String error = "";
             try {
-                path = copyArchiveUriToInternalStorage(archiveUri, displayName);
+                path = copyImportUriToInternalStorage(
+                        request.uri, request.displayName, request.isTree);
             } catch (Exception e) {
-                error = e.getMessage() == null ? "Could not import archive." : e.getMessage();
+                error = e.getMessage() == null ? "Could not import charts." : e.getMessage();
             }
             synchronized (pendingArchiveImportLock) {
-                pendingArchiveImportPath = path;
-                pendingArchiveImportError = error;
+                pendingArchiveImportResults.addLast(
+                        error.isEmpty() ? path : ERROR_PREFIX + error);
                 pendingArchiveImportCopyRunning = false;
+                startNextPendingImportCopyLocked();
             }
-        }, "AsoBMaShowArchiveImport").start();
+        }, request.isTree ? "AsoBMaShowFolderImport"
+                : "AsoBMaShowArchiveImport").start();
     }
 
     private Uri archiveUriFromIntent(Intent intent) {
@@ -885,6 +1068,99 @@ public class AsoBMaShowActivity extends SDLActivity {
         return output.getAbsolutePath();
     }
 
+    private String copyImportUriToInternalStorage(Uri uri, String displayName,
+                                                  boolean isTree) throws Exception {
+        if (isTree) {
+            return copyTreeUriToBmsFolder(uri, displayName);
+        }
+        return copyArchiveUriToInternalStorage(uri, displayName);
+    }
+
+    private File documentsBmsDirectory() {
+        File base = getExternalFilesDir(null);
+        if (base == null) {
+            base = getFilesDir();
+        }
+        return new File(base, "BMS");
+    }
+
+    private String copyTreeUriToBmsFolder(Uri treeUri, String displayName) throws Exception {
+        File directory = documentsBmsDirectory();
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new Exception("Could not create BMS import folder.");
+        }
+        File output = uniqueDirectory(directory, sanitizeFileName(displayName));
+        if (!output.mkdirs()) {
+            throw new Exception("Could not create imported chart copy.");
+        }
+
+        try {
+            String rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
+            copyDocumentTreeChildren(treeUri, rootDocumentId, output);
+        } catch (Exception e) {
+            deleteRecursively(output);
+            throw e;
+        }
+        return output.getAbsolutePath();
+    }
+
+    private void copyDocumentTreeChildren(Uri treeUri, String parentDocumentId,
+                                          File destination) throws Exception {
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri, parentDocumentId);
+        String[] columns = new String[] {
+                Document.COLUMN_DOCUMENT_ID,
+                Document.COLUMN_DISPLAY_NAME,
+                Document.COLUMN_MIME_TYPE
+        };
+        try (Cursor cursor = getContentResolver().query(
+                childrenUri, columns, null, null, null)) {
+            if (cursor == null) {
+                throw new Exception("Could not read selected folder.");
+            }
+            int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
+            int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
+            int mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE);
+            while (cursor.moveToNext()) {
+                String documentId = cursor.getString(idColumn);
+                String name = sanitizeFileName(cursor.getString(nameColumn));
+                String mimeType = cursor.getString(mimeColumn);
+                if (name.isEmpty()) {
+                    name = "item";
+                }
+                if (Document.MIME_TYPE_DIR.equals(mimeType)) {
+                    File childDirectory = uniqueDirectory(destination, name);
+                    if (!childDirectory.mkdirs()) {
+                        throw new Exception("Could not create folder: " + name);
+                    }
+                    copyDocumentTreeChildren(treeUri, documentId, childDirectory);
+                } else {
+                    Uri documentUri =
+                            DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
+                    File output = uniqueFile(destination, name);
+                    copyDocumentUriToFile(documentUri, output);
+                }
+            }
+        }
+    }
+
+    private void copyDocumentUriToFile(Uri uri, File output) throws Exception {
+        try (InputStream input = getContentResolver().openInputStream(uri);
+             FileOutputStream outputStream = new FileOutputStream(output)) {
+            if (input == null) {
+                throw new Exception("Could not open imported file.");
+            }
+            byte[] buffer = new byte[1024 * 1024];
+            while (true) {
+                int read = input.read(buffer);
+                if (read < 0) {
+                    break;
+                }
+                outputStream.write(buffer, 0, read);
+            }
+        }
+    }
+
     private File uniqueFile(File directory, String fileName) {
         File candidate = new File(directory, fileName);
         if (!candidate.exists()) {
@@ -904,6 +1180,35 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         return new File(directory, base + " " + System.currentTimeMillis() + extension);
+    }
+
+    private File uniqueDirectory(File directory, String name) {
+        File candidate = new File(directory, name);
+        if (!candidate.exists()) {
+            return candidate;
+        }
+        for (int i = 2; i < 10000; i++) {
+            candidate = new File(directory, name + " " + i);
+            if (!candidate.exists()) {
+                return candidate;
+            }
+        }
+        return new File(directory, name + " " + System.currentTimeMillis());
+    }
+
+    private void deleteRecursively(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        file.delete();
     }
 
     private String sanitizeFileName(String name) {

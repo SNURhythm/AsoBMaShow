@@ -26,6 +26,7 @@ namespace {
 
 constexpr const char *kAndroidTreeSentinel = "@androidtree@";
 constexpr const char *kErrorPrefix = "__ERROR__:";
+constexpr const char *kPendingImportResult = "__PENDING_ARCHIVE_IMPORT__";
 
 std::mutex gAndroidTreeMutex;
 std::unordered_map<std::string, std::string> gTreeUrisById;
@@ -473,6 +474,14 @@ std::string GetAndroidInternalFilesDir() {
   return GetAndroidExternalFilesDir();
 }
 
+bool AndroidBuildHasManageExternalStorage() {
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "hasManageExternalStorageBuildVariant", "()Ljava/lang/String;", nullptr,
+      callError);
+  return callError.empty() && result == "1";
+}
+
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
                             std::string &errorMessage) {
@@ -554,7 +563,38 @@ bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
   if (!parseBridgeResult(result, value, errorMessage)) {
     return false;
   }
+  if (value == kPendingImportResult) {
+    archivePath.clear();
+    return true;
+  }
   archivePath = std::filesystem::path(value).lexically_normal();
+  return true;
+}
+
+bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
+                                std::string &errorMessage) {
+  folderPath.clear();
+  RequestAndroidExternalActivityRenderPause();
+  struct ExternalActivityPauseReset {
+    ~ExternalActivityPauseReset() { FinishAndroidExternalActivityRenderPause(); }
+  } externalActivityPauseReset;
+
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "pickFolderForImport", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string value;
+  if (!parseBridgeResult(result, value, errorMessage)) {
+    return false;
+  }
+  if (value == kPendingImportResult) {
+    folderPath.clear();
+    return true;
+  }
+  folderPath = std::filesystem::path(value).lexically_normal();
   return true;
 }
 

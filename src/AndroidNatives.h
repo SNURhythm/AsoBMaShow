@@ -18,11 +18,14 @@ using AndroidDownloadProgressCallback =
 
 std::string GetAndroidExternalFilesDir();
 std::string GetAndroidInternalFilesDir();
+bool AndroidBuildHasManageExternalStorage();
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
                             std::string &errorMessage);
 bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
+bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
+                                std::string &errorMessage);
 std::optional<std::filesystem::path>
 ConsumePendingAndroidArchiveImport(std::string &errorMessage);
 void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,

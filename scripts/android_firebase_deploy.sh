@@ -52,6 +52,10 @@ Options:
 Required env for deployment:
   FIREBASE_ANDROID_APP_ID
 
+Required env for release builds unless --skip-build is used:
+  ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+  ANDROID_KEY_PASSWORD
+
 Firebase auth for deployment must be available through one of:
   FIREBASE_SERVICE_CREDENTIALS_JSON, FIREBASE_CLI_TOKEN, FIREBASE_TOKEN,
   GOOGLE_APPLICATION_CREDENTIALS, cached Firebase CLI login, or gcloud ADC.
@@ -217,6 +221,49 @@ is_positive_int() {
       [ "$1" -gt 0 ]
       ;;
   esac
+}
+
+is_release_variant() {
+  case "${VARIANT}" in
+    *Release)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+setup_android_signing_env() {
+  local resolved_path
+
+  if [ "${SKIP_BUILD}" -eq 1 ] || ! is_release_variant; then
+    return 0
+  fi
+
+  require_env \
+    ANDROID_KEYSTORE_PATH \
+    ANDROID_KEYSTORE_PASSWORD \
+    ANDROID_KEY_ALIAS \
+    ANDROID_KEY_PASSWORD
+
+  resolved_path="${ANDROID_KEYSTORE_PATH}"
+  case "${resolved_path}" in
+    "~/"*)
+      resolved_path="${HOME}/${resolved_path#~/}"
+      ;;
+    /*)
+      ;;
+    *)
+      resolved_path="${ROOT_DIR}/${resolved_path}"
+      ;;
+  esac
+  export ANDROID_KEYSTORE_PATH="${resolved_path}"
+
+  if [ ! -f "${ANDROID_KEYSTORE_PATH}" ]; then
+    echo "ANDROID_KEYSTORE_PATH does not point to a file: ${ANDROID_KEYSTORE_PATH}" >&2
+    exit 1
+  fi
 }
 
 android_timestamp_version_code() {
@@ -556,6 +603,7 @@ capture_version_fixed_flags
 setup_android_env
 setup_java_env
 setup_build_metadata
+setup_android_signing_env
 
 if [ "${BUILD_ONLY}" -eq 0 ]; then
   setup_firebase_app_defaults

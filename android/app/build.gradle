@@ -27,6 +27,39 @@ if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) {
 def generatedAssetsDir = layout.buildDirectory.dir('generated/assets/asobmashow')
 def androidVersionCodeText = System.getenv('ANDROID_VERSION_CODE') ?: (findProperty('androidVersionCode') ?: '1')
 def androidVersionNameText = System.getenv('ANDROID_VERSION_NAME') ?: (findProperty('androidVersionName') ?: '1.0')
+def envOrProperty = { String envName, String propertyName ->
+    def value = System.getenv(envName)
+    if (value == null || value.toString().trim().isEmpty()) {
+        value = findProperty(propertyName)
+    }
+    return value == null ? '' : value.toString().trim()
+}
+def androidKeystorePathText = envOrProperty('ANDROID_KEYSTORE_PATH', 'androidKeystorePath')
+def androidKeystorePasswordText = envOrProperty('ANDROID_KEYSTORE_PASSWORD', 'androidKeystorePassword')
+def androidKeyAliasText = envOrProperty('ANDROID_KEY_ALIAS', 'androidKeyAlias')
+def androidKeyPasswordText = envOrProperty('ANDROID_KEY_PASSWORD', 'androidKeyPassword')
+def androidSigningValues = [
+        ANDROID_KEYSTORE_PATH    : androidKeystorePathText,
+        ANDROID_KEYSTORE_PASSWORD: androidKeystorePasswordText,
+        ANDROID_KEY_ALIAS        : androidKeyAliasText,
+        ANDROID_KEY_PASSWORD     : androidKeyPasswordText
+]
+def androidReleaseSigningProvided = androidSigningValues.values().any { !it.isEmpty() }
+def androidReleaseSigningConfigured = androidSigningValues.values().every { !it.isEmpty() }
+if (androidReleaseSigningProvided && !androidReleaseSigningConfigured) {
+    def missing = androidSigningValues.findAll { it.value.isEmpty() }.keySet().join(', ')
+    throw new GradleException("Incomplete Android release signing config. Missing env/property values: ${missing}")
+}
+def resolveAndroidSigningPath = { String pathText ->
+    if (pathText.startsWith('~/')) {
+        return new File(System.getProperty('user.home'), pathText.substring(2))
+    }
+    def pathFile = new File(pathText)
+    return pathFile.isAbsolute() ? pathFile : new File(repoRoot, pathText)
+}
+def androidKeystoreFile = androidReleaseSigningConfigured
+        ? resolveAndroidSigningPath(androidKeystorePathText)
+        : null
 
 tasks.register('syncNativeAssets', Sync) {
     into(generatedAssetsDir)
@@ -71,6 +104,17 @@ android {
         }
     }
 
+    signingConfigs {
+        if (androidReleaseSigningConfigured) {
+            release {
+                storeFile androidKeystoreFile
+                storePassword androidKeystorePasswordText
+                keyAlias androidKeyAliasText
+                keyPassword androidKeyPasswordText
+            }
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path "${repoRoot}/CMakeLists.txt"
@@ -86,7 +130,6 @@ android {
         firebase {
             dimension 'distribution'
             buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'true'
-            signingConfig signingConfigs.debug
         }
     }
 
@@ -106,6 +149,9 @@ android {
         }
         release {
             minifyEnabled false
+            if (androidReleaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
@@ -116,4 +162,20 @@ android {
 
 tasks.named('preBuild') {
     dependsOn(tasks.named('syncNativeAssets'))
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTaskRequested = taskGraph.allTasks.any {
+        it.path.toLowerCase(Locale.ROOT).contains('release')
+    }
+    if (releaseTaskRequested) {
+        if (!androidReleaseSigningConfigured) {
+            throw new GradleException(
+                    'Android release builds require ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD.'
+            )
+        }
+        if (!androidKeystoreFile.isFile()) {
+            throw new GradleException("ANDROID_KEYSTORE_PATH does not point to a file: ${androidKeystoreFile}")
+        }
+    }
 }

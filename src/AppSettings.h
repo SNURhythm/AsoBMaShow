@@ -140,6 +140,7 @@ public:
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedAssistOption = kDefaultAssistOption;
+  bool defaultDifficultyTablesSeeded = false;
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;

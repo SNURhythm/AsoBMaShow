@@ -637,6 +637,8 @@ bool AppSettings::save() const {
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
+  file << "default_difficulty_tables_seeded="
+       << (sanitized.defaultDifficultyTablesSeeded ? 1 : 0) << "\n";
   return file.good();
 }
 
@@ -788,6 +790,11 @@ AppSettings AppSettings::load() {
       } else if (key == "selected_assist_option") {
         settings.selectedAssistOption =
             parseAssistOptionId(value, settings.selectedAssistOption);
+      } else if (key == "default_difficulty_tables_seeded") {
+        bool parsed = settings.defaultDifficultyTablesSeeded;
+        if (parseBool(value, parsed)) {
+          settings.defaultDifficultyTablesSeeded = parsed;
+        }
       }
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),

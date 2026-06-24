@@ -57,10 +57,14 @@
                 <data android:mimeType="application/x-rar-compressed" />
                 <data android:mimeType="application/x-lha" />
                 <data android:mimeType="application/x-lzh-compressed" />
+                <data android:mimeType="application/x-lzh" />
                 <data android:mimeType="application/x-tar" />
                 <data android:mimeType="application/gzip" />
                 <data android:mimeType="application/x-gzip" />
-                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-bzip2" />
+                <data android:mimeType="application/x-xz" />
+                <data android:mimeType="application/zstd" />
+                <data android:mimeType="application/x-zstd" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -72,10 +76,14 @@
                 <data android:mimeType="application/x-rar-compressed" />
                 <data android:mimeType="application/x-lha" />
                 <data android:mimeType="application/x-lzh-compressed" />
+                <data android:mimeType="application/x-lzh" />
                 <data android:mimeType="application/x-tar" />
                 <data android:mimeType="application/gzip" />
                 <data android:mimeType="application/x-gzip" />
-                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-bzip2" />
+                <data android:mimeType="application/x-xz" />
+                <data android:mimeType="application/zstd" />
+                <data android:mimeType="application/x-zstd" />
             </intent-filter>
         </activity>
     </application>
