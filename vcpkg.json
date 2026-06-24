@@ -27,8 +27,14 @@
             "name": "unarr",
             "platform": "!ios"
         },
-        "lua",
-        "luajit",
+        {
+            "name": "lua",
+            "platform": "!android"
+        },
+        {
+            "name": "luajit",
+            "platform": "!android"
+        },
         {
             "name": "portaudio",
             "features": [
@@ -38,7 +44,7 @@
         },
         {
             "name": "portaudio",
-            "platform": "!windows"
+            "platform": "!windows & !android"
         }
     ],
     "overrides": [

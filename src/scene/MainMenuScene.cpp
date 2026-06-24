@@ -27,6 +27,7 @@
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 #ifdef _WIN32
@@ -48,6 +49,10 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
+#elif defined(__ANDROID__)
+#include "../AndroidNatives.h"
+#include <dirent.h>
+#include <sys/stat.h>
 #elif __linux
 // linux
 #include <dirent.h>
@@ -71,6 +76,12 @@ namespace {
 constexpr int kRootPadding = 28;
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
+constexpr const char *kDefaultDifficultyTableUrls[] = {
+    "https://rattoto10.jounin.jp/table.html",
+    "https://rattoto10.jounin.jp/table_insane.html",
+    "https://stellabms.xyz/sl/table.html",
+    "https://stellabms.xyz/st/table.html",
+};
 
 struct SafeAreaInsets {
   int top = 0;
@@ -382,6 +393,9 @@ bool revealPathInFileManager(const std::filesystem::path &path,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return RevealIOSFileInFiles(path_t_to_utf8(fspath_to_path_t(targetPath)),
                               errorMessage);
+#elif TARGET_OS_ANDROID
+  errorMessage = "Reveal is not supported on Android yet";
+  return false;
 #elif TARGET_OS_OSX
   return RevealPathInFinder(path_t_to_utf8(fspath_to_path_t(targetPath)),
                             errorMessage);
@@ -465,6 +479,8 @@ bool openExternalUrl(const std::string &url, std::string &errorMessage) {
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return OpenURLInIOSBrowser(url, errorMessage);
+#elif TARGET_OS_ANDROID
+  return OpenURLInAndroidBrowser(url, errorMessage);
 #elif TARGET_OS_OSX
   return OpenURLInDefaultBrowser(url, errorMessage);
 #elif defined(_WIN32)
@@ -824,6 +840,16 @@ void MainMenuScene::init() {
   context.requestAddChartFolderFromFiles = [this]() {
     addIOSFolderEntryFromFiles();
   };
+#elif TARGET_OS_ANDROID
+  if (AndroidBuildHasManageExternalStorage()) {
+    context.requestAddChartFolderFromFiles = [this]() {
+      addAndroidFolderEntryFromPicker();
+    };
+  } else {
+    context.requestAddChartFolderFromFiles = [this]() {
+      importAndroidFolderFromPicker();
+    };
+  }
 #endif
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
@@ -980,8 +1006,9 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
                       "Paused");
 
   std::unique_lock<std::mutex> lock(libraryTaskPauseMutex);
-  libraryTaskPauseCv.wait(lock, stopToken,
-                          [this]() { return !libraryTaskWorkerPaused.load(); });
+  libraryTaskPauseCv.wait(lock, [this, &stopToken]() {
+    return stopToken.stop_requested() || !libraryTaskWorkerPaused.load();
+  });
   if (stopToken.stop_requested()) {
     return false;
   }
@@ -1015,6 +1042,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     libraryTaskQueue.push_back(LibraryTaskRequest{
         .id = id,
+        .kind = LibraryTaskKind::RefreshLibrary,
         .title = title,
         .folderToAdd = taskFolderToAdd,
         .iosBookmark = taskIOSBookmark,
@@ -1045,6 +1073,93 @@ void MainMenuScene::enqueueLibraryRefreshTask(
   }
   libraryTaskCv.notify_one();
 }
+
+#if TARGET_OS_ANDROID
+void MainMenuScene::createPendingAndroidImportTask(bool folderImport) {
+  startLibraryTaskWorker();
+  const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    libraryTasks.push_back(LibraryTaskInfo{
+        .id = id,
+        .title = folderImport ? "Import Folder" : "Import Archive",
+        .status = LibraryTaskStatus::Running,
+        .fraction = 0.0,
+        .current = 0,
+        .total = 0,
+        .detail = folderImport ? "Copying selected folder"
+                               : "Copying selected archive",
+    });
+    constexpr std::size_t kMaxTaskHistory = 24;
+    while (libraryTasks.size() > kMaxTaskHistory) {
+      const auto removable = std::find_if(
+          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
+            return task.status == LibraryTaskStatus::Complete ||
+                   task.status == LibraryTaskStatus::Failed ||
+                   task.status == LibraryTaskStatus::Paused;
+          });
+      if (removable == libraryTasks.end()) {
+        break;
+      }
+      libraryTasks.erase(removable);
+    }
+    bumpLibraryTasksRevisionLocked();
+  }
+  {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    pendingAndroidArchiveImportTasks.emplace_back(id, folderImport);
+  }
+  androidArchiveImportCopyPending.store(true);
+  tasksModalOpenRequested.store(true);
+}
+
+void MainMenuScene::enqueueAndroidImportTask(
+    std::uint64_t id, const std::filesystem::path &importPath,
+    bool folderImport) {
+  if (importPath.empty()) {
+    setLibraryTaskState(id, LibraryTaskStatus::Failed, 0.0, 0, 0,
+                        "Import failed: selected path is empty.");
+    return;
+  }
+
+  startLibraryTaskWorker();
+  {
+    std::lock_guard<std::mutex> lock(libraryTaskMutex);
+    libraryTaskQueue.push_back(LibraryTaskRequest{
+        .id = id,
+        .kind = LibraryTaskKind::AndroidImport,
+        .title = folderImport ? "Import Folder" : "Import Archive",
+        .androidImportPath = importPath,
+        .androidImportFolder = folderImport,
+    });
+    auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
+                               [id](const auto &task) {
+                                 return task.id == id;
+                               });
+    if (taskIt == libraryTasks.end()) {
+      libraryTasks.push_back(LibraryTaskInfo{
+          .id = id,
+          .title = folderImport ? "Import Folder" : "Import Archive",
+          .status = LibraryTaskStatus::Queued,
+          .fraction = 0.0,
+          .current = 0,
+          .total = 0,
+          .detail = "Waiting",
+      });
+    } else {
+      taskIt->title = folderImport ? "Import Folder" : "Import Archive";
+      taskIt->status = LibraryTaskStatus::Queued;
+      taskIt->fraction = 0.0;
+      taskIt->current = 0;
+      taskIt->total = 0;
+      taskIt->detail = "Waiting";
+    }
+    bumpLibraryTasksRevisionLocked();
+  }
+  tasksModalOpenRequested.store(true);
+  libraryTaskCv.notify_one();
+}
+#endif
 
 bool MainMenuScene::isPauseableLibraryTaskStatus(LibraryTaskStatus status) {
   return status == LibraryTaskStatus::Queued ||
@@ -1188,8 +1303,9 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
     LibraryTaskRequest task;
     {
       std::unique_lock<std::mutex> lock(libraryTaskMutex);
-      libraryTaskCv.wait(lock, stopToken, [this]() {
-        return !libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty();
+      libraryTaskCv.wait(lock, [this, &stopToken]() {
+        return stopToken.stop_requested() ||
+               (!libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty());
       });
       if (stopToken.stop_requested()) {
         break;
@@ -1205,7 +1321,18 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
                         "Starting");
     try {
-      runLibraryRefreshTask(task, stopToken);
+      switch (task.kind) {
+      case LibraryTaskKind::RefreshLibrary:
+        runLibraryRefreshTask(task, stopToken);
+        break;
+      case LibraryTaskKind::AndroidImport:
+#if TARGET_OS_ANDROID
+        runAndroidImportTask(task, stopToken);
+#else
+        throw std::runtime_error("Android import task is unavailable.");
+#endif
+        break;
+      }
       if (stopToken.stop_requested()) {
         setLibraryTaskState(task.id, LibraryTaskStatus::Paused, 0.0, 0, 0,
                             "Paused");
@@ -1244,6 +1371,66 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
   }
 }
 
+void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
+    sqlite3 *taskDb, std::uint64_t taskId,
+    const std::stop_token &stopToken) {
+  if (context.settings.defaultDifficultyTablesSeeded ||
+      stopToken.stop_requested()) {
+    return;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  constexpr int totalTables =
+      static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
+                       sizeof(kDefaultDifficultyTableUrls[0]));
+  int successfulTables = 0;
+  bool allSucceeded = true;
+
+  for (int i = 0; i < totalTables; ++i) {
+    if (stopToken.stop_requested()) {
+      return;
+    }
+
+    const char *url = kDefaultDifficultyTableUrls[i];
+    setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02, i,
+                        totalTables, "Adding default difficulty tables");
+
+    std::string errorMessage;
+    const bool ok = dbHelper.ImportDifficultyTableFromUrl(
+        taskDb, url, &errorMessage,
+        [this, taskId, i, totalTables,
+         url](const DifficultyTableImportProgress &progress) {
+          std::string detail = progress.tableName.empty()
+                                   ? std::string(url)
+                                   : progress.tableName;
+          setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02,
+                              i + (progress.current > 0 ? 1 : 0), totalTables,
+                              "Adding default table: " + detail);
+        });
+    if (ok) {
+      ++successfulTables;
+    } else {
+      allSucceeded = false;
+      SDL_Log("Failed to import default difficulty table %s: %s", url,
+              errorMessage.empty() ? "unknown error" : errorMessage.c_str());
+    }
+  }
+
+  if (stopToken.stop_requested()) {
+    return;
+  }
+
+  if (allSucceeded) {
+    context.settings.defaultDifficultyTablesSeeded = true;
+    if (!context.settings.save()) {
+      SDL_Log("Failed to save default difficulty table seed setting");
+    }
+  }
+  if (successfulTables > 0) {
+    requestLibraryReload(true);
+  }
+}
+
 void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
                                           const std::stop_token &stopToken) {
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -1275,12 +1462,16 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (!pauseTask()) {
     return;
   }
+  seedDefaultDifficultyTablesIfNeeded(taskDb, task.id, stopToken);
+  if (stopToken.stop_requested() || !pauseTask()) {
+    return;
+  }
   const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
       taskDb, Utils::GetDocumentsPath("tables"));
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }
-  auto entries = dbHelper.SelectAllEntries(taskDb);
+  auto entries = dbHelper.SelectEffectiveEntries(taskDb);
 
   if (stopToken.stop_requested()) {
     return;
@@ -1298,18 +1489,23 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     std::string errorMessage;
     if (PickIOSFolder(folder, bookmark, errorMessage)) {
       dbHelper.InsertEntry(taskDb, std::filesystem::path(folder), bookmark);
-      entries = dbHelper.SelectAllEntries(taskDb);
+      entries = dbHelper.SelectEffectiveEntries(taskDb);
     } else {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
-      auto path = Utils::GetDocumentsPath("BMS");
+      auto path = ChartDBHelper::DefaultBmsFolderPath();
       std::filesystem::create_directories(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
           .iosBookmark = "",
       });
     }
+#elif TARGET_OS_ANDROID
+    auto path = ChartDBHelper::DefaultBmsFolderPath();
+    std::filesystem::create_directories(path);
+    dbHelper.InsertEntry(taskDb, path);
+    entries = dbHelper.SelectEffectiveEntries(taskDb);
 #else
     char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
     std::string folder;
@@ -1348,7 +1544,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
     std::filesystem::path path(folder);
     dbHelper.InsertEntry(taskDb, path);
-    entries = dbHelper.SelectAllEntries(taskDb);
+    entries = dbHelper.SelectEffectiveEntries(taskDb);
 #endif
   }
 
@@ -1419,6 +1615,291 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
                                   bookmark);
       });
+}
+#endif
+
+#if TARGET_OS_ANDROID
+void MainMenuScene::addAndroidFolderEntryFromPicker() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      addFolderPickerInProgress.load()) {
+    return;
+  }
+  if (addFolderPickerThread.joinable()) {
+    addFolderPickerThread.join();
+  }
+  if (addFolderPickerInProgress.exchange(true)) {
+    return;
+  }
+
+  addFolderPickerThread =
+      std::jthread([this](const std::stop_token &stopToken) {
+        struct PickerFlagReset {
+          std::atomic_bool &flag;
+          ~PickerFlagReset() { flag.store(false); }
+        } reset{addFolderPickerInProgress};
+
+        std::filesystem::path folder;
+        std::string treeUri;
+        std::string errorMessage;
+        if (!PickAndroidChartFolder(folder, treeUri, errorMessage)) {
+          if (!errorMessage.empty()) {
+            SDL_Log("Failed to pick Android library folder: %s",
+                    errorMessage.c_str());
+          }
+          return;
+        }
+        if (stopToken.stop_requested()) {
+          return;
+        }
+
+        std::filesystem::path folderPath(folder);
+        std::string folderName =
+            !folderPath.filename().empty()
+                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
+                : path_t_to_utf8(fspath_to_path_t(folderPath));
+        if (folderName.empty()) {
+          folderName = "Folder";
+        }
+        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
+                                  treeUri);
+      });
+}
+
+void MainMenuScene::importAndroidArchiveFromPicker() {
+  importAndroidPathFromPicker(false);
+}
+
+void MainMenuScene::importAndroidFolderFromPicker() {
+  importAndroidPathFromPicker(true);
+}
+
+void MainMenuScene::importAndroidPathFromPicker(bool folderImport) {
+  if (willStart.load() || replayExportInProgress.load() ||
+      archiveImportPickerInProgress.load()) {
+    return;
+  }
+  if (archiveImportPickerThread.joinable()) {
+    archiveImportPickerThread.join();
+  }
+  if (archiveImportPickerInProgress.exchange(true)) {
+    return;
+  }
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText(folderImport ? "Choose a folder..."
+                                           : "Choose an archive...");
+  }
+
+  archiveImportPickerThread =
+      std::jthread([this, folderImport](const std::stop_token &stopToken) {
+        struct PickerFlagReset {
+          std::atomic_bool &flag;
+          ~PickerFlagReset() { flag.store(false); }
+        } reset{archiveImportPickerInProgress};
+
+        std::filesystem::path importPath;
+        std::string errorMessage;
+        const bool picked =
+            folderImport ? PickAndroidFolderForImport(importPath, errorMessage)
+                         : PickAndroidArchiveForImport(importPath,
+                                                       errorMessage);
+        if (!picked) {
+          std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+          pendingAndroidArchiveImportError =
+              errorMessage.empty()
+                  ? (folderImport ? "Folder import cancelled."
+                                  : "Archive import cancelled.")
+                  : errorMessage;
+          return;
+        }
+        if (stopToken.stop_requested()) {
+          return;
+        }
+
+        if (importPath.empty()) {
+          createPendingAndroidImportTask(folderImport);
+        } else {
+          const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
+          enqueueAndroidImportTask(id, importPath, folderImport);
+        }
+      });
+}
+
+void MainMenuScene::pollPendingAndroidArchiveImport() {
+  const std::uint64_t now = SDL_GetTicks64();
+  if (now < nextAndroidArchiveImportPollMs) {
+    return;
+  }
+  nextAndroidArchiveImportPollMs = now + 1000;
+
+  std::string errorMessage;
+  const auto archivePath = ConsumePendingAndroidArchiveImport(errorMessage);
+  if (!archivePath.has_value() && errorMessage.empty()) {
+    return;
+  }
+
+  std::uint64_t taskId = 0;
+  bool folderImport = false;
+  {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    if (!pendingAndroidArchiveImportTasks.empty()) {
+      taskId = pendingAndroidArchiveImportTasks.front().first;
+      folderImport = pendingAndroidArchiveImportTasks.front().second;
+      pendingAndroidArchiveImportTasks.pop_front();
+    }
+    androidArchiveImportCopyPending.store(
+        !pendingAndroidArchiveImportTasks.empty());
+  }
+  if (archivePath.has_value()) {
+    if (taskId == 0) {
+      taskId = nextLibraryTaskId.fetch_add(1);
+    }
+    enqueueAndroidImportTask(taskId, *archivePath, folderImport);
+  } else {
+    if (taskId != 0) {
+      setLibraryTaskState(taskId, LibraryTaskStatus::Failed, 0.0, 0, 0,
+                          errorMessage.empty() ? "Import failed"
+                                               : errorMessage);
+    }
+    {
+      std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+      pendingAndroidArchiveImportError = errorMessage;
+    }
+  }
+}
+
+void MainMenuScene::applyPendingAndroidArchiveImport() {
+  std::optional<std::string> errorMessage;
+  {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    if (pendingAndroidArchiveImportError.has_value()) {
+      errorMessage = std::move(pendingAndroidArchiveImportError);
+      pendingAndroidArchiveImportError.reset();
+    }
+  }
+
+  if (errorMessage.has_value()) {
+    SDL_Log("Android archive import failed: %s", errorMessage->c_str());
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText("Archive import failed");
+    }
+  }
+}
+
+void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
+                                         const std::stop_token &stopToken) {
+  const std::filesystem::path importPath = task.androidImportPath;
+  if (importPath.empty()) {
+    throw std::runtime_error("Import failed: selected path is empty.");
+  }
+
+  std::error_code importPathError;
+  const bool importingFolder =
+      task.androidImportFolder ||
+      std::filesystem::is_directory(importPath, importPathError);
+  const std::string importType = importingFolder ? "folder" : "archive";
+  const std::filesystem::path outputRoot = ChartDBHelper::DefaultBmsFolderPath();
+
+  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
+                      "Preparing import");
+  archive_file::appendDebugLogLine(
+      "Android import task requested: " +
+      path_t_to_utf8(fspath_to_path_t(importPath)) + " outputRoot=" +
+      path_t_to_utf8(fspath_to_path_t(outputRoot)));
+
+  auto postImportProgress = [this, &task,
+                             importingFolder](double fraction,
+                                              const std::string &message) {
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
+                        std::clamp(fraction, 0.0, 1.0), 0, 0,
+                        message.empty()
+                            ? (importingFolder ? "Importing folder"
+                                               : "Importing archive")
+                            : message);
+  };
+
+  std::string errorMessage;
+  std::error_code fsError;
+  std::filesystem::create_directories(outputRoot, fsError);
+  if (fsError) {
+    throw std::runtime_error("Import failed: could not create BMS import "
+                             "folder.");
+  }
+
+  std::filesystem::path outputFolder;
+  if (importingFolder) {
+    outputFolder = importPath;
+    postImportProgress(0.90, "Refreshing library");
+  } else {
+    auto postUnzipProgress =
+        [&](const archive_file::UnzipProgress &progress) {
+          postImportProgress(progress.fraction * 0.90, progress.message);
+        };
+    const auto unzippedArchive = archive_file::unzipArchiveFully(
+        importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress);
+    if (unzippedArchive.has_value()) {
+      outputFolder = unzippedArchive->outputFolder;
+    }
+  }
+
+  if (outputFolder.empty()) {
+    throw std::runtime_error(
+        stopToken.stop_requested()
+            ? "Import cancelled"
+            : (errorMessage.empty() ? "Import failed"
+                                    : "Import failed: " + errorMessage));
+  }
+  if (stopToken.stop_requested()) {
+    throw std::runtime_error("Import cancelled");
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  SqliteConnectionHandle importDbHandle(dbHelper.Connect());
+  sqlite3 *importDb = importDbHandle.get();
+  if (importDb == nullptr) {
+    throw std::runtime_error("Imported " + importType +
+                             ". Failed to refresh library.");
+  }
+
+  dbHelper.CreateEntriesTable(importDb);
+  dbHelper.CreateChartMetaTable(importDb);
+  dbHelper.CreateSolidArchiveTable(importDb);
+  dbHelper.CreateDifficultyTableTables(importDb);
+  dbHelper.InsertEntry(importDb, outputRoot);
+
+  std::vector<std::filesystem::path> roots{outputFolder};
+  postImportProgress(0.92, "Refreshing library");
+  auto scanProgress = [this, &task](const ChartScanProgress &progress) {
+    const int total = std::max(0, progress.total);
+    const int current = total > 0 ? std::clamp(progress.current, 0, total)
+                                  : std::max(0, progress.current);
+    const double scanFraction =
+        total > 0 ? static_cast<double>(current) / std::max(1, total) : 0.0;
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
+                        0.92 + scanFraction * 0.08, current, total,
+                        chartScanProgressStageText(progress.stage));
+  };
+  auto pauseTask = [this, &task, &stopToken]() {
+    return waitForLibraryTaskResume(task.id, stopToken);
+  };
+  const int changedCount =
+      dbHelper.ScanChartRoots(importDb, roots, &stopToken, scanProgress,
+                              pauseTask);
+  if (stopToken.stop_requested()) {
+    throw std::runtime_error("Import cancelled");
+  }
+
+  if (!importingFolder) {
+    std::filesystem::remove(importPath, fsError);
+  }
+  requestLibraryReload(true);
+  const std::string message =
+      changedCount > 0 ? "Imported " + importType + ". Library refreshed."
+                       : "Imported " + importType +
+                             ". Library already current.";
+  SDL_Log("Android import task result: %s", message.c_str());
+  archive_file::appendDebugLogLine(message);
+  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 1.0, 1, 1,
+                      message);
 }
 #endif
 
@@ -1550,10 +2031,19 @@ void MainMenuScene::initView(ApplicationContext &context) {
   suppressPreviewForChartPath.reset();
   unzipDeleteCandidatePath.reset();
   unzipEstimatedUncompressedSize = 0;
+#if TARGET_OS_ANDROID
+  {
+    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
+    pendingAndroidArchiveImportError.reset();
+    pendingAndroidArchiveImportTasks.clear();
+  }
+  androidArchiveImportCopyPending = false;
+#endif
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
   unzipInProgress = false;
+  tasksModalOpenRequested = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
   findBmsResult = {};
@@ -1594,6 +2084,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
+  dbHelper.CreateEntriesTable(db);
+#if TARGET_OS_ANDROID
+  (void)dbHelper.SelectEffectiveEntries(db);
+#endif
   dbHelper.CreateDifficultyTableTables(db);
 
   static constexpr int kChartListItemHeight = 108;
@@ -1660,8 +2154,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
           " estimatedUnpacked=" + std::to_string(item.archiveUncompressedSize));
       return;
     }
-    if (archive_file::isVirtualPath(meta.BmsPath) &&
-        !context.settings.archiveChartPreviewEnabled) {
+    bool archiveVirtualPath = archive_file::isVirtualPath(meta.BmsPath);
+#if TARGET_OS_ANDROID
+    if (archiveVirtualPath && IsAndroidTreePath(meta.BmsPath)) {
+      archiveVirtualPath = false;
+    }
+#endif
+    if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
       if (!replayExportInProgress.load() && replayStatusText != nullptr) {
         replayStatusText->setText("Archive preview disabled");
@@ -1812,22 +2311,60 @@ void MainMenuScene::initView(ApplicationContext &context) {
   navTitle->setThemedColor(ui_theme::textPrimary);
   nav->addView(navTitle);
 
+  bool showAddFolderButton = false;
+  std::string addFolderButtonLabel = "Add Folder";
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  auto *addFolderButton = new Button(0, 0, 252, 50);
-  auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  addFolderText->setText("Add Folder");
-  addFolderText->setAlign(TextView::CENTER);
-  addFolderText->setVAlign(TextView::MIDDLE);
-  addFolderButton->setContentView(addFolderText);
-  styleThemedActionButton(addFolderButton, addFolderText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
-  addFolderButton->setCornerRadius(ui_theme::controlRadius());
-  addFolderButton->setStyledBorderWidth(1);
-  addFolderButton->setOnClickListener(
-      [this]() { addIOSFolderEntryFromFiles(); });
-  nav->addView(addFolderButton);
+  showAddFolderButton = true;
+#elif TARGET_OS_ANDROID
+  const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
+  showAddFolderButton = true;
+  addFolderButtonLabel =
+      androidFullFileAccessBuild ? "Add Folder" : "Import Folder";
+#endif
+  if (showAddFolderButton) {
+    auto *addFolderButton = new Button(0, 0, 252, 50);
+    auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    addFolderText->setText(addFolderButtonLabel);
+    addFolderText->setAlign(TextView::CENTER);
+    addFolderText->setVAlign(TextView::MIDDLE);
+    addFolderButton->setContentView(addFolderText);
+    styleThemedActionButton(addFolderButton, addFolderText, true,
+                            ui_theme::primaryAction,
+                            ui_theme::primaryActionHover,
+                            ui_theme::primaryActionPressed,
+                            ui_theme::accentBorderStrong);
+    addFolderButton->setCornerRadius(ui_theme::controlRadius());
+    addFolderButton->setStyledBorderWidth(1);
+#if TARGET_OS_ANDROID
+    addFolderButton->setOnClickListener([this]() {
+      if (AndroidBuildHasManageExternalStorage()) {
+        addAndroidFolderEntryFromPicker();
+      } else {
+        importAndroidFolderFromPicker();
+      }
+    });
+#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    addFolderButton->setOnClickListener(
+        [this]() { addIOSFolderEntryFromFiles(); });
+#endif
+    nav->addView(addFolderButton);
+  }
+#if TARGET_OS_ANDROID
+  auto *importArchiveButton = new Button(0, 0, 252, 50);
+  auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  importArchiveText->setText("Import Archive");
+  importArchiveText->setAlign(TextView::CENTER);
+  importArchiveText->setVAlign(TextView::MIDDLE);
+  importArchiveButton->setContentView(importArchiveText);
+  styleThemedActionButton(importArchiveButton, importArchiveText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  importArchiveButton->setCornerRadius(ui_theme::controlRadius());
+  importArchiveButton->setStyledBorderWidth(1);
+  importArchiveButton->setOnClickListener(
+      [this]() { importAndroidArchiveFromPicker(); });
+  nav->addView(importArchiveButton);
 #endif
 
   folderRecyclerView->setFlex(1);
@@ -2530,8 +3067,12 @@ void MainMenuScene::requestLibraryReload(bool includeFolders) {
 }
 
 void MainMenuScene::applyPendingUiUpdates() {
+  const bool shouldOpenTasksModal = tasksModalOpenRequested.exchange(false);
   const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  if (shouldOpenTasksModal) {
+    showTasksModal();
+  }
   if (shouldReloadFolders) {
     reloadScoreClearRanks();
     reloadFolderItems(true);
@@ -3516,17 +4057,24 @@ void MainMenuScene::openFindBmsForSelection() {
 std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   auto &dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateEntriesTable(db);
-  auto entries = dbHelper.SelectAllEntries(db);
+  auto entries = dbHelper.SelectEffectiveEntries(db);
   if (entries.empty()) {
-    const auto path = Utils::GetDocumentsPath("BMS");
+    const auto path = ChartDBHelper::DefaultBmsFolderPath();
     std::error_code errorCode;
     std::filesystem::create_directories(path, errorCode);
+#if !(TARGET_OS_ANDROID)
     dbHelper.InsertEntry(db, path);
+#endif
     return path;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return ResolveIOSFolderEntryPath(entries.front());
+#elif TARGET_OS_ANDROID
+  const auto path = ChartDBHelper::DefaultBmsFolderPath();
+  std::error_code errorCode;
+  std::filesystem::create_directories(path, errorCode);
+  return path;
 #else
   return std::filesystem::path(entries.front().path);
 #endif
@@ -3798,26 +4346,36 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   const LibraryTaskProgressSnapshot progressSnapshot =
       readLibraryTaskProgress();
   std::vector<LibraryTaskInfo> activeTasks;
+  std::vector<LibraryTaskInfo> recentTasks;
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     activeTasks.reserve(libraryTasks.size());
+    recentTasks.reserve(libraryTasks.size());
     for (const auto &task : libraryTasks) {
       if (task.status == LibraryTaskStatus::Queued ||
           task.status == LibraryTaskStatus::Running ||
           task.status == LibraryTaskStatus::Paused) {
         activeTasks.push_back(task);
+      } else {
+        recentTasks.push_back(task);
       }
     }
   }
 
-  if (activeTasks.empty()) {
+  if (activeTasks.empty() && recentTasks.empty()) {
     return "No parsing tasks.";
   }
 
   std::ostringstream text;
-  text << activeTasks.size() << (activeTasks.size() == 1 ? " task" : " tasks")
-       << "\n\n";
-  for (const auto &task : activeTasks) {
+  if (activeTasks.empty()) {
+    text << "No active tasks.\n\nRecent tasks\n\n";
+  } else {
+    text << activeTasks.size()
+         << (activeTasks.size() == 1 ? " active task" : " active tasks")
+         << "\n\n";
+  }
+
+  auto appendTask = [&text, &progressSnapshot](const LibraryTaskInfo &task) {
     std::string statusText;
     switch (task.status) {
     case LibraryTaskStatus::Queued:
@@ -3857,11 +4415,28 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
           text << "\n" << task.detail;
         }
       }
-    } else if (!task.detail.empty()) {
+    } else if (!task.detail.empty() && task.detail != statusText) {
       text << "\n" << task.detail;
     }
     text << "\n\n";
+  };
+
+  for (const auto &task : activeTasks) {
+    appendTask(task);
   }
+
+  if (!activeTasks.empty() && !recentTasks.empty()) {
+    text << "Recent tasks\n\n";
+  }
+
+  constexpr std::size_t kMaxRecentTasksShown = 8;
+  std::size_t shownRecentTasks = 0;
+  for (auto it = recentTasks.rbegin();
+       it != recentTasks.rend() && shownRecentTasks < kMaxRecentTasksShown;
+       ++it, ++shownRecentTasks) {
+    appendTask(*it);
+  }
+
   return text.str();
 }
 
@@ -5381,6 +5956,11 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
     replayStatusText->setText("Exporting...");
   }
 
+#if TARGET_OS_ANDROID
+  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+    updateReplayExportProgressUi(progress.fraction, progress.message);
+  };
+#else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress = PendingReplayExportProgress{
@@ -5388,57 +5968,67 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         .message = progress.message,
     };
   };
+#endif
 
+  auto complete = [this](const ReplayVideoExportResult &result) {
+    std::lock_guard<std::mutex> lock(replayExportResultMutex);
+    pendingReplayExportResult = PendingReplayExportResult{
+        .success = result.success,
+        .photo = false,
+        .outputPath = result.outputPath,
+        .message = result.message,
+    };
+  };
+
+  auto runExport = [this, record, replayId, options,
+                    complete](const std::stop_token *stopToken) {
+    try {
+      if (loadThread.joinable()) {
+        loadThread.join();
+      }
+      context.jukebox.stop();
+      if (stopToken != nullptr && stopToken->stop_requested()) {
+        complete({.success = false, .message = "Replay export cancelled"});
+        return;
+      }
+
+      auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId,
+                                                             record.meta);
+      if (!replay.has_value()) {
+        complete({.success = false, .message = "No Replay"});
+        return;
+      }
+
+      std::atomic_bool parseCancelled = false;
+      auto chart = play_options::prepareReplayChart(
+          record.meta.BmsPath, replay.value(), parseCancelled);
+      if (chart == nullptr || parseCancelled) {
+        complete({.success = false, .message = "No Chart"});
+        return;
+      }
+      if (stopToken != nullptr && stopToken->stop_requested()) {
+        complete({.success = false, .message = "Replay export cancelled"});
+        return;
+      }
+
+      complete(ReplayVideoExporter::Export(context, chart.get(), replay.value(),
+                                           options));
+    } catch (const std::exception &e) {
+      complete({.success = false, .message = e.what()});
+    } catch (...) {
+      complete({.success = false, .message = "Unexpected replay export failure"});
+    }
+  };
+
+#if TARGET_OS_ANDROID
+  runExport(nullptr);
+  applyReplayVideoExportResult();
+#else
   replayExportThread = std::jthread(
-      [this, record, replayId, options](const std::stop_token &stopToken) {
-        auto complete = [this](const ReplayVideoExportResult &result) {
-          std::lock_guard<std::mutex> lock(replayExportResultMutex);
-          pendingReplayExportResult = PendingReplayExportResult{
-              .success = result.success,
-              .photo = false,
-              .outputPath = result.outputPath,
-              .message = result.message,
-          };
-        };
-
-        try {
-          if (loadThread.joinable()) {
-            loadThread.join();
-          }
-          context.jukebox.stop();
-          if (stopToken.stop_requested()) {
-            complete({.success = false, .message = "Replay export cancelled"});
-            return;
-          }
-
-          auto replay =
-              ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
-          if (!replay.has_value()) {
-            complete({.success = false, .message = "No Replay"});
-            return;
-          }
-
-          std::atomic_bool parseCancelled = false;
-          auto chart = play_options::prepareReplayChart(
-              record.meta.BmsPath, replay.value(), parseCancelled);
-          if (chart == nullptr || parseCancelled) {
-            complete({.success = false, .message = "No Chart"});
-            return;
-          }
-          if (stopToken.stop_requested()) {
-            complete({.success = false, .message = "Replay export cancelled"});
-            return;
-          }
-
-          complete(ReplayVideoExporter::Export(context, chart.get(),
-                                               replay.value(), options));
-        } catch (const std::exception &e) {
-          complete({.success = false, .message = e.what()});
-        } catch (...) {
-          complete({.success = false,
-                    .message = "Unexpected replay export failure"});
-        }
+      [runExport = std::move(runExport)](const std::stop_token &stopToken) {
+        runExport(&stopToken);
       });
+#endif
 }
 
 void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
@@ -5463,56 +6053,49 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     replayStatusText->setText("Exporting photo...");
   }
 
-  replayExportThread = std::jthread(
-      [this, record, replayId](const std::stop_token &stopToken) {
-        auto complete = [this](const ResultImageExportResult &result) {
-          std::lock_guard<std::mutex> lock(replayExportResultMutex);
-          pendingReplayExportResult = PendingReplayExportResult{
-              .success = result.success,
-              .photo = true,
-              .outputPath = result.outputPath,
-              .message = result.message,
-          };
-        };
+  auto complete = [this](const ResultImageExportResult &result) {
+    std::lock_guard<std::mutex> lock(replayExportResultMutex);
+    pendingReplayExportResult = PendingReplayExportResult{
+        .success = result.success,
+        .photo = true,
+        .outputPath = result.outputPath,
+        .message = result.message,
+    };
+  };
 
-        try {
-          if (loadThread.joinable()) {
-            loadThread.join();
-          }
-          context.jukebox.stop();
-          if (stopToken.stop_requested()) {
-            complete({.success = false, .message = "Photo export cancelled"});
-            return;
-          }
+  try {
+    if (loadThread.joinable()) {
+      loadThread.join();
+    }
+    context.jukebox.stop();
 
-          auto replay =
-              ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
-          if (!replay.has_value()) {
-            complete({.success = false, .message = "No Replay"});
-            return;
-          }
+    auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+    if (!replay.has_value()) {
+      complete({.success = false, .message = "No Replay"});
+      applyReplayVideoExportResult();
+      return;
+    }
 
-          std::atomic_bool parseCancelled = false;
-          auto chart = play_options::prepareReplayChart(
-              record.meta.BmsPath, replay.value(), parseCancelled);
-          if (chart == nullptr || parseCancelled) {
-            complete({.success = false, .message = "No Chart"});
-            return;
-          }
-          if (stopToken.stop_requested()) {
-            complete({.success = false, .message = "Photo export cancelled"});
-            return;
-          }
+    updateReplayExportProgressUi(0.25, "Loading chart");
+    std::atomic_bool parseCancelled = false;
+    auto chart = play_options::prepareReplayChart(record.meta.BmsPath,
+                                                  replay.value(),
+                                                  parseCancelled);
+    if (chart == nullptr || parseCancelled) {
+      complete({.success = false, .message = "No Chart"});
+      applyReplayVideoExportResult();
+      return;
+    }
 
-          complete(ResultImageExporter::ExportReplay(context, *chart,
-                                                     replay.value()));
-        } catch (const std::exception &e) {
-          complete({.success = false, .message = e.what()});
-        } catch (...) {
-          complete({.success = false,
-                    .message = "Unexpected photo export failure"});
-        }
-      });
+    updateReplayExportProgressUi(0.75, "Rendering photo");
+    complete(ResultImageExporter::ExportReplay(context, *chart, replay.value()));
+  } catch (const std::exception &e) {
+    complete({.success = false, .message = e.what()});
+  } catch (...) {
+    complete({.success = false,
+              .message = "Unexpected photo export failure"});
+  }
+  applyReplayVideoExportResult();
 }
 
 void MainMenuScene::applyReplayVideoExportProgress() {
@@ -5613,6 +6196,10 @@ void MainMenuScene::update(float dt) {
   applyUnzipResult();
   applyReplayVideoExportProgress();
   applyReplayVideoExportResult();
+#if TARGET_OS_ANDROID
+  pollPendingAndroidArchiveImport();
+  applyPendingAndroidArchiveImport();
+#endif
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
@@ -5686,6 +6273,14 @@ void MainMenuScene::cleanupScene() {
     addFolderPickerThread.join();
   }
   addFolderPickerInProgress = false;
+#if TARGET_OS_ANDROID
+  if (archiveImportPickerThread.joinable()) {
+    SDL_Log("Joining archiveImportPickerThread");
+    archiveImportPickerThread.request_stop();
+    archiveImportPickerThread.join();
+  }
+  archiveImportPickerInProgress = false;
+#endif
   stopLibraryTaskWorker();
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");
@@ -5898,6 +6493,10 @@ void MainMenuScene::LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
     }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     roots.push_back(ResolveIOSFolderEntryPath(entry));
+#elif TARGET_OS_ANDROID
+    std::filesystem::path root(entry.path);
+    RegisterAndroidChartFolder(root, entry.iosBookmark);
+    roots.push_back(std::move(root));
 #else
     roots.emplace_back(entry.path);
 #endif
@@ -5961,7 +6560,7 @@ void MainMenuScene::FindFilesWin(const std::filesystem::path &path,
     FindClose(hFind);
   }
 }
-#elif TARGET_OS_OSX || TARGET_OS_LINUX
+#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_ANDROID
 void MainMenuScene::resolveDType(const std::filesystem::path &directoryPath,
                                  struct dirent *entry) {
   if (entry->d_type == DT_UNKNOWN) {
@@ -6087,7 +6686,7 @@ void MainMenuScene::FindNewBmsFiles(
 
 #ifdef _WIN32
     FindFilesWin(currentDir, diffs, oldFilesWs, directoriesToVisit, stop_token);
-#elif TARGET_OS_OSX || TARGET_OS_LINUX
+#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_ANDROID
     FindFilesUnix(currentDir, diffs, oldFilesWs, directoriesToVisit,
                   stop_token);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR

@@ -2,10 +2,16 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
 
 using namespace settings_scene;
 
 namespace {
+constexpr const char *kRepositoryUrl =
+    "https://github.com/SNURhythm/AsoBMaShow";
+
 View *makeCardsColumn(const LayoutMetrics &metrics) {
   auto *cardsColumn = new View();
   cardsColumn->setFlexDirection(FlexDirection::Column);
@@ -2279,31 +2285,88 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
   folderActions->addView(refreshFoldersButton);
 
+  bool showAddFolderButton = false;
+  bool importFolderByCopy = false;
+  std::string addFolderButtonLabel = "Add Folder";
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  auto *addFolderButton = makeAccentButton(
-      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
-      makeText("Add Folder", metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-      ui_theme::cyan());
-  addFolderButton->setOnClickListener([this]() {
-    if (context.requestAddChartFolderFromFiles) {
-      context.requestAddChartFolderFromFiles();
-      chartFolderStatusMessage = "Choose a folder to add.";
-      chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
-    } else {
-      chartFolderStatusMessage = "Add Folder is unavailable.";
-      chartFolderStatusColor = {255, 177, 170, 255};
-    }
-
-    if (chartFolderStatusText != nullptr) {
-      chartFolderStatusText->setText(chartFolderStatusMessage);
-      chartFolderStatusText->setColor(chartFolderStatusColor);
-    }
-  });
-  folderActions->addView(addFolderButton);
+  showAddFolderButton = true;
+#elif TARGET_OS_ANDROID
+  const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
+  showAddFolderButton = true;
+  importFolderByCopy = !androidFullFileAccessBuild;
+  addFolderButtonLabel =
+      androidFullFileAccessBuild ? "Add Folder" : "Import Folder";
 #endif
+  if (showAddFolderButton) {
+    auto *addFolderButton = makeAccentButton(
+        metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+        makeText(addFolderButtonLabel, metrics.bodyTextSize + 2,
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+        ui_theme::cyan());
+    addFolderButton->setOnClickListener([this, importFolderByCopy,
+                                         addFolderButtonLabel]() {
+      if (context.requestAddChartFolderFromFiles) {
+        context.requestAddChartFolderFromFiles();
+        chartFolderStatusMessage = importFolderByCopy
+                                       ? "Choose a folder to import."
+                                       : "Choose a folder to add.";
+        chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+      } else {
+        chartFolderStatusMessage = addFolderButtonLabel + " is unavailable.";
+        chartFolderStatusColor = {255, 177, 170, 255};
+      }
+
+      if (chartFolderStatusText != nullptr) {
+        chartFolderStatusText->setText(chartFolderStatusMessage);
+        chartFolderStatusText->setColor(chartFolderStatusColor);
+      }
+    });
+    folderActions->addView(addFolderButton);
+  }
 
   folderList->addView(folderActions);
+
+#if TARGET_OS_ANDROID
+  if (importFolderByCopy) {
+    auto *playNote = new View();
+    playNote->setFlexDirection(FlexDirection::Column);
+    playNote->setGap(metrics.compact ? 8.0f : 10.0f);
+    playNote->setAlignSelf(YGAlignStretch);
+    playNote->setPadding(Edge::All,
+                         static_cast<float>(metrics.compact ? 14 : 16));
+    playNote->setThemedBackgroundColor(ui_theme::panelSubtle);
+    playNote->setCornerRadius(ui_theme::controlRadius());
+    playNote->setThemedBorderColor(ui_theme::hairline);
+    playNote->setBorderWidth(1);
+    playNote->addView(makeWrappedText(
+        "Google Play builds cannot add external chart folders. You can import "
+        "archive files or folders into app storage instead. More info: "
+        "github.com/SNURhythm/AsoBMaShow",
+        metrics.bodyTextSize, ui_theme::textSecondary()));
+
+    auto *repoButton = makeAccentButton(
+        metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+        makeText("Open GitHub", metrics.bodyTextSize + 2,
+                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+        ui_theme::cyan());
+    repoButton->setOnClickListener([this]() {
+      std::string errorMessage;
+      if (!OpenURLInAndroidBrowser(kRepositoryUrl, errorMessage)) {
+        chartFolderStatusMessage = "Could not open GitHub link.";
+        chartFolderStatusColor = {255, 177, 170, 255};
+        if (chartFolderStatusText != nullptr) {
+          chartFolderStatusText->setText(chartFolderStatusMessage);
+          chartFolderStatusText->setColor(chartFolderStatusColor);
+        }
+        if (!errorMessage.empty()) {
+          SDL_Log("Failed to open repository URL: %s", errorMessage.c_str());
+        }
+      }
+    });
+    playNote->addView(repoButton);
+    folderList->addView(playNote);
+  }
+#endif
 
   chartFolderStatusText = makeWrappedText(
       chartFolderStatusMessage, metrics.bodyTextSize,
@@ -2341,17 +2404,22 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int folderActionWidth = metrics.compact ? 136 : 156;
-      const bool confirmingDelete =
-          pendingDeleteChartEntryPath == entryPathText;
-      auto *deleteButton = makeAccentButton(
-          folderActionWidth, metrics.actionButtonHeight,
-          makeText(confirmingDelete ? "Confirm" : "Delete",
-                   metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE),
-          ui_theme::coral());
-      deleteButton->setOnClickListener(
-          [this, entryPathText]() { deleteChartEntry(entryPathText); });
-      actions->addView(deleteButton);
+      if (entry.removable) {
+        const bool confirmingDelete =
+            pendingDeleteChartEntryPath == entryPathText;
+        auto *deleteButton = makeAccentButton(
+            folderActionWidth, metrics.actionButtonHeight,
+            makeText(confirmingDelete ? "Confirm" : "Delete",
+                     metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE),
+            ui_theme::coral());
+        deleteButton->setOnClickListener(
+            [this, entryPathText]() { deleteChartEntry(entryPathText); });
+        actions->addView(deleteButton);
+      } else {
+        actions->addView(makeWrappedText("Built-in", metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
       const auto backupStatusIt =

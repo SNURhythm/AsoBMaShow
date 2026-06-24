@@ -4,6 +4,11 @@
 
 #include "ImageView.h"
 #include "../ArchiveFile.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 #include "../RAII.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
@@ -18,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -55,7 +61,31 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
   int height = 0;
   int channels = 0;
   StbiImageHandle data(nullptr);
+#if TARGET_OS_ANDROID
+  bool androidTreePath = false;
+  if (IsAndroidTreePath(path)) {
+    androidTreePath = true;
+    std::string fdError;
+    const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
+    if (!fd.has_value()) {
+      SDL_Log("Failed to open Android image descriptor %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(), fdError.c_str());
+      return std::nullopt;
+    }
+    FILE *file = fdopen(*fd, "rb");
+    if (file == nullptr) {
+      close(*fd);
+      SDL_Log("Failed to create FILE for Android image descriptor: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+      return std::nullopt;
+    }
+    data.reset(stbi_load_from_file(file, &width, &height, &channels, 4));
+    fclose(file);
+  }
+  if (!androidTreePath && !archive_file::isVirtualPath(path)) {
+#else
   if (!archive_file::isVirtualPath(path)) {
+#endif
     const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
     data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
   } else {

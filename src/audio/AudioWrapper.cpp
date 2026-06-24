@@ -940,8 +940,9 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
 
   updateCurrentSampleRate();
   int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
-  SDL_Log("Target sample rate: %d, File sample rate: %d", targetSampleRate,
-          sampleRate);
+  SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                 "Target sample rate: %d, File sample rate: %d",
+                 targetSampleRate, sampleRate);
 
   if (targetSampleRate == sampleRate) {
     // Optimization: Skip resampling
@@ -949,11 +950,14 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
     soundData->resampledData = std::move(pcmData);
     soundData->resampledFrameCount =
         soundData->resampledData.size() / soundData->channels;
-    SDL_Log("Loaded sound without resampling (Rate: %d)", targetSampleRate);
+    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                   "Loaded sound without resampling (Rate: %d)",
+                   targetSampleRate);
   } else {
     // Initialize the resampler
-    SDL_Log("Resampling audio data from %d Hz to %d Hz", sampleRate,
-            targetSampleRate);
+    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                   "Resampling audio data from %d Hz to %d Hz", sampleRate,
+                   targetSampleRate);
     ma_resampler_config resamplerConfig = ma_resampler_config_init(
         ma_format_s16, channels, sampleRate, targetSampleRate,
         ma_resample_algorithm_linear);

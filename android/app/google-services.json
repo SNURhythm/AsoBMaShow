@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "218675483457",
+    "project_id": "asobmashow",
+    "storage_bucket": "asobmashow.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:218675483457:android:78b14fc5c044613b91c7c0",
+        "android_client_info": {
+          "package_name": "com.snurhythm.asobmashow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAyaUYIsM8yhYzm0iEcsi7q9XKMKxXMMpw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

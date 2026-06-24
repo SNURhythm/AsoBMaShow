@@ -81,7 +81,7 @@ void SettingsScene::loadChartEntries() {
   }
 
   dbHelper.CreateEntriesTable(settingsDb);
-  chartEntries = dbHelper.SelectAllEntries(settingsDb);
+  chartEntries = dbHelper.SelectEffectiveEntries(settingsDb);
 
   if (!pendingDeleteChartEntryPath.empty()) {
     const auto it = std::find_if(chartEntries.begin(), chartEntries.end(),
@@ -589,13 +589,13 @@ void SettingsScene::refreshChartLibrary() {
 
         dbHelper.CreateChartMetaTable(settingsDb);
         dbHelper.CreateEntriesTable(settingsDb);
-        auto entries = dbHelper.SelectAllEntries(settingsDb);
+        auto entries = dbHelper.SelectEffectiveEntries(settingsDb);
         if (entries.empty()) {
-          const auto defaultPath = Utils::GetDocumentsPath("BMS");
+          const auto defaultPath = ChartDBHelper::DefaultBmsFolderPath();
           std::error_code errorCode;
           std::filesystem::create_directories(defaultPath, errorCode);
           dbHelper.InsertEntry(settingsDb, defaultPath);
-          entries = dbHelper.SelectAllEntries(settingsDb);
+          entries = dbHelper.SelectEffectiveEntries(settingsDb);
         }
 
         std::vector<std::filesystem::path> roots;
@@ -657,6 +657,20 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
     return;
   }
 
+#if TARGET_OS_ANDROID
+  if (ChartDBHelper::IsDefaultBmsFolderPath(
+          std::filesystem::path(utf8_to_path_t(entryPathText)))) {
+    chartFolderStatusMessage = "The default BMS folder is built in.";
+    chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
+    }
+    pendingDeleteChartEntryPath.clear();
+    return;
+  }
+#endif
+
   if (pendingDeleteChartEntryPath != entryPathText) {
     pendingDeleteChartEntryPath = entryPathText;
     pendingDeleteDifficultyTableId = 0;
@@ -694,16 +708,19 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         dbHelper.CreateChartMetaTable(settingsDb);
         dbHelper.CreateEntriesTable(settingsDb);
 
-        const auto entries = dbHelper.SelectAllEntries(settingsDb);
+        const auto entries = dbHelper.SelectEffectiveEntries(settingsDb);
         const auto entryIt =
             std::find_if(entries.begin(), entries.end(),
                          [&entryPathText](const ChartEntry &entry) {
                            return formatChartEntryPath(entry) == entryPathText;
                          });
 
-        if (entryIt == entries.end()) {
+        if (entryIt == entries.end() || !entryIt->removable) {
           if (!token.stop_requested()) {
-            requestChartFolderStatus("Folder entry was not found.",
+            requestChartFolderStatus(
+                entryIt == entries.end()
+                    ? "Folder entry was not found."
+                    : "The default BMS folder is built in.",
                                      {255, 177, 170, 255}, true);
             difficultyTableJobRunning = false;
           }

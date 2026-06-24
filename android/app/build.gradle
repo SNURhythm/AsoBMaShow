@@ -1,0 +1,181 @@
+plugins {
+    id 'com.android.application'
+}
+
+def repoRoot = rootProject.file('..')
+def vcpkgRoot = System.getenv('VCPKG_ROOT')
+if (vcpkgRoot == null || vcpkgRoot.trim().isEmpty()) {
+    throw new GradleException('VCPKG_ROOT must point to a vcpkg checkout for Android native dependencies.')
+}
+def androidSdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+def androidNdkRoot = System.getenv('ANDROID_NDK_HOME')
+if ((androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) && androidSdkRoot != null) {
+    def ndkDir = file("${androidSdkRoot}/ndk")
+    if (ndkDir.isDirectory()) {
+        def installedNdks = ndkDir.listFiles()
+                .findAll { it.isDirectory() && file("${it}/build/cmake/android.toolchain.cmake").isFile() }
+                .sort { a, b -> b.name <=> a.name }
+        if (!installedNdks.isEmpty()) {
+            androidNdkRoot = installedNdks.first().absolutePath
+        }
+    }
+}
+if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) {
+    throw new GradleException('ANDROID_NDK_HOME must point to an installed Android NDK, or ANDROID_HOME/ANDROID_SDK_ROOT must contain an ndk/ directory.')
+}
+
+def generatedAssetsDir = layout.buildDirectory.dir('generated/assets/asobmashow')
+def androidVersionCodeText = System.getenv('ANDROID_VERSION_CODE') ?: (findProperty('androidVersionCode') ?: '1')
+def androidVersionNameText = System.getenv('ANDROID_VERSION_NAME') ?: (findProperty('androidVersionName') ?: '1.0')
+def envOrProperty = { String envName, String propertyName ->
+    def value = System.getenv(envName)
+    if (value == null || value.toString().trim().isEmpty()) {
+        value = findProperty(propertyName)
+    }
+    return value == null ? '' : value.toString().trim()
+}
+def androidKeystorePathText = envOrProperty('ANDROID_KEYSTORE_PATH', 'androidKeystorePath')
+def androidKeystorePasswordText = envOrProperty('ANDROID_KEYSTORE_PASSWORD', 'androidKeystorePassword')
+def androidKeyAliasText = envOrProperty('ANDROID_KEY_ALIAS', 'androidKeyAlias')
+def androidKeyPasswordText = envOrProperty('ANDROID_KEY_PASSWORD', 'androidKeyPassword')
+def androidSigningValues = [
+        ANDROID_KEYSTORE_PATH    : androidKeystorePathText,
+        ANDROID_KEYSTORE_PASSWORD: androidKeystorePasswordText,
+        ANDROID_KEY_ALIAS        : androidKeyAliasText,
+        ANDROID_KEY_PASSWORD     : androidKeyPasswordText
+]
+def androidReleaseSigningProvided = androidSigningValues.values().any { !it.isEmpty() }
+def androidReleaseSigningConfigured = androidSigningValues.values().every { !it.isEmpty() }
+if (androidReleaseSigningProvided && !androidReleaseSigningConfigured) {
+    def missing = androidSigningValues.findAll { it.value.isEmpty() }.keySet().join(', ')
+    throw new GradleException("Incomplete Android release signing config. Missing env/property values: ${missing}")
+}
+def resolveAndroidSigningPath = { String pathText ->
+    if (pathText.startsWith('~/')) {
+        return new File(System.getProperty('user.home'), pathText.substring(2))
+    }
+    def pathFile = new File(pathText)
+    return pathFile.isAbsolute() ? pathFile : new File(repoRoot, pathText)
+}
+def androidKeystoreFile = androidReleaseSigningConfigured
+        ? resolveAndroidSigningPath(androidKeystorePathText)
+        : null
+
+tasks.register('syncNativeAssets', Sync) {
+    into(generatedAssetsDir)
+    from(repoRoot.toPath().resolve('assets')) {
+        into('assets')
+    }
+    from(repoRoot.toPath().resolve('shaders')) {
+        into('shaders')
+    }
+}
+
+android {
+    namespace 'com.snurhythm.asobmashow'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId 'com.snurhythm.asobmashow'
+        minSdk 28
+        targetSdk 35
+        ndkVersion file(androidNdkRoot).name
+        versionCode androidVersionCodeText.toInteger()
+        versionName androidVersionNameText.toString()
+
+        externalNativeBuild {
+            cmake {
+                abiFilters 'arm64-v8a'
+                targets 'main'
+                arguments(
+                    '-DANDROID_PLATFORM=android-28',
+                    '-DANDROID_STL=c++_shared',
+                    "-DCMAKE_TOOLCHAIN_FILE=${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake",
+                    "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${androidNdkRoot}/build/cmake/android.toolchain.cmake",
+                    '-DVCPKG_TARGET_TRIPLET=arm64-android',
+                    "-DVCPKG_OVERLAY_TRIPLETS=${repoRoot}/vcpkg-triplets",
+                    "-DVCPKG_OVERLAY_PORTS=${repoRoot}/vcpkg-overlays"
+                )
+            }
+        }
+    }
+
+    signingConfigs {
+        if (androidReleaseSigningConfigured) {
+            release {
+                storeFile androidKeystoreFile
+                storePassword androidKeystorePasswordText
+                keyAlias androidKeyAliasText
+                keyPassword androidKeyPasswordText
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "${repoRoot}/CMakeLists.txt"
+        }
+    }
+
+    flavorDimensions 'distribution'
+    productFlavors {
+        play {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'false'
+        }
+        firebase {
+            dimension 'distribution'
+            buildConfigField 'boolean', 'ASOBMSHOW_MANAGE_EXTERNAL_STORAGE', 'true'
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = [
+                'src/main/java',
+                "${repoRoot}/SDL/android-project/app/src/main/java"
+            ]
+            assets.srcDir(generatedAssetsDir)
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+            if (androidReleaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn(tasks.named('syncNativeAssets'))
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTaskRequested = taskGraph.allTasks.any {
+        it.path.toLowerCase(Locale.ROOT).contains('release')
+    }
+    if (releaseTaskRequested) {
+        if (!androidReleaseSigningConfigured) {
+            throw new GradleException(
+                    'Android release builds require ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD.'
+            )
+        }
+        if (!androidKeystoreFile.isFile()) {
+            throw new GradleException("ANDROID_KEYSTORE_PATH does not point to a file: ${androidKeystoreFile}")
+        }
+    }
+}

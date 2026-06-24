@@ -1,8 +1,10 @@
 #include "VideoPlayer.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
+#include "../rendering/UniformCache.h"
 #include <algorithm>
 #include <cstring>
+#include <inttypes.h>
 
 #include <thread>
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
@@ -10,27 +12,13 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
       hasVideoFrame(false) {
 
   frameBuffer.resize(maxBufferSize, nullptr);
-  s_texY = bgfx::createUniform("s_texY", bgfx::UniformType::Sampler);
-  s_texU = bgfx::createUniform("s_texU", bgfx::UniformType::Sampler);
-  s_texV = bgfx::createUniform("s_texV", bgfx::UniformType::Sampler);
+  auto &uniforms = rendering::UniformCache::getInstance();
+  s_texY = uniforms.getSampler("s_texY");
+  s_texU = uniforms.getSampler("s_texU");
+  s_texV = uniforms.getSampler("s_texV");
 }
 
-VideoPlayer::~VideoPlayer() {
-  unloadVideo();
-
-  if (bgfx::isValid(s_texY)) {
-    bgfx::destroy(s_texY);
-    s_texY = BGFX_INVALID_HANDLE;
-  }
-  if (bgfx::isValid(s_texU)) {
-    bgfx::destroy(s_texU);
-    s_texU = BGFX_INVALID_HANDLE;
-  }
-  if (bgfx::isValid(s_texV)) {
-    bgfx::destroy(s_texV);
-    s_texV = BGFX_INVALID_HANDLE;
-  }
-}
+VideoPlayer::~VideoPlayer() { unloadVideo(); }
 
 void VideoPlayer::destroyVideoTextures() {
   std::lock_guard<std::mutex> lock(videoFrameMutex);
@@ -457,7 +445,7 @@ void VideoPlayer::seek(int64_t micro) {
   // Perform the seek operation
   if (av_seek_frame(formatContext, videoStreamIndex, seekTarget,
                     AVSEEK_FLAG_BACKWARD) < 0) {
-    SDL_Log("Failed to seek to %lld microseconds", micro);
+    SDL_Log("Failed to seek to %" PRId64 " microseconds", micro);
     return;
   }
 
@@ -467,7 +455,7 @@ void VideoPlayer::seek(int64_t micro) {
   hasVideoFrame = false;
 
   // Notify predecoding thread to continue from the new position
-  SDL_Log("Seeked to %lld microseconds", micro);
+  SDL_Log("Seeked to %" PRId64 " microseconds", micro);
   isEOF = false;
   eofCV.notify_all();
 }

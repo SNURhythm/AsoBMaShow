@@ -1,6 +1,10 @@
 #include "ArchiveFile.h"
 
+#include "targets.h"
 #include "RAII.h"
+#if TARGET_OS_ANDROID
+#include "AndroidNatives.h"
+#endif
 
 #include <SDL2/SDL.h>
 #if __has_include(<TargetConditionals.h>)
@@ -58,7 +62,7 @@
 #define ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP 0
 #endif
 
-#if __has_include(<iconv.h>)
+#if !TARGET_OS_ANDROID && __has_include(<iconv.h>)
 #include <iconv.h>
 #define ASOBMSHOW_ARCHIVEFILE_HAS_ICONV 1
 #else
@@ -545,6 +549,42 @@ bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
   std::ifstream file(path, std::ios::binary);
+#if TARGET_OS_ANDROID
+  if (!file) {
+    const std::string assetPath = path.generic_string();
+    UniqueResource<SDL_RWops, SDL_RWclose> rw(
+        SDL_RWFromFile(assetPath.c_str(), "rb"));
+    if (rw) {
+      bytes.clear();
+      const Sint64 size = SDL_RWsize(rw.get());
+      if (size > 0) {
+        bytes.resize(static_cast<size_t>(size));
+        const size_t read =
+            SDL_RWread(rw.get(), bytes.data(), 1, bytes.size());
+        if (read != bytes.size()) {
+          if (errorMessage != nullptr) {
+            *errorMessage = "Could not read Android asset: " + assetPath;
+          }
+          bytes.clear();
+          return false;
+        }
+      } else {
+        std::array<unsigned char, 64 * 1024> buffer{};
+        for (;;) {
+          const size_t read =
+              SDL_RWread(rw.get(), buffer.data(), 1, buffer.size());
+          if (read > 0) {
+            bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + read);
+          }
+          if (read < buffer.size()) {
+            break;
+          }
+        }
+      }
+      return true;
+    }
+  }
+#endif
   if (!file) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not open file: " + path.string();
@@ -3876,6 +3916,11 @@ bool splitVirtualPath(const std::filesystem::path &path,
 }
 
 bool isVirtualPath(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    return true;
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   return splitVirtualPath(path, archivePath, innerPath);
@@ -4196,6 +4241,12 @@ entryRangeForFolder(const std::filesystem::path &folderPath) {
 }
 
 bool exists(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string errorMessage;
+    return ExistsAndroidTreeFile(path, errorMessage);
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
@@ -4290,6 +4341,18 @@ SourcePreference sourcePreferenceForPath(const std::filesystem::path &path) {
 
 bool readFile(const std::filesystem::path &path,
               std::vector<unsigned char> &bytes, std::string *errorMessage) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string androidError;
+    if (!ReadAndroidTreeFile(path, bytes, androidError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = androidError;
+      }
+      return false;
+    }
+    return true;
+  }
+#endif
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
@@ -4666,6 +4729,147 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   return outputChartPath;
 }
 
+bool extractArchiveFullyWithBatchReader(
+    const std::filesystem::path &archivePath,
+    const std::filesystem::path &outputFolder,
+    const std::vector<Entry> &entries,
+    const std::stop_token *stopToken,
+    const UnzipProgressCallback &progressCallback,
+    std::string *errorMessage) {
+  static constexpr std::size_t kMaxBatchFiles = 128;
+  static constexpr std::uint64_t kMaxBatchBytes = 64ull * 1024ull * 1024ull;
+
+  struct FileEntryRef {
+    const Entry *entry = nullptr;
+  };
+
+  std::vector<FileEntryRef> filesToExtract;
+  filesToExtract.reserve(entries.size());
+  for (const Entry &entry : entries) {
+    if (entry.directory) {
+      continue;
+    }
+    std::filesystem::path safePath;
+    if (!safeEntryPath(entry.path.generic_string(), safePath) ||
+        isSystemEntryPath(safePath)) {
+      continue;
+    }
+    filesToExtract.push_back(FileEntryRef{.entry = &entry});
+  }
+
+  if (filesToExtract.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive does not contain files to unzip.";
+    }
+    return false;
+  }
+
+  appendDebugLogLineImpl("Starting batched full unzip: " +
+                         pathForLog(archivePath) + " output=" +
+                         pathForLog(outputFolder) + " files=" +
+                         std::to_string(filesToExtract.size()));
+
+  std::uint64_t writtenCount = 0;
+  std::size_t nextFile = 0;
+  while (nextFile < filesToExtract.size()) {
+    if (stopRequested(stopToken)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Unzip cancelled";
+      }
+      return false;
+    }
+
+    std::vector<std::filesystem::path> batchPaths;
+    batchPaths.reserve(kMaxBatchFiles);
+    const std::size_t batchStartOrder = filesToExtract[nextFile].entry->order;
+    std::size_t batchEndOrder = batchStartOrder;
+    std::uint64_t batchBytes = 0;
+    do {
+      const Entry &entry = *filesToExtract[nextFile].entry;
+      batchPaths.push_back(entry.path);
+      batchEndOrder = entry.order;
+      const std::uint64_t remaining =
+          std::numeric_limits<std::uint64_t>::max() - batchBytes;
+      batchBytes += std::min(entry.size, remaining);
+      ++nextFile;
+    } while (nextFile < filesToExtract.size() &&
+             batchPaths.size() < kMaxBatchFiles &&
+             batchBytes < kMaxBatchBytes);
+
+    std::vector<FileData> batchFiles;
+    const EntryRange range{.start = batchStartOrder, .end = batchEndOrder};
+    const auto keepGoing = [stopToken]() { return !stopRequested(stopToken); };
+    if (!readArchiveEntriesInRange(archivePath, batchPaths, range, batchFiles,
+                                   errorMessage, keepGoing)) {
+      return false;
+    }
+    if (batchFiles.empty() && !batchPaths.empty()) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive extraction read no files.";
+      }
+      return false;
+    }
+
+    for (const FileData &file : batchFiles) {
+      if (stopRequested(stopToken)) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Unzip cancelled";
+        }
+        return false;
+      }
+
+      std::filesystem::path relativePath;
+      if (!safeEntryPath(file.path.generic_string(), relativePath) ||
+          isSystemEntryPath(relativePath)) {
+        continue;
+      }
+
+      std::error_code error;
+      const std::filesystem::path outputPath = outputFolder / relativePath;
+      std::filesystem::create_directories(outputPath.parent_path(), error);
+      if (error) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not create unzip subfolder: " +
+                          error.message();
+        }
+        return false;
+      }
+
+      std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+      if (!output) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Could not write unzipped file: " +
+                          outputPath.string();
+        }
+        return false;
+      }
+      if (!file.bytes.empty()) {
+        output.write(reinterpret_cast<const char *>(file.bytes.data()),
+                     static_cast<std::streamsize>(file.bytes.size()));
+      }
+      if (!output) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Failed while writing unzipped file: " +
+                          outputPath.string();
+        }
+        return false;
+      }
+
+      ++writtenCount;
+      reportUnzipProgress(
+          progressCallback,
+          0.12 + 0.84 * (static_cast<double>(writtenCount) /
+                         static_cast<double>(filesToExtract.size())),
+          writtenCount, filesToExtract.size(), "Writing unzipped files");
+    }
+  }
+
+  appendDebugLogLineImpl("Finished batched full unzip: " +
+                         pathForLog(outputFolder) + " files=" +
+                         std::to_string(writtenCount));
+  return true;
+}
+
 std::optional<UnzipArchiveResult>
 unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
@@ -4809,6 +5013,11 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
         errorMessage);
   }
 #endif
+  if (!extracted && !stopRequested(stopToken)) {
+    extracted = extractArchiveFullyWithBatchReader(
+        archivePath, outputFolder, index->entries, stopToken, progressCallback,
+        errorMessage);
+  }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {
       *errorMessage = stopRequested(stopToken)
@@ -4878,6 +5087,15 @@ findFileWithExtensions(const std::filesystem::path &basePath,
 
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path, std::string *errorMessage) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Android SAF files are not copied into the temporary "
+                      "cache. Use the Android file descriptor bridge instead.";
+    }
+    return std::nullopt;
+  }
+#endif
   if (!isVirtualPath(path)) {
     return path;
   }
@@ -5062,6 +5280,31 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
     return;
   }
   *chart = nullptr;
+
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::vector<unsigned char> bytes;
+    std::string errorMessage;
+    appendDebugLogLineImpl("Reading Android SAF chart: " + pathForLog(path));
+    if (!readFile(path, bytes, &errorMessage)) {
+      SDL_Log("Failed to read Android SAF chart %s: %s",
+              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+              errorMessage.c_str());
+      appendDebugLogLineImpl("Failed to read Android SAF chart: " +
+                             pathForLog(path) + ": " + errorMessage);
+      return;
+    }
+    parser.Parse(bytes, chart, addReadyMeasure, metaOnly, cancelled);
+    if (*chart != nullptr) {
+      (*chart)->Meta.BmsPath = path;
+      (*chart)->Meta.Folder = path.parent_path();
+      appendDebugLogLineImpl("Parsed Android SAF chart: " + pathForLog(path) +
+                             " measures=" +
+                             std::to_string((*chart)->Measures.size()));
+    }
+    return;
+  }
+#endif
 
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;

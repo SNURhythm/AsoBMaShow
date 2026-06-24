@@ -49,6 +49,11 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
+#elif defined(__ANDROID__)
+#include "AndroidNatives.h"
+#include <dirent.h>
+#include <sys/system_properties.h>
+#include <sys/stat.h>
 #elif __linux
 // linux
 #include <dirent.h>
@@ -120,6 +125,9 @@ uint32_t resolveResetFlags() {
   uint32_t flags = parseMsaaFlag(msaaSamples);
 
   if (TARGET_PLATFORM == iOS) {
+    flags |= BGFX_RESET_VSYNC;
+  }
+  if (TARGET_PLATFORM == Android) {
     flags |= BGFX_RESET_VSYNC;
   }
   return flags;
@@ -286,23 +294,100 @@ private:
   static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
 };
 
+#if TARGET_OS_ANDROID
+static std::string getAndroidSystemProperty(const char *name) {
+  char value[PROP_VALUE_MAX] = {};
+  if (__system_property_get(name, value) <= 0) {
+    return {};
+  }
+  return value;
+}
+
+static bool isAndroidEmulator() {
+  const std::string qemu = getAndroidSystemProperty("ro.kernel.qemu");
+  if (qemu == "1") {
+    return true;
+  }
+
+  const std::string hardware = getAndroidSystemProperty("ro.hardware");
+  return hardware == "ranchu" || hardware == "goldfish";
+}
+
+static int getAndroidSdkVersion() {
+  const std::string sdk = getAndroidSystemProperty("ro.build.version.sdk");
+  if (sdk.empty()) {
+    return 0;
+  }
+  char *end = nullptr;
+  const long value = std::strtol(sdk.c_str(), &end, 10);
+  if (end == sdk.c_str() || value <= 0 || value > 1000) {
+    return 0;
+  }
+  return static_cast<int>(value);
+}
+
+#endif
+
+static uint32_t withoutMsaaResetFlags(uint32_t flags) {
+  constexpr uint32_t msaaMask = BGFX_RESET_MSAA_X2 | BGFX_RESET_MSAA_X4 |
+                                BGFX_RESET_MSAA_X8 | BGFX_RESET_MSAA_X16;
+  return flags & ~msaaMask;
+}
+
 static int runApplication(const bgfx::Init &bgfxInit) {
   SDL_Log("bgfx_init: %d x %d", bgfxInit.resolution.width,
           bgfxInit.resolution.height);
-  if (!bgfx::init(bgfxInit)) {
-    SDL_Log("bgfx::init failed");
-    return EXIT_FAILURE;
+  std::vector<bgfx::RendererType::Enum> rendererCandidates;
+#if TARGET_OS_ANDROID
+  const bool androidEmulator = isAndroidEmulator();
+  const int androidSdkVersion = getAndroidSdkVersion();
+  const bool skipAndroidEmulatorVulkan =
+      androidEmulator && androidSdkVersion >= 33;
+  if (skipAndroidEmulatorVulkan) {
+    SDL_Log("Android emulator API %d detected; skipping Vulkan stub renderer",
+            androidSdkVersion);
+  } else {
+    rendererCandidates.push_back(bgfx::RendererType::Vulkan);
   }
-  SDL_Log("bgfx renderer: %s", bgfx::getRendererName(bgfx::getRendererType()));
-  // Keep debug rendering disabled in normal runtime to avoid perturbing
-  // frame pacing and post-process output.
-  // bgfx::setDebug(BGFX_DEBUG_TEXT);
+  rendererCandidates.push_back(bgfx::RendererType::OpenGLES);
+#elif __APPLE__
+  rendererCandidates.push_back(bgfx::RendererType::Metal);
+#else
+  rendererCandidates.push_back(bgfx::RendererType::Count);
+#endif
 
-  run();
-  rendering::ShaderManager::getInstance().release();
-  rendering::UniformCache::getInstance().destroyAll();
-  bgfx::shutdown();
-  return EXIT_SUCCESS;
+  bgfx::Init selectedInit = bgfxInit;
+  for (const auto rendererType : rendererCandidates) {
+    selectedInit.type = rendererType;
+#if TARGET_OS_ANDROID
+    selectedInit.resolution.formatColor =
+        rendererType == bgfx::RendererType::Vulkan
+            ? bgfx::TextureFormat::RGBA8
+            : bgfx::TextureFormat::BGRA8;
+#endif
+    SDL_Log("Trying bgfx renderer: %s",
+            rendererType == bgfx::RendererType::Count
+                ? "auto"
+                : bgfx::getRendererName(rendererType));
+    if (bgfx::init(selectedInit)) {
+      SDL_Log("bgfx renderer: %s",
+              bgfx::getRendererName(bgfx::getRendererType()));
+      // Keep debug rendering disabled in normal runtime to avoid perturbing
+      // frame pacing and post-process output.
+      // bgfx::setDebug(BGFX_DEBUG_TEXT);
+
+      run();
+      rendering::ShaderManager::getInstance().release();
+      rendering::UniformCache::getInstance().destroyAll();
+      bgfx::shutdown();
+      return EXIT_SUCCESS;
+    }
+    SDL_Log("bgfx::init failed for renderer: %s",
+            rendererType == bgfx::RendererType::Count
+                ? "auto"
+                : bgfx::getRendererName(rendererType));
+  }
+  return EXIT_FAILURE;
 }
 
 int main(int argv, char **args) {
@@ -347,6 +432,9 @@ int main(int argv, char **args) {
       }
     }
   }
+#elif defined(__ANDROID__)
+  // Android assets and app-private storage are resolved through SDL and
+  // AndroidNatives; do not chdir into /proc/self/exe.
 #elif __linux__
   // Linux: use /proc/self/exe
   char exePathBuf[PATH_MAX];
@@ -416,17 +504,29 @@ int main(int argv, char **args) {
   }
   s_renderScale = resolveRenderScale();
   s_bgfxResetFlags = resolveResetFlags();
+#if TARGET_OS_ANDROID
+  if (isAndroidEmulator()) {
+    const uint32_t adjustedResetFlags = withoutMsaaResetFlags(s_bgfxResetFlags);
+    if (adjustedResetFlags != s_bgfxResetFlags) {
+      SDL_Log("Android emulator detected; disabling bgfx MSAA reset flags");
+    }
+    s_bgfxResetFlags = adjustedResetFlags;
+  }
+#endif
   SDL_Log("Render scale: %.2f | bgfx reset flags: 0x%08x", s_renderScale,
           s_bgfxResetFlags);
 
   int windowCreateWidth = 1280;
   int windowCreateHeight = 720;
-  SDL_Window *win = SDL_CreateWindow(
-      "AsoBMaShow", 100, 100, windowCreateWidth, windowCreateHeight,
-      SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
-          (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS
-               ? SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI
-               : 0));
+  uint32_t windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == MacOS) {
+    windowFlags |= SDL_WINDOW_METAL | SDL_WINDOW_ALLOW_HIGHDPI;
+  } else if (TARGET_PLATFORM == Android) {
+    windowFlags |= SDL_WINDOW_VULKAN | SDL_WINDOW_ALLOW_HIGHDPI;
+  }
+  SDL_Window *win = SDL_CreateWindow("AsoBMaShow", 100, 100,
+                                     windowCreateWidth, windowCreateHeight,
+                                     windowFlags);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     TextInputBox::releaseCachedCursors();
@@ -444,7 +544,7 @@ int main(int argv, char **args) {
   APP_DEBUG_LOG("Window size (logical): %d x %d", windowLogicalWidth,
                 windowLogicalHeight);
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
   SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
   SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
   if (windowLogicalWidth <= 0 || windowLogicalHeight <= 0) {
@@ -517,11 +617,7 @@ int main(int argv, char **args) {
 #endif
 
   bgfx::Init bgfx_init;
-#if __APPLE__
-  bgfx_init.type = bgfx::RendererType::Metal; // force Metal on Apple platforms
-#else
-  bgfx_init.type = bgfx::RendererType::Count; // auto choose renderer
-#endif
+  bgfx_init.type = bgfx::RendererType::Count;
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
@@ -624,6 +720,12 @@ void run() {
   bool hasDeferredRenderResize = false;
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
+  uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+#if TARGET_OS_ANDROID
+  bool androidSystemSuspended = false;
+  bool androidRenderSuspended = false;
+  bool androidResumeResizePending = false;
+#endif
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -710,7 +812,9 @@ void run() {
 
       // set bgfx resolution
       bgfx::reset(rendering::render_width, rendering::render_height,
-                  s_bgfxResetFlags);
+                  activeBgfxResetFlags);
+      context.bgfxResetFlags.store(activeBgfxResetFlags,
+                                   std::memory_order_relaxed);
       APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
                     rendering::render_width, rendering::render_height,
                     logicalW, logicalH, s_renderScale);
@@ -718,6 +822,72 @@ void run() {
       context.restoreGameplayRenderViews();
       return true;
     };
+
+#if TARGET_OS_ANDROID
+    auto refreshAndroidBgfxPlatformData = [&]() {
+      if (s_window == nullptr) {
+        return false;
+      }
+      SDL_SysWMinfo wmi;
+      SDL_VERSION(&wmi.version);
+      if (!SDL_GetWindowWMInfo(s_window, &wmi)) {
+        SDL_Log("Failed to refresh Android window handle: %s",
+                SDL_GetError());
+        return false;
+      }
+      bgfx::PlatformData pd{};
+      setup_bgfx_platform_data(pd, wmi, s_window);
+      if (pd.nwh == nullptr) {
+        SDL_Log("Android window handle is not ready yet");
+        return false;
+      }
+      bgfx::setPlatformData(pd);
+      return true;
+    };
+
+    auto applyAndroidRenderSuspend = [&](bool suspend) {
+      if (androidRenderSuspended == suspend) {
+        if (suspend) {
+          NotifyAndroidExternalActivityRenderPaused();
+        }
+        return true;
+      }
+
+      if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
+        return false;
+      }
+
+      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
+      if (!suspend && !refreshAndroidBgfxPlatformData()) {
+        return false;
+      }
+      activeBgfxResetFlags =
+          suspend ? (s_bgfxResetFlags | BGFX_RESET_SUSPEND) : s_bgfxResetFlags;
+      context.bgfxResetFlags.store(activeBgfxResetFlags,
+                                   std::memory_order_relaxed);
+      bgfx::reset(rendering::render_width, rendering::render_height,
+                  activeBgfxResetFlags);
+      bgfx::frame();
+      androidRenderSuspended = suspend;
+      SDL_Log("Android rendering %s", suspend ? "suspended" : "resumed");
+      if (suspend) {
+        NotifyAndroidExternalActivityRenderPaused();
+      } else {
+        androidResumeResizePending = true;
+      }
+      return true;
+    };
+
+    auto syncAndroidRenderSuspend = [&]() {
+      const bool shouldSuspend =
+          androidSystemSuspended ||
+          IsAndroidExternalActivityRenderPauseRequested();
+      if (!applyAndroidRenderSuspend(shouldSuspend)) {
+        return androidRenderSuspended || shouldSuspend;
+      }
+      return androidRenderSuspended;
+    };
+#endif
 
 #if TARGET_OS_IPHONE
     auto restoreIOSViewportAfterKeyboardFocus = [&]() {
@@ -740,6 +910,29 @@ void run() {
       if (event.type == SDL_QUIT) {
         context.quitFlag = true;
       }
+
+#if TARGET_OS_ANDROID
+      if (event.type == SDL_APP_WILLENTERBACKGROUND ||
+          event.type == SDL_APP_DIDENTERBACKGROUND ||
+          (event.type == SDL_WINDOWEVENT &&
+           (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+            event.window.event == SDL_WINDOWEVENT_HIDDEN ||
+            event.window.event == SDL_WINDOWEVENT_FOCUS_LOST))) {
+        androidSystemSuspended = true;
+        syncAndroidRenderSuspend();
+      }
+
+      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
+          event.type == SDL_APP_DIDENTERFOREGROUND ||
+          (event.type == SDL_WINDOWEVENT &&
+           (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+            event.window.event == SDL_WINDOWEVENT_SHOWN ||
+            event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED))) {
+        androidSystemSuspended = false;
+        androidResumeResizePending = true;
+        syncAndroidRenderSuspend();
+      }
+#endif
 
 #if TARGET_OS_IPHONE
       if (event.type == SDL_APP_WILLENTERFOREGROUND ||
@@ -839,6 +1032,26 @@ void run() {
         applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
       hasDeferredRenderResize = false;
     }
+#if TARGET_OS_ANDROID
+    if (syncAndroidRenderSuspend()) {
+      SDL_Delay(16);
+      context.currentFrame++;
+      continue;
+    }
+    if (androidResumeResizePending) {
+      int logicalW = 0;
+      int logicalH = 0;
+      if (s_window != nullptr) {
+        SDL_GetWindowSize(s_window, &logicalW, &logicalH);
+      }
+      if (logicalW > 0 && logicalH > 0) {
+        if (!applyWindowResize(logicalW, logicalH)) {
+          deferWindowResize(logicalW, logicalH);
+        }
+      }
+      androidResumeResizePending = false;
+    }
+#endif
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);

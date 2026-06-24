@@ -42,7 +42,7 @@
 #define ASOBMSHOW_HAS_LIBARCHIVE 0
 #endif
 
-#if __has_include(<iconv.h>)
+#if !TARGET_OS_ANDROID && __has_include(<iconv.h>)
 #include <iconv.h>
 #define ASOBMSHOW_HAS_ICONV 1
 #else
@@ -62,8 +62,6 @@
 namespace asobmshow::bms_search {
 using json = nlohmann::json;
 
-inline constexpr std::uint64_t kMaxDownloadBytes =
-    1024ull * 1024ull * 1024ull * 4ull;
 inline constexpr const char *kHorieApiOrigin = "https://horie.synology.me:8443";
 
 struct ParsedUrl {

@@ -31,6 +31,9 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
+#elif TARGET_OS_ANDROID
+#include "AndroidNatives.h"
+#include "CurlRAII.h"
 #else
 #include "CurlRAII.h"
 #endif
@@ -441,6 +444,17 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     return std::nullopt;
   }
   return body;
+#elif TARGET_OS_ANDROID
+  std::string body;
+  std::string androidError;
+  if (!DownloadURLTextAndroid(url, body, androidError)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = androidError.empty() ? "Failed to download " + url
+                                           : androidError;
+    }
+    return std::nullopt;
+  }
+  return body;
 #else
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
   CurlEasyHandle curl(curl_easy_init());
@@ -464,6 +478,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -3222,8 +3237,56 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
     const char *bookmark =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
     entry.iosBookmark = bookmark != nullptr ? bookmark : "";
+#if TARGET_OS_ANDROID
+    RegisterAndroidChartFolder(path, entry.iosBookmark);
+#endif
     entries.push_back(std::move(entry));
   }
+  return entries;
+}
+
+std::filesystem::path ChartDBHelper::DefaultBmsFolderPath() {
+  return Utils::GetDocumentsPath("BMS");
+}
+
+bool ChartDBHelper::IsDefaultBmsFolderPath(
+    const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (path.empty()) {
+    return false;
+  }
+  return path.lexically_normal() == DefaultBmsFolderPath().lexically_normal();
+#else
+  (void)path;
+  return false;
+#endif
+}
+
+std::vector<ChartEntry> ChartDBHelper::SelectEffectiveEntries(sqlite3 *db) {
+  auto entries = SelectAllEntries(db);
+
+#if TARGET_OS_ANDROID
+  const auto defaultPath = DefaultBmsFolderPath();
+  std::error_code errorCode;
+  std::filesystem::create_directories(defaultPath, errorCode);
+
+  bool hasDefaultEntry = false;
+  for (auto &entry : entries) {
+    if (IsDefaultBmsFolderPath(std::filesystem::path(entry.path))) {
+      entry.removable = false;
+      hasDefaultEntry = true;
+    }
+  }
+
+  if (!hasDefaultEntry) {
+    entries.push_back({
+        .path = fspath_to_path_t(defaultPath),
+        .iosBookmark = "",
+        .removable = false,
+    });
+  }
+#endif
+
   return entries;
 }
 
@@ -3530,6 +3593,42 @@ int ChartDBHelper::ScanChartRoots(
     }
     reportProgress(scannedRootCount, rootCount,
                    ChartScanProgressStage::ScanningRoots);
+#if TARGET_OS_ANDROID
+    if (IsAndroidTreePath(root)) {
+      std::vector<std::filesystem::path> androidChartPaths;
+      std::string androidError;
+      if (!ListAndroidTreeChartFiles(root, androidChartPaths, androidError,
+                                     stopToken)) {
+        if (!androidError.empty()) {
+          SDL_Log("Failed while scanning Android chart folder %s: %s",
+                  path_t_to_utf8(fspath_to_path_t(root)).c_str(),
+                  androidError.c_str());
+        }
+        ++scannedRootCount;
+        continue;
+      }
+      for (const auto &path : androidChartPaths) {
+        if (shouldStop()) {
+          return 0;
+        }
+        if (isBmsChartFile(path)) {
+          const path_t key = fspath_to_path_t(path);
+          if (knownChartPaths.find(key) == knownChartPaths.end()) {
+            diffs.push_back({.path = path, .deleted = false});
+            knownChartPaths.insert(key);
+          }
+          continue;
+        }
+        if (archive_file::hasSupportedArchiveExtension(path)) {
+          archive_file::appendDebugLogLine(
+              "Skipping Android SAF archive during library scan: " +
+              path_t_to_utf8(fspath_to_path_t(path)));
+        }
+      }
+      ++scannedRootCount;
+      continue;
+    }
+#endif
     std::error_code error;
     if (!std::filesystem::exists(root, error) || error) {
       error.clear();

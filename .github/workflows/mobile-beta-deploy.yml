@@ -1,4 +1,4 @@
-name: Build & Deploy iOS
+name: Build & Deploy Mobile Betas
 
 on:
   push:
@@ -47,3 +47,30 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SPACESHIP_ONLY_ALLOW_INTERACTIVE_2FA: 1
           APP_STORE_KEY: ${{ secrets.APP_STORE_KEY }}
+
+  android-firebase:
+    name: Deploy Android beta
+    runs-on: [self-hosted, macOS]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    timeout-minutes: 60
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      ANDROID_HOME: /opt/homebrew/share/android-commandlinetools
+      ANDROID_SDK_ROOT: /opt/homebrew/share/android-commandlinetools
+      VCPKG_ROOT: /Users/xf/vcpkg
+      FIREBASE_APP_DISTRIBUTION_GROUPS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_GROUPS || 'internal' }}
+      FIREBASE_APP_DISTRIBUTION_TESTERS: ${{ vars.FIREBASE_ANDROID_DISTRIBUTION_TESTERS }}
+      ANDROID_KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: ./scripts/android_firebase_deploy.sh --variant firebaseRelease

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 1.0 LANGUAGES C CXX)
@@ -23,6 +23,11 @@ if (APPLE AND NOT IOS)
     set(PLATFORM_MACOS ON)
 else()
     set(PLATFORM_MACOS OFF)
+endif()
+if (ANDROID)
+    set(PLATFORM_ANDROID ON)
+else()
+    set(PLATFORM_ANDROID OFF)
 endif()
 
 # Option to build macOS app bundle
@@ -113,6 +118,54 @@ if (IOS)
     find_library(PHOTOS Photos)
     list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
         ${CORE_TEXT} ${PHOTOS} ${SDL2_LIB} ${SDL2_TFF_LIB})
+
+elseif(ANDROID)
+    # --- Android: SDL submodules + vcpkg-compatible native packages ---
+    message(STATUS "Configuring for Android - Using submodules for SDL2/SDL_ttf")
+
+    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+    set(SDL2TTF_INSTALL OFF CACHE BOOL "" FORCE)
+    set(SDL2TTF_SAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
+
+    add_subdirectory(SDL)
+    add_subdirectory(SDL_ttf)
+
+    list(APPEND COMMON_LIBS SDL2 SDL2main SDL2_ttf)
+
+    find_package(FFMPEG REQUIRED)
+    include_directories(${FFMPEG_INCLUDE_DIRS})
+    list(APPEND COMMON_LIBS ${FFMPEG_LIBRARIES})
+
+    find_package(CURL REQUIRED)
+    list(APPEND COMMON_LIBS CURL::libcurl)
+
+    find_package(LibArchive REQUIRED)
+    if(TARGET LibArchive::LibArchive)
+        list(APPEND COMMON_LIBS LibArchive::LibArchive)
+    else()
+        include_directories(${LibArchive_INCLUDE_DIRS})
+        list(APPEND COMMON_LIBS ${LibArchive_LIBRARIES})
+    endif()
+
+    find_package(7zip CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS 7zip::7zip)
+
+    find_package(unarr CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS unarr::unarr)
+
+    find_library(ANDROID_LIBRARY android REQUIRED)
+    find_library(LOG_LIBRARY log REQUIRED)
+    find_library(EGL_LIBRARY EGL REQUIRED)
+    find_library(GLESV2_LIBRARY GLESv2 REQUIRED)
+    find_library(VULKAN_LIBRARY vulkan REQUIRED)
+    list(APPEND COMMON_LIBS
+        ${ANDROID_LIBRARY}
+        ${LOG_LIBRARY}
+        ${EGL_LIBRARY}
+        ${GLESV2_LIBRARY}
+        ${VULKAN_LIBRARY}
+    )
 
 else()
     # --- Desktop: Use Vcpkg ---
@@ -237,7 +290,9 @@ endif()
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
-if (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
+if (ANDROID)
+    add_library(main SHARED)
+elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_executable(main MACOSX_BUNDLE)
     set_target_properties(main PROPERTIES
         MACOSX_BUNDLE TRUE
@@ -251,6 +306,10 @@ if (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     )
 else()
     add_executable(main)
+endif()
+
+if (ANDROID)
+    target_compile_definitions(main PRIVATE PLATFORM_ANDROID=1)
 endif()
 
 option(ENABLE_DEBUG_OPTIMIZED_BUILD
@@ -344,7 +403,9 @@ endif()
 # ------------------------------------------------------------------------------
 
 # Assets
-if (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
+if (ANDROID)
+    # Gradle packages assets/ and shaders/ into the APK from sourceSets.
+elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_custom_command(
         TARGET main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:main>/Contents/Resources
@@ -360,7 +421,9 @@ endif()
 # Shaders
 file(GLOB_RECURSE SHADER_FILES "${CMAKE_SOURCE_DIR}/shaders/*.*")
 
-if (PLATFORM_MACOS)
+if (ANDROID)
+    # Android reads packaged shader assets with SDL_RWFromFile.
+elseif (PLATFORM_MACOS)
      # macOS (Metal)
     file(GLOB_RECURSE METAL_SHADER_FILES "${CMAKE_SOURCE_DIR}/shaders/metal/*.*")
     if (BUILD_MACOS_BUNDLE)

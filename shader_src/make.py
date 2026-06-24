@@ -33,6 +33,28 @@ def should_recompile_shader(src, dst):
     return os.path.getmtime(src) > os.path.getmtime(dst)
 
 
+def essl_shader_needs_recompile(src, dst):
+    if should_recompile_shader(src, dst):
+        return True
+    with open(dst, "rb") as f:
+        data = f.read()
+    return b"(-1.0/0.0)" in data or b"#version 300 es" not in data
+
+
+def patch_essl_shader(dst):
+    with open(dst, "rb") as f:
+        data = f.read()
+
+    data = data.replace(b"#version 310 es", b"#version 300 es")
+    if b"(-1.0/0.0)" in data:
+        raise RuntimeError(f"Invalid ESSL shader constants remain in {dst}")
+    if b"#version 300 es" not in data:
+        raise RuntimeError(f"Missing ESSL 300 version marker in {dst}")
+
+    with open(dst, "wb") as f:
+        f.write(data)
+
+
 def compile_shader(src, dst, type, platform, profile):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     result = subprocess.run(
@@ -64,6 +86,13 @@ def compile_all_shaders():
         dst = "../shaders/spirv/" + fs_shader.replace(".sc", ".bin")
         if should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "spirv")
+        dst = "../shaders/essl/" + fs_shader.replace(".sc", ".bin")
+        if essl_shader_needs_recompile(fs_shader, dst):
+            # shaderc 1.18.129 corrupts some ESSL 100/300 float constants into
+            # -inf. Compile through 310_es, then downshift compatible GLSL to
+            # 300_es for Android GLES 3.0.
+            compile_shader(fs_shader, dst, "f", "android", "310_es")
+            patch_essl_shader(dst)
         dst = "../shaders/dx11/" + fs_shader.replace(".sc", ".bin")
         if compile_dx11 and should_recompile_shader(fs_shader, dst):
             compile_shader(fs_shader, dst, "f", "windows", "s_5_0")
@@ -80,6 +109,13 @@ def compile_all_shaders():
         dst = "../shaders/spirv/" + vs_shader.replace(".sc", ".bin")
         if should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "spirv")
+        dst = "../shaders/essl/" + vs_shader.replace(".sc", ".bin")
+        if essl_shader_needs_recompile(vs_shader, dst):
+            # shaderc 1.18.129 corrupts some ESSL 100/300 float constants into
+            # -inf. Compile through 310_es, then downshift compatible GLSL to
+            # 300_es for Android GLES 3.0.
+            compile_shader(vs_shader, dst, "v", "android", "310_es")
+            patch_essl_shader(dst)
         dst = "../shaders/dx11/" + vs_shader.replace(".sc", ".bin")
         if compile_dx11 and should_recompile_shader(vs_shader, dst):
             compile_shader(vs_shader, dst, "v", "windows", "s_5_0")
@@ -90,7 +126,8 @@ def compile_all_shaders():
 if __name__ == "__main__":
     args = sys.argv[1:]
     if len(args) > 0 and args[0] == "clean":
-        shutil.rmtree("../shaders/metal")
-        shutil.rmtree("../shaders/spirv")
+        shutil.rmtree("../shaders/metal", ignore_errors=True)
+        shutil.rmtree("../shaders/spirv", ignore_errors=True)
+        shutil.rmtree("../shaders/essl", ignore_errors=True)
     else:
         compile_all_shaders()

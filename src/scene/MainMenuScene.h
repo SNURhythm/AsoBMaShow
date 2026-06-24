@@ -6,6 +6,7 @@
 #include "../ReplayDBHelper.h"
 #include "../ReplayVideoExporter.h"
 #include "../ScoreDBHelper.h"
+#include "../ThreadCompat.h"
 #include "../path.h"
 #include "../view/ImageView.h"
 #include "../view/ReplaySummaryListView.h"
@@ -26,7 +27,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <unordered_map>
 
@@ -58,6 +58,7 @@ private:
   std::thread loadThread;
   std::jthread checkEntriesThread;
   std::jthread addFolderPickerThread;
+  std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
   std::jthread replayExportThread;
   std::jthread unzipThread;
@@ -66,7 +67,9 @@ private:
   std::atomic_bool replayExportInProgress = false;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
+  std::atomic_bool archiveImportPickerInProgress = false;
   std::atomic_bool libraryTaskWorkerPaused = false;
+  std::atomic_bool tasksModalOpenRequested = false;
   enum class LibraryTaskStatus {
     Queued,
     Running,
@@ -74,11 +77,18 @@ private:
     Failed,
     Paused,
   };
+  enum class LibraryTaskKind {
+    RefreshLibrary,
+    AndroidImport,
+  };
   struct LibraryTaskRequest {
     std::uint64_t id = 0;
+    LibraryTaskKind kind = LibraryTaskKind::RefreshLibrary;
     std::string title;
     std::filesystem::path folderToAdd;
     std::string iosBookmark;
+    std::filesystem::path androidImportPath;
+    bool androidImportFolder = false;
   };
   struct LibraryTaskInfo {
     std::uint64_t id = 0;
@@ -319,6 +329,11 @@ private:
   std::optional<PendingUnzipResult> pendingUnzipResult;
   std::mutex unzipProgressMutex;
   std::optional<PendingUnzipProgress> pendingUnzipProgress;
+  std::mutex androidArchiveImportMutex;
+  std::optional<std::string> pendingAndroidArchiveImportError;
+  std::deque<std::pair<std::uint64_t, bool>> pendingAndroidArchiveImportTasks;
+  std::atomic_bool androidArchiveImportCopyPending = false;
+  std::uint64_t nextAndroidArchiveImportPollMs = 0;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
   std::optional<std::filesystem::path> unzipDeleteCandidatePath;
@@ -403,9 +418,22 @@ private:
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "");
+#if TARGET_OS_ANDROID
+  void createPendingAndroidImportTask(bool folderImport);
+  void enqueueAndroidImportTask(std::uint64_t id,
+                                const std::filesystem::path &importPath,
+                                bool folderImport);
+#endif
   void libraryTaskLoop(const std::stop_token &stopToken);
   void runLibraryRefreshTask(const LibraryTaskRequest &task,
                              const std::stop_token &stopToken);
+#if TARGET_OS_ANDROID
+  void runAndroidImportTask(const LibraryTaskRequest &task,
+                            const std::stop_token &stopToken);
+#endif
+  void seedDefaultDifficultyTablesIfNeeded(
+      sqlite3 *taskDb, std::uint64_t taskId,
+      const std::stop_token &stopToken);
   static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
   static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
   void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
@@ -509,6 +537,14 @@ private:
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void addIOSFolderEntryFromFiles();
 #endif
+#if TARGET_OS_ANDROID
+  void addAndroidFolderEntryFromPicker();
+  void importAndroidArchiveFromPicker();
+  void importAndroidFolderFromPicker();
+  void importAndroidPathFromPicker(bool folderImport);
+  void pollPendingAndroidArchiveImport();
+  void applyPendingAndroidArchiveImport();
+#endif
   static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token,
@@ -525,7 +561,7 @@ private:
                            const std::unordered_set<path_t> &oldFilesWs,
                            std::vector<path_t> &directoriesToVisit,
                            const std::stop_token &stop_token);
-#elif TARGET_OS_OSX || TARGET_OS_LINUX
+#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_ANDROID
   static void
   FindFilesUnix(const std::filesystem::path &path, std::vector<Diff> &diffs,
                 const std::unordered_set<path_t> &oldFilesWs,

@@ -1272,6 +1272,17 @@ std::string ffmpegError(int errorCode) {
 }
 
 const AVCodec *findReplayVideoEncoder() {
+#if TARGET_OS_ANDROID
+  if (const AVCodec *codec = avcodec_find_encoder_by_name("libx264");
+      codec != nullptr) {
+    return codec;
+  }
+  if (const AVCodec *codec = avcodec_find_encoder_by_name("mpeg4");
+      codec != nullptr) {
+    return codec;
+  }
+  return avcodec_find_encoder(AV_CODEC_ID_H264);
+#else
 #if __APPLE__
   if (const AVCodec *codec = avcodec_find_encoder_by_name("h264_videotoolbox");
       codec != nullptr) {
@@ -1289,6 +1300,7 @@ const AVCodec *findReplayVideoEncoder() {
   }
 #endif
   return avcodec_find_encoder(AV_CODEC_ID_H264);
+#endif
 }
 
 bool codecSupportsPixelFormat(const AVCodec *codec, AVPixelFormat format) {
@@ -1359,39 +1371,71 @@ std::optional<AVSampleFormat> chooseAudioSampleFormat(const AVCodec *codec) {
 bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
                  AVStream *stream, AVFrame *frame, AVPacket *packet,
                  std::string &errorMessage, int64_t forcedPacketDuration = 0) {
-  int ret = avcodec_send_frame(encoderContext, frame);
-  if (ret < 0) {
-    errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
-    return false;
-  }
-
-  while (ret >= 0) {
+  auto receiveAvailablePackets = [&](bool *wrotePacket = nullptr) {
+    if (wrotePacket != nullptr) {
+      *wrotePacket = false;
+    }
     av_packet_unref(packet);
-    ret = avcodec_receive_packet(encoderContext, packet);
+    int ret = avcodec_receive_packet(encoderContext, packet);
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
       return true;
     }
-    if (ret < 0) {
-      errorMessage = "Failed to receive encoded packet: " + ffmpegError(ret);
-      return false;
+
+    while (ret >= 0) {
+      if (forcedPacketDuration > 0) {
+        packet->duration = forcedPacketDuration;
+      }
+      if (packet->pts != AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) {
+        packet->dts = packet->pts;
+      }
+      av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
+      packet->stream_index = stream->index;
+      ret = av_interleaved_write_frame(formatContext, packet);
+      av_packet_unref(packet);
+      if (ret < 0) {
+        errorMessage = "Failed to write encoded packet: " + ffmpegError(ret);
+        return false;
+      }
+      if (wrotePacket != nullptr) {
+        *wrotePacket = true;
+      }
+
+      ret = avcodec_receive_packet(encoderContext, packet);
+      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        return true;
+      }
     }
 
-    if (forcedPacketDuration > 0) {
-      packet->duration = forcedPacketDuration;
+    errorMessage = "Failed to receive encoded packet: " + ffmpegError(ret);
+    return false;
+  };
+
+  int stalledRetries = 0;
+  while (true) {
+    const int ret = avcodec_send_frame(encoderContext, frame);
+    if (ret == AVERROR(EAGAIN)) {
+      bool wrotePacket = false;
+      if (!receiveAvailablePackets(&wrotePacket)) {
+        return false;
+      }
+      if (wrotePacket) {
+        stalledRetries = 0;
+      } else if (++stalledRetries > 10000) {
+        errorMessage = "Timed out waiting for encoder input space";
+        return false;
+      } else {
+        SDL_Delay(1);
+      }
+      continue;
     }
-    if (packet->pts != AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) {
-      packet->dts = packet->pts;
-    }
-    av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
-    packet->stream_index = stream->index;
-    ret = av_interleaved_write_frame(formatContext, packet);
-    av_packet_unref(packet);
     if (ret < 0) {
-      errorMessage = "Failed to write encoded packet: " + ffmpegError(ret);
+      errorMessage = "Failed to send frame to encoder: " + ffmpegError(ret);
       return false;
     }
+    break;
   }
-  return true;
+
+  return receiveAvailablePackets();
 }
 
 bool fillAudioFrame(AVFrame *frame, const std::vector<float> &interleaved,
@@ -1524,11 +1568,14 @@ public:
 
     const AVCodec *videoCodec = findReplayVideoEncoder();
     if (videoCodec == nullptr) {
-      return failOpen("H.264 encoder was not found");
+      return failOpen("Replay video encoder was not found");
     }
+    const std::string videoCodecName =
+        videoCodec->name != nullptr ? videoCodec->name : "";
+    const bool videoCodecIsH264 = videoCodec->id == AV_CODEC_ID_H264;
     const auto videoPixelFormat = chooseVideoPixelFormat(videoCodec);
     if (!videoPixelFormat.has_value()) {
-      return failOpen("H.264 encoder does not support a BGRA-convertible "
+      return failOpen("Replay video encoder does not support a BGRA-convertible "
                       "format");
     }
 
@@ -1538,9 +1585,9 @@ public:
     }
     videoContext = avcodec_alloc_context3(videoCodec);
     if (videoContext == nullptr) {
-      return failOpen("Failed to allocate H.264 encoder");
+      return failOpen("Failed to allocate replay video encoder");
     }
-    videoContext->codec_id = AV_CODEC_ID_H264;
+    videoContext->codec_id = videoCodec->id;
     videoContext->codec_type = AVMEDIA_TYPE_VIDEO;
     videoContext->width = width;
     videoContext->height = height;
@@ -1551,9 +1598,12 @@ public:
     videoContext->gop_size = fps * 2;
     videoContext->max_b_frames = 0;
     videoContext->bit_rate = replayVideoBitRate(width, height, fps);
-    const int h264Level = replayVideoH264Level(width, height, fps);
-    videoContext->profile = kH264HighProfile;
-    videoContext->level = h264Level;
+    const int h264Level =
+        videoCodecIsH264 ? replayVideoH264Level(width, height, fps) : 0;
+    if (videoCodecIsH264) {
+      videoContext->profile = kH264HighProfile;
+      videoContext->level = h264Level;
+    }
     if (replayVideoEncoderSupportsFrameThreads(videoCodec)) {
       videoContext->thread_count = replayVideoEncoderThreadCount();
       videoContext->thread_type = FF_THREAD_FRAME;
@@ -1565,8 +1615,6 @@ public:
     }
 
     AVDictionary *videoOptions = nullptr;
-    const std::string videoCodecName =
-        videoCodec->name != nullptr ? videoCodec->name : "";
     if (videoCodecName == "libx264") {
       av_dict_set(&videoOptions, "preset", "ultrafast", 0);
       av_dict_set(&videoOptions, "crf", "22", 0);
@@ -1590,18 +1638,29 @@ public:
     ret = avcodec_open2(videoContext, videoCodec, &videoOptions);
     av_dict_free(&videoOptions);
     if (ret < 0) {
-      return failOpen("Failed to open H.264 encoder: " + ffmpegError(ret));
+      return failOpen("Failed to open replay video encoder: " +
+                      ffmpegError(ret));
     }
     videoFrameDuration = 1;
     const char *pixelFormatName = av_get_pix_fmt_name(videoContext->pix_fmt);
-    replayExportLog(log,
-                    "Replay video export encoder: %s, pixel format: %s, time "
-                    "base: %d/%d, frame duration: %lld, H.264 level: %s",
-                    videoCodec->name,
-                    pixelFormatName != nullptr ? pixelFormatName : "unknown",
-                    videoContext->time_base.num, videoContext->time_base.den,
-                    static_cast<long long>(videoFrameDuration),
-                    replayVideoH264LevelString(h264Level).c_str());
+    if (videoCodecIsH264) {
+      replayExportLog(log,
+                      "Replay video export encoder: %s, pixel format: %s, time "
+                      "base: %d/%d, frame duration: %lld, H.264 level: %s",
+                      videoCodec->name,
+                      pixelFormatName != nullptr ? pixelFormatName : "unknown",
+                      videoContext->time_base.num, videoContext->time_base.den,
+                      static_cast<long long>(videoFrameDuration),
+                      replayVideoH264LevelString(h264Level).c_str());
+    } else {
+      replayExportLog(log,
+                      "Replay video export encoder: %s, pixel format: %s, time "
+                      "base: %d/%d, frame duration: %lld",
+                      videoCodec->name,
+                      pixelFormatName != nullptr ? pixelFormatName : "unknown",
+                      videoContext->time_base.num, videoContext->time_base.den,
+                      static_cast<long long>(videoFrameDuration));
+    }
     ret = avcodec_parameters_from_context(videoStream->codecpar, videoContext);
     if (ret < 0) {
       return failOpen("Failed to configure MP4 video stream: " +

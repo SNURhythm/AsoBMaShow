@@ -3,11 +3,19 @@
 //
 
 #include "SpriteLoader.h"
+#include "../ArchiveFile.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
 #include <stb_image.h>
+#include <cstdio>
 #include <limits>
+#include <vector>
 
 SpriteLoader::SpriteLoader(const path_t& path) {
   if (path.empty()) {
@@ -25,10 +33,42 @@ bool SpriteLoader::load() {
   }
   const std::string utf8Path = path_t_to_utf8(path);
   constexpr int kRequestedChannels = 4;
-  data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
-                       kRequestedChannels));
+  std::string errorMessage;
+#if TARGET_OS_ANDROID
+  const std::filesystem::path fsPath(path);
+  if (IsAndroidTreePath(fsPath)) {
+    const auto fd = OpenAndroidTreeFileDescriptor(fsPath, errorMessage);
+    if (fd.has_value()) {
+      FILE *file = fdopen(*fd, "rb");
+      if (file != nullptr) {
+        data.reset(stbi_load_from_file(file, &width, &height, &channels,
+                                       kRequestedChannels));
+        fclose(file);
+      } else {
+        close(*fd);
+        errorMessage = "Failed to create FILE for Android image descriptor.";
+      }
+    }
+  }
+#endif
+  std::vector<unsigned char> bytes;
+  if (!data &&
+      archive_file::readFile(std::filesystem::path(path), bytes,
+                             &errorMessage) &&
+      !bytes.empty() &&
+      bytes.size() <= static_cast<size_t>(std::numeric_limits<int>::max())) {
+    data.reset(stbi_load_from_memory(
+        bytes.data(), static_cast<int>(bytes.size()), &width, &height,
+        &channels, kRequestedChannels));
+  }
   if (!data) {
-    SDL_Log("Failed to load image: %s", SDL_GetError());
+    data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
+                         kRequestedChannels));
+  }
+  if (!data) {
+    SDL_Log("Failed to load image %s: %s",
+            utf8Path.c_str(),
+            errorMessage.empty() ? SDL_GetError() : errorMessage.c_str());
     return false;
   }
   channels = kRequestedChannels;
