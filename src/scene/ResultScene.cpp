@@ -124,7 +124,8 @@ ResultScene::ResultScene(ApplicationContext &context,
                          const bms_parser::ChartMeta &meta,
                          const RhythmState &state, const ReplayData *replay,
                          bool shouldSaveScore, const ReplayData *retrySource,
-                         ResultPracticeOptions practiceOptions)
+                         ResultPracticeOptions practiceOptions,
+                         bool autoPlayResult)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -135,7 +136,9 @@ ResultScene::ResultScene(ApplicationContext &context,
       practiceOptions(std::move(practiceOptions)),
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
-                   !this->practiceOptions.enabled) {
+                   !this->practiceOptions.enabled),
+      autoPlayResult(autoPlayResult ||
+                     (retrySource != nullptr && retrySource->autoPlay)) {
   const play_options::PlayModeDisplayLabel display =
       resultPlayModeDisplayLabel(this->meta, replayToSave, retryData,
                                  this->practiceOptions);
@@ -162,7 +165,8 @@ void ResultScene::loadPreviousBest() {
   previousBestLoaded = true;
 
   std::optional<std::string> beforeCreatedAt;
-  if (!shouldSaveScore && retryData.has_value() && !retryData->createdAt.empty()) {
+  if (!shouldSaveScore && retryData.has_value() && !retryData->autoPlay &&
+      !retryData->createdAt.empty()) {
     beforeCreatedAt = retryData->createdAt;
   }
 
@@ -290,12 +294,23 @@ void ResultScene::addRetryButtons() {
       ui_theme::withAlpha(ui_theme::violetActionHover(), 190),
       ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
   exportPhotoButton->setStyledBorderWidth(1);
+  if (autoPlayResult) {
+    exportPhotoButtonText->setText("AUTO PLAY");
+    exportPhotoButton->setOnClickListener([]() {});
+    exportPhotoButton->setBackgroundColors(ui_theme::control(),
+                                           ui_theme::control(),
+                                           ui_theme::control());
+    exportPhotoButton->setBorderColors(ui_theme::hairlineSubtle(),
+                                       ui_theme::hairlineSubtle(),
+                                       ui_theme::hairlineSubtle());
+  }
   retryRow->addView(exportPhotoButton);
   actionHost->addView(retryRow);
 }
 
 void ResultScene::exportPhoto() {
-  if (resultPhotoExportInProgress || exportPhotoButtonText == nullptr) {
+  if (autoPlayResult || resultPhotoExportInProgress ||
+      exportPhotoButtonText == nullptr) {
     return;
   }
 
@@ -496,6 +511,9 @@ void ResultScene::init() {
   data.playModeLabel = playModeLabel;
   data.laneOrderLabel = laneOrderLabel;
   data.difficultyLabel = difficultyLabel;
+  if (autoPlayResult) {
+    data.currentClearLabelOverride = "AUTO PLAY";
+  }
   data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);
   addRetryButtons();

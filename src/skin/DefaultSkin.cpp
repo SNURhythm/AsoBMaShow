@@ -287,6 +287,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const Color previousClearAccent =
       hasPreviousBest ? clearLampColorForRank(previousClearRank)
                       : ui_theme::textMuted();
+  const std::string currentClearLabel =
+      data != nullptr && data->currentClearLabelOverride.has_value()
+          ? *data->currentClearLabelOverride
+          : resultState.getClearTypeLabel();
   const Color positiveDelta =
       scoreDelta >= 0 ? ui_theme::lime() : ui_theme::coral();
   const std::string longNoteSummary =
@@ -479,7 +483,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
       previousClearAccent));
   lampCompareRow->addView(makeDivider());
   lampCompareRow->addView(makeLampColumn(
-      "CURRENT", resultState.getClearTypeLabel(),
+      "CURRENT", currentClearLabel,
       "GAUGE " + formatGauge(resultState.currentGauge), currentClearAccent));
   lampPanel->addView(lampCompareRow);
   summaryRow->addView(lampPanel);

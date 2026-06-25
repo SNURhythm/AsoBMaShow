@@ -10,6 +10,7 @@
 
 struct ReplaySummary {
   int id = 0;
+  bool autoPlay = false;
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;

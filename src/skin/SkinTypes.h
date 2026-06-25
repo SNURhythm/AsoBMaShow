@@ -28,5 +28,6 @@ struct ResultSkinData {
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
+  std::optional<std::string> currentClearLabelOverride;
   std::optional<ResultPreviousBestData> previousBest;
 };

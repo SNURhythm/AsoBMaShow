@@ -106,6 +106,7 @@ private:
   std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<TextView> playOptionText;
+  std::unique_ptr<TextView> autoPlayMarkText;
   std::unique_ptr<TextView> laneCoverVisibleTimeText;
   static constexpr size_t kJudgementCounterItemCount = 7;
   std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
@@ -206,6 +207,7 @@ private:
   long long lastReplayTouchTimeMicros = -1;
   bool touchVisualizationEnabled = true;
   bool replayGhostRenderingEnabled = true;
+  bool autoPlayMarkVisible = false;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -233,9 +235,11 @@ private:
   void drawJudgementAccentBar();
   void drawJudgementCounterPanels();
   void layoutGameplayHud();
+  void layoutAutoPlayMark();
   void layoutGaugeText();
   std::array<float, 4> worldGaugeRect() const;
   std::array<float, 4> hudGaugeRect() const;
+  float gameplayHudRightReserveLeft() const;
   float gameplayHudTitleWidth() const;
   float projectedLaneLeftUiInBand(float bandTop, float bandBottom) const;
   void layoutCenteredJudgementText();
@@ -250,6 +254,7 @@ private:
   void drawScore(RenderContext &context) const;
   void drawGauge(RenderContext &context) const;
   void drawPlayOption(RenderContext &context) const;
+  void drawAutoPlayMark(RenderContext &context) const;
   void drawLongNote(float headY, float tailY,
                     bms_parser::LongNote *const &head);
   void drawNormalNote(float y, bms_parser::Note *const &note);
@@ -324,6 +329,11 @@ private:
   bms_parser::Chart *chart;
 
 public:
+  static std::unique_ptr<TextView> createAutoPlayMarkText();
+  static std::array<float, 4> autoPlayMarkRect();
+  static void layoutAutoPlayMark(TextView *text);
+  static void renderAutoPlayMark(TextView *text, RenderContext &context);
+
   void onLanePressed(int lane, const JudgeResult judge, long long time);
   void onLaneReleased(int lane, long long time);
   void onJudge(JudgeResult judgeResult, int combo, int score,
@@ -374,6 +384,7 @@ public:
                       float currentGauge);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
+  void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,

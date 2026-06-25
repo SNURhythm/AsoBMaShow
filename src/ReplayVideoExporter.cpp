@@ -2468,6 +2468,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                           gaugeInitialValue(replay.initialGaugeType));
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
+  renderer.setAutoPlayMarkVisible(replay.autoPlay);
   renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
   renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
 
@@ -2501,7 +2502,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                         rendering::window_height);
     std::optional<ResultPreviousBestData> previousBest;
     std::optional<std::string> beforeCreatedAt;
-    if (!replay.createdAt.empty()) {
+    if (!replay.autoPlay && !replay.createdAt.empty()) {
       beforeCreatedAt = replay.createdAt;
     }
     if (const auto best =
@@ -2530,6 +2531,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.playModeLabel = playModeDisplay.mode;
     resultSkinData.laneOrderLabel = playModeDisplay.laneOrder;
     resultSkinData.difficultyLabel = difficultyLabel;
+    if (replay.autoPlay) {
+      resultSkinData.currentClearLabelOverride = "AUTO PLAY";
+    }
     resultSkinData.previousBest = previousBest;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);

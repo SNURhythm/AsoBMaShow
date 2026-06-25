@@ -559,7 +559,7 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<std::string> beforeCreatedAt;
-  if (!replay.createdAt.empty()) {
+  if (!replay.autoPlay && !replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
   if (const auto best =

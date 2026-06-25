@@ -36,6 +36,13 @@ constexpr float kTouchPointMaxRadius = 58.0f;
 constexpr float kTouchPointRadiusScale = 0.035f;
 constexpr long long kTouchPointReleaseLingerMicros = 180000LL;
 constexpr float kTouchPointReleasePulseScale = 0.42f;
+constexpr float kHudMargin = 28.0f;
+constexpr float kPauseButtonLeftOffset = 88.0f;
+constexpr float kPauseButtonTop = 38.0f;
+constexpr float kPauseButtonSize = 52.0f;
+constexpr float kAutoPlayMarkGap = 12.0f;
+constexpr float kAutoPlayMarkMinWidth = 150.0f;
+constexpr float kAutoPlayMarkMaxWidth = 260.0f;
 
 constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
     "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
@@ -415,7 +422,8 @@ std::optional<std::pair<float, float>> projectWorldToUi(float worldX,
 }
 
 JudgementCounterLayout judgementCounterLayoutFor(
-    AppSettings::JudgementCounterPosition position, float titleWidth) {
+    AppSettings::JudgementCounterPosition position, float titleWidth,
+    float rightReserveLeft) {
   JudgementCounterLayout layout;
   layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
   layout.gap = layout.horizontal ? 8.0f : 6.0f;
@@ -441,9 +449,8 @@ JudgementCounterLayout judgementCounterLayoutFor(
                0.5f;
     layout.y = 28.0f;
     const float titleRight = 28.0f + titleWidth;
-    const float pauseLeft = static_cast<float>(rendering::window_width - 104);
     if (layout.x < titleRight + 16.0f ||
-        layout.x + totalWidth > pauseLeft) {
+        layout.x + totalWidth > rightReserveLeft) {
       layout.y = 124.0f;
     }
     break;
@@ -696,6 +703,8 @@ BMSRenderer::BMSRenderer(
   playOptionText->setOverflow(TextView::TextOverflow::Marquee);
   playOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
   playOptionText->setVisible(false);
+  autoPlayMarkText = createAutoPlayMarkText();
+  autoPlayMarkText->setVisible(false);
   laneCoverVisibleTimeText = std::make_unique<TextView>(kHudFontPath, 24);
   laneCoverVisibleTimeText->setAlign(TextView::CENTER);
   laneCoverVisibleTimeText->setVAlign(TextView::MIDDLE);
@@ -772,6 +781,21 @@ bgfx::TextureHandle BMSRenderer::loadCroppedTexture(SpriteLoader &loader, int x,
   }
   return handle;
 }
+
+std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
+  auto text = std::make_unique<TextView>(kHudFontPath, 27);
+  text->setText("AUTO PLAY");
+  text->setAlign(TextView::CENTER);
+  text->setVAlign(TextView::MIDDLE);
+  text->setOverflow(TextView::TextOverflow::Hidden);
+  text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  text->setBackgroundColor(Color(7, 13, 22, 218));
+  text->setBorderColor(ui_theme::amber());
+  text->setBorderWidth(1);
+  text->setCornerRadius(ui_theme::controlRadius());
+  return text;
+}
+
 void BMSRenderer::drawTitle(RenderContext &context) const {
   titleText->render(context);
 }
@@ -794,6 +818,12 @@ void BMSRenderer::drawGauge(RenderContext &context) const {
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
+}
+void BMSRenderer::drawAutoPlayMark(RenderContext &context) const {
+  if (!autoPlayMarkVisible || autoPlayMarkText == nullptr) {
+    return;
+  }
+  renderAutoPlayMark(autoPlayMarkText.get(), context);
 }
 
 void BMSRenderer::drawHudRoundedPanel(float x, float y, float width,
@@ -867,6 +897,49 @@ std::array<float, 4> BMSRenderer::hudGaugeRect() const {
                           static_cast<float>(rendering::window_width) - width -
                               12.0f));
   return {x, y, width, height};
+}
+
+std::array<float, 4> BMSRenderer::autoPlayMarkRect() {
+  const float pauseLeft =
+      std::max(kHudMargin, static_cast<float>(rendering::window_width) -
+                               kPauseButtonLeftOffset);
+  const float availableWidth =
+      std::max(1.0f, pauseLeft - kAutoPlayMarkGap - kHudMargin);
+  const float preferredWidth =
+      std::clamp(static_cast<float>(rendering::window_width) * 0.18f,
+                 kAutoPlayMarkMinWidth, kAutoPlayMarkMaxWidth);
+  const float width = std::min(preferredWidth, availableWidth);
+  const float x =
+      std::max(kHudMargin, pauseLeft - kAutoPlayMarkGap - width);
+  return {x, kPauseButtonTop, width, kPauseButtonSize};
+}
+
+void BMSRenderer::layoutAutoPlayMark(TextView *text) {
+  if (text == nullptr) {
+    return;
+  }
+  const auto rect = autoPlayMarkRect();
+  text->setPositionNoLayout(static_cast<int>(std::round(rect[0])),
+                            static_cast<int>(std::round(rect[1])));
+  text->setSize(static_cast<int>(std::round(rect[2])),
+                static_cast<int>(std::round(rect[3])));
+}
+
+void BMSRenderer::renderAutoPlayMark(TextView *text, RenderContext &context) {
+  if (text == nullptr) {
+    return;
+  }
+  layoutAutoPlayMark(text);
+  text->render(context);
+}
+
+float BMSRenderer::gameplayHudRightReserveLeft() const {
+  if (autoPlayMarkVisible) {
+    const auto rect = autoPlayMarkRect();
+    return std::max(kHudMargin, rect[0] - 16.0f);
+  }
+  return static_cast<float>(rendering::window_width) -
+         kPauseButtonLeftOffset - 16.0f;
 }
 
 void BMSRenderer::drawGaugeBar() {
@@ -989,7 +1062,8 @@ void BMSRenderer::drawJudgementCounterPanels() {
   constexpr float radius = 10.0f;
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
-                                gameplayHudTitleWidth());
+                                gameplayHudTitleWidth(),
+                                gameplayHudRightReserveLeft());
   const bool topPosition =
       judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
   if (topPosition) {
@@ -1031,10 +1105,12 @@ void BMSRenderer::layoutGameplayHud() {
   placeText(comboText.get(), margin + metricsWidth / 2 - 8,
             compactMetricsY + 9, metricsWidth / 2 - 10, 40);
   layoutGaugeText();
+  layoutAutoPlayMark();
 
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
-                                gameplayHudTitleWidth());
+                                gameplayHudTitleWidth(),
+                                gameplayHudRightReserveLeft());
   const int gap = static_cast<int>(layout.gap);
   const int itemWidth = static_cast<int>(layout.itemWidth);
   const int itemHeight = static_cast<int>(layout.itemHeight);
@@ -1054,6 +1130,14 @@ void BMSRenderer::layoutGameplayHud() {
               itemY + (layout.horizontal ? 24 : 22), itemWidth - 16,
               itemHeight - (layout.horizontal ? 28 : 24));
   }
+}
+
+void BMSRenderer::layoutAutoPlayMark() {
+  if (autoPlayMarkText == nullptr) {
+    return;
+  }
+  autoPlayMarkText->setVisible(autoPlayMarkVisible);
+  layoutAutoPlayMark(autoPlayMarkText.get());
 }
 
 void BMSRenderer::layoutGaugeText() {
@@ -2119,6 +2203,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     }
     drawGauge(context);
     drawPlayOption(context);
+    drawAutoPlayMark(context);
     if (judgementCounterEnabled) {
       for (size_t i = 0; i < kHudCounterItemCount; ++i) {
         if (judgementCounterLabelTexts[i] != nullptr) {
@@ -2719,6 +2804,13 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
                    [](const ReplayTouchSample &a, const ReplayTouchSample &b) {
                      return a.songTimeMicros < b.songTimeMicros;
                    });
+}
+
+void BMSRenderer::setAutoPlayMarkVisible(bool visible) {
+  autoPlayMarkVisible = visible;
+  if (autoPlayMarkText != nullptr) {
+    autoPlayMarkText->setVisible(visible);
+  }
 }
 
 void BMSRenderer::setTouchVisualizationEnabled(bool enabled) {

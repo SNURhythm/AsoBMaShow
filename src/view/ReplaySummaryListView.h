@@ -74,15 +74,19 @@ public:
   }
 
   void setSummary(const ReplaySummary &summary) {
-    titleText->setText(summary.createdAt.empty()
-                           ? "Replay #" + std::to_string(summary.id)
-                           : summary.createdAt);
+    titleText->setText(summary.autoPlay
+                           ? "AUTO PLAY"
+                           : (summary.createdAt.empty()
+                                  ? "Replay #" + std::to_string(summary.id)
+                                  : summary.createdAt));
     std::string detail = replay_summary_ui::gaugeLabel(summary.initialGaugeType,
                                                        summary.gaugeAutoShift) +
                          "  Gauge " +
                          replay_summary_ui::formatGauge(summary.finalGauge) +
                          "  Events " + std::to_string(summary.eventCount);
-    if (summary.touchSampleCount > 0) {
+    if (summary.autoPlay) {
+      detail += "  Automated";
+    } else if (summary.touchSampleCount > 0) {
       detail += "  Touches " + std::to_string(summary.touchSampleCount);
     }
     const std::string optionLabel = replay_summary_ui::playOptionLabel(summary);
@@ -93,7 +97,8 @@ public:
       detail += "  Assist " + assist_options::normalize(summary.assistOption);
     }
     detailText->setText(detail);
-    scoreText->setText(std::to_string(summary.finalScore));
+    scoreText->setText(summary.autoPlay ? "AUTO"
+                                        : std::to_string(summary.finalScore));
 
     if (hasClearLampColor(summary.clearType)) {
       clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
