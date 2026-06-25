@@ -224,6 +224,8 @@ void GamePlayScene::init() {
   renderer->setReplayGhostRenderingEnabled(
       options.replayGhostRenderingEnabled.value_or(true));
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
+  std::string musicStopError;
+  context.musicPlayer.Stop(musicStopError);
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback() && !options.autoPlay) {
