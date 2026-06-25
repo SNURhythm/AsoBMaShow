@@ -3689,6 +3689,8 @@ void ChartViewerScene::startListeningFromSelection() {
         }
 
         std::atomic_bool cancelled = false;
+        std::string musicStopError;
+        context.musicPlayer.Stop(musicStopError);
         if (!listenAudioLoaded) {
           const bool previousVisuals = context.jukebox.getVisualsEnabled();
           context.jukebox.stop();

@@ -2298,6 +2298,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
           path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
       return;
     }
+    std::string musicStopError;
+    context.musicPlayer.Stop(musicStopError);
     previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
       SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
