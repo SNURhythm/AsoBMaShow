@@ -4645,10 +4645,11 @@ void MainMenuScene::refreshMusicModal() {
     return;
   }
 
-  const auto *track = context.musicPlayer.CurrentTrack();
+  const auto track = context.musicPlayer.CurrentTrackSnapshot();
   const auto playback = context.musicPlayer.PlaybackState();
 
-  musicTrackText->setText(musicTrackDisplayName(track));
+  musicTrackText->setText(
+      musicTrackDisplayName(track ? &track.value() : nullptr));
 
   std::string status;
   if (!musicStatusMessage.empty()) {
@@ -4663,17 +4664,18 @@ void MainMenuScene::refreshMusicModal() {
     status += formatMusicTime(playback.positionMicros) + " / " +
               formatMusicTime(playback.durationMicros);
   }
-  if (const auto *playlist = context.musicPlayer.DefaultPlaylist()) {
+  if (const auto playlist = context.musicPlayer.DefaultPlaylistSnapshot()) {
     status += "  " + playlist->name + ": " +
               std::to_string(playlist->trackCount);
   }
-  const auto &libraryTracks = context.musicPlayer.LibraryTracks();
-  if (!libraryTracks.empty()) {
-    status += "  Library tracks: " + std::to_string(libraryTracks.size());
+  const std::size_t libraryTrackCount = context.musicPlayer.LibraryTrackCount();
+  if (libraryTrackCount > 0) {
+    status += "  Library tracks: " + std::to_string(libraryTrackCount);
   }
   musicStatusText->setText(status);
   musicPlaylistText->setText(
-      musicPlaylistTextSnapshot(context.musicPlayer.DefaultPlaylistTracks()));
+      musicPlaylistTextSnapshot(
+          context.musicPlayer.DefaultPlaylistTracksSnapshot()));
 
   if (musicPlayPauseButtonText != nullptr) {
     musicPlayPauseButtonText->setText(
@@ -7122,6 +7124,10 @@ void MainMenuScene::update(float dt) {
   }
   std::string nativeMusicStatusMessage;
   if (context.musicPlayer.ProcessNativeControlEvents(
+          nativeMusicStatusMessage)) {
+    musicStatusMessage = nativeMusicStatusMessage;
+  }
+  if (context.musicPlayer.ConsumeNativeControlStatus(
           nativeMusicStatusMessage)) {
     musicStatusMessage = nativeMusicStatusMessage;
   }

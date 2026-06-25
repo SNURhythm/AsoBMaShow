@@ -2,6 +2,8 @@
 
 #include "../ChartDBHelper.h"
 
+#include <chrono>
+#include <thread>
 #include <utility>
 
 namespace music_player {
@@ -26,7 +28,12 @@ loadPlaylistTracks(ChartDBHelper &dbHelper, sqlite3 *db, int playlistId) {
 
 } // namespace
 
+MusicPlayerService::~MusicPlayerService() {
+  StopNativeControlEventPump();
+}
+
 bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -44,7 +51,13 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   return true;
 }
 
+std::size_t MusicPlayerService::LibraryTrackCount() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return libraryTracks.size();
+}
+
 bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -66,17 +79,26 @@ bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
   return true;
 }
 
-const MusicPlaylistInfo *MusicPlayerService::DefaultPlaylist() const {
+std::optional<MusicPlaylistInfo>
+MusicPlayerService::DefaultPlaylistSnapshot() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
   for (const auto &playlist : playlists) {
     if (playlist.id == defaultPlaylistId) {
-      return &playlist;
+      return playlist;
     }
   }
-  return nullptr;
+  return std::nullopt;
+}
+
+std::vector<music_playlist::MusicTrack>
+MusicPlayerService::DefaultPlaylistTracksSnapshot() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return defaultPlaylistTracks;
 }
 
 bool MusicPlayerService::AddChartToDefaultPlaylist(
     const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -106,6 +128,7 @@ bool MusicPlayerService::AddChartToDefaultPlaylist(
 
 bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
     const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -134,6 +157,7 @@ bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
 }
 
 bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -166,6 +190,7 @@ bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
 
 bool MusicPlayerService::StartLibraryPlaylist(std::string &errorMessage,
                                               std::size_t startIndex) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
   if (libraryTracks.empty()) {
     setEmptyLibraryError(errorMessage);
@@ -178,6 +203,7 @@ bool MusicPlayerService::StartLibraryPlaylist(std::string &errorMessage,
 
 bool MusicPlayerService::StartRandomLibrary(std::string &errorMessage,
                                             std::optional<std::uint64_t> seed) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
   if (libraryTracks.empty()) {
     setEmptyLibraryError(errorMessage);
@@ -189,6 +215,7 @@ bool MusicPlayerService::StartRandomLibrary(std::string &errorMessage,
 }
 
 bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
   auto &dbHelper = ChartDBHelper::GetInstance();
@@ -221,75 +248,108 @@ bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
 
 void MusicPlayerService::SetPlaylist(
     std::vector<music_playlist::MusicTrack> tracks, std::size_t startIndex) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   queue.SetPlaylist(std::move(tracks), startIndex);
 }
 
 void MusicPlayerService::SetRandomAll(
     std::vector<music_playlist::MusicTrack> tracks,
     std::optional<std::uint64_t> seed) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   queue.SetRandomAll(std::move(tracks), seed);
 }
 
 bool MusicPlayerService::PlayCurrent(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return PlayCurrentLocked(errorMessage);
+}
+
+bool MusicPlayerService::PlayCurrentLocked(std::string &errorMessage) {
   errorMessage.clear();
   const auto *track = queue.Current();
   if (track == nullptr) {
     errorMessage = "No music track is selected.";
     return false;
   }
-  return PlayTrack(*track, errorMessage);
+  return PlayTrackLocked(*track, errorMessage);
 }
 
 bool MusicPlayerService::PlayLibraryTrack(std::size_t index,
                                           std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
   if (index >= libraryTracks.size()) {
     errorMessage = "Music track index is out of range.";
     return false;
   }
   queue.SetPlaylist(libraryTracks, index);
-  return PlayCurrent(errorMessage);
+  return PlayCurrentLocked(errorMessage);
 }
 
 bool MusicPlayerService::PlayNext(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return PlayNextLocked(errorMessage);
+}
+
+bool MusicPlayerService::PlayNextLocked(std::string &errorMessage) {
   errorMessage.clear();
   const auto *track = queue.Next();
   if (track == nullptr) {
     errorMessage = "No next music track is available.";
     return false;
   }
-  return PlayTrack(*track, errorMessage);
+  return PlayTrackLocked(*track, errorMessage);
 }
 
 bool MusicPlayerService::PlayPrevious(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return PlayPreviousLocked(errorMessage);
+}
+
+bool MusicPlayerService::PlayPreviousLocked(std::string &errorMessage) {
   errorMessage.clear();
   const auto *track = queue.Previous();
   if (track == nullptr) {
     errorMessage = "No previous music track is available.";
     return false;
   }
-  return PlayTrack(*track, errorMessage);
+  return PlayTrackLocked(*track, errorMessage);
 }
 
 bool MusicPlayerService::Resume(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Play(errorMessage);
 }
 
 bool MusicPlayerService::Pause(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Pause(errorMessage);
 }
 
 bool MusicPlayerService::Stop(std::string &errorMessage) {
   CancelRender();
-  return native_music_player::Stop(errorMessage);
+  bool stopped = false;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    stopped = native_music_player::Stop(errorMessage);
+  }
+  StopNativeControlEventPump();
+  return stopped;
 }
 
 bool MusicPlayerService::Seek(long long positionMicros,
                               std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Seek(positionMicros, errorMessage);
 }
 
 bool MusicPlayerService::ProcessNativeControlEvents(
+    std::string &statusMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return ProcessNativeControlEventsLocked(statusMessage);
+}
+
+bool MusicPlayerService::ProcessNativeControlEventsLocked(
     std::string &statusMessage) {
   bool handled = false;
   for (const auto event : native_music_player::DrainControlEvents()) {
@@ -297,21 +357,21 @@ bool MusicPlayerService::ProcessNativeControlEvents(
     std::string errorMessage;
     switch (event) {
     case native_music_player::ControlEvent::Previous:
-      if (PlayPrevious(errorMessage)) {
+      if (PlayPreviousLocked(errorMessage)) {
         statusMessage = "Playing previous track.";
       } else {
         statusMessage = errorMessage;
       }
       break;
     case native_music_player::ControlEvent::Next:
-      if (PlayNext(errorMessage)) {
+      if (PlayNextLocked(errorMessage)) {
         statusMessage = "Playing next track.";
       } else {
         statusMessage = errorMessage;
       }
       break;
     case native_music_player::ControlEvent::Finished:
-      if (PlayNext(errorMessage)) {
+      if (PlayNextLocked(errorMessage)) {
         statusMessage = "Track finished. Playing next track.";
       } else {
         statusMessage = errorMessage;
@@ -322,12 +382,38 @@ bool MusicPlayerService::ProcessNativeControlEvents(
   return handled;
 }
 
+bool MusicPlayerService::ConsumeNativeControlStatus(
+    std::string &statusMessage) {
+  std::lock_guard<std::mutex> lock(nativeControlStatusMutex);
+  if (consumedNativeControlStatusRevision == nativeControlStatusRevision) {
+    return false;
+  }
+  consumedNativeControlStatusRevision = nativeControlStatusRevision;
+  statusMessage = nativeControlStatusMessage;
+  return true;
+}
+
 void MusicPlayerService::CancelRender() {
   renderCancelled.store(true, std::memory_order_release);
 }
 
-bool MusicPlayerService::PlayTrack(const music_playlist::MusicTrack &track,
-                                   std::string &errorMessage) {
+std::optional<music_playlist::MusicTrack>
+MusicPlayerService::CurrentTrackSnapshot() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  const auto *track = queue.Current();
+  if (track == nullptr) {
+    return std::nullopt;
+  }
+  return *track;
+}
+
+chart_music_cache::CacheResult MusicPlayerService::LastCacheResult() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return lastCacheResult;
+}
+
+bool MusicPlayerService::PlayTrackLocked(
+    const music_playlist::MusicTrack &track, std::string &errorMessage) {
   errorMessage.clear();
   lastCacheResult = {};
 
@@ -355,7 +441,71 @@ bool MusicPlayerService::PlayTrack(const music_playlist::MusicTrack &track,
                                  errorMessage)) {
     return false;
   }
-  return native_music_player::Play(errorMessage);
+  const bool playing = native_music_player::Play(errorMessage);
+  if (playing) {
+    EnsureNativeControlEventPump();
+  }
+  return playing;
+}
+
+void MusicPlayerService::EnsureNativeControlEventPump() {
+  if (!native_music_player::IsSupported()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(nativeControlThreadMutex);
+  if (nativeControlEventThreadStopping) {
+    return;
+  }
+  if (nativeControlEventThread.joinable()) {
+    return;
+  }
+  nativeControlEventThread =
+      std::jthread([this](const std::stop_token &stopToken) {
+        NativeControlEventLoop(stopToken);
+      });
+}
+
+void MusicPlayerService::StopNativeControlEventPump() {
+  std::jthread threadToStop;
+  {
+    std::lock_guard<std::mutex> lock(nativeControlThreadMutex);
+    if (!nativeControlEventThread.joinable()) {
+      return;
+    }
+    nativeControlEventThreadStopping = true;
+    nativeControlEventThread.request_stop();
+    native_music_player::DrainControlEvents();
+    threadToStop = std::move(nativeControlEventThread);
+  }
+
+  if (threadToStop.joinable()) {
+    threadToStop.join();
+  }
+
+  std::lock_guard<std::mutex> lock(nativeControlThreadMutex);
+  nativeControlEventThreadStopping = false;
+}
+
+void MusicPlayerService::NativeControlEventLoop(
+    const std::stop_token &stopToken) {
+  while (!stopToken.stop_requested()) {
+    std::string statusMessage;
+    if (ProcessNativeControlEvents(statusMessage) && !statusMessage.empty()) {
+      PublishNativeControlStatus(statusMessage);
+    }
+
+    for (int i = 0; i < 10 && !stopToken.stop_requested(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+  }
+}
+
+void MusicPlayerService::PublishNativeControlStatus(
+    const std::string &statusMessage) {
+  std::lock_guard<std::mutex> lock(nativeControlStatusMutex);
+  nativeControlStatusMessage = statusMessage;
+  ++nativeControlStatusRevision;
 }
 
 } // namespace music_player
