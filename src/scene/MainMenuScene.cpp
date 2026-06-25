@@ -4781,12 +4781,9 @@ void MainMenuScene::playSelectedChartAsMusic() {
                                .chartCount = 1};
   context.musicPlayer.SetPlaylist({music_playlist::MakeTrack(musicRecord)});
 
-  std::string errorMessage;
-  if (context.musicPlayer.PlayCurrent(errorMessage)) {
-    musicStatusMessage = "Playing selected chart.";
-  } else {
-    musicStatusMessage = errorMessage;
-  }
+  std::string statusMessage;
+  context.musicPlayer.PlayCurrentAsync(statusMessage, "Playing selected chart.");
+  musicStatusMessage = statusMessage;
   refreshMusicModal();
 }
 
@@ -4860,11 +4857,11 @@ void MainMenuScene::playSavedMusicPlaylist() {
   context.jukebox.stop();
 
   std::string errorMessage;
-  if (!context.musicPlayer.StartDefaultPlaylist(errorMessage) ||
-      !context.musicPlayer.PlayCurrent(errorMessage)) {
+  if (!context.musicPlayer.StartDefaultPlaylist(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    musicStatusMessage = "Playing My Playlist.";
+    context.musicPlayer.PlayCurrentAsync(errorMessage, "Playing My Playlist.");
+    musicStatusMessage = errorMessage;
   }
   refreshMusicModal();
 }
@@ -4888,11 +4885,12 @@ void MainMenuScene::playRandomMusicLibrary() {
 
   std::string errorMessage;
   if (!context.musicPlayer.ReloadLibrary(errorMessage) ||
-      !context.musicPlayer.StartRandomLibrary(errorMessage) ||
-      !context.musicPlayer.PlayCurrent(errorMessage)) {
+      !context.musicPlayer.StartRandomLibrary(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    musicStatusMessage = "Playing random library.";
+    context.musicPlayer.PlayCurrentAsync(errorMessage,
+                                         "Playing random library.");
+    musicStatusMessage = errorMessage;
   }
   refreshMusicModal();
 }
@@ -4906,9 +4904,10 @@ void MainMenuScene::toggleMusicPlayback() {
   } else if (playback.loaded) {
     ok = context.musicPlayer.Resume(errorMessage);
   } else {
-    ok = context.musicPlayer.PlayCurrent(errorMessage);
+    ok = context.musicPlayer.PlayCurrentAsync(errorMessage,
+                                              "Playing current track.");
   }
-  musicStatusMessage = ok ? "" : errorMessage;
+  musicStatusMessage = errorMessage;
   refreshMusicModal();
 }
 
@@ -4942,11 +4941,8 @@ void MainMenuScene::playNextMusicTrack() {
   context.jukebox.stop();
 
   std::string errorMessage;
-  if (context.musicPlayer.PlayNext(errorMessage)) {
-    musicStatusMessage = "Playing next track.";
-  } else {
-    musicStatusMessage = errorMessage;
-  }
+  context.musicPlayer.PlayNextAsync(errorMessage, "Playing next track.");
+  musicStatusMessage = errorMessage;
   refreshMusicModal();
 }
 
@@ -4958,11 +4954,9 @@ void MainMenuScene::playPreviousMusicTrack() {
   context.jukebox.stop();
 
   std::string errorMessage;
-  if (context.musicPlayer.PlayPrevious(errorMessage)) {
-    musicStatusMessage = "Playing previous track.";
-  } else {
-    musicStatusMessage = errorMessage;
-  }
+  context.musicPlayer.PlayPreviousAsync(errorMessage,
+                                        "Playing previous track.");
+  musicStatusMessage = errorMessage;
   refreshMusicModal();
 }
 

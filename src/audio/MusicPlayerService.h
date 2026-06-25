@@ -56,6 +56,13 @@ public:
   bool PlayLibraryTrack(std::size_t index, std::string &errorMessage);
   bool PlayNext(std::string &errorMessage);
   bool PlayPrevious(std::string &errorMessage);
+  bool PlayCurrentAsync(std::string &statusMessage,
+                        std::string successMessage = "Playing music.");
+  bool PlayNextAsync(std::string &statusMessage,
+                     std::string successMessage = "Playing next track.");
+  bool PlayPreviousAsync(std::string &statusMessage,
+                         std::string successMessage =
+                             "Playing previous track.");
   bool Resume(std::string &errorMessage);
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
@@ -65,11 +72,20 @@ public:
   void CancelRender();
 
 private:
+  enum class PlaybackRequest { Current, Next, Previous };
+
   bool PlayCurrentLocked(std::string &errorMessage);
   bool PlayNextLocked(std::string &errorMessage);
   bool PlayPreviousLocked(std::string &errorMessage);
   bool PlayTrackLocked(const music_playlist::MusicTrack &track,
                        std::string &errorMessage);
+  bool StartPlaybackAsync(PlaybackRequest request, std::string &statusMessage,
+                          std::string successMessage);
+  void PlaybackWorker(music_playlist::MusicTrack track,
+                      std::uint64_t requestRevision,
+                      std::string successMessage,
+                      const std::stop_token &stopToken);
+  void StopPlaybackWorker();
   bool ProcessNativeControlEventsLocked(std::string &statusMessage);
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
@@ -79,17 +95,20 @@ private:
   mutable std::mutex stateMutex;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
+  std::mutex playbackThreadMutex;
   std::vector<music_playlist::MusicTrack> libraryTracks;
   std::vector<MusicPlaylistInfo> playlists;
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   int defaultPlaylistId = 0;
   music_playlist::MusicQueue queue;
+  std::jthread playbackThread;
   std::jthread nativeControlEventThread;
   bool nativeControlEventThreadStopping = false;
   std::string nativeControlStatusMessage;
   std::uint64_t nativeControlStatusRevision = 0;
   std::uint64_t consumedNativeControlStatusRevision = 0;
   std::atomic_bool renderCancelled{false};
+  std::atomic<std::uint64_t> playbackRequestRevision{0};
   chart_music_cache::CacheResult lastCacheResult;
 };
 

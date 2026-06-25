@@ -29,6 +29,7 @@ loadPlaylistTracks(ChartDBHelper &dbHelper, sqlite3 *db, int playlistId) {
 } // namespace
 
 MusicPlayerService::~MusicPlayerService() {
+  StopPlaybackWorker();
   StopNativeControlEventPump();
 }
 
@@ -316,6 +317,24 @@ bool MusicPlayerService::PlayPreviousLocked(std::string &errorMessage) {
   return PlayTrackLocked(*track, errorMessage);
 }
 
+bool MusicPlayerService::PlayCurrentAsync(std::string &statusMessage,
+                                          std::string successMessage) {
+  return StartPlaybackAsync(PlaybackRequest::Current, statusMessage,
+                            std::move(successMessage));
+}
+
+bool MusicPlayerService::PlayNextAsync(std::string &statusMessage,
+                                       std::string successMessage) {
+  return StartPlaybackAsync(PlaybackRequest::Next, statusMessage,
+                            std::move(successMessage));
+}
+
+bool MusicPlayerService::PlayPreviousAsync(std::string &statusMessage,
+                                           std::string successMessage) {
+  return StartPlaybackAsync(PlaybackRequest::Previous, statusMessage,
+                            std::move(successMessage));
+}
+
 bool MusicPlayerService::Resume(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Play(errorMessage);
@@ -327,7 +346,7 @@ bool MusicPlayerService::Pause(std::string &errorMessage) {
 }
 
 bool MusicPlayerService::Stop(std::string &errorMessage) {
-  CancelRender();
+  StopPlaybackWorker();
   bool stopped = false;
   {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -446,6 +465,147 @@ bool MusicPlayerService::PlayTrackLocked(
     EnsureNativeControlEventPump();
   }
   return playing;
+}
+
+bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
+                                            std::string &statusMessage,
+                                            std::string successMessage) {
+  statusMessage.clear();
+  if (!native_music_player::IsSupported()) {
+    statusMessage = "Native music playback is not supported on this platform.";
+    return false;
+  }
+
+  music_playlist::MusicTrack track;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    const music_playlist::MusicTrack *selectedTrack = nullptr;
+    switch (request) {
+    case PlaybackRequest::Current:
+      selectedTrack = queue.Current();
+      break;
+    case PlaybackRequest::Next:
+      selectedTrack = queue.Next();
+      break;
+    case PlaybackRequest::Previous:
+      selectedTrack = queue.Previous();
+      break;
+    }
+    if (selectedTrack == nullptr) {
+      switch (request) {
+      case PlaybackRequest::Current:
+        statusMessage = "No music track is selected.";
+        break;
+      case PlaybackRequest::Next:
+        statusMessage = "No next music track is available.";
+        break;
+      case PlaybackRequest::Previous:
+        statusMessage = "No previous music track is available.";
+        break;
+      }
+      return false;
+    }
+    track = *selectedTrack;
+    lastCacheResult = {};
+  }
+
+  StopPlaybackWorker();
+
+  const std::uint64_t requestRevision =
+      playbackRequestRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
+  renderCancelled.store(false, std::memory_order_release);
+
+  {
+    std::lock_guard<std::mutex> lock(playbackThreadMutex);
+    playbackThread = std::jthread(
+        [this, track = std::move(track), requestRevision,
+         successMessage = std::move(successMessage)](
+            const std::stop_token &stopToken) mutable {
+          PlaybackWorker(std::move(track), requestRevision,
+                         std::move(successMessage), stopToken);
+        });
+  }
+
+  statusMessage = "Preparing music...";
+  return true;
+}
+
+void MusicPlayerService::PlaybackWorker(
+    music_playlist::MusicTrack track, std::uint64_t requestRevision,
+    std::string successMessage, const std::stop_token &stopToken) {
+  const auto isCurrentRequest = [this, requestRevision, &stopToken]() {
+    return !stopToken.stop_requested() &&
+           playbackRequestRevision.load(std::memory_order_acquire) ==
+               requestRevision;
+  };
+
+  if (!isCurrentRequest()) {
+    return;
+  }
+
+  auto cacheResult = chart_music_cache::EnsureRenderedMusicFile(
+      track.representativeChart, renderCancelled);
+  if (!isCurrentRequest()) {
+    return;
+  }
+
+  std::string statusMessage;
+  bool playing = false;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    if (!isCurrentRequest()) {
+      return;
+    }
+    lastCacheResult = cacheResult;
+    if (!cacheResult.success) {
+      statusMessage = cacheResult.message.empty()
+                          ? "Could not render music track."
+                          : cacheResult.message;
+    } else {
+      auto metadata = music_playlist::MakeNativeMetadata(track);
+      if (metadata.durationMicros <= 0 && cacheResult.durationMicros > 0) {
+        metadata.durationMicros = cacheResult.durationMicros;
+      }
+
+      std::string errorMessage;
+      if (!native_music_player::Load(cacheResult.audioPath, metadata,
+                                     errorMessage)) {
+        statusMessage = errorMessage;
+      } else if (!native_music_player::Play(errorMessage)) {
+        statusMessage = errorMessage;
+      } else {
+        playing = true;
+        statusMessage =
+            successMessage.empty() ? "Playing music." : successMessage;
+      }
+    }
+  }
+
+  if (playing) {
+    EnsureNativeControlEventPump();
+  }
+  if (isCurrentRequest() && !statusMessage.empty()) {
+    PublishNativeControlStatus(statusMessage);
+  }
+}
+
+void MusicPlayerService::StopPlaybackWorker() {
+  renderCancelled.store(true, std::memory_order_release);
+  playbackRequestRevision.fetch_add(1, std::memory_order_acq_rel);
+
+  std::jthread threadToStop;
+  {
+    std::lock_guard<std::mutex> lock(playbackThreadMutex);
+    if (!playbackThread.joinable()) {
+      return;
+    }
+    playbackThread.request_stop();
+    threadToStop = std::move(playbackThread);
+  }
+
+  if (threadToStop.joinable()) {
+    threadToStop.join();
+  }
 }
 
 void MusicPlayerService::EnsureNativeControlEventPump() {
