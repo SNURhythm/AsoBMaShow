@@ -3,6 +3,7 @@
 #include "../ChartDBHelper.h"
 
 #include <chrono>
+#include <exception>
 #include <thread>
 #include <utility>
 
@@ -543,8 +544,18 @@ void MusicPlayerService::PlaybackWorker(
     return;
   }
 
-  auto cacheResult = chart_music_cache::EnsureRenderedMusicFile(
-      track.representativeChart, renderCancelled);
+  chart_music_cache::CacheResult cacheResult;
+  try {
+    cacheResult = chart_music_cache::EnsureRenderedMusicFile(
+        track.representativeChart, renderCancelled);
+  } catch (const std::exception &e) {
+    cacheResult = {.success = false,
+                   .message = std::string("Could not render music track: ") +
+                              e.what()};
+  } catch (...) {
+    cacheResult = {.success = false,
+                   .message = "Could not render music track."};
+  }
   if (!isCurrentRequest()) {
     return;
   }
