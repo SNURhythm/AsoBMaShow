@@ -11,6 +11,7 @@
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
 #include "audio/Jukebox.h"
+#include "audio/MusicPlayerService.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -20,6 +21,7 @@ public:
   Uint64 currentFrame = 0;
   AppSettings settings;
   Jukebox jukebox;
+  music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
   std::atomic<bool> replayVideoExportUiFrameRequested{false};
@@ -44,6 +46,8 @@ public:
   }
   ~ApplicationContext() {
     quitFlag = true;
+    std::string musicStopError;
+    musicPlayer.Stop(musicStopError);
     std::cout << "Waiting for threads to join..." << std::endl;
     for (auto &thread : threads) {
       if (thread.second.joinable()) {

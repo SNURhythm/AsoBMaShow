@@ -201,6 +201,8 @@ private:
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
   TextView *parseLogButtonText = nullptr;
+  Button *musicButton = nullptr;
+  TextView *musicButtonText = nullptr;
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
@@ -218,6 +220,7 @@ private:
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   View *parseLogModalRoot = nullptr;
+  View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
   View *unzipModalRoot = nullptr;
   View *unzipProgressTrack = nullptr;
@@ -235,6 +238,22 @@ private:
   TextView *parseLogText = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
+  TextView *musicTrackText = nullptr;
+  TextView *musicStatusText = nullptr;
+  Button *musicSelectedButton = nullptr;
+  Button *musicRandomButton = nullptr;
+  Button *musicPreviousButton = nullptr;
+  Button *musicPlayPauseButton = nullptr;
+  Button *musicNextButton = nullptr;
+  Button *musicStopButton = nullptr;
+  Button *musicCloseButton = nullptr;
+  TextView *musicSelectedButtonText = nullptr;
+  TextView *musicRandomButtonText = nullptr;
+  TextView *musicPreviousButtonText = nullptr;
+  TextView *musicPlayPauseButtonText = nullptr;
+  TextView *musicNextButtonText = nullptr;
+  TextView *musicStopButtonText = nullptr;
+  TextView *musicCloseButtonText = nullptr;
   ScrollView *tasksScrollView = nullptr;
   View *tasksContent = nullptr;
   TextView *tasksText = nullptr;
@@ -406,6 +425,7 @@ private:
   int lastSafeRight = -1;
   std::uint64_t parseLogDisplayedRevision = 0;
   ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
+  std::string musicStatusMessage;
 
   void initView(ApplicationContext &context);
   void applyThemeChange();
@@ -508,6 +528,16 @@ private:
   void showParseLogModal();
   void hideParseLogModal();
   void refreshParseLogModal();
+  void buildMusicModal();
+  void showMusicModal();
+  void hideMusicModal();
+  void refreshMusicModal();
+  void playSelectedChartAsMusic();
+  void playRandomMusicLibrary();
+  void toggleMusicPlayback();
+  void playNextMusicTrack();
+  void playPreviousMusicTrack();
+  void stopMusicPlayback();
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();

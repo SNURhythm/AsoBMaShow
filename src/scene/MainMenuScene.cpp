@@ -1,6 +1,7 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../audio/MusicPlaylist.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -798,6 +799,29 @@ const char *chartScanProgressStageText(ChartScanProgressStage stage) {
   return "Refreshing library";
 }
 
+std::string formatMusicTime(long long micros) {
+  if (micros <= 0) {
+    return "--:--";
+  }
+  const long long totalSeconds = micros / 1000000LL;
+  const long long minutes = totalSeconds / 60LL;
+  const long long seconds = totalSeconds % 60LL;
+  std::ostringstream stream;
+  stream << minutes << ":" << std::setw(2) << std::setfill('0') << seconds;
+  return stream.str();
+}
+
+std::string musicTrackDisplayName(const music_playlist::MusicTrack *track) {
+  if (track == nullptr) {
+    return "No track selected";
+  }
+  std::string title = track->title.empty() ? "Untitled" : track->title;
+  if (!track->artist.empty()) {
+    title += " / " + track->artist;
+  }
+  return title;
+}
+
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
@@ -917,6 +941,7 @@ void MainMenuScene::applyThemeChange() {
   refreshReplayModalActions();
   refreshReplayExportOptionButtons();
   refreshFindBmsModal();
+  refreshMusicModal();
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
@@ -1948,6 +1973,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
+  musicButton = nullptr;
+  musicButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
@@ -1964,6 +1991,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
   unzipProgressFill = nullptr;
@@ -1982,6 +2010,22 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
+  musicTrackText = nullptr;
+  musicStatusText = nullptr;
+  musicSelectedButton = nullptr;
+  musicRandomButton = nullptr;
+  musicPreviousButton = nullptr;
+  musicPlayPauseButton = nullptr;
+  musicNextButton = nullptr;
+  musicStopButton = nullptr;
+  musicCloseButton = nullptr;
+  musicSelectedButtonText = nullptr;
+  musicRandomButtonText = nullptr;
+  musicPreviousButtonText = nullptr;
+  musicPlayPauseButtonText = nullptr;
+  musicNextButtonText = nullptr;
+  musicStopButtonText = nullptr;
+  musicCloseButtonText = nullptr;
   tasksScrollView = nullptr;
   tasksContent = nullptr;
   tasksText = nullptr;
@@ -2077,6 +2121,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
+  musicStatusMessage.clear();
   replaySummaries.clear();
   selectedReplayIndex = -1;
   selectedExportFps = 120;
@@ -2439,6 +2484,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(parseLogButton);
 
+  musicButton = makeModalButton("Music", 20, &musicButtonText);
+  musicButton->setWidth(122);
+  musicButton->setHeight(50);
+  musicButton->setOnClickListener([this]() { showMusicModal(); });
+  styleThemedActionButton(musicButton, musicButtonText, true, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  libraryHeader->addView(musicButton);
+
   tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(50);
@@ -2778,6 +2832,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildPlayOptionsModal();
   buildReplayModal();
   buildParseLogModal();
+  buildMusicModal();
   buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();
@@ -4395,6 +4450,301 @@ void MainMenuScene::refreshParseLogModal() {
   if (parseLogScrollView != nullptr) {
     parseLogScrollView->scrollToBottom();
   }
+}
+
+void MainMenuScene::buildMusicModal() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  constexpr float kModalPanelWidth = 760.0f;
+  constexpr float kModalPanelPadding = 22.0f;
+
+  musicModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                           rendering::window_height);
+  musicModalRoot->setPositionType(YGPositionTypeAbsolute);
+  musicModalRoot->setPosition(Edge::Left, 0);
+  musicModalRoot->setPosition(Edge::Top, 0);
+  musicModalRoot->setZIndex(1000);
+  musicModalRoot->setVisible(false);
+  musicModalRoot->setFlexDirection(FlexDirection::Column);
+  musicModalRoot->setAlignItems(YGAlignCenter);
+  musicModalRoot->setJustifyContent(YGJustifyCenter);
+  musicModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+
+  auto *panel = new View();
+  panel->setWidth(kModalPanelWidth)
+      ->setHeight(480)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, kModalPanelPadding)
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(modalPanelBorder)
+      ->setBorderWidth(1);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Music Player");
+  title->setThemedColor(ui_theme::textPrimary);
+  title->setHeight(42);
+  panel->addView(title);
+
+  musicTrackText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  musicTrackText->setHeight(62);
+  musicTrackText->setWrap(true);
+  musicTrackText->setOverflow(TextView::TextOverflow::Hidden);
+  musicTrackText->setThemedColor(ui_theme::textPrimary);
+  panel->addView(musicTrackText);
+
+  musicStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  musicStatusText->setHeight(62);
+  musicStatusText->setWrap(true);
+  musicStatusText->setThemedColor(ui_theme::textSecondary);
+  panel->addView(musicStatusText);
+
+  auto *sourceRow = makeModalOptionRow();
+  musicSelectedButton =
+      makeModalButton("Selected", 20, &musicSelectedButtonText);
+  musicSelectedButton->setFlex(1);
+  musicSelectedButton->setOnClickListener(
+      [this]() { playSelectedChartAsMusic(); });
+  musicRandomButton = makeModalButton("Random All", 20, &musicRandomButtonText);
+  musicRandomButton->setFlex(1);
+  musicRandomButton->setOnClickListener([this]() { playRandomMusicLibrary(); });
+  sourceRow->addView(musicSelectedButton);
+  sourceRow->addView(musicRandomButton);
+  panel->addView(sourceRow);
+
+  auto *transportRow = makeModalOptionRow();
+  musicPreviousButton =
+      makeModalButton("Previous", 18, &musicPreviousButtonText);
+  musicPreviousButton->setFlex(1);
+  musicPreviousButton->setOnClickListener(
+      [this]() { playPreviousMusicTrack(); });
+  musicPlayPauseButton = makeModalButton("Play", 20, &musicPlayPauseButtonText);
+  musicPlayPauseButton->setFlex(1);
+  musicPlayPauseButton->setOnClickListener([this]() { toggleMusicPlayback(); });
+  musicNextButton = makeModalButton("Next", 20, &musicNextButtonText);
+  musicNextButton->setFlex(1);
+  musicNextButton->setOnClickListener([this]() { playNextMusicTrack(); });
+  musicStopButton = makeModalButton("Stop", 20, &musicStopButtonText);
+  musicStopButton->setFlex(1);
+  musicStopButton->setOnClickListener([this]() { stopMusicPlayback(); });
+  transportRow->addView(musicPreviousButton);
+  transportRow->addView(musicPlayPauseButton);
+  transportRow->addView(musicNextButton);
+  transportRow->addView(musicStopButton);
+  panel->addView(transportRow);
+
+  auto *footer = new View();
+  footer->setFlexDirection(FlexDirection::Row);
+  footer->setJustifyContent(YGJustifyFlexEnd);
+  footer->setAlignItems(YGAlignStretch);
+  footer->setGap(12);
+  footer->setHeight(58);
+
+  musicCloseButton = makeModalButton("Close", 20, &musicCloseButtonText);
+  musicCloseButton->setWidth(130);
+  musicCloseButton->setOnClickListener([this]() { hideMusicModal(); });
+  footer->addView(musicCloseButton);
+  panel->addView(footer);
+
+  musicModalRoot->addView(panel);
+  rootLayout->addView(musicModalRoot);
+  refreshMusicModal();
+}
+
+void MainMenuScene::showMusicModal() {
+  if (musicModalRoot == nullptr) {
+    return;
+  }
+  musicModalRoot->setSize(rendering::window_width, rendering::window_height);
+  musicModalRoot->setVisible(true);
+  refreshMusicModal();
+}
+
+void MainMenuScene::hideMusicModal() {
+  if (musicModalRoot != nullptr) {
+    musicModalRoot->setVisible(false);
+  }
+}
+
+void MainMenuScene::refreshMusicModal() {
+  if (musicModalRoot == nullptr || musicTrackText == nullptr ||
+      musicStatusText == nullptr) {
+    return;
+  }
+
+  const auto *track = context.musicPlayer.CurrentTrack();
+  const auto playback = context.musicPlayer.PlaybackState();
+
+  musicTrackText->setText(musicTrackDisplayName(track));
+
+  std::string status;
+  if (!musicStatusMessage.empty()) {
+    status += musicStatusMessage + "\n";
+  }
+  if (!playback.supported) {
+    status += "Native music playback is unavailable on this platform.";
+  } else if (!playback.loaded) {
+    status += "Choose Selected or Random All.";
+  } else {
+    status += playback.playing ? "Playing " : "Paused ";
+    status += formatMusicTime(playback.positionMicros) + " / " +
+              formatMusicTime(playback.durationMicros);
+  }
+  const auto &libraryTracks = context.musicPlayer.LibraryTracks();
+  if (!libraryTracks.empty()) {
+    status += "  Library tracks: " + std::to_string(libraryTracks.size());
+  }
+  musicStatusText->setText(status);
+
+  if (musicPlayPauseButtonText != nullptr) {
+    musicPlayPauseButtonText->setText(
+        playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+  }
+
+  styleThemedActionButton(musicSelectedButton, musicSelectedButtonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
+  styleThemedActionButton(musicRandomButton, musicRandomButtonText, true,
+                          ui_theme::successAction, ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
+  styleThemedActionButton(musicPreviousButton, musicPreviousButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(musicPlayPauseButton, musicPlayPauseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(musicNextButton, musicNextButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(musicStopButton, musicStopButtonText, true,
+                          ui_theme::warningAction, ui_theme::warningActionHover,
+                          ui_theme::warningActionPressed,
+                          ui_theme::accentBorder);
+  styleThemedActionButton(musicCloseButton, musicCloseButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+}
+
+void MainMenuScene::playSelectedChartAsMusic() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    musicStatusMessage = "Select a chart first.";
+    refreshMusicModal();
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
+    musicStatusMessage = "Selected chart cannot be played as music.";
+    refreshMusicModal();
+    return;
+  }
+
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+
+  MusicTrackRecord musicRecord{.representativeChart = record.meta,
+                               .chartCount = 1};
+  context.musicPlayer.SetPlaylist({music_playlist::MakeTrack(musicRecord)});
+
+  std::string errorMessage;
+  if (context.musicPlayer.PlayCurrent(errorMessage)) {
+    musicStatusMessage = "Playing selected chart.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::playRandomMusicLibrary() {
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+
+  std::string errorMessage;
+  if (!context.musicPlayer.ReloadLibrary(errorMessage) ||
+      !context.musicPlayer.StartRandomLibrary(errorMessage) ||
+      !context.musicPlayer.PlayCurrent(errorMessage)) {
+    musicStatusMessage = errorMessage;
+  } else {
+    musicStatusMessage = "Playing random library.";
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::toggleMusicPlayback() {
+  std::string errorMessage;
+  const auto playback = context.musicPlayer.PlaybackState();
+  bool ok = false;
+  if (playback.playing) {
+    ok = context.musicPlayer.Pause(errorMessage);
+  } else if (playback.loaded) {
+    ok = context.musicPlayer.Resume(errorMessage);
+  } else {
+    ok = context.musicPlayer.PlayCurrent(errorMessage);
+  }
+  musicStatusMessage = ok ? "" : errorMessage;
+  refreshMusicModal();
+}
+
+void MainMenuScene::playNextMusicTrack() {
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+
+  std::string errorMessage;
+  if (context.musicPlayer.PlayNext(errorMessage)) {
+    musicStatusMessage = "Playing next track.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::playPreviousMusicTrack() {
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+
+  std::string errorMessage;
+  if (context.musicPlayer.PlayPrevious(errorMessage)) {
+    musicStatusMessage = "Playing previous track.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::stopMusicPlayback() {
+  std::string errorMessage;
+  if (context.musicPlayer.Stop(errorMessage)) {
+    musicStatusMessage = "Stopped.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
 }
 
 void MainMenuScene::buildTasksModal() {
@@ -6590,6 +6940,9 @@ void MainMenuScene::update(float dt) {
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
+  if (musicModalRoot != nullptr && musicModalRoot->getVisible()) {
+    refreshMusicModal();
+  }
   if (tasksModalRoot != nullptr && tasksModalRoot->getVisible()) {
     refreshTasksModal();
   }
@@ -6618,6 +6971,9 @@ void MainMenuScene::renderScene() {
   if (parseLogModalRoot != nullptr) {
     parseLogModalRoot->setSize(rendering::window_width,
                                rendering::window_height);
+  }
+  if (musicModalRoot != nullptr) {
+    musicModalRoot->setSize(rendering::window_width, rendering::window_height);
   }
   if (tasksModalRoot != nullptr) {
     tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
@@ -6708,6 +7064,8 @@ void MainMenuScene::cleanupScene() {
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
   parseLogButtonText = nullptr;
+  musicButton = nullptr;
+  musicButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
@@ -6724,6 +7082,7 @@ void MainMenuScene::cleanupScene() {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
   unzipProgressFill = nullptr;
@@ -6742,6 +7101,22 @@ void MainMenuScene::cleanupScene() {
   parseLogText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
+  musicTrackText = nullptr;
+  musicStatusText = nullptr;
+  musicSelectedButton = nullptr;
+  musicRandomButton = nullptr;
+  musicPreviousButton = nullptr;
+  musicPlayPauseButton = nullptr;
+  musicNextButton = nullptr;
+  musicStopButton = nullptr;
+  musicCloseButton = nullptr;
+  musicSelectedButtonText = nullptr;
+  musicRandomButtonText = nullptr;
+  musicPreviousButtonText = nullptr;
+  musicPlayPauseButtonText = nullptr;
+  musicNextButtonText = nullptr;
+  musicStopButtonText = nullptr;
+  musicCloseButtonText = nullptr;
   tasksScrollView = nullptr;
   tasksContent = nullptr;
   tasksText = nullptr;
