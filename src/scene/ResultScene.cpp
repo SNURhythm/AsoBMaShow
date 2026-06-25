@@ -383,9 +383,11 @@ void ResultScene::startRetry(bool samePattern) {
         options.startPosition =
             practiceOptions.enabled ? practiceOptions.startPosition : 0;
         options.autoKeySound =
-            practiceOptions.enabled ? practiceOptions.autoKeySound
+            practiceOptions.enabled
+                ? (practiceOptions.autoPlay || practiceOptions.autoKeySound)
                                     : !context.settings.inputKeysoundEnabled;
-        options.autoPlay = false;
+        options.autoPlay =
+            practiceOptions.enabled ? practiceOptions.autoPlay : false;
         options.gaugeType = retrySource.initialGaugeType;
         options.gaugeAutoShift = retrySource.gaugeAutoShift;
         options.assistOption = retrySource.assistOption;
@@ -394,8 +396,14 @@ void ResultScene::startRetry(bool samePattern) {
           options.practiceMode = true;
           options.practiceLeadInMicros = practiceOptions.leadInMicros;
           options.returnScene = practiceOptions.returnScene;
-          options.practiceGhostCallback =
-              practiceOptions.practiceGhostCallback;
+          if (!options.autoPlay) {
+            options.practiceGhostCallback =
+                practiceOptions.practiceGhostCallback;
+          }
+          if (options.autoPlay) {
+            options.touchVisualizationEnabled = false;
+            options.replayGhostRenderingEnabled = false;
+          }
         }
 
         if (retrySource.playOption.has_value()) {

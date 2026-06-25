@@ -14,6 +14,7 @@ struct ResultPracticeOptions {
   bool enabled = false;
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
+  bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   std::optional<std::string> playOption;

@@ -751,6 +751,7 @@ void GamePlayScene::update(float dt) {
           practiceResultOptions.startPosition =
               static_cast<unsigned long long>(getStartPositionMicros());
           practiceResultOptions.autoKeySound = options.autoKeySound;
+          practiceResultOptions.autoPlay = options.autoPlay;
           practiceResultOptions.gaugeType = options.gaugeType;
           practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
           practiceResultOptions.playOption = options.playOption;
