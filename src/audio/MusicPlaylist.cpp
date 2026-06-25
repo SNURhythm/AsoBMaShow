@@ -1,15 +1,20 @@
 #include "MusicPlaylist.h"
 
+#include "../ArchiveFile.h"
 #include "../path.h"
 
 #include <algorithm>
 #include <cctype>
 #include <numeric>
 #include <random>
+#include <string_view>
 #include <utility>
 
 namespace music_playlist {
 namespace {
+
+const std::vector<std::string_view> kArtworkExtensions = {
+    "png", "jpg", "jpeg", "bmp", "gif", "webp"};
 
 std::string lowerTrimmed(std::string value) {
   value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
@@ -63,6 +68,16 @@ long long durationForChart(const bms_parser::ChartMeta &meta) {
   return std::max(0LL, meta.PlayLength);
 }
 
+std::filesystem::path nativeArtworkPathForTrack(const MusicTrack &track) {
+  if (track.artworkPath.empty()) {
+    return {};
+  }
+  std::string errorMessage;
+  const auto materialized =
+      archive_file::materializeFile(track.artworkPath, &errorMessage);
+  return materialized.value_or(std::filesystem::path{});
+}
+
 std::uint64_t generateSeed() {
   static std::random_device device;
   const auto high = static_cast<std::uint64_t>(device()) << 32u;
@@ -91,6 +106,25 @@ std::string ChartIdForChart(const bms_parser::ChartMeta &meta) {
   return "path:" + normalizedPathString(meta.BmsPath);
 }
 
+std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta) {
+  const std::filesystem::path candidates[] = {
+      meta.StageFile,
+      meta.Banner,
+      meta.BackBmp,
+  };
+  for (const auto &candidate : candidates) {
+    if (candidate.empty()) {
+      continue;
+    }
+    if (const auto resolved =
+            archive_file::findFileWithExtensions(meta.Folder / candidate,
+                                                 kArtworkExtensions)) {
+      return *resolved;
+    }
+  }
+  return {};
+}
+
 MusicTrack MakeTrack(const MusicTrackRecord &record) {
   const auto &meta = record.representativeChart;
   return {
@@ -102,6 +136,7 @@ MusicTrack MakeTrack(const MusicTrackRecord &record) {
       .artist = meta.Artist,
       .subArtist = meta.SubArtist,
       .genre = meta.Genre,
+      .artworkPath = ArtworkPathForChart(meta),
       .chartCount = std::max(1, record.chartCount),
       .durationMicros = durationForChart(meta),
   };
@@ -126,6 +161,7 @@ native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
       .title = std::move(title),
       .artist = combineArtists(track.artist, track.subArtist),
       .album = track.genre,
+      .artworkPath = nativeArtworkPathForTrack(track),
       .durationMicros = track.durationMicros,
   };
 }

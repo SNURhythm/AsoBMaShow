@@ -2,6 +2,7 @@
 
 #include "../ThreadCompat.h"
 #include "ChartMusicCache.h"
+#include "MusicPlaylistDB.h"
 #include "MusicPlaylist.h"
 #include "NativeMusicPlayer.h"
 
@@ -24,7 +25,24 @@ public:
 
   bool ReloadLibrary(std::string &errorMessage);
   [[nodiscard]] std::size_t LibraryTrackCount() const;
+  [[nodiscard]] std::vector<music_playlist::MusicTrack>
+  LibraryTracksSnapshot() const;
   bool ReloadPlaylists(std::string &errorMessage);
+  [[nodiscard]] std::vector<MusicPlaylistInfo> PlaylistsSnapshot() const;
+  [[nodiscard]] int SelectedPlaylistId() const;
+  [[nodiscard]] std::optional<MusicPlaylistInfo>
+  SelectedPlaylistSnapshot() const;
+  [[nodiscard]] std::vector<music_playlist::MusicTrack>
+  SelectedPlaylistTracksSnapshot() const;
+  int CreatePlaylist(const std::string &name, std::string &errorMessage);
+  bool SelectPlaylist(int playlistId, std::string &errorMessage);
+  bool AddChartToSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                  std::string &errorMessage);
+  bool RemoveChartFromSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                       std::string &errorMessage);
+  bool MoveChartInSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                   int delta, std::string &errorMessage);
+  bool ClearSelectedPlaylist(std::string &errorMessage);
   [[nodiscard]] std::optional<MusicPlaylistInfo>
   DefaultPlaylistSnapshot() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
@@ -33,12 +51,15 @@ public:
                                  std::string &errorMessage);
   bool RemoveChartFromDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
                                       std::string &errorMessage);
+  bool MoveChartInDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                  int delta, std::string &errorMessage);
   bool ClearDefaultPlaylist(std::string &errorMessage);
 
   bool StartLibraryPlaylist(std::string &errorMessage,
                             std::size_t startIndex = 0);
   bool StartRandomLibrary(std::string &errorMessage,
                           std::optional<std::uint64_t> seed = std::nullopt);
+  bool StartSelectedPlaylist(std::string &errorMessage);
   bool StartDefaultPlaylist(std::string &errorMessage);
   void SetPlaylist(std::vector<music_playlist::MusicTrack> tracks,
                    std::size_t startIndex = 0);
@@ -85,6 +106,8 @@ private:
                       std::uint64_t requestRevision,
                       std::string successMessage,
                       const std::stop_token &stopToken);
+  void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
+                                   int preferredSelectedPlaylistId);
   void StopPlaybackWorker();
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
@@ -98,7 +121,9 @@ private:
   std::vector<music_playlist::MusicTrack> libraryTracks;
   std::vector<MusicPlaylistInfo> playlists;
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
+  std::vector<music_playlist::MusicTrack> selectedPlaylistTracks;
   int defaultPlaylistId = 0;
+  int selectedPlaylistId = 0;
   music_playlist::MusicQueue queue;
   std::jthread playbackThread;
   std::jthread nativeControlEventThread;

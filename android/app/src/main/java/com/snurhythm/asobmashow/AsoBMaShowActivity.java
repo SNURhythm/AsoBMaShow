@@ -5,6 +5,8 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
@@ -71,6 +73,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     private String nativeMusicTitle = "AsoBMaShow";
     private String nativeMusicArtist = "AsoBMaShow";
     private String nativeMusicAlbum = "";
+    private String nativeMusicArtworkPath = "";
+    private Bitmap nativeMusicArtwork;
     private long nativeMusicDurationMicros = 0;
 
     private static class PendingImportRequest {
@@ -622,6 +626,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                 nativeMusicTitle = metadataLine(metadataLines, 0, new File(pathText).getName());
                 nativeMusicArtist = metadataLine(metadataLines, 1, "AsoBMaShow");
                 nativeMusicAlbum = metadataLine(metadataLines, 2, "");
+                nativeMusicArtworkPath = metadataLine(metadataLines, 3, "");
+                nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
                 player.setOnCompletionListener(ignored ->
                         nativeMusicControlEvent("finished"));
                 nativeMusicPlayer = player;
@@ -681,7 +687,6 @@ public class AsoBMaShowActivity extends SDLActivity {
                 }
                 nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
                 updateNativeMusicSessionLocked(false);
-                stopNativeMusicForegroundServiceLocked();
                 return "OK";
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(e, "Could not stop music.");
@@ -875,6 +880,10 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, nativeMusicArtist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, nativeMusicAlbum)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs);
+        if (nativeMusicArtwork != null) {
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, nativeMusicArtwork);
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, nativeMusicArtwork);
+        }
         nativeMusicSession.setMetadata(metadata.build());
 
         long actions = PlaybackState.ACTION_PLAY
@@ -893,37 +902,6 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .build();
         nativeMusicSession.setPlaybackState(playbackState);
         nativeMusicSession.setActive(nativeMusicPlayer != null);
-        updateNativeMusicForegroundServiceLocked(playing);
-    }
-
-    private void updateNativeMusicForegroundServiceLocked(boolean playing) {
-        if (nativeMusicPlayer == null || nativeMusicSession == null) {
-            stopNativeMusicForegroundServiceLocked();
-            return;
-        }
-        Intent intent = new Intent(this, AsoBMaShowMusicService.class)
-                .setAction(AsoBMaShowMusicService.ACTION_UPDATE)
-                .putExtra(AsoBMaShowMusicService.EXTRA_TITLE, nativeMusicTitle)
-                .putExtra(AsoBMaShowMusicService.EXTRA_ARTIST, nativeMusicArtist)
-                .putExtra(AsoBMaShowMusicService.EXTRA_ALBUM, nativeMusicAlbum)
-                .putExtra(AsoBMaShowMusicService.EXTRA_PLAYING, playing)
-                .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
-                        nativeMusicSession.getSessionToken());
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent);
-            } else {
-                startService(intent);
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void stopNativeMusicForegroundServiceLocked() {
-        try {
-            stopService(new Intent(this, AsoBMaShowMusicService.class));
-        } catch (Exception ignored) {
-        }
     }
 
     private void releaseNativeMusicPlayerLocked() {
@@ -938,6 +916,8 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeMusicTitle = "AsoBMaShow";
         nativeMusicArtist = "AsoBMaShow";
         nativeMusicAlbum = "";
+        nativeMusicArtworkPath = "";
+        nativeMusicArtwork = null;
         if (nativeMusicSession != null) {
             try {
                 updateNativeMusicSessionLocked(false);
@@ -947,7 +927,17 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         nativeMusicSession = null;
-        stopNativeMusicForegroundServiceLocked();
+    }
+
+    private Bitmap decodeNativeMusicArtwork(String pathText) {
+        if (pathText == null || pathText.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return BitmapFactory.decodeFile(pathText);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String messageForException(Exception e, String fallback) {

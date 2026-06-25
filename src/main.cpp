@@ -721,6 +721,22 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+  auto isAppBackgroundEvent = [](const SDL_Event &event) {
+    return event.type == SDL_APP_WILLENTERBACKGROUND ||
+           event.type == SDL_APP_DIDENTERBACKGROUND ||
+           (event.type == SDL_WINDOWEVENT &&
+            (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+             event.window.event == SDL_WINDOWEVENT_HIDDEN ||
+             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST));
+  };
+  auto isAppForegroundEvent = [](const SDL_Event &event) {
+    return event.type == SDL_APP_WILLENTERFOREGROUND ||
+           event.type == SDL_APP_DIDENTERFOREGROUND ||
+           (event.type == SDL_WINDOWEVENT &&
+            (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+             event.window.event == SDL_WINDOWEVENT_SHOWN ||
+             event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
+  };
 #if TARGET_OS_ANDROID
   bool androidSystemSuspended = false;
   bool androidRenderSuspended = false;
@@ -912,22 +928,12 @@ void run() {
       }
 
 #if TARGET_OS_ANDROID
-      if (event.type == SDL_APP_WILLENTERBACKGROUND ||
-          event.type == SDL_APP_DIDENTERBACKGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-            event.window.event == SDL_WINDOWEVENT_HIDDEN ||
-            event.window.event == SDL_WINDOWEVENT_FOCUS_LOST))) {
+      if (isAppBackgroundEvent(event)) {
         androidSystemSuspended = true;
         syncAndroidRenderSuspend();
       }
 
-      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
-          event.type == SDL_APP_DIDENTERFOREGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-            event.window.event == SDL_WINDOWEVENT_SHOWN ||
-            event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED))) {
+      if (isAppForegroundEvent(event)) {
         androidSystemSuspended = false;
         androidResumeResizePending = true;
         syncAndroidRenderSuspend();
@@ -935,12 +941,7 @@ void run() {
 #endif
 
 #if TARGET_OS_IPHONE
-      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
-          event.type == SDL_APP_DIDENTERFOREGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
-            event.window.event == SDL_WINDOWEVENT_RESTORED ||
-            event.window.event == SDL_WINDOWEVENT_SHOWN))) {
+      if (isAppForegroundEvent(event)) {
         restoreIOSViewportAfterKeyboardFocus();
       }
 #endif

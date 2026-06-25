@@ -16,6 +16,7 @@ struct TrackMetadata {
   std::string title;
   std::string artist;
   std::string album;
+  std::filesystem::path artworkPath;
   long long durationMicros = 0;
 };
 

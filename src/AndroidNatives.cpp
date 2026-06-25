@@ -421,7 +421,8 @@ std::string musicMetadataPayload(const AndroidNativeMusicMetadata &metadata) {
     return value;
   };
   return sanitizeLine(metadata.title) + "\n" + sanitizeLine(metadata.artist) +
-         "\n" + sanitizeLine(metadata.album);
+         "\n" + sanitizeLine(metadata.album) + "\n" +
+         sanitizeLine(metadata.artworkPath);
 }
 
 long long parseLongLongOrZero(const std::string &value) {

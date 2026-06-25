@@ -2,6 +2,7 @@ target_sources(main PRIVATE
     ChartViewerScene.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
+    MusicPlayerScene.cpp
     SceneManager.cpp
     ResultScene.cpp
     SettingsScene.cpp

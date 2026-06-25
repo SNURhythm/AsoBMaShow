@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <random>
 #include <string>
@@ -26,12 +27,14 @@ struct MusicTrack {
   std::string artist;
   std::string subArtist;
   std::string genre;
+  std::filesystem::path artworkPath;
   int chartCount = 1;
   long long durationMicros = 0;
 };
 
 std::string TrackIdForChart(const bms_parser::ChartMeta &meta);
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta);
+std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta);
 MusicTrack MakeTrack(const MusicTrackRecord &record);
 std::vector<MusicTrack>
 MakeTracks(const std::vector<MusicTrackRecord> &records);

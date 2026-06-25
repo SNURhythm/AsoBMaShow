@@ -506,6 +506,7 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
     NSString *title = NSStringFromUtf8(gIOSNativeMusicMetadata.title);
     NSString *artist = NSStringFromUtf8(gIOSNativeMusicMetadata.artist);
     NSString *album = NSStringFromUtf8(gIOSNativeMusicMetadata.album);
+    NSString *artworkPath = NSStringFromUtf8(gIOSNativeMusicMetadata.artworkPath);
     if (title != nil && title.length > 0) {
       info[MPMediaItemPropertyTitle] = title;
     } else {
@@ -516,6 +517,19 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
     }
     if (album != nil && album.length > 0) {
       info[MPMediaItemPropertyAlbumTitle] = album;
+    }
+    if (artworkPath != nil && artworkPath.length > 0) {
+      UIImage *artworkImage = [UIImage imageWithContentsOfFile:artworkPath];
+      if (artworkImage != nil) {
+        MPMediaItemArtwork *artwork =
+            [[MPMediaItemArtwork alloc]
+                initWithBoundsSize:artworkImage.size
+                     requestHandler:^UIImage *(CGSize size) {
+                       (void)size;
+                       return artworkImage;
+                     }];
+        info[MPMediaItemPropertyArtwork] = artwork;
+      }
     }
 
     const long long durationMicros = IOSNativeMusicDurationMicrosLocked();

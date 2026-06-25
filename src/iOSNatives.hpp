@@ -52,6 +52,7 @@ struct IOSNativeMusicMetadata {
   std::string title;
   std::string artist;
   std::string album;
+  std::string artworkPath;
   long long durationMicros = 0;
 };
 

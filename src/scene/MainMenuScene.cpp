@@ -21,6 +21,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
+#include "MusicPlayerScene.h"
 #include "play/GamePlayScene.h"
 #include "../view/ClearLampColors.h"
 #include "../view/ReplaySummaryListView.h"
@@ -2522,7 +2523,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicButton = makeModalButton("Music", 20, &musicButtonText);
   musicButton->setWidth(122);
   musicButton->setHeight(50);
-  musicButton->setOnClickListener([this]() { showMusicModal(); });
+  musicButton->setOnClickListener([this, &context]() {
+    if (context.sceneManager != nullptr) {
+      context.sceneManager->changeScene(
+          std::make_unique<MusicPlayerScene>(context), true);
+    }
+  });
   styleThemedActionButton(musicButton, musicButtonText, true, ui_theme::control,
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
@@ -2867,7 +2873,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildPlayOptionsModal();
   buildReplayModal();
   buildParseLogModal();
-  buildMusicModal();
   buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();

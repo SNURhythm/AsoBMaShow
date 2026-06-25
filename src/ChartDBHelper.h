@@ -43,12 +43,6 @@ struct MusicTrackRecord {
   int chartCount = 0;
 };
 
-struct MusicPlaylistInfo {
-  int id = 0;
-  std::string name;
-  int trackCount = 0;
-};
-
 struct ChartEntry {
   path_t path;
   std::string iosBookmark;
@@ -151,16 +145,6 @@ public:
                           std::vector<bms_parser::ChartMeta> &chartMetas);
   void SelectMusicTracks(sqlite3 *db,
                          std::vector<MusicTrackRecord> &tracks);
-  bool CreateMusicPlaylistTables(sqlite3 *db);
-  int EnsureMusicPlaylist(sqlite3 *db, const std::string &name);
-  std::vector<MusicPlaylistInfo> SelectMusicPlaylists(sqlite3 *db);
-  bool InsertMusicPlaylistTrack(sqlite3 *db, int playlistId,
-                                const bms_parser::ChartMeta &chartMeta);
-  bool DeleteMusicPlaylistTrack(sqlite3 *db, int playlistId,
-                                const bms_parser::ChartMeta &chartMeta);
-  bool ClearMusicPlaylist(sqlite3 *db, int playlistId);
-  void SelectMusicPlaylistTracks(sqlite3 *db, int playlistId,
-                                 std::vector<MusicTrackRecord> &tracks);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
                        std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,

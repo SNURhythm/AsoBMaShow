@@ -31,6 +31,9 @@ TrackMetadata normalizedMetadata(TrackMetadata metadata,
   if (metadata.artist.empty()) {
     metadata.artist = "AsoBMaShow";
   }
+  if (!metadata.artworkPath.empty()) {
+    metadata.artworkPath = metadata.artworkPath.lexically_normal();
+  }
   metadata.durationMicros = std::max(0LL, metadata.durationMicros);
   return metadata;
 }
@@ -60,6 +63,8 @@ bool Load(const std::filesystem::path &audioPath,
   IOSNativeMusicMetadata iosMetadata{.title = normalized.title,
                                      .artist = normalized.artist,
                                      .album = normalized.album,
+                                     .artworkPath =
+                                         pathToUtf8(normalized.artworkPath),
                                      .durationMicros =
                                          normalized.durationMicros};
   return LoadIOSNativeMusicFile(audioPathUtf8, iosMetadata, errorMessage);
@@ -67,6 +72,9 @@ bool Load(const std::filesystem::path &audioPath,
   AndroidNativeMusicMetadata androidMetadata{.title = normalized.title,
                                              .artist = normalized.artist,
                                              .album = normalized.album,
+                                             .artworkPath =
+                                                 pathToUtf8(
+                                                     normalized.artworkPath),
                                              .durationMicros =
                                                  normalized.durationMicros};
   return LoadAndroidNativeMusicFile(audioPathUtf8, androidMetadata,
