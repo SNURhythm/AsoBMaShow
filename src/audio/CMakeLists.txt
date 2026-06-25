@@ -1,2 +1,2 @@
-target_sources(main PRIVATE AudioWrapper.cpp ChartAudioRenderer.cpp decoder.cpp
-                            Jukebox.cpp)
+target_sources(main PRIVATE AudioWrapper.cpp ChartAudioRenderer.cpp
+                            ChartMusicCache.cpp decoder.cpp Jukebox.cpp)

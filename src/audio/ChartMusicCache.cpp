@@ -1,0 +1,242 @@
+#include "ChartMusicCache.h"
+
+#include "../PlayOptionUtils.h"
+#include "../Utils.h"
+#include "../path.h"
+#include "../targets.h"
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
+
+#include <SDL2/SDL.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+namespace chart_music_cache {
+namespace {
+
+std::uint64_t fnv1a64Append(std::uint64_t hash, std::string_view value) {
+  constexpr std::uint64_t kPrime = 1099511628211ull;
+  for (unsigned char c : value) {
+    hash ^= static_cast<std::uint64_t>(c);
+    hash *= kPrime;
+  }
+  hash ^= 0xffu;
+  hash *= kPrime;
+  return hash;
+}
+
+std::string hex64(std::uint64_t value) {
+  constexpr char kHex[] = "0123456789abcdef";
+  std::string text(16, '0');
+  for (int i = 15; i >= 0; --i) {
+    text[static_cast<std::size_t>(i)] = kHex[value & 0xfu];
+    value >>= 4u;
+  }
+  return text;
+}
+
+std::string lowerTrimmed(std::string value) {
+  value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
+                                              [](unsigned char ch) {
+                                                return std::isspace(ch) != 0;
+                                              }));
+  value.erase(std::find_if_not(value.rbegin(), value.rend(),
+                               [](unsigned char ch) {
+                                 return std::isspace(ch) != 0;
+                               }).base(),
+              value.end());
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return value;
+}
+
+std::string sanitizeFileNamePart(const std::string &value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const unsigned char ch : value) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+      result.push_back(static_cast<char>(ch));
+    } else if (ch == ' ' || ch == '.' || ch == '[' || ch == ']') {
+      result.push_back('_');
+    }
+  }
+  while (!result.empty() && result.back() == '_') {
+    result.pop_back();
+  }
+  if (result.empty()) {
+    return "music";
+  }
+  return result.substr(0, 64);
+}
+
+std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
+  const std::string sha256 = lowerTrimmed(meta.SHA256);
+  const std::string md5 = lowerTrimmed(meta.MD5);
+  const std::string identity =
+      !sha256.empty() ? "sha256:" + sha256
+                      : (!md5.empty() ? "md5:" + md5
+                                      : "path:" + path_t_to_utf8(
+                                                     fspath_to_path_t(
+                                                         meta.BmsPath)));
+  const std::string folder =
+      path_t_to_utf8(fspath_to_path_t(meta.Folder.lexically_normal()));
+  std::uint64_t hash = 14695981039346656037ull;
+  hash = fnv1a64Append(hash, folder);
+  hash = fnv1a64Append(hash, identity);
+  return hex64(hash);
+}
+
+void excludeCacheFromBackup(const std::filesystem::path &path) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  std::string errorMessage;
+  if (!SetIOSFileExcludedFromBackup(path.string(), true, errorMessage) &&
+      !errorMessage.empty()) {
+    SDL_Log("Failed to exclude music cache path from backup: %s",
+            errorMessage.c_str());
+  }
+#else
+  (void)path;
+#endif
+}
+
+bool ensureCacheDirectory(std::string &errorMessage) {
+  std::error_code error;
+  std::filesystem::create_directories(CacheDirectory(), error);
+  if (error) {
+    errorMessage = "Could not create music cache directory: " + error.message();
+    return false;
+  }
+  excludeCacheFromBackup(CacheDirectory());
+  return true;
+}
+
+CacheResult resultForExistingFile(const std::filesystem::path &path) {
+  return {.success = true,
+          .rendered = false,
+          .audioPath = path,
+          .message = "Cached audio exists"};
+}
+
+} // namespace
+
+std::filesystem::path CacheDirectory() {
+  return Utils::GetDocumentsPath("music_cache");
+}
+
+std::filesystem::path
+CachedAudioPathForChart(const bms_parser::ChartMeta &meta) {
+  const std::string title =
+      !meta.Title.empty() ? meta.Title : meta.BmsPath.stem().string();
+  return CacheDirectory() /
+         (sanitizeFileNamePart(title) + "_" + stableChartAudioKey(meta) +
+          ".wav");
+}
+
+bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
+  std::error_code error;
+  return std::filesystem::is_regular_file(CachedAudioPathForChart(meta), error) &&
+         !error;
+}
+
+CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
+                                    std::atomic_bool &cancelled,
+                                    chart_audio::LogCallback log) {
+  if (meta.BmsPath.empty()) {
+    return {.success = false, .message = "Chart path is empty"};
+  }
+
+  const std::filesystem::path outputPath = CachedAudioPathForChart(meta);
+  if (CachedAudioExists(meta)) {
+    return resultForExistingFile(outputPath);
+  }
+
+  std::string errorMessage;
+  if (!ensureCacheDirectory(errorMessage)) {
+    return {.success = false, .audioPath = outputPath, .message = errorMessage};
+  }
+
+  auto chart = play_options::parseChart(meta.BmsPath, cancelled, "music cache");
+  if (cancelled) {
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Music render cancelled"};
+  }
+  if (chart == nullptr) {
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Could not parse chart for music render"};
+  }
+  return EnsureRenderedMusicFile(*chart, cancelled, std::move(log));
+}
+
+CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
+                                    std::atomic_bool &cancelled,
+                                    chart_audio::LogCallback log) {
+  const std::filesystem::path outputPath = CachedAudioPathForChart(chart.Meta);
+  if (CachedAudioExists(chart.Meta)) {
+    return resultForExistingFile(outputPath);
+  }
+
+  std::string errorMessage;
+  if (!ensureCacheDirectory(errorMessage)) {
+    return {.success = false, .audioPath = outputPath, .message = errorMessage};
+  }
+
+  const std::filesystem::path tempPath = outputPath.string() + ".tmp";
+  std::error_code error;
+  std::filesystem::remove(tempPath, error);
+
+  const chart_audio::RenderOptions options{
+      .keySoundMode = chart_audio::KeySoundMode::ChartTiming,
+      .isCancelled = &cancelled,
+      .log = std::move(log),
+  };
+  const auto renderResult =
+      chart_audio::RenderChartAudioToWav(chart, tempPath, options);
+  if (!renderResult.success) {
+    std::filesystem::remove(tempPath, error);
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = renderResult.message,
+            .durationMicros = renderResult.durationMicros};
+  }
+  if (cancelled) {
+    std::filesystem::remove(tempPath, error);
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Music render cancelled",
+            .durationMicros = renderResult.durationMicros};
+  }
+
+  error.clear();
+  std::filesystem::remove(outputPath, error);
+  error.clear();
+  std::filesystem::rename(tempPath, outputPath, error);
+  if (error) {
+    const std::string renameMessage = error.message();
+    std::filesystem::remove(tempPath, error);
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Could not store rendered music file: " +
+                       renameMessage,
+            .durationMicros = renderResult.durationMicros};
+  }
+
+  excludeCacheFromBackup(outputPath);
+  return {.success = true,
+          .rendered = true,
+          .audioPath = outputPath,
+          .message = "Audio rendered",
+          .durationMicros = renderResult.durationMicros};
+}
+
+} // namespace chart_music_cache
