@@ -711,6 +711,7 @@
 				audio/ChartMusicCache.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
+				audio/MusicPlaylist.cpp,
 				audio/NativeMusicPlayer.cpp,
 				bgfx_helper.cpp,
 				bms_parser.cpp,
