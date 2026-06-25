@@ -2110,7 +2110,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateEntriesTable(db);
-#if TARGET_OS_ANDROID
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  RefreshIOSFolderAccess(dbHelper.SelectEffectiveEntries(db));
+#elif TARGET_OS_ANDROID
   (void)dbHelper.SelectEffectiveEntries(db);
 #endif
   dbHelper.CreateDifficultyTableTables(db);
@@ -2205,7 +2207,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       suppressPreviewForChartPath.reset();
     }
     if (!meta.StageFile.empty()) {
-      jacketView->setImageAsync(meta.Folder / meta.StageFile);
+      jacketView->setImageAsync(meta.Folder / meta.StageFile, true);
     } else {
       jacketView->freeImage();
     }

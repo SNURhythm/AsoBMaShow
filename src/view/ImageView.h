@@ -20,7 +20,9 @@ private:
   };
   void freeTexture();
   bool applyCachedTexture(const path_t &path);
-  bool applyImage(const path_t &path, const ImageCache &cache);
+  bool applyCachedThumbnail(const path_t &path);
+  bool applyImage(const path_t &path, const ImageCache &cache,
+                  bool storeCache = true);
   void applyAsyncImageIfReady();
   bool loadTexture(const path_t &path);
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
@@ -28,6 +30,7 @@ private:
   static std::map<std::string, ImageCache> imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
+  bool asyncImagePending = false;
 
 public:
   ImageView() = delete;
@@ -35,7 +38,7 @@ public:
   ImageView(int x, int y, int width, int height, const path_t &path);
   ~ImageView() override;
   bool setImage(const path_t &path);
-  bool setImageAsync(const path_t &path);
+  bool setImageAsync(const path_t &path, bool prioritize = false);
   void freeImage();
 
   static void dropCache(const path_t &path);
