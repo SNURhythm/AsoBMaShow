@@ -944,6 +944,10 @@ private:
 };
 } // namespace
 
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
+  return RequestPhotoAddAuthorization(errorMessage);
+}
+
 @interface AsoNativeTextEditorView : UIView <UITextFieldDelegate> {
 @private
   UITextField *_textField;
@@ -1992,7 +1996,7 @@ bool RevealIOSFileInFiles(const std::string &filePath,
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage) {
   @autoreleasepool {
-    if (!RequestPhotoAddAuthorization(errorMessage)) {
+    if (!RequestIOSPhotoAddAuthorization(errorMessage)) {
       return false;
     }
 
@@ -2022,8 +2026,13 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
     [[PHPhotoLibrary sharedPhotoLibrary]
         performChanges:^{
           PHAssetCreationRequest *request =
-              [PHAssetCreationRequest creationRequestForAssetFromVideoAtFileURL:
-                                          fileUrl];
+              [PHAssetCreationRequest creationRequestForAsset];
+          PHAssetResourceCreationOptions *options =
+              [[PHAssetResourceCreationOptions alloc] init];
+          options.shouldMoveFile = YES;
+          [request addResourceWithType:PHAssetResourceTypeVideo
+                               fileURL:fileUrl
+                               options:options];
           requestCreated = request != nil;
         }
         completionHandler:^(BOOL success, NSError *error) {
@@ -2052,6 +2061,11 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       return false;
     }
 
+    if (preparedPath != nil && ![preparedPath isEqualToString:path]) {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    } else if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
     return true;
   }
   return false;
@@ -2060,7 +2074,7 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 bool SaveImageToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage) {
   @autoreleasepool {
-    if (!RequestPhotoAddAuthorization(errorMessage)) {
+    if (!RequestIOSPhotoAddAuthorization(errorMessage)) {
       return false;
     }
 
@@ -2083,8 +2097,13 @@ bool SaveImageToIOSPhotos(const std::string &filePath,
     [[PHPhotoLibrary sharedPhotoLibrary]
         performChanges:^{
           PHAssetCreationRequest *request =
-              [PHAssetCreationRequest creationRequestForAssetFromImageAtFileURL:
-                                          fileUrl];
+              [PHAssetCreationRequest creationRequestForAsset];
+          PHAssetResourceCreationOptions *options =
+              [[PHAssetResourceCreationOptions alloc] init];
+          options.shouldMoveFile = YES;
+          [request addResourceWithType:PHAssetResourceTypePhoto
+                               fileURL:fileUrl
+                               options:options];
           requestCreated = request != nil;
         }
         completionHandler:^(BOOL success, NSError *error) {
@@ -2110,6 +2129,9 @@ bool SaveImageToIOSPhotos(const std::string &filePath,
       return false;
     }
 
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+      [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
     return true;
   }
   return false;

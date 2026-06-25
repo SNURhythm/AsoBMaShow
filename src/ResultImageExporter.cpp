@@ -537,6 +537,16 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
                                 &previousBest) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("result_exports");
   std::filesystem::create_directories(outputDir, ec);

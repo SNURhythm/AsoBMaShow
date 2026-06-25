@@ -29,15 +29,59 @@ bool prepareShadowRenderContext(const RenderContext &context,
   return shadowContext.scissor.width > 0 && shadowContext.scissor.height > 0;
 }
 
-void submitColoredRect(const RenderContext &context, int x, int y, int width,
-                       int height, const Color &color) {
-  if (width <= 0 || height <= 0 || color.a == 0) {
+float oneDrawablePixelInUi(float scale) {
+  if (!std::isfinite(scale) || scale <= 0.0f) {
+    return 1.0f;
+  }
+  return 1.0f / scale;
+}
+
+float visibleUiBorderWidth(float width, float scale) {
+  if (width <= 0.0f) {
+    return 0.0f;
+  }
+  return std::max(width, oneDrawablePixelInUi(scale));
+}
+
+float visibleUiBorderInset(float width) {
+  if (width <= 0.0f) {
+    return 0.0f;
+  }
+  return std::max(
+      width, std::max(oneDrawablePixelInUi(rendering::ui_scale_x),
+                      oneDrawablePixelInUi(rendering::ui_scale_y)));
+}
+
+void submitColoredRect(const RenderContext &context, float x, float y,
+                       float width, float height, const Color &color) {
+  if (width <= 0.0f || height <= 0.0f || color.a == 0) {
     return;
   }
 
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
-  rendering::createRect(tvb, tib, x, y, width, height, color.toABGR());
+  if (bgfx::getAvailTransientVertexBuffer(4,
+                                          rendering::PosColorVertex::ms_decl) <
+          4 ||
+      bgfx::getAvailTransientIndexBuffer(6) < 6) {
+    return;
+  }
+  bgfx::allocTransientVertexBuffer(&tvb, 4,
+                                   rendering::PosColorVertex::ms_decl);
+  bgfx::allocTransientIndexBuffer(&tib, 6);
+  auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
+  auto *indices = reinterpret_cast<uint16_t *>(tib.data);
+  const uint32_t abgr = color.toABGR();
+  vertices[0] = {x, y, 0.0f, abgr};
+  vertices[1] = {x + width, y, 0.0f, abgr};
+  vertices[2] = {x + width, y + height, 0.0f, abgr};
+  vertices[3] = {x, y + height, 0.0f, abgr};
+  indices[0] = 0;
+  indices[1] = 1;
+  indices[2] = 2;
+  indices[3] = 2;
+  indices[4] = 3;
+  indices[5] = 0;
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
@@ -48,14 +92,14 @@ void submitColoredRect(const RenderContext &context, int x, int y, int width,
   bgfx::submit(rendering::ui_view, kSimpleProgram);
 }
 
-void submitRoundedRect(const RenderContext &context, int x, int y, int width,
-                       int height, float radius, const Color &color) {
-  if (width <= 0 || height <= 0 || color.a == 0) {
+void submitRoundedRect(const RenderContext &context, float x, float y,
+                       float width, float height, float radius,
+                       const Color &color) {
+  if (width <= 0.0f || height <= 0.0f || color.a == 0) {
     return;
   }
 
-  radius = std::clamp(radius, 0.0f,
-                      static_cast<float>(std::min(width, height)) * 0.5f);
+  radius = std::clamp(radius, 0.0f, std::min(width, height) * 0.5f);
   if (radius <= 0.5f) {
     submitColoredRect(context, x, y, width, height, color);
     return;
@@ -82,9 +126,8 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
   auto *indices = reinterpret_cast<uint16_t *>(tib.data);
   const uint32_t abgr = color.toABGR();
   uint16_t vertexIndex = 0;
-  vertices[vertexIndex++] = {
-      static_cast<float>(x) + static_cast<float>(width) * 0.5f,
-      static_cast<float>(y) + static_cast<float>(height) * 0.5f, 0.0f, abgr};
+  vertices[vertexIndex++] = {x + width * 0.5f, y + height * 0.5f, 0.0f,
+                             abgr};
 
   const auto appendCorner = [&](float cx, float cy, float startAngle) {
     for (int i = 0; i <= segments; ++i) {
@@ -95,14 +138,10 @@ void submitRoundedRect(const RenderContext &context, int x, int y, int width,
     }
   };
 
-  const float fx = static_cast<float>(x);
-  const float fy = static_cast<float>(y);
-  const float fw = static_cast<float>(width);
-  const float fh = static_cast<float>(height);
-  appendCorner(fx + fw - radius, fy + radius, -kPi * 0.5f);
-  appendCorner(fx + fw - radius, fy + fh - radius, 0.0f);
-  appendCorner(fx + radius, fy + fh - radius, kPi * 0.5f);
-  appendCorner(fx + radius, fy + radius, kPi);
+  appendCorner(x + width - radius, y + radius, -kPi * 0.5f);
+  appendCorner(x + width - radius, y + height - radius, 0.0f);
+  appendCorner(x + radius, y + height - radius, kPi * 0.5f);
+  appendCorner(x + radius, y + radius, kPi);
 
   uint16_t index = 0;
   for (uint16_t i = 0; i < ringVertexCount; ++i) {
@@ -195,10 +234,11 @@ void submitShadowRect(const RenderContext &context, int x, int y, int width,
   bgfx::submit(rendering::ui_view, kShadowProgram);
 }
 
-void submitGradientRect(const RenderContext &context, int x, int y, int width,
-                        int height, const Color &topColor,
+void submitGradientRect(const RenderContext &context, float x, float y,
+                        float width, float height, const Color &topColor,
                         const Color &bottomColor) {
-  if (width <= 0 || height <= 0 || (topColor.a == 0 && bottomColor.a == 0)) {
+  if (width <= 0.0f || height <= 0.0f ||
+      (topColor.a == 0 && bottomColor.a == 0)) {
     return;
   }
 
@@ -212,13 +252,10 @@ void submitGradientRect(const RenderContext &context, int x, int y, int width,
   const uint32_t top = topColor.toABGR();
   const uint32_t bottom = bottomColor.toABGR();
 
-  vertices[0] = {static_cast<float>(x), static_cast<float>(y), 0.0f, top};
-  vertices[1] = {static_cast<float>(x + width), static_cast<float>(y), 0.0f,
-                 top};
-  vertices[2] = {static_cast<float>(x + width), static_cast<float>(y + height),
-                 0.0f, bottom};
-  vertices[3] = {static_cast<float>(x), static_cast<float>(y + height), 0.0f,
-                 bottom};
+  vertices[0] = {x, y, 0.0f, top};
+  vertices[1] = {x + width, y, 0.0f, top};
+  vertices[2] = {x + width, y + height, 0.0f, bottom};
+  vertices[3] = {x, y + height, 0.0f, bottom};
 
   indices[0] = 0;
   indices[1] = 1;
@@ -586,8 +623,24 @@ void View::renderBoxDecoration(RenderContext &context) const {
   const int width = getWidth();
   const int height = getHeight();
 
-  int inset = hasBorder ? borderWidth : 0;
-  inset = std::min(inset, std::min(width / 2, height / 2));
+  int layoutInset = hasBorder ? borderWidth : 0;
+  layoutInset = std::min(layoutInset, std::min(width / 2, height / 2));
+  const float borderWidthX =
+      hasBorder
+          ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
+                                          rendering::ui_scale_x),
+                     static_cast<float>(width) * 0.5f)
+          : 0.0f;
+  const float borderWidthY =
+      hasBorder
+          ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
+                                          rendering::ui_scale_y),
+                     static_cast<float>(height) * 0.5f)
+          : 0.0f;
+  const float borderInset =
+      hasBorder ? std::min(visibleUiBorderInset(static_cast<float>(layoutInset)),
+                           static_cast<float>(std::min(width, height)) * 0.5f)
+                : 0.0f;
   const bool rounded = cornerRadius > 0.5f;
 
   if (hasShadow) {
@@ -600,14 +653,15 @@ void View::renderBoxDecoration(RenderContext &context) const {
     }
   }
 
-  if (rounded && hasBorder && inset > 0 && hasBackground) {
+  if (rounded && hasBorder && layoutInset > 0 && hasBackground) {
     submitRoundedRect(context, x, y, width, height, cornerRadius, borderColor);
 
-    const int backgroundX = x + inset;
-    const int backgroundY = y + inset;
-    const int backgroundWidth = width - inset * 2;
-    const int backgroundHeight = height - inset * 2;
-    const float backgroundRadius = std::max(0.0f, cornerRadius - inset);
+    const float backgroundX = static_cast<float>(x) + borderInset;
+    const float backgroundY = static_cast<float>(y) + borderInset;
+    const float backgroundWidth = static_cast<float>(width) - borderInset * 2.0f;
+    const float backgroundHeight =
+        static_cast<float>(height) - borderInset * 2.0f;
+    const float backgroundRadius = std::max(0.0f, cornerRadius - borderInset);
     if (hasGradientBackground) {
       submitRoundedRect(context, backgroundX, backgroundY, backgroundWidth,
                         backgroundHeight, backgroundRadius,
@@ -626,25 +680,31 @@ void View::renderBoxDecoration(RenderContext &context) const {
     return;
   }
 
-  if (hasBorder && inset > 0) {
-    submitColoredRect(context, x, y, width, inset, borderColor);
-    submitColoredRect(context, x, y + height - inset, width, inset,
+  if (hasBorder && layoutInset > 0) {
+    submitColoredRect(context, x, y, width, borderWidthY, borderColor);
+    submitColoredRect(context, x,
+                      static_cast<float>(y + height) - borderWidthY, width,
+                      borderWidthY,
                       borderColor);
 
-    const int middleHeight = height - inset * 2;
-    if (middleHeight > 0) {
-      submitColoredRect(context, x, y + inset, inset, middleHeight,
+    const float middleY = static_cast<float>(y) + borderWidthY;
+    const float middleHeight = static_cast<float>(height) - borderWidthY * 2.0f;
+    if (middleHeight > 0.0f) {
+      submitColoredRect(context, x, middleY, borderWidthX, middleHeight,
                         borderColor);
-      submitColoredRect(context, x + width - inset, y + inset, inset,
+      submitColoredRect(context, static_cast<float>(x + width) - borderWidthX,
+                        middleY, borderWidthX,
                         middleHeight, borderColor);
     }
   }
 
   if (hasBackground) {
-    const int backgroundX = x + inset;
-    const int backgroundY = y + inset;
-    const int backgroundWidth = width - inset * 2;
-    const int backgroundHeight = height - inset * 2;
+    const float backgroundX = static_cast<float>(x) + borderWidthX;
+    const float backgroundY = static_cast<float>(y) + borderWidthY;
+    const float backgroundWidth =
+        static_cast<float>(width) - borderWidthX * 2.0f;
+    const float backgroundHeight =
+        static_cast<float>(height) - borderWidthY * 2.0f;
     if (hasGradientBackground) {
       submitGradientRect(context, backgroundX, backgroundY, backgroundWidth,
                          backgroundHeight, backgroundGradientTopColor,

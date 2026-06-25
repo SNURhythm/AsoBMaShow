@@ -82,6 +82,18 @@ uint8_t scaledAlpha(uint8_t alpha, float scale) {
       std::clamp(std::lround(static_cast<float>(alpha) * scale), 0L, 255L));
 }
 
+float oneDrawablePixelInUi(float scale) {
+  if (!std::isfinite(scale) || scale <= 0.0f) {
+    return 1.0f;
+  }
+  return 1.0f / scale;
+}
+
+float hudHairlineWidth() {
+  return std::max(oneDrawablePixelInUi(rendering::ui_scale_x),
+                  oneDrawablePixelInUi(rendering::ui_scale_y));
+}
+
 bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   if (head == nullptr || head->Tail == nullptr || !head->Tail->IsPlayed ||
       head->Tail->Timeline == nullptr) {
@@ -830,7 +842,8 @@ void BMSRenderer::drawHudRoundedPanel(float x, float y, float width,
                                       float height, float radius,
                                       const Color &fill,
                                       const Color &border) {
-  drawRoundedPanel(x, y, width, height, radius, 1.0f, fill, border);
+  drawRoundedPanel(x, y, width, height, radius, hudHairlineWidth(), fill,
+                   border);
 }
 
 void BMSRenderer::drawRoundedPanel(float x, float y, float width, float height,

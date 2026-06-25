@@ -274,8 +274,6 @@ void replayExportLog(ReplayVideoExportLog *log, const char *format, ...) {
 
   if (log != nullptr) {
     log->write(message);
-  } else {
-    SDL_Log("%s", message.c_str());
   }
 }
 
@@ -324,34 +322,6 @@ void restoreReplayVideoRenderGeometry(
   rendering::ui_view_height = state.uiViewHeight;
 }
 
-void applyReplayVideoRenderGeometry(int exportWidth, int exportHeight) {
-  rendering::render_width = std::max(1, exportWidth);
-  rendering::render_height = std::max(1, exportHeight);
-
-  // Rendering below the 1920px design width used to make 1px UI strokes and
-  // world-space line accents subpixel-thin. Keep export UI scale at least 1:1
-  // so 1080p exports on narrower display aspects do not drop thin lines.
-  const float uiScale = std::max(
-      1.0f, static_cast<float>(rendering::render_width) /
-                static_cast<float>(rendering::design_width));
-  rendering::ui_scale_x = uiScale;
-  rendering::ui_scale_y = uiScale;
-  rendering::widthScale = uiScale;
-  rendering::heightScale = uiScale;
-  rendering::window_width = std::max(
-      1, static_cast<int>(
-             std::lround(static_cast<float>(rendering::render_width) /
-                         uiScale)));
-  rendering::window_height = std::max(
-      1, static_cast<int>(
-             std::lround(static_cast<float>(rendering::render_height) /
-                         uiScale)));
-  rendering::ui_view_width = rendering::render_width;
-  rendering::ui_view_height = rendering::render_height;
-  rendering::ui_offset_x = 0;
-  rendering::ui_offset_y = 0;
-}
-
 class ScopedReplayVideoRenderGeometry {
 public:
   ScopedReplayVideoRenderGeometry(int exportWidth, int exportHeight)
@@ -359,9 +329,7 @@ public:
 
   ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
 
-  void applyExport() {
-    applyReplayVideoRenderGeometry(exportWidth, exportHeight);
-  }
+  void applyExport() { rendering::updateUIScale(exportWidth, exportHeight); }
 
   void restorePrimary() {
     restoreReplayVideoRenderGeometry(primary);
@@ -2884,6 +2852,17 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
   reportReplayExportProgress(options, 0.0, "Preparing export");
 
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  reportReplayExportProgress(options, 0.01, "Requesting Photos permission");
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
   std::filesystem::create_directories(outputDir, ec);
@@ -2895,41 +2874,38 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const std::string baseName =
       sanitizeFileNamePart(chart->Meta.Title) + "_" + makeTimestamp();
   const auto tempDir = outputDir / (baseName + "_tmp");
-  const auto logPath = outputDir / (baseName + ".log");
-  ReplayVideoExportLog exportLog(logPath);
-  replayExportLog(&exportLog, "Replay export log: %s",
-                  logPath.string().c_str());
-  replayExportLog(&exportLog, "Replay export chart: %s",
+  ReplayVideoExportLog *exportLog = nullptr;
+  replayExportLog(exportLog, "Replay export chart: %s",
                   chart->Meta.Title.c_str());
   if (replay.randomSeed.has_value()) {
-    replayExportLog(&exportLog, "Replay export random seed: %u",
+    replayExportLog(exportLog, "Replay export random seed: %u",
                     *replay.randomSeed);
   }
   if (replay.randomPrng.has_value()) {
-    replayExportLog(&exportLog, "Replay export random PRNG: %s",
+    replayExportLog(exportLog, "Replay export random PRNG: %s",
                     replay.randomPrng->c_str());
   }
   if (replay.playOption.has_value()) {
-    replayExportLog(&exportLog, "Replay export play option: %s",
+    replayExportLog(exportLog, "Replay export play option: %s",
                     replay.playOption->c_str());
   }
   if (replay.playOptionSeed.has_value()) {
-    replayExportLog(&exportLog, "Replay export play option seed: %lld",
+    replayExportLog(exportLog, "Replay export play option seed: %lld",
                     *replay.playOptionSeed);
   }
   if (replay.playOption2.has_value()) {
-    replayExportLog(&exportLog, "Replay export 2P play option: %s",
+    replayExportLog(exportLog, "Replay export 2P play option: %s",
                     replay.playOption2->c_str());
   }
   if (replay.playOption2Seed.has_value()) {
-    replayExportLog(&exportLog, "Replay export 2P play option seed: %lld",
+    replayExportLog(exportLog, "Replay export 2P play option seed: %lld",
                     *replay.playOption2Seed);
   }
   const auto totalStart = std::chrono::steady_clock::now();
 
   std::filesystem::create_directories(tempDir, ec);
   if (ec) {
-    replayExportLog(&exportLog,
+    replayExportLog(exportLog,
                     "Replay export failed to create work directory: %s",
                     tempDir.string().c_str());
     return {.success = false,
@@ -2941,41 +2917,41 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto wavPath = tempDir / "audio.wav";
   const auto outputPath = outputDir / (baseName + ".mp4");
 
-  replayExportLog(&exportLog, "Replay export audio: %s",
+  replayExportLog(exportLog, "Replay export audio: %s",
                   wavPath.string().c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
-  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath, &exportLog);
+  auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath, exportLog);
   if (!audioResult.success) {
-    replayExportLog(&exportLog, "Replay export audio failed: %s",
+    replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
     std::filesystem::remove_all(tempDir, ec);
     return audioResult;
   }
-  replayExportLog(&exportLog, "Replay export audio finished in %.2fs",
+  replayExportLog(exportLog, "Replay export audio finished in %.2fs",
                   static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
   reportReplayExportProgress(resolvedOptions, 0.05, "Audio track ready");
 
-  replayExportLog(&exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
+  replayExportLog(exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
                   outputPath.string().c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult =
       renderReplayVideoToMp4(context, *chart, replay, context.settings,
-                             resolvedOptions, wavPath, outputPath, &exportLog);
+                             resolvedOptions, wavPath, outputPath, exportLog);
   if (!muxResult.success) {
-    replayExportLog(&exportLog, "Replay export MP4 failed: %s",
+    replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
     std::filesystem::remove(outputPath, ec);
     std::filesystem::remove_all(tempDir, ec);
     return muxResult;
   }
-  replayExportLog(&exportLog, "Replay export MP4 finished in %.2fs",
+  replayExportLog(exportLog, "Replay export MP4 finished in %.2fs",
                   static_cast<double>(elapsedMicros(videoStart)) / 1000000.0);
 
   std::filesystem::remove_all(tempDir, ec);
   if (ec) {
-    replayExportLog(&exportLog,
+    replayExportLog(exportLog,
                     "Replay export could not clean work directory: %s",
                     tempDir.string().c_str());
   }
@@ -2983,12 +2959,12 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
   if (!platformSaveResult.success) {
-    replayExportLog(&exportLog, "Replay export platform save failed: %s",
+    replayExportLog(exportLog, "Replay export platform save failed: %s",
                     platformSaveResult.message.c_str());
     return platformSaveResult;
   }
   reportReplayExportProgress(resolvedOptions, 1.0, platformSaveResult.message);
-  replayExportLog(&exportLog, "Replay export finished in %.2fs: %s",
+  replayExportLog(exportLog, "Replay export finished in %.2fs: %s",
                   static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
                   platformSaveResult.message.c_str());
   return platformSaveResult;
