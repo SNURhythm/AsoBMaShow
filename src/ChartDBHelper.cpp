@@ -2617,6 +2617,52 @@ bool ChartDBHelper::InsertMusicPlaylistTrack(
   return true;
 }
 
+bool ChartDBHelper::DeleteMusicPlaylistTrack(
+    sqlite3 *db, int playlistId, const bms_parser::ChartMeta &chartMeta) {
+  if (playlistId <= 0 || !CreateMusicPlaylistTables(db)) {
+    return false;
+  }
+
+  const auto identity = storedMusicTrackIdentity(chartMeta);
+  if (identity.musicKey.empty()) {
+    std::cerr << "Cannot delete music playlist track without a music key.\n";
+    return false;
+  }
+
+  const char *query =
+      "DELETE FROM music_playlist_items "
+      "WHERE playlist_id = ?1 AND music_key_type = ?2 AND music_key = ?3";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing music playlist track delete: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, playlistId);
+  bindText(stmt, 2, identity.keyType);
+  bindText(stmt, 3, identity.musicKey);
+  rc = sqlite3_step(stmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while deleting music playlist track: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+
+  const bool deleted = sqlite3_changes(db) > 0;
+  if (deleted) {
+    const char *updateQuery =
+        "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = "
+        "?1";
+    SqliteStatementHandle updateStmt;
+    if (prepareSqliteStatement(db, updateQuery, updateStmt) == SQLITE_OK) {
+      sqlite3_bind_int(updateStmt, 1, playlistId);
+      sqlite3_step(updateStmt);
+    }
+  }
+  return deleted;
+}
+
 bool ChartDBHelper::ClearMusicPlaylist(sqlite3 *db, int playlistId) {
   if (playlistId <= 0 || !CreateMusicPlaylistTables(db)) {
     return false;

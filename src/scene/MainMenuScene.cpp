@@ -822,6 +822,26 @@ std::string musicTrackDisplayName(const music_playlist::MusicTrack *track) {
   return title;
 }
 
+std::string musicPlaylistTextSnapshot(
+    const std::vector<music_playlist::MusicTrack> &tracks) {
+  if (tracks.empty()) {
+    return "My Playlist\nEmpty";
+  }
+
+  constexpr std::size_t kVisibleTrackCount = 5;
+  std::ostringstream text;
+  text << "My Playlist";
+  const std::size_t visibleCount =
+      std::min(kVisibleTrackCount, tracks.size());
+  for (std::size_t i = 0; i < visibleCount; ++i) {
+    text << "\n" << (i + 1) << ". " << musicTrackDisplayName(&tracks[i]);
+  }
+  if (tracks.size() > visibleCount) {
+    text << "\n+" << (tracks.size() - visibleCount) << " more";
+  }
+  return text.str();
+}
+
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
@@ -2012,8 +2032,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;
   musicStatusText = nullptr;
+  musicPlaylistText = nullptr;
   musicSelectedButton = nullptr;
   musicAddSelectedButton = nullptr;
+  musicRemoveSelectedButton = nullptr;
   musicPlaylistButton = nullptr;
   musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
@@ -2024,6 +2046,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicCloseButton = nullptr;
   musicSelectedButtonText = nullptr;
   musicAddSelectedButtonText = nullptr;
+  musicRemoveSelectedButtonText = nullptr;
   musicPlaylistButtonText = nullptr;
   musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;
@@ -4480,7 +4503,7 @@ void MainMenuScene::buildMusicModal() {
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
-      ->setHeight(560)
+      ->setHeight(650)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -4510,6 +4533,13 @@ void MainMenuScene::buildMusicModal() {
   musicStatusText->setThemedColor(ui_theme::textSecondary);
   panel->addView(musicStatusText);
 
+  musicPlaylistText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  musicPlaylistText->setHeight(100);
+  musicPlaylistText->setWrap(true);
+  musicPlaylistText->setOverflow(TextView::TextOverflow::Hidden);
+  musicPlaylistText->setThemedColor(ui_theme::textSecondary);
+  panel->addView(musicPlaylistText);
+
   auto *sourceRow = makeModalOptionRow();
   musicSelectedButton =
       makeModalButton("Play Selected", 18, &musicSelectedButtonText);
@@ -4529,6 +4559,11 @@ void MainMenuScene::buildMusicModal() {
   musicAddSelectedButton->setFlex(1);
   musicAddSelectedButton->setOnClickListener(
       [this]() { addSelectedChartToMusicPlaylist(); });
+  musicRemoveSelectedButton =
+      makeModalButton("Remove Selected", 16, &musicRemoveSelectedButtonText);
+  musicRemoveSelectedButton->setFlex(1);
+  musicRemoveSelectedButton->setOnClickListener(
+      [this]() { removeSelectedChartFromMusicPlaylist(); });
   musicPlaylistButton =
       makeModalButton("Play Playlist", 18, &musicPlaylistButtonText);
   musicPlaylistButton->setFlex(1);
@@ -4540,6 +4575,7 @@ void MainMenuScene::buildMusicModal() {
   musicClearPlaylistButton->setOnClickListener(
       [this]() { clearSavedMusicPlaylist(); });
   playlistRow->addView(musicAddSelectedButton);
+  playlistRow->addView(musicRemoveSelectedButton);
   playlistRow->addView(musicPlaylistButton);
   playlistRow->addView(musicClearPlaylistButton);
   panel->addView(playlistRow);
@@ -4605,7 +4641,7 @@ void MainMenuScene::hideMusicModal() {
 
 void MainMenuScene::refreshMusicModal() {
   if (musicModalRoot == nullptr || musicTrackText == nullptr ||
-      musicStatusText == nullptr) {
+      musicStatusText == nullptr || musicPlaylistText == nullptr) {
     return;
   }
 
@@ -4636,6 +4672,8 @@ void MainMenuScene::refreshMusicModal() {
     status += "  Library tracks: " + std::to_string(libraryTracks.size());
   }
   musicStatusText->setText(status);
+  musicPlaylistText->setText(
+      musicPlaylistTextSnapshot(context.musicPlayer.DefaultPlaylistTracks()));
 
   if (musicPlayPauseButtonText != nullptr) {
     musicPlayPauseButtonText->setText(
@@ -4648,6 +4686,10 @@ void MainMenuScene::refreshMusicModal() {
                           ui_theme::accentBorderStrong);
   styleThemedActionButton(musicAddSelectedButton, musicAddSelectedButtonText,
                           true, ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(musicRemoveSelectedButton,
+                          musicRemoveSelectedButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
   styleThemedActionButton(musicPlaylistButton, musicPlaylistButtonText, true,
                           ui_theme::primaryAction, ui_theme::primaryActionHover,
@@ -4746,6 +4788,37 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
   if (context.musicPlayer.AddChartToDefaultPlaylist(record.meta,
                                                     errorMessage)) {
     musicStatusMessage = "Added selected chart to My Playlist.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    musicStatusMessage = "Select a chart first.";
+    refreshMusicModal();
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
+    musicStatusMessage = "Selected chart cannot be removed from a playlist.";
+    refreshMusicModal();
+    return;
+  }
+
+  std::string errorMessage;
+  if (context.musicPlayer.RemoveChartFromDefaultPlaylist(record.meta,
+                                                         errorMessage)) {
+    musicStatusMessage = "Removed selected chart from My Playlist.";
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -7215,8 +7288,10 @@ void MainMenuScene::cleanupScene() {
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;
   musicStatusText = nullptr;
+  musicPlaylistText = nullptr;
   musicSelectedButton = nullptr;
   musicAddSelectedButton = nullptr;
+  musicRemoveSelectedButton = nullptr;
   musicPlaylistButton = nullptr;
   musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
@@ -7227,6 +7302,7 @@ void MainMenuScene::cleanupScene() {
   musicCloseButton = nullptr;
   musicSelectedButtonText = nullptr;
   musicAddSelectedButtonText = nullptr;
+  musicRemoveSelectedButtonText = nullptr;
   musicPlaylistButtonText = nullptr;
   musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;

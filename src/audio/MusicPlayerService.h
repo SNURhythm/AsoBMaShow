@@ -28,9 +28,15 @@ public:
   [[nodiscard]] const std::vector<MusicPlaylistInfo> &Playlists() const {
     return playlists;
   }
+  [[nodiscard]] const std::vector<music_playlist::MusicTrack> &
+  DefaultPlaylistTracks() const {
+    return defaultPlaylistTracks;
+  }
   [[nodiscard]] const MusicPlaylistInfo *DefaultPlaylist() const;
   bool AddChartToDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
                                  std::string &errorMessage);
+  bool RemoveChartFromDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                      std::string &errorMessage);
   bool ClearDefaultPlaylist(std::string &errorMessage);
 
   bool StartLibraryPlaylist(std::string &errorMessage,
@@ -73,6 +79,7 @@ private:
 
   std::vector<music_playlist::MusicTrack> libraryTracks;
   std::vector<MusicPlaylistInfo> playlists;
+  std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   int defaultPlaylistId = 0;
   music_playlist::MusicQueue queue;
   std::atomic_bool renderCancelled{false};

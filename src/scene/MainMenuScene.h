@@ -240,8 +240,10 @@ private:
   TextView *parseLogCloseButtonText = nullptr;
   TextView *musicTrackText = nullptr;
   TextView *musicStatusText = nullptr;
+  TextView *musicPlaylistText = nullptr;
   Button *musicSelectedButton = nullptr;
   Button *musicAddSelectedButton = nullptr;
+  Button *musicRemoveSelectedButton = nullptr;
   Button *musicPlaylistButton = nullptr;
   Button *musicClearPlaylistButton = nullptr;
   Button *musicRandomButton = nullptr;
@@ -252,6 +254,7 @@ private:
   Button *musicCloseButton = nullptr;
   TextView *musicSelectedButtonText = nullptr;
   TextView *musicAddSelectedButtonText = nullptr;
+  TextView *musicRemoveSelectedButtonText = nullptr;
   TextView *musicPlaylistButtonText = nullptr;
   TextView *musicClearPlaylistButtonText = nullptr;
   TextView *musicRandomButtonText = nullptr;
@@ -540,6 +543,7 @@ private:
   void refreshMusicModal();
   void playSelectedChartAsMusic();
   void addSelectedChartToMusicPlaylist();
+  void removeSelectedChartFromMusicPlaylist();
   void playSavedMusicPlaylist();
   void clearSavedMusicPlaylist();
   void playRandomMusicLibrary();

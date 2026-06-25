@@ -156,6 +156,8 @@ public:
   std::vector<MusicPlaylistInfo> SelectMusicPlaylists(sqlite3 *db);
   bool InsertMusicPlaylistTrack(sqlite3 *db, int playlistId,
                                 const bms_parser::ChartMeta &chartMeta);
+  bool DeleteMusicPlaylistTrack(sqlite3 *db, int playlistId,
+                                const bms_parser::ChartMeta &chartMeta);
   bool ClearMusicPlaylist(sqlite3 *db, int playlistId);
   void SelectMusicPlaylistTracks(sqlite3 *db, int playlistId,
                                  std::vector<MusicTrackRecord> &tracks);

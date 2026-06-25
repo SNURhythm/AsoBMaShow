@@ -17,6 +17,13 @@ void setEmptyPlaylistError(std::string &errorMessage) {
   errorMessage = "The music playlist is empty.";
 }
 
+std::vector<music_playlist::MusicTrack>
+loadPlaylistTracks(ChartDBHelper &dbHelper, sqlite3 *db, int playlistId) {
+  std::vector<MusicTrackRecord> records;
+  dbHelper.SelectMusicPlaylistTracks(db, playlistId, records);
+  return music_playlist::MakeTracks(records);
+}
+
 } // namespace
 
 bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
@@ -54,6 +61,7 @@ bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
     return false;
   }
   playlists = dbHelper.SelectMusicPlaylists(db);
+  defaultPlaylistTracks = loadPlaylistTracks(dbHelper, db, defaultPlaylistId);
   dbHelper.Close(db);
   return true;
 }
@@ -87,9 +95,39 @@ bool MusicPlayerService::AddChartToDefaultPlaylist(
   const bool inserted =
       dbHelper.InsertMusicPlaylistTrack(db, defaultPlaylistId, chartMeta);
   playlists = dbHelper.SelectMusicPlaylists(db);
+  defaultPlaylistTracks = loadPlaylistTracks(dbHelper, db, defaultPlaylistId);
   dbHelper.Close(db);
   if (!inserted) {
     errorMessage = "Could not add selected chart to the music playlist.";
+    return false;
+  }
+  return true;
+}
+
+bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
+    const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+  errorMessage.clear();
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  defaultPlaylistId = dbHelper.EnsureMusicPlaylist(db, kDefaultPlaylistName);
+  if (defaultPlaylistId <= 0) {
+    dbHelper.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return false;
+  }
+  const bool deleted =
+      dbHelper.DeleteMusicPlaylistTrack(db, defaultPlaylistId, chartMeta);
+  playlists = dbHelper.SelectMusicPlaylists(db);
+  defaultPlaylistTracks = loadPlaylistTracks(dbHelper, db, defaultPlaylistId);
+  dbHelper.Close(db);
+  if (!deleted) {
+    errorMessage = "Selected chart is not in My Playlist.";
     return false;
   }
   return true;
@@ -113,6 +151,11 @@ bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
   }
   const bool cleared = dbHelper.ClearMusicPlaylist(db, defaultPlaylistId);
   playlists = dbHelper.SelectMusicPlaylists(db);
+  if (cleared) {
+    defaultPlaylistTracks.clear();
+  } else {
+    defaultPlaylistTracks = loadPlaylistTracks(dbHelper, db, defaultPlaylistId);
+  }
   dbHelper.Close(db);
   if (!cleared) {
     errorMessage = "Could not clear the music playlist.";
@@ -163,17 +206,16 @@ bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
     return false;
   }
 
-  std::vector<MusicTrackRecord> records;
-  dbHelper.SelectMusicPlaylistTracks(db, defaultPlaylistId, records);
   playlists = dbHelper.SelectMusicPlaylists(db);
+  defaultPlaylistTracks = loadPlaylistTracks(dbHelper, db, defaultPlaylistId);
   dbHelper.Close(db);
 
-  if (records.empty()) {
+  if (defaultPlaylistTracks.empty()) {
     setEmptyPlaylistError(errorMessage);
     queue.Clear();
     return false;
   }
-  queue.SetPlaylist(music_playlist::MakeTracks(records));
+  queue.SetPlaylist(defaultPlaylistTracks);
   return true;
 }
 
