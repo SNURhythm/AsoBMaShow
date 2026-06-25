@@ -24,11 +24,20 @@ public:
   LibraryTracks() const {
     return libraryTracks;
   }
+  bool ReloadPlaylists(std::string &errorMessage);
+  [[nodiscard]] const std::vector<MusicPlaylistInfo> &Playlists() const {
+    return playlists;
+  }
+  [[nodiscard]] const MusicPlaylistInfo *DefaultPlaylist() const;
+  bool AddChartToDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
+                                 std::string &errorMessage);
+  bool ClearDefaultPlaylist(std::string &errorMessage);
 
   bool StartLibraryPlaylist(std::string &errorMessage,
                             std::size_t startIndex = 0);
   bool StartRandomLibrary(std::string &errorMessage,
                           std::optional<std::uint64_t> seed = std::nullopt);
+  bool StartDefaultPlaylist(std::string &errorMessage);
   void SetPlaylist(std::vector<music_playlist::MusicTrack> tracks,
                    std::size_t startIndex = 0);
   void SetRandomAll(std::vector<music_playlist::MusicTrack> tracks,
@@ -62,6 +71,8 @@ private:
                  std::string &errorMessage);
 
   std::vector<music_playlist::MusicTrack> libraryTracks;
+  std::vector<MusicPlaylistInfo> playlists;
+  int defaultPlaylistId = 0;
   music_playlist::MusicQueue queue;
   std::atomic_bool renderCancelled{false};
   chart_music_cache::CacheResult lastCacheResult;

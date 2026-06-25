@@ -241,6 +241,9 @@ private:
   TextView *musicTrackText = nullptr;
   TextView *musicStatusText = nullptr;
   Button *musicSelectedButton = nullptr;
+  Button *musicAddSelectedButton = nullptr;
+  Button *musicPlaylistButton = nullptr;
+  Button *musicClearPlaylistButton = nullptr;
   Button *musicRandomButton = nullptr;
   Button *musicPreviousButton = nullptr;
   Button *musicPlayPauseButton = nullptr;
@@ -248,6 +251,9 @@ private:
   Button *musicStopButton = nullptr;
   Button *musicCloseButton = nullptr;
   TextView *musicSelectedButtonText = nullptr;
+  TextView *musicAddSelectedButtonText = nullptr;
+  TextView *musicPlaylistButtonText = nullptr;
+  TextView *musicClearPlaylistButtonText = nullptr;
   TextView *musicRandomButtonText = nullptr;
   TextView *musicPreviousButtonText = nullptr;
   TextView *musicPlayPauseButtonText = nullptr;
@@ -533,6 +539,9 @@ private:
   void hideMusicModal();
   void refreshMusicModal();
   void playSelectedChartAsMusic();
+  void addSelectedChartToMusicPlaylist();
+  void playSavedMusicPlaylist();
+  void clearSavedMusicPlaylist();
   void playRandomMusicLibrary();
   void toggleMusicPlayback();
   void playNextMusicTrack();

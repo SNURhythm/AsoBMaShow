@@ -7,8 +7,14 @@
 namespace music_player {
 namespace {
 
+constexpr const char *kDefaultPlaylistName = "My Playlist";
+
 void setEmptyLibraryError(std::string &errorMessage) {
   errorMessage = "No music tracks are available in the chart library.";
+}
+
+void setEmptyPlaylistError(std::string &errorMessage) {
+  errorMessage = "The music playlist is empty.";
 }
 
 } // namespace
@@ -28,6 +34,90 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   dbHelper.Close(db);
 
   libraryTracks = music_playlist::MakeTracks(records);
+  return true;
+}
+
+bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
+  errorMessage.clear();
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  defaultPlaylistId = dbHelper.EnsureMusicPlaylist(db, kDefaultPlaylistName);
+  if (defaultPlaylistId <= 0) {
+    dbHelper.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return false;
+  }
+  playlists = dbHelper.SelectMusicPlaylists(db);
+  dbHelper.Close(db);
+  return true;
+}
+
+const MusicPlaylistInfo *MusicPlayerService::DefaultPlaylist() const {
+  for (const auto &playlist : playlists) {
+    if (playlist.id == defaultPlaylistId) {
+      return &playlist;
+    }
+  }
+  return nullptr;
+}
+
+bool MusicPlayerService::AddChartToDefaultPlaylist(
+    const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+  errorMessage.clear();
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  defaultPlaylistId = dbHelper.EnsureMusicPlaylist(db, kDefaultPlaylistName);
+  if (defaultPlaylistId <= 0) {
+    dbHelper.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return false;
+  }
+  const bool inserted =
+      dbHelper.InsertMusicPlaylistTrack(db, defaultPlaylistId, chartMeta);
+  playlists = dbHelper.SelectMusicPlaylists(db);
+  dbHelper.Close(db);
+  if (!inserted) {
+    errorMessage = "Could not add selected chart to the music playlist.";
+    return false;
+  }
+  return true;
+}
+
+bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
+  errorMessage.clear();
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  defaultPlaylistId = dbHelper.EnsureMusicPlaylist(db, kDefaultPlaylistName);
+  if (defaultPlaylistId <= 0) {
+    dbHelper.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return false;
+  }
+  const bool cleared = dbHelper.ClearMusicPlaylist(db, defaultPlaylistId);
+  playlists = dbHelper.SelectMusicPlaylists(db);
+  dbHelper.Close(db);
+  if (!cleared) {
+    errorMessage = "Could not clear the music playlist.";
+    return false;
+  }
   return true;
 }
 
@@ -52,6 +142,38 @@ bool MusicPlayerService::StartRandomLibrary(std::string &errorMessage,
     return false;
   }
   queue.SetRandomAll(libraryTracks, seed);
+  return true;
+}
+
+bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
+  errorMessage.clear();
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  defaultPlaylistId = dbHelper.EnsureMusicPlaylist(db, kDefaultPlaylistName);
+  if (defaultPlaylistId <= 0) {
+    dbHelper.Close(db);
+    errorMessage = "Could not create music playlist.";
+    queue.Clear();
+    return false;
+  }
+
+  std::vector<MusicTrackRecord> records;
+  dbHelper.SelectMusicPlaylistTracks(db, defaultPlaylistId, records);
+  playlists = dbHelper.SelectMusicPlaylists(db);
+  dbHelper.Close(db);
+
+  if (records.empty()) {
+    setEmptyPlaylistError(errorMessage);
+    queue.Clear();
+    return false;
+  }
+  queue.SetPlaylist(music_playlist::MakeTracks(records));
   return true;
 }
 

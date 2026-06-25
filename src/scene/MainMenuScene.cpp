@@ -2013,6 +2013,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicTrackText = nullptr;
   musicStatusText = nullptr;
   musicSelectedButton = nullptr;
+  musicAddSelectedButton = nullptr;
+  musicPlaylistButton = nullptr;
+  musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
   musicPreviousButton = nullptr;
   musicPlayPauseButton = nullptr;
@@ -2020,6 +2023,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicStopButton = nullptr;
   musicCloseButton = nullptr;
   musicSelectedButtonText = nullptr;
+  musicAddSelectedButtonText = nullptr;
+  musicPlaylistButtonText = nullptr;
+  musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;
   musicPreviousButtonText = nullptr;
   musicPlayPauseButtonText = nullptr;
@@ -4474,7 +4480,7 @@ void MainMenuScene::buildMusicModal() {
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
-      ->setHeight(480)
+      ->setHeight(560)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -4499,14 +4505,14 @@ void MainMenuScene::buildMusicModal() {
   panel->addView(musicTrackText);
 
   musicStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  musicStatusText->setHeight(62);
+  musicStatusText->setHeight(70);
   musicStatusText->setWrap(true);
   musicStatusText->setThemedColor(ui_theme::textSecondary);
   panel->addView(musicStatusText);
 
   auto *sourceRow = makeModalOptionRow();
   musicSelectedButton =
-      makeModalButton("Selected", 20, &musicSelectedButtonText);
+      makeModalButton("Play Selected", 18, &musicSelectedButtonText);
   musicSelectedButton->setFlex(1);
   musicSelectedButton->setOnClickListener(
       [this]() { playSelectedChartAsMusic(); });
@@ -4516,6 +4522,27 @@ void MainMenuScene::buildMusicModal() {
   sourceRow->addView(musicSelectedButton);
   sourceRow->addView(musicRandomButton);
   panel->addView(sourceRow);
+
+  auto *playlistRow = makeModalOptionRow();
+  musicAddSelectedButton =
+      makeModalButton("Add Selected", 18, &musicAddSelectedButtonText);
+  musicAddSelectedButton->setFlex(1);
+  musicAddSelectedButton->setOnClickListener(
+      [this]() { addSelectedChartToMusicPlaylist(); });
+  musicPlaylistButton =
+      makeModalButton("Play Playlist", 18, &musicPlaylistButtonText);
+  musicPlaylistButton->setFlex(1);
+  musicPlaylistButton->setOnClickListener(
+      [this]() { playSavedMusicPlaylist(); });
+  musicClearPlaylistButton =
+      makeModalButton("Clear", 18, &musicClearPlaylistButtonText);
+  musicClearPlaylistButton->setFlex(1);
+  musicClearPlaylistButton->setOnClickListener(
+      [this]() { clearSavedMusicPlaylist(); });
+  playlistRow->addView(musicAddSelectedButton);
+  playlistRow->addView(musicPlaylistButton);
+  playlistRow->addView(musicClearPlaylistButton);
+  panel->addView(playlistRow);
 
   auto *transportRow = makeModalOptionRow();
   musicPreviousButton =
@@ -4562,6 +4589,11 @@ void MainMenuScene::showMusicModal() {
   }
   musicModalRoot->setSize(rendering::window_width, rendering::window_height);
   musicModalRoot->setVisible(true);
+  std::string errorMessage;
+  if (!context.musicPlayer.ReloadPlaylists(errorMessage) &&
+      !errorMessage.empty()) {
+    musicStatusMessage = errorMessage;
+  }
   refreshMusicModal();
 }
 
@@ -4589,11 +4621,15 @@ void MainMenuScene::refreshMusicModal() {
   if (!playback.supported) {
     status += "Native music playback is unavailable on this platform.";
   } else if (!playback.loaded) {
-    status += "Choose Selected or Random All.";
+    status += "Choose Play Selected, Play Playlist, or Random All.";
   } else {
     status += playback.playing ? "Playing " : "Paused ";
     status += formatMusicTime(playback.positionMicros) + " / " +
               formatMusicTime(playback.durationMicros);
+  }
+  if (const auto *playlist = context.musicPlayer.DefaultPlaylist()) {
+    status += "  " + playlist->name + ": " +
+              std::to_string(playlist->trackCount);
   }
   const auto &libraryTracks = context.musicPlayer.LibraryTracks();
   if (!libraryTracks.empty()) {
@@ -4610,6 +4646,19 @@ void MainMenuScene::refreshMusicModal() {
                           ui_theme::primaryAction, ui_theme::primaryActionHover,
                           ui_theme::primaryActionPressed,
                           ui_theme::accentBorderStrong);
+  styleThemedActionButton(musicAddSelectedButton, musicAddSelectedButtonText,
+                          true, ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(musicPlaylistButton, musicPlaylistButtonText, true,
+                          ui_theme::primaryAction, ui_theme::primaryActionHover,
+                          ui_theme::primaryActionPressed,
+                          ui_theme::accentBorderStrong);
+  styleThemedActionButton(musicClearPlaylistButton,
+                          musicClearPlaylistButtonText, true,
+                          ui_theme::warningAction,
+                          ui_theme::warningActionHover,
+                          ui_theme::warningActionPressed,
+                          ui_theme::accentBorder);
   styleThemedActionButton(musicRandomButton, musicRandomButtonText, true,
                           ui_theme::successAction, ui_theme::successActionHover,
                           ui_theme::successActionPressed,
@@ -4666,6 +4715,64 @@ void MainMenuScene::playSelectedChartAsMusic() {
   std::string errorMessage;
   if (context.musicPlayer.PlayCurrent(errorMessage)) {
     musicStatusMessage = "Playing selected chart.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::addSelectedChartToMusicPlaylist() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    musicStatusMessage = "Select a chart first.";
+    refreshMusicModal();
+    return;
+  }
+
+  const ChartMetaRecord record = recyclerView->get(selected);
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
+    musicStatusMessage = "Selected chart cannot be added to a playlist.";
+    refreshMusicModal();
+    return;
+  }
+
+  std::string errorMessage;
+  if (context.musicPlayer.AddChartToDefaultPlaylist(record.meta,
+                                                    errorMessage)) {
+    musicStatusMessage = "Added selected chart to My Playlist.";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::playSavedMusicPlaylist() {
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    loadThread.join();
+  }
+  context.jukebox.stop();
+
+  std::string errorMessage;
+  if (!context.musicPlayer.StartDefaultPlaylist(errorMessage) ||
+      !context.musicPlayer.PlayCurrent(errorMessage)) {
+    musicStatusMessage = errorMessage;
+  } else {
+    musicStatusMessage = "Playing My Playlist.";
+  }
+  refreshMusicModal();
+}
+
+void MainMenuScene::clearSavedMusicPlaylist() {
+  std::string errorMessage;
+  if (context.musicPlayer.ClearDefaultPlaylist(errorMessage)) {
+    musicStatusMessage = "Cleared My Playlist.";
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -7104,6 +7211,9 @@ void MainMenuScene::cleanupScene() {
   musicTrackText = nullptr;
   musicStatusText = nullptr;
   musicSelectedButton = nullptr;
+  musicAddSelectedButton = nullptr;
+  musicPlaylistButton = nullptr;
+  musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
   musicPreviousButton = nullptr;
   musicPlayPauseButton = nullptr;
@@ -7111,6 +7221,9 @@ void MainMenuScene::cleanupScene() {
   musicStopButton = nullptr;
   musicCloseButton = nullptr;
   musicSelectedButtonText = nullptr;
+  musicAddSelectedButtonText = nullptr;
+  musicPlaylistButtonText = nullptr;
+  musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;
   musicPreviousButtonText = nullptr;
   musicPlayPauseButtonText = nullptr;
