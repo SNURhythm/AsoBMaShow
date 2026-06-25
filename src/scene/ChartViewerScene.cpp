@@ -1,6 +1,7 @@
 #include "ChartViewerScene.h"
 
 #include "../ArchiveFile.h"
+#include "../ChartPlaybackDuration.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
@@ -61,7 +62,6 @@ constexpr float kCursorTapSlop = 10.0f;
 constexpr float kCursorEndpointHorizontalSlopUi = 18.0f;
 constexpr float kPlaybackAutofocusPaddingX = 48.0f;
 constexpr float kPlaybackAutofocusPaddingY = 40.0f;
-constexpr long long kListenStopTailMicros = 1000000LL;
 constexpr long long kPracticeLeadInMicros = 3000000LL;
 constexpr int kNoGhostReplayId = -1;
 constexpr int kPracticeGhostReplayId = -2;
@@ -2179,8 +2179,7 @@ void ChartViewerScene::update(float dt) {
         rawTime + static_cast<long long>(context.settings.audioOffsetMs) *
                       1000LL;
     canvasView->setPlaybackTime(displayTime, true);
-    if (chart != nullptr &&
-        rawTime >= chart->Meta.TotalLength + kListenStopTailMicros) {
+    if (chart != nullptr && listenEndMicros > 0 && rawTime >= listenEndMicros) {
       stopListening();
     }
     updateListenControls();
@@ -2225,6 +2224,7 @@ void ChartViewerScene::cleanupScene() {
     context.jukebox.stop();
     listenActive = false;
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
   chart.reset();
   randomOptions.clear();
@@ -2686,6 +2686,7 @@ void ChartViewerScene::parseAndRefresh(
   if (listenAudioLoaded) {
     context.jukebox.stop();
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
   if (canvasView != nullptr) {
     canvasView->clearGhostReplay();
@@ -3170,6 +3171,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
   if (listenAudioLoaded) {
     context.jukebox.stop();
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
 
   randomSeed = replayChart->Meta.RandomSeed;
@@ -3704,6 +3706,9 @@ void ChartViewerScene::startListeningFromSelection() {
         } else {
           context.jukebox.stop();
         }
+        listenEndMicros = std::max(
+            chart_playback_duration::ChartTimelineEndMicros(*chart),
+            context.jukebox.getScheduledAudioEndMicros());
 
         context.jukebox.play();
         context.jukebox.seek(std::max(0LL, selectedTime));

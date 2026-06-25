@@ -608,6 +608,22 @@ bool Jukebox::hasActiveVisuals() const {
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
 
+long long Jukebox::getScheduledAudioEndMicros() {
+  long long endMicros = 0;
+  for (const auto &[eventMicros, wav] : audioList) {
+    const auto wavIt = wavTableAbs.find(wav);
+    if (wavIt == wavTableAbs.end()) {
+      continue;
+    }
+    const auto durationMicros = audio.getSoundDurationMicros(wavIt->second);
+    if (!durationMicros.has_value()) {
+      continue;
+    }
+    endMicros = std::max(endMicros, eventMicros + *durationMicros);
+  }
+  return endMicros;
+}
+
 long long Jukebox::getScheduledVisualEndMicros() {
   std::unordered_map<int, long long> videoDurations;
   {

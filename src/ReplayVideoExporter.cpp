@@ -1,6 +1,7 @@
 #include "ReplayVideoExporter.h"
 
 #include "ArchiveFile.h"
+#include "ChartPlaybackDuration.h"
 #include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
@@ -73,7 +74,6 @@ constexpr int kExportSampleRate = 44100;
 constexpr int kExportChannels = 2;
 constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
-constexpr long long kAudioTailMicros = 3000000;
 constexpr long long kResultSceneTailMicros = 10000000;
 const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
                                                      "mp3"};
@@ -639,25 +639,6 @@ buildReplayNoteLookup(bms_parser::Chart &chart) {
   return lookup;
 }
 
-long long calculateExportDurationMicros(bms_parser::Chart &chart,
-                                        const ReplayData &replay) {
-  long long durationMicros =
-      std::max(chart.Meta.TotalLength, chart.Meta.PlayLength);
-  for (const auto &measure : chart.Measures) {
-    for (const auto &timeline : measure->TimeLines) {
-      durationMicros = std::max(durationMicros, timeline->Timing);
-    }
-  }
-  for (const auto &event : replay.events) {
-    durationMicros = std::max(durationMicros, event.songTimeMicros);
-    durationMicros = std::max(durationMicros, event.noteTimeMicros);
-  }
-  for (const auto &sample : replay.touchSamples) {
-    durationMicros = std::max(durationMicros, sample.songTimeMicros);
-  }
-  return std::max(0LL, durationMicros) + kAudioTailMicros;
-}
-
 std::vector<const bms_parser::TimeLine *>
 collectBpmChangeTimelines(const bms_parser::Chart &chart) {
   std::vector<const bms_parser::TimeLine *> timelines;
@@ -683,10 +664,8 @@ collectBpmChangeTimelines(const bms_parser::Chart &chart) {
 
 std::vector<AudioEvent> collectAudioEvents(bms_parser::Chart &chart,
                                            const ReplayData &replay,
-                                           long long keySoundOffsetMicros,
-                                           long long &durationMicros) {
+                                           long long keySoundOffsetMicros) {
   std::vector<AudioEvent> events;
-  durationMicros = calculateExportDurationMicros(chart, replay);
 
   for (const auto &measure : chart.Measures) {
     for (const auto &timeline : measure->TimeLines) {
@@ -902,6 +881,24 @@ void ensureMixFrames(std::vector<float> &mix, size_t frames) {
   }
 }
 
+size_t exportAudioFramesForMicros(long long durationMicros) {
+  if (durationMicros <= 0) {
+    return 0;
+  }
+  return static_cast<size_t>(
+      std::ceil(static_cast<long double>(durationMicros) * kExportSampleRate /
+                1000000.0L));
+}
+
+long long exportAudioMicrosForFrames(size_t frames) {
+  if (frames == 0) {
+    return 0;
+  }
+  return static_cast<long long>(
+      std::ceil(static_cast<long double>(frames) * 1000000.0L /
+                kExportSampleRate));
+}
+
 float sampleDecodedChannel(const DecodedSound &sound, size_t frame,
                            int channel) {
   const int sourceChannels = sound.info.channels;
@@ -986,19 +983,23 @@ bool writeWavFile(const std::filesystem::path &path,
   return true;
 }
 
-ReplayVideoExportResult
+struct ReplayAudioTrackResult {
+  bool success = false;
+  std::filesystem::path outputPath;
+  std::string message;
+  long long durationMicros = 0;
+};
+
+ReplayAudioTrackResult
 writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
                       const std::filesystem::path &path,
                       ReplayVideoExportLog *log) {
-  long long durationMicros = 0;
   constexpr long long keySoundOffsetMicros = 0;
   const auto audioEvents =
-      collectAudioEvents(chart, replay, keySoundOffsetMicros, durationMicros);
-  const size_t initialFrames = static_cast<size_t>(
-      (static_cast<long double>(std::max(0LL, durationMicros)) *
-       kExportSampleRate) /
-          1000000.0L +
-      1.0L);
+      collectAudioEvents(chart, replay, keySoundOffsetMicros);
+  const long long baseDurationMicros =
+      chart_playback_duration::ReplayTimelineEndMicros(chart, replay);
+  const size_t initialFrames = exportAudioFramesForMicros(baseDurationMicros);
   std::vector<float> mix(initialFrames * kExportChannels, 0.0f);
   DecodedSoundCache decodedSounds;
   std::atomic_bool isCancelled = false;
@@ -1013,12 +1014,28 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
     }
     mixSoundAt(mix, *sound, event.timeMicros);
   }
+  if (mix.empty()) {
+    ensureMixFrames(mix, 1);
+  }
+  const long long durationMicros =
+      exportAudioMicrosForFrames(mix.size() / kExportChannels);
+  replayExportLog(log,
+                  "Replay export audio duration: %.3fs base=%.3fs events=%zu",
+                  static_cast<double>(durationMicros) / 1000000.0,
+                  static_cast<double>(baseDurationMicros) / 1000000.0,
+                  audioEvents.size());
 
   std::string errorMessage;
   if (!writeWavFile(path, mix, errorMessage)) {
-    return {.success = false, .outputPath = path, .message = errorMessage};
+    return {.success = false,
+            .outputPath = path,
+            .message = errorMessage,
+            .durationMicros = durationMicros};
   }
-  return {.success = true, .outputPath = path, .message = "Audio exported"};
+  return {.success = true,
+          .outputPath = path,
+          .message = "Audio exported",
+          .durationMicros = durationMicros};
 }
 
 void resetChartNotes(bms_parser::Chart &chart) {
@@ -2284,11 +2301,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        const ReplayVideoExportOptions &options,
                        const std::filesystem::path &wavPath,
                        const std::filesystem::path &outputPath,
+                       long long requestedGameplayDurationMicros,
                        ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const long long gameplayDurationMicros =
+      std::max(0LL, requestedGameplayDurationMicros);
 
   if (width > UINT16_MAX || height > UINT16_MAX) {
     return {.success = false,
@@ -2475,8 +2495,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
   size_t replayAutoReleaseTailCursor = 0;
-  const long long gameplayDurationMicros =
-      calculateExportDurationMicros(chart, replay);
   const long long scheduledVisualEndMicros =
       context.jukebox.getScheduledVisualEndMicros();
   const long long visualTailMicros =
@@ -2926,7 +2944,9 @@ ReplayVideoExporter::Export(ApplicationContext &context,
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
     std::filesystem::remove_all(tempDir, ec);
-    return audioResult;
+    return {.success = false,
+            .outputPath = audioResult.outputPath,
+            .message = audioResult.message};
   }
   replayExportLog(exportLog, "Replay export audio finished in %.2fs",
                   static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
@@ -2938,7 +2958,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult =
       renderReplayVideoToMp4(context, *chart, replay, context.settings,
-                             resolvedOptions, wavPath, outputPath, exportLog);
+                             resolvedOptions, wavPath, outputPath,
+                             audioResult.durationMicros, exportLog);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
