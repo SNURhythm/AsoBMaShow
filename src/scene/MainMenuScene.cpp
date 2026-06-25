@@ -800,7 +800,7 @@ const char *chartScanProgressStageText(ChartScanProgressStage stage) {
 }
 
 std::string formatMusicTime(long long micros) {
-  if (micros <= 0) {
+  if (micros < 0) {
     return "--:--";
   }
   const long long totalSeconds = micros / 1000000LL;
@@ -2040,7 +2040,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
   musicPreviousButton = nullptr;
+  musicSeekBackwardButton = nullptr;
   musicPlayPauseButton = nullptr;
+  musicSeekForwardButton = nullptr;
   musicNextButton = nullptr;
   musicStopButton = nullptr;
   musicCloseButton = nullptr;
@@ -2051,7 +2053,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;
   musicPreviousButtonText = nullptr;
+  musicSeekBackwardButtonText = nullptr;
   musicPlayPauseButtonText = nullptr;
+  musicSeekForwardButtonText = nullptr;
   musicNextButtonText = nullptr;
   musicStopButtonText = nullptr;
   musicCloseButtonText = nullptr;
@@ -4582,21 +4586,33 @@ void MainMenuScene::buildMusicModal() {
 
   auto *transportRow = makeModalOptionRow();
   musicPreviousButton =
-      makeModalButton("Previous", 18, &musicPreviousButtonText);
+      makeModalButton("Previous", 16, &musicPreviousButtonText);
   musicPreviousButton->setFlex(1);
   musicPreviousButton->setOnClickListener(
       [this]() { playPreviousMusicTrack(); });
+  musicSeekBackwardButton =
+      makeModalButton("-10s", 18, &musicSeekBackwardButtonText);
+  musicSeekBackwardButton->setFlex(1);
+  musicSeekBackwardButton->setOnClickListener(
+      [this]() { seekMusicRelative(-10000000LL); });
   musicPlayPauseButton = makeModalButton("Play", 20, &musicPlayPauseButtonText);
   musicPlayPauseButton->setFlex(1);
   musicPlayPauseButton->setOnClickListener([this]() { toggleMusicPlayback(); });
+  musicSeekForwardButton =
+      makeModalButton("+10s", 18, &musicSeekForwardButtonText);
+  musicSeekForwardButton->setFlex(1);
+  musicSeekForwardButton->setOnClickListener(
+      [this]() { seekMusicRelative(10000000LL); });
   musicNextButton = makeModalButton("Next", 20, &musicNextButtonText);
   musicNextButton->setFlex(1);
   musicNextButton->setOnClickListener([this]() { playNextMusicTrack(); });
-  musicStopButton = makeModalButton("Stop", 20, &musicStopButtonText);
+  musicStopButton = makeModalButton("Stop", 18, &musicStopButtonText);
   musicStopButton->setFlex(1);
   musicStopButton->setOnClickListener([this]() { stopMusicPlayback(); });
   transportRow->addView(musicPreviousButton);
+  transportRow->addView(musicSeekBackwardButton);
   transportRow->addView(musicPlayPauseButton);
+  transportRow->addView(musicSeekForwardButton);
   transportRow->addView(musicNextButton);
   transportRow->addView(musicStopButton);
   panel->addView(transportRow);
@@ -4710,9 +4726,16 @@ void MainMenuScene::refreshMusicModal() {
   styleThemedActionButton(musicPreviousButton, musicPreviousButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(musicSeekBackwardButton,
+                          musicSeekBackwardButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   styleThemedActionButton(musicPlayPauseButton, musicPlayPauseButtonText, true,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(musicSeekForwardButton, musicSeekForwardButtonText,
+                          true, ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   styleThemedActionButton(musicNextButton, musicNextButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
@@ -4884,6 +4907,28 @@ void MainMenuScene::toggleMusicPlayback() {
     ok = context.musicPlayer.PlayCurrent(errorMessage);
   }
   musicStatusMessage = ok ? "" : errorMessage;
+  refreshMusicModal();
+}
+
+void MainMenuScene::seekMusicRelative(long long deltaMicros) {
+  const auto playback = context.musicPlayer.PlaybackState();
+  if (!playback.supported || !playback.loaded) {
+    musicStatusMessage = "No music is loaded.";
+    refreshMusicModal();
+    return;
+  }
+
+  long long targetMicros = std::max(0LL, playback.positionMicros + deltaMicros);
+  if (playback.durationMicros > 0) {
+    targetMicros = std::min(targetMicros, playback.durationMicros);
+  }
+
+  std::string errorMessage;
+  if (context.musicPlayer.Seek(targetMicros, errorMessage)) {
+    musicStatusMessage = "Seeked to " + formatMusicTime(targetMicros) + ".";
+  } else {
+    musicStatusMessage = errorMessage;
+  }
   refreshMusicModal();
 }
 
@@ -7302,7 +7347,9 @@ void MainMenuScene::cleanupScene() {
   musicClearPlaylistButton = nullptr;
   musicRandomButton = nullptr;
   musicPreviousButton = nullptr;
+  musicSeekBackwardButton = nullptr;
   musicPlayPauseButton = nullptr;
+  musicSeekForwardButton = nullptr;
   musicNextButton = nullptr;
   musicStopButton = nullptr;
   musicCloseButton = nullptr;
@@ -7313,7 +7360,9 @@ void MainMenuScene::cleanupScene() {
   musicClearPlaylistButtonText = nullptr;
   musicRandomButtonText = nullptr;
   musicPreviousButtonText = nullptr;
+  musicSeekBackwardButtonText = nullptr;
   musicPlayPauseButtonText = nullptr;
+  musicSeekForwardButtonText = nullptr;
   musicNextButtonText = nullptr;
   musicStopButtonText = nullptr;
   musicCloseButtonText = nullptr;

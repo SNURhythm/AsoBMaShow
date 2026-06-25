@@ -248,7 +248,9 @@ private:
   Button *musicClearPlaylistButton = nullptr;
   Button *musicRandomButton = nullptr;
   Button *musicPreviousButton = nullptr;
+  Button *musicSeekBackwardButton = nullptr;
   Button *musicPlayPauseButton = nullptr;
+  Button *musicSeekForwardButton = nullptr;
   Button *musicNextButton = nullptr;
   Button *musicStopButton = nullptr;
   Button *musicCloseButton = nullptr;
@@ -259,7 +261,9 @@ private:
   TextView *musicClearPlaylistButtonText = nullptr;
   TextView *musicRandomButtonText = nullptr;
   TextView *musicPreviousButtonText = nullptr;
+  TextView *musicSeekBackwardButtonText = nullptr;
   TextView *musicPlayPauseButtonText = nullptr;
+  TextView *musicSeekForwardButtonText = nullptr;
   TextView *musicNextButtonText = nullptr;
   TextView *musicStopButtonText = nullptr;
   TextView *musicCloseButtonText = nullptr;
@@ -548,6 +552,7 @@ private:
   void clearSavedMusicPlaylist();
   void playRandomMusicLibrary();
   void toggleMusicPlayback();
+  void seekMusicRelative(long long deltaMicros);
   void playNextMusicTrack();
   void playPreviousMusicTrack();
   void stopMusicPlayback();
