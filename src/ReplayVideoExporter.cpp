@@ -298,6 +298,8 @@ struct ReplayVideoRenderGeometryState {
   int windowHeight = rendering::window_height;
   int renderWidth = rendering::render_width;
   int renderHeight = rendering::render_height;
+  float widthScale = rendering::widthScale;
+  float heightScale = rendering::heightScale;
   float uiScaleX = rendering::ui_scale_x;
   float uiScaleY = rendering::ui_scale_y;
   int uiOffsetX = rendering::ui_offset_x;
@@ -312,12 +314,42 @@ void restoreReplayVideoRenderGeometry(
   rendering::window_height = state.windowHeight;
   rendering::render_width = state.renderWidth;
   rendering::render_height = state.renderHeight;
+  rendering::widthScale = state.widthScale;
+  rendering::heightScale = state.heightScale;
   rendering::ui_scale_x = state.uiScaleX;
   rendering::ui_scale_y = state.uiScaleY;
   rendering::ui_offset_x = state.uiOffsetX;
   rendering::ui_offset_y = state.uiOffsetY;
   rendering::ui_view_width = state.uiViewWidth;
   rendering::ui_view_height = state.uiViewHeight;
+}
+
+void applyReplayVideoRenderGeometry(int exportWidth, int exportHeight) {
+  rendering::render_width = std::max(1, exportWidth);
+  rendering::render_height = std::max(1, exportHeight);
+
+  // Rendering below the 1920px design width used to make 1px UI strokes and
+  // world-space line accents subpixel-thin. Keep export UI scale at least 1:1
+  // so 1080p exports on narrower display aspects do not drop thin lines.
+  const float uiScale = std::max(
+      1.0f, static_cast<float>(rendering::render_width) /
+                static_cast<float>(rendering::design_width));
+  rendering::ui_scale_x = uiScale;
+  rendering::ui_scale_y = uiScale;
+  rendering::widthScale = uiScale;
+  rendering::heightScale = uiScale;
+  rendering::window_width = std::max(
+      1, static_cast<int>(
+             std::lround(static_cast<float>(rendering::render_width) /
+                         uiScale)));
+  rendering::window_height = std::max(
+      1, static_cast<int>(
+             std::lround(static_cast<float>(rendering::render_height) /
+                         uiScale)));
+  rendering::ui_view_width = rendering::render_width;
+  rendering::ui_view_height = rendering::render_height;
+  rendering::ui_offset_x = 0;
+  rendering::ui_offset_y = 0;
 }
 
 class ScopedReplayVideoRenderGeometry {
@@ -328,7 +360,7 @@ public:
   ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
 
   void applyExport() {
-    rendering::updateUIScale(exportWidth, exportHeight);
+    applyReplayVideoRenderGeometry(exportWidth, exportHeight);
   }
 
   void restorePrimary() {
