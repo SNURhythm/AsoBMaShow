@@ -247,6 +247,39 @@ bool MusicPlayerService::Seek(long long positionMicros,
   return native_music_player::Seek(positionMicros, errorMessage);
 }
 
+bool MusicPlayerService::ProcessNativeControlEvents(
+    std::string &statusMessage) {
+  bool handled = false;
+  for (const auto event : native_music_player::DrainControlEvents()) {
+    handled = true;
+    std::string errorMessage;
+    switch (event) {
+    case native_music_player::ControlEvent::Previous:
+      if (PlayPrevious(errorMessage)) {
+        statusMessage = "Playing previous track.";
+      } else {
+        statusMessage = errorMessage;
+      }
+      break;
+    case native_music_player::ControlEvent::Next:
+      if (PlayNext(errorMessage)) {
+        statusMessage = "Playing next track.";
+      } else {
+        statusMessage = errorMessage;
+      }
+      break;
+    case native_music_player::ControlEvent::Finished:
+      if (PlayNext(errorMessage)) {
+        statusMessage = "Track finished. Playing next track.";
+      } else {
+        statusMessage = errorMessage;
+      }
+      break;
+    }
+  }
+  return handled;
+}
+
 void MusicPlayerService::CancelRender() {
   renderCancelled.store(true, std::memory_order_release);
 }

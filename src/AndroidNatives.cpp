@@ -3,6 +3,8 @@
 
 #if TARGET_OS_ANDROID
 
+#include "audio/NativeMusicPlayer.h"
+
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_system.h>
@@ -462,6 +464,22 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelle
     return JNI_TRUE;
   }
   return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeMusicControlEvent(
+    JNIEnv *env, jclass, jstring eventName) {
+  const std::string event = jstringToUtf8(env, eventName);
+  if (event == "previous") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Previous);
+  } else if (event == "next") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Next);
+  } else if (event == "finished") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Finished);
+  }
 }
 
 std::string GetAndroidExternalFilesDir() {

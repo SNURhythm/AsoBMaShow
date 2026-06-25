@@ -10,9 +10,14 @@
 #endif
 
 #include <algorithm>
+#include <mutex>
+#include <vector>
 
 namespace native_music_player {
 namespace {
+
+std::mutex gControlEventsMutex;
+std::vector<ControlEvent> gControlEvents;
 
 std::string pathToUtf8(const std::filesystem::path &path) {
   return path_t_to_utf8(fspath_to_path_t(path));
@@ -140,6 +145,20 @@ PlaybackState GetState() {
 #else
   return {};
 #endif
+}
+
+void NotifyControlEvent(ControlEvent event) {
+  std::lock_guard<std::mutex> lock(gControlEventsMutex);
+  if (gControlEvents.size() < 32) {
+    gControlEvents.push_back(event);
+  }
+}
+
+std::vector<ControlEvent> DrainControlEvents() {
+  std::vector<ControlEvent> events;
+  std::lock_guard<std::mutex> lock(gControlEventsMutex);
+  events.swap(gControlEvents);
+  return events;
 }
 
 } // namespace native_music_player

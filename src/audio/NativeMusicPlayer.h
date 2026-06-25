@@ -2,8 +2,15 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace native_music_player {
+
+enum class ControlEvent {
+  Previous,
+  Next,
+  Finished,
+};
 
 struct TrackMetadata {
   std::string title;
@@ -28,5 +35,7 @@ bool Pause(std::string &errorMessage);
 bool Stop(std::string &errorMessage);
 bool Seek(long long positionMicros, std::string &errorMessage);
 PlaybackState GetState();
+void NotifyControlEvent(ControlEvent event);
+std::vector<ControlEvent> DrainControlEvents();
 
 } // namespace native_music_player

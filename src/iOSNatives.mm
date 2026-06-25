@@ -1,6 +1,7 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
+#include "audio/NativeMusicPlayer.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -23,6 +24,19 @@
 #include <string>
 #include <vector>
 
+@interface IOSNativeMusicDelegate : NSObject <AVAudioPlayerDelegate>
+@end
+
+@implementation IOSNativeMusicDelegate
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player
+                        successfully:(BOOL)flag {
+  (void)player;
+  (void)flag;
+  native_music_player::NotifyControlEvent(
+      native_music_player::ControlEvent::Finished);
+}
+@end
+
 namespace {
 constexpr int kIOSReplaySampleRate = 44100;
 constexpr int kIOSReplayChannels = 2;
@@ -31,6 +45,7 @@ constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 UIDocumentInteractionController *gIOSRevealFileController = nil;
 AVAudioPlayer *gIOSNativeMusicPlayer = nil;
+IOSNativeMusicDelegate *gIOSNativeMusicDelegate = nil;
 IOSNativeMusicMetadata gIOSNativeMusicMetadata;
 bool gIOSNativeMusicRemoteCommandsConfigured = false;
 
@@ -586,6 +601,24 @@ void ConfigureIOSNativeMusicRemoteCommands() {
                ? MPRemoteCommandHandlerStatusSuccess
                : MPRemoteCommandHandlerStatusCommandFailed;
   }];
+
+  center.previousTrackCommand.enabled = YES;
+  [center.previousTrackCommand
+      addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+          MPRemoteCommandEvent *) {
+        native_music_player::NotifyControlEvent(
+            native_music_player::ControlEvent::Previous);
+        return MPRemoteCommandHandlerStatusSuccess;
+      }];
+
+  center.nextTrackCommand.enabled = YES;
+  [center.nextTrackCommand
+      addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+          MPRemoteCommandEvent *) {
+        native_music_player::NotifyControlEvent(
+            native_music_player::ControlEvent::Next);
+        return MPRemoteCommandHandlerStatusSuccess;
+      }];
 
   center.changePlaybackPositionCommand.enabled = YES;
   [center.changePlaybackPositionCommand
@@ -2370,6 +2403,10 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
         return false;
       }
       player.numberOfLoops = 0;
+      if (gIOSNativeMusicDelegate == nil) {
+        gIOSNativeMusicDelegate = [IOSNativeMusicDelegate new];
+      }
+      player.delegate = gIOSNativeMusicDelegate;
       if (![player prepareToPlay]) {
         errorMessage = "Could not prepare music for playback";
         return false;

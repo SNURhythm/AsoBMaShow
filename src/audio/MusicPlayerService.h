@@ -64,6 +64,7 @@ public:
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
   bool Seek(long long positionMicros, std::string &errorMessage);
+  bool ProcessNativeControlEvents(std::string &statusMessage);
   void CancelRender();
 
 private:

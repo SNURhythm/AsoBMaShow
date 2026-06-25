@@ -7047,6 +7047,11 @@ void MainMenuScene::update(float dt) {
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
+  std::string nativeMusicStatusMessage;
+  if (context.musicPlayer.ProcessNativeControlEvents(
+          nativeMusicStatusMessage)) {
+    musicStatusMessage = nativeMusicStatusMessage;
+  }
   if (musicModalRoot != nullptr && musicModalRoot->getVisible()) {
     refreshMusicModal();
   }
