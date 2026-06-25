@@ -538,6 +538,13 @@ private:
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
+  bool selectedReplayIsAutoPlay() const;
+  ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
+  bool prepareAutoPlayChartForRecord(
+      const ChartMetaRecord &record,
+      std::unique_ptr<bms_parser::Chart> &preparedChart,
+      play_options::PlayOptionReplayInfo &playInfo,
+      std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);

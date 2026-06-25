@@ -14,6 +14,7 @@ struct ResultPracticeOptions {
   bool enabled = false;
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
+  bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   std::optional<std::string> playOption;
@@ -35,7 +36,8 @@ public:
               const RhythmState &state, const ReplayData *replay = nullptr,
               bool shouldSaveScore = true,
               const ReplayData *retrySource = nullptr,
-              ResultPracticeOptions practiceOptions = {});
+              ResultPracticeOptions practiceOptions = {},
+              bool autoPlayResult = false);
   ~ResultScene() override = default;
 
   void init() override;
@@ -70,6 +72,7 @@ private:
   std::unique_ptr<ISkin> skin;
   bool shouldSaveScore = true;
   bool replayResult = false;
+  bool autoPlayResult = false;
   bool scoreSaved = false;
   bool replaySaved = false;
   bool previousBestLoaded = false;

@@ -91,6 +91,7 @@ struct ReplayLaneCoverEvent {
 
 struct ReplayData {
   int id = 0;
+  bool autoPlay = false;
   bms_parser::ChartMeta chartMeta;
   std::optional<unsigned int> randomSeed;
   std::optional<std::string> randomPrng;

@@ -132,6 +132,8 @@ std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
                      std::string *errorMessage = nullptr);
+std::filesystem::path
+materializedFileCachePath(const std::filesystem::path &path);
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
                            const std::vector<std::filesystem::path>
                                &protectedPaths = {},

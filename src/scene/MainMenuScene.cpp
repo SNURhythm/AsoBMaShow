@@ -5,6 +5,7 @@
 #include <fstream>
 #include <algorithm>
 #include "../ReplayDBHelper.h"
+#include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
 #include "../ResultImageExporter.h"
 #include "../PlayOptionUtils.h"
@@ -2109,7 +2110,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateEntriesTable(db);
-#if TARGET_OS_ANDROID
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  RefreshIOSFolderAccess(dbHelper.SelectEffectiveEntries(db));
+#elif TARGET_OS_ANDROID
   (void)dbHelper.SelectEffectiveEntries(db);
 #endif
   dbHelper.CreateDifficultyTableTables(db);
@@ -2204,7 +2207,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       suppressPreviewForChartPath.reset();
     }
     if (!meta.StageFile.empty()) {
-      jacketView->setImageAsync(meta.Folder / meta.StageFile);
+      jacketView->setImageAsync(meta.Folder / meta.StageFile, true);
     } else {
       jacketView->freeImage();
     }
@@ -3685,7 +3688,7 @@ void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   }
 
   replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record->meta);
-  setReplayButtonVisible(!replaySummaries.empty());
+  setReplayButtonVisible(true);
 }
 
 void MainMenuScene::setReplayButtonVisible(bool visible) {
@@ -5425,6 +5428,11 @@ void MainMenuScene::buildReplayModal() {
   replayListView = new ReplaySummaryListView();
   replayListView->onSelectionChanged = [this](int idx) {
     selectedReplayIndex = idx;
+    if (selectedReplayIsAutoPlay()) {
+      selectedReplayRenderTouchPoints = false;
+      selectedReplayRenderGhosts = false;
+      refreshReplayExportOptionButtons();
+    }
     refreshReplayModalActions();
   };
   replayListView->setFlex(1);
@@ -5444,14 +5452,14 @@ void MainMenuScene::buildReplayModal() {
   replayTouchShowButton->setFlex(1);
   replayTouchHideButton->setFlex(1);
   replayTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderTouchPoints = true;
     refreshReplayExportOptionButtons();
   });
   replayTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderTouchPoints = false;
@@ -5473,14 +5481,14 @@ void MainMenuScene::buildReplayModal() {
   replayGhostShowButton->setFlex(1);
   replayGhostHideButton->setFlex(1);
   replayGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderGhosts = true;
     refreshReplayExportOptionButtons();
   });
   replayGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderGhosts = false;
@@ -5592,14 +5600,14 @@ void MainMenuScene::buildReplayModal() {
   replayExportTouchShowButton->setFlex(1);
   replayExportTouchHideButton->setFlex(1);
   replayExportTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderTouchPoints = true;
     refreshReplayExportOptionButtons();
   });
   replayExportTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderTouchPoints = false;
@@ -5622,14 +5630,14 @@ void MainMenuScene::buildReplayModal() {
   replayExportGhostShowButton->setFlex(1);
   replayExportGhostHideButton->setFlex(1);
   replayExportGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderGhosts = true;
     refreshReplayExportOptionButtons();
   });
   replayExportGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
       return;
     }
     selectedReplayRenderGhosts = false;
@@ -5737,6 +5745,9 @@ void MainMenuScene::buildReplayModal() {
     if (replayExportInProgress.load()) {
       return;
     }
+    if (selectedReplayIsAutoPlay()) {
+      return;
+    }
     if (selectedReplayIndex < 0 ||
         selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
       return;
@@ -5757,8 +5768,10 @@ void MainMenuScene::buildReplayModal() {
       ReplayVideoExportOptions options;
       options.fps = selectedExportFps;
       options.includeResultScreen = selectedExportIncludeResultScreen;
-      options.renderTouchPoints = selectedReplayRenderTouchPoints;
-      options.renderReplayGhosts = selectedReplayRenderGhosts;
+      options.renderTouchPoints =
+          selectedReplayIsAutoPlay() ? false : selectedReplayRenderTouchPoints;
+      options.renderReplayGhosts =
+          selectedReplayIsAutoPlay() ? false : selectedReplayRenderGhosts;
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
@@ -5787,10 +5800,9 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
 
   replayModalChart = record;
   replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta);
-  setReplayButtonVisible(!replaySummaries.empty());
-  if (replaySummaries.empty()) {
-    return;
-  }
+  replaySummaries.insert(replaySummaries.begin(),
+                         autoPlayReplaySummary(record));
+  setReplayButtonVisible(true);
 
   selectedReplayIndex = -1;
   selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
@@ -5820,6 +5832,10 @@ void MainMenuScene::showReplayExportOptions() {
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
+  if (selectedReplayIsAutoPlay()) {
+    selectedReplayRenderTouchPoints = false;
+    selectedReplayRenderGhosts = false;
+  }
   refreshReplayExportOptionButtons();
   refreshReplayModalActions();
   replayModalRoot->applyYogaLayoutFromRoot();
@@ -5871,9 +5887,14 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool progressMode = replayExportProgressContent != nullptr &&
                             replayExportProgressContent->getVisible();
   const bool exportInProgress = replayExportInProgress.load();
+  const bool autoPlaySelection = selectedReplayIsAutoPlay();
 
   if (replayModalCloseButtonText != nullptr) {
     replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
+  }
+  if (replayModalPhotoButtonText != nullptr) {
+    replayModalPhotoButtonText->setText(autoPlaySelection ? "No Photo"
+                                                          : "Export Photo");
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText(exportInProgress ? "Exporting"
@@ -5905,7 +5926,7 @@ void MainMenuScene::refreshReplayModalActions() {
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(replayModalPhotoButton, replayModalPhotoButtonText,
                           hasSelection && !optionsMode && !progressMode &&
-                              !exportInProgress,
+                              !exportInProgress && !autoPlaySelection,
                           ui_theme::successAction,
                           ui_theme::successActionHover,
                           ui_theme::successActionPressed, ui_theme::lime);
@@ -5921,6 +5942,12 @@ void MainMenuScene::refreshReplayModalActions() {
 }
 
 void MainMenuScene::refreshReplayExportOptionButtons() {
+  const bool autoPlaySelection = selectedReplayIsAutoPlay();
+  if (autoPlaySelection) {
+    selectedReplayRenderTouchPoints = false;
+    selectedReplayRenderGhosts = false;
+  }
+
   styleOptionButton(replayFps60Button, replayFps60ButtonText,
                     selectedExportFps == 60);
   styleOptionButton(replayFps120Button, replayFps120ButtonText,
@@ -5933,6 +5960,34 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
                     selectedExportIncludeResultScreen);
   styleOptionButton(replayResultSkipButton, replayResultSkipButtonText,
                     !selectedExportIncludeResultScreen);
+  if (autoPlaySelection) {
+    styleThemedActionButton(replayTouchShowButton, replayTouchShowButtonText,
+                            false, ui_theme::control, ui_theme::controlHover,
+                            ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
+    styleOptionButton(replayTouchHideButton, replayTouchHideButtonText, true);
+    styleThemedActionButton(replayExportTouchShowButton,
+                            replayExportTouchShowButtonText, false,
+                            ui_theme::control, ui_theme::controlHover,
+                            ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
+    styleOptionButton(replayExportTouchHideButton,
+                      replayExportTouchHideButtonText, true);
+    styleThemedActionButton(replayGhostShowButton, replayGhostShowButtonText,
+                            false, ui_theme::control, ui_theme::controlHover,
+                            ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
+    styleOptionButton(replayGhostHideButton, replayGhostHideButtonText, true);
+    styleThemedActionButton(replayExportGhostShowButton,
+                            replayExportGhostShowButtonText, false,
+                            ui_theme::control, ui_theme::controlHover,
+                            ui_theme::controlPressed,
+                            ui_theme::hairlineStrong);
+    styleOptionButton(replayExportGhostHideButton,
+                      replayExportGhostHideButtonText, true);
+    return;
+  }
+
   styleOptionButton(replayTouchShowButton, replayTouchShowButtonText,
                     selectedReplayRenderTouchPoints);
   styleOptionButton(replayTouchHideButton, replayTouchHideButtonText,
@@ -5976,6 +6031,55 @@ void MainMenuScene::updateReplayExportProgressUi(double fraction,
   }
 }
 
+bool MainMenuScene::selectedReplayIsAutoPlay() const {
+  return selectedReplayIndex >= 0 &&
+         selectedReplayIndex < static_cast<int>(replaySummaries.size()) &&
+         replaySummaries[selectedReplayIndex].autoPlay;
+}
+
+ReplaySummary
+MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
+  std::optional<std::string> playOption;
+  if (!play_options::isNormalPlayOption(selectedPlayOption)) {
+    playOption = selectedPlayOption;
+  }
+  return replay_autoplay::BuildSummary(
+      record.meta, selectedGaugeType, selectedGaugeAutoShift, playOption,
+      std::nullopt, std::nullopt, std::nullopt, selectedAssistOption);
+}
+
+bool MainMenuScene::prepareAutoPlayChartForRecord(
+    const ChartMetaRecord &record,
+    std::unique_ptr<bms_parser::Chart> &preparedChart,
+    play_options::PlayOptionReplayInfo &playInfo,
+    std::atomic_bool &parseCancelled) const {
+  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+    return false;
+  }
+
+  const SelectedChartRandomInfo chartRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
+  try {
+    preparedChart = play_options::parseChart(
+        record.meta.BmsPath, chartRandomInfo.seed, chartRandomInfo.prng,
+        chartRandomInfo.values, parseCancelled, "autoplay");
+  } catch (const std::exception &e) {
+    SDL_Log("Error parsing %s for autoplay: %s",
+            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+    archive_file::appendDebugLogLine(
+        "Autoplay parse exception: " +
+        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
+        e.what());
+  }
+  if (preparedChart == nullptr || parseCancelled) {
+    return false;
+  }
+
+  playInfo =
+      play_options::applySelectedPlayOptions(*preparedChart, selectedPlayOption);
+  return true;
+}
+
 void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                         int replayId) {
   if (willStart.load()) {
@@ -5995,6 +6099,46 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         };
         if (loadThread.joinable()) {
           loadThread.join();
+        }
+
+        if (replay_autoplay::isAutoPlayReplayId(replayId)) {
+          std::atomic_bool parseCancelled = false;
+          std::unique_ptr<bms_parser::Chart> autoPlayChart;
+          play_options::PlayOptionReplayInfo playInfo;
+          if (!prepareAutoPlayChartForRecord(record, autoPlayChart, playInfo,
+                                             parseCancelled)) {
+            return failReplayLoad();
+          }
+
+          context.jukebox.stop();
+          context.jukebox.loadChart(*autoPlayChart, true, parseCancelled);
+          if (parseCancelled) {
+            return failReplayLoad();
+          }
+
+          auto *chart = setSelectedChart(std::move(autoPlayChart), true, false);
+          if (chart == nullptr) {
+            return failReplayLoad();
+          }
+
+          hideReplayModal();
+          changeToGameplayScene(chart,
+                                {
+                                    .startPosition = 0,
+                                    .autoKeySound = true,
+                                    .autoPlay = true,
+                                    .gaugeType = selectedGaugeType,
+                                    .gaugeAutoShift = selectedGaugeAutoShift,
+                                    .playOption = playInfo.option,
+                                    .playOptionSeed = playInfo.seed,
+                                    .playOption2 = playInfo.option2,
+                                    .playOption2Seed = playInfo.seed2,
+                                    .assistOption = selectedAssistOption,
+                                    .touchVisualizationEnabled = false,
+                                    .replayGhostRenderingEnabled = false,
+                                });
+          willStart.store(false);
+          return true;
         }
 
         auto replay =
@@ -6171,9 +6315,17 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         .message = result.message,
     };
   };
+  const GaugeType autoPlayGaugeType = selectedGaugeType;
+  const bool autoPlayGaugeAutoShift = selectedGaugeAutoShift;
+  const std::string autoPlayAssistOption = selectedAssistOption;
+  const std::string autoPlayOption = selectedPlayOption;
+  const SelectedChartRandomInfo autoPlayRandomInfo =
+      selectedChartRandomInfoForPath(record.meta.BmsPath);
 
-  auto runExport = [this, record, replayId, options,
-                    complete](const std::stop_token *stopToken) {
+  auto runExport = [this, record, replayId, options, complete,
+                    autoPlayGaugeType, autoPlayGaugeAutoShift,
+                    autoPlayAssistOption, autoPlayOption,
+                    autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
       if (loadThread.joinable()) {
         loadThread.join();
@@ -6181,6 +6333,46 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       context.jukebox.stop();
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
+        return;
+      }
+
+      if (replay_autoplay::isAutoPlayReplayId(replayId)) {
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> chart;
+        try {
+          chart = play_options::parseChart(
+              record.meta.BmsPath, autoPlayRandomInfo.seed,
+              autoPlayRandomInfo.prng, autoPlayRandomInfo.values,
+              parseCancelled, "autoplay export");
+        } catch (const std::exception &e) {
+          SDL_Log("Error parsing %s for autoplay export: %s",
+                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+          archive_file::appendDebugLogLine(
+              "Autoplay export parse exception: " +
+              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
+              e.what());
+        }
+        if (chart == nullptr || parseCancelled) {
+          complete({.success = false, .message = "No Chart"});
+          return;
+        }
+        if (stopToken != nullptr && stopToken->stop_requested()) {
+          complete({.success = false,
+                    .message = "Replay export cancelled"});
+          return;
+        }
+
+        play_options::PlayOptionReplayInfo playInfo =
+            play_options::applySelectedPlayOptions(*chart, autoPlayOption);
+        ReplayData replay = replay_autoplay::BuildReplayData(
+            *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
+            playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
+            autoPlayAssistOption);
+        ReplayVideoExportOptions exportOptions = options;
+        exportOptions.renderTouchPoints = false;
+        exportOptions.renderReplayGhosts = false;
+        complete(ReplayVideoExporter::Export(context, chart.get(), replay,
+                                             exportOptions));
         return;
       }
 
@@ -6225,6 +6417,9 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
 void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
                                            int replayId) {
+  if (replay_autoplay::isAutoPlayReplayId(replayId)) {
+    return;
+  }
   if (replayExportInProgress.exchange(true)) {
     return;
   }

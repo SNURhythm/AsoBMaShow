@@ -19,14 +19,18 @@
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "../../bgfx/bimg/3rdparty/stb/stb_image_resize.h"
 #include "../StbImageRAII.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -36,6 +40,9 @@
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
+constexpr int kArchivedThumbnailMaxDimension = 256;
+constexpr std::array<unsigned char, 8> kArchivedThumbnailMagic = {
+    'A', 'S', 'O', 'B', 'T', 'H', 'M', '1'};
 
 struct DecodedImage {
   int width = 0;
@@ -56,7 +63,134 @@ bool decodedImageDimensionsAreValid(int width, int height) {
              std::numeric_limits<std::uint32_t>::max() / 4;
 }
 
+bool isArchiveEntryImagePath(const std::filesystem::path &path) {
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  return archive_file::splitVirtualPath(path, archivePath, innerPath);
+}
+
+std::filesystem::path
+archivedThumbnailCacheKeyPath(const std::filesystem::path &path) {
+  std::filesystem::path keyPath = path;
+  keyPath += ".asobmashow-thumb256-v1.rgba";
+  return keyPath;
+}
+
+std::uint32_t readLittleEndianU32(const unsigned char *bytes) {
+  return static_cast<std::uint32_t>(bytes[0]) |
+         (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+         (static_cast<std::uint32_t>(bytes[2]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+void appendLittleEndianU32(std::vector<unsigned char> &bytes,
+                           std::uint32_t value) {
+  bytes.push_back(static_cast<unsigned char>(value & 0xffU));
+  bytes.push_back(static_cast<unsigned char>((value >> 8U) & 0xffU));
+  bytes.push_back(static_cast<unsigned char>((value >> 16U) & 0xffU));
+  bytes.push_back(static_cast<unsigned char>((value >> 24U) & 0xffU));
+}
+
+std::optional<DecodedImage>
+readCachedArchivedThumbnail(const std::filesystem::path &path) {
+  if (!isArchiveEntryImagePath(path)) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path cachePath =
+      archive_file::materializedFileCachePath(
+          archivedThumbnailCacheKeyPath(path));
+  std::ifstream file(cachePath, std::ios::binary);
+  if (!file) {
+    return std::nullopt;
+  }
+
+  std::array<unsigned char, 16> header{};
+  file.read(reinterpret_cast<char *>(header.data()),
+            static_cast<std::streamsize>(header.size()));
+  if (!file || !std::equal(kArchivedThumbnailMagic.begin(),
+                           kArchivedThumbnailMagic.end(), header.begin())) {
+    return std::nullopt;
+  }
+
+  const int width =
+      static_cast<int>(readLittleEndianU32(header.data() + 8));
+  const int height =
+      static_cast<int>(readLittleEndianU32(header.data() + 12));
+  if (!decodedImageDimensionsAreValid(width, height) ||
+      width > kArchivedThumbnailMaxDimension ||
+      height > kArchivedThumbnailMaxDimension) {
+    return std::nullopt;
+  }
+
+  const size_t byteCount =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 4U;
+  auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
+  if (!rgba->empty()) {
+    file.read(reinterpret_cast<char *>(rgba->data()),
+              static_cast<std::streamsize>(rgba->size()));
+  }
+  if (!file) {
+    return std::nullopt;
+  }
+  return DecodedImage{.width = width, .height = height, .rgba = rgba};
+}
+
+DecodedImage makeArchivedThumbnail(const DecodedImage &decoded) {
+  const int maxDimension = std::max(decoded.width, decoded.height);
+  if (maxDimension <= kArchivedThumbnailMaxDimension) {
+    return decoded;
+  }
+
+  const float scale = static_cast<float>(kArchivedThumbnailMaxDimension) /
+                      static_cast<float>(maxDimension);
+  const int thumbnailWidth =
+      std::max(1, static_cast<int>(std::round(decoded.width * scale)));
+  const int thumbnailHeight =
+      std::max(1, static_cast<int>(std::round(decoded.height * scale)));
+  auto rgba = std::make_shared<std::vector<unsigned char>>(
+      static_cast<size_t>(thumbnailWidth) *
+      static_cast<size_t>(thumbnailHeight) * 4U);
+  const int resized =
+      stbir_resize_uint8(decoded.rgba->data(), decoded.width, decoded.height, 0,
+                         rgba->data(), thumbnailWidth, thumbnailHeight, 0, 4);
+  if (resized == 0) {
+    return decoded;
+  }
+  return DecodedImage{.width = thumbnailWidth,
+                      .height = thumbnailHeight,
+                      .rgba = rgba};
+}
+
+void writeCachedArchivedThumbnail(const std::filesystem::path &path,
+                                  const DecodedImage &thumbnail) {
+  if (!thumbnail.rgba ||
+      !decodedImageDimensionsAreValid(thumbnail.width, thumbnail.height) ||
+      thumbnail.width > kArchivedThumbnailMaxDimension ||
+      thumbnail.height > kArchivedThumbnailMaxDimension) {
+    return;
+  }
+
+  std::vector<unsigned char> bytes;
+  bytes.reserve(kArchivedThumbnailMagic.size() + 8U + thumbnail.rgba->size());
+  bytes.insert(bytes.end(), kArchivedThumbnailMagic.begin(),
+               kArchivedThumbnailMagic.end());
+  appendLittleEndianU32(bytes, static_cast<std::uint32_t>(thumbnail.width));
+  appendLittleEndianU32(bytes, static_cast<std::uint32_t>(thumbnail.height));
+  bytes.insert(bytes.end(), thumbnail.rgba->begin(), thumbnail.rgba->end());
+
+  std::string errorMessage;
+  if (!archive_file::materializeFileBytes(archivedThumbnailCacheKeyPath(path),
+                                          bytes, &errorMessage) &&
+      !errorMessage.empty()) {
+    SDL_Log("Failed to cache archived image thumbnail %s: %s",
+            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+            errorMessage.c_str());
+  }
+}
+
 std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
+  const bool archiveEntryPath = isArchiveEntryImagePath(path);
   int width = 0;
   int height = 0;
   int channels = 0;
@@ -110,7 +244,12 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
                            static_cast<size_t>(height) * 4;
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
   std::copy(data.get(), data.get() + byteCount, rgba->begin());
-  return DecodedImage{.width = width, .height = height, .rgba = rgba};
+  DecodedImage decoded{.width = width, .height = height, .rgba = rgba};
+  if (archiveEntryPath) {
+    DecodedImage thumbnail = makeArchivedThumbnail(decoded);
+    writeCachedArchivedThumbnail(path, thumbnail);
+  }
+  return decoded;
 }
 
 class ImageDecodeWorker {
@@ -120,14 +259,25 @@ public:
     return worker;
   }
 
-  void request(const path_t &path) {
+  void request(const path_t &path, bool prioritize = false) {
     const std::string key = imageCacheKey(path);
     std::lock_guard<std::mutex> lock(mutex);
-    if (ready.contains(key) || failed.contains(key) || queued.contains(key) ||
+    if (ready.contains(key) || failed.contains(key) ||
         inFlight.contains(key)) {
       return;
     }
-    queue.push_back({.key = key, .path = path, .generation = generation});
+    if (queued.contains(key)) {
+      if (prioritize) {
+        promoteQueuedTask(key);
+      }
+      return;
+    }
+    Task task{.key = key, .path = path, .generation = generation};
+    if (prioritize) {
+      queue.push_back(std::move(task));
+    } else {
+      queue.push_front(std::move(task));
+    }
     queued.insert(key);
     cv.notify_one();
   }
@@ -223,6 +373,20 @@ private:
         }
       }
     }
+  }
+
+  void promoteQueuedTask(const std::string &key) {
+    const auto it = std::find_if(queue.begin(), queue.end(),
+                                 [&key](const Task &task) {
+                                   return task.key == key;
+                                 });
+    if (it == queue.end()) {
+      return;
+    }
+    Task task = std::move(*it);
+    queue.erase(it);
+    queue.push_back(std::move(task));
+    cv.notify_one();
   }
 
   std::mutex mutex;
@@ -353,7 +517,8 @@ ImageView::ImageView(int x, int y, int width, int height, const path_t &path)
 }
 ImageView::~ImageView() { freeTexture(); }
 
-bool ImageView::applyImage(const path_t &path, const ImageCache &cache) {
+bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
+                           bool storeCache) {
   freeTexture();
   const std::string key = imageCacheKey(path);
   if (!cache.rgba || cache.rgba->empty() ||
@@ -378,7 +543,9 @@ bool ImageView::applyImage(const path_t &path, const ImageCache &cache) {
   texture = nextTexture;
   currentImageKey = key;
   currentImagePath = path;
-  imageCache[key] = cache;
+  if (storeCache) {
+    imageCache[key] = cache;
+  }
   return true;
 }
 
@@ -396,19 +563,39 @@ bool ImageView::applyCachedTexture(const path_t &path) {
   return false;
 }
 
+bool ImageView::applyCachedThumbnail(const path_t &path) {
+  const auto thumbnail =
+      readCachedArchivedThumbnail(std::filesystem::path(path));
+  if (!thumbnail.has_value()) {
+    return false;
+  }
+  return applyImage(path, {.width = thumbnail->width,
+                           .height = thumbnail->height,
+                           .rgba = thumbnail->rgba},
+                    false);
+}
+
 void ImageView::applyAsyncImageIfReady() {
-  if (currentImageKey.empty() || bgfx::isValid(texture)) {
+  if (currentImageKey.empty() || !asyncImagePending) {
     return;
   }
-  applyCachedTexture(currentImagePath);
+  if (applyCachedTexture(currentImagePath)) {
+    asyncImagePending = false;
+    return;
+  }
+  if (ImageDecodeWorker::instance().hasFailed(currentImagePath)) {
+    asyncImagePending = false;
+  }
 }
 
 bool ImageView::loadTexture(const path_t &path) {
   const std::string utf8Path = path_t_to_utf8(path);
   const std::string key = imageCacheKey(path);
-  if (currentImageKey == key && bgfx::isValid(texture)) {
+  if (currentImageKey == key && bgfx::isValid(texture) &&
+      !asyncImagePending) {
     return true;
   }
+  asyncImagePending = false;
   if (applyCachedTexture(path)) {
     return true;
   }
@@ -433,17 +620,21 @@ void ImageView::freeTexture() {
 }
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
-bool ImageView::setImageAsync(const path_t &path) {
+bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   const std::string key = imageCacheKey(path);
   if (currentImageKey == key) {
-    if (bgfx::isValid(texture)) {
+    if (applyCachedTexture(path)) {
+      asyncImagePending = false;
       return true;
     }
-    if (applyCachedTexture(path)) {
-      return true;
+    if (!bgfx::isValid(texture)) {
+      applyCachedThumbnail(path);
     }
     if (!ImageDecodeWorker::instance().hasFailed(path)) {
-      ImageDecodeWorker::instance().request(path);
+      asyncImagePending = true;
+      ImageDecodeWorker::instance().request(path, prioritize);
+    } else {
+      asyncImagePending = false;
     }
     return false;
   }
@@ -452,14 +643,18 @@ bool ImageView::setImageAsync(const path_t &path) {
   currentImageKey = key;
   currentImagePath = path;
   if (applyCachedTexture(path)) {
+    asyncImagePending = false;
     return true;
   }
-  ImageDecodeWorker::instance().request(path);
+  applyCachedThumbnail(path);
+  ImageDecodeWorker::instance().request(path, prioritize);
+  asyncImagePending = !ImageDecodeWorker::instance().hasFailed(path);
   return false;
 }
 void ImageView::freeImage() {
   currentImageKey.clear();
   currentImagePath.clear();
+  asyncImagePending = false;
   freeTexture();
 }
 void ImageView::renderImpl(RenderContext &context) {

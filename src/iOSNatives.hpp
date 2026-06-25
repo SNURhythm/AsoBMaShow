@@ -88,6 +88,7 @@ bool DownloadURLBinaryIOS(const std::string &url,
 bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           std::string &errorMessage);
+bool RequestIOSPhotoAddAuthorization(std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
 bool SaveImageToIOSPhotos(const std::string &filePath,

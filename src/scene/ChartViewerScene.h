@@ -93,6 +93,7 @@ private:
   size_t randomDrawerPage = 0;
   bool listenActive = false;
   bool listenAudioLoaded = false;
+  long long listenEndMicros = 0;
   std::optional<ReplayData> practiceGhostReplay;
   std::vector<ReplaySummary> ghostReplaySummaries;
   int selectedGhostReplayIndex = -1;
@@ -143,7 +144,7 @@ private:
   void startListeningFromSelection();
   void toggleListenPause();
   void stopListening();
-  void startPracticeFromSelection();
+  void startPracticeFromSelection(bool autoPlay);
   void goBack();
 
   [[nodiscard]] std::vector<RandomOption>

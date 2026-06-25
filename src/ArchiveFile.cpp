@@ -5111,7 +5111,6 @@ std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
-  const std::string key = cacheKeyForPath(path);
   std::filesystem::path cacheRoot = archiveCacheRoot();
   std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
   std::error_code error;
@@ -5123,8 +5122,7 @@ materializeFileBytes(const std::filesystem::path &path,
     return std::nullopt;
   }
 
-  std::filesystem::path output =
-      cacheRoot / (hex64(fnv1a64(key)) + path.extension().string());
+  std::filesystem::path output = materializedFileCachePath(path);
   bool needsWrite = true;
   if (std::filesystem::exists(output, error) && !error) {
     std::uintmax_t size = std::filesystem::file_size(output, error);
@@ -5145,6 +5143,13 @@ materializeFileBytes(const std::filesystem::path &path,
     }
   }
   return output;
+}
+
+std::filesystem::path
+materializedFileCachePath(const std::filesystem::path &path) {
+  const std::string key = cacheKeyForPath(path);
+  return archiveCacheRoot() /
+         (hex64(fnv1a64(key)) + path.extension().string());
 }
 
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,

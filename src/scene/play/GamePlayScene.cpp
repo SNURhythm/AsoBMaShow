@@ -226,7 +226,7 @@ void GamePlayScene::init() {
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
   context.jukebox.stop();
   reset();
-  if (!isReplayPlayback()) {
+  if (!isReplayPlayback() && !options.autoPlay) {
     ownedInputHandler = std::make_unique<RhythmInputHandler>(
         this, chart->Meta,
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
@@ -325,7 +325,8 @@ void GamePlayScene::init() {
           isReplayPlayback() ? "Replay" : "Retry", Color(57, 105, 42, 238),
           Color(72, 127, 51, 248), Color(91, 153, 61, 255),
           ui_theme::lime(), [this]() {
-            if (isReplayPlayback() || options.practiceMode) {
+            if (isReplayPlayback() || options.practiceMode ||
+                options.autoPlay) {
               restartCurrentPattern();
             } else {
               retryWithNewPattern();
@@ -455,6 +456,9 @@ void GamePlayScene::reset() {
   initializeStartPositionState();
   state->isPlaying = true;
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
+  renderer->setAutoPlayMarkVisible(
+      options.autoPlay ||
+      (options.replayData != nullptr && options.replayData->autoPlay));
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
@@ -747,6 +751,7 @@ void GamePlayScene::update(float dt) {
           practiceResultOptions.startPosition =
               static_cast<unsigned long long>(getStartPositionMicros());
           practiceResultOptions.autoKeySound = options.autoKeySound;
+          practiceResultOptions.autoPlay = options.autoPlay;
           practiceResultOptions.gaugeType = options.gaugeType;
           practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
           practiceResultOptions.playOption = options.playOption;
@@ -762,8 +767,12 @@ void GamePlayScene::update(float dt) {
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, chart->Meta, *state, replayToSave,
-                !options.practiceMode && !isReplayPlayback(), retrySource,
-                practiceResultOptions),
+                !options.autoPlay && !options.practiceMode &&
+                    !isReplayPlayback(),
+                retrySource, practiceResultOptions,
+                options.autoPlay ||
+                    (options.replayData != nullptr &&
+                     options.replayData->autoPlay)),
             false);
         return false;
       },

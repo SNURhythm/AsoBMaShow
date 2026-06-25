@@ -537,6 +537,16 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
                                 &previousBest) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("result_exports");
   std::filesystem::create_directories(outputDir, ec);
@@ -559,7 +569,7 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<std::string> beforeCreatedAt;
-  if (!replay.createdAt.empty()) {
+  if (!replay.autoPlay && !replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
   if (const auto best =

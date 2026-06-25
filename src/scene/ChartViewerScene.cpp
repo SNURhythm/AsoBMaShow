@@ -1,6 +1,7 @@
 #include "ChartViewerScene.h"
 
 #include "../ArchiveFile.h"
+#include "../ChartPlaybackDuration.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
@@ -40,7 +41,7 @@
 namespace {
 constexpr int kHeaderButtonHeight = 54;
 constexpr int kHeaderPadding = 18;
-constexpr float kMinZoom = 0.55f;
+constexpr float kMinZoom = 0.20f;
 constexpr float kMaxZoom = 5.0f;
 constexpr float kZoomStep = 0.20f;
 constexpr float kMinScreenZoom = 0.65f;
@@ -58,9 +59,9 @@ constexpr int kMarkerLabelMaxRasterFontSize = 128;
 constexpr float kChartContentTopPadding = 16.0f;
 constexpr float kChartContentBottomPadding = 24.0f;
 constexpr float kCursorTapSlop = 10.0f;
+constexpr float kCursorEndpointHorizontalSlopUi = 18.0f;
 constexpr float kPlaybackAutofocusPaddingX = 48.0f;
 constexpr float kPlaybackAutofocusPaddingY = 40.0f;
-constexpr long long kListenStopTailMicros = 1000000LL;
 constexpr long long kPracticeLeadInMicros = 3000000LL;
 constexpr int kNoGhostReplayId = -1;
 constexpr int kPracticeGhostReplayId = -2;
@@ -346,6 +347,7 @@ public:
     chart = newChart;
     markerGlyphTextures.clear();
     selectedTimeMicros.reset();
+    selectedBeatPosition.reset();
     playbackActive = false;
     replayGhostEvents.clear();
     rebuildLayout();
@@ -645,6 +647,10 @@ private:
     float y = 0.0f;
   };
 
+  enum class BoundaryPreference { PreferEnd, PreferStart };
+
+  enum class CursorSegmentSide { Full, Above, Below };
+
   bms_parser::Chart *chart = nullptr;
   rendering::SimpleBatchRenderer batch;
   rendering::TexBatchRenderer markerTextBatch;
@@ -666,7 +672,7 @@ private:
   float laneWidth = 24.0f;
   float laneAreaWidth = 0.0f;
   float gutterWidth = 54.0f;
-  float columnGap = 36.0f;
+  float columnGap = 17.0f;
   float columnWidth = 0.0f;
   float contentLeftMargin = 72.0f;
   float contentRightMargin = 72.0f;
@@ -695,6 +701,7 @@ private:
   float pinchAnchorContentX = 0.0f;
   float pinchAnchorContentY = 0.0f;
   std::optional<long long> selectedTimeMicros;
+  std::optional<double> selectedBeatPosition;
   long long playbackTimeMicros = 0;
   bool playbackActive = false;
   bool showInvisibleNotes = false;
@@ -744,7 +751,7 @@ private:
     laneWidth *= std::clamp(zoom, 0.8f, 1.35f);
     gutterWidth = 54.0f;
     laneAreaWidth = static_cast<float>(laneCount) * laneWidth;
-    columnGap = 34.0f;
+    columnGap = 17.0f;
     columnWidth = gutterWidth + laneAreaWidth + columnGap + 78.0f;
     const SafeAreaInsets safe = getSafeAreaInsetsUi();
     const float horizontalSafeInset =
@@ -757,7 +764,7 @@ private:
         std::max(280.0f, static_cast<float>(getHeight()) -
                              kChartContentTopPadding -
                              kChartContentBottomPadding);
-    const float baseMeasureHeight = 136.0f * zoom;
+    const float baseMeasureHeight = 272.0f * zoom;
     totalBeatLength = 0.0;
     for (const auto *measure : chart->Measures) {
       totalBeatLength += measure == nullptr ? 1.0 : measure->Scale;
@@ -1002,7 +1009,8 @@ private:
 
     for (const auto &marker : replayMissMarkers) {
       CursorDrawPosition position;
-      if (!beatToCursorPosition(marker.noteScrollPosition, position)) {
+      if (!beatToCursorPosition(marker.noteScrollPosition, position,
+                                BoundaryPreference::PreferStart)) {
         continue;
       }
       const float x = laneContentX(position.column, marker.lane) + 2.0f;
@@ -1043,7 +1051,9 @@ private:
 
   void drawCursorBars() {
     if (selectedTimeMicros.has_value()) {
-      drawCursorBar(*selectedTimeMicros, Color(255, 220, 92, 235), 4.0f);
+      drawCursorBarAtBeat(
+          selectedBeatPosition.value_or(timeToBeatPosition(*selectedTimeMicros)),
+          Color(255, 220, 92, 235), 4.0f);
     }
     if (playbackActive) {
       drawCursorBar(playbackTimeMicros, Color(91, 218, 236, 242), 3.0f);
@@ -1051,21 +1061,68 @@ private:
   }
 
   void drawCursorBar(long long timeMicros, Color color, float thickness) {
-    CursorDrawPosition position;
-    if (!timeToCursorPosition(timeMicros, position)) {
+    drawCursorBarAtBeat(timeToBeatPosition(timeMicros), color, thickness);
+  }
+
+  void drawCursorBarAtBeat(double beatPosition, Color color, float thickness) {
+    const std::vector<CursorDrawPosition> positions =
+        beatToCursorPositions(beatPosition);
+    if (positions.empty()) {
       return;
     }
+    if (positions.size() == 1) {
+      drawCursorBarSegment(positions.front(), color, thickness,
+                           CursorSegmentSide::Full);
+      return;
+    }
+
+    for (const auto &position : positions) {
+      CursorSegmentSide side = CursorSegmentSide::Full;
+      if (position.column >= 0 &&
+          position.column < static_cast<int>(columnLayouts.size())) {
+        const auto &column =
+            columnLayouts[static_cast<size_t>(position.column)];
+        constexpr float kEndpointEpsilon = 0.5f;
+        if (std::abs(position.y - column.yTop) <= kEndpointEpsilon) {
+          side = CursorSegmentSide::Below;
+        } else if (std::abs(position.y - column.yBottom) <=
+                   kEndpointEpsilon) {
+          side = CursorSegmentSide::Above;
+        }
+      }
+      drawCursorBarSegment(position, color, thickness, side);
+    }
+  }
+
+  void drawCursorBarSegment(const CursorDrawPosition &position, Color color,
+                            float thickness, CursorSegmentSide side) {
     const float laneX = position.x + gutterWidth;
-    drawRectClip(laneX, position.y - thickness * 0.5f, laneAreaWidth,
-                 thickness, color.toABGR());
-    drawRectClip(position.x + gutterWidth - 6.0f,
-                 position.y - thickness * 1.4f, 6.0f, thickness * 2.8f,
-                 color.toABGR());
+    float laneY = position.y - thickness * 0.5f;
+    float laneHeight = thickness;
+    float markerY = position.y - thickness * 1.4f;
+    float markerHeight = thickness * 2.8f;
+    if (side == CursorSegmentSide::Above) {
+      laneHeight = thickness * 0.5f;
+      laneY = position.y - laneHeight;
+      markerHeight = thickness * 1.4f;
+      markerY = position.y - markerHeight;
+    } else if (side == CursorSegmentSide::Below) {
+      laneHeight = thickness * 0.5f;
+      laneY = position.y;
+      markerHeight = thickness * 1.4f;
+      markerY = position.y;
+    }
+    drawRectClip(laneX, laneY, laneAreaWidth, laneHeight, color.toABGR());
+    drawRectClip(position.x + gutterWidth - 6.0f, markerY, 6.0f,
+                 markerHeight, color.toABGR());
   }
 
   void selectAtUiPoint(float uiX, float uiY) {
     if (chart == nullptr) {
       return;
+    }
+    if (layoutDirty) {
+      rebuildLayout();
     }
 
     const float contentX = uiToContentX(uiX);
@@ -1083,15 +1140,83 @@ private:
           std::clamp(static_cast<double>(layout.y + layout.height - contentY) /
                          static_cast<double>(layout.height),
                      0.0, 1.0);
-      const double beatPosition = layout.beatStart + layout.scale * local;
-      const long long timeMicros = beatToTimeMicros(beatPosition);
-      selectedTimeMicros = std::max(0LL, timeMicros);
-      playbackActive = false;
-      if (selectionListener != nullptr) {
-        selectionListener(*selectedTimeMicros);
-      }
+      selectBeatPosition(layout.beatStart + layout.scale * local);
       return;
     }
+
+    (void)selectAtColumnEndpoint(contentX, contentY);
+  }
+
+  void selectBeatPosition(double beatPosition) {
+    selectedBeatPosition =
+        std::clamp(beatPosition, 0.0, std::max(0.0, totalBeatLength));
+    const long long timeMicros = beatToTimeMicros(*selectedBeatPosition);
+    selectedTimeMicros = std::max(0LL, timeMicros);
+    playbackActive = false;
+    if (selectionListener != nullptr) {
+      selectionListener(*selectedTimeMicros);
+    }
+  }
+
+  bool selectAtColumnEndpoint(float contentX, float contentY) {
+    const float horizontalSlop =
+        kCursorEndpointHorizontalSlopUi / std::max(0.001f, screenZoom);
+    for (size_t columnIndex = 0; columnIndex < columnLayouts.size();
+         ++columnIndex) {
+      const auto &column = columnLayouts[columnIndex];
+      const float laneLeft = column.x - horizontalSlop;
+      const float laneRight =
+          column.x + gutterWidth + laneAreaWidth + horizontalSlop;
+      if (contentX < laneLeft || contentX > laneRight) {
+        continue;
+      }
+
+      const MeasureLayout *bottomMeasure = nullptr;
+      const MeasureLayout *topMeasure = nullptr;
+      for (const auto &layout : measureLayouts) {
+        if (layout.column != static_cast<int>(columnIndex) ||
+            layout.scale <= 0.0) {
+          continue;
+        }
+        if (bottomMeasure == nullptr ||
+            layout.y + layout.height > bottomMeasure->y + bottomMeasure->height) {
+          bottomMeasure = &layout;
+        }
+        if (topMeasure == nullptr || layout.y < topMeasure->y) {
+          topMeasure = &layout;
+        }
+      }
+
+      const float bottomEndpointY =
+          bottomMeasure != nullptr ? bottomMeasure->y + bottomMeasure->height
+                                   : column.yBottom;
+      const float topEndpointY =
+          topMeasure != nullptr ? topMeasure->y : column.yTop;
+      const bool inBottomMargin =
+          bottomMeasure != nullptr && contentY >= bottomEndpointY;
+      const bool inTopMargin =
+          topMeasure != nullptr && contentY <= topEndpointY;
+
+      if (inBottomMargin && inTopMargin) {
+        if (std::abs(contentY - bottomEndpointY) <=
+            std::abs(contentY - topEndpointY)) {
+          selectBeatPosition(bottomMeasure->beatStart);
+        } else {
+          selectBeatPosition(topMeasure->beatStart + topMeasure->scale);
+        }
+        return true;
+      }
+      if (inBottomMargin) {
+        selectBeatPosition(bottomMeasure->beatStart);
+        return true;
+      }
+      if (inTopMargin) {
+        selectBeatPosition(topMeasure->beatStart + topMeasure->scale);
+        return true;
+      }
+      return false;
+    }
+    return false;
   }
 
   bool timeToCursorPosition(long long timeMicros,
@@ -1102,10 +1227,62 @@ private:
     return beatToCursorPosition(timeToBeatPosition(timeMicros), position);
   }
 
+  std::vector<CursorDrawPosition>
+  timeToCursorPositions(long long timeMicros) const {
+    if (measureLayouts.empty()) {
+      return {};
+    }
+    return beatToCursorPositions(timeToBeatPosition(timeMicros));
+  }
+
   bool beatToCursorPosition(double beatPosition,
-                            CursorDrawPosition &position) const {
+                            CursorDrawPosition &position,
+                            BoundaryPreference boundaryPreference =
+                                BoundaryPreference::PreferEnd) const {
     if (measureLayouts.empty()) {
       return false;
+    }
+
+    constexpr double epsilon = 0.000001;
+    if (boundaryPreference == BoundaryPreference::PreferStart) {
+      for (const auto &layout : measureLayouts) {
+        if (layout.scale <= 0.0 ||
+            std::abs(beatPosition - layout.beatStart) > epsilon) {
+          continue;
+        }
+        position = cursorPositionForLayout(layout, beatPosition);
+        return true;
+      }
+    }
+
+    for (const auto &layout : measureLayouts) {
+      if (layout.scale <= 0.0) {
+        continue;
+      }
+      const double start = layout.beatStart;
+      const double end = layout.beatStart + layout.scale;
+      if (beatPosition + epsilon < start || beatPosition - epsilon > end) {
+        continue;
+      }
+      position = cursorPositionForLayout(layout, beatPosition);
+      return true;
+    }
+
+    const auto &fallback =
+        beatPosition < measureLayouts.front().beatStart ? measureLayouts.front()
+                                                        : measureLayouts.back();
+    position = cursorPositionForLayout(
+        fallback, beatPosition < fallback.beatStart ? fallback.beatStart
+                                                    : fallback.beatStart +
+                                                          fallback.scale);
+    return true;
+  }
+
+  std::vector<CursorDrawPosition> beatToCursorPositions(
+      double beatPosition) const {
+    std::vector<CursorDrawPosition> positions;
+    if (measureLayouts.empty()) {
+      return positions;
     }
 
     constexpr double epsilon = 0.000001;
@@ -1118,24 +1295,42 @@ private:
       if (beatPosition + epsilon < start || beatPosition - epsilon > end) {
         continue;
       }
-      const double local =
-          std::clamp((beatPosition - start) / layout.scale, 0.0, 1.0);
-      position.column = layout.column;
-      position.x = layout.x;
-      position.y = layout.y + layout.height -
-                   static_cast<float>(local) * layout.height;
-      return true;
+      CursorDrawPosition position = cursorPositionForLayout(layout, beatPosition);
+      const auto duplicate = std::find_if(
+          positions.begin(), positions.end(), [&](const auto &existing) {
+            return existing.column == position.column &&
+                   std::abs(existing.x - position.x) <= 0.5f &&
+                   std::abs(existing.y - position.y) <= 0.5f;
+          });
+      if (duplicate == positions.end()) {
+        positions.push_back(position);
+      }
     }
 
-    const auto &fallback =
-        beatPosition < measureLayouts.front().beatStart ? measureLayouts.front()
-                                                        : measureLayouts.back();
-    const double local = beatPosition < fallback.beatStart ? 0.0 : 1.0;
-    position.column = fallback.column;
-    position.x = fallback.x;
-    position.y = fallback.y + fallback.height -
-                 static_cast<float>(local) * fallback.height;
-    return true;
+    if (!positions.empty()) {
+      return positions;
+    }
+
+    CursorDrawPosition fallbackPosition;
+    if (beatToCursorPosition(beatPosition, fallbackPosition)) {
+      positions.push_back(fallbackPosition);
+    }
+    return positions;
+  }
+
+  CursorDrawPosition cursorPositionForLayout(const MeasureLayout &layout,
+                                             double beatPosition) const {
+    const double local =
+        layout.scale <= 0.0
+            ? 0.0
+            : std::clamp((beatPosition - layout.beatStart) / layout.scale, 0.0,
+                         1.0);
+    CursorDrawPosition position;
+    position.column = layout.column;
+    position.x = layout.x;
+    position.y = layout.y + layout.height -
+                 static_cast<float>(local) * layout.height;
+    return position;
   }
 
   double timeToBeatPosition(long long timeMicros) const {
@@ -1984,8 +2179,7 @@ void ChartViewerScene::update(float dt) {
         rawTime + static_cast<long long>(context.settings.audioOffsetMs) *
                       1000LL;
     canvasView->setPlaybackTime(displayTime, true);
-    if (chart != nullptr &&
-        rawTime >= chart->Meta.TotalLength + kListenStopTailMicros) {
+    if (chart != nullptr && listenEndMicros > 0 && rawTime >= listenEndMicros) {
       stopListening();
     }
     updateListenControls();
@@ -2030,6 +2224,7 @@ void ChartViewerScene::cleanupScene() {
     context.jukebox.stop();
     listenActive = false;
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
   chart.reset();
   randomOptions.clear();
@@ -2224,9 +2419,15 @@ void ChartViewerScene::initView() {
   listenStopButton->setVisible(false);
   toolbar->addView(listenStopButton);
 
-  auto *practiceButton = makeButton("Practice", 128, 18);
-  practiceButton->setOnClickListener([this]() { startPracticeFromSelection(); });
+  auto *practiceButton = makeButton("Practice", 116, 18);
+  practiceButton->setOnClickListener(
+      [this]() { startPracticeFromSelection(false); });
   toolbar->addView(practiceButton);
+
+  auto *autoPlayButton = makeButton("Auto Play", 126, 18);
+  autoPlayButton->setOnClickListener(
+      [this]() { startPracticeFromSelection(true); });
+  toolbar->addView(autoPlayButton);
 
   ghostLoadButton = makeButton("Ghost", 90, 18, &ghostLoadButtonText);
   ghostLoadButton->setOnClickListener([this]() { showGhostModal(); });
@@ -2485,6 +2686,7 @@ void ChartViewerScene::parseAndRefresh(
   if (listenAudioLoaded) {
     context.jukebox.stop();
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
   if (canvasView != nullptr) {
     canvasView->clearGhostReplay();
@@ -2969,6 +3171,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
   if (listenAudioLoaded) {
     context.jukebox.stop();
     listenAudioLoaded = false;
+    listenEndMicros = 0;
   }
 
   randomSeed = replayChart->Meta.RandomSeed;
@@ -3503,6 +3706,9 @@ void ChartViewerScene::startListeningFromSelection() {
         } else {
           context.jukebox.stop();
         }
+        listenEndMicros = std::max(
+            chart_playback_duration::ChartTimelineEndMicros(*chart),
+            context.jukebox.getScheduledAudioEndMicros());
 
         context.jukebox.play();
         context.jukebox.seek(std::max(0LL, selectedTime));
@@ -3548,7 +3754,7 @@ void ChartViewerScene::stopListening() {
   updateListenControls();
 }
 
-void ChartViewerScene::startPracticeFromSelection() {
+void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   if (chart == nullptr || canvasView == nullptr ||
       !canvasView->hasSelectedTime()) {
     if (statusText != nullptr) {
@@ -3566,42 +3772,51 @@ void ChartViewerScene::startPracticeFromSelection() {
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
   const GaugeSelection gaugeSelection =
       gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
-  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
 
   stopListening();
   if (statusText != nullptr) {
-    statusText->setText("Preparing practice...");
+    statusText->setText(autoPlay ? "Preparing auto play..."
+                                 : "Preparing practice...");
   }
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       gaugeSelection, autoKeySound, assistOption]() {
+       gaugeSelection, autoKeySound, assistOption, autoPlay]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
           practiceChart =
               play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
                                        chartRandomPrng, chartRandomValues,
-                                       parseCancelled, "practice");
+                                       parseCancelled,
+                                       autoPlay ? "practice autoplay"
+                                                : "practice");
         } catch (const std::exception &e) {
-          SDL_Log("Error parsing %s for practice: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+          SDL_Log("Error parsing %s for %s: %s",
+                  path_t_to_utf8(record.meta.BmsPath).c_str(),
+                  autoPlay ? "practice autoplay" : "practice", e.what());
           archive_file::appendDebugLogLine(
-              "Practice parse exception: " +
+              std::string(autoPlay ? "Practice autoplay" : "Practice") +
+              " parse exception: " +
               path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
               e.what());
         }
         if (practiceChart == nullptr || parseCancelled) {
           if (statusText != nullptr) {
-            statusText->setText("Practice parse failed");
+            statusText->setText(autoPlay ? "Auto play parse failed"
+                                         : "Practice parse failed");
           }
           return true;
         }
 
-        if (!applyViewerPlayOptions(*practiceChart, "practice")) {
+        if (!applyViewerPlayOptions(*practiceChart,
+                                    autoPlay ? "practice autoplay"
+                                             : "practice")) {
           if (statusText != nullptr) {
-            statusText->setText("Practice play option failed");
+            statusText->setText(autoPlay ? "Auto play option failed"
+                                         : "Practice play option failed");
           }
           return true;
         }
@@ -3609,7 +3824,8 @@ void ChartViewerScene::startPracticeFromSelection() {
         context.jukebox.loadChart(*practiceChart, true, parseCancelled);
         if (parseCancelled) {
           if (statusText != nullptr) {
-            statusText->setText("Practice load cancelled");
+            statusText->setText(autoPlay ? "Auto play load cancelled"
+                                         : "Practice load cancelled");
           }
           return true;
         }
@@ -3625,7 +3841,7 @@ void ChartViewerScene::startPracticeFromSelection() {
                     .startPosition = static_cast<unsigned long long>(
                         std::max(0LL, selectedTime)),
                     .autoKeySound = autoKeySound,
-                    .autoPlay = false,
+                    .autoPlay = autoPlay,
                     .gaugeType = gaugeSelection.type,
                     .gaugeAutoShift = gaugeSelection.autoShift,
                     .playOption = viewerPlayOption,
@@ -3638,6 +3854,10 @@ void ChartViewerScene::startPracticeFromSelection() {
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
                     .returnScene = this,
+                    .touchVisualizationEnabled =
+                        autoPlay ? std::optional<bool>(false) : std::nullopt,
+                    .replayGhostRenderingEnabled =
+                        autoPlay ? std::optional<bool>(false) : std::nullopt,
                     .practiceGhostCallback =
                         [this](const ReplayData &replayData) {
                           setPracticeGhostReplay(replayData);
