@@ -86,7 +86,6 @@ private:
                       std::string successMessage,
                       const std::stop_token &stopToken);
   void StopPlaybackWorker();
-  bool ProcessNativeControlEventsLocked(std::string &statusMessage);
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
   void NativeControlEventLoop(const std::stop_token &stopToken);

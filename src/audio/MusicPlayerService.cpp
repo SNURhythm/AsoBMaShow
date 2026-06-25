@@ -365,37 +365,19 @@ bool MusicPlayerService::Seek(long long positionMicros,
 
 bool MusicPlayerService::ProcessNativeControlEvents(
     std::string &statusMessage) {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  return ProcessNativeControlEventsLocked(statusMessage);
-}
-
-bool MusicPlayerService::ProcessNativeControlEventsLocked(
-    std::string &statusMessage) {
+  statusMessage.clear();
   bool handled = false;
   for (const auto event : native_music_player::DrainControlEvents()) {
     handled = true;
-    std::string errorMessage;
     switch (event) {
     case native_music_player::ControlEvent::Previous:
-      if (PlayPreviousLocked(errorMessage)) {
-        statusMessage = "Playing previous track.";
-      } else {
-        statusMessage = errorMessage;
-      }
+      PlayPreviousAsync(statusMessage, "Playing previous track.");
       break;
     case native_music_player::ControlEvent::Next:
-      if (PlayNextLocked(errorMessage)) {
-        statusMessage = "Playing next track.";
-      } else {
-        statusMessage = errorMessage;
-      }
+      PlayNextAsync(statusMessage, "Playing next track.");
       break;
     case native_music_player::ControlEvent::Finished:
-      if (PlayNextLocked(errorMessage)) {
-        statusMessage = "Track finished. Playing next track.";
-      } else {
-        statusMessage = errorMessage;
-      }
+      PlayNextAsync(statusMessage, "Track finished. Playing next track.");
       break;
     }
   }
