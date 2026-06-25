@@ -38,6 +38,11 @@ struct ChartMetaRecord {
   int archiveFileCount = 0;
 };
 
+struct MusicTrackRecord {
+  bms_parser::ChartMeta representativeChart;
+  int chartCount = 0;
+};
+
 struct ChartEntry {
   path_t path;
   std::string iosBookmark;
@@ -138,6 +143,8 @@ public:
   int CountSolidArchives(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
                           std::vector<bms_parser::ChartMeta> &chartMetas);
+  void SelectMusicTracks(sqlite3 *db,
+                         std::vector<MusicTrackRecord> &tracks);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
                        std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,

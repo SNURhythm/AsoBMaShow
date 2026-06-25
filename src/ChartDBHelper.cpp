@@ -2377,6 +2377,42 @@ void ChartDBHelper::SelectAllChartMeta(
   }
 }
 
+void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
+                                      std::vector<MusicTrackRecord> &tracks) {
+  const char *musicKey = "COALESCE(NULLIF(cm.folder, ''), cm.path)";
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", cm.music_chart_count FROM (SELECT cm.*, "
+           "COUNT(*) OVER (PARTITION BY ";
+  query += musicKey;
+  query += ") AS music_chart_count, "
+           "ROW_NUMBER() OVER (PARTITION BY ";
+  query += musicKey;
+  query += " ORDER BY total_notes DESC, length DESC, ";
+  query += chartSourceOrderBy("cm");
+  query += ", title COLLATE NOCASE, path) AS music_rank FROM chart_meta cm "
+           "WHERE ";
+  query += preferredChartPredicate("cm");
+  query += ") cm WHERE cm.music_rank = 1 "
+           "ORDER BY cm.title COLLATE NOCASE, cm.path";
+
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting music tracks: " << sqlite3_errmsg(db)
+              << "\n";
+    return;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    MusicTrackRecord record;
+    record.representativeChart = ReadChartMeta(stmt);
+    record.chartCount =
+        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    tracks.push_back(std::move(record));
+  }
+}
+
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
