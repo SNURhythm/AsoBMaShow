@@ -478,6 +478,13 @@ int main(int argv, char **args) {
   rendering::main_camera = &rendering::game_camera;
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
+#if TARGET_OS_IPHONE
+  SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
+#endif
+#if TARGET_OS_ANDROID
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "1");
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "1");
+#endif
   // print bgfx version
   APP_DEBUG_LOG("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
   // print libsdl version

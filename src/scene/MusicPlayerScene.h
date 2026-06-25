@@ -28,11 +28,16 @@ public:
 private:
   using MusicTrack = music_playlist::MusicTrack;
   using PlaylistInfo = MusicPlaylistInfo;
+  enum class MusicPlayerTab { Library, Playlists, Player };
 
   void buildView();
+  void buildLibraryPage(View *page);
+  void buildPlaylistsPage(View *page);
+  void buildPlayerPage(View *page);
   View *makePanel(const std::string &title, TextView **subtitleText = nullptr);
   Button *makeButton(const std::string &label, int fontSize,
                      TextView **textOut = nullptr);
+  Button *makeNavButton(const std::string &label, TextView **textOut);
   void styleButton(Button *button, TextView *text,
                    View::ThemeColorProvider normal,
                    View::ThemeColorProvider hover,
@@ -43,7 +48,9 @@ private:
   void refreshLibraryList(int preferredIndex = -1);
   void refreshPlaylistDirectoryList(int preferredPlaylistId = 0);
   void refreshPlaylistList(int preferredIndex = -1);
+  void refreshPlaylistSelectionViews();
   void refreshUi();
+  void refreshNavigation();
   void refreshArtwork(const std::optional<MusicTrack> &track);
   void setStatus(std::string message);
 
@@ -54,8 +61,10 @@ private:
   std::string selectedPlaylistName() const;
   std::string nextPlaylistName() const;
 
+  void switchTab(MusicPlayerTab tab);
   void createPlaylist();
   void selectPlaylist(int index);
+  void selectPlaylistTrack(int index);
   void addLibraryTrackToPlaylist();
   void removePlaylistTrack();
   void movePlaylistTrack(int delta);
@@ -72,9 +81,24 @@ private:
   void goBack();
 
   View *rootLayout = nullptr;
+  View *libraryPage = nullptr;
+  View *playlistsPage = nullptr;
+  View *playerPage = nullptr;
+  Button *libraryNavButton = nullptr;
+  Button *playlistsNavButton = nullptr;
+  Button *playerNavButton = nullptr;
+  TextView *libraryNavText = nullptr;
+  TextView *playlistsNavText = nullptr;
+  TextView *playerNavText = nullptr;
+  TextView *railSummaryText = nullptr;
   TextView *statusText = nullptr;
   TextView *librarySubtitleText = nullptr;
   TextView *playlistSubtitleText = nullptr;
+  TextView *playerSubtitleText = nullptr;
+  TextView *librarySelectionTitleText = nullptr;
+  TextView *librarySelectionDetailText = nullptr;
+  TextView *playlistSelectionTitleText = nullptr;
+  TextView *playlistSelectionDetailText = nullptr;
   TextView *currentTitleText = nullptr;
   TextView *currentDetailText = nullptr;
   TextView *playbackText = nullptr;
@@ -83,6 +107,7 @@ private:
   RecyclerView<MusicTrack> *libraryList = nullptr;
   RecyclerView<PlaylistInfo> *playlistDirectoryList = nullptr;
   RecyclerView<MusicTrack> *playlistList = nullptr;
+  RecyclerView<MusicTrack> *playerQueueList = nullptr;
   TextInputBox *playlistNameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
 
@@ -93,6 +118,7 @@ private:
   int selectedPlaylistDirectoryIndex = -1;
   int selectedPlaylistId = 0;
   int selectedPlaylistIndex = -1;
+  MusicPlayerTab activeTab = MusicPlayerTab::Library;
   std::string statusMessage;
   std::filesystem::path displayedArtworkPath;
   int lastLayoutWidth = -1;

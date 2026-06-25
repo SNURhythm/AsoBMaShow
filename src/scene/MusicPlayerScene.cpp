@@ -26,6 +26,7 @@ namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 constexpr float kScreenPadding = 18.0f;
 constexpr float kHeaderHeight = 82.0f;
+constexpr float kRailWidth = 180.0f;
 constexpr int kTrackRowHeight = 82;
 constexpr int kPlaylistRowHeight = 58;
 
@@ -204,9 +205,23 @@ void MusicPlayerScene::init() {
 }
 
 EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
-  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-    goBack();
-    return {};
+  if (event.type == SDL_KEYDOWN) {
+    if (event.key.keysym.sym == SDLK_ESCAPE) {
+      goBack();
+      return {};
+    }
+    if (event.key.keysym.sym == SDLK_1) {
+      switchTab(MusicPlayerTab::Library);
+      return {};
+    }
+    if (event.key.keysym.sym == SDLK_2) {
+      switchTab(MusicPlayerTab::Playlists);
+      return {};
+    }
+    if (event.key.keysym.sym == SDLK_3) {
+      switchTab(MusicPlayerTab::Player);
+      return {};
+    }
   }
   return Scene::handleEvents(event);
 }
@@ -237,9 +252,24 @@ void MusicPlayerScene::renderScene() {}
 
 void MusicPlayerScene::cleanupScene() {
   rootLayout = nullptr;
+  libraryPage = nullptr;
+  playlistsPage = nullptr;
+  playerPage = nullptr;
+  libraryNavButton = nullptr;
+  playlistsNavButton = nullptr;
+  playerNavButton = nullptr;
+  libraryNavText = nullptr;
+  playlistsNavText = nullptr;
+  playerNavText = nullptr;
+  railSummaryText = nullptr;
   statusText = nullptr;
   librarySubtitleText = nullptr;
   playlistSubtitleText = nullptr;
+  playerSubtitleText = nullptr;
+  librarySelectionTitleText = nullptr;
+  librarySelectionDetailText = nullptr;
+  playlistSelectionTitleText = nullptr;
+  playlistSelectionDetailText = nullptr;
   currentTitleText = nullptr;
   currentDetailText = nullptr;
   playbackText = nullptr;
@@ -248,6 +278,7 @@ void MusicPlayerScene::cleanupScene() {
   libraryList = nullptr;
   playlistDirectoryList = nullptr;
   playlistList = nullptr;
+  playerQueueList = nullptr;
   playlistNameInput = nullptr;
   playPauseButtonText = nullptr;
 }
@@ -307,14 +338,97 @@ void MusicPlayerScene::buildView() {
   content->setFlex(1)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(16)
+      ->setGap(14)
       ->setPadding(Edge::Top, 16)
       ->setPadding(Edge::Bottom, safe.bottom + 16)
       ->setPadding(Edge::Left, safe.left + kScreenPadding)
       ->setPadding(Edge::Right, safe.right + kScreenPadding);
 
-  auto *libraryPanel = makePanel("Library", &librarySubtitleText);
-  libraryPanel->setFlex(1)->setMinWidth(250)->setFlexShrink(1);
+  auto *rail = new View();
+  rail->setWidth(kRailWidth)
+      ->setFlexShrink(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setGap(10)
+      ->setPadding(Edge::All, 12)
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setThemedBorderColor(ui_theme::hairline)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::panelRadius());
+
+  auto *railTitle = new TextView(kFontPath, 18);
+  railTitle->setText("Music");
+  railTitle->setHeight(26);
+  railTitle->setThemedColor(ui_theme::textSecondary);
+  railTitle->setOverflow(TextView::TextOverflow::Hidden);
+  rail->addView(railTitle);
+
+  libraryNavButton = makeNavButton("Library", &libraryNavText);
+  libraryNavButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Library); });
+  playlistsNavButton = makeNavButton("Playlists", &playlistsNavText);
+  playlistsNavButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Playlists); });
+  playerNavButton = makeNavButton("Player", &playerNavText);
+  playerNavButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Player); });
+  rail->addView(libraryNavButton);
+  rail->addView(playlistsNavButton);
+  rail->addView(playerNavButton);
+
+  auto *railSpacer = new View();
+  railSpacer->setFlex(1);
+  rail->addView(railSpacer);
+
+  railSummaryText = new TextView(kFontPath, 14);
+  railSummaryText->setHeight(74);
+  railSummaryText->setWrap(true);
+  railSummaryText->setThemedColor(ui_theme::textSecondary);
+  rail->addView(railSummaryText);
+  content->addView(rail);
+
+  auto *pageStack = new View();
+  pageStack->setFlex(1)->setMinWidth(0);
+
+  auto makePage = [] {
+    auto *page = new View();
+    page->setPositionType(YGPositionTypeAbsolute)
+        ->setPosition(Edge::Left, 0)
+        ->setPosition(Edge::Right, 0)
+        ->setPosition(Edge::Top, 0)
+        ->setPosition(Edge::Bottom, 0)
+        ->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch);
+    return page;
+  };
+
+  libraryPage = makePage();
+  buildLibraryPage(libraryPage);
+  playlistsPage = makePage();
+  buildPlaylistsPage(playlistsPage);
+  playerPage = makePage();
+  buildPlayerPage(playerPage);
+  pageStack->addView(libraryPage);
+  pageStack->addView(playlistsPage);
+  pageStack->addView(playerPage);
+  content->addView(pageStack);
+
+  rootLayout->addView(content);
+  refreshNavigation();
+  rootLayout->applyYogaLayout();
+}
+
+void MusicPlayerScene::buildLibraryPage(View *page) {
+  auto *panel = makePanel("Library", &librarySubtitleText);
+  panel->setFlex(1);
+  page->addView(panel);
+
+  auto *workspace = new View();
+  workspace->setFlex(1)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(16);
+  panel->addView(workspace);
+
   libraryList = new RecyclerView<MusicTrack>(
       [](const MusicTrack &a, const MusicTrack &b) {
         return a.trackId == b.trackId && a.chartId == b.chartId;
@@ -335,56 +449,287 @@ void MusicPlayerScene::buildView() {
     selectedLibraryIndex = index;
     refreshUi();
   };
-  libraryPanel->addView(libraryList);
+  workspace->addView(libraryList);
 
-  auto *libraryButtons = new View();
-  libraryButtons->setHeight(118)
+  auto *actions = new View();
+  actions->setWidth(350)
+      ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
-      ->setGap(10);
-  auto *libraryRowA = new View();
-  libraryRowA->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
-  auto *libraryRowB = new View();
-  libraryRowB->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
+
+  auto *selectionTitle = new TextView(kFontPath, 18);
+  selectionTitle->setText("Selected Track");
+  selectionTitle->setHeight(28);
+  selectionTitle->setThemedColor(ui_theme::textSecondary);
+  actions->addView(selectionTitle);
+
+  librarySelectionTitleText = new TextView(kFontPath, 24);
+  librarySelectionTitleText->setHeight(42);
+  librarySelectionTitleText->setOverflow(TextView::TextOverflow::Marquee);
+  librarySelectionTitleText->setThemedColor(ui_theme::textPrimary);
+  actions->addView(librarySelectionTitleText);
+
+  librarySelectionDetailText = new TextView(kFontPath, 16);
+  librarySelectionDetailText->setHeight(78);
+  librarySelectionDetailText->setWrap(true);
+  librarySelectionDetailText->setThemedColor(ui_theme::textSecondary);
+  actions->addView(librarySelectionDetailText);
+
+  auto *primaryRow = new View();
+  primaryRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   TextView *playTrackText = nullptr;
-  auto *playTrackButton = makeButton("Play Track", 18, &playTrackText);
+  auto *playTrackButton = makeButton("Play Track", 17, &playTrackText);
   playTrackButton->setFlex(1);
   styleButton(playTrackButton, playTrackText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
   playTrackButton->setOnClickListener([this]() { playLibraryTrack(); });
   TextView *addText = nullptr;
-  auto *addButton = makeButton("Add", 18, &addText);
+  auto *addButton = makeButton("Add", 17, &addText);
   addButton->setFlex(1);
   styleButton(addButton, addText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   addButton->setOnClickListener([this]() { addLibraryTrackToPlaylist(); });
+  primaryRow->addView(playTrackButton);
+  primaryRow->addView(addButton);
+  actions->addView(primaryRow);
+
+  auto *secondaryRow = new View();
+  secondaryRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
   TextView *randomText = nullptr;
-  auto *randomButton = makeButton("Random All", 18, &randomText);
+  auto *randomButton = makeButton("Random All", 17, &randomText);
   randomButton->setFlex(1);
   styleButton(randomButton, randomText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
               ui_theme::accentBorder);
   randomButton->setOnClickListener([this]() { playRandomLibrary(); });
   TextView *reloadText = nullptr;
-  auto *reloadButton = makeButton("Refresh", 18, &reloadText);
+  auto *reloadButton = makeButton("Refresh", 17, &reloadText);
   reloadButton->setFlex(1);
   styleButton(reloadButton, reloadText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   reloadButton->setOnClickListener([this]() { reloadData(true); });
-  libraryRowA->addView(playTrackButton);
-  libraryRowA->addView(addButton);
-  libraryRowB->addView(randomButton);
-  libraryRowB->addView(reloadButton);
-  libraryButtons->addView(libraryRowA);
-  libraryButtons->addView(libraryRowB);
-  libraryPanel->addView(libraryButtons);
+  secondaryRow->addView(randomButton);
+  secondaryRow->addView(reloadButton);
+  actions->addView(secondaryRow);
 
-  auto *playerPanel = makePanel("Now Playing");
-  playerPanel->setWidth(360)->setFlexShrink(0);
+  TextView *openPlayerText = nullptr;
+  auto *openPlayerButton = makeButton("Open Player", 17, &openPlayerText);
+  styleButton(openPlayerButton, openPlayerText, ui_theme::infoAction,
+              ui_theme::infoActionHover, ui_theme::infoActionPressed,
+              ui_theme::accentBorder);
+  openPlayerButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Player); });
+  actions->addView(openPlayerButton);
+
+  auto *actionsSpacer = new View();
+  actionsSpacer->setFlex(1);
+  actions->addView(actionsSpacer);
+  workspace->addView(actions);
+}
+
+void MusicPlayerScene::buildPlaylistsPage(View *page) {
+  auto *panel = makePanel("Playlists", &playlistSubtitleText);
+  panel->setFlex(1);
+  page->addView(panel);
+
+  auto *workspace = new View();
+  workspace->setFlex(1)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(16);
+  panel->addView(workspace);
+
+  auto *directoryColumn = new View();
+  directoryColumn->setWidth(360)
+      ->setFlexShrink(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
+
+  auto *createPlaylistRow = new View();
+  createPlaylistRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  playlistNameInput = new TextInputBox(kFontPath, 18);
+  playlistNameInput->setFlex(1);
+  playlistNameInput->setHeight(52);
+  playlistNameInput->setEditingText("");
+  playlistNameInput->setThemedBackgroundColor(ui_theme::control);
+  playlistNameInput->setThemedBorderColor(ui_theme::hairlineStrong);
+  playlistNameInput->setBorderWidth(1);
+  playlistNameInput->setCornerRadius(ui_theme::controlRadius());
+  playlistNameInput->setThemedColor(ui_theme::textPrimary);
+  playlistNameInput->setVAlign(TextView::MIDDLE);
+  playlistNameInput->onSubmit(
+      [this](const std::string &) { createPlaylist(); });
+  TextView *createText = nullptr;
+  auto *createButton = makeButton("Create", 17, &createText);
+  createButton->setWidth(112);
+  styleButton(createButton, createText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  createButton->setOnClickListener([this]() { createPlaylist(); });
+  createPlaylistRow->addView(playlistNameInput);
+  createPlaylistRow->addView(createButton);
+  directoryColumn->addView(createPlaylistRow);
+
+  playlistDirectoryList = new RecyclerView<PlaylistInfo>(
+      [](const PlaylistInfo &a, const PlaylistInfo &b) { return a.id == b.id; });
+  playlistDirectoryList->setFlex(1);
+  playlistDirectoryList->itemHeight = kPlaylistRowHeight;
+  playlistDirectoryList->reserveScrollbarGutter = true;
+  playlistDirectoryList->onCreateView = [](const PlaylistInfo &) {
+    return new PlaylistRowView();
+  };
+  playlistDirectoryList->onBind = [](View *view, const PlaylistInfo &playlist,
+                                     int, bool selected) {
+    if (auto *row = dynamic_cast<PlaylistRowView *>(view)) {
+      row->setPlaylist(playlist, selected);
+    }
+  };
+  playlistDirectoryList->onSelected = [this](const PlaylistInfo &, int index) {
+    selectPlaylist(index);
+  };
+  directoryColumn->addView(playlistDirectoryList);
+  workspace->addView(directoryColumn);
+
+  auto *editorColumn = new View();
+  editorColumn->setFlex(1)
+      ->setMinWidth(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
+
+  auto *selectedHeader = new TextView(kFontPath, 18);
+  selectedHeader->setText("Playlist Contents");
+  selectedHeader->setHeight(28);
+  selectedHeader->setThemedColor(ui_theme::textSecondary);
+  editorColumn->addView(selectedHeader);
+
+  playlistSelectionTitleText = new TextView(kFontPath, 24);
+  playlistSelectionTitleText->setHeight(36);
+  playlistSelectionTitleText->setOverflow(TextView::TextOverflow::Marquee);
+  playlistSelectionTitleText->setThemedColor(ui_theme::textPrimary);
+  editorColumn->addView(playlistSelectionTitleText);
+
+  playlistSelectionDetailText = new TextView(kFontPath, 16);
+  playlistSelectionDetailText->setHeight(32);
+  playlistSelectionDetailText->setOverflow(TextView::TextOverflow::Hidden);
+  playlistSelectionDetailText->setThemedColor(ui_theme::textSecondary);
+  editorColumn->addView(playlistSelectionDetailText);
+
+  playlistList = new RecyclerView<MusicTrack>(
+      [](const MusicTrack &a, const MusicTrack &b) {
+        return a.trackId == b.trackId && a.chartId == b.chartId;
+      });
+  playlistList->setFlex(1);
+  playlistList->itemHeight = kTrackRowHeight;
+  playlistList->reserveScrollbarGutter = true;
+  playlistList->onCreateView = [](const MusicTrack &) {
+    return new MusicTrackRowView();
+  };
+  playlistList->onBind = [](View *view, const MusicTrack &track, int,
+                            bool selected) {
+    if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
+      row->setTrack(track, selected);
+    }
+  };
+  playlistList->onSelected = [this](const MusicTrack &, int index) {
+    selectPlaylistTrack(index);
+  };
+  editorColumn->addView(playlistList);
+
+  auto *playlistButtons = new View();
+  playlistButtons->setHeight(118)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setGap(10);
+  auto *playlistRowA = new View();
+  playlistRowA->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  auto *playlistRowB = new View();
+  playlistRowB->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  TextView *playPlaylistText = nullptr;
+  auto *playPlaylistButton = makeButton("Play Playlist", 17, &playPlaylistText);
+  playPlaylistButton->setFlex(1);
+  styleButton(playPlaylistButton, playPlaylistText, ui_theme::primaryAction,
+              ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
+              ui_theme::accentBorderStrong);
+  playPlaylistButton->setOnClickListener([this]() { playPlaylist(); });
+  TextView *removeText = nullptr;
+  auto *removeButton = makeButton("Remove Track", 16, &removeText);
+  removeButton->setFlex(1);
+  styleButton(removeButton, removeText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  removeButton->setOnClickListener([this]() { removePlaylistTrack(); });
+  TextView *upText = nullptr;
+  auto *upButton = makeButton("Up", 17, &upText);
+  upButton->setFlex(1);
+  styleButton(upButton, upText, ui_theme::control, ui_theme::controlHover,
+              ui_theme::controlPressed, ui_theme::hairlineStrong);
+  upButton->setOnClickListener([this]() { movePlaylistTrack(-1); });
+  TextView *downText = nullptr;
+  auto *downButton = makeButton("Down", 17, &downText);
+  downButton->setFlex(1);
+  styleButton(downButton, downText, ui_theme::control, ui_theme::controlHover,
+              ui_theme::controlPressed, ui_theme::hairlineStrong);
+  downButton->setOnClickListener([this]() { movePlaylistTrack(1); });
+  TextView *clearText = nullptr;
+  auto *clearButton = makeButton("Clear", 17, &clearText);
+  clearButton->setFlex(1);
+  styleButton(clearButton, clearText, ui_theme::warningAction,
+              ui_theme::warningActionHover, ui_theme::warningActionPressed,
+              ui_theme::accentBorder);
+  clearButton->setOnClickListener([this]() { clearPlaylist(); });
+  TextView *playerText = nullptr;
+  auto *playerButton = makeButton("Player", 17, &playerText);
+  playerButton->setFlex(1);
+  styleButton(playerButton, playerText, ui_theme::infoAction,
+              ui_theme::infoActionHover, ui_theme::infoActionPressed,
+              ui_theme::accentBorder);
+  playerButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Player); });
+  playlistRowA->addView(playPlaylistButton);
+  playlistRowA->addView(removeButton);
+  playlistRowA->addView(playerButton);
+  playlistRowB->addView(upButton);
+  playlistRowB->addView(downButton);
+  playlistRowB->addView(clearButton);
+  playlistButtons->addView(playlistRowA);
+  playlistButtons->addView(playlistRowB);
+  editorColumn->addView(playlistButtons);
+  workspace->addView(editorColumn);
+}
+
+void MusicPlayerScene::buildPlayerPage(View *page) {
+  auto *panel = makePanel("Player", &playerSubtitleText);
+  panel->setFlex(1);
+  page->addView(panel);
+
+  auto *workspace = new View();
+  workspace->setFlex(1)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(16);
+  panel->addView(workspace);
+
+  auto *nowColumn = new View();
+  nowColumn->setWidth(420)
+      ->setFlexShrink(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
 
   auto *artFrame = new View();
-  artFrame->setHeight(300)
+  artFrame->setHeight(330)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setJustifyContent(YGJustifyCenter)
@@ -402,24 +747,24 @@ void MusicPlayerScene::buildView() {
   artworkFallbackText->setThemedColor(ui_theme::textMuted);
   artFrame->addView(artworkImage);
   artFrame->addView(artworkFallbackText);
-  playerPanel->addView(artFrame);
+  nowColumn->addView(artFrame);
 
-  currentTitleText = new TextView(kFontPath, 25);
-  currentTitleText->setHeight(36);
+  currentTitleText = new TextView(kFontPath, 27);
+  currentTitleText->setHeight(40);
   currentTitleText->setThemedColor(ui_theme::textPrimary);
   currentTitleText->setOverflow(TextView::TextOverflow::Marquee);
-  playerPanel->addView(currentTitleText);
+  nowColumn->addView(currentTitleText);
 
   currentDetailText = new TextView(kFontPath, 17);
-  currentDetailText->setHeight(48);
+  currentDetailText->setHeight(56);
   currentDetailText->setWrap(true);
   currentDetailText->setThemedColor(ui_theme::textSecondary);
-  playerPanel->addView(currentDetailText);
+  nowColumn->addView(currentDetailText);
 
   playbackText = new TextView(kFontPath, 18);
   playbackText->setHeight(32);
   playbackText->setThemedColor(ui_theme::textSecondary);
-  playerPanel->addView(playbackText);
+  nowColumn->addView(playbackText);
 
   auto *transport = new View();
   transport->setHeight(178)
@@ -482,7 +827,7 @@ void MusicPlayerScene::buildView() {
 
   TextView *playSelectedText = nullptr;
   auto *playSelectedButton =
-      makeButton("Play Selected Playlist Track", 15, &playSelectedText);
+      makeButton("Play Queue Track", 16, &playSelectedText);
   playSelectedButton->setFlex(1);
   styleButton(playSelectedButton, playSelectedText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
@@ -500,143 +845,65 @@ void MusicPlayerScene::buildView() {
   transport->addView(transportRowA);
   transport->addView(transportRowB);
   transport->addView(transportRowC);
-  playerPanel->addView(transport);
+  nowColumn->addView(transport);
+  workspace->addView(nowColumn);
 
-  auto *playlistPanel = makePanel("Playlists", &playlistSubtitleText);
-  playlistPanel->setFlex(1)->setMinWidth(280)->setFlexShrink(1);
+  auto *queueColumn = new View();
+  queueColumn->setFlex(1)
+      ->setMinWidth(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
 
-  auto *createPlaylistRow = new View();
-  createPlaylistRow->setHeight(52)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setGap(10);
-  playlistNameInput = new TextInputBox(kFontPath, 18);
-  playlistNameInput->setFlex(1);
-  playlistNameInput->setHeight(52);
-  playlistNameInput->setEditingText("");
-  playlistNameInput->setThemedBackgroundColor(ui_theme::control);
-  playlistNameInput->setThemedBorderColor(ui_theme::hairlineStrong);
-  playlistNameInput->setBorderWidth(1);
-  playlistNameInput->setCornerRadius(ui_theme::controlRadius());
-  playlistNameInput->setThemedColor(ui_theme::textPrimary);
-  playlistNameInput->setVAlign(TextView::MIDDLE);
-  playlistNameInput->onSubmit(
-      [this](const std::string &) { createPlaylist(); });
-  TextView *createText = nullptr;
-  auto *createButton = makeButton("Create", 17, &createText);
-  createButton->setWidth(112);
-  styleButton(createButton, createText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  createButton->setOnClickListener([this]() { createPlaylist(); });
-  createPlaylistRow->addView(playlistNameInput);
-  createPlaylistRow->addView(createButton);
-  playlistPanel->addView(createPlaylistRow);
+  auto *queueTitle = new TextView(kFontPath, 18);
+  queueTitle->setText("Selected Playlist Queue");
+  queueTitle->setHeight(28);
+  queueTitle->setThemedColor(ui_theme::textSecondary);
+  queueColumn->addView(queueTitle);
 
-  playlistDirectoryList = new RecyclerView<PlaylistInfo>(
-      [](const PlaylistInfo &a, const PlaylistInfo &b) { return a.id == b.id; });
-  playlistDirectoryList->setHeight(140);
-  playlistDirectoryList->itemHeight = kPlaylistRowHeight;
-  playlistDirectoryList->reserveScrollbarGutter = true;
-  playlistDirectoryList->onCreateView = [](const PlaylistInfo &) {
-    return new PlaylistRowView();
-  };
-  playlistDirectoryList->onBind = [](View *view, const PlaylistInfo &playlist,
-                                     int, bool selected) {
-    if (auto *row = dynamic_cast<PlaylistRowView *>(view)) {
-      row->setPlaylist(playlist, selected);
-    }
-  };
-  playlistDirectoryList->onSelected = [this](const PlaylistInfo &, int index) {
-    selectPlaylist(index);
-  };
-  playlistPanel->addView(playlistDirectoryList);
-
-  playlistList = new RecyclerView<MusicTrack>(
+  playerQueueList = new RecyclerView<MusicTrack>(
       [](const MusicTrack &a, const MusicTrack &b) {
         return a.trackId == b.trackId && a.chartId == b.chartId;
       });
-  playlistList->setFlex(1);
-  playlistList->itemHeight = kTrackRowHeight;
-  playlistList->reserveScrollbarGutter = true;
-  playlistList->onCreateView = [](const MusicTrack &) {
+  playerQueueList->setFlex(1);
+  playerQueueList->itemHeight = kTrackRowHeight;
+  playerQueueList->reserveScrollbarGutter = true;
+  playerQueueList->onCreateView = [](const MusicTrack &) {
     return new MusicTrackRowView();
   };
-  playlistList->onBind = [](View *view, const MusicTrack &track, int,
-                            bool selected) {
+  playerQueueList->onBind = [](View *view, const MusicTrack &track, int,
+                               bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
       row->setTrack(track, selected);
     }
   };
-  playlistList->onSelected = [this](const MusicTrack &, int index) {
-    selectedPlaylistIndex = index;
-    refreshUi();
+  playerQueueList->onSelected = [this](const MusicTrack &, int index) {
+    selectPlaylistTrack(index);
   };
-  playlistPanel->addView(playlistList);
+  queueColumn->addView(playerQueueList);
 
-  auto *playlistButtons = new View();
-  playlistButtons->setHeight(180)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setGap(10);
-  auto *playlistRowA = new View();
-  playlistRowA->setHeight(52)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setGap(10);
-  auto *playlistRowB = new View();
-  playlistRowB->setHeight(52)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setGap(10);
-  auto *playlistRowC = new View();
-  playlistRowC->setHeight(52)
+  auto *queueButtons = new View();
+  queueButtons->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
   TextView *playPlaylistText = nullptr;
-  auto *playPlaylistButton = makeButton("Play", 18, &playPlaylistText);
+  auto *playPlaylistButton = makeButton("Play Playlist", 17, &playPlaylistText);
   playPlaylistButton->setFlex(1);
   styleButton(playPlaylistButton, playPlaylistText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
   playPlaylistButton->setOnClickListener([this]() { playPlaylist(); });
-  TextView *removeText = nullptr;
-  auto *removeButton = makeButton("Remove", 17, &removeText);
-  removeButton->setFlex(1);
-  styleButton(removeButton, removeText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  removeButton->setOnClickListener([this]() { removePlaylistTrack(); });
-  TextView *upText = nullptr;
-  auto *upButton = makeButton("Up", 17, &upText);
-  upButton->setFlex(1);
-  styleButton(upButton, upText, ui_theme::control, ui_theme::controlHover,
+  TextView *editText = nullptr;
+  auto *editButton = makeButton("Edit Playlist", 17, &editText);
+  editButton->setFlex(1);
+  styleButton(editButton, editText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
-  upButton->setOnClickListener([this]() { movePlaylistTrack(-1); });
-  TextView *downText = nullptr;
-  auto *downButton = makeButton("Down", 17, &downText);
-  downButton->setFlex(1);
-  styleButton(downButton, downText, ui_theme::control, ui_theme::controlHover,
-              ui_theme::controlPressed, ui_theme::hairlineStrong);
-  downButton->setOnClickListener([this]() { movePlaylistTrack(1); });
-  TextView *clearText = nullptr;
-  auto *clearButton = makeButton("Clear", 17, &clearText);
-  clearButton->setFlex(1);
-  styleButton(clearButton, clearText, ui_theme::warningAction,
-              ui_theme::warningActionHover, ui_theme::warningActionPressed,
-              ui_theme::accentBorder);
-  clearButton->setOnClickListener([this]() { clearPlaylist(); });
-  playlistRowA->addView(playPlaylistButton);
-  playlistRowA->addView(removeButton);
-  playlistRowB->addView(upButton);
-  playlistRowB->addView(downButton);
-  playlistRowC->addView(clearButton);
-  playlistButtons->addView(playlistRowA);
-  playlistButtons->addView(playlistRowB);
-  playlistButtons->addView(playlistRowC);
-  playlistPanel->addView(playlistButtons);
-
-  content->addView(libraryPanel);
-  content->addView(playerPanel);
-  content->addView(playlistPanel);
-  rootLayout->addView(content);
-  rootLayout->applyYogaLayout();
+  editButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Playlists); });
+  queueButtons->addView(playPlaylistButton);
+  queueButtons->addView(editButton);
+  queueColumn->addView(queueButtons);
+  workspace->addView(queueColumn);
 }
 
 View *MusicPlayerScene::makePanel(const std::string &title,
@@ -683,6 +950,13 @@ Button *MusicPlayerScene::makeButton(const std::string &label, int fontSize,
   if (textOut != nullptr) {
     *textOut = text;
   }
+  return button;
+}
+
+Button *MusicPlayerScene::makeNavButton(const std::string &label,
+                                        TextView **textOut) {
+  auto *button = makeButton(label, 18, textOut);
+  button->setHeight(58);
   return button;
 }
 
@@ -790,17 +1064,29 @@ void MusicPlayerScene::refreshPlaylistDirectoryList(int preferredPlaylistId) {
 }
 
 void MusicPlayerScene::refreshPlaylistList(int preferredIndex) {
-  if (playlistList == nullptr) {
-    return;
-  }
-  playlistList->setItems(playlistTracks);
   const int trackCount = static_cast<int>(playlistTracks.size());
   selectedPlaylistIndex =
       preferredIndex >= 0 && preferredIndex < trackCount
           ? preferredIndex
           : (playlistTracks.empty() ? -1 : 0);
-  playlistList->selectedIndex = selectedPlaylistIndex;
-  playlistList->rebindVisibleItems();
+  if (playlistList != nullptr) {
+    playlistList->setItems(playlistTracks);
+  }
+  if (playerQueueList != nullptr) {
+    playerQueueList->setItems(playlistTracks);
+  }
+  refreshPlaylistSelectionViews();
+}
+
+void MusicPlayerScene::refreshPlaylistSelectionViews() {
+  if (playlistList != nullptr) {
+    playlistList->selectedIndex = selectedPlaylistIndex;
+    playlistList->rebindVisibleItems();
+  }
+  if (playerQueueList != nullptr) {
+    playerQueueList->selectedIndex = selectedPlaylistIndex;
+    playerQueueList->rebindVisibleItems();
+  }
 }
 
 void MusicPlayerScene::refreshUi() {
@@ -814,15 +1100,47 @@ void MusicPlayerScene::refreshUi() {
         selectedPlaylistName() + " | " + std::to_string(playlists.size()) +
         " playlists | " + std::to_string(playlistTracks.size()) + " tracks");
   }
+  if (playerSubtitleText != nullptr) {
+    playerSubtitleText->setText(selectedPlaylistName() + " queue | " +
+                                std::to_string(playlistTracks.size()) +
+                                " tracks");
+  }
+  if (railSummaryText != nullptr) {
+    railSummaryText->setText(std::to_string(libraryTracks.size()) +
+                             " library tracks\n" +
+                             std::to_string(playlists.size()) +
+                             " playlists");
+  }
 
   std::optional<MusicTrack> current = context.musicPlayer.CurrentTrackSnapshot();
-  std::optional<MusicTrack> shown = current.has_value() ? current : displayTrack();
+  std::optional<MusicTrack> shown =
+      current.has_value() ? current : displayTrack();
+  if (librarySelectionTitleText != nullptr) {
+    const auto track = selectedLibraryTrack();
+    librarySelectionTitleText->setText(track ? trackTitle(*track)
+                                             : "No library track selected");
+  }
+  if (librarySelectionDetailText != nullptr) {
+    const auto track = selectedLibraryTrack();
+    librarySelectionDetailText->setText(
+        track ? trackDetail(*track) : "No track selected.");
+  }
+  if (playlistSelectionTitleText != nullptr) {
+    const auto track = selectedPlaylistTrack();
+    playlistSelectionTitleText->setText(track ? trackTitle(*track)
+                                              : "No playlist track selected");
+  }
+  if (playlistSelectionDetailText != nullptr) {
+    const auto track = selectedPlaylistTrack();
+    playlistSelectionDetailText->setText(
+        track ? trackDetail(*track) : "No queue track selected.");
+  }
   if (currentTitleText != nullptr) {
     currentTitleText->setText(shown ? trackTitle(*shown) : "No track selected");
   }
   if (currentDetailText != nullptr) {
     currentDetailText->setText(shown ? trackDetail(*shown)
-                                     : "Choose a library or playlist track.");
+                                     : "No music loaded.");
   }
   if (playbackText != nullptr) {
     if (!playback.supported) {
@@ -841,10 +1159,41 @@ void MusicPlayerScene::refreshUi() {
   }
   if (statusText != nullptr) {
     statusText->setText(statusMessage.empty()
-                            ? "Create, modify, and play playlists."
+                            ? "Ready."
                             : statusMessage);
   }
+  refreshNavigation();
   refreshArtwork(shown);
+}
+
+void MusicPlayerScene::refreshNavigation() {
+  const auto styleNav = [this](Button *button, TextView *text,
+                               MusicPlayerTab tab) {
+    if (button == nullptr) {
+      return;
+    }
+    if (activeTab == tab) {
+      styleButton(button, text, ui_theme::primaryAction,
+                  ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
+                  ui_theme::accentBorderStrong);
+    } else {
+      styleButton(button, text, ui_theme::control, ui_theme::controlHover,
+                  ui_theme::controlPressed, ui_theme::hairlineStrong);
+    }
+  };
+  styleNav(libraryNavButton, libraryNavText, MusicPlayerTab::Library);
+  styleNav(playlistsNavButton, playlistsNavText, MusicPlayerTab::Playlists);
+  styleNav(playerNavButton, playerNavText, MusicPlayerTab::Player);
+
+  if (libraryPage != nullptr) {
+    libraryPage->setVisible(activeTab == MusicPlayerTab::Library);
+  }
+  if (playlistsPage != nullptr) {
+    playlistsPage->setVisible(activeTab == MusicPlayerTab::Playlists);
+  }
+  if (playerPage != nullptr) {
+    playerPage->setVisible(activeTab == MusicPlayerTab::Player);
+  }
 }
 
 void MusicPlayerScene::refreshArtwork(const std::optional<MusicTrack> &track) {
@@ -931,6 +1280,15 @@ std::string MusicPlayerScene::nextPlaylistName() const {
   return "Playlist";
 }
 
+void MusicPlayerScene::switchTab(MusicPlayerTab tab) {
+  activeTab = tab;
+  refreshNavigation();
+  refreshUi();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
 void MusicPlayerScene::createPlaylist() {
   std::string name =
       playlistNameInput != nullptr ? playlistNameInput->getText() : "";
@@ -972,6 +1330,16 @@ void MusicPlayerScene::selectPlaylist(int index) {
   } else {
     setStatus(errorMessage);
   }
+}
+
+void MusicPlayerScene::selectPlaylistTrack(int index) {
+  if (index < 0 || index >= static_cast<int>(playlistTracks.size())) {
+    selectedPlaylistIndex = -1;
+  } else {
+    selectedPlaylistIndex = index;
+  }
+  refreshPlaylistSelectionViews();
+  refreshUi();
 }
 
 void MusicPlayerScene::addLibraryTrackToPlaylist() {

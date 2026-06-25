@@ -565,6 +565,24 @@ bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage) {
   return true;
 }
 
+bool RestoreIOSForegroundAudioSession(std::string &errorMessage) {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  NSError *error = nil;
+  if (![session setCategory:AVAudioSessionCategoryAmbient
+                withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                      error:&error]) {
+    errorMessage =
+        NSErrorMessage(error, "Could not restore foreground audio session");
+    return false;
+  }
+  error = nil;
+  if (![session setActive:YES error:&error]) {
+    errorMessage = NSErrorMessage(error, "Could not restore audio session");
+    return false;
+  }
+  return true;
+}
+
 void ConfigureIOSNativeMusicRemoteCommands() {
   if (gIOSNativeMusicRemoteCommandsConfigured) {
     return;
@@ -2471,7 +2489,7 @@ bool PauseIOSNativeMusic(std::string &errorMessage) {
       }
       [gIOSNativeMusicPlayer pause];
       UpdateIOSNativeMusicNowPlayingInfoLocked();
-      return true;
+      return RestoreIOSForegroundAudioSession(errorMessage);
     }
   }
 }
@@ -2487,7 +2505,13 @@ bool StopIOSNativeMusic(std::string &errorMessage) {
       [gIOSNativeMusicPlayer pause];
       gIOSNativeMusicPlayer.currentTime = 0.0;
       UpdateIOSNativeMusicNowPlayingInfoLocked();
-      return true;
+      MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
+      center.nowPlayingInfo = nil;
+      if (@available(iOS 13.0, *)) {
+        center.playbackState = MPNowPlayingPlaybackStateStopped;
+      }
+
+      return RestoreIOSForegroundAudioSession(errorMessage);
     }
   }
 }
