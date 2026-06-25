@@ -705,6 +705,7 @@
 				AppSettings.cpp,
 				ArchiveFile.cpp,
 				audio/AudioWrapper.cpp,
+				audio/ChartAudioRenderer.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
 				bgfx_helper.cpp,
