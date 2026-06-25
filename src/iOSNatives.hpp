@@ -48,6 +48,20 @@ struct IOSNativeTextEditorConfig {
   int fontSize = 17;
 };
 
+struct IOSNativeMusicMetadata {
+  std::string title;
+  std::string artist;
+  std::string album;
+  long long durationMicros = 0;
+};
+
+struct IOSNativeMusicState {
+  bool loaded = false;
+  bool playing = false;
+  long long positionMicros = 0;
+  long long durationMicros = 0;
+};
+
 using IOSNativeTextEditorCallback =
     void (*)(void *context, IOSNativeTextEditorEvent event,
              const IOSNativeTextEditorState &state);
@@ -97,6 +111,14 @@ bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
                                   std::string &errorMessage);
 bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
                                   std::string &errorMessage);
+bool LoadIOSNativeMusicFile(const std::string &filePath,
+                            const IOSNativeMusicMetadata &metadata,
+                            std::string &errorMessage);
+bool PlayIOSNativeMusic(std::string &errorMessage);
+bool PauseIOSNativeMusic(std::string &errorMessage);
+bool StopIOSNativeMusic(std::string &errorMessage);
+bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage);
+IOSNativeMusicState GetIOSNativeMusicState();
 void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,
                                  int height, int fps, int64_t bitRate,

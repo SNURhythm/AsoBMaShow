@@ -412,6 +412,24 @@ std::vector<std::string> splitLines(const std::string &value) {
   return lines;
 }
 
+std::string musicMetadataPayload(const AndroidNativeMusicMetadata &metadata) {
+  auto sanitizeLine = [](std::string value) {
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    std::replace(value.begin(), value.end(), '\r', ' ');
+    return value;
+  };
+  return sanitizeLine(metadata.title) + "\n" + sanitizeLine(metadata.artist) +
+         "\n" + sanitizeLine(metadata.album);
+}
+
+long long parseLongLongOrZero(const std::string &value) {
+  try {
+    return std::stoll(value);
+  } catch (...) {
+    return 0;
+  }
+}
+
 } // namespace
 
 extern "C" JNIEXPORT void JNICALL
@@ -882,6 +900,99 @@ bool DownloadURLToFileAndroid(const std::string &url,
   }
   std::string ignored;
   return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool LoadAndroidNativeMusicFile(const std::string &filePath,
+                                const AndroidNativeMusicMetadata &metadata,
+                                std::string &errorMessage) {
+  const std::string payload = musicMetadataPayload(metadata);
+  std::string callError;
+  const std::string result = callActivityStringMethod2Long(
+      "loadNativeMusic",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      filePath.c_str(), payload.c_str(), metadata.durationMicros, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool PlayAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("playNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool PauseAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("pauseNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool StopAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("stopNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool SeekAndroidNativeMusic(long long positionMicros,
+                            std::string &errorMessage) {
+  std::string callError;
+  const std::string positionText = std::to_string(std::max(0LL, positionMicros));
+  const std::string result =
+      callActivityStringMethod("seekNativeMusic", "(Ljava/lang/String;)"
+                                                  "Ljava/lang/String;",
+                               positionText.c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+AndroidNativeMusicState GetAndroidNativeMusicState() {
+  AndroidNativeMusicState state;
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("nativeMusicState", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty() || result.rfind(kErrorPrefix, 0) == 0) {
+    return state;
+  }
+
+  const std::vector<std::string> lines = splitLines(result);
+  if (lines.size() < 4) {
+    return state;
+  }
+  state.loaded = lines[0] == "1";
+  state.playing = lines[1] == "1";
+  state.positionMicros = parseLongLongOrZero(lines[2]);
+  state.durationMicros = parseLongLongOrZero(lines[3]);
+  return state;
 }
 
 void RequestAndroidExternalActivityRenderPause() {

@@ -5,6 +5,8 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.database.Cursor;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -60,6 +62,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     private boolean pendingArchiveImportCopyRunning = false;
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
+    private final Object nativeMusicLock = new Object();
+    private MediaPlayer nativeMusicPlayer;
+    private long nativeMusicDurationMicros = 0;
 
     private static class PendingImportRequest {
         final Uri uri;
@@ -92,6 +97,14 @@ public class AsoBMaShowActivity extends SDLActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleArchiveImportIntent(intent);
+    }
+
+    @Override
+    protected void onDestroy() {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -584,6 +597,109 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    public String loadNativeMusic(String pathText, String metadataText, long durationMicros) {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+            try {
+                MediaPlayer player = new MediaPlayer();
+                player.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+                player.setDataSource(pathText);
+                player.prepare();
+                nativeMusicPlayer = player;
+                nativeMusicDurationMicros = durationMicros > 0
+                        ? durationMicros
+                        : Math.max(0L, player.getDuration()) * 1000L;
+                return "OK";
+            } catch (Exception e) {
+                releaseNativeMusicPlayerLocked();
+                return ERROR_PREFIX + messageForException(e, "Could not load music.");
+            }
+        }
+    }
+
+    public String playNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                nativeMusicPlayer.start();
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not play music.");
+            }
+        }
+    }
+
+    public String pauseNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                if (nativeMusicPlayer.isPlaying()) {
+                    nativeMusicPlayer.pause();
+                }
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not pause music.");
+            }
+        }
+    }
+
+    public String stopNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                if (nativeMusicPlayer.isPlaying()) {
+                    nativeMusicPlayer.pause();
+                }
+                nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not stop music.");
+            }
+        }
+    }
+
+    public String seekNativeMusic(String positionMicrosText) {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                long positionMicros = Math.max(0L, Long.parseLong(positionMicrosText));
+                nativeMusicPlayer.seekTo(positionMicros / 1000L, MediaPlayer.SEEK_CLOSEST);
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not seek music.");
+            }
+        }
+    }
+
+    public String nativeMusicState() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return "0\n0\n0\n0";
+            }
+            try {
+                long positionMicros = Math.max(0L, nativeMusicPlayer.getCurrentPosition()) * 1000L;
+                long durationMicros = nativeMusicDurationMicros > 0
+                        ? nativeMusicDurationMicros
+                        : Math.max(0L, nativeMusicPlayer.getDuration()) * 1000L;
+                return "1\n" + (nativeMusicPlayer.isPlaying() ? "1" : "0") +
+                        "\n" + positionMicros + "\n" + durationMicros;
+            } catch (Exception e) {
+                return "0\n0\n0\n0";
+            }
+        }
+    }
+
     private HttpURLConnection openHttpConnection(String urlText, String method,
                                                  int maxRedirects) throws IOException {
         String currentUrl = urlText;
@@ -670,6 +786,24 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         nativeDownloadUrlToFileProgress(progressToken, total, totalBytes > 0 ? totalBytes : total);
+    }
+
+    private void releaseNativeMusicPlayerLocked() {
+        if (nativeMusicPlayer != null) {
+            try {
+                nativeMusicPlayer.release();
+            } catch (Exception ignored) {
+            }
+        }
+        nativeMusicPlayer = null;
+        nativeMusicDurationMicros = 0;
+    }
+
+    private String messageForException(Exception e, String fallback) {
+        String message = e.getMessage();
+        return message == null || message.isEmpty()
+                ? fallback
+                : message;
     }
 
     private void finishPicker() {

@@ -7,12 +7,14 @@
 #include <CoreText/CoreText.h>
 #include <CoreVideo/CoreVideo.h>
 #include <Foundation/Foundation.h>
+#include <MediaPlayer/MediaPlayer.h>
 #include <Photos/Photos.h>
 #include <QuartzCore/CAMetalLayer.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
 #include <chrono>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <cstdint>
@@ -28,6 +30,9 @@ constexpr NSTimeInterval kIOSReplayInputWaitTimeoutSeconds = 2.0;
 constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 UIDocumentInteractionController *gIOSRevealFileController = nil;
+AVAudioPlayer *gIOSNativeMusicPlayer = nil;
+IOSNativeMusicMetadata gIOSNativeMusicMetadata;
+bool gIOSNativeMusicRemoteCommandsConfigured = false;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -452,6 +457,154 @@ std::string AVWriterStatusName(AVAssetWriterStatus status) {
     return "cancelled";
   }
   return "invalid";
+}
+
+NSObject *IOSNativeMusicLock() {
+  static NSObject *lock = [NSObject new];
+  return lock;
+}
+
+long long IOSNativeMusicDurationMicrosLocked() {
+  if (gIOSNativeMusicPlayer == nil) {
+    return 0;
+  }
+  if (gIOSNativeMusicMetadata.durationMicros > 0) {
+    return gIOSNativeMusicMetadata.durationMicros;
+  }
+  return static_cast<long long>(
+      std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.duration) *
+      1000000.0);
+}
+
+void UpdateIOSNativeMusicNowPlayingInfoLocked() {
+  @autoreleasepool {
+    MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
+    if (gIOSNativeMusicPlayer == nil) {
+      center.nowPlayingInfo = nil;
+      if (@available(iOS 13.0, *)) {
+        center.playbackState = MPNowPlayingPlaybackStateStopped;
+      }
+      return;
+    }
+
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    NSString *title = NSStringFromUtf8(gIOSNativeMusicMetadata.title);
+    NSString *artist = NSStringFromUtf8(gIOSNativeMusicMetadata.artist);
+    NSString *album = NSStringFromUtf8(gIOSNativeMusicMetadata.album);
+    if (title != nil && title.length > 0) {
+      info[MPMediaItemPropertyTitle] = title;
+    } else {
+      info[MPMediaItemPropertyTitle] = @"AsoBMaShow";
+    }
+    if (artist != nil && artist.length > 0) {
+      info[MPMediaItemPropertyArtist] = artist;
+    }
+    if (album != nil && album.length > 0) {
+      info[MPMediaItemPropertyAlbumTitle] = album;
+    }
+
+    const long long durationMicros = IOSNativeMusicDurationMicrosLocked();
+    if (durationMicros > 0) {
+      info[MPMediaItemPropertyPlaybackDuration] =
+          @(static_cast<double>(durationMicros) / 1000000.0);
+    }
+    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] =
+        @(std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.currentTime));
+    info[MPNowPlayingInfoPropertyPlaybackRate] =
+        @(gIOSNativeMusicPlayer.playing ? 1.0 : 0.0);
+    center.nowPlayingInfo = info;
+    if (@available(iOS 13.0, *)) {
+      center.playbackState = gIOSNativeMusicPlayer.playing
+                                 ? MPNowPlayingPlaybackStatePlaying
+                                 : MPNowPlayingPlaybackStatePaused;
+    }
+  }
+}
+
+bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage) {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  NSError *error = nil;
+  if (![session setCategory:AVAudioSessionCategoryPlayback error:&error]) {
+    errorMessage = NSErrorMessage(error, "Could not configure audio session");
+    return false;
+  }
+  error = nil;
+  if (![session setActive:YES error:&error]) {
+    errorMessage = NSErrorMessage(error, "Could not activate audio session");
+    return false;
+  }
+  return true;
+}
+
+void ConfigureIOSNativeMusicRemoteCommands() {
+  if (gIOSNativeMusicRemoteCommandsConfigured) {
+    return;
+  }
+  gIOSNativeMusicRemoteCommandsConfigured = true;
+
+  MPRemoteCommandCenter *center = [MPRemoteCommandCenter sharedCommandCenter];
+  center.playCommand.enabled = YES;
+  [center.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+                              MPRemoteCommandEvent *) {
+    std::string errorMessage;
+    return PlayIOSNativeMusic(errorMessage)
+               ? MPRemoteCommandHandlerStatusSuccess
+               : MPRemoteCommandHandlerStatusCommandFailed;
+  }];
+
+  center.pauseCommand.enabled = YES;
+  [center.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+                               MPRemoteCommandEvent *) {
+    std::string errorMessage;
+    return PauseIOSNativeMusic(errorMessage)
+               ? MPRemoteCommandHandlerStatusSuccess
+               : MPRemoteCommandHandlerStatusCommandFailed;
+  }];
+
+  center.togglePlayPauseCommand.enabled = YES;
+  [center.togglePlayPauseCommand
+      addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+          MPRemoteCommandEvent *) {
+        @synchronized(IOSNativeMusicLock()) {
+          std::string errorMessage;
+          if (gIOSNativeMusicPlayer != nil && gIOSNativeMusicPlayer.playing) {
+            return PauseIOSNativeMusic(errorMessage)
+                       ? MPRemoteCommandHandlerStatusSuccess
+                       : MPRemoteCommandHandlerStatusCommandFailed;
+          }
+          return PlayIOSNativeMusic(errorMessage)
+                     ? MPRemoteCommandHandlerStatusSuccess
+                     : MPRemoteCommandHandlerStatusCommandFailed;
+        }
+      }];
+
+  center.stopCommand.enabled = YES;
+  [center.stopCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+                              MPRemoteCommandEvent *) {
+    std::string errorMessage;
+    return StopIOSNativeMusic(errorMessage)
+               ? MPRemoteCommandHandlerStatusSuccess
+               : MPRemoteCommandHandlerStatusCommandFailed;
+  }];
+
+  center.changePlaybackPositionCommand.enabled = YES;
+  [center.changePlaybackPositionCommand
+      addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+          MPRemoteCommandEvent *event) {
+        if (![event
+                isKindOfClass:[MPChangePlaybackPositionCommandEvent class]]) {
+          return MPRemoteCommandHandlerStatusCommandFailed;
+        }
+        MPChangePlaybackPositionCommandEvent *positionEvent =
+            (MPChangePlaybackPositionCommandEvent *)event;
+        std::string errorMessage;
+        const long long positionMicros = static_cast<long long>(
+            std::max<NSTimeInterval>(0.0, positionEvent.positionTime) *
+            1000000.0);
+        return SeekIOSNativeMusic(positionMicros, errorMessage)
+                   ? MPRemoteCommandHandlerStatusSuccess
+                   : MPRemoteCommandHandlerStatusCommandFailed;
+      }];
 }
 
 bool WaitForWriterInput(AVAssetWriter *writer, AVAssetWriterInput *input,
@@ -2186,6 +2339,145 @@ bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
       return false;
     }
     return true;
+  }
+}
+
+bool LoadIOSNativeMusicFile(const std::string &filePath,
+                            const IOSNativeMusicMetadata &metadata,
+                            std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      NSString *path = NSStringFromUtf8(filePath);
+      if (path == nil || path.length == 0) {
+        errorMessage = "Music file path is empty";
+        return false;
+      }
+      if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        errorMessage = "Music file does not exist";
+        return false;
+      }
+      if (!ActivateIOSNativeMusicAudioSession(errorMessage)) {
+        return false;
+      }
+
+      NSURL *url = [NSURL fileURLWithPath:path];
+      NSError *error = nil;
+      AVAudioPlayer *player =
+          [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&error];
+      if (player == nil) {
+        errorMessage = NSErrorMessage(error, "Could not load music");
+        return false;
+      }
+      player.numberOfLoops = 0;
+      if (![player prepareToPlay]) {
+        errorMessage = "Could not prepare music for playback";
+        return false;
+      }
+
+      gIOSNativeMusicPlayer = player;
+      gIOSNativeMusicMetadata = metadata;
+      if (gIOSNativeMusicMetadata.durationMicros <= 0) {
+        gIOSNativeMusicMetadata.durationMicros =
+            static_cast<long long>(
+                std::max<NSTimeInterval>(0.0, player.duration) * 1000000.0);
+      }
+      ConfigureIOSNativeMusicRemoteCommands();
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool PlayIOSNativeMusic(std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicPlayer == nil) {
+        errorMessage = "No music is loaded";
+        return false;
+      }
+      if (!ActivateIOSNativeMusicAudioSession(errorMessage)) {
+        return false;
+      }
+      if (![gIOSNativeMusicPlayer play]) {
+        errorMessage = "Could not start music playback";
+        return false;
+      }
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool PauseIOSNativeMusic(std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicPlayer == nil) {
+        errorMessage = "No music is loaded";
+        return false;
+      }
+      [gIOSNativeMusicPlayer pause];
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool StopIOSNativeMusic(std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicPlayer == nil) {
+        errorMessage = "No music is loaded";
+        return false;
+      }
+      [gIOSNativeMusicPlayer pause];
+      gIOSNativeMusicPlayer.currentTime = 0.0;
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicPlayer == nil) {
+        errorMessage = "No music is loaded";
+        return false;
+      }
+      const NSTimeInterval duration =
+          std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.duration);
+      const NSTimeInterval target = std::clamp<NSTimeInterval>(
+          static_cast<NSTimeInterval>(std::max(0LL, positionMicros)) /
+              1000000.0,
+          0.0, duration > 0.0 ? duration : DBL_MAX);
+      gIOSNativeMusicPlayer.currentTime = target;
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+IOSNativeMusicState GetIOSNativeMusicState() {
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      IOSNativeMusicState state;
+      state.loaded = gIOSNativeMusicPlayer != nil;
+      if (!state.loaded) {
+        return state;
+      }
+      state.playing = gIOSNativeMusicPlayer.playing;
+      state.positionMicros =
+          static_cast<long long>(
+              std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.currentTime) *
+              1000000.0);
+      state.durationMicros = IOSNativeMusicDurationMicrosLocked();
+      return state;
+    }
   }
 }
 

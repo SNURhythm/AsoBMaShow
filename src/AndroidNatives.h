@@ -16,6 +16,20 @@ using AndroidDownloadProgressCallback =
     std::function<void(std::uint64_t downloadedBytes,
                        std::uint64_t totalBytes)>;
 
+struct AndroidNativeMusicMetadata {
+  std::string title;
+  std::string artist;
+  std::string album;
+  long long durationMicros = 0;
+};
+
+struct AndroidNativeMusicState {
+  bool loaded = false;
+  bool playing = false;
+  long long positionMicros = 0;
+  long long durationMicros = 0;
+};
+
 std::string GetAndroidExternalFilesDir();
 std::string GetAndroidInternalFilesDir();
 bool AndroidBuildHasManageExternalStorage();
@@ -56,6 +70,15 @@ bool DownloadURLToFileAndroid(const std::string &url,
                               std::atomic_bool &cancelled,
                               AndroidDownloadProgressCallback progressCallback,
                               std::string &errorMessage);
+bool LoadAndroidNativeMusicFile(const std::string &filePath,
+                                const AndroidNativeMusicMetadata &metadata,
+                                std::string &errorMessage);
+bool PlayAndroidNativeMusic(std::string &errorMessage);
+bool PauseAndroidNativeMusic(std::string &errorMessage);
+bool StopAndroidNativeMusic(std::string &errorMessage);
+bool SeekAndroidNativeMusic(long long positionMicros,
+                            std::string &errorMessage);
+AndroidNativeMusicState GetAndroidNativeMusicState();
 void RequestAndroidExternalActivityRenderPause();
 void FinishAndroidExternalActivityRenderPause();
 bool IsAndroidExternalActivityRenderPauseRequested();

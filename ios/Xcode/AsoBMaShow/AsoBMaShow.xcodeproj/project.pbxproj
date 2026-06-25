@@ -49,6 +49,7 @@
 		B7FA8B092C7D06B400B7EAAF /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FA8B082C7D06B400B7EAAF /* CoreText.framework */; };
 		B7FA8B0D2C7D06D800B7EAAF /* GLKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FA8B0C2C7D06D700B7EAAF /* GLKit.framework */; };
 		B7FA8B0F2C7D06F200B7EAAF /* OpenGLES.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FA8B0E2C7D06F200B7EAAF /* OpenGLES.framework */; };
+		B7E010012F54000100A50B01 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E010002F54000100A50B01 /* MediaPlayer.framework */; };
 		B7FFC2C32BF7D834000C838E /* SDL2.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL2.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B7FFC39F2BFAAFA7000C838E /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E222BF7C48700945F27 /* CoreFoundation.framework */; };
 		B7FFC3A82BFAAFF3000C838E /* libbimg_encode.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FFC3192BFAAF67000C838E /* libbimg_encode.a */; };
@@ -671,6 +672,7 @@
 		B7D27AEA2C7CD4B400189ED7 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		B7D27AEC2C7CD4D700189ED7 /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
 		B7D27AEE2C7CD4EC00189ED7 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		B7E010002F54000100A50B01 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
 		B7D27AF02C7CE2F900189ED7 /* libvlc.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvlc.a; path = lib/libvlc.a; sourceTree = "<group>"; };
 		B7D27AF12C7CE2FA00189ED7 /* libcompat.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcompat.a; path = lib/libcompat.a; sourceTree = "<group>"; };
 		B7D27AF22C7CE2FA00189ED7 /* libvlccore.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvlccore.a; path = lib/libvlccore.a; sourceTree = "<group>"; };
@@ -709,6 +711,7 @@
 				audio/ChartMusicCache.cpp,
 				audio/decoder.cpp,
 				audio/Jukebox.cpp,
+				audio/NativeMusicPlayer.cpp,
 				bgfx_helper.cpp,
 				bms_parser.cpp,
 				bms_search/ArchiveSupport.cpp,
@@ -811,6 +814,7 @@
 				B7FA8B092C7D06B400B7EAAF /* CoreText.framework in Frameworks */,
 				B7FA8B072C7D069D00B7EAAF /* CoreGraphics.framework in Frameworks */,
 				B7FA8B052C7D068600B7EAAF /* AVFoundation.framework in Frameworks */,
+				B7E010012F54000100A50B01 /* MediaPlayer.framework in Frameworks */,
 				B7A11F002F30000100F00D01 /* Photos.framework in Frameworks */,
 				B7D27AEF2C7CD4EC00189ED7 /* Security.framework in Frameworks */,
 				B7D27AED2C7CD4D700189ED7 /* CoreVideo.framework in Frameworks */,
@@ -920,6 +924,7 @@
 				B7FA8B062C7D069D00B7EAAF /* CoreGraphics.framework */,
 				B7FA8B042C7D068600B7EAAF /* AVFoundation.framework */,
 				B7A11EFF2F30000100F00D01 /* Photos.framework */,
+				B7E010002F54000100A50B01 /* MediaPlayer.framework */,
 				B7FA8B022C7D065C00B7EAAF /* libvlc-full-static.a */,
 				B7D27AF12C7CE2FA00189ED7 /* libcompat.a */,
 				B7D27AF02C7CE2F900189ED7 /* libvlc.a */,
