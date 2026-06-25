@@ -132,7 +132,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long downloadedBytes,
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
-    private static native void nativeMusicControlEvent(String eventName);
+    static native void nativeMusicControlEvent(String eventName);
 
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
@@ -681,6 +681,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 }
                 nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
                 updateNativeMusicSessionLocked(false);
+                stopNativeMusicForegroundServiceLocked();
                 return "OK";
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(e, "Could not stop music.");
@@ -892,6 +893,37 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .build();
         nativeMusicSession.setPlaybackState(playbackState);
         nativeMusicSession.setActive(nativeMusicPlayer != null);
+        updateNativeMusicForegroundServiceLocked(playing);
+    }
+
+    private void updateNativeMusicForegroundServiceLocked(boolean playing) {
+        if (nativeMusicPlayer == null || nativeMusicSession == null) {
+            stopNativeMusicForegroundServiceLocked();
+            return;
+        }
+        Intent intent = new Intent(this, AsoBMaShowMusicService.class)
+                .setAction(AsoBMaShowMusicService.ACTION_UPDATE)
+                .putExtra(AsoBMaShowMusicService.EXTRA_TITLE, nativeMusicTitle)
+                .putExtra(AsoBMaShowMusicService.EXTRA_ARTIST, nativeMusicArtist)
+                .putExtra(AsoBMaShowMusicService.EXTRA_ALBUM, nativeMusicAlbum)
+                .putExtra(AsoBMaShowMusicService.EXTRA_PLAYING, playing)
+                .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
+                        nativeMusicSession.getSessionToken());
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void stopNativeMusicForegroundServiceLocked() {
+        try {
+            stopService(new Intent(this, AsoBMaShowMusicService.class));
+        } catch (Exception ignored) {
+        }
     }
 
     private void releaseNativeMusicPlayerLocked() {
@@ -915,6 +947,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         nativeMusicSession = null;
+        stopNativeMusicForegroundServiceLocked();
     }
 
     private String messageForException(Exception e, String fallback) {
