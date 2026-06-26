@@ -31,13 +31,14 @@ public class AsoBMaShowMusicService extends Service {
     public static final String EXTRA_SESSION_TOKEN = "session_token";
 
     private static final String CHANNEL_ID = "asobmashow_music";
-    private static final int NOTIFICATION_ID = 0x41534d53;
+    static final int NOTIFICATION_ID = 0x41534d53;
 
     private String title = "AsoBMaShow";
     private String artist = "AsoBMaShow";
     private String album = "";
     private String artworkPath = "";
     private boolean playing = false;
+    private boolean foreground = false;
     private MediaSession.Token sessionToken;
 
     @Override
@@ -49,38 +50,44 @@ public class AsoBMaShowMusicService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) {
-            updateForeground();
-            return START_STICKY;
+            if (playing) {
+                updateNotification();
+                return START_STICKY;
+            }
+            stopSelf(startId);
+            return START_NOT_STICKY;
         }
 
         String action = intent.getAction();
+        readUpdate(intent);
         if (ACTION_STOP_SERVICE.equals(action)) {
-            stopForeground(Service.STOP_FOREGROUND_REMOVE);
+            removeNotification();
             stopSelf();
             return START_NOT_STICKY;
         }
 
         if (ACTION_PLAY.equals(action)) {
             sendTransportAction(intent, ACTION_PLAY);
+            playing = sessionToken != null;
         } else if (ACTION_PAUSE.equals(action)) {
             sendTransportAction(intent, ACTION_PAUSE);
-            stopForeground(Service.STOP_FOREGROUND_REMOVE);
-            stopSelf();
-            return START_NOT_STICKY;
+            playing = false;
         } else if (ACTION_STOP.equals(action)) {
             sendTransportAction(intent, ACTION_STOP);
-            stopForeground(Service.STOP_FOREGROUND_REMOVE);
+            removeNotification();
             stopSelf();
             return START_NOT_STICKY;
         } else if (ACTION_PREVIOUS.equals(action)) {
             AsoBMaShowActivity.nativeMusicControlEvent("previous");
         } else if (ACTION_NEXT.equals(action)) {
             AsoBMaShowActivity.nativeMusicControlEvent("next");
-        } else {
-            readUpdate(intent);
         }
 
-        updateForeground();
+        updateNotification();
+        if (!playing) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         return START_STICKY;
     }
 
@@ -90,18 +97,30 @@ public class AsoBMaShowMusicService extends Service {
     }
 
     private void readUpdate(Intent intent) {
-        title = nonEmpty(intent.getStringExtra(EXTRA_TITLE), "AsoBMaShow");
-        artist = nonEmpty(intent.getStringExtra(EXTRA_ARTIST), "AsoBMaShow");
-        album = nonEmpty(intent.getStringExtra(EXTRA_ALBUM), "");
-        artworkPath = nonEmpty(intent.getStringExtra(EXTRA_ARTWORK_PATH), "");
-        playing = intent.getBooleanExtra(EXTRA_PLAYING, false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            sessionToken = intent.getParcelableExtra(EXTRA_SESSION_TOKEN,
-                    MediaSession.Token.class);
-        } else {
-            @SuppressWarnings("deprecation")
-            MediaSession.Token token = intent.getParcelableExtra(EXTRA_SESSION_TOKEN);
-            sessionToken = token;
+        if (intent.hasExtra(EXTRA_TITLE)) {
+            title = nonEmpty(intent.getStringExtra(EXTRA_TITLE), "AsoBMaShow");
+        }
+        if (intent.hasExtra(EXTRA_ARTIST)) {
+            artist = nonEmpty(intent.getStringExtra(EXTRA_ARTIST), "AsoBMaShow");
+        }
+        if (intent.hasExtra(EXTRA_ALBUM)) {
+            album = nonEmpty(intent.getStringExtra(EXTRA_ALBUM), "");
+        }
+        if (intent.hasExtra(EXTRA_ARTWORK_PATH)) {
+            artworkPath = nonEmpty(intent.getStringExtra(EXTRA_ARTWORK_PATH), "");
+        }
+        if (intent.hasExtra(EXTRA_PLAYING)) {
+            playing = intent.getBooleanExtra(EXTRA_PLAYING, false);
+        }
+        if (intent.hasExtra(EXTRA_SESSION_TOKEN)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                sessionToken = intent.getParcelableExtra(EXTRA_SESSION_TOKEN,
+                        MediaSession.Token.class);
+            } else {
+                @SuppressWarnings("deprecation")
+                MediaSession.Token token = intent.getParcelableExtra(EXTRA_SESSION_TOKEN);
+                sessionToken = token;
+            }
         }
     }
 
@@ -139,13 +158,40 @@ public class AsoBMaShowMusicService extends Service {
         }
     }
 
-    private void updateForeground() {
+    private void updateNotification() {
         Notification notification = buildNotification();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        if (playing) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+            foreground = true;
         } else {
-            startForeground(NOTIFICATION_ID, notification);
+            if (foreground) {
+                stopForeground(Service.STOP_FOREGROUND_DETACH);
+                foreground = false;
+            }
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.notify(NOTIFICATION_ID, notification);
+            }
+        }
+    }
+
+    private void removeNotification() {
+        if (foreground) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE);
+            foreground = false;
+        } else {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE);
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
         }
     }
 
@@ -203,7 +249,12 @@ public class AsoBMaShowMusicService extends Service {
 
     private PendingIntent serviceIntent(String action, int requestCode) {
         Intent intent = new Intent(this, AsoBMaShowMusicService.class)
-                .setAction(action);
+                .setAction(action)
+                .putExtra(EXTRA_TITLE, title)
+                .putExtra(EXTRA_ARTIST, artist)
+                .putExtra(EXTRA_ALBUM, album)
+                .putExtra(EXTRA_ARTWORK_PATH, artworkPath)
+                .putExtra(EXTRA_PLAYING, playing);
         if (sessionToken != null) {
             intent.putExtra(EXTRA_SESSION_TOKEN, sessionToken);
         }

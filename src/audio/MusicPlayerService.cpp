@@ -1,7 +1,5 @@
 #include "MusicPlayerService.h"
 
-#include "../ChartDBHelper.h"
-
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -61,16 +59,16 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *db = dbHelper.Connect();
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
   if (db == nullptr) {
     errorMessage = "Could not open chart database.";
     return false;
   }
 
   std::vector<MusicTrackRecord> records;
-  dbHelper.SelectMusicTracks(db, records);
-  dbHelper.Close(db);
+  playlistDb.SelectLibraryTracks(db, records);
+  playlistDb.Close(db);
 
   libraryTracks = music_playlist::MakeTracks(records);
   return true;
@@ -184,6 +182,34 @@ int MusicPlayerService::CreatePlaylist(const std::string &name,
   return playlistId;
 }
 
+bool MusicPlayerService::RenameSelectedPlaylist(const std::string &name,
+                                                std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  if (selectedPlaylistId <= 0) {
+    errorMessage = "Select a playlist first.";
+    return false;
+  }
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  const int playlistId = selectedPlaylistId;
+  const bool renamed = playlistDb.RenamePlaylist(db, playlistId, name);
+  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  playlistDb.Close(db);
+  if (!renamed) {
+    errorMessage = "Could not rename playlist. The name may already exist.";
+    return false;
+  }
+  return true;
+}
+
 bool MusicPlayerService::SelectPlaylist(int playlistId,
                                         std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
@@ -212,6 +238,17 @@ bool MusicPlayerService::SelectPlaylist(int playlistId,
 
 bool MusicPlayerService::AddChartToSelectedPlaylist(
     const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+  int targetPlaylistId = 0;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    targetPlaylistId = selectedPlaylistId;
+  }
+  return AddChartToPlaylist(targetPlaylistId, chartMeta, errorMessage);
+}
+
+bool MusicPlayerService::AddChartToPlaylist(
+    int targetPlaylistId, const bms_parser::ChartMeta &chartMeta,
+    std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
@@ -223,11 +260,16 @@ bool MusicPlayerService::AddChartToSelectedPlaylist(
   }
 
   RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
-  const int playlistId = selectedPlaylistId;
+  const int playlistId = targetPlaylistId;
+  if (!hasPlaylistId(playlists, playlistId)) {
+    playlistDb.Close(db);
+    errorMessage = "Select a playlist first.";
+    return false;
+  }
   const bool inserted =
       playlistId > 0 &&
       playlistDb.InsertTrack(db, playlistId, chartMeta);
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
   playlistDb.Close(db);
   if (!inserted) {
     errorMessage = "Could not add selected chart to the playlist.";
@@ -456,7 +498,7 @@ bool MusicPlayerService::StartLibraryPlaylist(std::string &errorMessage,
     queue.Clear();
     return false;
   }
-  queue.SetPlaylist(libraryTracks, startIndex);
+  queue.SetPlaylist(libraryTracks, startIndex, "Library");
   return true;
 }
 
@@ -469,7 +511,8 @@ bool MusicPlayerService::StartRandomLibrary(std::string &errorMessage,
     queue.Clear();
     return false;
   }
-  queue.SetRandomAll(libraryTracks, seed);
+  queue.SetPlaylist(music_playlist::ShuffledTracks(libraryTracks, seed), 0,
+                    music_playlist::kNowPlayingDisplayName);
   return true;
 }
 
@@ -492,7 +535,9 @@ bool MusicPlayerService::StartSelectedPlaylist(std::string &errorMessage) {
     queue.Clear();
     return false;
   }
-  queue.SetPlaylist(selectedPlaylistTracks);
+  const auto selectedPlaylist = findPlaylistById(playlists, selectedPlaylistId);
+  queue.SetPlaylist(selectedPlaylistTracks, 0,
+                    selectedPlaylist ? selectedPlaylist->name : "");
   return true;
 }
 
@@ -522,21 +567,30 @@ bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
     queue.Clear();
     return false;
   }
-  queue.SetPlaylist(defaultPlaylistTracks);
+  queue.SetPlaylist(defaultPlaylistTracks, 0, kDefaultPlaylistName);
   return true;
 }
 
-void MusicPlayerService::SetPlaylist(
+void MusicPlayerService::SetNowPlaying(
     std::vector<music_playlist::MusicTrack> tracks, std::size_t startIndex) {
   std::lock_guard<std::mutex> lock(stateMutex);
-  queue.SetPlaylist(std::move(tracks), startIndex);
+  queue.SetPlaylist(std::move(tracks), startIndex,
+                    music_playlist::kNowPlayingDisplayName);
 }
 
-void MusicPlayerService::SetRandomAll(
-    std::vector<music_playlist::MusicTrack> tracks,
-    std::optional<std::uint64_t> seed) {
+void MusicPlayerService::SetPlaylist(
+    std::vector<music_playlist::MusicTrack> tracks, std::size_t startIndex,
+    std::string displayName) {
   std::lock_guard<std::mutex> lock(stateMutex);
-  queue.SetRandomAll(std::move(tracks), seed);
+  queue.SetPlaylist(std::move(tracks), startIndex, std::move(displayName));
+}
+
+void MusicPlayerService::SetPlaylistAfterCurrentRemoved(
+    std::vector<music_playlist::MusicTrack> tracks, std::size_t nextIndex,
+    std::string displayName) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  queue.SetPlaylistAfterCurrentRemoved(std::move(tracks), nextIndex,
+                                       std::move(displayName));
 }
 
 bool MusicPlayerService::PlayCurrent(std::string &errorMessage) {
@@ -562,7 +616,7 @@ bool MusicPlayerService::PlayLibraryTrack(std::size_t index,
     errorMessage = "Music track index is out of range.";
     return false;
   }
-  queue.SetPlaylist(libraryTracks, index);
+  queue.SetPlaylist(libraryTracks, index, "Library");
   return PlayCurrentLocked(errorMessage);
 }
 
@@ -630,6 +684,7 @@ bool MusicPlayerService::Stop(std::string &errorMessage) {
   {
     std::lock_guard<std::mutex> lock(stateMutex);
     stopped = native_music_player::Stop(errorMessage);
+    loadedTrack.reset();
   }
   StopNativeControlEventPump();
   return stopped;
@@ -680,11 +735,30 @@ void MusicPlayerService::CancelRender() {
 std::optional<music_playlist::MusicTrack>
 MusicPlayerService::CurrentTrackSnapshot() const {
   std::lock_guard<std::mutex> lock(stateMutex);
+  if (loadedTrack) {
+    return loadedTrack;
+  }
   const auto *track = queue.Current();
   if (track == nullptr) {
     return std::nullopt;
   }
   return *track;
+}
+
+music_playlist::MusicQueueSnapshot MusicPlayerService::QueueSnapshot() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return queue.Snapshot();
+}
+
+music_playlist::QueueRepeatMode MusicPlayerService::RepeatMode() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return queue.RepeatMode();
+}
+
+void MusicPlayerService::SetRepeatMode(
+    music_playlist::QueueRepeatMode mode) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  queue.SetRepeatMode(mode);
 }
 
 chart_music_cache::CacheResult MusicPlayerService::LastCacheResult() const {
@@ -723,6 +797,7 @@ bool MusicPlayerService::PlayTrackLocked(
   }
   const bool playing = native_music_player::Play(errorMessage);
   if (playing) {
+    loadedTrack = track;
     EnsureNativeControlEventPump();
   }
   return playing;
@@ -845,6 +920,7 @@ void MusicPlayerService::PlaybackWorker(
       } else if (!native_music_player::Play(errorMessage)) {
         statusMessage = errorMessage;
       } else {
+        loadedTrack = track;
         playing = true;
         statusMessage =
             successMessage.empty() ? "Playing music." : successMessage;

@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <numeric>
 #include <random>
 #include <string_view>
 #include <utility>
@@ -122,6 +121,16 @@ std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta) {
       return *resolved;
     }
   }
+
+  const std::string commonNames[] = {
+      "jacket", "cover", "folder", "title", "stagefile", "stage", "banner"};
+  for (const auto &name : commonNames) {
+    if (const auto resolved =
+            archive_file::findFileWithExtensions(meta.Folder / name,
+                                                 kArtworkExtensions)) {
+      return *resolved;
+    }
+  }
   return {};
 }
 
@@ -152,6 +161,14 @@ MakeTracks(const std::vector<MusicTrackRecord> &records) {
   return tracks;
 }
 
+std::vector<MusicTrack>
+ShuffledTracks(std::vector<MusicTrack> tracks,
+               std::optional<std::uint64_t> seed) {
+  std::mt19937_64 engine(seed.value_or(generateSeed()));
+  std::shuffle(tracks.begin(), tracks.end(), engine);
+  return tracks;
+}
+
 native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
   std::string title = track.title;
   if (!track.subtitle.empty()) {
@@ -167,46 +184,35 @@ native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
 }
 
 void MusicQueue::SetPlaylist(std::vector<MusicTrack> newTracks,
-                             std::size_t startIndex) {
-  mode = QueueMode::Playlist;
+                             std::size_t startIndex,
+                             std::string newDisplayName) {
+  displayName = std::move(newDisplayName);
   tracks = std::move(newTracks);
-  randomSeed.reset();
-  randomBag.clear();
-  randomHistory.clear();
-  randomHistoryCursor = 0;
   currentIndex.reset();
+  detachedCurrentNextIndex.reset();
   if (!tracks.empty()) {
     currentIndex = std::min(startIndex, tracks.size() - 1);
   }
 }
 
-void MusicQueue::SetRandomAll(std::vector<MusicTrack> newTracks,
-                              std::optional<std::uint64_t> seed) {
-  mode = QueueMode::RandomAll;
+void MusicQueue::SetPlaylistAfterCurrentRemoved(
+    std::vector<MusicTrack> newTracks, std::size_t nextIndex,
+    std::string newDisplayName) {
+  displayName = std::move(newDisplayName);
   tracks = std::move(newTracks);
-  randomSeed = seed.value_or(generateSeed());
-  shuffleEngine.seed(*randomSeed);
-  randomBag.clear();
-  randomHistory.clear();
-  randomHistoryCursor = 0;
   currentIndex.reset();
+  detachedCurrentNextIndex.reset();
   if (!tracks.empty()) {
-    RefillRandomBag();
-    if (const auto index = DrawRandomIndex()) {
-      SelectIndex(*index);
-      PushRandomHistory(*index);
-    }
+    const std::size_t clampedNextIndex = std::min(nextIndex, tracks.size());
+    detachedCurrentNextIndex = clampedNextIndex;
   }
 }
 
 void MusicQueue::Clear() {
   tracks.clear();
   currentIndex.reset();
-  randomSeed.reset();
-  randomBag.clear();
-  randomHistory.clear();
-  randomHistoryCursor = 0;
-  mode = QueueMode::Playlist;
+  detachedCurrentNextIndex.reset();
+  displayName.clear();
 }
 
 const MusicTrack *MusicQueue::Current() const {
@@ -216,30 +222,48 @@ const MusicTrack *MusicQueue::Current() const {
   return &tracks[*currentIndex];
 }
 
+MusicQueueSnapshot MusicQueue::Snapshot() const {
+  MusicQueueSnapshot snapshot;
+  snapshot.repeatMode = repeatMode;
+  snapshot.displayName = displayName;
+  snapshot.tracks = tracks;
+  snapshot.currentIndex = currentIndex;
+  snapshot.detachedCurrentNextIndex = detachedCurrentNextIndex;
+  return snapshot;
+}
+
 const MusicTrack *MusicQueue::Next() {
   if (tracks.empty()) {
     return nullptr;
   }
 
-  if (mode == QueueMode::Playlist) {
-    const std::size_t index =
-        currentIndex ? (*currentIndex + 1) % tracks.size() : 0;
-    return SelectIndex(index);
+  if (detachedCurrentNextIndex) {
+    const std::size_t nextIndex = *detachedCurrentNextIndex;
+    if (nextIndex >= tracks.size()) {
+      if (repeatMode != QueueRepeatMode::All) {
+        detachedCurrentNextIndex.reset();
+        return nullptr;
+      }
+      return SelectIndex(0);
+    }
+    return SelectIndex(nextIndex);
   }
 
-  if (randomHistoryCursor + 1 < randomHistory.size()) {
-    ++randomHistoryCursor;
-    return SelectIndex(randomHistory[randomHistoryCursor]);
+  if (repeatMode == QueueRepeatMode::One) {
+    return Current();
   }
 
-  if (randomBag.empty()) {
-    RefillRandomBag();
+  if (!currentIndex) {
+    return SelectIndex(0);
   }
-  if (const auto index = DrawRandomIndex()) {
-    SelectIndex(*index);
-    PushRandomHistory(*index);
+  if (*currentIndex + 1 >= tracks.size()) {
+    if (repeatMode != QueueRepeatMode::All) {
+      return nullptr;
+    }
+    return SelectIndex(0);
   }
-  return Current();
+  const std::size_t index = *currentIndex + 1;
+  return SelectIndex(index);
 }
 
 const MusicTrack *MusicQueue::Previous() {
@@ -247,58 +271,44 @@ const MusicTrack *MusicQueue::Previous() {
     return nullptr;
   }
 
-  if (mode == QueueMode::Playlist) {
-    const std::size_t index = !currentIndex || *currentIndex == 0
-                                  ? tracks.size() - 1
-                                  : *currentIndex - 1;
-    return SelectIndex(index);
+  if (detachedCurrentNextIndex) {
+    const std::size_t nextIndex = *detachedCurrentNextIndex;
+    if (nextIndex == 0) {
+      if (repeatMode != QueueRepeatMode::All) {
+        detachedCurrentNextIndex.reset();
+        return nullptr;
+      }
+      return SelectIndex(tracks.size() - 1);
+    }
+    return SelectIndex(nextIndex - 1);
   }
 
-  if (randomHistoryCursor > 0) {
-    --randomHistoryCursor;
-    return SelectIndex(randomHistory[randomHistoryCursor]);
+  if (repeatMode == QueueRepeatMode::One) {
+    return Current();
   }
-  return Current();
+
+  if (!currentIndex) {
+    return SelectIndex(0);
+  }
+  if (*currentIndex == 0) {
+    if (repeatMode != QueueRepeatMode::All) {
+      return nullptr;
+    }
+    return SelectIndex(tracks.size() - 1);
+  }
+  const std::size_t index = *currentIndex - 1;
+  return SelectIndex(index);
 }
 
 const MusicTrack *MusicQueue::SelectIndex(std::size_t index) {
   if (index >= tracks.size()) {
     currentIndex.reset();
+    detachedCurrentNextIndex.reset();
     return nullptr;
   }
   currentIndex = index;
+  detachedCurrentNextIndex.reset();
   return &tracks[index];
-}
-
-void MusicQueue::PushRandomHistory(std::size_t index) {
-  if (randomHistoryCursor + 1 < randomHistory.size()) {
-    randomHistory.erase(randomHistory.begin() + static_cast<std::ptrdiff_t>(
-                                                    randomHistoryCursor + 1),
-                        randomHistory.end());
-  }
-  randomHistory.push_back(index);
-  randomHistoryCursor = randomHistory.size() - 1;
-}
-
-void MusicQueue::RefillRandomBag() {
-  randomBag.resize(tracks.size());
-  std::iota(randomBag.begin(), randomBag.end(), 0);
-
-  std::shuffle(randomBag.begin(), randomBag.end(), shuffleEngine);
-
-  if (tracks.size() > 1 && currentIndex && !randomBag.empty() &&
-      randomBag.back() == *currentIndex) {
-    std::swap(randomBag.front(), randomBag.back());
-  }
-}
-
-std::optional<std::size_t> MusicQueue::DrawRandomIndex() {
-  if (randomBag.empty()) {
-    return std::nullopt;
-  }
-  const std::size_t index = randomBag.back();
-  randomBag.pop_back();
-  return index;
 }
 
 } // namespace music_playlist

@@ -4784,7 +4784,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
 
   MusicTrackRecord musicRecord{.representativeChart = record.meta,
                                .chartCount = 1};
-  context.musicPlayer.SetPlaylist({music_playlist::MakeTrack(musicRecord)});
+  context.musicPlayer.SetNowPlaying({music_playlist::MakeTrack(musicRecord)});
 
   std::string statusMessage;
   context.musicPlayer.PlayCurrentAsync(statusMessage, "Playing selected chart.");
@@ -4894,7 +4894,7 @@ void MainMenuScene::playRandomMusicLibrary() {
     musicStatusMessage = errorMessage;
   } else {
     context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                         "Playing random library.");
+                                         "Playing Now Playing.");
     musicStatusMessage = errorMessage;
   }
   refreshMusicModal();

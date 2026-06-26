@@ -35,9 +35,14 @@ public:
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   SelectedPlaylistTracksSnapshot() const;
   int CreatePlaylist(const std::string &name, std::string &errorMessage);
+  bool RenameSelectedPlaylist(const std::string &name,
+                              std::string &errorMessage);
   bool SelectPlaylist(int playlistId, std::string &errorMessage);
   bool AddChartToSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
                                   std::string &errorMessage);
+  bool AddChartToPlaylist(int playlistId,
+                          const bms_parser::ChartMeta &chartMeta,
+                          std::string &errorMessage);
   bool RemoveChartFromSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
                                        std::string &errorMessage);
   bool MoveChartInSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
@@ -61,13 +66,20 @@ public:
                           std::optional<std::uint64_t> seed = std::nullopt);
   bool StartSelectedPlaylist(std::string &errorMessage);
   bool StartDefaultPlaylist(std::string &errorMessage);
+  void SetNowPlaying(std::vector<music_playlist::MusicTrack> tracks,
+                     std::size_t startIndex = 0);
   void SetPlaylist(std::vector<music_playlist::MusicTrack> tracks,
-                   std::size_t startIndex = 0);
-  void SetRandomAll(std::vector<music_playlist::MusicTrack> tracks,
-                    std::optional<std::uint64_t> seed = std::nullopt);
+                   std::size_t startIndex = 0,
+                   std::string displayName = {});
+  void SetPlaylistAfterCurrentRemoved(
+      std::vector<music_playlist::MusicTrack> tracks, std::size_t nextIndex = 0,
+      std::string displayName = {});
 
   [[nodiscard]] std::optional<music_playlist::MusicTrack>
   CurrentTrackSnapshot() const;
+  [[nodiscard]] music_playlist::MusicQueueSnapshot QueueSnapshot() const;
+  [[nodiscard]] music_playlist::QueueRepeatMode RepeatMode() const;
+  void SetRepeatMode(music_playlist::QueueRepeatMode mode);
   [[nodiscard]] chart_music_cache::CacheResult LastCacheResult() const;
   [[nodiscard]] native_music_player::PlaybackState PlaybackState() const {
     return native_music_player::GetState();
@@ -122,6 +134,7 @@ private:
   std::vector<MusicPlaylistInfo> playlists;
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   std::vector<music_playlist::MusicTrack> selectedPlaylistTracks;
+  std::optional<music_playlist::MusicTrack> loadedTrack;
   int defaultPlaylistId = 0;
   int selectedPlaylistId = 0;
   music_playlist::MusicQueue queue;

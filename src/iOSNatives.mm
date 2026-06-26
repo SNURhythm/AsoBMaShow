@@ -2489,7 +2489,7 @@ bool PauseIOSNativeMusic(std::string &errorMessage) {
       }
       [gIOSNativeMusicPlayer pause];
       UpdateIOSNativeMusicNowPlayingInfoLocked();
-      return RestoreIOSForegroundAudioSession(errorMessage);
+      return true;
     }
   }
 }

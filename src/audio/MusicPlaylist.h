@@ -7,15 +7,17 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <random>
 #include <string>
 #include <vector>
 
 namespace music_playlist {
 
-enum class QueueMode {
-  Playlist,
-  RandomAll,
+inline constexpr const char *kNowPlayingDisplayName = "Now Playing";
+
+enum class QueueRepeatMode {
+  None,
+  One,
+  All,
 };
 
 struct MusicTrack {
@@ -32,50 +34,56 @@ struct MusicTrack {
   long long durationMicros = 0;
 };
 
+struct MusicQueueSnapshot {
+  QueueRepeatMode repeatMode = QueueRepeatMode::All;
+  std::string displayName;
+  std::vector<MusicTrack> tracks;
+  std::optional<std::size_t> currentIndex;
+  std::optional<std::size_t> detachedCurrentNextIndex;
+};
+
 std::string TrackIdForChart(const bms_parser::ChartMeta &meta);
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta);
 std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta);
 MusicTrack MakeTrack(const MusicTrackRecord &record);
 std::vector<MusicTrack>
 MakeTracks(const std::vector<MusicTrackRecord> &records);
+std::vector<MusicTrack>
+ShuffledTracks(std::vector<MusicTrack> tracks,
+               std::optional<std::uint64_t> seed = std::nullopt);
 native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track);
 
 class MusicQueue {
 public:
-  void SetPlaylist(std::vector<MusicTrack> tracks, std::size_t startIndex = 0);
-  void SetRandomAll(std::vector<MusicTrack> tracks,
-                    std::optional<std::uint64_t> seed = std::nullopt);
+  void SetPlaylist(std::vector<MusicTrack> tracks, std::size_t startIndex = 0,
+                   std::string displayName = {});
+  void SetPlaylistAfterCurrentRemoved(std::vector<MusicTrack> tracks,
+                                      std::size_t nextIndex,
+                                      std::string displayName = {});
   void Clear();
+  void SetRepeatMode(QueueRepeatMode mode) { repeatMode = mode; }
 
-  [[nodiscard]] QueueMode Mode() const { return mode; }
+  [[nodiscard]] QueueRepeatMode RepeatMode() const { return repeatMode; }
   [[nodiscard]] bool Empty() const { return tracks.empty(); }
   [[nodiscard]] std::size_t Size() const { return tracks.size(); }
   [[nodiscard]] const std::vector<MusicTrack> &Tracks() const { return tracks; }
   [[nodiscard]] std::optional<std::size_t> CurrentIndex() const {
     return currentIndex;
   }
-  [[nodiscard]] std::optional<std::uint64_t> RandomSeed() const {
-    return randomSeed;
-  }
   [[nodiscard]] const MusicTrack *Current() const;
+  [[nodiscard]] MusicQueueSnapshot Snapshot() const;
 
   const MusicTrack *Next();
   const MusicTrack *Previous();
 
 private:
   const MusicTrack *SelectIndex(std::size_t index);
-  void PushRandomHistory(std::size_t index);
-  void RefillRandomBag();
-  std::optional<std::size_t> DrawRandomIndex();
 
-  QueueMode mode = QueueMode::Playlist;
+  QueueRepeatMode repeatMode = QueueRepeatMode::All;
+  std::string displayName;
   std::vector<MusicTrack> tracks;
   std::optional<std::size_t> currentIndex;
-  std::optional<std::uint64_t> randomSeed;
-  std::mt19937_64 shuffleEngine;
-  std::vector<std::size_t> randomBag;
-  std::vector<std::size_t> randomHistory;
-  std::size_t randomHistoryCursor = 0;
+  std::optional<std::size_t> detachedCurrentNextIndex;
 };
 
 } // namespace music_playlist

@@ -1,6 +1,7 @@
 #include "MusicPlayerScene.h"
 
 #include "../path.h"
+#include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <iterator>
 #include <sstream>
 #include <utility>
 
@@ -29,6 +31,7 @@ constexpr float kHeaderHeight = 82.0f;
 constexpr float kRailWidth = 180.0f;
 constexpr int kTrackRowHeight = 82;
 constexpr int kPlaylistRowHeight = 58;
+constexpr int kNowPlayingPlaylistId = -1;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -111,47 +114,252 @@ std::string trimPlaylistName(const std::string &value) {
   return std::string(begin, end);
 }
 
+std::string lowercaseText(std::string value) {
+  std::transform(
+      value.begin(), value.end(), value.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+bool containsText(const std::string &haystack, const std::string &needle) {
+  return lowercaseText(haystack).find(needle) != std::string::npos;
+}
+
+bool trackMatchesSearch(const music_playlist::MusicTrack &track,
+                        const std::string &query) {
+  if (query.empty()) {
+    return true;
+  }
+  const auto &meta = track.representativeChart;
+  const std::string searchable =
+      track.title + " " + track.subtitle + " " + track.artist + " " +
+      track.subArtist + " " + track.genre + " " + track.trackId + " " +
+      track.chartId + " " + meta.Title + " " + meta.SubTitle + " " +
+      meta.Artist + " " + meta.SubArtist + " " + meta.Genre + " " +
+      meta.MD5 + " " + meta.SHA256 + " " +
+      path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + " " +
+      path_t_to_utf8(fspath_to_path_t(meta.Folder));
+  return containsText(searchable, query);
+}
+
+bool sameTrackIdentity(const music_playlist::MusicTrack &a,
+                       const music_playlist::MusicTrack &b) {
+  return a.trackId == b.trackId && a.chartId == b.chartId;
+}
+
+bool sameTrackList(const std::vector<music_playlist::MusicTrack> &a,
+                   const std::vector<music_playlist::MusicTrack> &b) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  return std::equal(a.begin(), a.end(), b.begin(), sameTrackIdentity);
+}
+
+std::string repeatModeLabel(music_playlist::QueueRepeatMode mode) {
+  switch (mode) {
+  case music_playlist::QueueRepeatMode::One:
+    return "1-Loop";
+  case music_playlist::QueueRepeatMode::All:
+    return "Playlist Loop";
+  case music_playlist::QueueRepeatMode::None:
+  default:
+    return "Loop Off";
+  }
+}
+
+std::string queueDisplayName(const std::string &name) {
+  return name.empty() ? music_playlist::kNowPlayingDisplayName : name;
+}
+
+bool isNowPlayingPlaylistId(int playlistId) {
+  return playlistId == kNowPlayingPlaylistId;
+}
+
+int adjustedDetachedNextIndex(std::optional<std::size_t> previousNextIndex,
+                              std::optional<int> removedIndex,
+                              int fallbackIndex, std::size_t nextSize) {
+  int index = previousNextIndex
+                  ? static_cast<int>(*previousNextIndex)
+                  : fallbackIndex;
+  if (removedIndex && previousNextIndex && *removedIndex < index) {
+    --index;
+  }
+  return std::clamp(index, 0, static_cast<int>(nextSize));
+}
+
+std::filesystem::path artworkPathForDisplay(
+    const music_playlist::MusicTrack &track) {
+  const auto &meta = track.representativeChart;
+  if (!meta.StageFile.empty()) {
+    return meta.Folder / meta.StageFile;
+  }
+  if (!meta.Banner.empty()) {
+    return meta.Folder / meta.Banner;
+  }
+  return track.artworkPath;
+}
+
+void mouseButtonEventToUi(const SDL_MouseButtonEvent &event, int &uiX,
+                          int &uiY) {
+  const int screenX = static_cast<int>(event.x * rendering::widthScale);
+  const int screenY = static_cast<int>(event.y * rendering::heightScale);
+  rendering::screenToUi(screenX, screenY, uiX, uiY);
+}
+
+void mouseMotionEventToUi(const SDL_MouseMotionEvent &event, int &uiX,
+                          int &uiY) {
+  const int screenX = static_cast<int>(event.x * rendering::widthScale);
+  const int screenY = static_cast<int>(event.y * rendering::heightScale);
+  rendering::screenToUi(screenX, screenY, uiX, uiY);
+}
+
+bool isInsideView(const View *view, float uiX, float uiY) {
+  return view != nullptr && uiX >= view->getX() &&
+         uiX <= view->getX() + view->getWidth() && uiY >= view->getY() &&
+         uiY <= view->getY() + view->getHeight();
+}
+
 class MusicTrackRowView : public View {
 public:
   MusicTrackRowView() {
     setHeight(kTrackRowHeight)
         ->setPadding(Edge::All, 12)
+        ->setFlexDirection(FlexDirection::Row)
+        ->setAlignItems(YGAlignCenter)
+        ->setJustifyContent(YGJustifyCenter)
+        ->setGap(12)
+        ->setCornerRadius(ui_theme::controlRadius())
+        ->setBorderWidth(1);
+
+    auto *artworkFrame = new View();
+    artworkFrame->setWidth(58)
+        ->setHeight(58)
+        ->setFlexShrink(0)
         ->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch)
         ->setJustifyContent(YGJustifyCenter)
-        ->setGap(4)
-        ->setCornerRadius(ui_theme::controlRadius())
-        ->setBorderWidth(1);
+        ->setThemedBackgroundColor(ui_theme::insetSurface)
+        ->setThemedBorderColor(ui_theme::hairlineSubtle)
+        ->setBorderWidth(1)
+        ->setCornerRadius(ui_theme::controlRadius());
+
+    artworkFallback = new TextView(kFontPath, 13);
+    artworkFallback->setText("ART");
+    artworkFallback->setHeight(22);
+    artworkFallback->setAlign(TextView::CENTER);
+    artworkFallback->setVAlign(TextView::MIDDLE);
+    artworkFallback->setThemedColor(ui_theme::textMuted);
+    artworkFrame->addView(artworkFallback);
+
+    artwork = new ImageView(0, 0, 0, 0);
+    artwork->setWidth(58)
+        ->setHeight(58)
+        ->setPositionType(YGPositionTypeAbsolute)
+        ->setPosition(Edge::Left, 0)
+        ->setPosition(Edge::Top, 0)
+        ->setCornerRadius(ui_theme::controlRadius());
+    artworkFrame->addView(artwork);
+    addView(artworkFrame);
+
+    auto *textColumn = new View();
+    textColumn->setFlex(1)
+        ->setMinWidth(0)
+        ->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)
+        ->setJustifyContent(YGJustifyCenter)
+        ->setGap(4);
 
     title = new TextView(kFontPath, 19);
     title->setHeight(26);
     title->setThemedColor(ui_theme::textPrimary);
     title->setOverflow(TextView::TextOverflow::Hidden);
-    addView(title);
+    textColumn->addView(title);
 
     detail = new TextView(kFontPath, 15);
     detail->setHeight(22);
     detail->setThemedColor(ui_theme::textSecondary);
     detail->setOverflow(TextView::TextOverflow::Hidden);
-    addView(detail);
+    textColumn->addView(detail);
+    addView(textColumn);
   }
 
   void setTrack(const music_playlist::MusicTrack &track, bool selected) {
     title->setText(trackTitle(track));
     detail->setText(trackDetail(track));
+    if (artwork != nullptr) {
+      const auto path = artworkPathForDisplay(track);
+      if (path.empty()) {
+        artwork->freeImage();
+      } else {
+        artwork->setImageAsync(fspath_to_path_t(path));
+      }
+    }
     if (selected) {
-      setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-      setThemedBorderColor(ui_theme::accentBorderStrong);
+      onSelected();
     } else {
-      setThemedBackgroundColor(ui_theme::mainMenuItem);
-      setThemedBorderColor(ui_theme::hairlineSubtle);
+      onUnselected();
     }
   }
 
+  void onSelected() override {
+    setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
+    setThemedBorderColor(ui_theme::accentBorderStrong);
+  }
+
+  void onUnselected() override {
+    setThemedBackgroundColor(ui_theme::mainMenuItem);
+    setThemedBorderColor(ui_theme::hairlineSubtle);
+  }
+
 private:
+  ImageView *artwork = nullptr;
+  TextView *artworkFallback = nullptr;
   TextView *title = nullptr;
   TextView *detail = nullptr;
 };
+
+class MusicSeekProgressFillView : public View {
+public:
+  MusicSeekProgressFillView() {
+    batch.setSubmitView(rendering::ui_view);
+    setCornerRadius(std::max(0.0f, ui_theme::controlRadius() - 1.0f));
+  }
+
+  void setFraction(float value) {
+    fraction = std::clamp(value, 0.0f, 1.0f);
+  }
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    const float fillWidth =
+        std::clamp(static_cast<float>(getWidth()) * fraction, 0.0f,
+                   static_cast<float>(getWidth()));
+    if (fillWidth <= 0.0f || getHeight() <= 0) {
+      return;
+    }
+
+    rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                            context.scissor.width, context.scissor.height);
+    batch.begin();
+    const float radius =
+        std::min(getCornerRadius(),
+                 std::min(fillWidth, static_cast<float>(getHeight())) * 0.5f);
+    batch.addRoundedRect(static_cast<float>(getX()), static_cast<float>(getY()),
+                         fillWidth, static_cast<float>(getHeight()), radius,
+                         ui_theme::primaryAction().toABGR());
+    batch.end();
+  }
+
+private:
+  float fraction = 0.0f;
+  rendering::SimpleBatchRenderer batch;
+};
+
+void setSeekFillFraction(View *view, float fraction) {
+  if (auto *fill = dynamic_cast<MusicSeekProgressFillView *>(view)) {
+    fill->setFraction(fraction);
+  }
+}
 
 class PlaylistRowView : public View {
 public:
@@ -182,12 +390,20 @@ public:
     title->setText(playlist.name.empty() ? "Untitled Playlist" : playlist.name);
     detail->setText(std::to_string(playlist.trackCount) + " tracks");
     if (selected) {
-      setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-      setThemedBorderColor(ui_theme::accentBorderStrong);
+      onSelected();
     } else {
-      setThemedBackgroundColor(ui_theme::mainMenuItem);
-      setThemedBorderColor(ui_theme::hairlineSubtle);
+      onUnselected();
     }
+  }
+
+  void onSelected() override {
+    setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
+    setThemedBorderColor(ui_theme::accentBorderStrong);
+  }
+
+  void onUnselected() override {
+    setThemedBackgroundColor(ui_theme::mainMenuItem);
+    setThemedBorderColor(ui_theme::hairlineSubtle);
   }
 
 private:
@@ -198,6 +414,7 @@ private:
 } // namespace
 
 void MusicPlayerScene::init() {
+  context.jukebox.stop();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   buildView();
@@ -205,6 +422,9 @@ void MusicPlayerScene::init() {
 }
 
 EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
+  if (handleSeekEvents(event)) {
+    return {};
+  }
   if (event.type == SDL_KEYDOWN) {
     if (event.key.keysym.sym == SDLK_ESCAPE) {
       goBack();
@@ -237,13 +457,21 @@ void MusicPlayerScene::update(float) {
   }
 
   std::string nativeStatus;
-  if (context.musicPlayer.ProcessNativeControlEvents(nativeStatus) &&
-      !nativeStatus.empty()) {
-    setStatus(nativeStatus);
+  bool queueMayHaveChanged = false;
+  if (context.musicPlayer.ProcessNativeControlEvents(nativeStatus)) {
+    queueMayHaveChanged = true;
+    if (!nativeStatus.empty()) {
+      setStatus(nativeStatus);
+    }
   }
-  if (context.musicPlayer.ConsumeNativeControlStatus(nativeStatus) &&
-      !nativeStatus.empty()) {
-    setStatus(nativeStatus);
+  if (context.musicPlayer.ConsumeNativeControlStatus(nativeStatus)) {
+    queueMayHaveChanged = true;
+    if (!nativeStatus.empty()) {
+      setStatus(nativeStatus);
+    }
+  }
+  if (queueMayHaveChanged) {
+    refreshActiveQueueList(true);
   }
   refreshUi();
 }
@@ -268,19 +496,33 @@ void MusicPlayerScene::cleanupScene() {
   playerSubtitleText = nullptr;
   librarySelectionTitleText = nullptr;
   librarySelectionDetailText = nullptr;
+  libraryArtworkFallbackText = nullptr;
   playlistSelectionTitleText = nullptr;
   playlistSelectionDetailText = nullptr;
   currentTitleText = nullptr;
   currentDetailText = nullptr;
   playbackText = nullptr;
+  queueTitleText = nullptr;
+  repeatModeButtonText = nullptr;
   artworkFallbackText = nullptr;
   artworkImage = nullptr;
+  libraryArtworkImage = nullptr;
   libraryList = nullptr;
+  libraryPlaylistList = nullptr;
   playlistDirectoryList = nullptr;
   playlistList = nullptr;
   playerQueueList = nullptr;
+  librarySearchInput = nullptr;
   playlistNameInput = nullptr;
+  playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
+  seekProgressTrack = nullptr;
+  seekProgressFill = nullptr;
+  displayedLibraryArtworkPath.clear();
+  displayedArtworkPath.clear();
+  displayedQueueName.clear();
+  seekMouseDown = false;
+  activeSeekTouchId = -1;
 }
 
 void MusicPlayerScene::buildView() {
@@ -422,6 +664,50 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   panel->setFlex(1);
   page->addView(panel);
 
+  auto *searchRow = new View();
+  searchRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10);
+  auto *searchLabel = new TextView(kFontPath, 17);
+  searchLabel->setText("Search");
+  searchLabel->setWidth(72);
+  searchLabel->setHeight(52);
+  searchLabel->setVAlign(TextView::MIDDLE);
+  searchLabel->setThemedColor(ui_theme::textSecondary);
+  librarySearchInput = new TextInputBox(kFontPath, 18);
+  librarySearchInput->setFlex(1);
+  librarySearchInput->setHeight(52);
+  librarySearchInput->setThemedBackgroundColor(ui_theme::control);
+  librarySearchInput->setThemedBorderColor(ui_theme::hairlineStrong);
+  librarySearchInput->setBorderWidth(1);
+  librarySearchInput->setCornerRadius(ui_theme::controlRadius());
+  librarySearchInput->setThemedColor(ui_theme::textPrimary);
+  librarySearchInput->setVAlign(TextView::MIDDLE);
+  librarySearchInput->onTextChanged([this](const std::string &value) {
+    librarySearchText = value;
+    applyLibraryFilter();
+    refreshUi();
+  });
+  TextView *clearSearchText = nullptr;
+  auto *clearSearchButton = makeButton("Clear", 17, &clearSearchText);
+  clearSearchButton->setWidth(104);
+  styleButton(clearSearchButton, clearSearchText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  clearSearchButton->setOnClickListener([this]() {
+    librarySearchText.clear();
+    if (librarySearchInput != nullptr) {
+      librarySearchInput->setEditingText("");
+    }
+    applyLibraryFilter();
+    refreshUi();
+  });
+  searchRow->addView(searchLabel);
+  searchRow->addView(librarySearchInput);
+  searchRow->addView(clearSearchButton);
+  panel->addView(searchRow);
+
   auto *workspace = new View();
   workspace->setFlex(1)
       ->setFlexDirection(FlexDirection::Row)
@@ -446,17 +732,52 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
     }
   };
   libraryList->onSelected = [this](const MusicTrack &, int index) {
+    if (auto *selectedView = libraryList->getViewByIndex(index)) {
+      selectedView->onSelected();
+    }
     selectedLibraryIndex = index;
     refreshUi();
+  };
+  libraryList->onUnselected = [this](const MusicTrack &, int index) {
+    if (auto *unselectedView = libraryList->getViewByIndex(index)) {
+      unselectedView->onUnselected();
+    }
   };
   workspace->addView(libraryList);
 
   auto *actions = new View();
-  actions->setWidth(350)
+  actions->setWidth(390)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(12);
+
+  auto *libraryArtFrame = new View();
+  libraryArtFrame->setHeight(250)
+      ->setFlexShrink(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setThemedBackgroundColor(ui_theme::insetSurface)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  libraryArtworkFallbackText = new TextView(kFontPath, 18);
+  libraryArtworkFallbackText->setText("No album art");
+  libraryArtworkFallbackText->setHeight(36);
+  libraryArtworkFallbackText->setAlign(TextView::CENTER);
+  libraryArtworkFallbackText->setVAlign(TextView::MIDDLE);
+  libraryArtworkFallbackText->setThemedColor(ui_theme::textMuted);
+  libraryArtFrame->addView(libraryArtworkFallbackText);
+  libraryArtworkImage = new ImageView(0, 0, 0, 0);
+  libraryArtworkImage->setWidth(388)
+      ->setHeight(248)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setCornerRadius(ui_theme::controlRadius());
+  libraryArtFrame->addView(libraryArtworkImage);
+  actions->addView(libraryArtFrame);
 
   auto *selectionTitle = new TextView(kFontPath, 18);
   selectionTitle->setText("Selected Track");
@@ -471,7 +792,7 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   actions->addView(librarySelectionTitleText);
 
   librarySelectionDetailText = new TextView(kFontPath, 16);
-  librarySelectionDetailText->setHeight(78);
+  librarySelectionDetailText->setHeight(62);
   librarySelectionDetailText->setWrap(true);
   librarySelectionDetailText->setThemedColor(ui_theme::textSecondary);
   actions->addView(librarySelectionDetailText);
@@ -486,7 +807,7 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
               ui_theme::accentBorderStrong);
   playTrackButton->setOnClickListener([this]() { playLibraryTrack(); });
   TextView *addText = nullptr;
-  auto *addButton = makeButton("Add", 17, &addText);
+  auto *addButton = makeButton("Add to playlist", 15, &addText);
   addButton->setFlex(1);
   styleButton(addButton, addText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
@@ -517,18 +838,35 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   secondaryRow->addView(reloadButton);
   actions->addView(secondaryRow);
 
-  TextView *openPlayerText = nullptr;
-  auto *openPlayerButton = makeButton("Open Player", 17, &openPlayerText);
-  styleButton(openPlayerButton, openPlayerText, ui_theme::infoAction,
-              ui_theme::infoActionHover, ui_theme::infoActionPressed,
-              ui_theme::accentBorder);
-  openPlayerButton->setOnClickListener(
-      [this]() { switchTab(MusicPlayerTab::Player); });
-  actions->addView(openPlayerButton);
+  auto *addToHeader = new TextView(kFontPath, 18);
+  addToHeader->setText("Add To");
+  addToHeader->setHeight(28);
+  addToHeader->setThemedColor(ui_theme::textSecondary);
+  actions->addView(addToHeader);
 
-  auto *actionsSpacer = new View();
-  actionsSpacer->setFlex(1);
-  actions->addView(actionsSpacer);
+  libraryPlaylistList = new RecyclerView<PlaylistInfo>(
+      [](const PlaylistInfo &a, const PlaylistInfo &b) { return a.id == b.id; });
+  libraryPlaylistList->setFlex(1);
+  libraryPlaylistList->itemHeight = kPlaylistRowHeight;
+  libraryPlaylistList->reserveScrollbarGutter = true;
+  libraryPlaylistList->onCreateView = [](const PlaylistInfo &) {
+    return new PlaylistRowView();
+  };
+  libraryPlaylistList->onBind = [](View *view, const PlaylistInfo &playlist,
+                                   int, bool selected) {
+    if (auto *row = dynamic_cast<PlaylistRowView *>(view)) {
+      row->setPlaylist(playlist, selected);
+    }
+  };
+  libraryPlaylistList->onSelected = [this](const PlaylistInfo &, int index) {
+    selectLibraryPlaylist(index);
+  };
+  libraryPlaylistList->onUnselected = [this](const PlaylistInfo &, int index) {
+    if (auto *unselectedView = libraryPlaylistList->getViewByIndex(index)) {
+      unselectedView->onUnselected();
+    }
+  };
+  actions->addView(libraryPlaylistList);
   workspace->addView(actions);
 }
 
@@ -578,6 +916,32 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   createPlaylistRow->addView(createButton);
   directoryColumn->addView(createPlaylistRow);
 
+  auto *renamePlaylistRow = new View();
+  renamePlaylistRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  playlistRenameInput = new TextInputBox(kFontPath, 18);
+  playlistRenameInput->setFlex(1);
+  playlistRenameInput->setHeight(52);
+  playlistRenameInput->setThemedBackgroundColor(ui_theme::control);
+  playlistRenameInput->setThemedBorderColor(ui_theme::hairlineStrong);
+  playlistRenameInput->setBorderWidth(1);
+  playlistRenameInput->setCornerRadius(ui_theme::controlRadius());
+  playlistRenameInput->setThemedColor(ui_theme::textPrimary);
+  playlistRenameInput->setVAlign(TextView::MIDDLE);
+  playlistRenameInput->onSubmit(
+      [this](const std::string &) { renameSelectedPlaylist(); });
+  TextView *renameText = nullptr;
+  auto *renameButton = makeButton("Rename", 16, &renameText);
+  renameButton->setWidth(112);
+  styleButton(renameButton, renameText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  renameButton->setOnClickListener([this]() { renameSelectedPlaylist(); });
+  renamePlaylistRow->addView(playlistRenameInput);
+  renamePlaylistRow->addView(renameButton);
+  directoryColumn->addView(renamePlaylistRow);
+
   playlistDirectoryList = new RecyclerView<PlaylistInfo>(
       [](const PlaylistInfo &a, const PlaylistInfo &b) { return a.id == b.id; });
   playlistDirectoryList->setFlex(1);
@@ -593,7 +957,15 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
     }
   };
   playlistDirectoryList->onSelected = [this](const PlaylistInfo &, int index) {
+    if (auto *selectedView = playlistDirectoryList->getViewByIndex(index)) {
+      selectedView->onSelected();
+    }
     selectPlaylist(index);
+  };
+  playlistDirectoryList->onUnselected = [this](const PlaylistInfo &, int index) {
+    if (auto *unselectedView = playlistDirectoryList->getViewByIndex(index)) {
+      unselectedView->onUnselected();
+    }
   };
   directoryColumn->addView(playlistDirectoryList);
   workspace->addView(directoryColumn);
@@ -642,6 +1014,11 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistList->onSelected = [this](const MusicTrack &, int index) {
     selectPlaylistTrack(index);
   };
+  playlistList->onUnselected = [this](const MusicTrack &, int index) {
+    if (auto *unselectedView = playlistList->getViewByIndex(index)) {
+      unselectedView->onUnselected();
+    }
+  };
   editorColumn->addView(playlistList);
 
   auto *playlistButtons = new View();
@@ -689,17 +1066,8 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
               ui_theme::warningActionHover, ui_theme::warningActionPressed,
               ui_theme::accentBorder);
   clearButton->setOnClickListener([this]() { clearPlaylist(); });
-  TextView *playerText = nullptr;
-  auto *playerButton = makeButton("Player", 17, &playerText);
-  playerButton->setFlex(1);
-  styleButton(playerButton, playerText, ui_theme::infoAction,
-              ui_theme::infoActionHover, ui_theme::infoActionPressed,
-              ui_theme::accentBorder);
-  playerButton->setOnClickListener(
-      [this]() { switchTab(MusicPlayerTab::Player); });
   playlistRowA->addView(playPlaylistButton);
   playlistRowA->addView(removeButton);
-  playlistRowA->addView(playerButton);
   playlistRowB->addView(upButton);
   playlistRowB->addView(downButton);
   playlistRowB->addView(clearButton);
@@ -737,16 +1105,21 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
-  artworkImage = new ImageView(0, 0, 0, 0);
-  artworkImage->setFlex(1);
   artworkFallbackText = new TextView(kFontPath, 18);
   artworkFallbackText->setText("No album art");
   artworkFallbackText->setHeight(36);
   artworkFallbackText->setAlign(TextView::CENTER);
   artworkFallbackText->setVAlign(TextView::MIDDLE);
   artworkFallbackText->setThemedColor(ui_theme::textMuted);
-  artFrame->addView(artworkImage);
   artFrame->addView(artworkFallbackText);
+  artworkImage = new ImageView(0, 0, 0, 0);
+  artworkImage->setWidth(418)
+      ->setHeight(328)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setCornerRadius(ui_theme::controlRadius());
+  artFrame->addView(artworkImage);
   nowColumn->addView(artFrame);
 
   currentTitleText = new TextView(kFontPath, 27);
@@ -765,6 +1138,23 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playbackText->setHeight(32);
   playbackText->setThemedColor(ui_theme::textSecondary);
   nowColumn->addView(playbackText);
+
+  seekProgressTrack = new View();
+  seekProgressTrack->setHeight(24)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setThemedBackgroundColor(ui_theme::insetSurface)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  seekProgressFill = new MusicSeekProgressFillView();
+  seekProgressFill->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 1)
+      ->setPosition(Edge::Right, 1)
+      ->setPosition(Edge::Top, 1)
+      ->setPosition(Edge::Bottom, 1);
+  seekProgressTrack->addView(seekProgressFill);
+  nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
   transport->setHeight(178)
@@ -832,8 +1222,14 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   styleButton(playSelectedButton, playSelectedText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
-  playSelectedButton->setOnClickListener(
-      [this]() { playSelectedPlaylistTrack(); });
+  playSelectedButton->setOnClickListener([this]() { playSelectedQueueTrack(); });
+
+  auto *repeatButton = makeButton("Playlist Loop", 16, &repeatModeButtonText);
+  repeatButton->setFlex(1);
+  styleButton(repeatButton, repeatModeButtonText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
 
   transportRowA->addView(previousButton);
   transportRowA->addView(playPauseButton);
@@ -842,6 +1238,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   transportRowB->addView(forward10Button);
   transportRowB->addView(stopButton);
   transportRowC->addView(playSelectedButton);
+  transportRowC->addView(repeatButton);
   transport->addView(transportRowA);
   transport->addView(transportRowB);
   transport->addView(transportRowC);
@@ -855,11 +1252,11 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12);
 
-  auto *queueTitle = new TextView(kFontPath, 18);
-  queueTitle->setText("Selected Playlist Queue");
-  queueTitle->setHeight(28);
-  queueTitle->setThemedColor(ui_theme::textSecondary);
-  queueColumn->addView(queueTitle);
+  queueTitleText = new TextView(kFontPath, 18);
+  queueTitleText->setText("Playback Queue");
+  queueTitleText->setHeight(28);
+  queueTitleText->setThemedColor(ui_theme::textSecondary);
+  queueColumn->addView(queueTitleText);
 
   playerQueueList = new RecyclerView<MusicTrack>(
       [](const MusicTrack &a, const MusicTrack &b) {
@@ -878,7 +1275,12 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
     }
   };
   playerQueueList->onSelected = [this](const MusicTrack &, int index) {
-    selectPlaylistTrack(index);
+    selectQueueTrack(index);
+  };
+  playerQueueList->onUnselected = [this](const MusicTrack &, int index) {
+    if (auto *unselectedView = playerQueueList->getViewByIndex(index)) {
+      unselectedView->onUnselected();
+    }
   };
   queueColumn->addView(playerQueueList);
 
@@ -1016,54 +1418,131 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
   const int playlistIndex =
       preserveSelection ? findIndex(playlistTracks, selectedPlaylistTrackId)
                         : -1;
+  refreshActiveQueueList(true);
   refreshLibraryList(libraryIndex);
+  refreshLibraryPlaylistList(preserveSelection ? selectedLibraryPlaylistId : 0);
   refreshPlaylistDirectoryList(preferredPlaylistId);
   refreshPlaylistList(playlistIndex);
   refreshUi();
 }
 
 void MusicPlayerScene::refreshLibraryList(int preferredIndex) {
+  applyLibraryFilter(preferredIndex);
+}
+
+void MusicPlayerScene::applyLibraryFilter(int preferredIndex) {
   if (libraryList == nullptr) {
     return;
   }
-  libraryList->setItems(libraryTracks);
-  const int trackCount = static_cast<int>(libraryTracks.size());
-  selectedLibraryIndex =
-      preferredIndex >= 0 && preferredIndex < trackCount
-          ? preferredIndex
-          : (libraryTracks.empty() ? -1 : 0);
+
+  std::string preferredTrackId;
+  if (preferredIndex >= 0 &&
+      preferredIndex < static_cast<int>(filteredLibraryTracks.size())) {
+    preferredTrackId =
+        filteredLibraryTracks[static_cast<std::size_t>(preferredIndex)].trackId;
+  } else if (preferredIndex >= 0 &&
+             preferredIndex < static_cast<int>(libraryTracks.size())) {
+    preferredTrackId =
+        libraryTracks[static_cast<std::size_t>(preferredIndex)].trackId;
+  }
+
+  filteredLibraryTracks.clear();
+  const std::string query = lowercaseText(trimPlaylistName(librarySearchText));
+  std::copy_if(libraryTracks.begin(), libraryTracks.end(),
+               std::back_inserter(filteredLibraryTracks),
+               [&query](const MusicTrack &track) {
+                 return trackMatchesSearch(track, query);
+               });
+
+  selectedLibraryIndex = -1;
+  if (!preferredTrackId.empty()) {
+    for (std::size_t i = 0; i < filteredLibraryTracks.size(); ++i) {
+      if (filteredLibraryTracks[i].trackId == preferredTrackId) {
+        selectedLibraryIndex = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+  if (selectedLibraryIndex < 0 && !filteredLibraryTracks.empty()) {
+    selectedLibraryIndex = 0;
+  }
+
+  libraryList->setItems(filteredLibraryTracks);
   libraryList->selectedIndex = selectedLibraryIndex;
   libraryList->rebindVisibleItems();
+}
+
+void MusicPlayerScene::rebuildPlaylistChoices() {
+  playlistChoices.clear();
+  playlistChoices.reserve(playlists.size() + 1);
+  playlistChoices.push_back(nowPlayingPlaylistInfo());
+  playlistChoices.insert(playlistChoices.end(), playlists.begin(),
+                         playlists.end());
+}
+
+void MusicPlayerScene::refreshLibraryPlaylistList(int preferredPlaylistId) {
+  if (libraryPlaylistList == nullptr) {
+    return;
+  }
+  rebuildPlaylistChoices();
+  libraryPlaylistList->setItems(playlistChoices);
+
+  int playlistIndex = -1;
+  const int targetPlaylistId =
+      preferredPlaylistId != 0 ? preferredPlaylistId
+                               : (selectedLibraryPlaylistId != 0
+                                      ? selectedLibraryPlaylistId
+                                      : selectedPlaylistId);
+  playlistIndex = playlistChoiceIndexForId(targetPlaylistId);
+  if (playlistIndex < 0 && !playlistChoices.empty()) {
+    playlistIndex = 0;
+  }
+
+  selectedLibraryPlaylistIndex = playlistIndex;
+  selectedLibraryPlaylistId =
+      playlistIndex >= 0
+          ? playlistChoices[static_cast<std::size_t>(playlistIndex)].id
+          : 0;
+  libraryPlaylistList->selectedIndex = selectedLibraryPlaylistIndex;
+  libraryPlaylistList->rebindVisibleItems();
 }
 
 void MusicPlayerScene::refreshPlaylistDirectoryList(int preferredPlaylistId) {
   if (playlistDirectoryList == nullptr) {
     return;
   }
-  playlistDirectoryList->setItems(playlists);
+  rebuildPlaylistChoices();
+  playlistDirectoryList->setItems(playlistChoices);
   int playlistIndex = -1;
   const int targetPlaylistId =
-      preferredPlaylistId > 0 ? preferredPlaylistId : selectedPlaylistId;
-  for (std::size_t i = 0; i < playlists.size(); ++i) {
-    if (playlists[i].id == targetPlaylistId) {
-      playlistIndex = static_cast<int>(i);
-      break;
-    }
-  }
-  if (playlistIndex < 0 && !playlists.empty()) {
+      preferredPlaylistId != 0 ? preferredPlaylistId : selectedPlaylistId;
+  playlistIndex = playlistChoiceIndexForId(targetPlaylistId);
+  if (playlistIndex < 0 && !playlistChoices.empty()) {
     playlistIndex = 0;
-    selectedPlaylistId = playlists.front().id;
   }
   selectedPlaylistDirectoryIndex = playlistIndex;
+  selectedPlaylistId =
+      playlistIndex >= 0
+          ? playlistChoices[static_cast<std::size_t>(playlistIndex)].id
+          : 0;
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    playlistTracks = queueTracks;
+  }
   playlistDirectoryList->selectedIndex = selectedPlaylistDirectoryIndex;
   playlistDirectoryList->rebindVisibleItems();
   if (playlistNameInput != nullptr &&
       trimPlaylistName(playlistNameInput->getText()).empty()) {
     playlistNameInput->setEditingText(nextPlaylistName());
   }
+  if (playlistRenameInput != nullptr) {
+    playlistRenameInput->setEditingText(selectedPlaylistName());
+  }
 }
 
 void MusicPlayerScene::refreshPlaylistList(int preferredIndex) {
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    playlistTracks = queueTracks;
+  }
   const int trackCount = static_cast<int>(playlistTracks.size());
   selectedPlaylistIndex =
       preferredIndex >= 0 && preferredIndex < trackCount
@@ -1071,9 +1550,6 @@ void MusicPlayerScene::refreshPlaylistList(int preferredIndex) {
           : (playlistTracks.empty() ? -1 : 0);
   if (playlistList != nullptr) {
     playlistList->setItems(playlistTracks);
-  }
-  if (playerQueueList != nullptr) {
-    playerQueueList->setItems(playlistTracks);
   }
   refreshPlaylistSelectionViews();
 }
@@ -1083,17 +1559,72 @@ void MusicPlayerScene::refreshPlaylistSelectionViews() {
     playlistList->selectedIndex = selectedPlaylistIndex;
     playlistList->rebindVisibleItems();
   }
+}
+
+void MusicPlayerScene::refreshActiveQueueList(bool force) {
+  const auto snapshot = context.musicPlayer.QueueSnapshot();
+  const int previousIndex = selectedQueueIndex;
+  const int previousPlaylistIndex = selectedPlaylistIndex;
+  (void)force;
+  const bool tracksChanged = !sameTrackList(queueTracks, snapshot.tracks);
+  const bool queueLabelChanged = snapshot.displayName != displayedQueueName;
+
+  displayedRepeatMode = snapshot.repeatMode;
+  displayedQueueName = snapshot.displayName;
+  queueTracks = snapshot.tracks;
+  selectedQueueIndex =
+      snapshot.currentIndex && *snapshot.currentIndex < queueTracks.size()
+          ? static_cast<int>(*snapshot.currentIndex)
+          : -1;
+
   if (playerQueueList != nullptr) {
-    playerQueueList->selectedIndex = selectedPlaylistIndex;
-    playerQueueList->rebindVisibleItems();
+    playerQueueList->selectedIndex = selectedQueueIndex;
+    if (tracksChanged) {
+      playerQueueList->setItems(queueTracks);
+      playerQueueList->selectedIndex = selectedQueueIndex;
+      playerQueueList->rebindVisibleItems();
+    } else if (previousIndex != selectedQueueIndex) {
+      if (previousIndex >= 0) {
+        if (auto *previousView =
+                playerQueueList->getViewByIndex(previousIndex)) {
+          previousView->onUnselected();
+        }
+      }
+      if (selectedQueueIndex >= 0) {
+        if (auto *selectedView =
+                playerQueueList->getViewByIndex(selectedQueueIndex)) {
+          selectedView->onSelected();
+        }
+      }
+    }
+  }
+
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    playlistTracks = queueTracks;
+    if (playlistList != nullptr) {
+      if (tracksChanged) {
+        refreshPlaylistList(selectedQueueIndex);
+      } else if (previousPlaylistIndex != selectedQueueIndex) {
+        selectPlaylistTrack(selectedQueueIndex);
+      }
+    }
+  }
+  if (tracksChanged || queueLabelChanged) {
+    refreshPlaylistDirectoryList(selectedPlaylistId);
+    refreshLibraryPlaylistList(selectedLibraryPlaylistId);
   }
 }
 
 void MusicPlayerScene::refreshUi() {
   const auto playback = context.musicPlayer.PlaybackState();
   if (librarySubtitleText != nullptr) {
-    librarySubtitleText->setText(std::to_string(libraryTracks.size()) +
-                                 " music tracks");
+    std::string text = std::to_string(filteredLibraryTracks.size()) +
+                       " of " + std::to_string(libraryTracks.size()) +
+                       " music tracks";
+    if (!trimPlaylistName(librarySearchText).empty()) {
+      text += " matched";
+    }
+    librarySubtitleText->setText(text);
   }
   if (playlistSubtitleText != nullptr) {
     playlistSubtitleText->setText(
@@ -1101,9 +1632,13 @@ void MusicPlayerScene::refreshUi() {
         " playlists | " + std::to_string(playlistTracks.size()) + " tracks");
   }
   if (playerSubtitleText != nullptr) {
-    playerSubtitleText->setText(selectedPlaylistName() + " queue | " +
-                                std::to_string(playlistTracks.size()) +
-                                " tracks");
+    playerSubtitleText->setText(queueDisplayName(displayedQueueName) + " | " +
+                                std::to_string(queueTracks.size()) +
+                                " tracks | " +
+                                repeatModeLabel(displayedRepeatMode));
+  }
+  if (queueTitleText != nullptr) {
+    queueTitleText->setText(queueDisplayName(displayedQueueName));
   }
   if (railSummaryText != nullptr) {
     railSummaryText->setText(std::to_string(libraryTracks.size()) +
@@ -1153,9 +1688,21 @@ void MusicPlayerScene::refreshUi() {
                             formatMusicTime(playback.durationMicros));
     }
   }
+  if (seekProgressFill != nullptr) {
+    const float fraction =
+        playback.loaded && playback.durationMicros > 0
+            ? std::clamp(static_cast<float>(playback.positionMicros) /
+                             static_cast<float>(playback.durationMicros),
+                         0.0f, 1.0f)
+            : 0.0f;
+    setSeekFillFraction(seekProgressFill, fraction);
+  }
   if (playPauseButtonText != nullptr) {
     playPauseButtonText->setText(
         playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+  }
+  if (repeatModeButtonText != nullptr) {
+    repeatModeButtonText->setText(repeatModeLabel(displayedRepeatMode));
   }
   if (statusText != nullptr) {
     statusText->setText(statusMessage.empty()
@@ -1163,6 +1710,7 @@ void MusicPlayerScene::refreshUi() {
                             : statusMessage);
   }
   refreshNavigation();
+  refreshLibraryArtwork(selectedLibraryTrack());
   refreshArtwork(shown);
 }
 
@@ -1198,7 +1746,7 @@ void MusicPlayerScene::refreshNavigation() {
 
 void MusicPlayerScene::refreshArtwork(const std::optional<MusicTrack> &track) {
   const std::filesystem::path path =
-      track ? track->artworkPath : std::filesystem::path{};
+      track ? artworkPathForDisplay(*track) : std::filesystem::path{};
   if (path == displayedArtworkPath) {
     return;
   }
@@ -1212,7 +1760,27 @@ void MusicPlayerScene::refreshArtwork(const std::optional<MusicTrack> &track) {
     return;
   }
   artworkImage->setImageAsync(fspath_to_path_t(path), true);
-  artworkFallbackText->setVisible(false);
+  artworkFallbackText->setVisible(true);
+}
+
+void MusicPlayerScene::refreshLibraryArtwork(
+    const std::optional<MusicTrack> &track) {
+  const std::filesystem::path path =
+      track ? artworkPathForDisplay(*track) : std::filesystem::path{};
+  if (path == displayedLibraryArtworkPath) {
+    return;
+  }
+  displayedLibraryArtworkPath = path;
+  if (libraryArtworkImage == nullptr || libraryArtworkFallbackText == nullptr) {
+    return;
+  }
+  if (path.empty()) {
+    libraryArtworkImage->freeImage();
+    libraryArtworkFallbackText->setVisible(true);
+    return;
+  }
+  libraryArtworkImage->setImageAsync(fspath_to_path_t(path), true);
+  libraryArtworkFallbackText->setVisible(true);
 }
 
 void MusicPlayerScene::setStatus(std::string message) {
@@ -1225,19 +1793,32 @@ void MusicPlayerScene::setStatus(std::string message) {
 std::optional<MusicPlayerScene::MusicTrack>
 MusicPlayerScene::selectedLibraryTrack() const {
   if (selectedLibraryIndex < 0 ||
-      selectedLibraryIndex >= static_cast<int>(libraryTracks.size())) {
+      selectedLibraryIndex >= static_cast<int>(filteredLibraryTracks.size())) {
     return std::nullopt;
   }
-  return libraryTracks[static_cast<std::size_t>(selectedLibraryIndex)];
+  return filteredLibraryTracks[static_cast<std::size_t>(selectedLibraryIndex)];
+}
+
+std::optional<MusicPlayerScene::PlaylistInfo>
+MusicPlayerScene::selectedLibraryPlaylistInfo() const {
+  if (selectedLibraryPlaylistIndex < 0 ||
+      selectedLibraryPlaylistIndex >=
+          static_cast<int>(playlistChoices.size())) {
+    return std::nullopt;
+  }
+  return playlistChoices[static_cast<std::size_t>(
+      selectedLibraryPlaylistIndex)];
 }
 
 std::optional<MusicPlayerScene::PlaylistInfo>
 MusicPlayerScene::selectedPlaylistInfo() const {
   if (selectedPlaylistDirectoryIndex < 0 ||
-      selectedPlaylistDirectoryIndex >= static_cast<int>(playlists.size())) {
+      selectedPlaylistDirectoryIndex >=
+          static_cast<int>(playlistChoices.size())) {
     return std::nullopt;
   }
-  return playlists[static_cast<std::size_t>(selectedPlaylistDirectoryIndex)];
+  return playlistChoices[static_cast<std::size_t>(
+      selectedPlaylistDirectoryIndex)];
 }
 
 std::optional<MusicPlayerScene::MusicTrack>
@@ -1251,10 +1832,58 @@ MusicPlayerScene::selectedPlaylistTrack() const {
 
 std::optional<MusicPlayerScene::MusicTrack> MusicPlayerScene::displayTrack()
     const {
+  if (selectedQueueIndex >= 0 &&
+      selectedQueueIndex < static_cast<int>(queueTracks.size())) {
+    return queueTracks[static_cast<std::size_t>(selectedQueueIndex)];
+  }
   if (const auto playlistTrack = selectedPlaylistTrack()) {
     return playlistTrack;
   }
   return selectedLibraryTrack();
+}
+
+MusicPlayerScene::PlaylistInfo MusicPlayerScene::nowPlayingPlaylistInfo()
+    const {
+  return {.id = kNowPlayingPlaylistId,
+          .name = music_playlist::kNowPlayingDisplayName,
+          .trackCount = static_cast<int>(queueTracks.size())};
+}
+
+int MusicPlayerScene::playlistChoiceIndexForId(int playlistId) const {
+  for (std::size_t i = 0; i < playlistChoices.size(); ++i) {
+    if (playlistChoices[i].id == playlistId) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+int MusicPlayerScene::trackIndexInList(const std::vector<MusicTrack> &tracks,
+                                       const MusicTrack &track) const {
+  for (std::size_t i = 0; i < tracks.size(); ++i) {
+    if (sameTrackIdentity(tracks[i], track)) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+bool MusicPlayerScene::selectedPlaylistIsActiveQueue() const {
+  if (selectedPlaylistId <= 0 || isNowPlayingPlaylistId(selectedPlaylistId) ||
+      playlistTracks.empty()) {
+    return false;
+  }
+  if (queueDisplayName(displayedQueueName) != selectedPlaylistName()) {
+    return false;
+  }
+  return sameTrackList(queueTracks, playlistTracks);
+}
+
+std::string MusicPlayerScene::selectedLibraryPlaylistName() const {
+  if (const auto playlist = selectedLibraryPlaylistInfo()) {
+    return playlist->name.empty() ? "Untitled Playlist" : playlist->name;
+  }
+  return "No playlist";
 }
 
 std::string MusicPlayerScene::selectedPlaylistName() const {
@@ -1303,6 +1932,7 @@ void MusicPlayerScene::createPlaylist() {
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
     refreshPlaylistDirectoryList(playlistId);
+    refreshLibraryPlaylistList(playlistId);
     refreshPlaylistList(-1);
     if (playlistNameInput != nullptr) {
       playlistNameInput->setEditingText(nextPlaylistName());
@@ -1313,18 +1943,95 @@ void MusicPlayerScene::createPlaylist() {
   }
 }
 
+void MusicPlayerScene::renameSelectedPlaylist() {
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    setStatus("Now Playing cannot be renamed.");
+    return;
+  }
+
+  std::string name =
+      playlistRenameInput != nullptr ? playlistRenameInput->getText() : "";
+  name = trimPlaylistName(name);
+  if (name.empty()) {
+    setStatus("Playlist name is empty.");
+    return;
+  }
+
+  std::string errorMessage;
+  if (context.musicPlayer.RenameSelectedPlaylist(name, errorMessage)) {
+    playlists = context.musicPlayer.PlaylistsSnapshot();
+    selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
+    playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
+    refreshPlaylistDirectoryList(selectedPlaylistId);
+    refreshLibraryPlaylistList(selectedPlaylistId);
+    refreshPlaylistList(selectedPlaylistIndex);
+    setStatus("Renamed playlist.");
+  } else {
+    setStatus(errorMessage);
+  }
+}
+
+void MusicPlayerScene::selectLibraryPlaylist(int index) {
+  const int previousIndex = selectedLibraryPlaylistIndex;
+  if (index < 0 || index >= static_cast<int>(playlistChoices.size())) {
+    selectedLibraryPlaylistIndex = -1;
+    selectedLibraryPlaylistId = 0;
+  } else {
+    selectedLibraryPlaylistIndex = index;
+    selectedLibraryPlaylistId =
+        playlistChoices[static_cast<std::size_t>(index)].id;
+  }
+
+  if (libraryPlaylistList != nullptr) {
+    libraryPlaylistList->selectedIndex = selectedLibraryPlaylistIndex;
+    if (previousIndex >= 0 && previousIndex != selectedLibraryPlaylistIndex) {
+      if (auto *previousView =
+              libraryPlaylistList->getViewByIndex(previousIndex)) {
+        previousView->onUnselected();
+      }
+    }
+    if (selectedLibraryPlaylistIndex >= 0) {
+      if (auto *selectedView =
+              libraryPlaylistList->getViewByIndex(selectedLibraryPlaylistIndex)) {
+        selectedView->onSelected();
+      }
+    }
+  }
+}
+
 void MusicPlayerScene::selectPlaylist(int index) {
-  if (index < 0 || index >= static_cast<int>(playlists.size())) {
+  if (index < 0 || index >= static_cast<int>(playlistChoices.size())) {
     setStatus("Select a playlist first.");
     return;
   }
-  const int playlistId = playlists[static_cast<std::size_t>(index)].id;
+  const int playlistId = playlistChoices[static_cast<std::size_t>(index)].id;
+  if (isNowPlayingPlaylistId(playlistId)) {
+    selectedPlaylistId = kNowPlayingPlaylistId;
+    playlistTracks = queueTracks;
+    selectedPlaylistDirectoryIndex = index;
+    if (playlistDirectoryList != nullptr) {
+      playlistDirectoryList->selectedIndex = selectedPlaylistDirectoryIndex;
+    }
+    if (playlistRenameInput != nullptr) {
+      playlistRenameInput->setEditingText(
+          music_playlist::kNowPlayingDisplayName);
+    }
+    refreshPlaylistList(selectedQueueIndex);
+    setStatus("Selected Now Playing.");
+    return;
+  }
+
   std::string errorMessage;
   if (context.musicPlayer.SelectPlaylist(playlistId, errorMessage)) {
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
-    playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
-    refreshPlaylistDirectoryList(selectedPlaylistId);
+    selectedPlaylistDirectoryIndex = index;
+    if (playlistDirectoryList != nullptr) {
+      playlistDirectoryList->selectedIndex = selectedPlaylistDirectoryIndex;
+    }
+    if (playlistRenameInput != nullptr) {
+      playlistRenameInput->setEditingText(selectedPlaylistName());
+    }
     refreshPlaylistList(-1);
     setStatus("Selected " + selectedPlaylistName() + ".");
   } else {
@@ -1333,12 +2040,51 @@ void MusicPlayerScene::selectPlaylist(int index) {
 }
 
 void MusicPlayerScene::selectPlaylistTrack(int index) {
+  const int previousIndex = selectedPlaylistIndex;
   if (index < 0 || index >= static_cast<int>(playlistTracks.size())) {
     selectedPlaylistIndex = -1;
   } else {
     selectedPlaylistIndex = index;
   }
-  refreshPlaylistSelectionViews();
+  auto updateSelection = [previousIndex, this](RecyclerView<MusicTrack> *list) {
+    if (list == nullptr) {
+      return;
+    }
+    list->selectedIndex = selectedPlaylistIndex;
+    if (previousIndex >= 0 && previousIndex != selectedPlaylistIndex) {
+      if (auto *previousView = list->getViewByIndex(previousIndex)) {
+        previousView->onUnselected();
+      }
+    }
+    if (selectedPlaylistIndex >= 0) {
+      if (auto *selectedView = list->getViewByIndex(selectedPlaylistIndex)) {
+        selectedView->onSelected();
+      }
+    }
+  };
+  updateSelection(playlistList);
+  refreshUi();
+}
+
+void MusicPlayerScene::selectQueueTrack(int index) {
+  const int previousIndex = selectedQueueIndex;
+  selectedQueueIndex = index >= 0 && index < static_cast<int>(queueTracks.size())
+                           ? index
+                           : -1;
+  if (playerQueueList != nullptr) {
+    playerQueueList->selectedIndex = selectedQueueIndex;
+    if (previousIndex >= 0 && previousIndex != selectedQueueIndex) {
+      if (auto *previousView = playerQueueList->getViewByIndex(previousIndex)) {
+        previousView->onUnselected();
+      }
+    }
+    if (selectedQueueIndex >= 0) {
+      if (auto *selectedView =
+              playerQueueList->getViewByIndex(selectedQueueIndex)) {
+        selectedView->onSelected();
+      }
+    }
+  }
   refreshUi();
 }
 
@@ -1348,17 +2094,49 @@ void MusicPlayerScene::addLibraryTrackToPlaylist() {
     setStatus("Select a library track first.");
     return;
   }
+  const auto targetPlaylist = selectedLibraryPlaylistInfo();
+  if (!targetPlaylist) {
+    setStatus("Select a playlist first.");
+    return;
+  }
+  const int targetPlaylistId = targetPlaylist->id;
+  const std::string targetPlaylistName = selectedLibraryPlaylistName();
+  if (isNowPlayingPlaylistId(targetPlaylistId)) {
+    addLibraryTrackToNowPlaying(*track);
+    return;
+  }
+
+  const bool wasActiveQueue =
+      targetPlaylistId == selectedPlaylistId && selectedPlaylistIsActiveQueue();
+  const auto previousCurrent = context.musicPlayer.CurrentTrackSnapshot();
   std::string errorMessage;
-  if (context.musicPlayer.AddChartToSelectedPlaylist(
-          track->representativeChart, errorMessage)) {
+  if (context.musicPlayer.AddChartToPlaylist(targetPlaylistId,
+                                             track->representativeChart,
+                                             errorMessage)) {
     playlists = context.musicPlayer.PlaylistsSnapshot();
+    selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
+    syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent,
+                                     selectedQueueIndex);
+    refreshLibraryPlaylistList(targetPlaylistId);
     refreshPlaylistDirectoryList(selectedPlaylistId);
-    refreshPlaylistList(static_cast<int>(playlistTracks.size()) - 1);
-    setStatus("Added to " + selectedPlaylistName() + ".");
+    refreshPlaylistList(selectedPlaylistId == targetPlaylistId
+                            ? static_cast<int>(playlistTracks.size()) - 1
+                            : selectedPlaylistIndex);
+    setStatus("Added to " + targetPlaylistName + ".");
   } else {
     setStatus(errorMessage);
   }
+}
+
+void MusicPlayerScene::addLibraryTrackToNowPlaying(const MusicTrack &track) {
+  std::vector<MusicTrack> tracks = queueTracks;
+  const int nextIndex = static_cast<int>(tracks.size());
+  tracks.push_back(track);
+  replaceNowPlaying(std::move(tracks), selectedQueueIndex >= 0
+                                           ? selectedQueueIndex
+                                           : nextIndex,
+                    "Added to Now Playing.");
 }
 
 void MusicPlayerScene::removePlaylistTrack() {
@@ -1368,12 +2146,67 @@ void MusicPlayerScene::removePlaylistTrack() {
     return;
   }
   const int nextIndex = selectedPlaylistIndex;
+  const bool wasActiveQueue = selectedPlaylistIsActiveQueue();
+  const auto previousCurrent = context.musicPlayer.CurrentTrackSnapshot();
+  const auto previousQueue = context.musicPlayer.QueueSnapshot();
+  const std::optional<int> previousQueueIndex =
+      previousQueue.currentIndex
+          ? std::optional<int>(
+                static_cast<int>(*previousQueue.currentIndex))
+          : std::nullopt;
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    std::vector<MusicTrack> tracks = playlistTracks;
+    tracks.erase(tracks.begin() + selectedPlaylistIndex);
+    const int preferredIndex =
+        std::min(nextIndex, static_cast<int>(tracks.size()) - 1);
+    const auto playback = context.musicPlayer.PlaybackState();
+    int queueIndex = -1;
+    bool currentTrackRemoved = false;
+    int detachedNextIndex =
+        adjustedDetachedNextIndex(previousQueue.detachedCurrentNextIndex,
+                                  nextIndex, nextIndex, tracks.size());
+    if (previousQueueIndex) {
+      if (*previousQueueIndex == nextIndex) {
+        currentTrackRemoved = true;
+      } else if (nextIndex < *previousQueueIndex) {
+        queueIndex =
+            std::clamp(*previousQueueIndex - 1, 0,
+                       std::max(0, static_cast<int>(tracks.size()) - 1));
+      } else {
+        queueIndex =
+            std::clamp(*previousQueueIndex, 0,
+                       std::max(0, static_cast<int>(tracks.size()) - 1));
+      }
+    } else if (previousCurrent && playback.loaded &&
+               sameTrackIdentity(*previousCurrent, *track)) {
+      currentTrackRemoved = true;
+    } else if (previousQueue.detachedCurrentNextIndex && playback.loaded) {
+      currentTrackRemoved = true;
+    }
+
+    if (currentTrackRemoved && playback.loaded) {
+      context.musicPlayer.SetPlaylistAfterCurrentRemoved(
+          std::move(tracks), static_cast<std::size_t>(detachedNextIndex),
+          music_playlist::kNowPlayingDisplayName);
+      refreshActiveQueueList(true);
+      setStatus("Removed from Now Playing.");
+    } else {
+      replaceNowPlaying(std::move(tracks),
+                        queueIndex >= 0 ? queueIndex : preferredIndex,
+                        "Removed from Now Playing.");
+    }
+    return;
+  }
+
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromSelectedPlaylist(
           track->representativeChart, errorMessage)) {
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
+    syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent,
+                                     nextIndex, previousQueueIndex, nextIndex);
     refreshPlaylistDirectoryList(selectedPlaylistId);
+    refreshLibraryPlaylistList(selectedLibraryPlaylistId);
     refreshPlaylistList(std::min(nextIndex,
                                  static_cast<int>(playlistTracks.size()) - 1));
     setStatus("Removed from " + selectedPlaylistName() + ".");
@@ -1388,11 +2221,33 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
     setStatus("Select a playlist track first.");
     return;
   }
+  const bool wasActiveQueue = selectedPlaylistIsActiveQueue();
+  const auto previousCurrent = context.musicPlayer.CurrentTrackSnapshot();
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    const int targetIndex = selectedPlaylistIndex + delta;
+    if (targetIndex < 0 ||
+        targetIndex >= static_cast<int>(playlistTracks.size())) {
+      setStatus(delta < 0 ? "Selected track is already at the top."
+                          : "Selected track is already at the bottom.");
+      return;
+    }
+    std::vector<MusicTrack> tracks = playlistTracks;
+    std::swap(tracks[static_cast<std::size_t>(selectedPlaylistIndex)],
+              tracks[static_cast<std::size_t>(targetIndex)]);
+    replaceNowPlaying(std::move(tracks), targetIndex,
+                      delta < 0 ? "Moved track up." : "Moved track down.");
+    return;
+  }
+
   std::string errorMessage;
   if (context.musicPlayer.MoveChartInSelectedPlaylist(
           track->representativeChart, delta, errorMessage)) {
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
+    syncActiveQueueAfterPlaylistEdit(
+        wasActiveQueue, previousCurrent,
+        std::clamp(selectedPlaylistIndex + delta, 0,
+                   std::max(0, static_cast<int>(playlistTracks.size()) - 1)));
     refreshPlaylistDirectoryList(selectedPlaylistId);
     refreshPlaylistList(std::clamp(selectedPlaylistIndex + delta, 0,
                                    std::max(0, static_cast<int>(
@@ -1405,16 +2260,137 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
 }
 
 void MusicPlayerScene::clearPlaylist() {
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    std::string ignoredStatus;
+    context.musicPlayer.Stop(ignoredStatus);
+    replaceNowPlaying({}, -1, "Cleared Now Playing.");
+    return;
+  }
+
+  const bool wasActiveQueue = selectedPlaylistIsActiveQueue();
+  const auto previousCurrent = context.musicPlayer.CurrentTrackSnapshot();
   std::string errorMessage;
   if (context.musicPlayer.ClearSelectedPlaylist(errorMessage)) {
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks.clear();
+    syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent, -1);
     refreshPlaylistDirectoryList(selectedPlaylistId);
+    refreshLibraryPlaylistList(selectedLibraryPlaylistId);
     refreshPlaylistList(-1);
     setStatus("Cleared " + selectedPlaylistName() + ".");
   } else {
     setStatus(errorMessage);
   }
+}
+
+void MusicPlayerScene::syncActiveQueueAfterPlaylistEdit(
+    bool wasActiveQueue, const std::optional<MusicTrack> &previousCurrent,
+    int fallbackIndex, std::optional<int> previousQueueIndex,
+    std::optional<int> removedIndex) {
+  if (!wasActiveQueue) {
+    return;
+  }
+
+  const auto previousQueue = context.musicPlayer.QueueSnapshot();
+  const auto playback = context.musicPlayer.PlaybackState();
+  if (playlistTracks.empty()) {
+    if (previousCurrent && playback.loaded) {
+      context.musicPlayer.SetPlaylistAfterCurrentRemoved(
+          {}, 0, selectedPlaylistName());
+    } else {
+      context.musicPlayer.SetPlaylist({}, 0, selectedPlaylistName());
+    }
+    refreshActiveQueueList(true);
+    return;
+  }
+
+  int queueIndex = -1;
+  bool currentTrackRemoved = false;
+  if (previousQueueIndex && removedIndex) {
+    if (*removedIndex == *previousQueueIndex) {
+      currentTrackRemoved = true;
+    } else if (*removedIndex < *previousQueueIndex) {
+      queueIndex =
+          std::clamp(*previousQueueIndex - 1, 0,
+                     static_cast<int>(playlistTracks.size()) - 1);
+    } else {
+      queueIndex =
+          std::clamp(*previousQueueIndex, 0,
+                     static_cast<int>(playlistTracks.size()) - 1);
+    }
+  }
+  if (previousCurrent) {
+    if (queueIndex < 0 && !currentTrackRemoved) {
+      queueIndex = trackIndexInList(playlistTracks, *previousCurrent);
+    }
+  }
+  currentTrackRemoved =
+      currentTrackRemoved || (previousCurrent && queueIndex < 0);
+  if (queueIndex < 0) {
+    queueIndex = std::clamp(fallbackIndex, 0,
+                            static_cast<int>(playlistTracks.size()) - 1);
+  }
+
+  if (currentTrackRemoved && playback.loaded) {
+    const int nextIndex = adjustedDetachedNextIndex(
+        previousQueue.detachedCurrentNextIndex, removedIndex, fallbackIndex,
+        playlistTracks.size());
+    context.musicPlayer.SetPlaylistAfterCurrentRemoved(
+        playlistTracks, static_cast<std::size_t>(nextIndex),
+        selectedPlaylistName());
+  } else {
+    context.musicPlayer.SetPlaylist(playlistTracks,
+                                    static_cast<std::size_t>(queueIndex),
+                                    selectedPlaylistName());
+  }
+  refreshActiveQueueList(true);
+}
+
+void MusicPlayerScene::replaceNowPlaying(std::vector<MusicTrack> tracks,
+                                         int preferredIndex,
+                                         const std::string &message) {
+  const auto current = context.musicPlayer.CurrentTrackSnapshot();
+  const auto playback = context.musicPlayer.PlaybackState();
+  const auto previousQueue = context.musicPlayer.QueueSnapshot();
+  int startIndex = tracks.empty()
+                       ? 0
+                       : std::clamp(preferredIndex, 0,
+                                    static_cast<int>(tracks.size()) - 1);
+  const int currentIndex =
+      current && playback.loaded ? trackIndexInList(tracks, *current) : -1;
+  if (currentIndex >= 0) {
+    startIndex = currentIndex;
+  }
+  if (!tracks.empty() && current && playback.loaded && currentIndex < 0) {
+    startIndex =
+        adjustedDetachedNextIndex(previousQueue.detachedCurrentNextIndex,
+                                  std::nullopt, startIndex, tracks.size());
+    context.musicPlayer.SetPlaylistAfterCurrentRemoved(
+        std::move(tracks), static_cast<std::size_t>(startIndex),
+        music_playlist::kNowPlayingDisplayName);
+  } else {
+    context.musicPlayer.SetNowPlaying(std::move(tracks),
+                                      static_cast<std::size_t>(startIndex));
+  }
+  refreshActiveQueueList(true);
+  setStatus(message);
+}
+
+void MusicPlayerScene::playNowPlaying(std::vector<MusicTrack> tracks,
+                                      std::size_t startIndex,
+                                      const std::string &emptyMessage,
+                                      const std::string &successMessage) {
+  if (tracks.empty()) {
+    setStatus(emptyMessage);
+    return;
+  }
+
+  context.jukebox.stop();
+  context.musicPlayer.SetNowPlaying(std::move(tracks), startIndex);
+  std::string status;
+  context.musicPlayer.PlayCurrentAsync(status, successMessage);
+  refreshActiveQueueList(true);
+  setStatus(status);
 }
 
 void MusicPlayerScene::playLibraryTrack() {
@@ -1423,12 +2399,8 @@ void MusicPlayerScene::playLibraryTrack() {
     setStatus("Select a library track first.");
     return;
   }
-  context.jukebox.stop();
-  context.musicPlayer.SetPlaylist(libraryTracks,
-                                  static_cast<std::size_t>(selectedLibraryIndex));
-  std::string status;
-  context.musicPlayer.PlayCurrentAsync(status, "Playing selected track.");
-  setStatus(status);
+  playNowPlaying({*track}, 0, "Select a library track first.",
+                 "Playing Now Playing.");
 }
 
 void MusicPlayerScene::playPlaylist() {
@@ -1436,6 +2408,16 @@ void MusicPlayerScene::playPlaylist() {
     setStatus(selectedPlaylistName() + " is empty.");
     return;
   }
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    const std::size_t startIndex =
+        selectedPlaylistIndex >= 0
+            ? static_cast<std::size_t>(selectedPlaylistIndex)
+            : 0;
+    playNowPlaying(playlistTracks, startIndex, "Now Playing is empty.",
+                   "Playing Now Playing.");
+    return;
+  }
+
   context.jukebox.stop();
   std::string status;
   if (!context.musicPlayer.StartSelectedPlaylist(status)) {
@@ -1444,6 +2426,7 @@ void MusicPlayerScene::playPlaylist() {
   }
   context.musicPlayer.PlayCurrentAsync(status,
                                        "Playing " + selectedPlaylistName() + ".");
+  refreshActiveQueueList(true);
   setStatus(status);
 }
 
@@ -1453,26 +2436,45 @@ void MusicPlayerScene::playSelectedPlaylistTrack() {
     setStatus("Select a playlist track first.");
     return;
   }
+  if (isNowPlayingPlaylistId(selectedPlaylistId)) {
+    playNowPlaying(playlistTracks,
+                   static_cast<std::size_t>(selectedPlaylistIndex),
+                   "Now Playing is empty.", "Playing Now Playing.");
+    return;
+  }
+
   context.jukebox.stop();
   context.musicPlayer.SetPlaylist(playlistTracks,
-                                  static_cast<std::size_t>(selectedPlaylistIndex));
+                                  static_cast<std::size_t>(selectedPlaylistIndex),
+                                  selectedPlaylistName());
   std::string status;
   context.musicPlayer.PlayCurrentAsync(status, "Playing playlist track.");
+  refreshActiveQueueList(true);
+  setStatus(status);
+}
+
+void MusicPlayerScene::playSelectedQueueTrack() {
+  if (selectedQueueIndex < 0 ||
+      selectedQueueIndex >= static_cast<int>(queueTracks.size())) {
+    setStatus("Select a queue track first.");
+    return;
+  }
+  context.jukebox.stop();
+  context.musicPlayer.SetPlaylist(queueTracks,
+                                  static_cast<std::size_t>(selectedQueueIndex),
+                                  queueDisplayName(displayedQueueName));
+  std::string status;
+  context.musicPlayer.PlayCurrentAsync(status, "Playing queue track.");
+  refreshActiveQueueList(true);
   setStatus(status);
 }
 
 void MusicPlayerScene::playRandomLibrary() {
-  context.jukebox.stop();
-  std::string status;
-  if (!context.musicPlayer.ReloadLibrary(status) ||
-      !context.musicPlayer.StartRandomLibrary(status)) {
-    setStatus(status);
-    return;
-  }
-  libraryTracks = context.musicPlayer.LibraryTracksSnapshot();
-  refreshLibraryList(selectedLibraryIndex);
-  context.musicPlayer.PlayCurrentAsync(status, "Playing random library.");
-  setStatus(status);
+  std::vector<MusicTrack> tracks =
+      trimPlaylistName(librarySearchText).empty() ? libraryTracks
+                                                  : filteredLibraryTracks;
+  playNowPlaying(music_playlist::ShuffledTracks(std::move(tracks)), 0,
+                 "No library tracks available.", "Playing Now Playing.");
 }
 
 void MusicPlayerScene::togglePlayback() {
@@ -1482,6 +2484,10 @@ void MusicPlayerScene::togglePlayback() {
     context.musicPlayer.Pause(status);
   } else if (playback.loaded) {
     context.musicPlayer.Resume(status);
+  } else if (selectedQueueIndex >= 0 &&
+             selectedQueueIndex < static_cast<int>(queueTracks.size())) {
+    playSelectedQueueTrack();
+    return;
   } else if (selectedPlaylistTrack()) {
     playSelectedPlaylistTrack();
     return;
@@ -1510,10 +2516,145 @@ void MusicPlayerScene::seekRelative(long long deltaMicros) {
   }
 }
 
+void MusicPlayerScene::cycleRepeatMode() {
+  const auto current = context.musicPlayer.RepeatMode();
+  music_playlist::QueueRepeatMode next = music_playlist::QueueRepeatMode::None;
+  switch (current) {
+  case music_playlist::QueueRepeatMode::None:
+    next = music_playlist::QueueRepeatMode::One;
+    break;
+  case music_playlist::QueueRepeatMode::One:
+    next = music_playlist::QueueRepeatMode::All;
+    break;
+  case music_playlist::QueueRepeatMode::All:
+  default:
+    next = music_playlist::QueueRepeatMode::None;
+    break;
+  }
+  context.musicPlayer.SetRepeatMode(next);
+  displayedRepeatMode = next;
+  setStatus(repeatModeLabel(next));
+  refreshUi();
+}
+
+void MusicPlayerScene::seekToFraction(float fraction) {
+  const auto playback = context.musicPlayer.PlaybackState();
+  if (!playback.supported || !playback.loaded || playback.durationMicros <= 0) {
+    setStatus("No seekable track loaded.");
+    return;
+  }
+  fraction = std::clamp(fraction, 0.0f, 1.0f);
+  const long long target =
+      static_cast<long long>(static_cast<double>(playback.durationMicros) *
+                             static_cast<double>(fraction));
+  std::string status;
+  if (context.musicPlayer.Seek(target, status)) {
+    setSeekFillFraction(seekProgressFill, fraction);
+  } else if (!status.empty()) {
+    setStatus(status);
+  }
+}
+
+bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
+  if (seekProgressTrack == nullptr || !seekProgressTrack->getVisible()) {
+    return false;
+  }
+
+  const auto seekAt = [this](float uiX) {
+    const int width = std::max(1, seekProgressTrack->getWidth());
+    const float fraction =
+        (uiX - static_cast<float>(seekProgressTrack->getX())) /
+        static_cast<float>(width);
+    seekToFraction(fraction);
+  };
+
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    int uiX = 0;
+    int uiY = 0;
+    mouseButtonEventToUi(event.button, uiX, uiY);
+    if (!isInsideView(seekProgressTrack, uiX, uiY)) {
+      return false;
+    }
+    seekMouseDown = true;
+    seekAt(static_cast<float>(uiX));
+    return true;
+  }
+  case SDL_MOUSEMOTION: {
+    if (!seekMouseDown || event.motion.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    int uiX = 0;
+    int uiY = 0;
+    mouseMotionEventToUi(event.motion, uiX, uiY);
+    (void)uiY;
+    seekAt(static_cast<float>(uiX));
+    return true;
+  }
+  case SDL_MOUSEBUTTONUP: {
+    if (!seekMouseDown || event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    seekMouseDown = false;
+    int uiX = 0;
+    int uiY = 0;
+    mouseButtonEventToUi(event.button, uiX, uiY);
+    (void)uiY;
+    seekAt(static_cast<float>(uiX));
+    return true;
+  }
+  case SDL_FINGERDOWN: {
+    if (activeSeekTouchId != -1) {
+      return false;
+    }
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+    if (!isInsideView(seekProgressTrack, uiX, uiY)) {
+      return false;
+    }
+    activeSeekTouchId = event.tfinger.fingerId;
+    seekAt(uiX);
+    return true;
+  }
+  case SDL_FINGERMOTION: {
+    if (event.tfinger.fingerId != activeSeekTouchId) {
+      return false;
+    }
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+    (void)uiY;
+    seekAt(uiX);
+    return true;
+  }
+  case SDL_FINGERUP: {
+    if (event.tfinger.fingerId != activeSeekTouchId) {
+      return false;
+    }
+    activeSeekTouchId = -1;
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+    (void)uiY;
+    seekAt(uiX);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
 void MusicPlayerScene::playNext() {
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayNextAsync(status, "Playing next track.");
+  refreshActiveQueueList(true);
   setStatus(status);
 }
 
@@ -1521,6 +2662,7 @@ void MusicPlayerScene::playPrevious() {
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayPreviousAsync(status, "Playing previous track.");
+  refreshActiveQueueList(true);
   setStatus(status);
 }
 

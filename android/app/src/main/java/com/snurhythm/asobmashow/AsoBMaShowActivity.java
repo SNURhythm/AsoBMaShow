@@ -1,6 +1,7 @@
 package com.snurhythm.asobmashow;
 
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -635,7 +636,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                         ? durationMicros
                         : Math.max(0L, player.getDuration()) * 1000L;
                 ensureNativeMusicSessionLocked();
-                updateNativeMusicSessionLocked(false);
+                updateNativeMusicSessionLocked(false, false);
                 return "OK";
             } catch (Exception e) {
                 releaseNativeMusicPlayerLocked();
@@ -686,7 +687,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                     nativeMusicPlayer.pause();
                 }
                 nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
-                updateNativeMusicSessionLocked(false);
+                updateNativeMusicSessionLocked(false, false);
                 stopNativeMusicForegroundServiceLocked();
                 return "OK";
             } catch (Exception e) {
@@ -866,6 +867,10 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private void updateNativeMusicSessionLocked(boolean playing) {
+        updateNativeMusicSessionLocked(playing, true);
+    }
+
+    private void updateNativeMusicSessionLocked(boolean playing, boolean updateService) {
         ensureNativeMusicSessionLocked();
         long durationMs = Math.max(0L, nativeMusicDurationMicros / 1000L);
         long positionMs = 0L;
@@ -903,15 +908,13 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .build();
         nativeMusicSession.setPlaybackState(playbackState);
         nativeMusicSession.setActive(nativeMusicPlayer != null);
-        updateNativeMusicForegroundServiceLocked(playing);
+        if (updateService) {
+            updateNativeMusicForegroundServiceLocked(playing);
+        }
     }
 
     private void updateNativeMusicForegroundServiceLocked(boolean playing) {
         if (nativeMusicPlayer == null || nativeMusicSession == null) {
-            stopNativeMusicForegroundServiceLocked();
-            return;
-        }
-        if (!playing) {
             stopNativeMusicForegroundServiceLocked();
             return;
         }
@@ -925,7 +928,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
                         nativeMusicSession.getSessionToken());
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (playing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent);
             } else {
                 startService(intent);
@@ -937,6 +940,14 @@ public class AsoBMaShowActivity extends SDLActivity {
     private void stopNativeMusicForegroundServiceLocked() {
         try {
             stopService(new Intent(this, AsoBMaShowMusicService.class));
+        } catch (Exception ignored) {
+        }
+        try {
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(AsoBMaShowMusicService.NOTIFICATION_ID);
+            }
         } catch (Exception ignored) {
         }
     }
@@ -957,7 +968,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeMusicArtwork = null;
         if (nativeMusicSession != null) {
             try {
-                updateNativeMusicSessionLocked(false);
+                updateNativeMusicSessionLocked(false, false);
                 nativeMusicSession.setActive(false);
                 nativeMusicSession.release();
             } catch (Exception ignored) {
