@@ -6,14 +6,10 @@
 #include <algorithm>
 #include <cctype>
 #include <random>
-#include <string_view>
 #include <utility>
 
 namespace music_playlist {
 namespace {
-
-const std::vector<std::string_view> kArtworkExtensions = {
-    "png", "jpg", "jpeg", "bmp", "gif", "webp"};
 
 std::string lowerTrimmed(std::string value) {
   value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
@@ -58,13 +54,6 @@ std::string combineArtists(const std::string &artist,
     return artist;
   }
   return artist + " / " + subArtist;
-}
-
-long long durationForChart(const bms_parser::ChartMeta &meta) {
-  if (meta.TotalLength > 0) {
-    return meta.TotalLength;
-  }
-  return std::max(0LL, meta.PlayLength);
 }
 
 std::filesystem::path nativeArtworkPathForTrack(const MusicTrack &track) {
@@ -115,21 +104,7 @@ std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta) {
     if (candidate.empty()) {
       continue;
     }
-    if (const auto resolved =
-            archive_file::findFileWithExtensions(meta.Folder / candidate,
-                                                 kArtworkExtensions)) {
-      return *resolved;
-    }
-  }
-
-  const std::string commonNames[] = {
-      "jacket", "cover", "folder", "title", "stagefile", "stage", "banner"};
-  for (const auto &name : commonNames) {
-    if (const auto resolved =
-            archive_file::findFileWithExtensions(meta.Folder / name,
-                                                 kArtworkExtensions)) {
-      return *resolved;
-    }
+    return meta.Folder / candidate;
   }
   return {};
 }
@@ -147,7 +122,7 @@ MusicTrack MakeTrack(const MusicTrackRecord &record) {
       .genre = meta.Genre,
       .artworkPath = ArtworkPathForChart(meta),
       .chartCount = std::max(1, record.chartCount),
-      .durationMicros = durationForChart(meta),
+      .durationMicros = 0,
   };
 }
 

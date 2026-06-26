@@ -9,6 +9,7 @@
 #endif
 
 #include <SDL2/SDL.h>
+#include <sndfile.h>
 
 #include <algorithm>
 #include <cctype>
@@ -123,7 +124,8 @@ CacheResult resultForExistingFile(const std::filesystem::path &path) {
   return {.success = true,
           .rendered = false,
           .audioPath = path,
-          .message = "Cached audio exists"};
+          .message = "Cached audio exists",
+          .durationMicros = ReadAudioFileDurationMicros(path).value_or(0)};
 }
 
 } // namespace
@@ -145,6 +147,26 @@ bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
   std::error_code error;
   return std::filesystem::is_regular_file(CachedAudioPathForChart(meta), error) &&
          !error;
+}
+
+std::optional<long long>
+ReadAudioFileDurationMicros(const std::filesystem::path &path) {
+  if (path.empty()) {
+    return std::nullopt;
+  }
+
+  SF_INFO info{};
+  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_READ, &info);
+  if (rawFile == nullptr) {
+    return std::nullopt;
+  }
+  sf_close(rawFile);
+  if (info.frames <= 0 || info.samplerate <= 0) {
+    return std::nullopt;
+  }
+  return static_cast<long long>(
+      static_cast<long double>(info.frames) * 1000000.0L /
+      static_cast<long double>(info.samplerate));
 }
 
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,

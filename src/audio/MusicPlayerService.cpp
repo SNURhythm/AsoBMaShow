@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <iostream>
 #include <thread>
 #include <utility>
 
@@ -71,6 +72,32 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   playlistDb.Close(db);
 
   libraryTracks = music_playlist::MakeTracks(records);
+  return true;
+}
+
+bool MusicPlayerService::ReloadLibraryAndPlaylists(
+    std::string &errorMessage, int preferredSelectedPlaylistId) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  std::vector<MusicTrackRecord> records;
+  playlistDb.SelectLibraryTracks(db, records);
+  libraryTracks = music_playlist::MakeTracks(records);
+
+  RefreshPlaylistCachesLocked(playlistDb, db, preferredSelectedPlaylistId);
+  if (defaultPlaylistId <= 0) {
+    playlistDb.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return false;
+  }
+  playlistDb.Close(db);
   return true;
 }
 
@@ -179,6 +206,75 @@ int MusicPlayerService::CreatePlaylist(const std::string &name,
   }
   RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
   playlistDb.Close(db);
+  return playlistId;
+}
+
+int MusicPlayerService::CreatePlaylistFromTracks(
+    const std::string &name,
+    const std::vector<music_playlist::MusicTrack> &tracks,
+    std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  if (tracks.empty()) {
+    errorMessage = "Now Playing is empty.";
+    return 0;
+  }
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return 0;
+  }
+
+  const int playlistId = playlistDb.EnsurePlaylist(db, name);
+  if (playlistId <= 0) {
+    playlistDb.Close(db);
+    errorMessage = "Could not create music playlist.";
+    return 0;
+  }
+
+  char *transactionError = nullptr;
+  const bool transactionStarted =
+      sqlite3_exec(db, "BEGIN IMMEDIATE", nullptr, nullptr,
+                   &transactionError) == SQLITE_OK;
+  if (transactionError != nullptr) {
+    std::cerr << "SQL error while beginning music playlist save: "
+              << transactionError << "\n";
+    sqlite3_free(transactionError);
+  }
+
+  bool insertedAll = true;
+  for (const auto &track : tracks) {
+    if (!playlistDb.InsertTrack(db, playlistId, track.representativeChart)) {
+      insertedAll = false;
+      break;
+    }
+  }
+
+  if (transactionStarted) {
+    transactionError = nullptr;
+    const char *finishQuery = insertedAll ? "COMMIT" : "ROLLBACK";
+    if (sqlite3_exec(db, finishQuery, nullptr, nullptr, &transactionError) !=
+        SQLITE_OK) {
+      std::cerr << "SQL error while finishing music playlist save: "
+                << (transactionError != nullptr ? transactionError
+                                                : sqlite3_errmsg(db))
+                << "\n";
+      insertedAll = false;
+    }
+    if (transactionError != nullptr) {
+      sqlite3_free(transactionError);
+    }
+  }
+
+  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  playlistDb.Close(db);
+  if (!insertedAll) {
+    errorMessage = "Could not save every Now Playing track.";
+    return 0;
+  }
   return playlistId;
 }
 
@@ -351,6 +447,40 @@ bool MusicPlayerService::ClearSelectedPlaylist(std::string &errorMessage) {
   playlistDb.Close(db);
   if (!cleared) {
     errorMessage = "Could not clear the playlist.";
+    return false;
+  }
+  return true;
+}
+
+bool MusicPlayerService::DeleteSelectedPlaylist(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  const int playlistId = selectedPlaylistId;
+  if (playlistId <= 0) {
+    playlistDb.Close(db);
+    errorMessage = "Select a playlist first.";
+    return false;
+  }
+  if (playlistId == defaultPlaylistId) {
+    playlistDb.Close(db);
+    errorMessage = "My Playlist cannot be deleted.";
+    return false;
+  }
+
+  const bool deleted = playlistDb.DeletePlaylist(db, playlistId);
+  RefreshPlaylistCachesLocked(playlistDb, db, 0);
+  playlistDb.Close(db);
+  if (!deleted) {
+    errorMessage = "Could not delete the playlist.";
     return false;
   }
   return true;
@@ -787,7 +917,8 @@ bool MusicPlayerService::PlayTrackLocked(
   }
 
   auto metadata = music_playlist::MakeNativeMetadata(track);
-  if (metadata.durationMicros <= 0 && lastCacheResult.durationMicros > 0) {
+  metadata.durationMicros = 0;
+  if (lastCacheResult.durationMicros > 0) {
     metadata.durationMicros = lastCacheResult.durationMicros;
   }
 
@@ -798,6 +929,9 @@ bool MusicPlayerService::PlayTrackLocked(
   const bool playing = native_music_player::Play(errorMessage);
   if (playing) {
     loadedTrack = track;
+    if (lastCacheResult.durationMicros > 0) {
+      loadedTrack->durationMicros = lastCacheResult.durationMicros;
+    }
     EnsureNativeControlEventPump();
   }
   return playing;
@@ -909,7 +1043,8 @@ void MusicPlayerService::PlaybackWorker(
                           : cacheResult.message;
     } else {
       auto metadata = music_playlist::MakeNativeMetadata(track);
-      if (metadata.durationMicros <= 0 && cacheResult.durationMicros > 0) {
+      metadata.durationMicros = 0;
+      if (cacheResult.durationMicros > 0) {
         metadata.durationMicros = cacheResult.durationMicros;
       }
 
@@ -921,6 +1056,9 @@ void MusicPlayerService::PlaybackWorker(
         statusMessage = errorMessage;
       } else {
         loadedTrack = track;
+        if (cacheResult.durationMicros > 0) {
+          loadedTrack->durationMicros = cacheResult.durationMicros;
+        }
         playing = true;
         statusMessage =
             successMessage.empty() ? "Playing music." : successMessage;

@@ -42,6 +42,10 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_backspin_notes";
 constexpr int kChartMetaColumnCount = 27;
 constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+constexpr const char *kPlaylistDatabaseFileName = "music_playlist.db";
+constexpr const char *kChartDatabaseFileName = "chart.db";
+constexpr const char *kChartDatabaseSchema = "chart_library";
+constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 
 std::string trimCopy(const std::string &value) {
   const auto begin =
@@ -85,6 +89,25 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while " << context << ": "
+              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
+              << "\n";
+    return false;
+  }
+  return true;
+}
+
+bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
+  char *query = sqlite3_mprintf("ATTACH DATABASE %Q AS %s",
+                                path.string().c_str(), kChartDatabaseSchema);
+  if (query == nullptr) {
+    std::cerr << "SQL error while preparing chart database attachment.\n";
+    return false;
+  }
+  SqliteErrorMessageHandle errMsg;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
+  sqlite3_free(query);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while attaching chart database: "
               << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
               << "\n";
     return false;
@@ -218,7 +241,8 @@ std::string preferredChartPredicate(const std::string &alias) {
       chartSourceArchiveSizeExpr("cm_better");
   const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
 
-  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
+  return std::string("NOT EXISTS (SELECT 1 FROM ") + kChartMetaTable +
+         " cm_better WHERE "
          "cm_better.path != " +
          alias + ".path AND ((" + alias +
          ".sha256 != '' AND cm_better.sha256 = " + alias +
@@ -273,10 +297,12 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
 sqlite3 *MusicPlaylistDB::Connect() {
   std::filesystem::path directory = Utils::GetDocumentsPath("db");
   std::filesystem::create_directories(directory);
-  std::filesystem::path path = directory / "chart.db";
+  const std::filesystem::path playlistPath =
+      directory / kPlaylistDatabaseFileName;
+  const std::filesystem::path chartPath = directory / kChartDatabaseFileName;
 
   sqlite3 *db = nullptr;
-  const int rc = sqlite3_open(path.string().c_str(), &db);
+  const int rc = sqlite3_open(playlistPath.string().c_str(), &db);
   if (db != nullptr) {
     sqlite3_busy_timeout(db, 1000);
   }
@@ -292,6 +318,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
 
   sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
   sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  attachChartDatabase(db, chartPath);
   return db;
 }
 
@@ -683,6 +710,47 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
   return true;
 }
 
+bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
+  if (playlistId <= 0 || !CreateTables(db)) {
+    return false;
+  }
+
+  const char *deleteItemsQuery =
+      "DELETE FROM music_playlist_items WHERE playlist_id = ?1";
+  SqliteStatementHandle deleteItemsStmt;
+  int rc = prepareSqliteStatement(db, deleteItemsQuery, deleteItemsStmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing music playlist item delete: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  sqlite3_bind_int(deleteItemsStmt, 1, playlistId);
+  rc = sqlite3_step(deleteItemsStmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while deleting music playlist items: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+
+  const char *deletePlaylistQuery =
+      "DELETE FROM music_playlists WHERE id = ?1";
+  SqliteStatementHandle deletePlaylistStmt;
+  rc = prepareSqliteStatement(db, deletePlaylistQuery, deletePlaylistStmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing music playlist delete: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  sqlite3_bind_int(deletePlaylistStmt, 1, playlistId);
+  rc = sqlite3_step(deletePlaylistStmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while deleting music playlist: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  return sqlite3_changes(db) > 0;
+}
+
 void MusicPlaylistDB::SelectLibraryTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr) {
@@ -702,8 +770,9 @@ void MusicPlaylistDB::SelectLibraryTracks(
   query += chartArtworkOrderBy("cm");
   query += ", total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM chart_meta cm "
-           "WHERE ";
+  query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE ";
   query += preferredChartPredicate("cm");
   query += ") cm WHERE cm.music_rank = 1 "
            "ORDER BY cm.title COLLATE NOCASE, cm.path";
@@ -745,7 +814,9 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
   query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM music_playlist_items mpi JOIN chart_meta cm ON "
+           "FROM music_playlist_items mpi JOIN ";
+  query += kChartMetaTable;
+  query += " cm ON "
            "((mpi.music_key_type = 'folder' AND cm.folder = mpi.music_key) "
            "OR (mpi.music_key_type = 'path' AND cm.path = mpi.music_key)) "
            "WHERE mpi.playlist_id = ?1 AND ";

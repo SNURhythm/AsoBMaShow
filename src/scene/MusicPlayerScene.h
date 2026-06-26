@@ -72,10 +72,13 @@ private:
   std::string selectedLibraryPlaylistName() const;
   std::string selectedPlaylistName() const;
   std::string nextPlaylistName() const;
+  std::string uniquePlaylistName(std::string desiredName) const;
 
   void switchTab(MusicPlayerTab tab);
   void createPlaylist();
+  void saveNowPlayingAsPlaylist();
   void renameSelectedPlaylist();
+  void deleteSelectedPlaylist();
   void selectLibraryPlaylist(int index);
   void selectPlaylist(int index);
   void selectPlaylistTrack(int index);
@@ -120,7 +123,6 @@ private:
   TextView *libraryNavText = nullptr;
   TextView *playlistsNavText = nullptr;
   TextView *playerNavText = nullptr;
-  TextView *railSummaryText = nullptr;
   TextView *statusText = nullptr;
   TextView *librarySubtitleText = nullptr;
   TextView *playlistSubtitleText = nullptr;
@@ -147,6 +149,7 @@ private:
   TextInputBox *playlistNameInput = nullptr;
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
+  TextView *deletePlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;
   View *seekProgressFill = nullptr;
 
@@ -163,6 +166,7 @@ private:
   int selectedPlaylistId = 0;
   int selectedPlaylistIndex = -1;
   int selectedQueueIndex = -1;
+  int pendingDeletePlaylistId = 0;
   MusicPlayerTab activeTab = MusicPlayerTab::Library;
   music_playlist::QueueRepeatMode displayedRepeatMode =
       music_playlist::QueueRepeatMode::All;

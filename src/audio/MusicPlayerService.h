@@ -24,6 +24,8 @@ public:
   MusicPlayerService &operator=(const MusicPlayerService &) = delete;
 
   bool ReloadLibrary(std::string &errorMessage);
+  bool ReloadLibraryAndPlaylists(std::string &errorMessage,
+                                 int preferredSelectedPlaylistId = 0);
   [[nodiscard]] std::size_t LibraryTrackCount() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   LibraryTracksSnapshot() const;
@@ -35,6 +37,10 @@ public:
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   SelectedPlaylistTracksSnapshot() const;
   int CreatePlaylist(const std::string &name, std::string &errorMessage);
+  int CreatePlaylistFromTracks(
+      const std::string &name,
+      const std::vector<music_playlist::MusicTrack> &tracks,
+      std::string &errorMessage);
   bool RenameSelectedPlaylist(const std::string &name,
                               std::string &errorMessage);
   bool SelectPlaylist(int playlistId, std::string &errorMessage);
@@ -48,6 +54,7 @@ public:
   bool MoveChartInSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
                                    int delta, std::string &errorMessage);
   bool ClearSelectedPlaylist(std::string &errorMessage);
+  bool DeleteSelectedPlaylist(std::string &errorMessage);
   [[nodiscard]] std::optional<MusicPlaylistInfo>
   DefaultPlaylistSnapshot() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
