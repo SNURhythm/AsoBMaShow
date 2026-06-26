@@ -139,6 +139,7 @@ private:
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
+      Favorites,
       SolidArchives,
       DifficultyTable,
       DifficultyLevel,
@@ -496,6 +497,7 @@ private:
   void requestLibraryReload(bool includeFolders);
   void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);
+  bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
@@ -507,6 +509,7 @@ private:
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
+  void cancelPreviewLoading(bool stopPreviewAudio);
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;

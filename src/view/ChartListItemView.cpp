@@ -1,8 +1,10 @@
 #include "ChartListItemView.h"
+#include "Button.h"
 #include "ClearLampColors.h"
 #include "UiTheme.h"
 
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 
@@ -10,6 +12,28 @@ namespace {
 constexpr int kBottomGap = 8;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
+constexpr const char *kIconFontPath = "assets/fonts/fa-solid-900.ttf";
+constexpr uint32_t kIconStar = 0xf005;
+
+std::string utf8ForCodepoint(uint32_t codepoint) {
+  std::string result;
+  if (codepoint <= 0x7f) {
+    result.push_back(static_cast<char>(codepoint));
+  } else if (codepoint <= 0x7ff) {
+    result.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else if (codepoint <= 0xffff) {
+    result.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else if (codepoint <= 0x10ffff) {
+    result.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  }
+  return result;
+}
 
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
@@ -52,6 +76,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artistView = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+  favoriteButton = new Button();
+  favoriteIconView = new TextView(kIconFontPath, 24);
 
   this->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -135,15 +161,48 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   keyModeView->setOverflow(TextView::TextOverflow::Hidden);
   keyModeView->setWidth(210)->setHeight(20);
   detailsLayout->addView(keyModeView);
+  favoriteButton->setWidth(52)
+      ->setHeight(52)
+      ->setFlexShrink(0)
+      ->setCornerRadius(ui_theme::controlRadius());
+  favoriteButton
+      ->setThemedBackgroundColors(
+          [] { return Color(0, 0, 0, 0); }, ui_theme::controlHover,
+          ui_theme::controlPressed)
+      ->setThemedBorderColors(
+          [] { return Color(0, 0, 0, 0); }, ui_theme::hairlineStrong,
+          ui_theme::accentBorder)
+      ->setStyledBorderWidth(1);
+  favoriteIconView->setText(utf8ForCodepoint(kIconStar));
+  favoriteIconView->setAlign(TextView::CENTER);
+  favoriteIconView->setVAlign(TextView::MIDDLE);
+  favoriteIconView->setOverflow(TextView::TextOverflow::Hidden);
+  favoriteButton->setContentView(favoriteIconView);
+  favoriteButton->setOnClickListener([this]() {
+    if (solidArchive || unavailable || currentRecord.meta.BmsPath.empty()) {
+      return;
+    }
+    const bool nextFavorite = !favorite;
+    const auto toggledPath = currentRecord.meta.BmsPath;
+    if (!favoriteToggleHandler || favoriteToggleHandler(currentRecord,
+                                                        nextFavorite)) {
+      if (currentRecord.meta.BmsPath == toggledPath) {
+        setFavoriteState(nextFavorite);
+      }
+    }
+  });
+  contentCard->addView(favoriteButton);
 
   onUnselected();
   this->applyYogaLayout();
 }
 
 void ChartListItemView::setMeta(const ChartMetaRecord &record) {
+  currentRecord = record;
   const auto &meta = record.meta;
   unavailable = record.unavailable;
   solidArchive = record.solidArchive;
+  favorite = record.favorite;
   std::string title = meta.Title;
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
@@ -167,6 +226,9 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   } else {
     jacketImage->freeImage();
   }
+  favoriteButton->setVisible(!unavailable && !solidArchive &&
+                             !meta.BmsPath.empty());
+  refreshFavoriteButton();
 }
 
 void ChartListItemView::setClearRank(int clearRank) {
@@ -177,7 +239,31 @@ void ChartListItemView::setClearRank(int clearRank) {
   }
 }
 
+void ChartListItemView::setFavoriteToggleHandler(
+    std::function<bool(const ChartMetaRecord &, bool)> handler) {
+  favoriteToggleHandler = std::move(handler);
+}
+
+void ChartListItemView::setFavoriteState(bool nextFavorite) {
+  favorite = nextFavorite;
+  currentRecord.favorite = nextFavorite;
+  refreshFavoriteButton();
+}
+
+void ChartListItemView::refreshFavoriteButton() {
+  if (favoriteIconView == nullptr) {
+    return;
+  }
+  if (favorite) {
+    favoriteIconView->setThemedColor(ui_theme::amber);
+  } else {
+    favoriteIconView->setThemedColor(selected ? ui_theme::textSecondary
+                                              : ui_theme::textMuted);
+  }
+}
+
 void ChartListItemView::onSelected() {
+  selected = true;
   contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
@@ -185,9 +271,11 @@ void ChartListItemView::onSelected() {
   artworkFrame->setThemedBackgroundColor(ui_theme::controlHover);
   artworkFrame->setThemedBorderColor(ui_theme::accentBorder);
   applyTextColors(true);
+  refreshFavoriteButton();
 }
 
 void ChartListItemView::onUnselected() {
+  selected = false;
   contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
   contentCard->setCornerRadius(ui_theme::controlRadius());
   contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
@@ -195,6 +283,7 @@ void ChartListItemView::onUnselected() {
   artworkFrame->setThemedBackgroundColor(ui_theme::control);
   artworkFrame->setThemedBorderColor(ui_theme::hairlineStrong);
   applyTextColors(false);
+  refreshFavoriteButton();
 }
 
 void ChartListItemView::applyTextColors(bool selected) {

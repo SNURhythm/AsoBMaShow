@@ -12,6 +12,14 @@ struct MusicPlaylistInfo {
   int trackCount = 0;
 };
 
+struct MusicPlayerStateRecord {
+  int selectedPlaylistId = 0;
+  int playlistCursorIndex = -1;
+  int queueCursorIndex = -1;
+  int repeatMode = 2;
+  std::string queueDisplayName;
+};
+
 class MusicPlaylistDB {
 public:
   sqlite3 *Connect();
@@ -29,14 +37,16 @@ public:
                  const bms_parser::ChartMeta &chartMeta, int delta);
   bool ClearPlaylist(sqlite3 *db, int playlistId);
   bool DeletePlaylist(sqlite3 *db, int playlistId);
-  bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
-                   bool favorite);
+  MusicPlayerStateRecord SelectPlayerState(sqlite3 *db);
+  bool SavePlayerState(sqlite3 *db, const MusicPlayerStateRecord &state);
+  bool ReplaceNowPlayingTracks(
+      sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks);
   void SelectLibraryTracks(sqlite3 *db, std::vector<MusicTrackRecord> &tracks);
   void SelectLibraryGroupTracks(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 std::vector<MusicTrackRecord> &tracks);
-  void SelectFavoriteTracks(sqlite3 *db,
-                            std::vector<MusicTrackRecord> &tracks);
+  void SelectNowPlayingTracks(sqlite3 *db,
+                              std::vector<MusicTrackRecord> &tracks);
   void SelectTracks(sqlite3 *db, int playlistId,
                     std::vector<MusicTrackRecord> &tracks);
 };

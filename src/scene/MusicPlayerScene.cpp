@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -1840,14 +1841,16 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
       selectedFavorite ? selectedFavorite->trackId : "";
   const std::string selectedPlaylistTrackId =
       selectedPlaylist ? selectedPlaylist->trackId : "";
-  const int preferredPlaylistId =
-      preserveSelection ? selectedPlaylistId : 0;
+  const int previousPlaylistId = selectedPlaylistId;
+  const int servicePreferredPlaylistId =
+      preserveSelection && selectedPlaylistId > 0 ? selectedPlaylistId : 0;
 
   std::string errorMessage;
-  if (!context.musicPlayer.ReloadLibraryAndPlaylists(errorMessage,
-                                                     preferredPlaylistId)) {
+  if (!context.musicPlayer.ReloadLibraryAndPlaylists(
+          errorMessage, servicePreferredPlaylistId)) {
     setStatus(errorMessage);
   }
+  const auto persistedState = context.musicPlayer.PlayerStateSnapshot();
   libraryTracks = context.musicPlayer.LibraryTracksSnapshot();
   favoriteTracks = context.musicPlayer.FavoriteTracksSnapshot();
   rebuildFavoriteTrackIds();
@@ -1856,6 +1859,11 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
   playlists = context.musicPlayer.PlaylistsSnapshot();
   selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
   playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
+  if ((preserveSelection && isNowPlayingPlaylistId(previousPlaylistId)) ||
+      (!preserveSelection &&
+       isNowPlayingPlaylistId(persistedState.selectedPlaylistId))) {
+    selectedPlaylistId = kNowPlayingPlaylistId;
+  }
 
   auto findIndex = [](const std::vector<MusicTrack> &tracks,
                       const std::string &trackId) {
@@ -1874,10 +1882,16 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
       preserveSelection ? findIndex(libraryTracks, selectedLibraryId) : -1;
   const int favoriteIndex =
       preserveSelection ? findIndex(favoriteTracks, selectedFavoriteId) : -1;
-  const int playlistIndex =
-      preserveSelection ? findIndex(playlistTracks, selectedPlaylistTrackId)
-                        : -1;
   refreshActiveQueueList(true);
+  int playlistIndex =
+      preserveSelection ? findIndex(playlistTracks, selectedPlaylistTrackId)
+                        : persistedState.playlistCursorIndex;
+  if (!preserveSelection && playlistIndex < 0 &&
+      isNowPlayingPlaylistId(selectedPlaylistId)) {
+    playlistIndex = selectedQueueIndex;
+  }
+  const int preferredPlaylistId =
+      preserveSelection ? previousPlaylistId : persistedState.selectedPlaylistId;
   refreshLibraryList(libraryIndex);
   refreshTrackBrowserList(TrackBrowserKind::Favorites, favoriteIndex);
   refreshLibraryPlaylistList(preserveSelection ? selectedLibraryPlaylistId : 0);
@@ -2849,6 +2863,12 @@ void MusicPlayerScene::selectTrackBrowserTrack(TrackBrowserKind kind,
   refreshUi();
 }
 
+void MusicPlayerScene::persistPlaylistSelection() {
+  std::string ignored;
+  context.musicPlayer.SavePlaylistCursor(selectedPlaylistId,
+                                         selectedPlaylistIndex, ignored);
+}
+
 void MusicPlayerScene::toggleFavorite(const MusicTrack &track) {
   const bool nextFavorite = !isFavoriteTrack(track);
   const auto previousFavorite =
@@ -2967,6 +2987,7 @@ void MusicPlayerScene::selectPlaylist(int index) {
           music_playlist::kNowPlayingDisplayName);
     }
     refreshPlaylistList(selectedQueueIndex);
+    persistPlaylistSelection();
     setStatus("Selected Now Playing.");
     refreshUi();
     return;
@@ -2984,6 +3005,7 @@ void MusicPlayerScene::selectPlaylist(int index) {
       playlistRenameInput->setEditingText(selectedPlaylistName());
     }
     refreshPlaylistList(-1);
+    persistPlaylistSelection();
     setStatus("Selected " + selectedPlaylistName() + ".");
     refreshUi();
   } else {
@@ -3016,6 +3038,7 @@ void MusicPlayerScene::selectPlaylistTrack(int index) {
     }
   };
   updateSelection(playlistList);
+  persistPlaylistSelection();
   refreshUi();
 }
 
@@ -3796,6 +3819,8 @@ void MusicPlayerScene::updateVideoFullscreen() {
   const long long position = playback.loaded ? playback.positionMicros : 0;
   if (videoVisualsLoaded) {
     context.jukebox.seekVisualsToSongTime(position);
+  } else if (videoShowingArtwork) {
+    layoutVideoArtwork();
   }
 
   if (videoControlsVisible && videoControlsVisibleUntil > 0 &&
@@ -3897,9 +3922,26 @@ void MusicPlayerScene::layoutVideoArtwork() {
   const int size = std::clamp(static_cast<int>(static_cast<float>(limit) *
                                                0.76f),
                               180, limit);
-  const int x = std::max(0, (width - size) / 2);
-  const int y = std::max(0, (height - size) / 2);
-  videoArtworkImage->setSize(size, size);
+  int imageWidth = size;
+  int imageHeight = size;
+  const int naturalWidth = videoArtworkImage->imageWidth();
+  const int naturalHeight = videoArtworkImage->imageHeight();
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    const float scale =
+        std::min(static_cast<float>(size) / static_cast<float>(naturalWidth),
+                 static_cast<float>(size) / static_cast<float>(naturalHeight));
+    imageWidth = std::clamp(static_cast<int>(
+                                std::round(static_cast<float>(naturalWidth) *
+                                           scale)),
+                            1, size);
+    imageHeight = std::clamp(static_cast<int>(
+                                 std::round(static_cast<float>(naturalHeight) *
+                                            scale)),
+                             1, size);
+  }
+  const int x = std::max(0, (width - imageWidth) / 2);
+  const int y = std::max(0, (height - imageHeight) / 2);
+  videoArtworkImage->setSize(imageWidth, imageHeight);
   videoArtworkImage->setPositionNoLayout(x, y, YGPositionTypeAbsolute);
 }
 

@@ -135,6 +135,7 @@ private:
   void deleteSelectedPlaylist();
   void selectLibraryPlaylist(int index);
   void selectTrackBrowserTrack(TrackBrowserKind kind, int index);
+  void persistPlaylistSelection();
   void toggleSelectedLibraryGroup();
   void toggleFavorite(const MusicTrack &track);
   void selectPlaylist(int index);

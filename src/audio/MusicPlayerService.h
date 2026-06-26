@@ -44,6 +44,7 @@ public:
   SelectedPlaylistSnapshot() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   SelectedPlaylistTracksSnapshot() const;
+  [[nodiscard]] MusicPlayerStateRecord PlayerStateSnapshot() const;
   int CreatePlaylist(const std::string &name, std::string &errorMessage);
   int CreatePlaylistFromTracks(
       const std::string &name,
@@ -63,6 +64,8 @@ public:
                                    int delta, std::string &errorMessage);
   bool ClearSelectedPlaylist(std::string &errorMessage);
   bool DeleteSelectedPlaylist(std::string &errorMessage);
+  bool SavePlaylistCursor(int playlistId, int cursorIndex,
+                          std::string &errorMessage);
   [[nodiscard]] std::optional<MusicPlaylistInfo>
   DefaultPlaylistSnapshot() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
@@ -144,6 +147,11 @@ private:
                              const std::stop_token &stopToken);
   void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
                                    int preferredSelectedPlaylistId);
+  void RestoreQueueFromPersistedStateLocked(MusicPlaylistDB &playlistDb,
+                                            sqlite3 *db);
+  void PersistPlayerStateLocked(MusicPlaylistDB &playlistDb, sqlite3 *db);
+  void PersistQueueTracksLocked();
+  void PersistQueueCursorLocked();
   void StopPlaybackWorker();
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
@@ -163,6 +171,7 @@ private:
   std::optional<music_playlist::MusicTrack> loadedTrack;
   int defaultPlaylistId = 0;
   int selectedPlaylistId = 0;
+  MusicPlayerStateRecord persistedState;
   music_playlist::MusicQueue queue;
   std::jthread playbackThread;
   std::jthread preloadThread;

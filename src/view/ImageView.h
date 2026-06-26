@@ -30,6 +30,8 @@ private:
   static std::map<std::string, ImageCache> imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
+  int currentImageWidth = 0;
+  int currentImageHeight = 0;
   bool asyncImagePending = false;
 
 public:
@@ -40,6 +42,8 @@ public:
   bool setImage(const path_t &path);
   bool setImageAsync(const path_t &path, bool prioritize = false);
   void freeImage();
+  [[nodiscard]] int imageWidth() const { return currentImageWidth; }
+  [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 
   static void dropCache(const path_t &path);
   static void dropAllCache();

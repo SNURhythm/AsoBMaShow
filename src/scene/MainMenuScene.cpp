@@ -2179,7 +2179,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
                a.solidArchive == b.solidArchive &&
                a.archiveSize == b.archiveSize &&
                a.archiveUncompressedSize == b.archiveUncompressedSize &&
-               a.archiveFileCount == b.archiveFileCount;
+               a.archiveFileCount == b.archiveFileCount &&
+               a.favorite == b.favorite;
       });
   folderRecyclerView = new RecyclerView<LibraryFolderItem>(
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
@@ -2188,6 +2189,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto dbHelper = ChartDBHelper::GetInstance();
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
+  dbHelper.CreateFavoritesTable(db);
   dbHelper.CreateEntriesTable(db);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   RefreshIOSFolderAccess(dbHelper.SelectEffectiveEntries(db));
@@ -2209,6 +2211,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item);
     chartListItemView->setClearRank(clearRankForChart(item));
+    chartListItemView->setFavoriteToggleHandler(
+        [this](const ChartMetaRecord &record, bool favorite) {
+          return toggleChartFavorite(record, favorite);
+        });
     if (isSelected) {
       chartListItemView->onSelected();
     } else {
@@ -2342,6 +2348,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
         return;
       }
       setSelectedChart(std::move(chart), true);
+      if (previewLoadCancelled) {
+        clearSelectedChart();
+        return;
+      }
       if (!willStart.load()) {
         context.jukebox.play();
       }
@@ -2525,6 +2535,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicButton->setHeight(50);
   musicButton->setOnClickListener([this, &context]() {
     if (context.sceneManager != nullptr) {
+      cancelPreviewLoading(true);
       context.sceneManager->changeScene(
           std::make_unique<MusicPlayerScene>(context), true);
     }
@@ -2863,8 +2874,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
-    previewLoadCancelled = true;
-    context.jukebox.stop();
+    cancelPreviewLoading(true);
     context.sceneManager->changeScene("Settings", true);
   });
   right->addView(settingsButton);
@@ -2895,6 +2905,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   int allSongCount = 0;
   allSongCount = dbHelper.CountAllChartMeta(db);
+  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
 
   auto isExpanded = [this](const std::string &key) {
     return expandedLibraryFolders.find(key) != expandedLibraryFolders.end();
@@ -2934,6 +2945,14 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   if (allSongsItem.expanded) {
     appendClearMarkFilters(allSongsItem, 1);
   }
+
+  folders.push_back({
+      .key = "favorites",
+      .label = "Favorites",
+      .type = LibraryFolderItem::Type::Favorites,
+      .depth = 0,
+      .count = favoriteCount,
+  });
 
   const int solidArchiveCount = dbHelper.CountSolidArchives(db);
   if (solidArchiveCount > 0) {
@@ -3106,6 +3125,21 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     previousSelectedPath =
         fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
   }
+  int previousTopIndex = -1;
+  float previousTopItemOffset = 0.0f;
+  path_t previousTopPath;
+  if (preserveViewState && recyclerView->itemHeight > 0 &&
+      recyclerView->size() > 0) {
+    previousTopIndex = std::clamp(
+        static_cast<int>(previousScrollOffset /
+                         static_cast<float>(recyclerView->itemHeight)),
+        0, recyclerView->size() - 1);
+    previousTopItemOffset =
+        previousScrollOffset -
+        static_cast<float>(previousTopIndex * recyclerView->itemHeight);
+    previousTopPath =
+        fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
+  }
 
   ChartMetaQuery query;
   query.keyword = searchText;
@@ -3114,6 +3148,9 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   switch (activeFolder.type) {
   case LibraryFolderItem::Type::SolidArchives:
     query.solidArchivesOnly = true;
+    break;
+  case LibraryFolderItem::Type::Favorites:
+    query.favoritesOnly = true;
     break;
   case LibraryFolderItem::Type::DifficultyTable:
     query.tableId = activeFolder.tableId;
@@ -3160,34 +3197,44 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   const float maxOffset = std::max(
       0.0f, static_cast<float>(std::max(1, count) * recyclerView->itemHeight -
                                recyclerView->getHeight()));
-  recyclerView->scrollOffset =
-      std::clamp(previousScrollOffset, 0.0f, maxOffset);
-
-  int restoredSelectedIndex = -1;
-  auto pathMatchesPreviousSelection = [&](int index) {
-    if (index < 0 || index >= count || previousSelectedPath.empty()) {
+  auto pathMatches = [&](int index, const path_t &path) {
+    if (index < 0 || index >= count || path.empty()) {
       return false;
     }
-    return fspath_to_path_t(recyclerView->get(index).meta.BmsPath) ==
-           previousSelectedPath;
+    return fspath_to_path_t(recyclerView->get(index).meta.BmsPath) == path;
   };
-
-  if (pathMatchesPreviousSelection(previousSelectedIndex)) {
-    restoredSelectedIndex = previousSelectedIndex;
-  } else if (!previousSelectedPath.empty()) {
-    const int visibleStart =
-        std::max(0, static_cast<int>(previousScrollOffset /
-                                     std::max(1, recyclerView->itemHeight)) -
-                        chartListCache.pageSize);
-    const int visibleEnd =
-        std::min(count, visibleStart + chartListCache.pageSize * 3);
-    for (int i = visibleStart; i < visibleEnd; ++i) {
-      if (pathMatchesPreviousSelection(i)) {
-        restoredSelectedIndex = i;
-        break;
+  auto findPathNear = [&](const path_t &path, int preferredIndex) {
+    if (path.empty() || count <= 0) {
+      return -1;
+    }
+    if (pathMatches(preferredIndex, path)) {
+      return preferredIndex;
+    }
+    const int searchRadius = std::max(chartListCache.pageSize * 3, 1);
+    const int searchStart =
+        std::max(0, std::max(0, preferredIndex) - searchRadius);
+    const int searchEnd =
+        std::min(count, std::max(0, preferredIndex) + searchRadius + 1);
+    for (int i = searchStart; i < searchEnd; ++i) {
+      if (pathMatches(i, path)) {
+        return i;
       }
     }
+    return -1;
+  };
+
+  float restoredScrollOffset = std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  const int restoredTopIndex = findPathNear(previousTopPath, previousTopIndex);
+  if (restoredTopIndex >= 0) {
+    restoredScrollOffset = std::clamp(
+        static_cast<float>(restoredTopIndex * recyclerView->itemHeight) +
+            previousTopItemOffset,
+        0.0f, maxOffset);
   }
+  recyclerView->scrollOffset = restoredScrollOffset;
+
+  const int restoredSelectedIndex =
+      findPathNear(previousSelectedPath, previousSelectedIndex);
 
   recyclerView->selectedIndex = restoredSelectedIndex;
   if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
@@ -3433,6 +3480,28 @@ void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
     reloadFolderItems(true);
   }
   reloadChartList();
+}
+
+bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
+                                        bool favorite) {
+  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+    return false;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  if (!dbHelper.SetFavorite(db, record.meta, favorite)) {
+    return false;
+  }
+
+  reloadFolderItems(true);
+  if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
+    reloadChartList(true);
+  } else if (recyclerView != nullptr) {
+    chartListCache.clear();
+    recyclerView->rebindVisibleItems();
+  }
+  libraryRevision = dbHelper.GetLibraryRevision();
+  return true;
 }
 
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
@@ -6790,6 +6859,17 @@ void MainMenuScene::clearSelectedChart() {
     previous = std::move(selectedChart);
     selectedChartMediaReady.store(false);
     selectedChartReusableForStart.store(false);
+  }
+}
+
+void MainMenuScene::cancelPreviewLoading(bool stopPreviewAudio) {
+  previewLoadCancelled = true;
+  if (loadThread.joinable()) {
+    SDL_Log("Joining preview thread");
+    loadThread.join();
+  }
+  if (stopPreviewAudio) {
+    stopAndClearSelectedChart();
   }
 }
 

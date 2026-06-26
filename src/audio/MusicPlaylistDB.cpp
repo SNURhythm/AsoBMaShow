@@ -7,9 +7,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace {
@@ -58,6 +61,38 @@ std::string lowerCopy(std::string value) {
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
+}
+
+int parseIntOr(const std::string &value, int fallback) {
+  if (value.empty()) {
+    return fallback;
+  }
+  char *end = nullptr;
+  const long parsed = std::strtol(value.c_str(), &end, 10);
+  if (end == value.c_str() || *end != '\0') {
+    return fallback;
+  }
+  if (parsed < std::numeric_limits<int>::min() ||
+      parsed > std::numeric_limits<int>::max()) {
+    return fallback;
+  }
+  return static_cast<int>(parsed);
+}
+
+int stateInt(const std::unordered_map<std::string, std::string> &values,
+             const char *key, int fallback) {
+  const auto it = values.find(key);
+  if (it == values.end()) {
+    return fallback;
+  }
+  return parseIntOr(it->second, fallback);
+}
+
+std::string stateString(
+    const std::unordered_map<std::string, std::string> &values,
+    const char *key) {
+  const auto it = values.find(key);
+  return it == values.end() ? std::string{} : it->second;
 }
 
 std::string columnString(sqlite3_stmt *stmt, int idx) {
@@ -446,18 +481,28 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
     return false;
   }
 
-  const char *favoritesQuery =
-      "CREATE TABLE IF NOT EXISTS music_favorites ("
+  const char *stateQuery =
+      "CREATE TABLE IF NOT EXISTS music_player_state ("
+      "key TEXT PRIMARY KEY,"
+      "value TEXT NOT NULL,"
+      "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+      ")";
+  if (!execSql(db, stateQuery, "creating music player state table")) {
+    return false;
+  }
+
+  const char *nowPlayingQuery =
+      "CREATE TABLE IF NOT EXISTS music_now_playing_items ("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "position INTEGER NOT NULL,"
       "music_key_type TEXT NOT NULL,"
       "music_key TEXT NOT NULL,"
       "chart_path TEXT NOT NULL DEFAULT '',"
       "chart_md5 TEXT NOT NULL DEFAULT '',"
       "chart_sha256 TEXT NOT NULL DEFAULT '',"
-      "added_at TEXT DEFAULT CURRENT_TIMESTAMP,"
-      "UNIQUE(music_key_type, music_key)"
+      "added_at TEXT DEFAULT CURRENT_TIMESTAMP"
       ")";
-  if (!execSql(db, favoritesQuery, "creating music favorite table")) {
+  if (!execSql(db, nowPlayingQuery, "creating now playing table")) {
     return false;
   }
 
@@ -466,10 +511,10 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
       "ON music_playlist_items(playlist_id, position)",
       "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_music_key "
       "ON music_playlist_items(music_key_type, music_key)",
-      "CREATE INDEX IF NOT EXISTS idx_music_favorites_music_key "
-      "ON music_favorites(music_key_type, music_key)",
-      "CREATE INDEX IF NOT EXISTS idx_music_favorites_added_at "
-      "ON music_favorites(added_at, id)",
+      "CREATE INDEX IF NOT EXISTS idx_music_now_playing_position "
+      "ON music_now_playing_items(position, id)",
+      "CREATE INDEX IF NOT EXISTS idx_music_now_playing_music_key "
+      "ON music_now_playing_items(music_key_type, music_key)",
   };
   for (const auto *indexQuery : indexes) {
     if (!execSql(db, indexQuery, "creating music playlist index")) {
@@ -857,68 +902,134 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   return sqlite3_changes(db) > 0;
 }
 
-bool MusicPlaylistDB::SetFavorite(sqlite3 *db,
-                                  const bms_parser::ChartMeta &chartMeta,
-                                  bool favorite) {
-  if (!CreateTables(db)) {
+MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
+  MusicPlayerStateRecord state;
+  if (db == nullptr || !CreateTables(db)) {
+    return state;
+  }
+
+  const char *query = "SELECT key, value FROM music_player_state";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting music player state: "
+              << sqlite3_errmsg(db) << "\n";
+    return state;
+  }
+
+  std::unordered_map<std::string, std::string> values;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    values[columnString(stmt, 0)] = columnString(stmt, 1);
+  }
+
+  state.selectedPlaylistId = stateInt(values, "selected_playlist_id", 0);
+  state.playlistCursorIndex = stateInt(values, "playlist_cursor_index", -1);
+  state.queueCursorIndex = stateInt(values, "queue_cursor_index", -1);
+  state.repeatMode = stateInt(values, "queue_repeat_mode", 2);
+  state.queueDisplayName = stateString(values, "queue_display_name");
+  return state;
+}
+
+bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
+                                      const MusicPlayerStateRecord &state) {
+  if (db == nullptr || !CreateTables(db)) {
     return false;
   }
 
-  const auto identity = storedMusicTrackIdentity(chartMeta);
-  if (identity.musicKey.empty()) {
-    std::cerr << "Cannot update favorite without a music key.\n";
+  const char *query =
+      "INSERT INTO music_player_state (key, value, updated_at) "
+      "VALUES (?1, ?2, CURRENT_TIMESTAMP) "
+      "ON CONFLICT(key) DO UPDATE SET "
+      "value = excluded.value, updated_at = CURRENT_TIMESTAMP";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing music player state save: "
+              << sqlite3_errmsg(db) << "\n";
     return false;
   }
 
-  if (!favorite) {
-    const char *query =
-        "DELETE FROM music_favorites "
-        "WHERE music_key_type = ?1 AND music_key = ?2";
-    SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while preparing music favorite delete: "
-                << sqlite3_errmsg(db) << "\n";
-      return false;
-    }
-    bindText(stmt, 1, identity.keyType);
-    bindText(stmt, 2, identity.musicKey);
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting music favorite: "
+  const auto saveValue = [&](const char *key, const std::string &value) {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    bindText(stmt, 1, key);
+    bindText(stmt, 2, value);
+    const int stepRc = sqlite3_step(stmt);
+    if (stepRc != SQLITE_DONE) {
+      std::cerr << "SQL error while saving music player state: "
                 << sqlite3_errmsg(db) << "\n";
       return false;
     }
     return true;
+  };
+
+  return saveValue("selected_playlist_id",
+                   std::to_string(state.selectedPlaylistId)) &&
+         saveValue("playlist_cursor_index",
+                   std::to_string(state.playlistCursorIndex)) &&
+         saveValue("queue_cursor_index",
+                   std::to_string(state.queueCursorIndex)) &&
+         saveValue("queue_repeat_mode", std::to_string(state.repeatMode)) &&
+         saveValue("queue_display_name", state.queueDisplayName);
+}
+
+bool MusicPlaylistDB::ReplaceNowPlayingTracks(
+    sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks) {
+  if (db == nullptr || !CreateTables(db)) {
+    return false;
   }
 
-  const char *query =
-      "INSERT INTO music_favorites "
-      "(music_key_type, music_key, chart_path, chart_md5, chart_sha256) "
-      "VALUES (?1, ?2, ?3, ?4, ?5) "
-      "ON CONFLICT(music_key_type, music_key) DO UPDATE SET "
-      "chart_path = excluded.chart_path,"
-      "chart_md5 = excluded.chart_md5,"
-      "chart_sha256 = excluded.chart_sha256";
-  SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music favorite insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!execSql(db, "BEGIN IMMEDIATE", "beginning now playing save")) {
     return false;
   }
-  bindText(stmt, 1, identity.keyType);
-  bindText(stmt, 2, identity.musicKey);
-  bindText(stmt, 3, identity.chartPath);
-  bindText(stmt, 4, identity.md5);
-  bindText(stmt, 5, identity.sha256);
-  rc = sqlite3_step(stmt);
-  if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting music favorite: "
-              << sqlite3_errmsg(db) << "\n";
+
+  bool ok = execSql(db, "DELETE FROM music_now_playing_items",
+                    "clearing now playing tracks");
+  const char *insertQuery =
+      "INSERT INTO music_now_playing_items "
+      "(position, music_key_type, music_key, chart_path, chart_md5, "
+      "chart_sha256) "
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+  SqliteStatementHandle insertStmt;
+  if (ok) {
+    const int rc = prepareSqliteStatement(db, insertQuery, insertStmt);
+    if (rc != SQLITE_OK) {
+      std::cerr << "SQL error while preparing now playing insert: "
+                << sqlite3_errmsg(db) << "\n";
+      ok = false;
+    }
+  }
+
+  for (std::size_t i = 0; ok && i < tracks.size(); ++i) {
+    const auto identity = storedMusicTrackIdentity(tracks[i]);
+    if (identity.musicKey.empty()) {
+      std::cerr << "Cannot save now playing track without a music key.\n";
+      ok = false;
+      break;
+    }
+
+    sqlite3_reset(insertStmt);
+    sqlite3_clear_bindings(insertStmt);
+    sqlite3_bind_int(insertStmt, 1, static_cast<int>(i));
+    bindText(insertStmt, 2, identity.keyType);
+    bindText(insertStmt, 3, identity.musicKey);
+    bindText(insertStmt, 4, identity.chartPath);
+    bindText(insertStmt, 5, identity.md5);
+    bindText(insertStmt, 6, identity.sha256);
+    const int rc = sqlite3_step(insertStmt);
+    if (rc != SQLITE_DONE) {
+      std::cerr << "SQL error while saving now playing track: "
+                << sqlite3_errmsg(db) << "\n";
+      ok = false;
+    }
+  }
+
+  const char *finishQuery = ok ? "COMMIT" : "ROLLBACK";
+  if (!execSql(db, finishQuery, ok ? "committing now playing save"
+                                   : "rolling back now playing save")) {
     return false;
   }
-  return true;
+  return ok;
 }
 
 void MusicPlaylistDB::SelectLibraryTracks(
@@ -1015,7 +1126,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   }
 }
 
-void MusicPlaylistDB::SelectFavoriteTracks(
+void MusicPlaylistDB::SelectNowPlayingTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return;
@@ -1023,31 +1134,32 @@ void MusicPlaylistDB::SelectFavoriteTracks(
 
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, mf.added_at AS "
-           "favorite_added_at, mf.id AS favorite_id, "
-           "COUNT(*) OVER (PARTITION BY mf.id) AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY mf.id ORDER BY "
-           "CASE WHEN mf.chart_sha256 != '' AND cm.sha256 = mf.chart_sha256 "
-           "THEN 0 WHEN mf.chart_md5 != '' AND cm.md5 = mf.chart_md5 THEN 1 "
-           "WHEN mf.chart_path != '' AND cm.path = mf.chart_path THEN 2 "
-           "ELSE 3 END, ";
+  query += ", cm.music_chart_count, cm.queue_music_key_type FROM (SELECT "
+           "cm.*, mnp.position AS "
+           "queue_position, COUNT(*) OVER (PARTITION BY mnp.id) AS "
+           "music_chart_count, mnp.music_key_type AS queue_music_key_type, "
+           "ROW_NUMBER() OVER (PARTITION BY mnp.id "
+           "ORDER BY ";
   query += chartArtworkOrderBy("cm");
-  query += ", total_notes DESC, length DESC, ";
+  query += ", CASE WHEN mnp.chart_sha256 != '' AND "
+           "cm.sha256 = mnp.chart_sha256 THEN 0 WHEN mnp.chart_md5 != '' AND "
+           "cm.md5 = mnp.chart_md5 THEN 1 WHEN mnp.chart_path != '' AND "
+           "cm.path = mnp.chart_path THEN 2 ELSE 3 END, ";
+  query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM music_favorites mf JOIN ";
+           "FROM music_now_playing_items mnp JOIN ";
   query += kChartMetaTable;
-  query += " cm ON mf.music_key_type = 'path' AND cm.path = mf.music_key "
+  query += " cm ON mnp.music_key_type = 'path' AND cm.path = mnp.music_key "
            "WHERE ";
   query += preferredChartPredicate("cm");
   query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.favorite_added_at DESC, cm.favorite_id DESC, "
-           "cm.title COLLATE NOCASE, cm.path";
+           "ORDER BY cm.queue_position, cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music favorite tracks: "
+    std::cerr << "SQL error while selecting now playing tracks: "
               << sqlite3_errmsg(db) << "\n";
     return;
   }
@@ -1057,7 +1169,8 @@ void MusicPlaylistDB::SelectFavoriteTracks(
     record.representativeChart = readChartMeta(stmt);
     record.chartCount =
         std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
-    record.useChartPathIdentity = true;
+    record.useChartPathIdentity =
+        columnString(stmt, kChartMetaColumnCount + 1) == "path";
     tracks.push_back(std::move(record));
   }
 }

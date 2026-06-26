@@ -117,6 +117,9 @@ constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
+constexpr const char *kChartFavoriteColumn =
+    "CASE WHEN EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
+    "cf.chart_path = cm.path) THEN 1 ELSE 0 END";
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -157,6 +160,15 @@ std::string lowerCopy(std::string value) {
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
+}
+
+std::string storedChartPathText(std::filesystem::path path) {
+  if (path.empty()) {
+    return "";
+  }
+  ChartDBHelper::ToRelativePath(path);
+  path = path.lexically_normal();
+  return path_t_to_utf8(fspath_to_path_t(path));
 }
 
 std::string jsonValueToString(const json &value,
@@ -1105,6 +1117,12 @@ std::string chartSourceArchiveSizeExpr(const std::string &alias) {
 std::string chartSourceOrderBy(const std::string &alias) {
   return chartSourcePriorityExpr(alias) + ", " +
          chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
+}
+
+std::string chartArtworkOrderBy(const std::string &alias) {
+  return "CASE WHEN NULLIF(TRIM(" + alias +
+         ".stage_file), '') IS NOT NULL THEN 0 WHEN NULLIF(TRIM(" + alias +
+         ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
 std::string preferredChartPredicate(const std::string &alias) {
@@ -2191,6 +2209,38 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   if (normalizedPaths) {
     bumpLibraryRevision();
   }
+  return CreateFavoritesTable(db);
+}
+
+bool ChartDBHelper::CreateFavoritesTable(sqlite3 *db) {
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS chart_favorites ("
+      "chart_path TEXT PRIMARY KEY,"
+      "chart_md5 TEXT NOT NULL DEFAULT '',"
+      "chart_sha256 TEXT NOT NULL DEFAULT '',"
+      "added_at TEXT DEFAULT CURRENT_TIMESTAMP"
+      ")";
+  if (!execSql(db, query, "creating chart favorite table")) {
+    return false;
+  }
+
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_chart_favorites_added_at "
+      "ON chart_favorites(added_at)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_favorites_md5 "
+      "ON chart_favorites(chart_md5)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_favorites_sha256 "
+      "ON chart_favorites(chart_sha256)",
+  };
+  for (const auto *indexQuery : indexes) {
+    if (!execSql(db, indexQuery, "creating chart favorite index")) {
+      return false;
+    }
+  }
+
+  if (normalizeStoredPathColumn(db, "chart_favorites", "chart_path", true)) {
+    bumpLibraryRevision();
+  }
   return true;
 }
 
@@ -2413,6 +2463,143 @@ void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
   }
 }
 
+void ChartDBHelper::SelectFavoriteMusicTracks(
+    sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
+  if (db == nullptr || !CreateFavoritesTable(db)) {
+    return;
+  }
+
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", cm.music_chart_count FROM (SELECT cm.*, "
+           "cf.added_at AS favorite_added_at, "
+           "COUNT(*) OVER (PARTITION BY cf.chart_path) AS music_chart_count, "
+           "ROW_NUMBER() OVER (PARTITION BY cf.chart_path ORDER BY ";
+  query += chartArtworkOrderBy("cm");
+  query += ", CASE WHEN cf.chart_sha256 != '' AND "
+           "cm.sha256 = cf.chart_sha256 THEN 0 WHEN cf.chart_md5 != '' AND "
+           "cm.md5 = cf.chart_md5 THEN 1 WHEN cf.chart_path != '' AND "
+           "cm.path = cf.chart_path THEN 2 ELSE 3 END, ";
+  query += "total_notes DESC, length DESC, ";
+  query += chartSourceOrderBy("cm");
+  query += ", title COLLATE NOCASE, path) AS music_rank "
+           "FROM chart_favorites cf JOIN chart_meta cm ON "
+           "cm.path = cf.chart_path WHERE ";
+  query += preferredChartPredicate("cm");
+  query += ") cm WHERE cm.music_rank = 1 "
+           "ORDER BY cm.favorite_added_at DESC, cm.title COLLATE NOCASE, "
+           "cm.path";
+
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting favorite music tracks: "
+              << sqlite3_errmsg(db) << "\n";
+    return;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    MusicTrackRecord record;
+    record.representativeChart = ReadChartMeta(stmt);
+    record.chartCount =
+        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    record.useChartPathIdentity = true;
+    tracks.push_back(std::move(record));
+  }
+}
+
+int ChartDBHelper::CountFavoriteCharts(sqlite3 *db) {
+  if (db == nullptr || !CreateFavoritesTable(db)) {
+    return 0;
+  }
+  ChartMetaQuery query;
+  query.favoritesOnly = true;
+  return CountChartMeta(db, query);
+}
+
+bool ChartDBHelper::SetFavorite(sqlite3 *db,
+                                const bms_parser::ChartMeta &chartMeta,
+                                bool favorite) {
+  if (db == nullptr || !CreateFavoritesTable(db)) {
+    return false;
+  }
+
+  const std::string chartPath = storedChartPathText(chartMeta.BmsPath);
+  if (chartPath.empty()) {
+    return false;
+  }
+
+  if (!favorite) {
+    const char *query = "DELETE FROM chart_favorites WHERE chart_path = ?1";
+    SqliteStatementHandle stmt;
+    int rc = prepareSqliteStatement(db, query, stmt);
+    if (rc != SQLITE_OK) {
+      std::cerr << "SQL error while preparing chart favorite delete: "
+                << sqlite3_errmsg(db) << "\n";
+      return false;
+    }
+    bindText(stmt, 1, chartPath);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+      std::cerr << "SQL error while deleting chart favorite: "
+                << sqlite3_errmsg(db) << "\n";
+      return false;
+    }
+    bumpLibraryRevision();
+    return true;
+  }
+
+  const char *query =
+      "INSERT INTO chart_favorites "
+      "(chart_path, chart_md5, chart_sha256, added_at) "
+      "VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) "
+      "ON CONFLICT(chart_path) DO UPDATE SET "
+      "chart_md5 = excluded.chart_md5,"
+      "chart_sha256 = excluded.chart_sha256,"
+      "added_at = CURRENT_TIMESTAMP";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing chart favorite insert: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  bindText(stmt, 1, chartPath);
+  bindText(stmt, 2, normalizedHash(chartMeta.MD5));
+  bindText(stmt, 3, normalizedHash(chartMeta.SHA256));
+  rc = sqlite3_step(stmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while saving chart favorite: " << sqlite3_errmsg(db)
+              << "\n";
+    return false;
+  }
+  bumpLibraryRevision();
+  return true;
+}
+
+bool ChartDBHelper::IsFavorite(sqlite3 *db,
+                               const bms_parser::ChartMeta &chartMeta) {
+  if (db == nullptr || !CreateFavoritesTable(db)) {
+    return false;
+  }
+  const std::string chartPath = storedChartPathText(chartMeta.BmsPath);
+  if (chartPath.empty()) {
+    return false;
+  }
+
+  const char *query =
+      "SELECT 1 FROM chart_favorites WHERE chart_path = ?1 LIMIT 1";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing chart favorite check: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  bindText(stmt, 1, chartPath);
+  return sqlite3_step(stmt) == SQLITE_ROW;
+}
+
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
@@ -2448,8 +2635,13 @@ int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
 void ChartDBHelper::SearchChartMeta(
     sqlite3 *db, const std::string &text,
     std::vector<ChartMetaRecord> &chartMetas) {
+  if (!CreateFavoritesTable(db)) {
+    return;
+  }
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
+  query += ", '', 0, ";
+  query += kChartFavoriteColumn;
   query += " FROM chart_meta cm WHERE rtrim(cm.title || ' ' || cm.subtitle || "
            "' ' || cm.artist || ' ' || cm.sub_artist || ' ' || cm.genre) LIKE "
            "@text AND ";
@@ -2477,6 +2669,9 @@ void ChartDBHelper::SearchChartMeta(
 void ChartDBHelper::QueryChartMeta(
     sqlite3 *db, const ChartMetaQuery &chartQuery,
     std::vector<ChartMetaRecord> &chartMetas) {
+  if (!CreateFavoritesTable(db)) {
+    return;
+  }
   if (chartQuery.solidArchivesOnly) {
     std::string query = "SELECT ";
     query += kSolidArchiveSelectColumns;
@@ -2536,6 +2731,8 @@ void ChartDBHelper::QueryChartMeta(
   if (queryDifficultyEntries) {
     std::string query = "SELECT ";
     query += kDifficultyEntrySelectColumns;
+    query += ", ";
+    query += kChartFavoriteColumn;
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
              "LEFT JOIN chart_meta cm ON cm.path = ("
@@ -2613,6 +2810,8 @@ void ChartDBHelper::QueryChartMeta(
 
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
+  query += ", '', 0, ";
+  query += kChartFavoriteColumn;
   query += " FROM chart_meta cm WHERE 1 = 1";
 
   if (!chartQuery.keyword.empty()) {
@@ -2692,6 +2891,10 @@ void ChartDBHelper::QueryChartMeta(
     query += " AND ";
     query += chartClearMarkPredicate("cm");
   }
+  if (chartQuery.favoritesOnly) {
+    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
+             "cf.chart_path = cm.path)";
+  }
 
   query += " AND ";
   query += preferredChartPredicate("cm");
@@ -2752,6 +2955,9 @@ void ChartDBHelper::QueryChartMeta(
 
 int ChartDBHelper::CountChartMeta(sqlite3 *db,
                                   const ChartMetaQuery &chartQuery) {
+  if (!CreateFavoritesTable(db)) {
+    return 0;
+  }
   if (chartQuery.solidArchivesOnly) {
     std::string query = "SELECT COUNT(*) FROM solid_archives sa WHERE 1 = 1";
     if (!chartQuery.keyword.empty()) {
@@ -2925,6 +3131,10 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
     query += chartClearMarkPredicate("cm");
+  }
+  if (chartQuery.favoritesOnly) {
+    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
+             "cf.chart_path = cm.path)";
   }
 
   query += " AND ";
@@ -3218,6 +3428,9 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
   }
   if (sqlite3_column_count(stmt) > idx) {
     record.unavailable = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.favorite = sqlite3_column_int(stmt, idx++) != 0;
   }
   return record;
 }
