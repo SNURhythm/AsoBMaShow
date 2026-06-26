@@ -380,12 +380,6 @@ int MusicPlayerService::SelectedPlaylistId() const {
   return selectedPlaylistId;
 }
 
-std::optional<MusicPlaylistInfo>
-MusicPlayerService::SelectedPlaylistSnapshot() const {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  return findPlaylistById(playlists, selectedPlaylistId);
-}
-
 std::vector<music_playlist::MusicTrack>
 MusicPlayerService::SelectedPlaylistTracksSnapshot() const {
   std::lock_guard<std::mutex> lock(stateMutex);
@@ -550,16 +544,6 @@ bool MusicPlayerService::SelectPlaylist(int playlistId,
     return false;
   }
   return true;
-}
-
-bool MusicPlayerService::AddChartToSelectedPlaylist(
-    const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
-  int targetPlaylistId = 0;
-  {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    targetPlaylistId = selectedPlaylistId;
-  }
-  return AddChartToPlaylist(targetPlaylistId, chartMeta, errorMessage);
 }
 
 bool MusicPlayerService::AddChartToPlaylist(
@@ -809,37 +793,6 @@ bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
   return true;
 }
 
-bool MusicPlayerService::MoveChartInDefaultPlaylist(
-    const bms_parser::ChartMeta &chartMeta, int delta,
-    std::string &errorMessage) {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  errorMessage.clear();
-
-  MusicPlaylistDB playlistDb;
-  sqlite3 *db = playlistDb.Connect();
-  if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
-    return false;
-  }
-
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
-  if (defaultPlaylistId <= 0) {
-    playlistDb.Close(db);
-    errorMessage = "Could not create music playlist.";
-    return false;
-  }
-  const bool moved =
-      playlistDb.MoveTrack(db, defaultPlaylistId, chartMeta, delta);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
-  playlistDb.Close(db);
-  if (!moved) {
-    errorMessage = delta < 0 ? "Selected track is already at the top."
-                             : "Selected track is already at the bottom.";
-    return false;
-  }
-  return true;
-}
-
 bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
@@ -864,21 +817,6 @@ bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
     errorMessage = "Could not clear the music playlist.";
     return false;
   }
-  return true;
-}
-
-bool MusicPlayerService::StartLibraryPlaylist(std::string &errorMessage,
-                                              std::size_t startIndex) {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  errorMessage.clear();
-  if (libraryTracks.empty()) {
-    setEmptyLibraryError(errorMessage);
-    queue.Clear();
-    PersistQueueTracksLocked();
-    return false;
-  }
-  queue.SetPlaylist(libraryTracks, startIndex, "Library");
-  PersistQueueTracksLocked();
   return true;
 }
 
@@ -996,19 +934,6 @@ bool MusicPlayerService::PlayCurrentLocked(std::string &errorMessage) {
     return false;
   }
   return PlayTrackLocked(*track, errorMessage);
-}
-
-bool MusicPlayerService::PlayLibraryTrack(std::size_t index,
-                                          std::string &errorMessage) {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  errorMessage.clear();
-  if (index >= libraryTracks.size()) {
-    errorMessage = "Music track index is out of range.";
-    return false;
-  }
-  queue.SetPlaylist(libraryTracks, index, "Library");
-  PersistQueueTracksLocked();
-  return PlayCurrentLocked(errorMessage);
 }
 
 bool MusicPlayerService::PlayNext(std::string &errorMessage) {
@@ -1155,11 +1080,6 @@ void MusicPlayerService::SetRepeatMode(
   std::lock_guard<std::mutex> lock(stateMutex);
   queue.SetRepeatMode(mode);
   PersistQueueCursorLocked();
-}
-
-chart_music_cache::CacheResult MusicPlayerService::LastCacheResult() const {
-  std::lock_guard<std::mutex> lock(stateMutex);
-  return lastCacheResult;
 }
 
 std::vector<music_playlist::MusicTrack>

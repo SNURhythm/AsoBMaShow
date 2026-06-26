@@ -6,6 +6,7 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/IconText.h"
 #include "../view/ImageView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
@@ -30,7 +31,6 @@
 namespace {
 
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
-constexpr const char *kIconFontPath = "assets/fonts/fa-solid-900.ttf";
 constexpr float kScreenPadding = 18.0f;
 constexpr float kHeaderHeight = 82.0f;
 constexpr float kRailWidth = 180.0f;
@@ -51,26 +51,6 @@ struct SafeAreaInsets {
   int bottom = 0;
   int right = 0;
 };
-
-std::string utf8ForCodepoint(uint32_t codepoint) {
-  std::string result;
-  if (codepoint <= 0x7f) {
-    result.push_back(static_cast<char>(codepoint));
-  } else if (codepoint <= 0x7ff) {
-    result.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  } else if (codepoint <= 0xffff) {
-    result.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  } else if (codepoint <= 0x10ffff) {
-    result.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  }
-  return result;
-}
 
 SafeAreaInsets getSafeAreaInsetsUi() {
   SafeAreaInsets insets;
@@ -1795,8 +1775,8 @@ Button *MusicPlayerScene::makeIconButton(uint32_t iconCodepoint, int fontSize,
   button->setWidth(56);
   button->setCornerRadius(ui_theme::controlRadius());
 
-  auto *text = new TextView(kIconFontPath, fontSize);
-  text->setText(utf8ForCodepoint(iconCodepoint));
+  auto *text = new TextView(ui_icons::kFontAwesomeSolidPath, fontSize);
+  text->setText(ui_icons::textForCodepoint(iconCodepoint));
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -2287,7 +2267,7 @@ void MusicPlayerScene::refreshUi() {
   }
   if (playPauseButtonText != nullptr) {
     playPauseButtonText->setText(
-        utf8ForCodepoint(playback.playing ? kIconPause : kIconPlay));
+        ui_icons::textForCodepoint(playback.playing ? kIconPause : kIconPlay));
   }
   if (repeatModeButtonText != nullptr) {
     repeatModeButtonText->setText(repeatModeLabel(displayedRepeatMode));
@@ -3859,7 +3839,7 @@ void MusicPlayerScene::refreshVideoOverlay() {
   }
   if (videoPlayPauseButtonText != nullptr) {
     videoPlayPauseButtonText->setText(
-        utf8ForCodepoint(playback.playing ? kIconPause : kIconPlay));
+        ui_icons::textForCodepoint(playback.playing ? kIconPause : kIconPlay));
   }
   if (videoProgressFill != nullptr) {
     const float fraction =

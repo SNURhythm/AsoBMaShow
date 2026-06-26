@@ -154,7 +154,6 @@ public:
   int CountFavoriteCharts(sqlite3 *db);
   bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
                    bool favorite);
-  bool IsFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
                        std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,

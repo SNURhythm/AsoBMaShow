@@ -1,6 +1,7 @@
 #include "ChartListItemView.h"
 #include "Button.h"
 #include "ClearLampColors.h"
+#include "IconText.h"
 #include "UiTheme.h"
 
 #include <cmath>
@@ -12,28 +13,7 @@ namespace {
 constexpr int kBottomGap = 8;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
-constexpr const char *kIconFontPath = "assets/fonts/fa-solid-900.ttf";
 constexpr uint32_t kIconStar = 0xf005;
-
-std::string utf8ForCodepoint(uint32_t codepoint) {
-  std::string result;
-  if (codepoint <= 0x7f) {
-    result.push_back(static_cast<char>(codepoint));
-  } else if (codepoint <= 0x7ff) {
-    result.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  } else if (codepoint <= 0xffff) {
-    result.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  } else if (codepoint <= 0x10ffff) {
-    result.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-  }
-  return result;
-}
 
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
@@ -77,7 +57,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
   favoriteButton = new Button();
-  favoriteIconView = new TextView(kIconFontPath, 24);
+  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
 
   this->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -173,7 +153,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
           [] { return Color(0, 0, 0, 0); }, ui_theme::hairlineStrong,
           ui_theme::accentBorder)
       ->setStyledBorderWidth(1);
-  favoriteIconView->setText(utf8ForCodepoint(kIconStar));
+  favoriteIconView->setText(ui_icons::textForCodepoint(kIconStar));
   favoriteIconView->setAlign(TextView::CENTER);
   favoriteIconView->setVAlign(TextView::MIDDLE);
   favoriteIconView->setOverflow(TextView::TextOverflow::Hidden);

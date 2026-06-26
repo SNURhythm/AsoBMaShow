@@ -3790,10 +3790,7 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   archive_file::appendDebugLogLine(
       "Open chart viewer: " +
       path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));

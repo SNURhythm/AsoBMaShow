@@ -2,6 +2,7 @@
 
 #include "ChartDBHelper.h"
 #include "ArchiveFile.h"
+#include "BmsMetadataText.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
@@ -138,24 +139,11 @@ void bumpLibraryRevision() {
 }
 
 std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
+  return asobmshow::bms_metadata::trimCopy(value);
 }
 
 std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
 std::string normalizedHash(const std::string &value) {
@@ -2575,29 +2563,6 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
   }
   bumpLibraryRevision();
   return true;
-}
-
-bool ChartDBHelper::IsFavorite(sqlite3 *db,
-                               const bms_parser::ChartMeta &chartMeta) {
-  if (db == nullptr || !CreateFavoritesTable(db)) {
-    return false;
-  }
-  const std::string chartPath = storedChartPathText(chartMeta.BmsPath);
-  if (chartPath.empty()) {
-    return false;
-  }
-
-  const char *query =
-      "SELECT 1 FROM chart_favorites WHERE chart_path = ?1 LIMIT 1";
-  SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart favorite check: "
-              << sqlite3_errmsg(db) << "\n";
-    return false;
-  }
-  bindText(stmt, 1, chartPath);
-  return sqlite3_step(stmt) == SQLITE_ROW;
 }
 
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {

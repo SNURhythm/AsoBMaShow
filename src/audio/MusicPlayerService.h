@@ -40,8 +40,6 @@ public:
   bool ReloadPlaylists(std::string &errorMessage);
   [[nodiscard]] std::vector<MusicPlaylistInfo> PlaylistsSnapshot() const;
   [[nodiscard]] int SelectedPlaylistId() const;
-  [[nodiscard]] std::optional<MusicPlaylistInfo>
-  SelectedPlaylistSnapshot() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   SelectedPlaylistTracksSnapshot() const;
   [[nodiscard]] MusicPlayerStateRecord PlayerStateSnapshot() const;
@@ -53,8 +51,6 @@ public:
   bool RenameSelectedPlaylist(const std::string &name,
                               std::string &errorMessage);
   bool SelectPlaylist(int playlistId, std::string &errorMessage);
-  bool AddChartToSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
-                                  std::string &errorMessage);
   bool AddChartToPlaylist(int playlistId,
                           const bms_parser::ChartMeta &chartMeta,
                           std::string &errorMessage);
@@ -74,12 +70,8 @@ public:
                                  std::string &errorMessage);
   bool RemoveChartFromDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
                                       std::string &errorMessage);
-  bool MoveChartInDefaultPlaylist(const bms_parser::ChartMeta &chartMeta,
-                                  int delta, std::string &errorMessage);
   bool ClearDefaultPlaylist(std::string &errorMessage);
 
-  bool StartLibraryPlaylist(std::string &errorMessage,
-                            std::size_t startIndex = 0);
   bool StartRandomLibrary(std::string &errorMessage,
                           std::optional<std::uint64_t> seed = std::nullopt);
   bool StartSelectedPlaylist(std::string &errorMessage);
@@ -98,13 +90,11 @@ public:
   [[nodiscard]] music_playlist::MusicQueueSnapshot QueueSnapshot() const;
   [[nodiscard]] music_playlist::QueueRepeatMode RepeatMode() const;
   void SetRepeatMode(music_playlist::QueueRepeatMode mode);
-  [[nodiscard]] chart_music_cache::CacheResult LastCacheResult() const;
   [[nodiscard]] native_music_player::PlaybackState PlaybackState() const {
     return native_music_player::GetState();
   }
 
   bool PlayCurrent(std::string &errorMessage);
-  bool PlayLibraryTrack(std::size_t index, std::string &errorMessage);
   bool PlayNext(std::string &errorMessage);
   bool PlayPrevious(std::string &errorMessage);
   bool PlayCurrentAsync(std::string &statusMessage,
