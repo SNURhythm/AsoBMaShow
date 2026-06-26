@@ -80,8 +80,10 @@ std::string trackDetail(const music_playlist::MusicTrack &track) {
   if (!track.genre.empty()) {
     detail += "  " + track.genre;
   }
-  if (track.chartCount > 1) {
+  if (track.groupRepresentative && track.chartCount > 1) {
     detail += "  " + std::to_string(track.chartCount) + " charts";
+  } else if (track.expandedChart) {
+    detail += "  chart";
   }
   return detail;
 }
@@ -832,6 +834,16 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   secondaryRow->addView(reloadButton);
   actions->addView(secondaryRow);
 
+  TextView *groupText = nullptr;
+  auto *groupButton = makeButton("Expand Group", 17, &groupText);
+  libraryGroupButtonText = groupText;
+  groupButton->setHeight(48);
+  styleButton(groupButton, groupText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  groupButton->setOnClickListener([this]() { toggleSelectedLibraryGroup(); });
+  actions->addView(groupButton);
+
   auto *addToHeader = new TextView(kFontPath, 18);
   addToHeader->setText("Add To");
   addToHeader->setHeight(28);
@@ -1423,6 +1435,8 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
     setStatus(errorMessage);
   }
   libraryTracks = context.musicPlayer.LibraryTracksSnapshot();
+  libraryGroupTracks.clear();
+  expandedLibraryGroupIds.clear();
   playlists = context.musicPlayer.PlaylistsSnapshot();
   selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
   playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -1473,13 +1487,37 @@ void MusicPlayerScene::applyLibraryFilter(int preferredIndex) {
         libraryTracks[static_cast<std::size_t>(preferredIndex)].trackId;
   }
 
+  applyLibraryFilterForTrackId(preferredTrackId);
+}
+
+void MusicPlayerScene::applyLibraryFilterForTrackId(
+    const std::string &preferredTrackId, bool preserveScroll) {
+  if (libraryList == nullptr) {
+    return;
+  }
+
+  const float previousScrollOffset =
+      preserveScroll ? libraryList->scrollOffset : 0.0f;
+
   filteredLibraryTracks.clear();
   const std::string query = lowercaseText(trimPlaylistName(librarySearchText));
-  std::copy_if(libraryTracks.begin(), libraryTracks.end(),
-               std::back_inserter(filteredLibraryTracks),
-               [&query](const MusicTrack &track) {
-                 return trackMatchesSearch(track, query);
-               });
+  for (const auto &track : libraryTracks) {
+    const bool expanded = !track.groupId.empty() &&
+                          expandedLibraryGroupIds.contains(track.groupId);
+    const auto childrenIt = expanded ? libraryGroupTracks.find(track.groupId)
+                                     : libraryGroupTracks.end();
+    if (expanded && childrenIt != libraryGroupTracks.end()) {
+      std::copy_if(childrenIt->second.begin(), childrenIt->second.end(),
+                   std::back_inserter(filteredLibraryTracks),
+                   [&query](const MusicTrack &childTrack) {
+                     return trackMatchesSearch(childTrack, query);
+                   });
+      continue;
+    }
+    if (trackMatchesSearch(track, query)) {
+      filteredLibraryTracks.push_back(track);
+    }
+  }
 
   selectedLibraryIndex = -1;
   if (!preferredTrackId.empty()) {
@@ -1496,6 +1534,14 @@ void MusicPlayerScene::applyLibraryFilter(int preferredIndex) {
 
   libraryList->setItems(filteredLibraryTracks);
   libraryList->selectedIndex = selectedLibraryIndex;
+  if (preserveScroll) {
+    const float maxOffset = std::max(
+        0.0f, static_cast<float>(std::max(1, libraryList->size()) *
+                                     libraryList->itemHeight -
+                                 libraryList->getContentHeight()));
+    libraryList->scrollOffset =
+        std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  }
   libraryList->rebindVisibleItems();
 }
 
@@ -1677,6 +1723,15 @@ void MusicPlayerScene::refreshUi() {
                 pendingDeletePlaylistId == selectedPlaylistId
             ? "Confirm Delete"
             : "Delete Playlist");
+  }
+  if (libraryGroupButtonText != nullptr) {
+    const auto track = selectedLibraryTrack();
+    if (track && !track->groupId.empty() &&
+        expandedLibraryGroupIds.contains(track->groupId)) {
+      libraryGroupButtonText->setText("Collapse Group");
+    } else {
+      libraryGroupButtonText->setText("Expand Group");
+    }
   }
 
   std::optional<MusicTrack> current = context.musicPlayer.CurrentTrackSnapshot();
@@ -2134,6 +2189,57 @@ void MusicPlayerScene::selectLibraryPlaylist(int index) {
       }
     }
   }
+}
+
+void MusicPlayerScene::toggleSelectedLibraryGroup() {
+  const auto track = selectedLibraryTrack();
+  if (!track) {
+    setStatus("Select a library track first.");
+    return;
+  }
+  if (track->groupId.empty()) {
+    setStatus("Selected track has no chart group.");
+    return;
+  }
+
+  if (expandedLibraryGroupIds.contains(track->groupId)) {
+    expandedLibraryGroupIds.erase(track->groupId);
+    applyLibraryFilterForTrackId(track->groupId, true);
+    refreshLibraryArtwork(selectedLibraryTrack());
+    refreshUi();
+    setStatus("Collapsed chart group.");
+    return;
+  }
+
+  if (!track->groupRepresentative && !track->expandedChart) {
+    setStatus("Selected track has no grouped charts.");
+    return;
+  }
+
+  auto childrenIt = libraryGroupTracks.find(track->groupId);
+  if (childrenIt == libraryGroupTracks.end()) {
+    std::vector<MusicTrack> groupTracks;
+    std::string errorMessage;
+    if (!context.musicPlayer.LoadLibraryGroupTracks(*track, groupTracks,
+                                                    errorMessage)) {
+      setStatus(errorMessage);
+      return;
+    }
+    childrenIt =
+        libraryGroupTracks.emplace(track->groupId, std::move(groupTracks))
+            .first;
+  }
+
+  if (childrenIt->second.size() <= 1) {
+    setStatus("Selected track has no alternate charts.");
+    return;
+  }
+
+  expandedLibraryGroupIds.insert(track->groupId);
+  applyLibraryFilterForTrackId(childrenIt->second.front().trackId, true);
+  refreshLibraryArtwork(selectedLibraryTrack());
+  refreshUi();
+  setStatus("Expanded chart group.");
 }
 
 void MusicPlayerScene::selectPlaylist(int index) {
@@ -2611,8 +2717,10 @@ void MusicPlayerScene::playSelectedQueueTrack() {
 
 void MusicPlayerScene::playRandomLibrary() {
   std::vector<MusicTrack> tracks =
-      trimPlaylistName(librarySearchText).empty() ? libraryTracks
-                                                  : filteredLibraryTracks;
+      trimPlaylistName(librarySearchText).empty() &&
+              expandedLibraryGroupIds.empty()
+          ? libraryTracks
+          : filteredLibraryTracks;
   playNowPlaying(music_playlist::ShuffledTracks(std::move(tracks)), 0,
                  "No library tracks available.", "Playing Now Playing.");
 }

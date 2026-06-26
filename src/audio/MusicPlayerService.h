@@ -30,6 +30,9 @@ public:
   [[nodiscard]] std::size_t LibraryTrackCount() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   LibraryTracksSnapshot() const;
+  bool LoadLibraryGroupTracks(const music_playlist::MusicTrack &groupTrack,
+                              std::vector<music_playlist::MusicTrack> &tracks,
+                              std::string &errorMessage);
   bool ReloadPlaylists(std::string &errorMessage);
   [[nodiscard]] std::vector<MusicPlaylistInfo> PlaylistsSnapshot() const;
   [[nodiscard]] int SelectedPlaylistId() const;

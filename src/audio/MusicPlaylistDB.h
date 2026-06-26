@@ -30,6 +30,9 @@ public:
   bool ClearPlaylist(sqlite3 *db, int playlistId);
   bool DeletePlaylist(sqlite3 *db, int playlistId);
   void SelectLibraryTracks(sqlite3 *db, std::vector<MusicTrackRecord> &tracks);
+  void SelectLibraryGroupTracks(sqlite3 *db,
+                                const bms_parser::ChartMeta &chartMeta,
+                                std::vector<MusicTrackRecord> &tracks);
   void SelectTracks(sqlite3 *db, int playlistId,
                     std::vector<MusicTrackRecord> &tracks);
 };

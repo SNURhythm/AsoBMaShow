@@ -23,6 +23,7 @@ enum class QueueRepeatMode {
 struct MusicTrack {
   std::string trackId;
   std::string chartId;
+  std::string groupId;
   bms_parser::ChartMeta representativeChart;
   std::string title;
   std::string subtitle;
@@ -32,6 +33,8 @@ struct MusicTrack {
   std::filesystem::path artworkPath;
   int chartCount = 1;
   long long durationMicros = 0;
+  bool groupRepresentative = false;
+  bool expandedChart = false;
 };
 
 struct MusicQueueSnapshot {
@@ -43,6 +46,7 @@ struct MusicQueueSnapshot {
 };
 
 std::string TrackIdForChart(const bms_parser::ChartMeta &meta);
+std::string ChartTrackIdForChart(const bms_parser::ChartMeta &meta);
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta);
 std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta);
 MusicTrack MakeTrack(const MusicTrackRecord &record);

@@ -1,5 +1,6 @@
 #include "MusicPlaylistDB.h"
 
+#include "../BmsMetadataText.h"
 #include "../SqliteRAII.h"
 #include "../Utils.h"
 #include "../path.h"
@@ -48,24 +49,11 @@ constexpr const char *kChartDatabaseSchema = "chart_library";
 constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 
 std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
+  return asobmshow::bms_metadata::trimCopy(value);
 }
 
 std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
 std::string normalizedHash(const std::string &value) {
@@ -77,6 +65,38 @@ std::string columnString(sqlite3_stmt *stmt, int idx) {
     return "";
   }
   return reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+}
+
+std::string sqliteValueString(sqlite3_value *value) {
+  if (value == nullptr || sqlite3_value_type(value) == SQLITE_NULL) {
+    return "";
+  }
+  const unsigned char *text = sqlite3_value_text(value);
+  return text != nullptr ? reinterpret_cast<const char *>(text) : "";
+}
+
+void sqliteArtistHasObjectNotation(sqlite3_context *context, int argc,
+                                   sqlite3_value **argv) {
+  const std::string artist = argc > 0 ? sqliteValueString(argv[0]) : "";
+  const std::string subArtist = argc > 1 ? sqliteValueString(argv[1]) : "";
+  sqlite3_result_int(
+      context,
+      asobmshow::bms_metadata::hasArtistObjectNotation(artist, subArtist) ? 1
+                                                                          : 0);
+}
+
+void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
+  if (db == nullptr) {
+    return;
+  }
+  const int rc = sqlite3_create_function_v2(
+      db, "bms_artist_has_object_notation", 2,
+      SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr,
+      sqliteArtistHasObjectNotation, nullptr, nullptr, nullptr);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while registering music playlist functions: "
+              << sqlite3_errmsg(db) << "\n";
+  }
 }
 
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
@@ -203,11 +223,7 @@ storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   identity.md5 = normalizedHash(chartMeta.MD5);
   identity.sha256 = normalizedHash(chartMeta.SHA256);
 
-  const std::string folder = storedPathText(chartMeta.Folder);
-  if (!folder.empty()) {
-    identity.keyType = "folder";
-    identity.musicKey = folder;
-  } else {
+  if (!identity.chartPath.empty()) {
     identity.keyType = "path";
     identity.musicKey = identity.chartPath;
   }
@@ -232,6 +248,58 @@ std::string chartArtworkOrderBy(const std::string &alias) {
   return "CASE WHEN NULLIF(TRIM(" + alias +
          ".stage_file), '') IS NOT NULL THEN 0 WHEN NULLIF(TRIM(" + alias +
          ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
+}
+
+std::string lowerTextExpr(const std::string &alias,
+                          std::initializer_list<const char *> columns) {
+  std::string expr = "LOWER(";
+  bool first = true;
+  for (const char *column : columns) {
+    if (!first) {
+      expr += " || ' ' || ";
+    }
+    first = false;
+    expr += "COALESCE(" + alias + "." + column + ", '')";
+  }
+  expr += ")";
+  return expr;
+}
+
+std::string likeAnyExpr(const std::string &expr,
+                        std::initializer_list<const char *> patterns) {
+  std::string result = "(";
+  bool first = true;
+  for (const char *pattern : patterns) {
+    if (!first) {
+      result += " OR ";
+    }
+    first = false;
+    result += expr + " LIKE '" + pattern + "'";
+  }
+  result += ")";
+  return result;
+}
+
+std::string musicTitleTextExpr(const std::string &alias) {
+  return lowerTextExpr(alias, {"title", "subtitle"});
+}
+
+std::string titleContainsExpr(const std::string &alias,
+                              std::initializer_list<const char *> patterns) {
+  return likeAnyExpr(musicTitleTextExpr(alias), patterns);
+}
+
+std::string musicRepresentativeOrderBy(const std::string &alias) {
+  return "CASE WHEN bms_artist_has_object_notation(" + alias + ".artist, " +
+         alias + ".sub_artist) != 0 THEN 1 ELSE 0 END, CASE WHEN " +
+         titleContainsExpr(alias, {"%delay%"}) +
+         " THEN 1 ELSE 0 END, CASE WHEN " +
+         titleContainsExpr(alias, {"%endless%"}) +
+         " THEN 1 ELSE 0 END, CASE WHEN " +
+         titleContainsExpr(alias,
+                           {"%normal%", "%hyper%", "%insane%",
+                            "%another%"}) +
+         " THEN 0 ELSE 1 END";
 }
 
 std::string preferredChartPredicate(const std::string &alias) {
@@ -318,6 +386,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
 
   sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
   sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  registerMusicPlaylistSqliteFunctions(db);
   attachChartDatabase(db, chartPath);
   return db;
 }
@@ -767,6 +836,8 @@ void MusicPlaylistDB::SelectLibraryTracks(
            "ROW_NUMBER() OVER (PARTITION BY ";
   query += musicKey;
   query += " ORDER BY ";
+  query += musicRepresentativeOrderBy("cm");
+  query += ", ";
   query += chartArtworkOrderBy("cm");
   query += ", total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
@@ -790,6 +861,55 @@ void MusicPlaylistDB::SelectLibraryTracks(
     record.representativeChart = readChartMeta(stmt);
     record.chartCount =
         std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    record.useChartPathIdentity = false;
+    tracks.push_back(std::move(record));
+  }
+}
+
+void MusicPlaylistDB::SelectLibraryGroupTracks(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+    std::vector<MusicTrackRecord> &tracks) {
+  if (db == nullptr) {
+    return;
+  }
+
+  std::filesystem::path groupPath = chartMeta.Folder;
+  const bool useFolder = !groupPath.empty();
+  if (!useFolder) {
+    groupPath = chartMeta.BmsPath;
+  }
+  const std::string groupKey = storedPathText(groupPath);
+  if (groupKey.empty()) {
+    return;
+  }
+
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += " FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE ";
+  query += useFolder ? "cm.folder = ?1 AND " : "cm.path = ?1 AND ";
+  query += preferredChartPredicate("cm");
+  query += " ORDER BY ";
+  query += musicRepresentativeOrderBy("cm");
+  query += ", cm.title COLLATE NOCASE, cm.subtitle COLLATE NOCASE, "
+           "cm.difficulty, cm.level, cm.total_notes DESC, cm.length DESC, ";
+  query += chartSourceOrderBy("cm");
+
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting music library group tracks: "
+              << sqlite3_errmsg(db) << "\n";
+    return;
+  }
+  bindText(stmt, 1, groupKey);
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    MusicTrackRecord record;
+    record.representativeChart = readChartMeta(stmt);
+    record.chartCount = 1;
+    record.useChartPathIdentity = true;
     tracks.push_back(std::move(record));
   }
 }
@@ -802,9 +922,11 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
 
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, mpi.position AS "
+  query += ", cm.music_chart_count, cm.playlist_music_key_type FROM (SELECT "
+           "cm.*, mpi.position AS "
            "playlist_position, COUNT(*) OVER (PARTITION BY mpi.id) AS "
-           "music_chart_count, ROW_NUMBER() OVER (PARTITION BY mpi.id "
+           "music_chart_count, mpi.music_key_type AS playlist_music_key_type, "
+           "ROW_NUMBER() OVER (PARTITION BY mpi.id "
            "ORDER BY ";
   query += chartArtworkOrderBy("cm");
   query += ", CASE WHEN mpi.chart_sha256 != '' AND "
@@ -816,9 +938,7 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
   query += ", title COLLATE NOCASE, path) AS music_rank "
            "FROM music_playlist_items mpi JOIN ";
   query += kChartMetaTable;
-  query += " cm ON "
-           "((mpi.music_key_type = 'folder' AND cm.folder = mpi.music_key) "
-           "OR (mpi.music_key_type = 'path' AND cm.path = mpi.music_key)) "
+  query += " cm ON mpi.music_key_type = 'path' AND cm.path = mpi.music_key "
            "WHERE mpi.playlist_id = ?1 AND ";
   query += preferredChartPredicate("cm");
   query += ") cm WHERE cm.music_rank = 1 "
@@ -838,6 +958,8 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
     record.representativeChart = readChartMeta(stmt);
     record.chartCount =
         std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    record.useChartPathIdentity =
+        columnString(stmt, kChartMetaColumnCount + 1) == "path";
     tracks.push_back(std::move(record));
   }
 }

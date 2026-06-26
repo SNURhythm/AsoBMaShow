@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class Button;
@@ -47,6 +49,8 @@ private:
   void reloadData(bool preserveSelection = true);
   void refreshLibraryList(int preferredIndex = -1);
   void applyLibraryFilter(int preferredIndex = -1);
+  void applyLibraryFilterForTrackId(const std::string &preferredTrackId,
+                                    bool preserveScroll = false);
   void rebuildPlaylistChoices();
   void refreshLibraryPlaylistList(int preferredPlaylistId = 0);
   void refreshPlaylistDirectoryList(int preferredPlaylistId = 0);
@@ -80,6 +84,7 @@ private:
   void renameSelectedPlaylist();
   void deleteSelectedPlaylist();
   void selectLibraryPlaylist(int index);
+  void toggleSelectedLibraryGroup();
   void selectPlaylist(int index);
   void selectPlaylistTrack(int index);
   void selectQueueTrack(int index);
@@ -135,6 +140,7 @@ private:
   TextView *currentTitleText = nullptr;
   TextView *currentDetailText = nullptr;
   TextView *playbackText = nullptr;
+  TextView *libraryGroupButtonText = nullptr;
   TextView *queueTitleText = nullptr;
   TextView *repeatModeButtonText = nullptr;
   TextView *artworkFallbackText = nullptr;
@@ -155,6 +161,8 @@ private:
 
   std::vector<MusicTrack> libraryTracks;
   std::vector<MusicTrack> filteredLibraryTracks;
+  std::unordered_map<std::string, std::vector<MusicTrack>> libraryGroupTracks;
+  std::unordered_set<std::string> expandedLibraryGroupIds;
   std::vector<PlaylistInfo> playlists;
   std::vector<PlaylistInfo> playlistChoices;
   std::vector<MusicTrack> playlistTracks;

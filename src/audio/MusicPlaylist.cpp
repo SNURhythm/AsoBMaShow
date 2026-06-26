@@ -82,6 +82,10 @@ std::string TrackIdForChart(const bms_parser::ChartMeta &meta) {
   return "path:" + normalizedPathString(meta.BmsPath);
 }
 
+std::string ChartTrackIdForChart(const bms_parser::ChartMeta &meta) {
+  return "path:" + normalizedPathString(meta.BmsPath);
+}
+
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta) {
   const std::string sha256 = lowerTrimmed(meta.SHA256);
   if (!sha256.empty()) {
@@ -111,9 +115,12 @@ std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta) {
 
 MusicTrack MakeTrack(const MusicTrackRecord &record) {
   const auto &meta = record.representativeChart;
+  const std::string groupId = TrackIdForChart(meta);
+  const bool expandedChart = record.useChartPathIdentity;
   return {
-      .trackId = TrackIdForChart(meta),
+      .trackId = expandedChart ? ChartTrackIdForChart(meta) : groupId,
       .chartId = ChartIdForChart(meta),
+      .groupId = groupId,
       .representativeChart = meta,
       .title = fallbackTitle(meta),
       .subtitle = meta.SubTitle,
@@ -123,6 +130,8 @@ MusicTrack MakeTrack(const MusicTrackRecord &record) {
       .artworkPath = ArtworkPathForChart(meta),
       .chartCount = std::max(1, record.chartCount),
       .durationMicros = 0,
+      .groupRepresentative = !expandedChart && record.chartCount > 1,
+      .expandedChart = expandedChart,
   };
 }
 

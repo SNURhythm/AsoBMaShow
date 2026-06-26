@@ -114,6 +114,38 @@ MusicPlayerService::LibraryTracksSnapshot() const {
   return libraryTracks;
 }
 
+bool MusicPlayerService::LoadLibraryGroupTracks(
+    const music_playlist::MusicTrack &groupTrack,
+    std::vector<music_playlist::MusicTrack> &tracks,
+    std::string &errorMessage) {
+  errorMessage.clear();
+  tracks.clear();
+
+  if (groupTrack.groupId.empty()) {
+    errorMessage = "Selected track does not belong to a chart group.";
+    return false;
+  }
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  std::vector<MusicTrackRecord> records;
+  playlistDb.SelectLibraryGroupTracks(db, groupTrack.representativeChart,
+                                      records);
+  playlistDb.Close(db);
+
+  tracks = music_playlist::MakeTracks(records);
+  if (tracks.empty()) {
+    errorMessage = "No charts were found in the selected group.";
+    return false;
+  }
+  return true;
+}
+
 void MusicPlayerService::RefreshPlaylistCachesLocked(
     MusicPlaylistDB &playlistDb, sqlite3 *db,
     int preferredSelectedPlaylistId) {

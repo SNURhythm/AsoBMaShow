@@ -166,7 +166,8 @@ std::string cleanupDecoratedQueryText(std::string value);
 bool looksLikeTitleDecoration(const std::string &value);
 bool looksLikeArtistDecoration(const std::string &value);
 std::string stripBracketedDecorations(
-    std::string value, bool (*looksLikeDecoration)(const std::string &));
+    std::string value, char open, char close,
+    const std::function<bool(const std::string &)> &isDecoration);
 std::string stripTrailingSquareBracketDecorations(std::string value);
 std::string stripTitleDecorations(const std::string &title);
 std::string stripArtistDecorations(const std::string &artist);

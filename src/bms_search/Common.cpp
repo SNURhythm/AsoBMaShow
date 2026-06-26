@@ -1,26 +1,15 @@
 #include "Internal.h"
 
+#include "../BmsMetadataText.h"
+
 namespace asobmshow::bms_search {
 
 std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
+  return asobmshow::bms_metadata::trimCopy(value);
 }
 
 std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
 bool endsWith(std::string_view value, std::string_view suffix) {
@@ -533,34 +522,11 @@ std::string bmsSearchUrlForText(const std::string &query) {
 }
 
 std::string normalizedSearchText(const std::string &value) {
-  std::string result;
-  bool lastWasSpace = true;
-  for (unsigned char c : value) {
-    if (std::isalnum(c)) {
-      result.push_back(static_cast<char>(std::tolower(c)));
-      lastWasSpace = false;
-    } else if (c >= 0x80) {
-      result.push_back(static_cast<char>(c));
-      lastWasSpace = false;
-    } else if (!lastWasSpace) {
-      result.push_back(' ');
-      lastWasSpace = true;
-    }
-  }
-  if (!result.empty() && result.back() == ' ') {
-    result.pop_back();
-  }
-  return result;
+  return asobmshow::bms_metadata::normalizedSearchText(value);
 }
 
 std::vector<std::string> splitSearchTokens(const std::string &value) {
-  std::vector<std::string> tokens;
-  std::istringstream stream(normalizedSearchText(value));
-  std::string token;
-  while (stream >> token) {
-    tokens.push_back(token);
-  }
-  return tokens;
+  return asobmshow::bms_metadata::splitSearchTokens(value);
 }
 
 bool containsNonAscii(const std::string &value) {
@@ -614,185 +580,43 @@ bool allowsRawSubstringTitleMatch(const std::string &normalizedTitle) {
 }
 
 bool isLooseQuerySeparator(char c) {
-  switch (c) {
-  case '-':
-  case '_':
-  case '/':
-  case ',':
-  case ':':
-  case ';':
-  case '|':
-  case '~':
-  case '(':
-  case ')':
-  case '[':
-  case ']':
-  case '{':
-  case '}':
-    return true;
-  default:
-    return false;
-  }
+  return asobmshow::bms_metadata::isLooseQuerySeparator(c);
 }
 
 std::string collapseWhitespaceCopy(const std::string &value) {
-  std::string result;
-  bool lastWasSpace = true;
-  for (unsigned char c : value) {
-    if (std::isspace(c) != 0) {
-      if (!lastWasSpace) {
-        result.push_back(' ');
-        lastWasSpace = true;
-      }
-      continue;
-    }
-    result.push_back(static_cast<char>(c));
-    lastWasSpace = false;
-  }
-  if (!result.empty() && result.back() == ' ') {
-    result.pop_back();
-  }
-  return result;
+  return asobmshow::bms_metadata::collapseWhitespaceCopy(value);
 }
 
 std::string cleanupDecoratedQueryText(std::string value) {
-  value = collapseWhitespaceCopy(trimCopy(value));
-  while (!value.empty() &&
-         isLooseQuerySeparator(static_cast<unsigned char>(value.front()))) {
-    value.erase(value.begin());
-    value = trimCopy(value);
-  }
-  while (!value.empty() &&
-         isLooseQuerySeparator(static_cast<unsigned char>(value.back()))) {
-    value.pop_back();
-    value = trimCopy(value);
-  }
-  return collapseWhitespaceCopy(value);
+  return asobmshow::bms_metadata::cleanupDecoratedQueryText(std::move(value));
 }
 
 bool looksLikeTitleDecoration(const std::string &value) {
-  const auto tokens = splitSearchTokens(value);
-  if (tokens.empty()) {
-    return false;
-  }
-
-  static constexpr std::string_view kDecorationTokens[] = {
-      "another", "hyper", "normal", "beginner", "easy", "hard",
-      "insane",  "black", "lunatic", "legend", "extra",    "ex",
-      "ent",     "entry", "entrance", "sp",     "dp",       "spn",
-      "sph",     "spa",   "dpn",     "dph",     "dpa",      "iidx",
-      "bga"};
-  for (const auto &token : tokens) {
-    if (token == "key" || token == "keys" ||
-        token.find("key") != std::string::npos) {
-      return true;
-    }
-    if (std::find(std::begin(kDecorationTokens), std::end(kDecorationTokens),
-                  token) != std::end(kDecorationTokens)) {
-      return true;
-    }
-  }
-  return false;
+  return asobmshow::bms_metadata::looksLikeTitleDecoration(value);
 }
 
 bool looksLikeArtistDecoration(const std::string &value) {
-  const std::string lower = lowerCopy(value);
-  return lower.find("obj.") != std::string::npos ||
-         lower.find("obj:") != std::string::npos ||
-         lower.find("obj-") != std::string::npos ||
-         lower.find("obj ") != std::string::npos ||
-         lower.find("object.") != std::string::npos ||
-         lower.find("object:") != std::string::npos ||
-         lower.find("object-") != std::string::npos ||
-         lower.find("object ") != std::string::npos;
+  return asobmshow::bms_metadata::looksLikeArtistDecoration(value);
 }
 
 std::string stripBracketedDecorations(
     std::string value, char open, char close,
     const std::function<bool(const std::string &)> &isDecoration) {
-  size_t position = 0;
-  while (position < value.size()) {
-    const size_t start = value.find(open, position);
-    if (start == std::string::npos) {
-      break;
-    }
-    const size_t end = value.find(close, start + 1);
-    if (end == std::string::npos) {
-      break;
-    }
-
-    const std::string inner = value.substr(start + 1, end - start - 1);
-    if (isDecoration(inner)) {
-      value.erase(start, end - start + 1);
-      position = start;
-      continue;
-    }
-    position = end + 1;
-  }
-  return cleanupDecoratedQueryText(value);
+  return asobmshow::bms_metadata::stripBracketedDecorations(
+      std::move(value), open, close, isDecoration);
 }
 
 std::string stripTrailingSquareBracketDecorations(std::string value) {
-  value = trimCopy(std::move(value));
-  while (!value.empty() && value.back() == ']') {
-    const size_t open = value.rfind('[');
-    if (open == std::string::npos) {
-      break;
-    }
-
-    const std::string prefix = cleanupDecoratedQueryText(value.substr(0, open));
-    if (prefix.empty()) {
-      break;
-    }
-    value = prefix;
-  }
-  return cleanupDecoratedQueryText(value);
+  return asobmshow::bms_metadata::stripTrailingSquareBracketDecorations(
+      std::move(value));
 }
 
 std::string stripTitleDecorations(const std::string &title) {
-  std::string result = trimCopy(title);
-  result = stripTrailingSquareBracketDecorations(std::move(result));
-  result =
-      stripBracketedDecorations(std::move(result), '[', ']',
-                                [](const std::string &value) {
-                                  return looksLikeTitleDecoration(value);
-                                });
-  result =
-      stripBracketedDecorations(std::move(result), '(', ')',
-                                [](const std::string &value) {
-                                  return looksLikeTitleDecoration(value);
-                                });
-  result =
-      stripBracketedDecorations(std::move(result), '{', '}',
-                                [](const std::string &value) {
-                                  return looksLikeTitleDecoration(value);
-                                });
-  return stripTrailingSquareBracketDecorations(std::move(result));
+  return asobmshow::bms_metadata::stripTitleDecorations(title);
 }
 
 std::string stripArtistDecorations(const std::string &artist) {
-  std::string result = trimCopy(artist);
-  result =
-      stripBracketedDecorations(std::move(result), '[', ']',
-                                [](const std::string &value) {
-                                  return looksLikeArtistDecoration(value);
-                                });
-  result =
-      stripBracketedDecorations(std::move(result), '(', ')',
-                                [](const std::string &value) {
-                                  return looksLikeArtistDecoration(value);
-                                });
-  result =
-      stripBracketedDecorations(std::move(result), '{', '}',
-                                [](const std::string &value) {
-                                  return looksLikeArtistDecoration(value);
-                                });
-
-  static const std::regex objectSegmentPattern(
-      R"((^|[\s,/;&+|()\[\]{}-])\bobj(?:ect)?\b[.:-]?\s*(?:\([^)]*\)|\[[^\]]*\]|\{[^}]*\}|[^,/;&+|()\[\]{}-]+))",
-      std::regex::icase);
-  result = std::regex_replace(result, objectSegmentPattern, "$1");
-  return cleanupDecoratedQueryText(result);
+  return asobmshow::bms_metadata::stripArtistDecorations(artist);
 }
 
 std::string stripArtistAfterSlash(const std::string &artist) {
