@@ -64,6 +64,8 @@ public:
   std::vector<std::filesystem::path> activeMaterializedVideoPaths() const;
   void setVisualsEnabled(bool enabled);
   bool getVisualsEnabled() const;
+  void setVisualsSuspended(bool suspended);
+  bool getVisualsSuspended() const;
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
@@ -147,6 +149,7 @@ private:
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};
+  std::atomic_bool visualsSuspended{false};
   std::atomic<int> bgaOffsetMs{0};
   std::atomic<int> bgaDisplayMode{
       static_cast<int>(AppSettings::BgaDisplayMode::Fit)};

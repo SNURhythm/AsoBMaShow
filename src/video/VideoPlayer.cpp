@@ -206,6 +206,9 @@ long long VideoPlayer::getDurationMicros() const {
 void VideoPlayer::update() {
   if (!isPlaying)
     return;
+  if (decodeSuspended.load(std::memory_order_acquire)) {
+    return;
+  }
   if (formatContext == nullptr || videoStreamIndex < 0) {
     return;
   }
@@ -390,6 +393,16 @@ void VideoPlayer::stop() {
   hasVideoFrame = false;
 }
 
+void VideoPlayer::setDecodeSuspended(bool suspended) {
+  const bool previous =
+      decodeSuspended.exchange(suspended, std::memory_order_acq_rel);
+  if (previous == suspended) {
+    return;
+  }
+  freeSpace.notify_all();
+  eofCV.notify_all();
+}
+
 void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
   std::lock_guard<std::mutex> lock(videoFrameMutex);
   if (width != videoFrameWidth || height != videoFrameHeight) {
@@ -484,12 +497,16 @@ void VideoPlayer::predecodeFrames() {
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
       freeSpace.wait(lock, [this] {
-        return bufferSize < maxBufferSize || !predecodingActive;
+        return !predecodingActive ||
+               (!decodeSuspended.load(std::memory_order_acquire) &&
+                bufferSize < maxBufferSize);
       });
     }
 
     if (!predecodingActive)
       break;
+    if (decodeSuspended.load(std::memory_order_acquire))
+      continue;
 
     bool readFailed = false;
     {

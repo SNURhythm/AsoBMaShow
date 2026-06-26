@@ -728,6 +728,7 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+  constexpr Uint32 kBackgroundIdleDelayMs = 250;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return event.type == SDL_APP_WILLENTERBACKGROUND ||
            event.type == SDL_APP_DIDENTERBACKGROUND ||
@@ -743,6 +744,18 @@ void run() {
             (event.window.event == SDL_WINDOWEVENT_RESTORED ||
              event.window.event == SDL_WINDOWEVENT_SHOWN ||
              event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
+  };
+  auto setAppBackground = [&](bool background) {
+    const bool previous =
+        context.appInBackground.exchange(background, std::memory_order_acq_rel);
+    if (previous == background) {
+      return;
+    }
+    context.jukebox.setVisualsSuspended(background);
+    if (!background) {
+      lastFrameTime = std::chrono::steady_clock::now();
+      context.jukebox.seekVisualsToSongTime(context.jukebox.getTimeMicros());
+    }
   };
 #if TARGET_OS_ANDROID
   bool androidSystemSuspended = false;
@@ -934,6 +947,14 @@ void run() {
         context.quitFlag = true;
       }
 
+      if (isAppBackgroundEvent(event)) {
+        setAppBackground(true);
+      }
+
+      if (isAppForegroundEvent(event)) {
+        setAppBackground(false);
+      }
+
 #if TARGET_OS_ANDROID
       if (isAppBackgroundEvent(event)) {
         androidSystemSuspended = true;
@@ -1042,7 +1063,9 @@ void run() {
     }
 #if TARGET_OS_ANDROID
     if (syncAndroidRenderSuspend()) {
-      SDL_Delay(16);
+      SDL_Delay(context.appInBackground.load(std::memory_order_acquire)
+                    ? kBackgroundIdleDelayMs
+                    : 16);
       context.currentFrame++;
       continue;
     }
@@ -1060,6 +1083,12 @@ void run() {
       androidResumeResizePending = false;
     }
 #endif
+    if (context.appInBackground.load(std::memory_order_acquire) &&
+        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+      SDL_Delay(kBackgroundIdleDelayMs);
+      context.currentFrame++;
+      continue;
+    }
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
