@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -19,6 +20,22 @@ void setEmptyLibraryError(std::string &errorMessage) {
 
 void setEmptyPlaylistError(std::string &errorMessage) {
   errorMessage = "The music playlist is empty.";
+}
+
+bool sameTrackIdentity(const music_playlist::MusicTrack &a,
+                       const music_playlist::MusicTrack &b) {
+  return a.trackId == b.trackId && a.chartId == b.chartId;
+}
+
+std::optional<std::size_t>
+trackIndexInList(const std::vector<music_playlist::MusicTrack> &tracks,
+                 const music_playlist::MusicTrack &track) {
+  for (std::size_t i = 0; i < tracks.size(); ++i) {
+    if (sameTrackIdentity(tracks[i], track)) {
+      return i;
+    }
+  }
+  return std::nullopt;
 }
 
 std::vector<music_playlist::MusicTrack>
@@ -287,6 +304,14 @@ void MusicPlayerService::PersistPlayerStateLocked(
 }
 
 void MusicPlayerService::PersistQueueTracksLocked() {
+  sessionOnlyQueueOrder = false;
+  sessionPersistentQueueTracks.clear();
+  PersistQueueTracksLocked(queue.Snapshot().tracks, false);
+}
+
+void MusicPlayerService::PersistQueueTracksLocked(
+    const std::vector<music_playlist::MusicTrack> &tracks,
+    bool preserveCursor) {
   MusicPlaylistDB playlistDb;
   sqlite3 *db = playlistDb.Connect();
   if (db == nullptr) {
@@ -297,7 +322,9 @@ void MusicPlayerService::PersistQueueTracksLocked() {
   MusicPlayerStateRecord nextState = persistedState;
   nextState.repeatMode = repeatModeToRecordValue(snapshot.repeatMode);
   nextState.queueDisplayName = snapshot.displayName;
-  if (snapshot.currentIndex) {
+  if (preserveCursor) {
+    nextState.queueCursorIndex = persistedState.queueCursorIndex;
+  } else if (snapshot.currentIndex) {
     nextState.queueCursorIndex = static_cast<int>(*snapshot.currentIndex);
   } else if (snapshot.detachedCurrentNextIndex) {
     nextState.queueCursorIndex =
@@ -307,8 +334,8 @@ void MusicPlayerService::PersistQueueTracksLocked() {
   }
 
   std::vector<bms_parser::ChartMeta> chartMetas;
-  chartMetas.reserve(snapshot.tracks.size());
-  for (const auto &track : snapshot.tracks) {
+  chartMetas.reserve(tracks.size());
+  for (const auto &track : tracks) {
     chartMetas.push_back(track.representativeChart);
   }
 
@@ -332,7 +359,9 @@ void MusicPlayerService::PersistQueueCursorLocked() {
   MusicPlayerStateRecord nextState = persistedState;
   nextState.repeatMode = repeatModeToRecordValue(snapshot.repeatMode);
   nextState.queueDisplayName = snapshot.displayName;
-  if (snapshot.currentIndex) {
+  if (sessionOnlyQueueOrder) {
+    nextState.queueCursorIndex = persistedState.queueCursorIndex;
+  } else if (snapshot.currentIndex) {
     nextState.queueCursorIndex = static_cast<int>(*snapshot.currentIndex);
   } else if (snapshot.detachedCurrentNextIndex) {
     nextState.queueCursorIndex =
@@ -919,6 +948,114 @@ void MusicPlayerService::SetPlaylistAfterCurrentRemoved(
   queue.SetPlaylistAfterCurrentRemoved(std::move(tracks), nextIndex,
                                        std::move(displayName));
   PersistQueueTracksLocked();
+}
+
+bool MusicPlayerService::AppendToQueue(
+    const music_playlist::MusicTrack &track, std::size_t preferredIndex,
+    std::string displayName, std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  const auto snapshot = queue.Snapshot();
+  const std::string nextDisplayName =
+      displayName.empty() ? snapshot.displayName : std::move(displayName);
+  std::vector<music_playlist::MusicTrack> visibleTracks = snapshot.tracks;
+  std::vector<music_playlist::MusicTrack> persistentTracks =
+      sessionOnlyQueueOrder && !sessionPersistentQueueTracks.empty()
+          ? sessionPersistentQueueTracks
+          : snapshot.tracks;
+  visibleTracks.push_back(track);
+  persistentTracks.push_back(track);
+
+  const auto loadedIndex =
+      loadedTrack ? trackIndexInList(visibleTracks, *loadedTrack)
+                  : std::nullopt;
+  if (loadedTrack && !loadedIndex) {
+    const std::size_t nextIndex =
+        std::min(preferredIndex, visibleTracks.size());
+    queue.SetPlaylistAfterCurrentRemoved(
+        std::move(visibleTracks), nextIndex, nextDisplayName);
+  } else {
+    std::size_t startIndex = preferredIndex;
+    if (loadedIndex) {
+      startIndex = *loadedIndex;
+    } else if (snapshot.currentIndex &&
+               *snapshot.currentIndex < visibleTracks.size()) {
+      startIndex = *snapshot.currentIndex;
+    } else if (!visibleTracks.empty()) {
+      startIndex = std::min(preferredIndex, visibleTracks.size() - 1);
+    }
+    queue.SetPlaylist(std::move(visibleTracks), startIndex, nextDisplayName);
+  }
+
+  if (sessionOnlyQueueOrder) {
+    sessionPersistentQueueTracks = std::move(persistentTracks);
+    PersistQueueTracksLocked(sessionPersistentQueueTracks, true);
+  } else {
+    PersistQueueTracksLocked();
+  }
+
+  if (loadedTrack) {
+    StopAdjacentPreloadWorker();
+    StartAdjacentPreloadWorker(AdjacentTracksLocked());
+  }
+  return true;
+}
+
+bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  const auto snapshot = queue.Snapshot();
+  if (snapshot.tracks.size() < 2) {
+    errorMessage = "Need at least two tracks to shuffle.";
+    return false;
+  }
+
+  std::vector<music_playlist::MusicTrack> tracks = snapshot.tracks;
+  if (!sessionOnlyQueueOrder || sessionPersistentQueueTracks.empty()) {
+    sessionPersistentQueueTracks = snapshot.tracks;
+  }
+  std::optional<music_playlist::MusicTrack> anchorTrack;
+  std::optional<std::size_t> anchorIndex;
+  if (loadedTrack) {
+    if (const auto index = trackIndexInList(tracks, *loadedTrack)) {
+      anchorTrack = *loadedTrack;
+      anchorIndex = *index;
+    }
+  }
+  if (!anchorTrack && snapshot.currentIndex &&
+      *snapshot.currentIndex < tracks.size()) {
+    anchorTrack = tracks[*snapshot.currentIndex];
+    anchorIndex = *snapshot.currentIndex;
+  }
+
+  if (anchorTrack && anchorIndex) {
+    const std::size_t requestedIndex = *anchorIndex;
+    tracks.erase(tracks.begin() + static_cast<std::ptrdiff_t>(*anchorIndex));
+    tracks = music_playlist::ShuffledTracks(std::move(tracks));
+    const std::size_t insertIndex = std::min(requestedIndex, tracks.size());
+    tracks.insert(tracks.begin() + static_cast<std::ptrdiff_t>(insertIndex),
+                  *anchorTrack);
+    queue.SetPlaylist(std::move(tracks), insertIndex, snapshot.displayName);
+  } else {
+    tracks = music_playlist::ShuffledTracks(std::move(tracks));
+    if (loadedTrack && snapshot.detachedCurrentNextIndex) {
+      const std::size_t nextIndex =
+          std::min(*snapshot.detachedCurrentNextIndex, tracks.size());
+      queue.SetPlaylistAfterCurrentRemoved(
+          std::move(tracks), nextIndex, snapshot.displayName);
+    } else {
+      queue.SetPlaylist(std::move(tracks), 0, snapshot.displayName);
+    }
+  }
+
+  sessionOnlyQueueOrder = true;
+  if (loadedTrack) {
+    StopAdjacentPreloadWorker();
+    StartAdjacentPreloadWorker(AdjacentTracksLocked());
+  }
+  return true;
 }
 
 bool MusicPlayerService::PlayCurrent(std::string &errorMessage) {

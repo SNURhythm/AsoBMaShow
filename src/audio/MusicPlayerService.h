@@ -84,6 +84,10 @@ public:
   void SetPlaylistAfterCurrentRemoved(
       std::vector<music_playlist::MusicTrack> tracks, std::size_t nextIndex = 0,
       std::string displayName = {});
+  bool AppendToQueue(const music_playlist::MusicTrack &track,
+                     std::size_t preferredIndex, std::string displayName,
+                     std::string &errorMessage);
+  bool ShuffleQueue(std::string &errorMessage);
 
   [[nodiscard]] std::optional<music_playlist::MusicTrack>
   CurrentTrackSnapshot() const;
@@ -141,6 +145,9 @@ private:
                                             sqlite3 *db);
   void PersistPlayerStateLocked(MusicPlaylistDB &playlistDb, sqlite3 *db);
   void PersistQueueTracksLocked();
+  void PersistQueueTracksLocked(
+      const std::vector<music_playlist::MusicTrack> &tracks,
+      bool preserveCursor);
   void PersistQueueCursorLocked();
   void StopPlaybackWorker();
   void EnsureNativeControlEventPump();
@@ -163,6 +170,8 @@ private:
   int selectedPlaylistId = 0;
   MusicPlayerStateRecord persistedState;
   music_playlist::MusicQueue queue;
+  bool sessionOnlyQueueOrder = false;
+  std::vector<music_playlist::MusicTrack> sessionPersistentQueueTracks;
   std::jthread playbackThread;
   std::jthread preloadThread;
   std::jthread nativeControlEventThread;

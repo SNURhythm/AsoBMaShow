@@ -1633,6 +1633,14 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::hairlineStrong);
   repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
 
+  TextView *shuffleText = nullptr;
+  auto *shuffleButton = makeButton("Shuffle", 17, &shuffleText);
+  shuffleButton->setFlex(1);
+  styleButton(shuffleButton, shuffleText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  shuffleButton->setOnClickListener([this]() { shuffleQueue(); });
+
   TextView *stopText = nullptr;
   auto *stopButton = makeButton("Stop", 17, &stopText);
   stopButton->setWidth(126);
@@ -1649,6 +1657,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowA->addView(playSelectedButton);
   actionRowA->addView(watchVideoButton);
   actionRowB->addView(repeatButton);
+  actionRowB->addView(shuffleButton);
   actionRowB->addView(stopButton);
   transport->addView(transportRow);
   transport->addView(actionRowA);
@@ -3138,6 +3147,13 @@ void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
 
   const bool wasActiveQueue =
       targetPlaylistId == selectedPlaylistId && selectedPlaylistIsActiveQueue();
+  const bool targetWasActiveQueue =
+      !queueTracks.empty() &&
+      queueDisplayName(displayedQueueName) == targetPlaylistName;
+  const std::size_t preferredQueueIndex =
+      selectedQueueIndex >= 0
+          ? static_cast<std::size_t>(selectedQueueIndex)
+          : queueTracks.size();
   const auto previousCurrent = context.musicPlayer.CurrentTrackSnapshot();
   std::string errorMessage;
   if (context.musicPlayer.AddChartToPlaylist(targetPlaylistId,
@@ -3147,8 +3163,19 @@ void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
     playlists = context.musicPlayer.PlaylistsSnapshot();
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
-    syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent,
-                                     selectedQueueIndex);
+    if (targetWasActiveQueue) {
+      std::string queueError;
+      if (!context.musicPlayer.AppendToQueue(
+              *track, preferredQueueIndex, targetPlaylistName, queueError)) {
+        setStatus(queueError);
+        refreshUi();
+        return;
+      }
+      refreshActiveQueueList(true);
+    } else {
+      syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent,
+                                       selectedQueueIndex);
+    }
     refreshLibraryPlaylistList(targetPlaylistId);
     refreshPlaylistDirectoryList(selectedPlaylistId);
     refreshPlaylistList(selectedPlaylistId == targetPlaylistId
@@ -3163,13 +3190,20 @@ void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
 
 void MusicPlayerScene::addLibraryTrackToNowPlaying(const MusicTrack &track) {
   pendingClearPlaylistId = 0;
-  std::vector<MusicTrack> tracks = queueTracks;
-  const int nextIndex = static_cast<int>(tracks.size());
-  tracks.push_back(track);
-  replaceNowPlaying(std::move(tracks), selectedQueueIndex >= 0
-                                           ? selectedQueueIndex
-                                           : nextIndex,
-                    "Added to Now Playing.");
+  const std::size_t preferredIndex =
+      selectedQueueIndex >= 0
+          ? static_cast<std::size_t>(selectedQueueIndex)
+          : queueTracks.size();
+  std::string errorMessage;
+  if (!context.musicPlayer.AppendToQueue(
+          track, preferredIndex, music_playlist::kNowPlayingDisplayName,
+          errorMessage)) {
+    setStatus(errorMessage);
+    refreshUi();
+    return;
+  }
+  refreshActiveQueueList(true);
+  setStatus("Added to Now Playing.");
   refreshUi();
 }
 
@@ -3565,6 +3599,18 @@ void MusicPlayerScene::playRandomTrackBrowser(TrackBrowserKind kind) {
                      ? "No library tracks available."
                      : "No favorite tracks available.",
                  "Playing Now Playing.");
+}
+
+void MusicPlayerScene::shuffleQueue() {
+  std::string status;
+  if (!context.musicPlayer.ShuffleQueue(status)) {
+    setStatus(status);
+    refreshUi();
+    return;
+  }
+  refreshActiveQueueList(true);
+  setStatus("Shuffled playback queue.");
+  refreshUi();
 }
 
 void MusicPlayerScene::togglePlayback() {

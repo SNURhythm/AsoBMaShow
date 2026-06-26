@@ -164,6 +164,7 @@ private:
   void playSelectedQueueTrack();
   void playRandomLibrary();
   void playRandomTrackBrowser(TrackBrowserKind kind);
+  void shuffleQueue();
   void togglePlayback();
   void cycleRepeatMode();
   void toggleSystemPlaybackJacket();
