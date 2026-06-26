@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 namespace chart_music_cache {
@@ -128,6 +129,10 @@ CacheResult resultForExistingFile(const std::filesystem::path &path) {
           .durationMicros = ReadAudioFileDurationMicros(path).value_or(0)};
 }
 
+std::string normalizedPathKey(const std::filesystem::path &path) {
+  return path.lexically_normal().string();
+}
+
 } // namespace
 
 std::filesystem::path CacheDirectory() {
@@ -167,6 +172,42 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
   return static_cast<long long>(
       static_cast<long double>(info.frames) * 1000000.0L /
       static_cast<long double>(info.samplerate));
+}
+
+void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
+  std::error_code error;
+  const std::filesystem::path directory = CacheDirectory();
+  if (!std::filesystem::is_directory(directory, error) || error) {
+    return;
+  }
+
+  std::unordered_set<std::string> keep;
+  keep.reserve(keepPaths.size());
+  for (const auto &path : keepPaths) {
+    if (!path.empty()) {
+      keep.insert(normalizedPathKey(path));
+    }
+  }
+
+  for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
+    if (error) {
+      return;
+    }
+    if (!entry.is_regular_file(error) || error) {
+      error.clear();
+      continue;
+    }
+    const std::filesystem::path path = entry.path();
+    const std::string extension = lowerTrimmed(path.extension().string());
+    if (extension != ".wav" && extension != ".tmp") {
+      continue;
+    }
+    if (keep.contains(normalizedPathKey(path))) {
+      continue;
+    }
+    std::filesystem::remove(path, error);
+    error.clear();
+  }
 }
 
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,

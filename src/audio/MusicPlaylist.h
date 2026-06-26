@@ -71,12 +71,15 @@ public:
     return currentIndex;
   }
   [[nodiscard]] const MusicTrack *Current() const;
+  [[nodiscard]] const MusicTrack *PeekNext() const;
+  [[nodiscard]] const MusicTrack *PeekPrevious() const;
   [[nodiscard]] MusicQueueSnapshot Snapshot() const;
 
   const MusicTrack *Next();
   const MusicTrack *Previous();
 
 private:
+  [[nodiscard]] const MusicTrack *TrackAt(std::size_t index) const;
   const MusicTrack *SelectIndex(std::size_t index);
 
   QueueRepeatMode repeatMode = QueueRepeatMode::All;

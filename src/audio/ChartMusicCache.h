@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace chart_music_cache {
 
@@ -24,6 +25,7 @@ std::filesystem::path CachedAudioPathForChart(
 bool CachedAudioExists(const bms_parser::ChartMeta &meta);
 std::optional<long long>
 ReadAudioFileDurationMicros(const std::filesystem::path &path);
+void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths);
 
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
                                     std::atomic_bool &cancelled,

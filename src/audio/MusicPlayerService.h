@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -125,6 +126,15 @@ private:
                       std::uint64_t requestRevision,
                       std::string successMessage,
                       const std::stop_token &stopToken);
+  std::vector<music_playlist::MusicTrack> AdjacentTracksLocked() const;
+  std::vector<std::filesystem::path> PlaybackCacheKeepPathsLocked(
+      const chart_music_cache::CacheResult &currentResult) const;
+  void StartAdjacentPreloadWorker(
+      std::vector<music_playlist::MusicTrack> tracks);
+  void StopAdjacentPreloadWorker();
+  void AdjacentPreloadWorker(std::vector<music_playlist::MusicTrack> tracks,
+                             std::uint64_t preloadRevision,
+                             const std::stop_token &stopToken);
   void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
                                    int preferredSelectedPlaylistId);
   void StopPlaybackWorker();
@@ -137,6 +147,7 @@ private:
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;
+  std::mutex preloadThreadMutex;
   std::vector<music_playlist::MusicTrack> libraryTracks;
   std::vector<MusicPlaylistInfo> playlists;
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
@@ -146,13 +157,16 @@ private:
   int selectedPlaylistId = 0;
   music_playlist::MusicQueue queue;
   std::jthread playbackThread;
+  std::jthread preloadThread;
   std::jthread nativeControlEventThread;
   bool nativeControlEventThreadStopping = false;
   std::string nativeControlStatusMessage;
   std::uint64_t nativeControlStatusRevision = 0;
   std::uint64_t consumedNativeControlStatusRevision = 0;
   std::atomic_bool renderCancelled{false};
+  std::atomic_bool preloadCancelled{false};
   std::atomic<std::uint64_t> playbackRequestRevision{0};
+  std::atomic<std::uint64_t> preloadRequestRevision{0};
   chart_music_cache::CacheResult lastCacheResult;
 };
 

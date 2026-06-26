@@ -197,6 +197,67 @@ const MusicTrack *MusicQueue::Current() const {
   return &tracks[*currentIndex];
 }
 
+const MusicTrack *MusicQueue::TrackAt(std::size_t index) const {
+  if (index >= tracks.size()) {
+    return nullptr;
+  }
+  return &tracks[index];
+}
+
+const MusicTrack *MusicQueue::PeekNext() const {
+  if (tracks.empty()) {
+    return nullptr;
+  }
+
+  if (detachedCurrentNextIndex) {
+    const std::size_t nextIndex = *detachedCurrentNextIndex;
+    if (nextIndex >= tracks.size()) {
+      return repeatMode == QueueRepeatMode::All ? TrackAt(0) : nullptr;
+    }
+    return TrackAt(nextIndex);
+  }
+
+  if (repeatMode == QueueRepeatMode::One) {
+    return Current();
+  }
+
+  if (!currentIndex) {
+    return TrackAt(0);
+  }
+  if (*currentIndex + 1 >= tracks.size()) {
+    return repeatMode == QueueRepeatMode::All ? TrackAt(0) : nullptr;
+  }
+  return TrackAt(*currentIndex + 1);
+}
+
+const MusicTrack *MusicQueue::PeekPrevious() const {
+  if (tracks.empty()) {
+    return nullptr;
+  }
+
+  if (detachedCurrentNextIndex) {
+    const std::size_t nextIndex = *detachedCurrentNextIndex;
+    if (nextIndex == 0) {
+      return repeatMode == QueueRepeatMode::All ? TrackAt(tracks.size() - 1)
+                                                : nullptr;
+    }
+    return TrackAt(nextIndex - 1);
+  }
+
+  if (repeatMode == QueueRepeatMode::One) {
+    return Current();
+  }
+
+  if (!currentIndex) {
+    return TrackAt(0);
+  }
+  if (*currentIndex == 0) {
+    return repeatMode == QueueRepeatMode::All ? TrackAt(tracks.size() - 1)
+                                              : nullptr;
+  }
+  return TrackAt(*currentIndex - 1);
+}
+
 MusicQueueSnapshot MusicQueue::Snapshot() const {
   MusicQueueSnapshot snapshot;
   snapshot.repeatMode = repeatMode;
@@ -283,7 +344,7 @@ const MusicTrack *MusicQueue::SelectIndex(std::size_t index) {
   }
   currentIndex = index;
   detachedCurrentNextIndex.reset();
-  return &tracks[index];
+  return TrackAt(index);
 }
 
 } // namespace music_playlist
