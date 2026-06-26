@@ -1122,12 +1122,20 @@ void run() {
 
         sceneManager.render();
         if (hasActiveVisuals) {
+          const bool ignoreBgaPostOptions =
+              context.ignoreBgaPostOptions.load(std::memory_order_acquire);
           context.jukebox.render();
+          s_blurPass->setBlurStrength(ignoreBgaPostOptions
+                                           ? 0.0f
+                                           : context.settings.bgaBlurStrength);
           s_postProcess.apply();
           rendering::renderFullscreenTextureTint(
               s_blurPass->outputTexture(), s_blurPass->finalView(),
-              static_cast<float>(context.settings.bgaBrightnessPercent) /
-                  100.0f);
+              ignoreBgaPostOptions
+                  ? 1.0f
+                  : static_cast<float>(
+                        context.settings.bgaBrightnessPercent) /
+                        100.0f);
         }
         bgfx::frame();
         renderedFrame = true;

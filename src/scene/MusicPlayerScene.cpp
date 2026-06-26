@@ -517,6 +517,7 @@ void MusicPlayerScene::update(float) {
       videoOverlayRoot->setSize(rendering::window_width,
                                 rendering::window_height);
       videoOverlayRoot->applyYogaLayout();
+      layoutVideoArtwork();
     }
   }
 
@@ -548,11 +549,13 @@ void MusicPlayerScene::cleanupScene() {
   if (videoVisualsLoaded || videoFullscreenActive) {
     context.jukebox.unloadVisuals();
   }
+  context.ignoreBgaPostOptions.store(false, std::memory_order_release);
   if (videoRestoresVisualsEnabled) {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
   }
   rootLayout = nullptr;
   videoOverlayRoot = nullptr;
+  videoArtworkBackdrop = nullptr;
   videoControlsPanel = nullptr;
   libraryPage = nullptr;
   favoritesPage = nullptr;
@@ -590,7 +593,9 @@ void MusicPlayerScene::cleanupScene() {
   videoDetailText = nullptr;
   videoPlaybackText = nullptr;
   videoPlayPauseButtonText = nullptr;
+  videoArtworkFallbackText = nullptr;
   artworkImage = nullptr;
+  videoArtworkImage = nullptr;
   libraryArtworkImage = nullptr;
   favoritesArtworkImage = nullptr;
   libraryList = nullptr;
@@ -613,6 +618,7 @@ void MusicPlayerScene::cleanupScene() {
   displayedLibraryArtworkPath.clear();
   displayedFavoritesArtworkPath.clear();
   displayedArtworkPath.clear();
+  displayedVideoArtworkPath.clear();
   displayedQueueName.clear();
   seekMouseDown = false;
   activeSeekTouchId = -1;
@@ -620,6 +626,7 @@ void MusicPlayerScene::cleanupScene() {
   activeVideoSeekTouchId = -1;
   videoFullscreenActive = false;
   videoVisualsLoaded = false;
+  videoShowingArtwork = false;
   videoRestoresVisualsEnabled = false;
   videoControlsVisible = false;
   videoControlsVisibleUntil = 0;
@@ -775,6 +782,35 @@ void MusicPlayerScene::buildVideoOverlay() {
       ->setPadding(Edge::Bottom, safe.bottom + 24);
   videoOverlayRoot->setVisible(false);
 
+  videoArtworkBackdrop = new View();
+  videoArtworkBackdrop->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Right, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setPosition(Edge::Bottom, 0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setBackgroundColor(Color(0, 0, 0, 255));
+  videoArtworkBackdrop->setVisible(false);
+
+  videoArtworkFallbackText = new TextView(kFontPath, 24);
+  videoArtworkFallbackText->setText("No jacket available");
+  videoArtworkFallbackText->setHeight(40);
+  videoArtworkFallbackText->setAlign(TextView::CENTER);
+  videoArtworkFallbackText->setVAlign(TextView::MIDDLE);
+  videoArtworkFallbackText->setThemedColor(ui_theme::textMuted);
+  videoArtworkBackdrop->addView(videoArtworkFallbackText);
+
+  videoArtworkImage = new ImageView(0, 0, 0, 0);
+  videoArtworkImage->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setThemedBorderColor(ui_theme::hairlineStrong)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::panelRadius());
+  videoArtworkBackdrop->addView(videoArtworkImage);
+
   videoControlsPanel = new View();
   videoControlsPanel->setHeight(190)
       ->setFlexDirection(FlexDirection::Column)
@@ -890,9 +926,11 @@ void MusicPlayerScene::buildVideoOverlay() {
   transportRow->addView(closeButton);
   videoControlsPanel->addView(transportRow);
 
+  videoOverlayRoot->addView(videoArtworkBackdrop);
   videoOverlayRoot->addView(videoControlsPanel);
   addView(videoOverlayRoot);
   videoOverlayRoot->applyYogaLayout();
+  layoutVideoArtwork();
 }
 
 void MusicPlayerScene::buildLibraryPage(View *page) {
@@ -3557,44 +3595,20 @@ void MusicPlayerScene::watchVideo() {
     return;
   }
 
-  std::atomic_bool cancelled{false};
-  auto chart = play_options::parseChart(track->representativeChart, cancelled,
-                                        "music video");
-  if (cancelled.load()) {
-    setStatus("Video loading cancelled.");
-    return;
-  }
-  if (!chart) {
-    setStatus("Could not parse chart for video.");
-    return;
-  }
-  if (!chartHasBgaEvents(*chart)) {
-    setStatus("No BGA is available for this track.");
-    return;
-  }
-
   if (!playback.loaded) {
     playNowPlaying({*track}, 0, "Select a track first.",
                    "Playing Now Playing.");
+  } else {
+    context.jukebox.stop();
   }
 
-  context.jukebox.stop();
   videoPreviousVisualsEnabled = context.jukebox.getVisualsEnabled();
   videoRestoresVisualsEnabled = true;
   context.jukebox.setVisualsEnabled(true);
-  context.jukebox.loadVisuals(*chart, cancelled);
-  if (cancelled.load()) {
-    context.jukebox.unloadVisuals();
-    context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
-    videoRestoresVisualsEnabled = false;
-    setStatus("Video loading cancelled.");
-    return;
-  }
 
-  videoChart = std::move(chart);
   videoTrackId = favoriteKeyForTrack(*track);
   videoFullscreenActive = true;
-  videoVisualsLoaded = true;
+  context.ignoreBgaPostOptions.store(true, std::memory_order_release);
   videoSeekMouseDown = false;
   activeVideoSeekTouchId = -1;
   if (rootLayout != nullptr) {
@@ -3606,10 +3620,54 @@ void MusicPlayerScene::watchVideo() {
                               rendering::window_height);
     videoOverlayRoot->applyYogaLayout();
   }
+  loadVideoVisualsForTrack(*track, true);
   showVideoControls(5000);
   updateVideoFullscreen();
   refreshVideoOverlay();
-  setStatus("Watching BGA.");
+}
+
+bool MusicPlayerScene::loadVideoVisualsForTrack(const MusicTrack &track,
+                                                bool showStatusMessage) {
+  videoTrackId = favoriteKeyForTrack(track);
+  std::atomic_bool cancelled{false};
+  auto chart = play_options::parseChart(track.representativeChart, cancelled,
+                                        "music video");
+  if (cancelled.load() || !chart || !chartHasBgaEvents(*chart)) {
+    context.jukebox.unloadVisuals();
+    videoChart.reset();
+    videoVisualsLoaded = false;
+    showVideoArtwork(track);
+    if (showStatusMessage) {
+      if (cancelled.load()) {
+        setStatus("Video loading cancelled. Showing jacket.");
+      } else if (!chart) {
+        setStatus("Could not parse chart video. Showing jacket.");
+      } else {
+        setStatus("No BGA is available for this track. Showing jacket.");
+      }
+    }
+    return false;
+  }
+
+  hideVideoArtwork();
+  context.jukebox.loadVisuals(*chart, cancelled);
+  if (cancelled.load()) {
+    context.jukebox.unloadVisuals();
+    videoChart.reset();
+    videoVisualsLoaded = false;
+    showVideoArtwork(track);
+    if (showStatusMessage) {
+      setStatus("Video loading cancelled. Showing jacket.");
+    }
+    return false;
+  }
+
+  videoChart = std::move(chart);
+  videoVisualsLoaded = true;
+  if (showStatusMessage) {
+    setStatus("Watching BGA.");
+  }
+  return true;
 }
 
 void MusicPlayerScene::exitVideoFullscreen() {
@@ -3620,8 +3678,10 @@ void MusicPlayerScene::exitVideoFullscreen() {
 
   videoFullscreenActive = false;
   videoVisualsLoaded = false;
+  videoShowingArtwork = false;
   videoTrackId.clear();
   videoChart.reset();
+  displayedVideoArtworkPath.clear();
   videoSeekMouseDown = false;
   activeVideoSeekTouchId = -1;
   videoControlsVisible = false;
@@ -3632,10 +3692,17 @@ void MusicPlayerScene::exitVideoFullscreen() {
   if (videoControlsPanel != nullptr) {
     videoControlsPanel->setVisible(false);
   }
+  if (videoArtworkBackdrop != nullptr) {
+    videoArtworkBackdrop->setVisible(false);
+  }
+  if (videoArtworkImage != nullptr) {
+    videoArtworkImage->freeImage();
+  }
   if (rootLayout != nullptr) {
     rootLayout->setVisible(true);
   }
   context.jukebox.unloadVisuals();
+  context.ignoreBgaPostOptions.store(false, std::memory_order_release);
   if (videoRestoresVisualsEnabled) {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
     videoRestoresVisualsEnabled = false;
@@ -3651,9 +3718,7 @@ void MusicPlayerScene::updateVideoFullscreen() {
   const auto current = context.musicPlayer.CurrentTrackSnapshot();
   if (current && !videoTrackId.empty() &&
       favoriteKeyForTrack(*current) != videoTrackId) {
-    exitVideoFullscreen();
-    setStatus("Video closed because the current track changed.");
-    return;
+    loadVideoVisualsForTrack(*current, true);
   }
 
   const auto playback = context.musicPlayer.PlaybackState();
@@ -3714,6 +3779,59 @@ void MusicPlayerScene::refreshVideoOverlay() {
   }
 }
 
+void MusicPlayerScene::showVideoArtwork(const MusicTrack &track) {
+  videoShowingArtwork = true;
+  const std::filesystem::path path = artworkPathForDisplay(track);
+  if (videoArtworkBackdrop != nullptr) {
+    videoArtworkBackdrop->setVisible(true);
+  }
+  if (videoArtworkImage == nullptr || videoArtworkFallbackText == nullptr) {
+    return;
+  }
+  if (path.empty()) {
+    displayedVideoArtworkPath.clear();
+    videoArtworkImage->freeImage();
+    videoArtworkImage->setVisible(false);
+    videoArtworkFallbackText->setVisible(true);
+    return;
+  }
+  if (path != displayedVideoArtworkPath) {
+    displayedVideoArtworkPath = path;
+    videoArtworkImage->setImageAsync(fspath_to_path_t(path), true);
+  }
+  layoutVideoArtwork();
+  videoArtworkImage->setVisible(true);
+  videoArtworkFallbackText->setVisible(false);
+}
+
+void MusicPlayerScene::hideVideoArtwork() {
+  videoShowingArtwork = false;
+  if (videoArtworkBackdrop != nullptr) {
+    videoArtworkBackdrop->setVisible(false);
+  }
+}
+
+void MusicPlayerScene::layoutVideoArtwork() {
+  if (videoArtworkBackdrop != nullptr) {
+    videoArtworkBackdrop->setSize(rendering::window_width,
+                                  rendering::window_height);
+    videoArtworkBackdrop->setPositionNoLayout(0, 0, YGPositionTypeAbsolute);
+  }
+  if (videoArtworkImage == nullptr) {
+    return;
+  }
+  const int width = std::max(1, rendering::window_width);
+  const int height = std::max(1, rendering::window_height);
+  const int limit = std::max(1, std::min(width, height));
+  const int size = std::clamp(static_cast<int>(static_cast<float>(limit) *
+                                               0.76f),
+                              180, limit);
+  const int x = std::max(0, (width - size) / 2);
+  const int y = std::max(0, (height - size) / 2);
+  videoArtworkImage->setSize(size, size);
+  videoArtworkImage->setPositionNoLayout(x, y, YGPositionTypeAbsolute);
+}
+
 void MusicPlayerScene::showVideoControls(Uint64 durationMs) {
   if (!videoFullscreenActive) {
     return;
@@ -3765,12 +3883,32 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
   const bool controlsVisible =
       videoControlsPanel != nullptr && videoControlsPanel->getVisible();
   if (controlsVisible) {
+    if (event.type == SDL_MOUSEBUTTONDOWN &&
+        event.button.button == SDL_BUTTON_LEFT &&
+        event.button.which != SDL_TOUCH_MOUSEID) {
+      int uiX = 0;
+      int uiY = 0;
+      mouseButtonEventToUi(event.button, uiX, uiY);
+      if (!isInsideView(videoControlsPanel, uiX, uiY)) {
+        hideVideoControls();
+        return true;
+      }
+    } else if (event.type == SDL_FINGERDOWN) {
+      float uiX = 0.0f;
+      float uiY = 0.0f;
+      rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
+      if (!isInsideView(videoControlsPanel, uiX, uiY)) {
+        hideVideoControls();
+        return true;
+      }
+    }
     if (handleProgressSeekEvents(event, videoProgressTrack, videoSeekMouseDown,
                                  activeVideoSeekTouchId)) {
       showVideoControls();
       return true;
     }
     Scene::handleEvents(event);
+    return true;
   }
 
   switch (event.type) {
@@ -3796,9 +3934,6 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
 }
 
 void MusicPlayerScene::playNext() {
-  if (videoFullscreenActive) {
-    exitVideoFullscreen();
-  }
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayNextAsync(status, "Playing next track.");
@@ -3807,9 +3942,6 @@ void MusicPlayerScene::playNext() {
 }
 
 void MusicPlayerScene::playPrevious() {
-  if (videoFullscreenActive) {
-    exitVideoFullscreen();
-  }
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayPreviousAsync(status, "Playing previous track.");

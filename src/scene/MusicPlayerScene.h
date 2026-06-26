@@ -169,9 +169,14 @@ private:
                                 bool &mouseDown,
                                 SDL_FingerID &activeTouchId);
   void watchVideo();
+  bool loadVideoVisualsForTrack(const MusicTrack &track,
+                                bool showStatusMessage);
   void exitVideoFullscreen();
   void updateVideoFullscreen();
   void refreshVideoOverlay();
+  void showVideoArtwork(const MusicTrack &track);
+  void hideVideoArtwork();
+  void layoutVideoArtwork();
   void showVideoControls(Uint64 durationMs = 4000);
   void hideVideoControls();
   bool handleVideoFullscreenEvents(SDL_Event &event);
@@ -182,6 +187,7 @@ private:
 
   View *rootLayout = nullptr;
   View *videoOverlayRoot = nullptr;
+  View *videoArtworkBackdrop = nullptr;
   View *videoControlsPanel = nullptr;
   View *libraryPage = nullptr;
   View *favoritesPage = nullptr;
@@ -220,7 +226,9 @@ private:
   TextView *videoDetailText = nullptr;
   TextView *videoPlaybackText = nullptr;
   TextView *videoPlayPauseButtonText = nullptr;
+  TextView *videoArtworkFallbackText = nullptr;
   ImageView *artworkImage = nullptr;
+  ImageView *videoArtworkImage = nullptr;
   ImageView *libraryArtworkImage = nullptr;
   ImageView *favoritesArtworkImage = nullptr;
   RecyclerView<MusicTrack> *libraryList = nullptr;
@@ -271,6 +279,7 @@ private:
   std::filesystem::path displayedLibraryArtworkPath;
   std::filesystem::path displayedFavoritesArtworkPath;
   std::filesystem::path displayedArtworkPath;
+  std::filesystem::path displayedVideoArtworkPath;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   bool seekMouseDown = false;
@@ -279,6 +288,7 @@ private:
   SDL_FingerID activeVideoSeekTouchId = -1;
   bool videoFullscreenActive = false;
   bool videoVisualsLoaded = false;
+  bool videoShowingArtwork = false;
   bool videoPreviousVisualsEnabled = true;
   bool videoRestoresVisualsEnabled = false;
   bool videoControlsVisible = false;
