@@ -6,6 +6,10 @@
 	<string>AsoBMaShow saves exported replay videos to your Photos library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>AsoBMaShow needs Photos access to save exported replay videos.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>

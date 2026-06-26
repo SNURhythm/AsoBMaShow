@@ -139,6 +139,7 @@ private:
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
+      Favorites,
       SolidArchives,
       DifficultyTable,
       DifficultyLevel,
@@ -201,6 +202,8 @@ private:
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
   TextView *parseLogButtonText = nullptr;
+  Button *musicButton = nullptr;
+  TextView *musicButtonText = nullptr;
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
@@ -218,6 +221,7 @@ private:
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   View *parseLogModalRoot = nullptr;
+  View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
   View *unzipModalRoot = nullptr;
   View *unzipProgressTrack = nullptr;
@@ -235,6 +239,35 @@ private:
   TextView *parseLogText = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
+  TextView *musicTrackText = nullptr;
+  TextView *musicStatusText = nullptr;
+  TextView *musicPlaylistText = nullptr;
+  Button *musicSelectedButton = nullptr;
+  Button *musicAddSelectedButton = nullptr;
+  Button *musicRemoveSelectedButton = nullptr;
+  Button *musicPlaylistButton = nullptr;
+  Button *musicClearPlaylistButton = nullptr;
+  Button *musicRandomButton = nullptr;
+  Button *musicPreviousButton = nullptr;
+  Button *musicSeekBackwardButton = nullptr;
+  Button *musicPlayPauseButton = nullptr;
+  Button *musicSeekForwardButton = nullptr;
+  Button *musicNextButton = nullptr;
+  Button *musicStopButton = nullptr;
+  Button *musicCloseButton = nullptr;
+  TextView *musicSelectedButtonText = nullptr;
+  TextView *musicAddSelectedButtonText = nullptr;
+  TextView *musicRemoveSelectedButtonText = nullptr;
+  TextView *musicPlaylistButtonText = nullptr;
+  TextView *musicClearPlaylistButtonText = nullptr;
+  TextView *musicRandomButtonText = nullptr;
+  TextView *musicPreviousButtonText = nullptr;
+  TextView *musicSeekBackwardButtonText = nullptr;
+  TextView *musicPlayPauseButtonText = nullptr;
+  TextView *musicSeekForwardButtonText = nullptr;
+  TextView *musicNextButtonText = nullptr;
+  TextView *musicStopButtonText = nullptr;
+  TextView *musicCloseButtonText = nullptr;
   ScrollView *tasksScrollView = nullptr;
   View *tasksContent = nullptr;
   TextView *tasksText = nullptr;
@@ -406,6 +439,7 @@ private:
   int lastSafeRight = -1;
   std::uint64_t parseLogDisplayedRevision = 0;
   ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
+  std::string musicStatusMessage;
 
   void initView(ApplicationContext &context);
   void applyThemeChange();
@@ -463,6 +497,7 @@ private:
   void requestLibraryReload(bool includeFolders);
   void applyPendingUiUpdates();
   void selectFolder(const LibraryFolderItem &item);
+  bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
@@ -474,6 +509,7 @@ private:
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
+  void cancelPreviewLoading(bool stopPreviewAudio);
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
@@ -508,6 +544,21 @@ private:
   void showParseLogModal();
   void hideParseLogModal();
   void refreshParseLogModal();
+  void buildMusicModal();
+  void showMusicModal();
+  void hideMusicModal();
+  void refreshMusicModal();
+  void playSelectedChartAsMusic();
+  void addSelectedChartToMusicPlaylist();
+  void removeSelectedChartFromMusicPlaylist();
+  void playSavedMusicPlaylist();
+  void clearSavedMusicPlaylist();
+  void playRandomMusicLibrary();
+  void toggleMusicPlayback();
+  void seekMusicRelative(long long deltaMicros);
+  void playNextMusicTrack();
+  void playPreviousMusicTrack();
+  void stopMusicPlayback();
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();

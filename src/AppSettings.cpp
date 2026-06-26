@@ -634,6 +634,12 @@ bool AppSettings::save() const {
        << gaugeBarPositionToString(sanitized.gaugeBarPosition) << "\n";
   file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
        << "\n";
+  file << "system_playback_show_jacket="
+       << (sanitized.systemPlaybackShowJacket ? 1 : 0) << "\n";
+  file << "system_playback_show_title="
+       << (sanitized.systemPlaybackShowTitle ? 1 : 0) << "\n";
+  file << "system_playback_show_artist="
+       << (sanitized.systemPlaybackShowArtist ? 1 : 0) << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
@@ -781,6 +787,21 @@ AppSettings AppSettings::load() {
             parseGaugeBarPosition(value, settings.gaugeBarPosition);
       } else if (key == "ui_theme_mode") {
         settings.uiThemeMode = parseUiThemeMode(value, settings.uiThemeMode);
+      } else if (key == "system_playback_show_jacket") {
+        bool parsed = settings.systemPlaybackShowJacket;
+        if (parseBool(value, parsed)) {
+          settings.systemPlaybackShowJacket = parsed;
+        }
+      } else if (key == "system_playback_show_title") {
+        bool parsed = settings.systemPlaybackShowTitle;
+        if (parseBool(value, parsed)) {
+          settings.systemPlaybackShowTitle = parsed;
+        }
+      } else if (key == "system_playback_show_artist") {
+        bool parsed = settings.systemPlaybackShowArtist;
+        if (parseBool(value, parsed)) {
+          settings.systemPlaybackShowArtist = parsed;
+        }
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

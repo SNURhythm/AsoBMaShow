@@ -543,6 +543,8 @@ bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
   texture = nextTexture;
   currentImageKey = key;
   currentImagePath = path;
+  currentImageWidth = cache.width;
+  currentImageHeight = cache.height;
   if (storeCache) {
     imageCache[key] = cache;
   }
@@ -617,6 +619,8 @@ void ImageView::freeTexture() {
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
+  currentImageWidth = 0;
+  currentImageHeight = 0;
 }
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }

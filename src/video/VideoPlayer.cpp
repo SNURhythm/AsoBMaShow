@@ -206,6 +206,9 @@ long long VideoPlayer::getDurationMicros() const {
 void VideoPlayer::update() {
   if (!isPlaying)
     return;
+  if (decodeSuspended.load(std::memory_order_acquire)) {
+    return;
+  }
   if (formatContext == nullptr || videoStreamIndex < 0) {
     return;
   }
@@ -372,11 +375,32 @@ void VideoPlayer::play() {
   eofCV.notify_all();
 }
 
+void VideoPlayer::playFrom(int64_t micro) {
+  micro = std::max<int64_t>(0, micro);
+  seek(micro);
+  startTime = stopwatch->elapsedMicros() - micro;
+  lastFramePTS = static_cast<double>(micro) / 1000000.0;
+  isPlaying = true;
+  isPaused = false;
+  isEOF = false;
+  eofCV.notify_all();
+}
+
 void VideoPlayer::pause() { isPaused = true; }
 
 void VideoPlayer::stop() {
   isPlaying = false;
   hasVideoFrame = false;
+}
+
+void VideoPlayer::setDecodeSuspended(bool suspended) {
+  const bool previous =
+      decodeSuspended.exchange(suspended, std::memory_order_acq_rel);
+  if (previous == suspended) {
+    return;
+  }
+  freeSpace.notify_all();
+  eofCV.notify_all();
 }
 
 void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
@@ -473,12 +497,16 @@ void VideoPlayer::predecodeFrames() {
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
       freeSpace.wait(lock, [this] {
-        return bufferSize < maxBufferSize || !predecodingActive;
+        return !predecodingActive ||
+               (!decodeSuspended.load(std::memory_order_acquire) &&
+                bufferSize < maxBufferSize);
       });
     }
 
     if (!predecodingActive)
       break;
+    if (decodeSuspended.load(std::memory_order_acquire))
+      continue;
 
     bool readFailed = false;
     {

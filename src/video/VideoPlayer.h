@@ -29,9 +29,11 @@ public:
   void update();
   void render();
   void play();
+  void playFrom(int64_t micro);
   void pause();
   void stop();
   void seek(int64_t micro);
+  void setDecodeSuspended(bool suspended);
   long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
@@ -48,6 +50,7 @@ private:
   std::atomic<bool> isPlaying{false};
   std::atomic<bool> isPaused{false};
   std::atomic<bool> predecodingActive{false};
+  std::atomic<bool> decodeSuspended{false};
   std::thread predecodeThread;
 
   AVFormatContext *formatContext = nullptr;

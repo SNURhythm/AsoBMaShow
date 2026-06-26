@@ -619,6 +619,19 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     outPtr[i] = (ma_int16)(sample * 32767.0f);
   }
 }
+
+ma_result initMiniaudioDevice(const ma_device_config *deviceConfig,
+                              ma_device *device) {
+#if TARGET_OS_IPHONE
+  ma_context_config contextConfig = ma_context_config_init();
+  contextConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
+  contextConfig.coreaudio.sessionCategoryOptions =
+      ma_ios_session_category_option_mix_with_others;
+  return ma_device_init_ex(nullptr, 0, &contextConfig, deviceConfig, device);
+#else
+  return ma_device_init(nullptr, deviceConfig, device);
+#endif
+}
 } // namespace
 
 // Miniaudio Backend Implementation
@@ -633,7 +646,7 @@ public:
     deviceConfig.dataCallback = dataCallback;
     deviceConfig.pUserData = userData;
 
-    if (ma_device_init(nullptr, &deviceConfig, &device) != MA_SUCCESS) {
+    if (initMiniaudioDevice(&deviceConfig, &device) != MA_SUCCESS) {
       throw std::runtime_error(
           "Failed to initialize miniaudio playback device.");
     }

@@ -1,10 +1,19 @@
 package com.snurhythm.asobmashow;
 
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.media.AudioAttributes;
+import android.media.MediaDescription;
+import android.media.MediaMetadata;
+import android.media.MediaPlayer;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,6 +37,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -41,6 +51,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final String ERROR_PREFIX = "__ERROR__:";
     private static final String PENDING_IMPORT_RESULT = "__PENDING_ARCHIVE_IMPORT__";
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
+    private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
 
     private final Object pickerLock = new Object();
     private CountDownLatch pickerLatch;
@@ -60,6 +71,18 @@ public class AsoBMaShowActivity extends SDLActivity {
     private boolean pendingArchiveImportCopyRunning = false;
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
+    private final Object nativeMusicLock = new Object();
+    private MediaPlayer nativeMusicPlayer;
+    private MediaSession nativeMusicSession;
+    private String nativeMusicTitle = "AsoBMaShow";
+    private String nativeMusicArtist = "AsoBMaShow";
+    private String nativeMusicAlbum = "";
+    private String nativeMusicArtworkPath = "";
+    private Bitmap nativeMusicArtwork;
+    private long nativeMusicDurationMicros = 0;
+    private String nativeMusicQueueTitle = "";
+    private final ArrayList<MediaSession.QueueItem> nativeMusicQueue = new ArrayList<>();
+    private long nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
 
     private static class PendingImportRequest {
         final Uri uri;
@@ -95,6 +118,14 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     @Override
+    protected void onDestroy() {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+        }
+        super.onDestroy();
+    }
+
+    @Override
     public void setOrientationBis(int width, int height, boolean resizable, String hint) {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
     }
@@ -112,6 +143,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long downloadedBytes,
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
+    static native void nativeMusicControlEvent(String eventName);
 
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
@@ -584,6 +616,209 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    public String loadNativeMusic(String pathText, String metadataText, long durationMicros) {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+            try {
+                MediaPlayer player = new MediaPlayer();
+                player.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+                player.setDataSource(pathText);
+                player.prepare();
+                String[] metadataLines = metadataText == null
+                        ? new String[0]
+                        : metadataText.split("\\n", -1);
+                nativeMusicTitle = metadataLine(metadataLines, 0, new File(pathText).getName());
+                nativeMusicArtist = metadataLine(metadataLines, 1, "AsoBMaShow");
+                nativeMusicAlbum = metadataLine(metadataLines, 2, "");
+                nativeMusicArtworkPath = metadataLine(metadataLines, 3, "");
+                nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
+                player.setOnCompletionListener(ignored ->
+                        nativeMusicControlEvent("finished"));
+                nativeMusicPlayer = player;
+                nativeMusicDurationMicros = durationMicros > 0
+                        ? durationMicros
+                        : Math.max(0L, player.getDuration()) * 1000L;
+                ensureNativeMusicSessionLocked();
+                updateNativeMusicSessionLocked(false, false);
+                return "OK";
+            } catch (Exception e) {
+                releaseNativeMusicPlayerLocked();
+                return ERROR_PREFIX + messageForException(e, "Could not load music.");
+            }
+        }
+    }
+
+    public String updateNativeMusicMetadata(String metadataText, long durationMicros) {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return "OK";
+            }
+            try {
+                String[] metadataLines = metadataText == null
+                        ? new String[0]
+                        : metadataText.split("\\n", -1);
+                nativeMusicTitle = metadataLine(metadataLines, 0, "AsoBMaShow");
+                nativeMusicArtist = metadataLine(metadataLines, 1, "AsoBMaShow");
+                nativeMusicAlbum = metadataLine(metadataLines, 2, "");
+                nativeMusicArtworkPath = metadataLine(metadataLines, 3, "");
+                nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
+                if (durationMicros > 0) {
+                    nativeMusicDurationMicros = durationMicros;
+                }
+                updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(
+                        e, "Could not update music metadata.");
+            }
+        }
+    }
+
+    public String updateNativeMusicQueue(String queueTitle, String queueText, long currentIndex) {
+        synchronized (nativeMusicLock) {
+            try {
+                ArrayList<MediaSession.QueueItem> nextQueue = new ArrayList<>();
+                String[] lines = queueText == null || queueText.isEmpty()
+                        ? new String[0]
+                        : queueText.split("\\n", -1);
+                for (String line : lines) {
+                    if (line == null || line.trim().isEmpty()) {
+                        continue;
+                    }
+                    String[] fields = line.split("\\t", -1);
+                    long itemId = parseLongOrDefault(
+                            metadataField(fields, 0, ""),
+                            nextQueue.size() + 1L);
+                    String title = metadataField(fields, 1, "AsoBMaShow");
+                    String artist = metadataField(fields, 2, "AsoBMaShow");
+                    String album = metadataField(fields, 3, "");
+                    String artworkPath = metadataField(fields, 4, "");
+                    MediaDescription.Builder description = new MediaDescription.Builder()
+                            .setMediaId(Long.toString(itemId))
+                            .setTitle(title)
+                            .setSubtitle(artist)
+                            .setDescription(album);
+                    if (!artworkPath.isEmpty()) {
+                        File artworkFile = new File(artworkPath);
+                        if (artworkFile.exists()) {
+                            description.setIconUri(Uri.fromFile(artworkFile));
+                        }
+                    }
+                    nextQueue.add(new MediaSession.QueueItem(
+                            description.build(), itemId));
+                }
+
+                nativeMusicQueueTitle =
+                        queueTitle == null || queueTitle.trim().isEmpty()
+                                ? "Now Playing"
+                                : queueTitle.trim();
+                nativeMusicQueue.clear();
+                nativeMusicQueue.addAll(nextQueue);
+                nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
+                if (currentIndex >= 0 && currentIndex < nativeMusicQueue.size()) {
+                    nativeMusicActiveQueueItemId =
+                            nativeMusicQueue.get((int) currentIndex).getQueueId();
+                }
+                if (nativeMusicSession != null) {
+                    boolean playing = nativeMusicPlayer != null && nativeMusicPlayer.isPlaying();
+                    updateNativeMusicSessionLocked(playing);
+                }
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(
+                        e, "Could not update music queue.");
+            }
+        }
+    }
+
+    public String playNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                nativeMusicPlayer.start();
+                updateNativeMusicSessionLocked(true);
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not play music.");
+            }
+        }
+    }
+
+    public String pauseNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                if (nativeMusicPlayer.isPlaying()) {
+                    nativeMusicPlayer.pause();
+                }
+                updateNativeMusicSessionLocked(false);
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not pause music.");
+            }
+        }
+    }
+
+    public String stopNativeMusic() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                if (nativeMusicPlayer.isPlaying()) {
+                    nativeMusicPlayer.pause();
+                }
+                nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
+                updateNativeMusicSessionLocked(false, false);
+                stopNativeMusicForegroundServiceLocked();
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not stop music.");
+            }
+        }
+    }
+
+    public String seekNativeMusic(String positionMicrosText) {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return ERROR_PREFIX + "No music is loaded.";
+            }
+            try {
+                long positionMicros = Math.max(0L, Long.parseLong(positionMicrosText));
+                nativeMusicPlayer.seekTo(positionMicros / 1000L, MediaPlayer.SEEK_CLOSEST);
+                updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(e, "Could not seek music.");
+            }
+        }
+    }
+
+    public String nativeMusicState() {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return "0\n0\n0\n0";
+            }
+            try {
+                long positionMicros = Math.max(0L, nativeMusicPlayer.getCurrentPosition()) * 1000L;
+                long durationMicros = nativeMusicDurationMicros > 0
+                        ? nativeMusicDurationMicros
+                        : Math.max(0L, nativeMusicPlayer.getDuration()) * 1000L;
+                return "1\n" + (nativeMusicPlayer.isPlaying() ? "1" : "0") +
+                        "\n" + positionMicros + "\n" + durationMicros;
+            } catch (Exception e) {
+                return "0\n0\n0\n0";
+            }
+        }
+    }
+
     private HttpURLConnection openHttpConnection(String urlText, String method,
                                                  int maxRedirects) throws IOException {
         String currentUrl = urlText;
@@ -670,6 +905,207 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         nativeDownloadUrlToFileProgress(progressToken, total, totalBytes > 0 ? totalBytes : total);
+    }
+
+    private String metadataLine(String[] lines, int index, String fallback) {
+        return metadataField(lines, index, fallback);
+    }
+
+    private String metadataField(String[] fields, int index, String fallback) {
+        if (fields == null || index < 0 || index >= fields.length) {
+            return fallback;
+        }
+        return fields[index] == null ? "" : fields[index].trim();
+    }
+
+    private long parseLongOrDefault(String value, long fallback) {
+        try {
+            return Long.parseLong(value);
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private void ensureNativeMusicSessionLocked() {
+        if (nativeMusicSession != null) {
+            return;
+        }
+        nativeMusicSession = new MediaSession(this, "AsoBMaShowMusic");
+        nativeMusicSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        nativeMusicSession.setCallback(new MediaSession.Callback() {
+            @Override
+            public void onPlay() {
+                playNativeMusic();
+            }
+
+            @Override
+            public void onPause() {
+                pauseNativeMusic();
+            }
+
+            @Override
+            public void onStop() {
+                stopNativeMusic();
+            }
+
+            @Override
+            public void onSeekTo(long positionMs) {
+                seekNativeMusic(Long.toString(Math.max(0L, positionMs) * 1000L));
+            }
+
+            @Override
+            public void onSkipToPrevious() {
+                nativeMusicControlEvent("previous");
+            }
+
+            @Override
+            public void onSkipToNext() {
+                nativeMusicControlEvent("next");
+            }
+        });
+    }
+
+    private void updateNativeMusicSessionLocked(boolean playing) {
+        updateNativeMusicSessionLocked(playing, true);
+    }
+
+    private void updateNativeMusicSessionLocked(boolean playing, boolean updateService) {
+        ensureNativeMusicSessionLocked();
+        long durationMs = Math.max(0L, nativeMusicDurationMicros / 1000L);
+        long positionMs = 0L;
+        if (nativeMusicPlayer != null) {
+            try {
+                positionMs = Math.max(0L, nativeMusicPlayer.getCurrentPosition());
+            } catch (Exception ignored) {
+            }
+        }
+
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, nativeMusicTitle)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, nativeMusicArtist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, nativeMusicAlbum)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs);
+        if (nativeMusicArtwork != null) {
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, nativeMusicArtwork);
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, nativeMusicArtwork);
+        }
+        nativeMusicSession.setMetadata(metadata.build());
+        if (nativeMusicQueue.isEmpty()) {
+            nativeMusicSession.setQueue(null);
+            nativeMusicSession.setQueueTitle(null);
+        } else {
+            nativeMusicSession.setQueue(new ArrayList<>(nativeMusicQueue));
+            nativeMusicSession.setQueueTitle(nativeMusicQueueTitle);
+        }
+
+        long actions = PlaybackState.ACTION_PLAY
+                | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE
+                | PlaybackState.ACTION_STOP
+                | PlaybackState.ACTION_SEEK_TO
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackState.ACTION_SKIP_TO_NEXT;
+        int state = nativeMusicPlayer == null
+                ? PlaybackState.STATE_STOPPED
+                : (playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
+        PlaybackState.Builder playbackState = new PlaybackState.Builder()
+                .setActions(actions)
+                .setState(state, positionMs, playing ? 1.0f : 0.0f);
+        if (nativeMusicActiveQueueItemId != NATIVE_MUSIC_UNKNOWN_QUEUE_ID) {
+            playbackState.setActiveQueueItemId(nativeMusicActiveQueueItemId);
+        }
+        nativeMusicSession.setPlaybackState(playbackState.build());
+        nativeMusicSession.setActive(nativeMusicPlayer != null);
+        if (updateService) {
+            updateNativeMusicForegroundServiceLocked(playing);
+        }
+    }
+
+    private void updateNativeMusicForegroundServiceLocked(boolean playing) {
+        if (nativeMusicPlayer == null || nativeMusicSession == null) {
+            stopNativeMusicForegroundServiceLocked();
+            return;
+        }
+        Intent intent = new Intent(this, AsoBMaShowMusicService.class)
+                .setAction(AsoBMaShowMusicService.ACTION_UPDATE)
+                .putExtra(AsoBMaShowMusicService.EXTRA_TITLE, nativeMusicTitle)
+                .putExtra(AsoBMaShowMusicService.EXTRA_ARTIST, nativeMusicArtist)
+                .putExtra(AsoBMaShowMusicService.EXTRA_ALBUM, nativeMusicAlbum)
+                .putExtra(AsoBMaShowMusicService.EXTRA_ARTWORK_PATH, nativeMusicArtworkPath)
+                .putExtra(AsoBMaShowMusicService.EXTRA_PLAYING, playing)
+                .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
+                        nativeMusicSession.getSessionToken());
+        try {
+            if (playing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void stopNativeMusicForegroundServiceLocked() {
+        try {
+            stopService(new Intent(this, AsoBMaShowMusicService.class));
+        } catch (Exception ignored) {
+        }
+        try {
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel(AsoBMaShowMusicService.NOTIFICATION_ID);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseNativeMusicPlayerLocked() {
+        if (nativeMusicPlayer != null) {
+            try {
+                nativeMusicPlayer.release();
+            } catch (Exception ignored) {
+            }
+        }
+        nativeMusicPlayer = null;
+        nativeMusicDurationMicros = 0;
+        nativeMusicTitle = "AsoBMaShow";
+        nativeMusicArtist = "AsoBMaShow";
+        nativeMusicAlbum = "";
+        nativeMusicArtworkPath = "";
+        nativeMusicArtwork = null;
+        nativeMusicQueueTitle = "";
+        nativeMusicQueue.clear();
+        nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
+        if (nativeMusicSession != null) {
+            try {
+                updateNativeMusicSessionLocked(false, false);
+                nativeMusicSession.setActive(false);
+                nativeMusicSession.release();
+            } catch (Exception ignored) {
+            }
+        }
+        nativeMusicSession = null;
+        stopNativeMusicForegroundServiceLocked();
+    }
+
+    private Bitmap decodeNativeMusicArtwork(String pathText) {
+        if (pathText == null || pathText.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return BitmapFactory.decodeFile(pathText);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String messageForException(Exception e, String fallback) {
+        String message = e.getMessage();
+        return message == null || message.isEmpty()
+                ? fallback
+                : message;
     }
 
     private void finishPicker() {

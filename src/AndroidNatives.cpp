@@ -3,6 +3,8 @@
 
 #if TARGET_OS_ANDROID
 
+#include "audio/NativeMusicPlayer.h"
+
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_system.h>
@@ -337,6 +339,56 @@ std::string callActivityStringMethod2Long(const char *methodName,
   return result;
 }
 
+std::string callActivityStringMethodLong(const char *methodName,
+                                         const char *signature,
+                                         const char *argument,
+                                         jlong longArgument,
+                                         std::string &errorMessage) {
+  errorMessage.clear();
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errorMessage = "Android activity is not available.";
+    return {};
+  }
+
+  jclass activityClass = env->GetObjectClass(activity);
+  if (activityClass == nullptr) {
+    errorMessage = "Android activity class is not available.";
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jmethodID method = env->GetMethodID(activityClass, methodName, signature);
+  if (method == nullptr) {
+    errorMessage = std::string("Android activity method missing: ") +
+                   methodName;
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jstring javaArgument = env->NewStringUTF(argument != nullptr ? argument : "");
+  jobject javaResult =
+      env->CallObjectMethod(activity, method, javaArgument, longArgument);
+
+  if (clearPendingJavaException(env, errorMessage)) {
+    env->DeleteLocalRef(javaArgument);
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  std::string result = jstringToUtf8(env, static_cast<jstring>(javaResult));
+  if (javaResult != nullptr) {
+    env->DeleteLocalRef(javaResult);
+  }
+  env->DeleteLocalRef(javaArgument);
+  env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  return result;
+}
+
 std::optional<int> callActivityIntMethod2(const char *methodName,
                                           const char *signature,
                                           const char *argument1,
@@ -412,6 +464,45 @@ std::vector<std::string> splitLines(const std::string &value) {
   return lines;
 }
 
+std::string sanitizeMusicPayloadField(std::string value) {
+  std::replace(value.begin(), value.end(), '\n', ' ');
+  std::replace(value.begin(), value.end(), '\r', ' ');
+  std::replace(value.begin(), value.end(), '\t', ' ');
+  return value;
+}
+
+std::string musicMetadataPayload(const AndroidNativeMusicMetadata &metadata) {
+  return sanitizeMusicPayloadField(metadata.title) + "\n" +
+         sanitizeMusicPayloadField(metadata.artist) + "\n" +
+         sanitizeMusicPayloadField(metadata.album) + "\n" +
+         sanitizeMusicPayloadField(metadata.artworkPath);
+}
+
+std::string musicQueuePayload(const AndroidNativeMusicQueue &queue) {
+  std::ostringstream stream;
+  for (std::size_t i = 0; i < queue.items.size(); ++i) {
+    if (i > 0) {
+      stream << '\n';
+    }
+    const auto &item = queue.items[i];
+    stream << item.itemId << '\t'
+           << sanitizeMusicPayloadField(item.metadata.title) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.artist) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.album) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.artworkPath) << '\t'
+           << std::max(0LL, item.metadata.durationMicros);
+  }
+  return stream.str();
+}
+
+long long parseLongLongOrZero(const std::string &value) {
+  try {
+    return std::stoll(value);
+  } catch (...) {
+    return 0;
+  }
+}
+
 } // namespace
 
 extern "C" JNIEXPORT void JNICALL
@@ -444,6 +535,22 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelle
     return JNI_TRUE;
   }
   return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeMusicControlEvent(
+    JNIEnv *env, jclass, jstring eventName) {
+  const std::string event = jstringToUtf8(env, eventName);
+  if (event == "previous") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Previous);
+  } else if (event == "next") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Next);
+  } else if (event == "finished") {
+    native_music_player::NotifyControlEvent(
+        native_music_player::ControlEvent::Finished);
+  }
 }
 
 std::string GetAndroidExternalFilesDir() {
@@ -882,6 +989,131 @@ bool DownloadURLToFileAndroid(const std::string &url,
   }
   std::string ignored;
   return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool LoadAndroidNativeMusicFile(const std::string &filePath,
+                                const AndroidNativeMusicMetadata &metadata,
+                                std::string &errorMessage) {
+  const std::string payload = musicMetadataPayload(metadata);
+  std::string callError;
+  const std::string result = callActivityStringMethod2Long(
+      "loadNativeMusic",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      filePath.c_str(), payload.c_str(), metadata.durationMicros, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool UpdateAndroidNativeMusicMetadata(
+    const AndroidNativeMusicMetadata &metadata, std::string &errorMessage) {
+  const std::string payload = musicMetadataPayload(metadata);
+  std::string callError;
+  const std::string result = callActivityStringMethodLong(
+      "updateNativeMusicMetadata", "(Ljava/lang/String;J)Ljava/lang/String;",
+      payload.c_str(), metadata.durationMicros, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool UpdateAndroidNativeMusicQueue(const AndroidNativeMusicQueue &queue,
+                                   std::string &errorMessage) {
+  const std::string payload = musicQueuePayload(queue);
+  std::string callError;
+  const std::string result = callActivityStringMethod2Long(
+      "updateNativeMusicQueue",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      queue.title.c_str(), payload.c_str(),
+      static_cast<jlong>(queue.currentIndex), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool PlayAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("playNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool PauseAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("pauseNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool StopAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("stopNativeMusic", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool SeekAndroidNativeMusic(long long positionMicros,
+                            std::string &errorMessage) {
+  std::string callError;
+  const std::string positionText = std::to_string(std::max(0LL, positionMicros));
+  const std::string result =
+      callActivityStringMethod("seekNativeMusic", "(Ljava/lang/String;)"
+                                                  "Ljava/lang/String;",
+                               positionText.c_str(), callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+AndroidNativeMusicState GetAndroidNativeMusicState() {
+  AndroidNativeMusicState state;
+  std::string callError;
+  const std::string result =
+      callActivityStringMethod("nativeMusicState", "()Ljava/lang/String;",
+                               nullptr, callError);
+  if (!callError.empty() || result.rfind(kErrorPrefix, 0) == 0) {
+    return state;
+  }
+
+  const std::vector<std::string> lines = splitLines(result);
+  if (lines.size() < 4) {
+    return state;
+  }
+  state.loaded = lines[0] == "1";
+  state.playing = lines[1] == "1";
+  state.positionMicros = parseLongLongOrZero(lines[2]);
+  state.durationMicros = parseLongLongOrZero(lines[3]);
+  return state;
 }
 
 void RequestAndroidExternalActivityRenderPause() {

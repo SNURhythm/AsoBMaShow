@@ -540,7 +540,8 @@ Jukebox::~Jukebox() {
   clearVisualResources();
 }
 void Jukebox::render() {
-  if (!visualsEnabled.load(std::memory_order_relaxed)) {
+  if (!visualsEnabled.load(std::memory_order_relaxed) ||
+      visualsSuspended.load(std::memory_order_acquire)) {
     return;
   }
   syncVisualClockToAudio();
@@ -604,6 +605,7 @@ void Jukebox::render() {
 
 bool Jukebox::hasActiveVisuals() const {
   return visualsEnabled.load(std::memory_order_relaxed) &&
+         !visualsSuspended.load(std::memory_order_acquire) &&
          (currentBga.load(std::memory_order_relaxed) != -1 ||
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
@@ -708,6 +710,15 @@ std::vector<std::filesystem::path> Jukebox::activeMaterializedVideoPaths()
 
 void Jukebox::setVisualsEnabled(bool enabled) {
   visualsEnabled.store(enabled, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      if (videoPlayer.second != nullptr) {
+        videoPlayer.second->setDecodeSuspended(
+            !enabled || visualsSuspended.load(std::memory_order_acquire));
+      }
+    }
+  }
   wakeScheduler();
   if (enabled) {
     return;
@@ -723,6 +734,28 @@ void Jukebox::setVisualsEnabled(bool enabled) {
 
 bool Jukebox::getVisualsEnabled() const {
   return visualsEnabled.load(std::memory_order_relaxed);
+}
+
+void Jukebox::setVisualsSuspended(bool suspended) {
+  const bool previous =
+      visualsSuspended.exchange(suspended, std::memory_order_acq_rel);
+  if (previous == suspended) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      if (videoPlayer.second != nullptr) {
+        videoPlayer.second->setDecodeSuspended(
+            suspended || !visualsEnabled.load(std::memory_order_relaxed));
+      }
+    }
+  }
+  wakeScheduler();
+}
+
+bool Jukebox::getVisualsSuspended() const {
+  return visualsSuspended.load(std::memory_order_acquire);
 }
 
 void Jukebox::setBgaOffsetMs(int offsetMs) {
@@ -744,6 +777,9 @@ bool Jukebox::loadMaterializedVideoPath(
 
   if (videoPlayer->loadVideo(path_t_to_utf8(playablePath), isCancelled)) {
     auto *loadedVideoPlayer = videoPlayer.get();
+    loadedVideoPlayer->setDecodeSuspended(
+        !visualsEnabled.load(std::memory_order_relaxed) ||
+        visualsSuspended.load(std::memory_order_acquire));
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     replaceVideoPlayerLocked(videoPlayerTable, id, std::move(videoPlayer));
     videoMaterializedPathTable[id] = materializedPath.lexically_normal();
@@ -1689,6 +1725,9 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 void Jukebox::clearVisualResources() {
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
+  bmpCursor = 0;
+  bmpLayerCursor = 0;
+  lastVisualTimelineMicros = -1;
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     videoPlayerTable.clear();
@@ -1707,6 +1746,7 @@ void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
                               std::atomic_bool &isCancelled) {
   bmpCursor = 0;
   bmpLayerCursor = 0;
+  lastVisualTimelineMicros = -1;
   bmpList.clear();
   bmpLayerList.clear();
   for (auto &measure : chart.Measures) {
@@ -1905,13 +1945,22 @@ Jukebox::getRawSongMicrosForBgaTarget(long long bgaTargetMicros) const {
 }
 
 bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
+  return activateVisualAt(visualId, viewId, 0);
+}
+
+bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
+                               long long elapsedMicros) {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     auto videoIt = videoPlayerTable.find(visualId);
     if (videoIt != videoPlayerTable.end()) {
       auto *videoPlayer = videoIt->second.get();
-      videoPlayer->seek(0);
-      videoPlayer->play();
+      if (elapsedMicros > 0) {
+        videoPlayer->playFrom(elapsedMicros);
+      } else {
+        videoPlayer->seek(0);
+        videoPlayer->play();
+      }
       videoPlayer->viewWidth = rendering::window_width;
       videoPlayer->viewHeight = rendering::window_height;
       videoPlayer->viewId = viewId;
@@ -1927,33 +1976,65 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
   return false;
 }
 
-void Jukebox::renderVisualsAt(long long micro) {
-  if (!visualsEnabled.load(std::memory_order_relaxed)) {
-    return;
-  }
+void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
+  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
 
   std::lock_guard<std::mutex> lock(seekLock);
-  stopwatch->seek(micro);
+  if (lastVisualTimelineMicros < 0 ||
+      bgaTimelineMicros < lastVisualTimelineMicros) {
+    currentBga.store(-1, std::memory_order_relaxed);
+    currentBmpLayer.store(-1, std::memory_order_relaxed);
+    bmpCursor = 0;
+    bmpLayerCursor = 0;
+    std::lock_guard<std::mutex> videoLock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      videoPlayer.second->stop();
+    }
+  }
+
+  stopwatch->seek(bgaTimelineMicros);
   while (bmpCursor < bmpList.size()) {
     const auto &target = bmpList[bmpCursor];
-    if (micro < target.first) {
+    if (bgaTimelineMicros < target.first) {
       break;
     }
-    if (activateVisual(target.second, rendering::bga_view)) {
+    const long long elapsedMicros =
+        std::max(0LL, bgaTimelineMicros - target.first);
+    if (activateVisualAt(target.second, rendering::bga_view, elapsedMicros)) {
       currentBga.store(target.second, std::memory_order_relaxed);
     }
     bmpCursor++;
   }
   while (bmpLayerCursor < bmpLayerList.size()) {
     const auto &target = bmpLayerList[bmpLayerCursor];
-    if (micro < target.first) {
+    if (bgaTimelineMicros < target.first) {
       break;
     }
-    if (activateVisual(target.second, rendering::bga_layer_view)) {
+    const long long elapsedMicros =
+        std::max(0LL, bgaTimelineMicros - target.first);
+    if (activateVisualAt(target.second, rendering::bga_layer_view,
+                         elapsedMicros)) {
       currentBmpLayer.store(target.second, std::memory_order_relaxed);
     }
     bmpLayerCursor++;
   }
+  lastVisualTimelineMicros = bgaTimelineMicros;
+}
+
+void Jukebox::seekVisualsToSongTime(long long rawSongMicros) {
+  if (!visualsEnabled.load(std::memory_order_relaxed) ||
+      visualsSuspended.load(std::memory_order_acquire)) {
+    return;
+  }
+  advanceVisualsAtTimelineMicros(getBgaTimelineMicros(rawSongMicros));
+}
+
+void Jukebox::renderVisualsAt(long long micro) {
+  if (!visualsEnabled.load(std::memory_order_relaxed) ||
+      visualsSuspended.load(std::memory_order_acquire)) {
+    return;
+  }
+  advanceVisualsAtTimelineMicros(micro);
   render();
 }
 
@@ -2016,81 +2097,78 @@ void Jukebox::play() {
           scheduleNextWake(positionMicro + kSchedulerTickMicros);
         }
 
-        while (bmpCursor < bmpList.size()) {
-          auto &target = bmpList[bmpCursor];
-          if (bgaPositionMicro < target.first) {
-            break;
-          }
-          if (!visualsEnabled.load(std::memory_order_relaxed)) {
+        const bool shouldAdvanceVisuals =
+            visualsEnabled.load(std::memory_order_relaxed) &&
+            !visualsSuspended.load(std::memory_order_acquire);
+        if (shouldAdvanceVisuals) {
+          while (bmpCursor < bmpList.size()) {
+            auto &target = bmpList[bmpCursor];
+            if (bgaPositionMicro < target.first) {
+              break;
+            }
+            bool activated = false;
+            {
+              std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+              auto videoIt = videoPlayerTable.find(target.second);
+              if (videoIt != videoPlayerTable.end()) {
+                auto *videoPlayer = videoIt->second.get();
+                videoPlayer->seek(0);
+                videoPlayer->play();
+                videoPlayer->viewWidth = rendering::window_width;
+                videoPlayer->viewHeight = rendering::window_height;
+                videoPlayer->viewId = rendering::bga_view;
+                activated = true;
+              }
+            }
+            if (!activated) {
+              std::lock_guard<std::mutex> lock(imageTableMutex);
+              if (imageTable.find(target.second) != imageTable.end()) {
+                activated = true;
+              }
+            }
+            if (activated) {
+              currentBga.store(target.second, std::memory_order_relaxed);
+            }
             bmpCursor++;
-            continue;
           }
-          bool activated = false;
-          {
-            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-            auto videoIt = videoPlayerTable.find(target.second);
-            if (videoIt != videoPlayerTable.end()) {
-              auto *videoPlayer = videoIt->second.get();
-              videoPlayer->seek(0);
-              videoPlayer->play();
-              videoPlayer->viewWidth = rendering::window_width;
-              videoPlayer->viewHeight = rendering::window_height;
-              videoPlayer->viewId = rendering::bga_view;
-              activated = true;
+          if (bmpCursor < bmpList.size()) {
+            scheduleNextWake(
+                getRawSongMicrosForBgaTarget(bmpList[bmpCursor].first));
+          }
+          while (bmpLayerCursor < bmpLayerList.size()) {
+            auto &target = bmpLayerList[bmpLayerCursor];
+            if (bgaPositionMicro < target.first) {
+              break;
             }
-          }
-          if (!activated) {
-            std::lock_guard<std::mutex> lock(imageTableMutex);
-            if (imageTable.find(target.second) != imageTable.end()) {
-              activated = true;
+            bool activated = false;
+            {
+              std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+              auto videoIt = videoPlayerTable.find(target.second);
+              if (videoIt != videoPlayerTable.end()) {
+                auto *videoPlayer = videoIt->second.get();
+                videoPlayer->seek(0);
+                videoPlayer->play();
+                videoPlayer->viewWidth = rendering::window_width;
+                videoPlayer->viewHeight = rendering::window_height;
+                videoPlayer->viewId = rendering::bga_layer_view;
+                activated = true;
+              }
             }
-          }
-          if (activated) {
-            currentBga.store(target.second, std::memory_order_relaxed);
-          }
-          bmpCursor++;
-        }
-        if (bmpCursor < bmpList.size()) {
-          scheduleNextWake(
-              getRawSongMicrosForBgaTarget(bmpList[bmpCursor].first));
-        }
-        while (bmpLayerCursor < bmpLayerList.size()) {
-          auto &target = bmpLayerList[bmpLayerCursor];
-          if (bgaPositionMicro < target.first) {
-            break;
-          }
-          if (!visualsEnabled.load(std::memory_order_relaxed)) {
+            if (!activated) {
+              std::lock_guard<std::mutex> lock(imageTableMutex);
+              if (imageTable.find(target.second) != imageTable.end()) {
+                activated = true;
+              }
+            }
+            if (activated) {
+              currentBmpLayer.store(target.second, std::memory_order_relaxed);
+            }
             bmpLayerCursor++;
-            continue;
           }
-          bool activated = false;
-          {
-            std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-            auto videoIt = videoPlayerTable.find(target.second);
-            if (videoIt != videoPlayerTable.end()) {
-              auto *videoPlayer = videoIt->second.get();
-              videoPlayer->seek(0);
-              videoPlayer->play();
-              videoPlayer->viewWidth = rendering::window_width;
-              videoPlayer->viewHeight = rendering::window_height;
-              videoPlayer->viewId = rendering::bga_layer_view;
-              activated = true;
-            }
+          if (bmpLayerCursor < bmpLayerList.size()) {
+            scheduleNextWake(getRawSongMicrosForBgaTarget(
+                bmpLayerList[bmpLayerCursor].first));
           }
-          if (!activated) {
-            std::lock_guard<std::mutex> lock(imageTableMutex);
-            if (imageTable.find(target.second) != imageTable.end()) {
-              activated = true;
-            }
-          }
-          if (activated) {
-            currentBmpLayer.store(target.second, std::memory_order_relaxed);
-          }
-          bmpLayerCursor++;
-        }
-        if (bmpLayerCursor < bmpLayerList.size()) {
-          scheduleNextWake(getRawSongMicrosForBgaTarget(
-              bmpLayerList[bmpLayerCursor].first));
         }
       }
 

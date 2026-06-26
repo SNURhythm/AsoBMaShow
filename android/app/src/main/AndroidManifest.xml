@@ -19,6 +19,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
         android:allowBackup="true"
@@ -28,6 +30,11 @@
         <meta-data
             android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK"
             android:value="0" />
+
+        <service
+            android:name=".AsoBMaShowMusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <activity
             android:name=".AsoBMaShowActivity"

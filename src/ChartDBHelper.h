@@ -24,6 +24,7 @@ struct ChartMetaQuery {
   std::string difficultyText;
   bool clearMarkFilter = false;
   int clearMarkRank = -1;
+  bool favoritesOnly = false;
   int limit = 0;
   int offset = 0;
 };
@@ -36,6 +37,13 @@ struct ChartMetaRecord {
   std::uint64_t archiveSize = 0;
   std::uint64_t archiveUncompressedSize = 0;
   int archiveFileCount = 0;
+  bool favorite = false;
+};
+
+struct MusicTrackRecord {
+  bms_parser::ChartMeta representativeChart;
+  int chartCount = 0;
+  bool useChartPathIdentity = false;
 };
 
 struct ChartEntry {
@@ -131,6 +139,7 @@ public:
   // CreateTable
   bool CreateChartMetaTable(sqlite3 *db);
   bool CreateSolidArchiveTable(sqlite3 *db);
+  bool CreateFavoritesTable(sqlite3 *db);
 
   // Insert ChartMeta
   bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);
@@ -138,6 +147,13 @@ public:
   int CountSolidArchives(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
                           std::vector<bms_parser::ChartMeta> &chartMetas);
+  void SelectMusicTracks(sqlite3 *db,
+                         std::vector<MusicTrackRecord> &tracks);
+  void SelectFavoriteMusicTracks(sqlite3 *db,
+                                 std::vector<MusicTrackRecord> &tracks);
+  int CountFavoriteCharts(sqlite3 *db);
+  bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+                   bool favorite);
   void SearchChartMeta(sqlite3 *db, const std::string &keyword,
                        std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,

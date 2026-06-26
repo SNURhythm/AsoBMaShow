@@ -478,6 +478,13 @@ int main(int argv, char **args) {
   rendering::main_camera = &rendering::game_camera;
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT, "1");
+#if TARGET_OS_IPHONE
+  SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
+#endif
+#if TARGET_OS_ANDROID
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "1");
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE_PAUSEAUDIO, "1");
+#endif
   // print bgfx version
   APP_DEBUG_LOG("bgfx version: %d OSX:%d", BGFX_API_VERSION, BX_PLATFORM_OSX);
   // print libsdl version
@@ -721,6 +728,35 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+  constexpr int kBackgroundEventWaitTimeoutMs = 1000;
+  auto isAppBackgroundEvent = [](const SDL_Event &event) {
+    return event.type == SDL_APP_WILLENTERBACKGROUND ||
+           event.type == SDL_APP_DIDENTERBACKGROUND ||
+           (event.type == SDL_WINDOWEVENT &&
+            (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+             event.window.event == SDL_WINDOWEVENT_HIDDEN ||
+             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST));
+  };
+  auto isAppForegroundEvent = [](const SDL_Event &event) {
+    return event.type == SDL_APP_WILLENTERFOREGROUND ||
+           event.type == SDL_APP_DIDENTERFOREGROUND ||
+           (event.type == SDL_WINDOWEVENT &&
+            (event.window.event == SDL_WINDOWEVENT_RESTORED ||
+             event.window.event == SDL_WINDOWEVENT_SHOWN ||
+             event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
+  };
+  auto setAppBackground = [&](bool background) {
+    const bool previous =
+        context.appInBackground.exchange(background, std::memory_order_acq_rel);
+    if (previous == background) {
+      return;
+    }
+    context.jukebox.setVisualsSuspended(background);
+    if (!background) {
+      lastFrameTime = std::chrono::steady_clock::now();
+      context.jukebox.seekVisualsToSongTime(context.jukebox.getTimeMicros());
+    }
+  };
 #if TARGET_OS_ANDROID
   bool androidSystemSuspended = false;
   bool androidRenderSuspended = false;
@@ -911,23 +947,21 @@ void run() {
         context.quitFlag = true;
       }
 
+      if (isAppBackgroundEvent(event)) {
+        setAppBackground(true);
+      }
+
+      if (isAppForegroundEvent(event)) {
+        setAppBackground(false);
+      }
+
 #if TARGET_OS_ANDROID
-      if (event.type == SDL_APP_WILLENTERBACKGROUND ||
-          event.type == SDL_APP_DIDENTERBACKGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-            event.window.event == SDL_WINDOWEVENT_HIDDEN ||
-            event.window.event == SDL_WINDOWEVENT_FOCUS_LOST))) {
+      if (isAppBackgroundEvent(event)) {
         androidSystemSuspended = true;
         syncAndroidRenderSuspend();
       }
 
-      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
-          event.type == SDL_APP_DIDENTERFOREGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-            event.window.event == SDL_WINDOWEVENT_SHOWN ||
-            event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED))) {
+      if (isAppForegroundEvent(event)) {
         androidSystemSuspended = false;
         androidResumeResizePending = true;
         syncAndroidRenderSuspend();
@@ -935,12 +969,7 @@ void run() {
 #endif
 
 #if TARGET_OS_IPHONE
-      if (event.type == SDL_APP_WILLENTERFOREGROUND ||
-          event.type == SDL_APP_DIDENTERFOREGROUND ||
-          (event.type == SDL_WINDOWEVENT &&
-           (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
-            event.window.event == SDL_WINDOWEVENT_RESTORED ||
-            event.window.event == SDL_WINDOWEVENT_SHOWN))) {
+      if (isAppForegroundEvent(event)) {
         restoreIOSViewportAfterKeyboardFocus();
       }
 #endif
@@ -966,6 +995,14 @@ void run() {
       if (event.type == SDL_TEXTEDITING_EXT) {
         SDL_free(event.editExt.text);
         event.editExt.text = nullptr;
+      }
+    };
+
+    auto waitForBackgroundEvent = [&]() {
+      SDL_Event waitEvent{};
+      if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
+        ++rawEventsInWindow;
+        processEvent(waitEvent);
       }
     };
 
@@ -1034,7 +1071,11 @@ void run() {
     }
 #if TARGET_OS_ANDROID
     if (syncAndroidRenderSuspend()) {
-      SDL_Delay(16);
+      if (context.appInBackground.load(std::memory_order_acquire)) {
+        waitForBackgroundEvent();
+      } else {
+        SDL_Delay(16);
+      }
       context.currentFrame++;
       continue;
     }
@@ -1052,6 +1093,12 @@ void run() {
       androidResumeResizePending = false;
     }
 #endif
+    if (context.appInBackground.load(std::memory_order_acquire) &&
+        !context.replayVideoExportActive.load(std::memory_order_acquire)) {
+      waitForBackgroundEvent();
+      context.currentFrame++;
+      continue;
+    }
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
@@ -1114,12 +1161,20 @@ void run() {
 
         sceneManager.render();
         if (hasActiveVisuals) {
+          const bool ignoreBgaPostOptions =
+              context.ignoreBgaPostOptions.load(std::memory_order_acquire);
           context.jukebox.render();
+          s_blurPass->setBlurStrength(ignoreBgaPostOptions
+                                           ? 0.0f
+                                           : context.settings.bgaBlurStrength);
           s_postProcess.apply();
           rendering::renderFullscreenTextureTint(
               s_blurPass->outputTexture(), s_blurPass->finalView(),
-              static_cast<float>(context.settings.bgaBrightnessPercent) /
-                  100.0f);
+              ignoreBgaPostOptions
+                  ? 1.0f
+                  : static_cast<float>(
+                        context.settings.bgaBrightnessPercent) /
+                        100.0f);
         }
         bgfx::frame();
         renderedFrame = true;
