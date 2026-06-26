@@ -259,6 +259,7 @@ private:
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
+  TextView *clearPlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;
   View *seekProgressFill = nullptr;
   View *videoProgressTrack = nullptr;
@@ -284,6 +285,7 @@ private:
   int selectedPlaylistIndex = -1;
   int selectedQueueIndex = -1;
   int pendingDeletePlaylistId = 0;
+  int pendingClearPlaylistId = 0;
   MusicPlayerTab activeTab = MusicPlayerTab::Library;
   music_playlist::QueueRepeatMode displayedRepeatMode =
       music_playlist::QueueRepeatMode::All;

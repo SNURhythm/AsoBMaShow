@@ -629,6 +629,7 @@ void MusicPlayerScene::cleanupScene() {
   playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
   deletePlaylistButtonText = nullptr;
+  clearPlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
   seekProgressFill = nullptr;
   videoProgressTrack = nullptr;
@@ -1460,10 +1461,9 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   styleButton(downButton, downText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
   downButton->setOnClickListener([this]() { movePlaylistTrack(1); });
-  TextView *clearText = nullptr;
-  auto *clearButton = makeButton("Clear", 17, &clearText);
+  auto *clearButton = makeButton("Clear", 17, &clearPlaylistButtonText);
   clearButton->setFlex(1);
-  styleButton(clearButton, clearText, ui_theme::warningAction,
+  styleButton(clearButton, clearPlaylistButtonText, ui_theme::warningAction,
               ui_theme::warningActionHover, ui_theme::warningActionPressed,
               ui_theme::accentBorder);
   clearButton->setOnClickListener([this]() { clearPlaylist(); });
@@ -2100,6 +2100,10 @@ void MusicPlayerScene::refreshPlaylistDirectoryList(int preferredPlaylistId) {
       playlistChoiceIndexForId(pendingDeletePlaylistId) < 0) {
     pendingDeletePlaylistId = 0;
   }
+  if (pendingClearPlaylistId != 0 &&
+      playlistChoiceIndexForId(pendingClearPlaylistId) < 0) {
+    pendingClearPlaylistId = 0;
+  }
   playlistDirectoryList->setItems(playlistChoices);
   int playlistIndex = -1;
   const int targetPlaylistId =
@@ -2243,6 +2247,13 @@ void MusicPlayerScene::refreshUi() {
                 pendingDeletePlaylistId == selectedPlaylistId
             ? "Confirm Delete"
             : "Delete Playlist");
+  }
+  if (clearPlaylistButtonText != nullptr) {
+    clearPlaylistButtonText->setText(
+        pendingClearPlaylistId != 0 &&
+                pendingClearPlaylistId == selectedPlaylistId
+            ? "Confirm Clear"
+            : "Clear");
   }
   if (libraryGroupButtonText != nullptr) {
     const auto track = selectedLibraryTrack();
@@ -2714,6 +2725,7 @@ void MusicPlayerScene::createPlaylist() {
   std::string errorMessage;
   const int playlistId = context.musicPlayer.CreatePlaylist(name, errorMessage);
   if (playlistId > 0) {
+    pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -2724,6 +2736,7 @@ void MusicPlayerScene::createPlaylist() {
       playlistNameInput->setEditingText(nextPlaylistName());
     }
     setStatus("Created " + selectedPlaylistName() + ".");
+    refreshUi();
   } else {
     setStatus(errorMessage);
   }
@@ -2753,6 +2766,7 @@ void MusicPlayerScene::saveNowPlayingAsPlaylist() {
   }
 
   playlists = context.musicPlayer.PlaylistsSnapshot();
+  pendingClearPlaylistId = 0;
   selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
   playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
   refreshActiveQueueList(true);
@@ -2763,6 +2777,7 @@ void MusicPlayerScene::saveNowPlayingAsPlaylist() {
     playlistNameInput->setEditingText(nextPlaylistName());
   }
   setStatus("Saved Now Playing as " + selectedPlaylistName() + ".");
+  refreshUi();
 }
 
 void MusicPlayerScene::renameSelectedPlaylist() {
@@ -2818,6 +2833,7 @@ void MusicPlayerScene::deleteSelectedPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.DeleteSelectedPlaylist(errorMessage)) {
     pendingDeletePlaylistId = 0;
+    pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -3006,6 +3022,7 @@ void MusicPlayerScene::selectPlaylist(int index) {
   }
   const int playlistId = playlistChoices[static_cast<std::size_t>(index)].id;
   if (isNowPlayingPlaylistId(playlistId)) {
+    pendingClearPlaylistId = 0;
     selectedPlaylistId = kNowPlayingPlaylistId;
     playlistTracks = queueTracks;
     selectedPlaylistDirectoryIndex = index;
@@ -3025,6 +3042,7 @@ void MusicPlayerScene::selectPlaylist(int index) {
 
   std::string errorMessage;
   if (context.musicPlayer.SelectPlaylist(playlistId, errorMessage)) {
+    pendingClearPlaylistId = 0;
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
     selectedPlaylistDirectoryIndex = index;
@@ -3125,6 +3143,7 @@ void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
   if (context.musicPlayer.AddChartToPlaylist(targetPlaylistId,
                                              track->representativeChart,
                                              errorMessage)) {
+    pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     selectedPlaylistId = context.musicPlayer.SelectedPlaylistId();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -3136,12 +3155,14 @@ void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
                             ? static_cast<int>(playlistTracks.size()) - 1
                             : selectedPlaylistIndex);
     setStatus("Added to " + targetPlaylistName + ".");
+    refreshUi();
   } else {
     setStatus(errorMessage);
   }
 }
 
 void MusicPlayerScene::addLibraryTrackToNowPlaying(const MusicTrack &track) {
+  pendingClearPlaylistId = 0;
   std::vector<MusicTrack> tracks = queueTracks;
   const int nextIndex = static_cast<int>(tracks.size());
   tracks.push_back(track);
@@ -3149,6 +3170,7 @@ void MusicPlayerScene::addLibraryTrackToNowPlaying(const MusicTrack &track) {
                                            ? selectedQueueIndex
                                            : nextIndex,
                     "Added to Now Playing.");
+  refreshUi();
 }
 
 void MusicPlayerScene::removePlaylistTrack() {
@@ -3197,15 +3219,19 @@ void MusicPlayerScene::removePlaylistTrack() {
     }
 
     if (currentTrackRemoved && playback.loaded) {
+      pendingClearPlaylistId = 0;
       context.musicPlayer.SetPlaylistAfterCurrentRemoved(
           std::move(tracks), static_cast<std::size_t>(detachedNextIndex),
           music_playlist::kNowPlayingDisplayName);
       refreshActiveQueueList(true);
+      selectPlaylistTrack(-1);
       setStatus("Removed from Now Playing.");
     } else {
+      pendingClearPlaylistId = 0;
       replaceNowPlaying(std::move(tracks),
                         queueIndex >= 0 ? queueIndex : preferredIndex,
                         "Removed from Now Playing.");
+      selectPlaylistTrack(-1);
     }
     return;
   }
@@ -3213,6 +3239,7 @@ void MusicPlayerScene::removePlaylistTrack() {
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromSelectedPlaylist(
           track->representativeChart, errorMessage)) {
+    pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
     syncActiveQueueAfterPlaylistEdit(wasActiveQueue, previousCurrent,
@@ -3221,6 +3248,7 @@ void MusicPlayerScene::removePlaylistTrack() {
     refreshLibraryPlaylistList(selectedLibraryPlaylistId);
     refreshPlaylistList(std::min(nextIndex,
                                  static_cast<int>(playlistTracks.size()) - 1));
+    selectPlaylistTrack(-1);
     setStatus("Removed from " + selectedPlaylistName() + ".");
   } else {
     setStatus(errorMessage);
@@ -3243,17 +3271,20 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
                           : "Selected track is already at the bottom.");
       return;
     }
+    pendingClearPlaylistId = 0;
     std::vector<MusicTrack> tracks = playlistTracks;
     std::swap(tracks[static_cast<std::size_t>(selectedPlaylistIndex)],
               tracks[static_cast<std::size_t>(targetIndex)]);
     replaceNowPlaying(std::move(tracks), targetIndex,
                       delta < 0 ? "Moved track up." : "Moved track down.");
+    refreshUi();
     return;
   }
 
   std::string errorMessage;
   if (context.musicPlayer.MoveChartInSelectedPlaylist(
           track->representativeChart, delta, errorMessage)) {
+    pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
     syncActiveQueueAfterPlaylistEdit(
@@ -3266,16 +3297,38 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
                                                    playlistTracks.size()) -
                                                    1)));
     setStatus(delta < 0 ? "Moved track up." : "Moved track down.");
+    refreshUi();
   } else {
     setStatus(errorMessage);
   }
 }
 
 void MusicPlayerScene::clearPlaylist() {
+  if (selectedPlaylistId == 0) {
+    pendingClearPlaylistId = 0;
+    setStatus("Select a playlist first.");
+    refreshUi();
+    return;
+  }
+  if (playlistTracks.empty()) {
+    pendingClearPlaylistId = 0;
+    setStatus(selectedPlaylistName() + " is already empty.");
+    refreshUi();
+    return;
+  }
+  if (pendingClearPlaylistId != selectedPlaylistId) {
+    pendingClearPlaylistId = selectedPlaylistId;
+    setStatus("Tap Confirm Clear to empty " + selectedPlaylistName() + ".");
+    refreshUi();
+    return;
+  }
+  pendingClearPlaylistId = 0;
+
   if (isNowPlayingPlaylistId(selectedPlaylistId)) {
     std::string ignoredStatus;
     context.musicPlayer.Stop(ignoredStatus);
     replaceNowPlaying({}, -1, "Cleared Now Playing.");
+    refreshUi();
     return;
   }
 
@@ -3293,6 +3346,7 @@ void MusicPlayerScene::clearPlaylist() {
   } else {
     setStatus(errorMessage);
   }
+  refreshUi();
 }
 
 void MusicPlayerScene::syncActiveQueueAfterPlaylistEdit(
