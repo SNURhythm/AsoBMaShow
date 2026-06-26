@@ -28,6 +28,13 @@ loadPlaylistTracks(MusicPlaylistDB &playlistDb, sqlite3 *db, int playlistId) {
   return music_playlist::MakeTracks(records);
 }
 
+std::vector<music_playlist::MusicTrack>
+loadFavoriteTracks(MusicPlaylistDB &playlistDb, sqlite3 *db) {
+  std::vector<MusicTrackRecord> records;
+  playlistDb.SelectFavoriteTracks(db, records);
+  return music_playlist::MakeTracks(records);
+}
+
 bool hasPlaylistId(const std::vector<MusicPlaylistInfo> &playlists,
                    int playlistId) {
   return std::any_of(playlists.begin(), playlists.end(),
@@ -71,6 +78,7 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
 
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectLibraryTracks(db, records);
+  favoriteTracks = loadFavoriteTracks(playlistDb, db);
   playlistDb.Close(db);
 
   libraryTracks = music_playlist::MakeTracks(records);
@@ -92,6 +100,7 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectLibraryTracks(db, records);
   libraryTracks = music_playlist::MakeTracks(records);
+  favoriteTracks = loadFavoriteTracks(playlistDb, db);
 
   RefreshPlaylistCachesLocked(playlistDb, db, preferredSelectedPlaylistId);
   if (defaultPlaylistId <= 0) {
@@ -112,6 +121,12 @@ std::vector<music_playlist::MusicTrack>
 MusicPlayerService::LibraryTracksSnapshot() const {
   std::lock_guard<std::mutex> lock(stateMutex);
   return libraryTracks;
+}
+
+std::vector<music_playlist::MusicTrack>
+MusicPlayerService::FavoriteTracksSnapshot() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return favoriteTracks;
 }
 
 bool MusicPlayerService::LoadLibraryGroupTracks(
@@ -141,6 +156,30 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
   tracks = music_playlist::MakeTracks(records);
   if (tracks.empty()) {
     errorMessage = "No charts were found in the selected group.";
+    return false;
+  }
+  return true;
+}
+
+bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
+                                     bool favorite,
+                                     std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  errorMessage.clear();
+
+  MusicPlaylistDB playlistDb;
+  sqlite3 *db = playlistDb.Connect();
+  if (db == nullptr) {
+    errorMessage = "Could not open chart database.";
+    return false;
+  }
+
+  const bool updated = playlistDb.SetFavorite(db, chartMeta, favorite);
+  favoriteTracks = loadFavoriteTracks(playlistDb, db);
+  playlistDb.Close(db);
+  if (!updated) {
+    errorMessage = favorite ? "Could not add favorite."
+                            : "Could not remove favorite.";
     return false;
   }
   return true;

@@ -250,9 +250,9 @@ std::string chartArtworkOrderBy(const std::string &alias) {
          ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
-std::string lowerTextExpr(const std::string &alias,
-                          std::initializer_list<const char *> columns) {
-  std::string expr = "LOWER(";
+std::string joinedTextExpr(const std::string &alias,
+                           std::initializer_list<const char *> columns) {
+  std::string expr;
   bool first = true;
   for (const char *column : columns) {
     if (!first) {
@@ -261,8 +261,24 @@ std::string lowerTextExpr(const std::string &alias,
     first = false;
     expr += "COALESCE(" + alias + "." + column + ", '')";
   }
-  expr += ")";
   return expr;
+}
+
+std::string lowerTextExpr(const std::string &alias,
+                          std::initializer_list<const char *> columns) {
+  return "LOWER(" + joinedTextExpr(alias, columns) + ")";
+}
+
+std::string trimmedTextExpr(const std::string &alias,
+                            std::initializer_list<const char *> columns) {
+  return "TRIM(" + joinedTextExpr(alias, columns) + ")";
+}
+
+std::string textLengthOrderExpr(const std::string &alias,
+                                std::initializer_list<const char *> columns) {
+  const std::string text = trimmedTextExpr(alias, columns);
+  return "CASE WHEN " + text + " = '' THEN " + kMaxSqlIntegerText +
+         " ELSE LENGTH(" + text + ") END";
 }
 
 std::string likeAnyExpr(const std::string &expr,
@@ -299,7 +315,9 @@ std::string musicRepresentativeOrderBy(const std::string &alias) {
          titleContainsExpr(alias,
                            {"%normal%", "%hyper%", "%insane%",
                             "%another%"}) +
-         " THEN 0 ELSE 1 END";
+         " THEN 0 ELSE 1 END, " +
+         textLengthOrderExpr(alias, {"artist", "sub_artist"}) + ", " +
+         textLengthOrderExpr(alias, {"title", "subtitle"});
 }
 
 std::string preferredChartPredicate(const std::string &alias) {
@@ -428,11 +446,30 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
     return false;
   }
 
+  const char *favoritesQuery =
+      "CREATE TABLE IF NOT EXISTS music_favorites ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "music_key_type TEXT NOT NULL,"
+      "music_key TEXT NOT NULL,"
+      "chart_path TEXT NOT NULL DEFAULT '',"
+      "chart_md5 TEXT NOT NULL DEFAULT '',"
+      "chart_sha256 TEXT NOT NULL DEFAULT '',"
+      "added_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+      "UNIQUE(music_key_type, music_key)"
+      ")";
+  if (!execSql(db, favoritesQuery, "creating music favorite table")) {
+    return false;
+  }
+
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist_position "
       "ON music_playlist_items(playlist_id, position)",
       "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_music_key "
       "ON music_playlist_items(music_key_type, music_key)",
+      "CREATE INDEX IF NOT EXISTS idx_music_favorites_music_key "
+      "ON music_favorites(music_key_type, music_key)",
+      "CREATE INDEX IF NOT EXISTS idx_music_favorites_added_at "
+      "ON music_favorites(added_at, id)",
   };
   for (const auto *indexQuery : indexes) {
     if (!execSql(db, indexQuery, "creating music playlist index")) {
@@ -820,9 +857,73 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   return sqlite3_changes(db) > 0;
 }
 
+bool MusicPlaylistDB::SetFavorite(sqlite3 *db,
+                                  const bms_parser::ChartMeta &chartMeta,
+                                  bool favorite) {
+  if (!CreateTables(db)) {
+    return false;
+  }
+
+  const auto identity = storedMusicTrackIdentity(chartMeta);
+  if (identity.musicKey.empty()) {
+    std::cerr << "Cannot update favorite without a music key.\n";
+    return false;
+  }
+
+  if (!favorite) {
+    const char *query =
+        "DELETE FROM music_favorites "
+        "WHERE music_key_type = ?1 AND music_key = ?2";
+    SqliteStatementHandle stmt;
+    int rc = prepareSqliteStatement(db, query, stmt);
+    if (rc != SQLITE_OK) {
+      std::cerr << "SQL error while preparing music favorite delete: "
+                << sqlite3_errmsg(db) << "\n";
+      return false;
+    }
+    bindText(stmt, 1, identity.keyType);
+    bindText(stmt, 2, identity.musicKey);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+      std::cerr << "SQL error while deleting music favorite: "
+                << sqlite3_errmsg(db) << "\n";
+      return false;
+    }
+    return true;
+  }
+
+  const char *query =
+      "INSERT INTO music_favorites "
+      "(music_key_type, music_key, chart_path, chart_md5, chart_sha256) "
+      "VALUES (?1, ?2, ?3, ?4, ?5) "
+      "ON CONFLICT(music_key_type, music_key) DO UPDATE SET "
+      "chart_path = excluded.chart_path,"
+      "chart_md5 = excluded.chart_md5,"
+      "chart_sha256 = excluded.chart_sha256";
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing music favorite insert: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  bindText(stmt, 1, identity.keyType);
+  bindText(stmt, 2, identity.musicKey);
+  bindText(stmt, 3, identity.chartPath);
+  bindText(stmt, 4, identity.md5);
+  bindText(stmt, 5, identity.sha256);
+  rc = sqlite3_step(stmt);
+  if (rc != SQLITE_DONE) {
+    std::cerr << "SQL error while inserting music favorite: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+  return true;
+}
+
 void MusicPlaylistDB::SelectLibraryTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
-  if (db == nullptr) {
+  if (db == nullptr || !CreateTables(db)) {
     return;
   }
 
@@ -869,7 +970,7 @@ void MusicPlaylistDB::SelectLibraryTracks(
 void MusicPlaylistDB::SelectLibraryGroupTracks(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     std::vector<MusicTrackRecord> &tracks) {
-  if (db == nullptr) {
+  if (db == nullptr || !CreateTables(db)) {
     return;
   }
 
@@ -909,6 +1010,53 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
     MusicTrackRecord record;
     record.representativeChart = readChartMeta(stmt);
     record.chartCount = 1;
+    record.useChartPathIdentity = true;
+    tracks.push_back(std::move(record));
+  }
+}
+
+void MusicPlaylistDB::SelectFavoriteTracks(
+    sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
+  if (db == nullptr || !CreateTables(db)) {
+    return;
+  }
+
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", cm.music_chart_count FROM (SELECT cm.*, mf.added_at AS "
+           "favorite_added_at, mf.id AS favorite_id, "
+           "COUNT(*) OVER (PARTITION BY mf.id) AS music_chart_count, "
+           "ROW_NUMBER() OVER (PARTITION BY mf.id ORDER BY "
+           "CASE WHEN mf.chart_sha256 != '' AND cm.sha256 = mf.chart_sha256 "
+           "THEN 0 WHEN mf.chart_md5 != '' AND cm.md5 = mf.chart_md5 THEN 1 "
+           "WHEN mf.chart_path != '' AND cm.path = mf.chart_path THEN 2 "
+           "ELSE 3 END, ";
+  query += chartArtworkOrderBy("cm");
+  query += ", total_notes DESC, length DESC, ";
+  query += chartSourceOrderBy("cm");
+  query += ", title COLLATE NOCASE, path) AS music_rank "
+           "FROM music_favorites mf JOIN ";
+  query += kChartMetaTable;
+  query += " cm ON mf.music_key_type = 'path' AND cm.path = mf.music_key "
+           "WHERE ";
+  query += preferredChartPredicate("cm");
+  query += ") cm WHERE cm.music_rank = 1 "
+           "ORDER BY cm.favorite_added_at DESC, cm.favorite_id DESC, "
+           "cm.title COLLATE NOCASE, cm.path";
+
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting music favorite tracks: "
+              << sqlite3_errmsg(db) << "\n";
+    return;
+  }
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    MusicTrackRecord record;
+    record.representativeChart = readChartMeta(stmt);
+    record.chartCount =
+        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
     record.useChartPathIdentity = true;
     tracks.push_back(std::move(record));
   }

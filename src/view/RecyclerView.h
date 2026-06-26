@@ -59,6 +59,14 @@ private:
   }
 
   inline bool handleEventsImpl(SDL_Event &event) override {
+    if (shouldForwardEventToVisibleItems(event)) {
+      for (auto it = viewEntries.rbegin(); it != viewEntries.rend(); ++it) {
+        if (it->first != nullptr && !it->first->handleEvents(event)) {
+          return false;
+        }
+      }
+    }
+
     switch (event.type) {
     case SDL_KEYDOWN: {
       bool changed = false;
@@ -463,6 +471,19 @@ private:
            visibleItemsLayoutHeight != this->getContentHeight() ||
            visibleItemsLayoutItemHeight != itemHeight ||
            std::fabs(visibleItemsLayoutScrollOffset - scrollOffset) > 0.001f;
+  }
+
+  inline static bool shouldForwardEventToVisibleItems(const SDL_Event &event) {
+    switch (event.type) {
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONUP:
+    case SDL_MOUSEMOTION:
+    case SDL_FINGERDOWN:
+    case SDL_FINGERUP:
+      return true;
+    default:
+      return false;
+    }
   }
 
   inline static float smoothStep(float value) {

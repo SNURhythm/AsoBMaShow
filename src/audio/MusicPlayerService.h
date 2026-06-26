@@ -30,9 +30,13 @@ public:
   [[nodiscard]] std::size_t LibraryTrackCount() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   LibraryTracksSnapshot() const;
+  [[nodiscard]] std::vector<music_playlist::MusicTrack>
+  FavoriteTracksSnapshot() const;
   bool LoadLibraryGroupTracks(const music_playlist::MusicTrack &groupTrack,
                               std::vector<music_playlist::MusicTrack> &tracks,
                               std::string &errorMessage);
+  bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite,
+                   std::string &errorMessage);
   bool ReloadPlaylists(std::string &errorMessage);
   [[nodiscard]] std::vector<MusicPlaylistInfo> PlaylistsSnapshot() const;
   [[nodiscard]] int SelectedPlaylistId() const;
@@ -152,6 +156,7 @@ private:
   std::mutex playbackThreadMutex;
   std::mutex preloadThreadMutex;
   std::vector<music_playlist::MusicTrack> libraryTracks;
+  std::vector<music_playlist::MusicTrack> favoriteTracks;
   std::vector<MusicPlaylistInfo> playlists;
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   std::vector<music_playlist::MusicTrack> selectedPlaylistTracks;

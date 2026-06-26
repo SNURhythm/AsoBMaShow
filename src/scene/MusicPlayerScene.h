@@ -30,10 +30,13 @@ public:
 private:
   using MusicTrack = music_playlist::MusicTrack;
   using PlaylistInfo = MusicPlaylistInfo;
-  enum class MusicPlayerTab { Library, Playlists, Player };
+  enum class MusicPlayerTab { Library, Favorites, Playlists, Player };
+  enum class TrackBrowserKind { Library, Favorites };
 
   void buildView();
   void buildLibraryPage(View *page);
+  void buildFavoritesPage(View *page);
+  void buildTrackBrowserPage(View *page, TrackBrowserKind kind);
   void buildPlaylistsPage(View *page);
   void buildPlayerPage(View *page);
   View *makePanel(const std::string &title, TextView **subtitleText = nullptr);
@@ -50,7 +53,15 @@ private:
   void refreshLibraryList(int preferredIndex = -1);
   void applyLibraryFilter(int preferredIndex = -1);
   void applyLibraryFilterForTrackId(const std::string &preferredTrackId,
-                                    bool preserveScroll = false);
+                                    bool preserveScroll = false,
+                                    bool revealPreferredIfOutOfView = false);
+  void refreshTrackBrowserList(TrackBrowserKind kind,
+                               int preferredIndex = -1);
+  void applyTrackBrowserFilter(TrackBrowserKind kind,
+                               int preferredIndex = -1);
+  void applyTrackBrowserFilterForTrackId(
+      TrackBrowserKind kind, const std::string &preferredTrackId,
+      bool preserveScroll = false, bool revealPreferredIfOutOfView = false);
   void rebuildPlaylistChoices();
   void refreshLibraryPlaylistList(int preferredPlaylistId = 0);
   void refreshPlaylistDirectoryList(int preferredPlaylistId = 0);
@@ -61,9 +72,38 @@ private:
   void refreshNavigation();
   void refreshArtwork(const std::optional<MusicTrack> &track);
   void refreshLibraryArtwork(const std::optional<MusicTrack> &track);
+  void refreshTrackBrowserArtwork(
+      TrackBrowserKind kind, const std::optional<MusicTrack> &track);
   void setStatus(std::string message);
 
+  [[nodiscard]] std::vector<MusicTrack> &
+  trackBrowserSourceTracks(TrackBrowserKind kind);
+  [[nodiscard]] const std::vector<MusicTrack> &
+  trackBrowserSourceTracks(TrackBrowserKind kind) const;
+  [[nodiscard]] std::vector<MusicTrack> &
+  trackBrowserFilteredTracks(TrackBrowserKind kind);
+  [[nodiscard]] const std::vector<MusicTrack> &
+  trackBrowserFilteredTracks(TrackBrowserKind kind) const;
+  [[nodiscard]] int &trackBrowserSelectedIndex(TrackBrowserKind kind);
+  [[nodiscard]] int trackBrowserSelectedIndex(TrackBrowserKind kind) const;
+  [[nodiscard]] std::string &trackBrowserSearchText(TrackBrowserKind kind);
+  [[nodiscard]] const std::string &
+  trackBrowserSearchText(TrackBrowserKind kind) const;
+  [[nodiscard]] RecyclerView<MusicTrack> *
+  trackBrowserList(TrackBrowserKind kind) const;
+  [[nodiscard]] TextView *trackBrowserSubtitleText(TrackBrowserKind kind) const;
+  [[nodiscard]] TextView *
+  trackBrowserSelectionTitleText(TrackBrowserKind kind) const;
+  [[nodiscard]] TextView *
+  trackBrowserSelectionDetailText(TrackBrowserKind kind) const;
+  [[nodiscard]] ImageView *trackBrowserArtworkImage(TrackBrowserKind kind) const;
+  [[nodiscard]] TextView *
+  trackBrowserArtworkFallbackText(TrackBrowserKind kind) const;
+  [[nodiscard]] std::filesystem::path &
+  trackBrowserDisplayedArtworkPath(TrackBrowserKind kind);
   std::optional<MusicTrack> selectedLibraryTrack() const;
+  std::optional<MusicTrack>
+  selectedTrackBrowserTrack(TrackBrowserKind kind) const;
   std::optional<PlaylistInfo> selectedLibraryPlaylistInfo() const;
   std::optional<PlaylistInfo> selectedPlaylistInfo() const;
   std::optional<MusicTrack> selectedPlaylistTrack() const;
@@ -73,6 +113,9 @@ private:
   int trackIndexInList(const std::vector<MusicTrack> &tracks,
                        const MusicTrack &track) const;
   bool selectedPlaylistIsActiveQueue() const;
+  bool isFavoriteTrack(const MusicTrack &track) const;
+  void rebuildFavoriteTrackIds();
+  void rebindFavoriteAwareTrackLists();
   std::string selectedLibraryPlaylistName() const;
   std::string selectedPlaylistName() const;
   std::string nextPlaylistName() const;
@@ -84,11 +127,14 @@ private:
   void renameSelectedPlaylist();
   void deleteSelectedPlaylist();
   void selectLibraryPlaylist(int index);
+  void selectTrackBrowserTrack(TrackBrowserKind kind, int index);
   void toggleSelectedLibraryGroup();
+  void toggleFavorite(const MusicTrack &track);
   void selectPlaylist(int index);
   void selectPlaylistTrack(int index);
   void selectQueueTrack(int index);
   void addLibraryTrackToPlaylist();
+  void addTrackBrowserTrackToPlaylist(TrackBrowserKind kind);
   void addLibraryTrackToNowPlaying(const MusicTrack &track);
   void removePlaylistTrack();
   void movePlaylistTrack(int delta);
@@ -104,10 +150,12 @@ private:
                       const std::string &emptyMessage,
                       const std::string &successMessage);
   void playLibraryTrack();
+  void playTrackBrowserTrack(TrackBrowserKind kind);
   void playPlaylist();
   void playSelectedPlaylistTrack();
   void playSelectedQueueTrack();
   void playRandomLibrary();
+  void playRandomTrackBrowser(TrackBrowserKind kind);
   void togglePlayback();
   void cycleRepeatMode();
   void seekRelative(long long deltaMicros);
@@ -120,21 +168,28 @@ private:
 
   View *rootLayout = nullptr;
   View *libraryPage = nullptr;
+  View *favoritesPage = nullptr;
   View *playlistsPage = nullptr;
   View *playerPage = nullptr;
   Button *libraryNavButton = nullptr;
+  Button *favoritesNavButton = nullptr;
   Button *playlistsNavButton = nullptr;
   Button *playerNavButton = nullptr;
   TextView *libraryNavText = nullptr;
+  TextView *favoritesNavText = nullptr;
   TextView *playlistsNavText = nullptr;
   TextView *playerNavText = nullptr;
   TextView *statusText = nullptr;
   TextView *librarySubtitleText = nullptr;
+  TextView *favoritesSubtitleText = nullptr;
   TextView *playlistSubtitleText = nullptr;
   TextView *playerSubtitleText = nullptr;
   TextView *librarySelectionTitleText = nullptr;
   TextView *librarySelectionDetailText = nullptr;
   TextView *libraryArtworkFallbackText = nullptr;
+  TextView *favoritesSelectionTitleText = nullptr;
+  TextView *favoritesSelectionDetailText = nullptr;
+  TextView *favoritesArtworkFallbackText = nullptr;
   TextView *playlistSelectionTitleText = nullptr;
   TextView *playlistSelectionDetailText = nullptr;
   TextView *currentTitleText = nullptr;
@@ -146,12 +201,16 @@ private:
   TextView *artworkFallbackText = nullptr;
   ImageView *artworkImage = nullptr;
   ImageView *libraryArtworkImage = nullptr;
+  ImageView *favoritesArtworkImage = nullptr;
   RecyclerView<MusicTrack> *libraryList = nullptr;
+  RecyclerView<MusicTrack> *favoritesList = nullptr;
   RecyclerView<PlaylistInfo> *libraryPlaylistList = nullptr;
+  RecyclerView<PlaylistInfo> *favoritesPlaylistList = nullptr;
   RecyclerView<PlaylistInfo> *playlistDirectoryList = nullptr;
   RecyclerView<MusicTrack> *playlistList = nullptr;
   RecyclerView<MusicTrack> *playerQueueList = nullptr;
   TextInputBox *librarySearchInput = nullptr;
+  TextInputBox *favoritesSearchInput = nullptr;
   TextInputBox *playlistNameInput = nullptr;
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
@@ -161,13 +220,17 @@ private:
 
   std::vector<MusicTrack> libraryTracks;
   std::vector<MusicTrack> filteredLibraryTracks;
+  std::vector<MusicTrack> favoriteTracks;
+  std::vector<MusicTrack> filteredFavoriteTracks;
   std::unordered_map<std::string, std::vector<MusicTrack>> libraryGroupTracks;
   std::unordered_set<std::string> expandedLibraryGroupIds;
+  std::unordered_set<std::string> favoriteTrackIds;
   std::vector<PlaylistInfo> playlists;
   std::vector<PlaylistInfo> playlistChoices;
   std::vector<MusicTrack> playlistTracks;
   std::vector<MusicTrack> queueTracks;
   int selectedLibraryIndex = -1;
+  int selectedFavoriteIndex = -1;
   int selectedLibraryPlaylistIndex = -1;
   int selectedLibraryPlaylistId = 0;
   int selectedPlaylistDirectoryIndex = -1;
@@ -181,7 +244,9 @@ private:
   std::string displayedQueueName;
   std::string statusMessage;
   std::string librarySearchText;
+  std::string favoritesSearchText;
   std::filesystem::path displayedLibraryArtworkPath;
+  std::filesystem::path displayedFavoritesArtworkPath;
   std::filesystem::path displayedArtworkPath;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;

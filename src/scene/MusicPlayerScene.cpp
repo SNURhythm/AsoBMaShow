@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <sstream>
 #include <utility>
@@ -157,6 +158,10 @@ bool sameTrackList(const std::vector<music_playlist::MusicTrack> &a,
   return std::equal(a.begin(), a.end(), b.begin(), sameTrackIdentity);
 }
 
+std::string favoriteKeyForTrack(const music_playlist::MusicTrack &track) {
+  return music_playlist::ChartTrackIdForChart(track.representativeChart);
+}
+
 std::string repeatModeLabel(music_playlist::QueueRepeatMode mode) {
   switch (mode) {
   case music_playlist::QueueRepeatMode::One:
@@ -283,11 +288,37 @@ public:
     detail->setOverflow(TextView::TextOverflow::Marquee);
     textColumn->addView(detail);
     addView(textColumn);
+
+    favoriteButton = new Button();
+    favoriteButton->setWidth(48)
+        ->setHeight(48)
+        ->setFlexShrink(0)
+        ->setCornerRadius(ui_theme::controlRadius());
+    favoriteButton
+        ->setThemedBackgroundColors(ui_theme::control,
+                                    ui_theme::controlHover,
+                                    ui_theme::controlPressed)
+        ->setThemedBorderColors(ui_theme::hairlineSubtle,
+                                ui_theme::hairlineStrong,
+                                ui_theme::accentBorderStrong)
+        ->setStyledBorderWidth(1);
+    favoriteText = new TextView(kFontPath, 25);
+    favoriteText->setText("☆");
+    favoriteText->setAlign(TextView::CENTER);
+    favoriteText->setVAlign(TextView::MIDDLE);
+    favoriteText->setThemedColor(ui_theme::textSecondary);
+    favoriteButton->setContentView(favoriteText);
+    addView(favoriteButton);
   }
 
-  void setTrack(const music_playlist::MusicTrack &track, bool selected) {
+  void setTrack(const music_playlist::MusicTrack &track, bool selected,
+                bool favorite, std::function<void()> onFavoriteToggle) {
     title->setText(trackTitle(track));
     detail->setText(trackDetail(track));
+    favoriteText->setText(favorite ? "★" : "☆");
+    favoriteText->setThemedColor(favorite ? ui_theme::amber
+                                          : ui_theme::textSecondary);
+    favoriteButton->setOnClickListener(std::move(onFavoriteToggle));
     if (artwork != nullptr) {
       const auto path = artworkPathForDisplay(track);
       if (path.empty()) {
@@ -318,6 +349,8 @@ private:
   TextView *artworkFallback = nullptr;
   TextView *title = nullptr;
   TextView *detail = nullptr;
+  Button *favoriteButton = nullptr;
+  TextView *favoriteText = nullptr;
 };
 
 class MusicSeekProgressFillView : public View {
@@ -437,10 +470,14 @@ EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
       return {};
     }
     if (event.key.keysym.sym == SDLK_2) {
-      switchTab(MusicPlayerTab::Playlists);
+      switchTab(MusicPlayerTab::Favorites);
       return {};
     }
     if (event.key.keysym.sym == SDLK_3) {
+      switchTab(MusicPlayerTab::Playlists);
+      return {};
+    }
+    if (event.key.keysym.sym == SDLK_4) {
       switchTab(MusicPlayerTab::Player);
       return {};
     }
@@ -483,21 +520,28 @@ void MusicPlayerScene::renderScene() {}
 void MusicPlayerScene::cleanupScene() {
   rootLayout = nullptr;
   libraryPage = nullptr;
+  favoritesPage = nullptr;
   playlistsPage = nullptr;
   playerPage = nullptr;
   libraryNavButton = nullptr;
+  favoritesNavButton = nullptr;
   playlistsNavButton = nullptr;
   playerNavButton = nullptr;
   libraryNavText = nullptr;
+  favoritesNavText = nullptr;
   playlistsNavText = nullptr;
   playerNavText = nullptr;
   statusText = nullptr;
   librarySubtitleText = nullptr;
+  favoritesSubtitleText = nullptr;
   playlistSubtitleText = nullptr;
   playerSubtitleText = nullptr;
   librarySelectionTitleText = nullptr;
   librarySelectionDetailText = nullptr;
   libraryArtworkFallbackText = nullptr;
+  favoritesSelectionTitleText = nullptr;
+  favoritesSelectionDetailText = nullptr;
+  favoritesArtworkFallbackText = nullptr;
   playlistSelectionTitleText = nullptr;
   playlistSelectionDetailText = nullptr;
   currentTitleText = nullptr;
@@ -508,12 +552,16 @@ void MusicPlayerScene::cleanupScene() {
   artworkFallbackText = nullptr;
   artworkImage = nullptr;
   libraryArtworkImage = nullptr;
+  favoritesArtworkImage = nullptr;
   libraryList = nullptr;
+  favoritesList = nullptr;
   libraryPlaylistList = nullptr;
+  favoritesPlaylistList = nullptr;
   playlistDirectoryList = nullptr;
   playlistList = nullptr;
   playerQueueList = nullptr;
   librarySearchInput = nullptr;
+  favoritesSearchInput = nullptr;
   playlistNameInput = nullptr;
   playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
@@ -521,6 +569,7 @@ void MusicPlayerScene::cleanupScene() {
   seekProgressTrack = nullptr;
   seekProgressFill = nullptr;
   displayedLibraryArtworkPath.clear();
+  displayedFavoritesArtworkPath.clear();
   displayedArtworkPath.clear();
   displayedQueueName.clear();
   seekMouseDown = false;
@@ -609,6 +658,9 @@ void MusicPlayerScene::buildView() {
   libraryNavButton = makeNavButton("Library", &libraryNavText);
   libraryNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Library); });
+  favoritesNavButton = makeNavButton("Favorites", &favoritesNavText);
+  favoritesNavButton->setOnClickListener(
+      [this]() { switchTab(MusicPlayerTab::Favorites); });
   playlistsNavButton = makeNavButton("Playlists", &playlistsNavText);
   playlistsNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Playlists); });
@@ -616,6 +668,7 @@ void MusicPlayerScene::buildView() {
   playerNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Player); });
   rail->addView(libraryNavButton);
+  rail->addView(favoritesNavButton);
   rail->addView(playlistsNavButton);
   rail->addView(playerNavButton);
 
@@ -641,11 +694,14 @@ void MusicPlayerScene::buildView() {
 
   libraryPage = makePage();
   buildLibraryPage(libraryPage);
+  favoritesPage = makePage();
+  buildFavoritesPage(favoritesPage);
   playlistsPage = makePage();
   buildPlaylistsPage(playlistsPage);
   playerPage = makePage();
   buildPlayerPage(playerPage);
   pageStack->addView(libraryPage);
+  pageStack->addView(favoritesPage);
   pageStack->addView(playlistsPage);
   pageStack->addView(playerPage);
   content->addView(pageStack);
@@ -656,7 +712,19 @@ void MusicPlayerScene::buildView() {
 }
 
 void MusicPlayerScene::buildLibraryPage(View *page) {
-  auto *panel = makePanel("Library", &librarySubtitleText);
+  buildTrackBrowserPage(page, TrackBrowserKind::Library);
+}
+
+void MusicPlayerScene::buildFavoritesPage(View *page) {
+  buildTrackBrowserPage(page, TrackBrowserKind::Favorites);
+}
+
+void MusicPlayerScene::buildTrackBrowserPage(View *page,
+                                             TrackBrowserKind kind) {
+  const bool isLibrary = kind == TrackBrowserKind::Library;
+  TextView **subtitleText =
+      isLibrary ? &librarySubtitleText : &favoritesSubtitleText;
+  auto *panel = makePanel(isLibrary ? "Library" : "Favorites", subtitleText);
   panel->setFlex(1);
   page->addView(panel);
 
@@ -671,18 +739,23 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   searchLabel->setHeight(52);
   searchLabel->setVAlign(TextView::MIDDLE);
   searchLabel->setThemedColor(ui_theme::textSecondary);
-  librarySearchInput = new TextInputBox(kFontPath, 18);
-  librarySearchInput->setFlex(1);
-  librarySearchInput->setHeight(52);
-  librarySearchInput->setThemedBackgroundColor(ui_theme::control);
-  librarySearchInput->setThemedBorderColor(ui_theme::hairlineStrong);
-  librarySearchInput->setBorderWidth(1);
-  librarySearchInput->setCornerRadius(ui_theme::controlRadius());
-  librarySearchInput->setThemedColor(ui_theme::textPrimary);
-  librarySearchInput->setVAlign(TextView::MIDDLE);
-  librarySearchInput->onTextChanged([this](const std::string &value) {
-    librarySearchText = value;
-    applyLibraryFilter();
+  auto *searchInput = new TextInputBox(kFontPath, 18);
+  if (isLibrary) {
+    librarySearchInput = searchInput;
+  } else {
+    favoritesSearchInput = searchInput;
+  }
+  searchInput->setFlex(1);
+  searchInput->setHeight(52);
+  searchInput->setThemedBackgroundColor(ui_theme::control);
+  searchInput->setThemedBorderColor(ui_theme::hairlineStrong);
+  searchInput->setBorderWidth(1);
+  searchInput->setCornerRadius(ui_theme::controlRadius());
+  searchInput->setThemedColor(ui_theme::textPrimary);
+  searchInput->setVAlign(TextView::MIDDLE);
+  searchInput->onTextChanged([this, kind](const std::string &value) {
+    trackBrowserSearchText(kind) = value;
+    applyTrackBrowserFilter(kind);
     refreshUi();
   });
   TextView *clearSearchText = nullptr;
@@ -691,16 +764,16 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   styleButton(clearSearchButton, clearSearchText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
-  clearSearchButton->setOnClickListener([this]() {
-    librarySearchText.clear();
-    if (librarySearchInput != nullptr) {
-      librarySearchInput->setEditingText("");
+  clearSearchButton->setOnClickListener([this, kind, searchInput]() {
+    trackBrowserSearchText(kind).clear();
+    if (searchInput != nullptr) {
+      searchInput->setEditingText("");
     }
-    applyLibraryFilter();
+    applyTrackBrowserFilter(kind);
     refreshUi();
   });
   searchRow->addView(searchLabel);
-  searchRow->addView(librarySearchInput);
+  searchRow->addView(searchInput);
   searchRow->addView(clearSearchButton);
   panel->addView(searchRow);
 
@@ -711,35 +784,37 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
       ->setGap(16);
   panel->addView(workspace);
 
-  libraryList = new RecyclerView<MusicTrack>(
+  auto *trackList = new RecyclerView<MusicTrack>(
       [](const MusicTrack &a, const MusicTrack &b) {
         return a.trackId == b.trackId && a.chartId == b.chartId;
       });
-  libraryList->setFlex(1);
-  libraryList->itemHeight = kTrackRowHeight;
-  libraryList->reserveScrollbarGutter = true;
-  libraryList->onCreateView = [](const MusicTrack &) {
+  if (isLibrary) {
+    libraryList = trackList;
+  } else {
+    favoritesList = trackList;
+  }
+  trackList->setFlex(1);
+  trackList->itemHeight = kTrackRowHeight;
+  trackList->reserveScrollbarGutter = true;
+  trackList->onCreateView = [](const MusicTrack &) {
     return new MusicTrackRowView();
   };
-  libraryList->onBind = [](View *view, const MusicTrack &track, int,
-                           bool selected) {
+  trackList->onBind = [this](View *view, const MusicTrack &track, int,
+                             bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected);
+      row->setTrack(track, selected, isFavoriteTrack(track),
+                    [this, track]() { toggleFavorite(track); });
     }
   };
-  libraryList->onSelected = [this](const MusicTrack &, int index) {
-    if (auto *selectedView = libraryList->getViewByIndex(index)) {
-      selectedView->onSelected();
-    }
-    selectedLibraryIndex = index;
-    refreshUi();
+  trackList->onSelected = [this, kind](const MusicTrack &, int index) {
+    selectTrackBrowserTrack(kind, index);
   };
-  libraryList->onUnselected = [this](const MusicTrack &, int index) {
-    if (auto *unselectedView = libraryList->getViewByIndex(index)) {
+  trackList->onUnselected = [trackList](const MusicTrack &, int index) {
+    if (auto *unselectedView = trackList->getViewByIndex(index)) {
       unselectedView->onUnselected();
     }
   };
-  workspace->addView(libraryList);
+  workspace->addView(trackList);
 
   auto *actions = new View();
   actions->setWidth(390)
@@ -758,21 +833,31 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
-  libraryArtworkFallbackText = new TextView(kFontPath, 18);
-  libraryArtworkFallbackText->setText("No album art");
-  libraryArtworkFallbackText->setHeight(36);
-  libraryArtworkFallbackText->setAlign(TextView::CENTER);
-  libraryArtworkFallbackText->setVAlign(TextView::MIDDLE);
-  libraryArtworkFallbackText->setThemedColor(ui_theme::textMuted);
-  libraryArtFrame->addView(libraryArtworkFallbackText);
-  libraryArtworkImage = new ImageView(0, 0, 0, 0);
-  libraryArtworkImage->setWidth(388)
+  auto *artworkFallbackText = new TextView(kFontPath, 18);
+  if (isLibrary) {
+    libraryArtworkFallbackText = artworkFallbackText;
+  } else {
+    favoritesArtworkFallbackText = artworkFallbackText;
+  }
+  artworkFallbackText->setText("No album art");
+  artworkFallbackText->setHeight(36);
+  artworkFallbackText->setAlign(TextView::CENTER);
+  artworkFallbackText->setVAlign(TextView::MIDDLE);
+  artworkFallbackText->setThemedColor(ui_theme::textMuted);
+  libraryArtFrame->addView(artworkFallbackText);
+  auto *artworkImage = new ImageView(0, 0, 0, 0);
+  if (isLibrary) {
+    libraryArtworkImage = artworkImage;
+  } else {
+    favoritesArtworkImage = artworkImage;
+  }
+  artworkImage->setWidth(388)
       ->setHeight(248)
       ->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Left, 0)
       ->setPosition(Edge::Top, 0)
       ->setCornerRadius(ui_theme::controlRadius());
-  libraryArtFrame->addView(libraryArtworkImage);
+  libraryArtFrame->addView(artworkImage);
   actions->addView(libraryArtFrame);
 
   auto *selectionTitle = new TextView(kFontPath, 18);
@@ -781,17 +866,27 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   selectionTitle->setThemedColor(ui_theme::textSecondary);
   actions->addView(selectionTitle);
 
-  librarySelectionTitleText = new TextView(kFontPath, 24);
-  librarySelectionTitleText->setHeight(42);
-  librarySelectionTitleText->setOverflow(TextView::TextOverflow::Marquee);
-  librarySelectionTitleText->setThemedColor(ui_theme::textPrimary);
-  actions->addView(librarySelectionTitleText);
+  auto *selectionTitleText = new TextView(kFontPath, 24);
+  if (isLibrary) {
+    librarySelectionTitleText = selectionTitleText;
+  } else {
+    favoritesSelectionTitleText = selectionTitleText;
+  }
+  selectionTitleText->setHeight(42);
+  selectionTitleText->setOverflow(TextView::TextOverflow::Marquee);
+  selectionTitleText->setThemedColor(ui_theme::textPrimary);
+  actions->addView(selectionTitleText);
 
-  librarySelectionDetailText = new TextView(kFontPath, 16);
-  librarySelectionDetailText->setHeight(32);
-  librarySelectionDetailText->setOverflow(TextView::TextOverflow::Marquee);
-  librarySelectionDetailText->setThemedColor(ui_theme::textSecondary);
-  actions->addView(librarySelectionDetailText);
+  auto *selectionDetailText = new TextView(kFontPath, 16);
+  if (isLibrary) {
+    librarySelectionDetailText = selectionDetailText;
+  } else {
+    favoritesSelectionDetailText = selectionDetailText;
+  }
+  selectionDetailText->setHeight(32);
+  selectionDetailText->setOverflow(TextView::TextOverflow::Marquee);
+  selectionDetailText->setThemedColor(ui_theme::textSecondary);
+  actions->addView(selectionDetailText);
 
   auto *primaryRow = new View();
   primaryRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
@@ -801,13 +896,15 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   styleButton(playTrackButton, playTrackText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
-  playTrackButton->setOnClickListener([this]() { playLibraryTrack(); });
+  playTrackButton->setOnClickListener(
+      [this, kind]() { playTrackBrowserTrack(kind); });
   TextView *addText = nullptr;
   auto *addButton = makeButton("Add to playlist", 15, &addText);
   addButton->setFlex(1);
   styleButton(addButton, addText, ui_theme::control, ui_theme::controlHover,
               ui_theme::controlPressed, ui_theme::hairlineStrong);
-  addButton->setOnClickListener([this]() { addLibraryTrackToPlaylist(); });
+  addButton->setOnClickListener(
+      [this, kind]() { addTrackBrowserTrackToPlaylist(kind); });
   primaryRow->addView(playTrackButton);
   primaryRow->addView(addButton);
   actions->addView(primaryRow);
@@ -822,7 +919,8 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   styleButton(randomButton, randomText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
               ui_theme::accentBorder);
-  randomButton->setOnClickListener([this]() { playRandomLibrary(); });
+  randomButton->setOnClickListener(
+      [this, kind]() { playRandomTrackBrowser(kind); });
   TextView *reloadText = nullptr;
   auto *reloadButton = makeButton("Refresh", 17, &reloadText);
   reloadButton->setFlex(1);
@@ -834,15 +932,18 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   secondaryRow->addView(reloadButton);
   actions->addView(secondaryRow);
 
-  TextView *groupText = nullptr;
-  auto *groupButton = makeButton("Expand Group", 17, &groupText);
-  libraryGroupButtonText = groupText;
-  groupButton->setHeight(48);
-  styleButton(groupButton, groupText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  groupButton->setOnClickListener([this]() { toggleSelectedLibraryGroup(); });
-  actions->addView(groupButton);
+  if (isLibrary) {
+    TextView *groupText = nullptr;
+    auto *groupButton = makeButton("Expand Group", 17, &groupText);
+    libraryGroupButtonText = groupText;
+    groupButton->setHeight(48);
+    styleButton(groupButton, groupText, ui_theme::control,
+                ui_theme::controlHover, ui_theme::controlPressed,
+                ui_theme::hairlineStrong);
+    groupButton->setOnClickListener(
+        [this]() { toggleSelectedLibraryGroup(); });
+    actions->addView(groupButton);
+  }
 
   auto *addToHeader = new TextView(kFontPath, 18);
   addToHeader->setText("Add To");
@@ -850,29 +951,35 @@ void MusicPlayerScene::buildLibraryPage(View *page) {
   addToHeader->setThemedColor(ui_theme::textSecondary);
   actions->addView(addToHeader);
 
-  libraryPlaylistList = new RecyclerView<PlaylistInfo>(
+  auto *addToPlaylistList = new RecyclerView<PlaylistInfo>(
       [](const PlaylistInfo &a, const PlaylistInfo &b) { return a.id == b.id; });
-  libraryPlaylistList->setFlex(1);
-  libraryPlaylistList->itemHeight = kPlaylistRowHeight;
-  libraryPlaylistList->reserveScrollbarGutter = true;
-  libraryPlaylistList->onCreateView = [](const PlaylistInfo &) {
+  if (isLibrary) {
+    libraryPlaylistList = addToPlaylistList;
+  } else {
+    favoritesPlaylistList = addToPlaylistList;
+  }
+  addToPlaylistList->setFlex(1);
+  addToPlaylistList->itemHeight = kPlaylistRowHeight;
+  addToPlaylistList->reserveScrollbarGutter = true;
+  addToPlaylistList->onCreateView = [](const PlaylistInfo &) {
     return new PlaylistRowView();
   };
-  libraryPlaylistList->onBind = [](View *view, const PlaylistInfo &playlist,
-                                   int, bool selected) {
+  addToPlaylistList->onBind = [](View *view, const PlaylistInfo &playlist,
+                                 int, bool selected) {
     if (auto *row = dynamic_cast<PlaylistRowView *>(view)) {
       row->setPlaylist(playlist, selected);
     }
   };
-  libraryPlaylistList->onSelected = [this](const PlaylistInfo &, int index) {
+  addToPlaylistList->onSelected = [this](const PlaylistInfo &, int index) {
     selectLibraryPlaylist(index);
   };
-  libraryPlaylistList->onUnselected = [this](const PlaylistInfo &, int index) {
-    if (auto *unselectedView = libraryPlaylistList->getViewByIndex(index)) {
+  addToPlaylistList->onUnselected = [addToPlaylistList](const PlaylistInfo &,
+                                                        int index) {
+    if (auto *unselectedView = addToPlaylistList->getViewByIndex(index)) {
       unselectedView->onUnselected();
     }
   };
-  actions->addView(libraryPlaylistList);
+  actions->addView(addToPlaylistList);
   workspace->addView(actions);
 }
 
@@ -1037,10 +1144,11 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistList->onCreateView = [](const MusicTrack &) {
     return new MusicTrackRowView();
   };
-  playlistList->onBind = [](View *view, const MusicTrack &track, int,
-                            bool selected) {
+  playlistList->onBind = [this](View *view, const MusicTrack &track, int,
+                                bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected);
+      row->setTrack(track, selected, isFavoriteTrack(track),
+                    [this, track]() { toggleFavorite(track); });
     }
   };
   playlistList->onSelected = [this](const MusicTrack &, int index) {
@@ -1300,10 +1408,11 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playerQueueList->onCreateView = [](const MusicTrack &) {
     return new MusicTrackRowView();
   };
-  playerQueueList->onBind = [](View *view, const MusicTrack &track, int,
-                               bool selected) {
+  playerQueueList->onBind = [this](View *view, const MusicTrack &track, int,
+                                   bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected);
+      row->setTrack(track, selected, isFavoriteTrack(track),
+                    [this, track]() { toggleFavorite(track); });
     }
   };
   playerQueueList->onSelected = [this](const MusicTrack &, int index) {
@@ -1421,9 +1530,13 @@ void MusicPlayerScene::styleButton(Button *button, TextView *text,
 
 void MusicPlayerScene::reloadData(bool preserveSelection) {
   const auto selectedLibrary = selectedLibraryTrack();
+  const auto selectedFavorite =
+      selectedTrackBrowserTrack(TrackBrowserKind::Favorites);
   const auto selectedPlaylist = selectedPlaylistTrack();
   const std::string selectedLibraryId =
       selectedLibrary ? selectedLibrary->trackId : "";
+  const std::string selectedFavoriteId =
+      selectedFavorite ? selectedFavorite->trackId : "";
   const std::string selectedPlaylistTrackId =
       selectedPlaylist ? selectedPlaylist->trackId : "";
   const int preferredPlaylistId =
@@ -1435,6 +1548,8 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
     setStatus(errorMessage);
   }
   libraryTracks = context.musicPlayer.LibraryTracksSnapshot();
+  favoriteTracks = context.musicPlayer.FavoriteTracksSnapshot();
+  rebuildFavoriteTrackIds();
   libraryGroupTracks.clear();
   expandedLibraryGroupIds.clear();
   playlists = context.musicPlayer.PlaylistsSnapshot();
@@ -1456,11 +1571,14 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
 
   const int libraryIndex =
       preserveSelection ? findIndex(libraryTracks, selectedLibraryId) : -1;
+  const int favoriteIndex =
+      preserveSelection ? findIndex(favoriteTracks, selectedFavoriteId) : -1;
   const int playlistIndex =
       preserveSelection ? findIndex(playlistTracks, selectedPlaylistTrackId)
                         : -1;
   refreshActiveQueueList(true);
   refreshLibraryList(libraryIndex);
+  refreshTrackBrowserList(TrackBrowserKind::Favorites, favoriteIndex);
   refreshLibraryPlaylistList(preserveSelection ? selectedLibraryPlaylistId : 0);
   refreshPlaylistDirectoryList(preferredPlaylistId);
   refreshPlaylistList(playlistIndex);
@@ -1468,81 +1586,122 @@ void MusicPlayerScene::reloadData(bool preserveSelection) {
 }
 
 void MusicPlayerScene::refreshLibraryList(int preferredIndex) {
-  applyLibraryFilter(preferredIndex);
+  refreshTrackBrowserList(TrackBrowserKind::Library, preferredIndex);
 }
 
 void MusicPlayerScene::applyLibraryFilter(int preferredIndex) {
-  if (libraryList == nullptr) {
+  applyTrackBrowserFilter(TrackBrowserKind::Library, preferredIndex);
+}
+
+void MusicPlayerScene::applyLibraryFilterForTrackId(
+    const std::string &preferredTrackId, bool preserveScroll,
+    bool revealPreferredIfOutOfView) {
+  applyTrackBrowserFilterForTrackId(TrackBrowserKind::Library,
+                                    preferredTrackId, preserveScroll,
+                                    revealPreferredIfOutOfView);
+}
+
+void MusicPlayerScene::refreshTrackBrowserList(TrackBrowserKind kind,
+                                               int preferredIndex) {
+  applyTrackBrowserFilter(kind, preferredIndex);
+}
+
+void MusicPlayerScene::applyTrackBrowserFilter(TrackBrowserKind kind,
+                                               int preferredIndex) {
+  if (trackBrowserList(kind) == nullptr) {
     return;
   }
 
   std::string preferredTrackId;
+  const auto &filtered = trackBrowserFilteredTracks(kind);
+  const auto &source = trackBrowserSourceTracks(kind);
   if (preferredIndex >= 0 &&
-      preferredIndex < static_cast<int>(filteredLibraryTracks.size())) {
+      preferredIndex < static_cast<int>(filtered.size())) {
     preferredTrackId =
-        filteredLibraryTracks[static_cast<std::size_t>(preferredIndex)].trackId;
+        filtered[static_cast<std::size_t>(preferredIndex)].trackId;
   } else if (preferredIndex >= 0 &&
-             preferredIndex < static_cast<int>(libraryTracks.size())) {
+             preferredIndex < static_cast<int>(source.size())) {
     preferredTrackId =
-        libraryTracks[static_cast<std::size_t>(preferredIndex)].trackId;
+        source[static_cast<std::size_t>(preferredIndex)].trackId;
   }
 
-  applyLibraryFilterForTrackId(preferredTrackId);
+  applyTrackBrowserFilterForTrackId(kind, preferredTrackId);
 }
 
-void MusicPlayerScene::applyLibraryFilterForTrackId(
-    const std::string &preferredTrackId, bool preserveScroll) {
-  if (libraryList == nullptr) {
+void MusicPlayerScene::applyTrackBrowserFilterForTrackId(
+    TrackBrowserKind kind, const std::string &preferredTrackId,
+    bool preserveScroll,
+    bool revealPreferredIfOutOfView) {
+  auto *list = trackBrowserList(kind);
+  if (list == nullptr) {
     return;
   }
 
   const float previousScrollOffset =
-      preserveScroll ? libraryList->scrollOffset : 0.0f;
+      preserveScroll ? list->scrollOffset : 0.0f;
 
-  filteredLibraryTracks.clear();
-  const std::string query = lowercaseText(trimPlaylistName(librarySearchText));
-  for (const auto &track : libraryTracks) {
-    const bool expanded = !track.groupId.empty() &&
-                          expandedLibraryGroupIds.contains(track.groupId);
-    const auto childrenIt = expanded ? libraryGroupTracks.find(track.groupId)
-                                     : libraryGroupTracks.end();
-    if (expanded && childrenIt != libraryGroupTracks.end()) {
-      std::copy_if(childrenIt->second.begin(), childrenIt->second.end(),
-                   std::back_inserter(filteredLibraryTracks),
-                   [&query](const MusicTrack &childTrack) {
-                     return trackMatchesSearch(childTrack, query);
-                   });
-      continue;
+  auto &filtered = trackBrowserFilteredTracks(kind);
+  const auto &source = trackBrowserSourceTracks(kind);
+  filtered.clear();
+  const std::string query =
+      lowercaseText(trimPlaylistName(trackBrowserSearchText(kind)));
+  for (const auto &track : source) {
+    if (kind == TrackBrowserKind::Library) {
+      const bool expanded = !track.groupId.empty() &&
+                            expandedLibraryGroupIds.contains(track.groupId);
+      const auto childrenIt = expanded ? libraryGroupTracks.find(track.groupId)
+                                       : libraryGroupTracks.end();
+      if (expanded && childrenIt != libraryGroupTracks.end()) {
+        std::copy_if(childrenIt->second.begin(), childrenIt->second.end(),
+                     std::back_inserter(filtered),
+                     [&query](const MusicTrack &childTrack) {
+                       return trackMatchesSearch(childTrack, query);
+                     });
+        continue;
+      }
     }
     if (trackMatchesSearch(track, query)) {
-      filteredLibraryTracks.push_back(track);
+      filtered.push_back(track);
     }
   }
 
-  selectedLibraryIndex = -1;
+  int &selectedIndex = trackBrowserSelectedIndex(kind);
+  selectedIndex = -1;
   if (!preferredTrackId.empty()) {
-    for (std::size_t i = 0; i < filteredLibraryTracks.size(); ++i) {
-      if (filteredLibraryTracks[i].trackId == preferredTrackId) {
-        selectedLibraryIndex = static_cast<int>(i);
+    for (std::size_t i = 0; i < filtered.size(); ++i) {
+      if (filtered[i].trackId == preferredTrackId) {
+        selectedIndex = static_cast<int>(i);
         break;
       }
     }
   }
-  if (selectedLibraryIndex < 0 && !filteredLibraryTracks.empty()) {
-    selectedLibraryIndex = 0;
+  if (selectedIndex < 0 && !filtered.empty()) {
+    selectedIndex = 0;
   }
 
-  libraryList->setItems(filteredLibraryTracks);
-  libraryList->selectedIndex = selectedLibraryIndex;
+  list->setItems(filtered);
+  list->selectedIndex = selectedIndex;
   if (preserveScroll) {
-    const float maxOffset = std::max(
-        0.0f, static_cast<float>(std::max(1, libraryList->size()) *
-                                     libraryList->itemHeight -
-                                 libraryList->getContentHeight()));
-    libraryList->scrollOffset =
-        std::clamp(previousScrollOffset, 0.0f, maxOffset);
+    const float maxScrollOffset = std::max(
+        0.0f, static_cast<float>(std::max(1, list->size()) *
+                                     list->itemHeight -
+                                 list->getContentHeight()));
+    list->scrollOffset =
+        std::clamp(previousScrollOffset, 0.0f, maxScrollOffset);
+    if (revealPreferredIfOutOfView && selectedIndex >= 0) {
+      const float itemTop =
+          static_cast<float>(selectedIndex * list->itemHeight);
+      const float itemBottom =
+          itemTop + static_cast<float>(list->itemHeight);
+      const float viewportTop = list->scrollOffset;
+      const float viewportBottom =
+          viewportTop + static_cast<float>(list->getContentHeight());
+      if (itemTop < viewportTop || itemBottom > viewportBottom) {
+        list->scrollOffset = std::clamp(itemTop, 0.0f, maxScrollOffset);
+      }
+    }
   }
-  libraryList->rebindVisibleItems();
+  list->rebindVisibleItems();
 }
 
 void MusicPlayerScene::rebuildPlaylistChoices() {
@@ -1554,11 +1713,10 @@ void MusicPlayerScene::rebuildPlaylistChoices() {
 }
 
 void MusicPlayerScene::refreshLibraryPlaylistList(int preferredPlaylistId) {
-  if (libraryPlaylistList == nullptr) {
+  if (libraryPlaylistList == nullptr && favoritesPlaylistList == nullptr) {
     return;
   }
   rebuildPlaylistChoices();
-  libraryPlaylistList->setItems(playlistChoices);
 
   int playlistIndex = -1;
   const int targetPlaylistId =
@@ -1576,8 +1734,17 @@ void MusicPlayerScene::refreshLibraryPlaylistList(int preferredPlaylistId) {
       playlistIndex >= 0
           ? playlistChoices[static_cast<std::size_t>(playlistIndex)].id
           : 0;
-  libraryPlaylistList->selectedIndex = selectedLibraryPlaylistIndex;
-  libraryPlaylistList->rebindVisibleItems();
+
+  const auto updateList = [this](RecyclerView<PlaylistInfo> *list) {
+    if (list == nullptr) {
+      return;
+    }
+    list->setItems(playlistChoices);
+    list->selectedIndex = selectedLibraryPlaylistIndex;
+    list->rebindVisibleItems();
+  };
+  updateList(libraryPlaylistList);
+  updateList(favoritesPlaylistList);
 }
 
 void MusicPlayerScene::refreshPlaylistDirectoryList(int preferredPlaylistId) {
@@ -1703,6 +1870,15 @@ void MusicPlayerScene::refreshUi() {
     }
     librarySubtitleText->setText(text);
   }
+  if (favoritesSubtitleText != nullptr) {
+    std::string text = std::to_string(filteredFavoriteTracks.size()) +
+                       " of " + std::to_string(favoriteTracks.size()) +
+                       " favorite tracks";
+    if (!trimPlaylistName(favoritesSearchText).empty()) {
+      text += " matched";
+    }
+    favoritesSubtitleText->setText(text);
+  }
   if (playlistSubtitleText != nullptr) {
     playlistSubtitleText->setText(
         selectedPlaylistName() + " | " + std::to_string(playlists.size()) +
@@ -1745,6 +1921,16 @@ void MusicPlayerScene::refreshUi() {
   if (librarySelectionDetailText != nullptr) {
     const auto track = selectedLibraryTrack();
     librarySelectionDetailText->setText(
+        track ? trackDetail(*track) : "No track selected.");
+  }
+  if (favoritesSelectionTitleText != nullptr) {
+    const auto track = selectedTrackBrowserTrack(TrackBrowserKind::Favorites);
+    favoritesSelectionTitleText->setText(
+        track ? trackTitle(*track) : "No favorite track selected");
+  }
+  if (favoritesSelectionDetailText != nullptr) {
+    const auto track = selectedTrackBrowserTrack(TrackBrowserKind::Favorites);
+    favoritesSelectionDetailText->setText(
         track ? trackDetail(*track) : "No track selected.");
   }
   if (playlistSelectionTitleText != nullptr) {
@@ -1798,6 +1984,9 @@ void MusicPlayerScene::refreshUi() {
   }
   refreshNavigation();
   refreshLibraryArtwork(selectedLibraryTrack());
+  refreshTrackBrowserArtwork(
+      TrackBrowserKind::Favorites,
+      selectedTrackBrowserTrack(TrackBrowserKind::Favorites));
   refreshArtwork(shown);
 }
 
@@ -1817,11 +2006,15 @@ void MusicPlayerScene::refreshNavigation() {
     }
   };
   styleNav(libraryNavButton, libraryNavText, MusicPlayerTab::Library);
+  styleNav(favoritesNavButton, favoritesNavText, MusicPlayerTab::Favorites);
   styleNav(playlistsNavButton, playlistsNavText, MusicPlayerTab::Playlists);
   styleNav(playerNavButton, playerNavText, MusicPlayerTab::Player);
 
   if (libraryPage != nullptr) {
     libraryPage->setVisible(activeTab == MusicPlayerTab::Library);
+  }
+  if (favoritesPage != nullptr) {
+    favoritesPage->setVisible(activeTab == MusicPlayerTab::Favorites);
   }
   if (playlistsPage != nullptr) {
     playlistsPage->setVisible(activeTab == MusicPlayerTab::Playlists);
@@ -1852,22 +2045,30 @@ void MusicPlayerScene::refreshArtwork(const std::optional<MusicTrack> &track) {
 
 void MusicPlayerScene::refreshLibraryArtwork(
     const std::optional<MusicTrack> &track) {
+  refreshTrackBrowserArtwork(TrackBrowserKind::Library, track);
+}
+
+void MusicPlayerScene::refreshTrackBrowserArtwork(
+    TrackBrowserKind kind, const std::optional<MusicTrack> &track) {
   const std::filesystem::path path =
       track ? artworkPathForDisplay(*track) : std::filesystem::path{};
-  if (path == displayedLibraryArtworkPath) {
+  auto &displayedPath = trackBrowserDisplayedArtworkPath(kind);
+  if (path == displayedPath) {
     return;
   }
-  displayedLibraryArtworkPath = path;
-  if (libraryArtworkImage == nullptr || libraryArtworkFallbackText == nullptr) {
+  displayedPath = path;
+  auto *image = trackBrowserArtworkImage(kind);
+  auto *fallback = trackBrowserArtworkFallbackText(kind);
+  if (image == nullptr || fallback == nullptr) {
     return;
   }
   if (path.empty()) {
-    libraryArtworkImage->freeImage();
-    libraryArtworkFallbackText->setVisible(true);
+    image->freeImage();
+    fallback->setVisible(true);
     return;
   }
-  libraryArtworkImage->setImageAsync(fspath_to_path_t(path), true);
-  libraryArtworkFallbackText->setVisible(true);
+  image->setImageAsync(fspath_to_path_t(path), true);
+  fallback->setVisible(true);
 }
 
 void MusicPlayerScene::setStatus(std::string message) {
@@ -1877,13 +2078,104 @@ void MusicPlayerScene::setStatus(std::string message) {
   }
 }
 
+std::vector<MusicPlayerScene::MusicTrack> &
+MusicPlayerScene::trackBrowserSourceTracks(TrackBrowserKind kind) {
+  return kind == TrackBrowserKind::Library ? libraryTracks : favoriteTracks;
+}
+
+const std::vector<MusicPlayerScene::MusicTrack> &
+MusicPlayerScene::trackBrowserSourceTracks(TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? libraryTracks : favoriteTracks;
+}
+
+std::vector<MusicPlayerScene::MusicTrack> &
+MusicPlayerScene::trackBrowserFilteredTracks(TrackBrowserKind kind) {
+  return kind == TrackBrowserKind::Library ? filteredLibraryTracks
+                                           : filteredFavoriteTracks;
+}
+
+const std::vector<MusicPlayerScene::MusicTrack> &
+MusicPlayerScene::trackBrowserFilteredTracks(TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? filteredLibraryTracks
+                                           : filteredFavoriteTracks;
+}
+
+int &MusicPlayerScene::trackBrowserSelectedIndex(TrackBrowserKind kind) {
+  return kind == TrackBrowserKind::Library ? selectedLibraryIndex
+                                           : selectedFavoriteIndex;
+}
+
+int MusicPlayerScene::trackBrowserSelectedIndex(TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? selectedLibraryIndex
+                                           : selectedFavoriteIndex;
+}
+
+std::string &MusicPlayerScene::trackBrowserSearchText(TrackBrowserKind kind) {
+  return kind == TrackBrowserKind::Library ? librarySearchText
+                                           : favoritesSearchText;
+}
+
+const std::string &
+MusicPlayerScene::trackBrowserSearchText(TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? librarySearchText
+                                           : favoritesSearchText;
+}
+
+RecyclerView<MusicPlayerScene::MusicTrack> *
+MusicPlayerScene::trackBrowserList(TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? libraryList : favoritesList;
+}
+
+TextView *MusicPlayerScene::trackBrowserSubtitleText(
+    TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? librarySubtitleText
+                                           : favoritesSubtitleText;
+}
+
+TextView *MusicPlayerScene::trackBrowserSelectionTitleText(
+    TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? librarySelectionTitleText
+                                           : favoritesSelectionTitleText;
+}
+
+TextView *MusicPlayerScene::trackBrowserSelectionDetailText(
+    TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? librarySelectionDetailText
+                                           : favoritesSelectionDetailText;
+}
+
+ImageView *MusicPlayerScene::trackBrowserArtworkImage(
+    TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? libraryArtworkImage
+                                           : favoritesArtworkImage;
+}
+
+TextView *MusicPlayerScene::trackBrowserArtworkFallbackText(
+    TrackBrowserKind kind) const {
+  return kind == TrackBrowserKind::Library ? libraryArtworkFallbackText
+                                           : favoritesArtworkFallbackText;
+}
+
+std::filesystem::path &
+MusicPlayerScene::trackBrowserDisplayedArtworkPath(TrackBrowserKind kind) {
+  return kind == TrackBrowserKind::Library ? displayedLibraryArtworkPath
+                                           : displayedFavoritesArtworkPath;
+}
+
 std::optional<MusicPlayerScene::MusicTrack>
 MusicPlayerScene::selectedLibraryTrack() const {
-  if (selectedLibraryIndex < 0 ||
-      selectedLibraryIndex >= static_cast<int>(filteredLibraryTracks.size())) {
+  return selectedTrackBrowserTrack(TrackBrowserKind::Library);
+}
+
+std::optional<MusicPlayerScene::MusicTrack>
+MusicPlayerScene::selectedTrackBrowserTrack(TrackBrowserKind kind) const {
+  const int selectedIndex = trackBrowserSelectedIndex(kind);
+  const auto &tracks = trackBrowserFilteredTracks(kind);
+  if (selectedIndex < 0 ||
+      selectedIndex >= static_cast<int>(tracks.size())) {
     return std::nullopt;
   }
-  return filteredLibraryTracks[static_cast<std::size_t>(selectedLibraryIndex)];
+  return tracks[static_cast<std::size_t>(selectedIndex)];
 }
 
 std::optional<MusicPlayerScene::PlaylistInfo>
@@ -1926,6 +2218,12 @@ std::optional<MusicPlayerScene::MusicTrack> MusicPlayerScene::displayTrack()
   if (const auto playlistTrack = selectedPlaylistTrack()) {
     return playlistTrack;
   }
+  if (activeTab == MusicPlayerTab::Favorites) {
+    if (const auto favoriteTrack =
+            selectedTrackBrowserTrack(TrackBrowserKind::Favorites)) {
+      return favoriteTrack;
+    }
+  }
   return selectedLibraryTrack();
 }
 
@@ -1964,6 +2262,33 @@ bool MusicPlayerScene::selectedPlaylistIsActiveQueue() const {
     return false;
   }
   return sameTrackList(queueTracks, playlistTracks);
+}
+
+bool MusicPlayerScene::isFavoriteTrack(const MusicTrack &track) const {
+  return favoriteTrackIds.contains(favoriteKeyForTrack(track));
+}
+
+void MusicPlayerScene::rebuildFavoriteTrackIds() {
+  favoriteTrackIds.clear();
+  favoriteTrackIds.reserve(favoriteTracks.size());
+  for (const auto &track : favoriteTracks) {
+    favoriteTrackIds.insert(favoriteKeyForTrack(track));
+  }
+}
+
+void MusicPlayerScene::rebindFavoriteAwareTrackLists() {
+  if (libraryList != nullptr) {
+    libraryList->rebindVisibleItems();
+  }
+  if (favoritesList != nullptr) {
+    favoritesList->rebindVisibleItems();
+  }
+  if (playlistList != nullptr) {
+    playlistList->rebindVisibleItems();
+  }
+  if (playerQueueList != nullptr) {
+    playerQueueList->rebindVisibleItems();
+  }
 }
 
 std::string MusicPlayerScene::selectedLibraryPlaylistName() const {
@@ -2174,21 +2499,102 @@ void MusicPlayerScene::selectLibraryPlaylist(int index) {
         playlistChoices[static_cast<std::size_t>(index)].id;
   }
 
-  if (libraryPlaylistList != nullptr) {
-    libraryPlaylistList->selectedIndex = selectedLibraryPlaylistIndex;
+  const auto updateList = [this,
+                           previousIndex](RecyclerView<PlaylistInfo> *list) {
+    if (list == nullptr) {
+      return;
+    }
+    list->selectedIndex = selectedLibraryPlaylistIndex;
     if (previousIndex >= 0 && previousIndex != selectedLibraryPlaylistIndex) {
-      if (auto *previousView =
-              libraryPlaylistList->getViewByIndex(previousIndex)) {
+      if (auto *previousView = list->getViewByIndex(previousIndex)) {
         previousView->onUnselected();
       }
     }
     if (selectedLibraryPlaylistIndex >= 0) {
       if (auto *selectedView =
-              libraryPlaylistList->getViewByIndex(selectedLibraryPlaylistIndex)) {
+              list->getViewByIndex(selectedLibraryPlaylistIndex)) {
+        selectedView->onSelected();
+      }
+    }
+  };
+  updateList(libraryPlaylistList);
+  updateList(favoritesPlaylistList);
+}
+
+void MusicPlayerScene::selectTrackBrowserTrack(TrackBrowserKind kind,
+                                               int index) {
+  const int previousIndex = trackBrowserSelectedIndex(kind);
+  auto &selectedIndex = trackBrowserSelectedIndex(kind);
+  const auto &tracks = trackBrowserFilteredTracks(kind);
+  selectedIndex = index >= 0 && index < static_cast<int>(tracks.size())
+                      ? index
+                      : -1;
+
+  if (auto *list = trackBrowserList(kind)) {
+    list->selectedIndex = selectedIndex;
+    if (previousIndex >= 0 && previousIndex != selectedIndex) {
+      if (auto *previousView = list->getViewByIndex(previousIndex)) {
+        previousView->onUnselected();
+      }
+    }
+    if (selectedIndex >= 0) {
+      if (auto *selectedView = list->getViewByIndex(selectedIndex)) {
         selectedView->onSelected();
       }
     }
   }
+
+  refreshTrackBrowserArtwork(kind, selectedTrackBrowserTrack(kind));
+  refreshUi();
+}
+
+void MusicPlayerScene::toggleFavorite(const MusicTrack &track) {
+  const bool nextFavorite = !isFavoriteTrack(track);
+  const auto previousFavorite =
+      selectedTrackBrowserTrack(TrackBrowserKind::Favorites);
+  const std::string previousFavoriteId =
+      previousFavorite ? previousFavorite->trackId : "";
+  const int previousFavoriteIndex = selectedFavoriteIndex;
+  std::string fallbackFavoriteId;
+  if (!nextFavorite && previousFavoriteId == favoriteKeyForTrack(track)) {
+    const int nextIndex = previousFavoriteIndex + 1;
+    if (nextIndex >= 0 &&
+        nextIndex < static_cast<int>(filteredFavoriteTracks.size())) {
+      fallbackFavoriteId =
+          filteredFavoriteTracks[static_cast<std::size_t>(nextIndex)].trackId;
+    } else if (previousFavoriteIndex > 0 &&
+               previousFavoriteIndex - 1 <
+                   static_cast<int>(filteredFavoriteTracks.size())) {
+      fallbackFavoriteId =
+          filteredFavoriteTracks[static_cast<std::size_t>(
+                                     previousFavoriteIndex - 1)]
+              .trackId;
+    }
+  } else if (!nextFavorite) {
+    fallbackFavoriteId = previousFavoriteId;
+  }
+
+  std::string errorMessage;
+  if (!context.musicPlayer.SetFavorite(track.representativeChart, nextFavorite,
+                                       errorMessage)) {
+    setStatus(errorMessage);
+    refreshUi();
+    return;
+  }
+
+  const std::string toggledTrackId = favoriteKeyForTrack(track);
+  favoriteTracks = context.musicPlayer.FavoriteTracksSnapshot();
+  rebuildFavoriteTrackIds();
+  applyTrackBrowserFilterForTrackId(
+      TrackBrowserKind::Favorites,
+      nextFavorite ? toggledTrackId : fallbackFavoriteId,
+      true, true);
+  rebindFavoriteAwareTrackLists();
+  refreshTrackBrowserArtwork(TrackBrowserKind::Favorites,
+                             selectedTrackBrowserTrack(
+                                 TrackBrowserKind::Favorites));
+  setStatus(nextFavorite ? "Added to Favorites." : "Removed from Favorites.");
+  refreshUi();
 }
 
 void MusicPlayerScene::toggleSelectedLibraryGroup() {
@@ -2204,7 +2610,7 @@ void MusicPlayerScene::toggleSelectedLibraryGroup() {
 
   if (expandedLibraryGroupIds.contains(track->groupId)) {
     expandedLibraryGroupIds.erase(track->groupId);
-    applyLibraryFilterForTrackId(track->groupId, true);
+    applyLibraryFilterForTrackId(track->groupId, true, true);
     refreshLibraryArtwork(selectedLibraryTrack());
     refreshUi();
     setStatus("Collapsed chart group.");
@@ -2335,9 +2741,15 @@ void MusicPlayerScene::selectQueueTrack(int index) {
 }
 
 void MusicPlayerScene::addLibraryTrackToPlaylist() {
-  const auto track = selectedLibraryTrack();
+  addTrackBrowserTrackToPlaylist(TrackBrowserKind::Library);
+}
+
+void MusicPlayerScene::addTrackBrowserTrackToPlaylist(TrackBrowserKind kind) {
+  const auto track = selectedTrackBrowserTrack(kind);
   if (!track) {
-    setStatus("Select a library track first.");
+    setStatus(kind == TrackBrowserKind::Library
+                  ? "Select a library track first."
+                  : "Select a favorite track first.");
     return;
   }
   const auto targetPlaylist = selectedLibraryPlaylistInfo();
@@ -2640,12 +3052,21 @@ void MusicPlayerScene::playNowPlaying(std::vector<MusicTrack> tracks,
 }
 
 void MusicPlayerScene::playLibraryTrack() {
-  const auto track = selectedLibraryTrack();
+  playTrackBrowserTrack(TrackBrowserKind::Library);
+}
+
+void MusicPlayerScene::playTrackBrowserTrack(TrackBrowserKind kind) {
+  const auto track = selectedTrackBrowserTrack(kind);
   if (!track) {
-    setStatus("Select a library track first.");
+    setStatus(kind == TrackBrowserKind::Library
+                  ? "Select a library track first."
+                  : "Select a favorite track first.");
     return;
   }
-  playNowPlaying({*track}, 0, "Select a library track first.",
+  playNowPlaying({*track}, 0,
+                 kind == TrackBrowserKind::Library
+                     ? "Select a library track first."
+                     : "Select a favorite track first.",
                  "Playing Now Playing.");
 }
 
@@ -2716,13 +3137,26 @@ void MusicPlayerScene::playSelectedQueueTrack() {
 }
 
 void MusicPlayerScene::playRandomLibrary() {
-  std::vector<MusicTrack> tracks =
-      trimPlaylistName(librarySearchText).empty() &&
-              expandedLibraryGroupIds.empty()
-          ? libraryTracks
-          : filteredLibraryTracks;
+  playRandomTrackBrowser(TrackBrowserKind::Library);
+}
+
+void MusicPlayerScene::playRandomTrackBrowser(TrackBrowserKind kind) {
+  std::vector<MusicTrack> tracks;
+  if (kind == TrackBrowserKind::Library) {
+    tracks = trimPlaylistName(librarySearchText).empty() &&
+                     expandedLibraryGroupIds.empty()
+                 ? libraryTracks
+                 : filteredLibraryTracks;
+  } else {
+    tracks = trimPlaylistName(favoritesSearchText).empty()
+                 ? favoriteTracks
+                 : filteredFavoriteTracks;
+  }
   playNowPlaying(music_playlist::ShuffledTracks(std::move(tracks)), 0,
-                 "No library tracks available.", "Playing Now Playing.");
+                 kind == TrackBrowserKind::Library
+                     ? "No library tracks available."
+                     : "No favorite tracks available.",
+                 "Playing Now Playing.");
 }
 
 void MusicPlayerScene::togglePlayback() {
@@ -2738,6 +3172,10 @@ void MusicPlayerScene::togglePlayback() {
     return;
   } else if (selectedPlaylistTrack()) {
     playSelectedPlaylistTrack();
+    return;
+  } else if (activeTab == MusicPlayerTab::Favorites &&
+             selectedTrackBrowserTrack(TrackBrowserKind::Favorites)) {
+    playTrackBrowserTrack(TrackBrowserKind::Favorites);
     return;
   } else {
     playLibraryTrack();
