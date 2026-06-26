@@ -645,6 +645,32 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    public String updateNativeMusicMetadata(String metadataText, long durationMicros) {
+        synchronized (nativeMusicLock) {
+            if (nativeMusicPlayer == null) {
+                return "OK";
+            }
+            try {
+                String[] metadataLines = metadataText == null
+                        ? new String[0]
+                        : metadataText.split("\\n", -1);
+                nativeMusicTitle = metadataLine(metadataLines, 0, "AsoBMaShow");
+                nativeMusicArtist = metadataLine(metadataLines, 1, "AsoBMaShow");
+                nativeMusicAlbum = metadataLine(metadataLines, 2, "");
+                nativeMusicArtworkPath = metadataLine(metadataLines, 3, "");
+                nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
+                if (durationMicros > 0) {
+                    nativeMusicDurationMicros = durationMicros;
+                }
+                updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(
+                        e, "Could not update music metadata.");
+            }
+        }
+    }
+
     public String playNativeMusic() {
         synchronized (nativeMusicLock) {
             if (nativeMusicPlayer == null) {

@@ -74,6 +74,8 @@ bool DownloadURLToFileAndroid(const std::string &url,
 bool LoadAndroidNativeMusicFile(const std::string &filePath,
                                 const AndroidNativeMusicMetadata &metadata,
                                 std::string &errorMessage);
+bool UpdateAndroidNativeMusicMetadata(
+    const AndroidNativeMusicMetadata &metadata, std::string &errorMessage);
 bool PlayAndroidNativeMusic(std::string &errorMessage);
 bool PauseAndroidNativeMusic(std::string &errorMessage);
 bool StopAndroidNativeMusic(std::string &errorMessage);

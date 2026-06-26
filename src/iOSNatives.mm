@@ -2458,6 +2458,26 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
   }
 }
 
+bool UpdateIOSNativeMusicMetadata(const IOSNativeMusicMetadata &metadata,
+                                  std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicPlayer == nil) {
+        return true;
+      }
+      const long long currentDurationMicros =
+          IOSNativeMusicDurationMicrosLocked();
+      gIOSNativeMusicMetadata = metadata;
+      if (gIOSNativeMusicMetadata.durationMicros <= 0) {
+        gIOSNativeMusicMetadata.durationMicros = currentDurationMicros;
+      }
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
 bool PlayIOSNativeMusic(std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {

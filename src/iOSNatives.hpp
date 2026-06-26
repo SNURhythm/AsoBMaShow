@@ -115,6 +115,8 @@ bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
 bool LoadIOSNativeMusicFile(const std::string &filePath,
                             const IOSNativeMusicMetadata &metadata,
                             std::string &errorMessage);
+bool UpdateIOSNativeMusicMetadata(const IOSNativeMusicMetadata &metadata,
+                                  std::string &errorMessage);
 bool PlayIOSNativeMusic(std::string &errorMessage);
 bool PauseIOSNativeMusic(std::string &errorMessage);
 bool StopIOSNativeMusic(std::string &errorMessage);

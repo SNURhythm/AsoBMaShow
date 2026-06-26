@@ -1,5 +1,6 @@
 #include "MusicPlayerScene.h"
 
+#include "../audio/NativeMusicPlayer.h"
 #include "../PlayOptionUtils.h"
 #include "../path.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -476,6 +477,7 @@ private:
 
 void MusicPlayerScene::init() {
   context.jukebox.stop();
+  applySystemPlaybackPrivacy(false);
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   buildView();
@@ -598,6 +600,12 @@ void MusicPlayerScene::cleanupScene() {
   queueTitleText = nullptr;
   repeatModeButtonText = nullptr;
   watchVideoButtonText = nullptr;
+  systemPlaybackJacketButton = nullptr;
+  systemPlaybackTitleButton = nullptr;
+  systemPlaybackArtistButton = nullptr;
+  systemPlaybackJacketText = nullptr;
+  systemPlaybackTitleText = nullptr;
+  systemPlaybackArtistText = nullptr;
   artworkFallbackText = nullptr;
   videoTitleText = nullptr;
   videoDetailText = nullptr;
@@ -1718,6 +1726,47 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueButtons->addView(editButton);
   queueButtons->addView(saveQueueButton);
   queueColumn->addView(queueButtons);
+
+  auto *privacyCard = new View();
+  privacyCard->setHeight(112)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10)
+      ->setPadding(Edge::All, 12)
+      ->setThemedBackgroundColor(ui_theme::insetSurface)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  auto *privacyTitle = new TextView(kFontPath, 18);
+  privacyTitle->setText("System Playback UI");
+  privacyTitle->setHeight(26);
+  privacyTitle->setThemedColor(ui_theme::textSecondary);
+  privacyCard->addView(privacyTitle);
+
+  auto *privacyRow = new View();
+  privacyRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  systemPlaybackJacketButton =
+      makeButton("Jacket: Shown", 16, &systemPlaybackJacketText);
+  systemPlaybackJacketButton->setFlex(1);
+  systemPlaybackJacketButton->setOnClickListener(
+      [this]() { toggleSystemPlaybackJacket(); });
+  systemPlaybackTitleButton =
+      makeButton("Title: Shown", 16, &systemPlaybackTitleText);
+  systemPlaybackTitleButton->setFlex(1);
+  systemPlaybackTitleButton->setOnClickListener(
+      [this]() { toggleSystemPlaybackTitle(); });
+  systemPlaybackArtistButton =
+      makeButton("Artist: Shown", 16, &systemPlaybackArtistText);
+  systemPlaybackArtistButton->setFlex(1);
+  systemPlaybackArtistButton->setOnClickListener(
+      [this]() { toggleSystemPlaybackArtist(); });
+  privacyRow->addView(systemPlaybackJacketButton);
+  privacyRow->addView(systemPlaybackTitleButton);
+  privacyRow->addView(systemPlaybackArtistButton);
+  privacyCard->addView(privacyRow);
+  queueColumn->addView(privacyCard);
   workspace->addView(queueColumn);
 }
 
@@ -2277,6 +2326,7 @@ void MusicPlayerScene::refreshUi() {
                             ? "Ready."
                             : statusMessage);
   }
+  refreshSystemPlaybackPrivacyButtons();
   refreshNavigation();
   refreshLibraryArtwork(selectedLibraryTrack());
   refreshTrackBrowserArtwork(
@@ -3525,6 +3575,69 @@ void MusicPlayerScene::cycleRepeatMode() {
   displayedRepeatMode = next;
   setStatus(repeatModeLabel(next));
   refreshUi();
+}
+
+void MusicPlayerScene::toggleSystemPlaybackJacket() {
+  context.settings.systemPlaybackShowJacket =
+      !context.settings.systemPlaybackShowJacket;
+  applySystemPlaybackPrivacy(true);
+}
+
+void MusicPlayerScene::toggleSystemPlaybackTitle() {
+  context.settings.systemPlaybackShowTitle =
+      !context.settings.systemPlaybackShowTitle;
+  applySystemPlaybackPrivacy(true);
+}
+
+void MusicPlayerScene::toggleSystemPlaybackArtist() {
+  context.settings.systemPlaybackShowArtist =
+      !context.settings.systemPlaybackShowArtist;
+  applySystemPlaybackPrivacy(true);
+}
+
+void MusicPlayerScene::applySystemPlaybackPrivacy(bool persist) {
+  std::string errorMessage;
+  const bool applied = native_music_player::SetMetadataVisibility(
+      {.showTitle = context.settings.systemPlaybackShowTitle,
+       .showArtist = context.settings.systemPlaybackShowArtist,
+       .showArtwork = context.settings.systemPlaybackShowJacket},
+      errorMessage);
+  if (persist) {
+    context.settings.sanitize();
+    if (!context.settings.save()) {
+      setStatus("Could not save system playback privacy.");
+    } else if (!applied && !errorMessage.empty()) {
+      setStatus(errorMessage);
+    } else {
+      setStatus("System playback privacy updated.");
+    }
+  }
+  refreshSystemPlaybackPrivacyButtons();
+}
+
+void MusicPlayerScene::refreshSystemPlaybackPrivacyButtons() {
+  auto refreshToggle = [this](Button *button, TextView *text,
+                              const std::string &label, bool visible) {
+    if (text != nullptr) {
+      text->setText(label + (visible ? ": Shown" : ": Hidden"));
+    }
+    if (button != nullptr) {
+      styleButton(button, text, visible ? ui_theme::successAction
+                                        : ui_theme::control,
+                  visible ? ui_theme::successActionHover
+                          : ui_theme::controlHover,
+                  visible ? ui_theme::successActionPressed
+                          : ui_theme::controlPressed,
+                  visible ? ui_theme::accentBorder
+                          : ui_theme::hairlineStrong);
+    }
+  };
+  refreshToggle(systemPlaybackJacketButton, systemPlaybackJacketText, "Jacket",
+                context.settings.systemPlaybackShowJacket);
+  refreshToggle(systemPlaybackTitleButton, systemPlaybackTitleText, "Title",
+                context.settings.systemPlaybackShowTitle);
+  refreshToggle(systemPlaybackArtistButton, systemPlaybackArtistText, "Artist",
+                context.settings.systemPlaybackShowArtist);
 }
 
 void MusicPlayerScene::seekToFraction(float fraction) {

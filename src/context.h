@@ -11,6 +11,7 @@
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
 #include "audio/Jukebox.h"
+#include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
@@ -45,6 +46,12 @@ public:
     jukebox.setVisualsEnabled(settings.bgaEnabled);
     jukebox.setBgaOffsetMs(settings.audioOffsetMs);
     jukebox.setBgaDisplayMode(settings.bgaDisplayMode);
+    std::string metadataVisibilityError;
+    native_music_player::SetMetadataVisibility(
+        {.showTitle = settings.systemPlaybackShowTitle,
+         .showArtist = settings.systemPlaybackShowArtist,
+         .showArtwork = settings.systemPlaybackShowJacket},
+        metadataVisibilityError);
   }
   ~ApplicationContext() {
     quitFlag = true;

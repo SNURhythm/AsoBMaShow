@@ -137,6 +137,9 @@ public:
       JudgementTimingDisplayCriteria::GreatOrBelow;
   GaugeBarPosition gaugeBarPosition = GaugeBarPosition::World;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
+  bool systemPlaybackShowJacket = true;
+  bool systemPlaybackShowTitle = true;
+  bool systemPlaybackShowArtist = true;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedAssistOption = kDefaultAssistOption;

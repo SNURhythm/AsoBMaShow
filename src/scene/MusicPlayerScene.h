@@ -166,6 +166,11 @@ private:
   void playRandomTrackBrowser(TrackBrowserKind kind);
   void togglePlayback();
   void cycleRepeatMode();
+  void toggleSystemPlaybackJacket();
+  void toggleSystemPlaybackTitle();
+  void toggleSystemPlaybackArtist();
+  void applySystemPlaybackPrivacy(bool persist);
+  void refreshSystemPlaybackPrivacyButtons();
   void seekRelative(long long deltaMicros);
   void seekToFraction(float fraction);
   bool handleSeekEvents(SDL_Event &event);
@@ -225,6 +230,12 @@ private:
   TextView *queueTitleText = nullptr;
   TextView *repeatModeButtonText = nullptr;
   TextView *watchVideoButtonText = nullptr;
+  Button *systemPlaybackJacketButton = nullptr;
+  Button *systemPlaybackTitleButton = nullptr;
+  Button *systemPlaybackArtistButton = nullptr;
+  TextView *systemPlaybackJacketText = nullptr;
+  TextView *systemPlaybackTitleText = nullptr;
+  TextView *systemPlaybackArtistText = nullptr;
   TextView *artworkFallbackText = nullptr;
   TextView *videoTitleText = nullptr;
   TextView *videoDetailText = nullptr;

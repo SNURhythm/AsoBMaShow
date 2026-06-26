@@ -339,6 +339,56 @@ std::string callActivityStringMethod2Long(const char *methodName,
   return result;
 }
 
+std::string callActivityStringMethodLong(const char *methodName,
+                                         const char *signature,
+                                         const char *argument,
+                                         jlong longArgument,
+                                         std::string &errorMessage) {
+  errorMessage.clear();
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errorMessage = "Android activity is not available.";
+    return {};
+  }
+
+  jclass activityClass = env->GetObjectClass(activity);
+  if (activityClass == nullptr) {
+    errorMessage = "Android activity class is not available.";
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jmethodID method = env->GetMethodID(activityClass, methodName, signature);
+  if (method == nullptr) {
+    errorMessage = std::string("Android activity method missing: ") +
+                   methodName;
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jstring javaArgument = env->NewStringUTF(argument != nullptr ? argument : "");
+  jobject javaResult =
+      env->CallObjectMethod(activity, method, javaArgument, longArgument);
+
+  if (clearPendingJavaException(env, errorMessage)) {
+    env->DeleteLocalRef(javaArgument);
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  std::string result = jstringToUtf8(env, static_cast<jstring>(javaResult));
+  if (javaResult != nullptr) {
+    env->DeleteLocalRef(javaResult);
+  }
+  env->DeleteLocalRef(javaArgument);
+  env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  return result;
+}
+
 std::optional<int> callActivityIntMethod2(const char *methodName,
                                           const char *signature,
                                           const char *argument1,
@@ -930,6 +980,21 @@ bool LoadAndroidNativeMusicFile(const std::string &filePath,
       "loadNativeMusic",
       "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
       filePath.c_str(), payload.c_str(), metadata.durationMicros, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool UpdateAndroidNativeMusicMetadata(
+    const AndroidNativeMusicMetadata &metadata, std::string &errorMessage) {
+  const std::string payload = musicMetadataPayload(metadata);
+  std::string callError;
+  const std::string result = callActivityStringMethodLong(
+      "updateNativeMusicMetadata", "(Ljava/lang/String;J)Ljava/lang/String;",
+      payload.c_str(), metadata.durationMicros, callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

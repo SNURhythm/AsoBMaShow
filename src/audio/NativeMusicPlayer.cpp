@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace native_music_player {
@@ -18,6 +19,9 @@ namespace {
 
 std::mutex gControlEventsMutex;
 std::vector<ControlEvent> gControlEvents;
+std::mutex gMetadataMutex;
+MetadataVisibility gMetadataVisibility;
+std::optional<TrackMetadata> gLastRawMetadata;
 
 std::string pathToUtf8(const std::filesystem::path &path) {
   return path_t_to_utf8(fspath_to_path_t(path));
@@ -38,6 +42,48 @@ TrackMetadata normalizedMetadata(TrackMetadata metadata,
   return metadata;
 }
 
+TrackMetadata applyMetadataVisibility(TrackMetadata metadata,
+                                      MetadataVisibility visibility) {
+  if (!visibility.showTitle) {
+    metadata.title = "AsoBMaShow";
+  }
+  if (!visibility.showArtist) {
+    metadata.artist.clear();
+  }
+  if (!visibility.showArtwork) {
+    metadata.artworkPath.clear();
+  }
+  return metadata;
+}
+
+bool updatePlatformMetadata(const TrackMetadata &metadata,
+                            std::string &errorMessage) {
+  errorMessage.clear();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  IOSNativeMusicMetadata iosMetadata{.title = metadata.title,
+                                     .artist = metadata.artist,
+                                     .album = metadata.album,
+                                     .artworkPath =
+                                         pathToUtf8(metadata.artworkPath),
+                                     .durationMicros =
+                                         metadata.durationMicros};
+  return UpdateIOSNativeMusicMetadata(iosMetadata, errorMessage);
+#elif TARGET_OS_ANDROID
+  AndroidNativeMusicMetadata androidMetadata{.title = metadata.title,
+                                             .artist = metadata.artist,
+                                             .album = metadata.album,
+                                             .artworkPath =
+                                                 pathToUtf8(
+                                                     metadata.artworkPath),
+                                             .durationMicros =
+                                                 metadata.durationMicros};
+  return UpdateAndroidNativeMusicMetadata(androidMetadata, errorMessage);
+#else
+  (void)metadata;
+  return true;
+#endif
+}
+
 } // namespace
 
 bool IsSupported() {
@@ -46,6 +92,24 @@ bool IsSupported() {
 #else
   return false;
 #endif
+}
+
+bool SetMetadataVisibility(MetadataVisibility visibility,
+                           std::string &errorMessage) {
+  errorMessage.clear();
+  std::optional<TrackMetadata> visibleMetadata;
+  {
+    std::lock_guard<std::mutex> lock(gMetadataMutex);
+    gMetadataVisibility = visibility;
+    if (gLastRawMetadata) {
+      visibleMetadata =
+          applyMetadataVisibility(*gLastRawMetadata, gMetadataVisibility);
+    }
+  }
+  if (!visibleMetadata) {
+    return true;
+  }
+  return updatePlatformMetadata(*visibleMetadata, errorMessage);
 }
 
 bool Load(const std::filesystem::path &audioPath,
@@ -57,33 +121,46 @@ bool Load(const std::filesystem::path &audioPath,
   }
 
   const TrackMetadata normalized = normalizedMetadata(metadata, audioPath);
+  TrackMetadata visibleMetadata;
+  {
+    std::lock_guard<std::mutex> lock(gMetadataMutex);
+    visibleMetadata =
+        applyMetadataVisibility(normalized, gMetadataVisibility);
+  }
   const std::string audioPathUtf8 = pathToUtf8(audioPath);
+  bool loaded = false;
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  IOSNativeMusicMetadata iosMetadata{.title = normalized.title,
-                                     .artist = normalized.artist,
-                                     .album = normalized.album,
+  IOSNativeMusicMetadata iosMetadata{.title = visibleMetadata.title,
+                                     .artist = visibleMetadata.artist,
+                                     .album = visibleMetadata.album,
                                      .artworkPath =
-                                         pathToUtf8(normalized.artworkPath),
+                                         pathToUtf8(
+                                             visibleMetadata.artworkPath),
                                      .durationMicros =
-                                         normalized.durationMicros};
-  return LoadIOSNativeMusicFile(audioPathUtf8, iosMetadata, errorMessage);
+                                         visibleMetadata.durationMicros};
+  loaded = LoadIOSNativeMusicFile(audioPathUtf8, iosMetadata, errorMessage);
 #elif TARGET_OS_ANDROID
-  AndroidNativeMusicMetadata androidMetadata{.title = normalized.title,
-                                             .artist = normalized.artist,
-                                             .album = normalized.album,
+  AndroidNativeMusicMetadata androidMetadata{.title = visibleMetadata.title,
+                                             .artist = visibleMetadata.artist,
+                                             .album = visibleMetadata.album,
                                              .artworkPath =
                                                  pathToUtf8(
-                                                     normalized.artworkPath),
+                                                     visibleMetadata.artworkPath),
                                              .durationMicros =
-                                                 normalized.durationMicros};
-  return LoadAndroidNativeMusicFile(audioPathUtf8, androidMetadata,
-                                    errorMessage);
+                                                 visibleMetadata.durationMicros};
+  loaded =
+      LoadAndroidNativeMusicFile(audioPathUtf8, androidMetadata, errorMessage);
 #else
   (void)audioPathUtf8;
   errorMessage = "Native music playback is not supported on this platform.";
   return false;
 #endif
+  if (loaded) {
+    std::lock_guard<std::mutex> lock(gMetadataMutex);
+    gLastRawMetadata = normalized;
+  }
+  return loaded;
 }
 
 bool Play(std::string &errorMessage) {

@@ -20,6 +20,12 @@ struct TrackMetadata {
   long long durationMicros = 0;
 };
 
+struct MetadataVisibility {
+  bool showTitle = true;
+  bool showArtist = true;
+  bool showArtwork = true;
+};
+
 struct PlaybackState {
   bool supported = false;
   bool loaded = false;
@@ -29,6 +35,8 @@ struct PlaybackState {
 };
 
 bool IsSupported();
+bool SetMetadataVisibility(MetadataVisibility visibility,
+                           std::string &errorMessage);
 bool Load(const std::filesystem::path &audioPath,
           const TrackMetadata &metadata, std::string &errorMessage);
 bool Play(std::string &errorMessage);
