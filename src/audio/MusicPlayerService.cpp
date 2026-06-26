@@ -154,6 +154,7 @@ native_music_player::QueueMetadata nativeQueueMetadataForSnapshot(
 } // namespace
 
 MusicPlayerService::~MusicPlayerService() {
+  StopSleepTimerWorker();
   StopPlaybackWorker();
   StopAdjacentPreloadWorker();
   StopNativeControlEventPump();
@@ -1189,6 +1190,11 @@ bool MusicPlayerService::Pause(std::string &errorMessage) {
 }
 
 bool MusicPlayerService::Stop(std::string &errorMessage) {
+  ClearSleepTimer();
+  return StopPlaybackInternal(errorMessage);
+}
+
+bool MusicPlayerService::StopPlaybackInternal(std::string &errorMessage) {
   StopPlaybackWorker();
   StopAdjacentPreloadWorker();
   bool stopped = false;
@@ -1205,6 +1211,48 @@ bool MusicPlayerService::Seek(long long positionMicros,
                               std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Seek(positionMicros, errorMessage);
+}
+
+bool MusicPlayerService::SetSleepTimer(long long durationMicros,
+                                       std::string &statusMessage) {
+  statusMessage.clear();
+  if (durationMicros <= 0) {
+    ClearSleepTimer();
+    statusMessage = "Sleep timer off.";
+    return true;
+  }
+
+  const auto duration = std::chrono::microseconds(durationMicros);
+  {
+    std::lock_guard<std::mutex> lock(sleepTimerMutex);
+    sleepTimerDeadline = std::chrono::steady_clock::now() + duration;
+  }
+  EnsureSleepTimerWorker();
+  sleepTimerCv.notify_all();
+  statusMessage = "Sleep timer set.";
+  return true;
+}
+
+void MusicPlayerService::ClearSleepTimer() {
+  {
+    std::lock_guard<std::mutex> lock(sleepTimerMutex);
+    sleepTimerDeadline.reset();
+  }
+  sleepTimerCv.notify_all();
+}
+
+long long MusicPlayerService::SleepTimerRemainingMicros() const {
+  std::lock_guard<std::mutex> lock(sleepTimerMutex);
+  if (!sleepTimerDeadline) {
+    return 0;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (*sleepTimerDeadline <= now) {
+    return 0;
+  }
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             *sleepTimerDeadline - now)
+      .count();
 }
 
 bool MusicPlayerService::ProcessNativeControlEvents(
@@ -1614,6 +1662,73 @@ void MusicPlayerService::StopPlaybackWorker() {
 
   if (threadToStop.joinable()) {
     threadToStop.join();
+  }
+}
+
+void MusicPlayerService::EnsureSleepTimerWorker() {
+  std::lock_guard<std::mutex> lock(sleepTimerThreadMutex);
+  if (sleepTimerThread.joinable()) {
+    return;
+  }
+  sleepTimerThread = std::jthread([this](const std::stop_token &stopToken) {
+    SleepTimerWorker(stopToken);
+  });
+}
+
+void MusicPlayerService::StopSleepTimerWorker() {
+  {
+    std::lock_guard<std::mutex> lock(sleepTimerMutex);
+    sleepTimerDeadline.reset();
+  }
+  sleepTimerCv.notify_all();
+
+  std::jthread threadToStop;
+  {
+    std::lock_guard<std::mutex> lock(sleepTimerThreadMutex);
+    if (!sleepTimerThread.joinable()) {
+      return;
+    }
+    sleepTimerThread.request_stop();
+    threadToStop = std::move(sleepTimerThread);
+  }
+
+  sleepTimerCv.notify_all();
+  if (threadToStop.joinable()) {
+    threadToStop.join();
+  }
+}
+
+void MusicPlayerService::SleepTimerWorker(const std::stop_token &stopToken) {
+  std::unique_lock<std::mutex> lock(sleepTimerMutex);
+  while (!stopToken.stop_requested()) {
+    if (!sleepTimerDeadline) {
+      sleepTimerCv.wait(lock, [this, &stopToken] {
+        return stopToken.stop_requested() || sleepTimerDeadline.has_value();
+      });
+      continue;
+    }
+
+    const auto deadline = *sleepTimerDeadline;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < deadline) {
+      sleepTimerCv.wait_until(lock, deadline, [this, &stopToken, deadline] {
+        return stopToken.stop_requested() || !sleepTimerDeadline ||
+               *sleepTimerDeadline != deadline;
+      });
+      continue;
+    }
+
+    sleepTimerDeadline.reset();
+    lock.unlock();
+    std::string stopMessage;
+    if (StopPlaybackInternal(stopMessage)) {
+      PublishNativeControlStatus("Sleep timer stopped playback.");
+    } else {
+      PublishNativeControlStatus(stopMessage.empty()
+                                     ? "Sleep timer expired."
+                                     : stopMessage);
+    }
+    lock.lock();
   }
 }
 

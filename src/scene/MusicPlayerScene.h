@@ -169,10 +169,13 @@ private:
   void shuffleQueue();
   void togglePlayback();
   void cycleRepeatMode();
+  void setSleepTimerFromInput();
+  void clearSleepTimer();
   void toggleSystemPlaybackJacket();
   void toggleSystemPlaybackTitle();
   void toggleSystemPlaybackArtist();
   void applySystemPlaybackPrivacy(bool persist);
+  void refreshSleepTimerUi();
   void refreshSystemPlaybackPrivacyButtons();
   void seekRelative(long long deltaMicros);
   void seekToFraction(float fraction);
@@ -234,6 +237,12 @@ private:
   TextView *repeatModeButtonText = nullptr;
   TextView *repeatModeBaseButtonText = nullptr;
   TextView *watchVideoButtonText = nullptr;
+  Button *sleepTimerSetButton = nullptr;
+  Button *sleepTimerClearButton = nullptr;
+  TextInputBox *sleepTimerInput = nullptr;
+  TextView *sleepTimerSetText = nullptr;
+  TextView *sleepTimerClearText = nullptr;
+  TextView *sleepTimerStatusText = nullptr;
   Button *systemPlaybackJacketButton = nullptr;
   Button *systemPlaybackTitleButton = nullptr;
   Button *systemPlaybackArtistButton = nullptr;

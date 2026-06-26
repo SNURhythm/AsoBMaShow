@@ -23,6 +23,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iterator>
@@ -123,6 +124,33 @@ std::string formatMusicTime(long long micros) {
   return stream.str();
 }
 
+std::string formatSleepTimerDuration(long long micros) {
+  micros = std::max(0LL, micros);
+  long long totalSeconds = (micros + 999999LL) / 1000000LL;
+  const long long hours = totalSeconds / 3600LL;
+  totalSeconds %= 3600LL;
+  const long long minutes = totalSeconds / 60LL;
+  const long long seconds = totalSeconds % 60LL;
+
+  std::ostringstream stream;
+  if (hours > 0) {
+    stream << hours << 'h';
+    if (minutes > 0) {
+      stream << ' ' << minutes << 'm';
+    }
+    return stream.str();
+  }
+  if (minutes > 0) {
+    stream << minutes << 'm';
+    if (seconds > 0 && minutes < 5) {
+      stream << ' ' << seconds << 's';
+    }
+    return stream.str();
+  }
+  stream << std::max(1LL, seconds) << 's';
+  return stream.str();
+}
+
 std::string trimPlaylistName(const std::string &value) {
   const auto begin =
       std::find_if_not(value.begin(), value.end(),
@@ -142,6 +170,80 @@ std::string lowercaseText(std::string value) {
       value.begin(), value.end(), value.begin(),
       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
+}
+
+std::optional<long long> parseSleepTimerDurationMicros(
+    const std::string &rawValue, std::string &errorMessage) {
+  errorMessage.clear();
+  const std::string text = lowercaseText(trimPlaylistName(rawValue));
+  if (text.empty()) {
+    errorMessage = "Enter a sleep timer duration.";
+    return std::nullopt;
+  }
+
+  double totalSeconds = 0.0;
+  bool consumed = false;
+  std::size_t i = 0;
+  while (i < text.size()) {
+    while (i < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[i])) != 0) {
+      ++i;
+    }
+    if (i >= text.size()) {
+      break;
+    }
+    if (text[i] == ',') {
+      ++i;
+      continue;
+    }
+
+    const char *start = text.c_str() + i;
+    char *end = nullptr;
+    const double value = std::strtod(start, &end);
+    if (end == start || !std::isfinite(value) || value < 0.0) {
+      errorMessage = "Invalid sleep timer duration.";
+      return std::nullopt;
+    }
+    i += static_cast<std::size_t>(end - start);
+    while (i < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[i])) != 0) {
+      ++i;
+    }
+
+    const std::size_t unitStart = i;
+    while (i < text.size() &&
+           std::isalpha(static_cast<unsigned char>(text[i])) != 0) {
+      ++i;
+    }
+    const std::string unit = text.substr(unitStart, i - unitStart);
+
+    double multiplier = 60.0;
+    if (unit.empty() || unit == "m" || unit == "min" || unit == "mins" ||
+        unit == "minute" || unit == "minutes") {
+      multiplier = 60.0;
+    } else if (unit == "h" || unit == "hr" || unit == "hrs" ||
+               unit == "hour" || unit == "hours") {
+      multiplier = 3600.0;
+    } else if (unit == "s" || unit == "sec" || unit == "secs" ||
+               unit == "second" || unit == "seconds") {
+      multiplier = 1.0;
+    } else {
+      errorMessage = "Invalid sleep timer unit.";
+      return std::nullopt;
+    }
+    totalSeconds += value * multiplier;
+    consumed = true;
+  }
+
+  if (!consumed || totalSeconds <= 0.0) {
+    errorMessage = "Sleep timer duration must be positive.";
+    return std::nullopt;
+  }
+  if (totalSeconds > 24.0 * 3600.0) {
+    errorMessage = "Sleep timer must be 24 hours or less.";
+    return std::nullopt;
+  }
+  return static_cast<long long>(std::llround(totalSeconds * 1000000.0));
 }
 
 bool containsText(const std::string &haystack, const std::string &needle) {
@@ -617,6 +719,12 @@ void MusicPlayerScene::cleanupScene() {
   repeatModeButtonText = nullptr;
   repeatModeBaseButtonText = nullptr;
   watchVideoButtonText = nullptr;
+  sleepTimerSetButton = nullptr;
+  sleepTimerClearButton = nullptr;
+  sleepTimerInput = nullptr;
+  sleepTimerSetText = nullptr;
+  sleepTimerClearText = nullptr;
+  sleepTimerStatusText = nullptr;
   systemPlaybackJacketButton = nullptr;
   systemPlaybackTitleButton = nullptr;
   systemPlaybackArtistButton = nullptr;
@@ -1761,6 +1869,69 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueButtons->addView(saveQueueButton);
   queueColumn->addView(queueButtons);
 
+  auto *sleepCard = new View();
+  sleepCard->setHeight(112)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10)
+      ->setPadding(Edge::All, 12)
+      ->setThemedBackgroundColor(ui_theme::insetSurface)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  auto *sleepHeader = new View();
+  sleepHeader->setHeight(26)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setGap(10);
+  auto *sleepTitle = new TextView(kFontPath, 18);
+  sleepTitle->setText("Sleep Timer");
+  sleepTitle->setFlex(1);
+  sleepTitle->setHeight(26);
+  sleepTitle->setThemedColor(ui_theme::textSecondary);
+  sleepTimerStatusText = new TextView(kFontPath, 16);
+  sleepTimerStatusText->setText("Off");
+  sleepTimerStatusText->setWidth(180);
+  sleepTimerStatusText->setHeight(26);
+  sleepTimerStatusText->setAlign(TextView::RIGHT);
+  sleepTimerStatusText->setThemedColor(ui_theme::textMuted);
+  sleepHeader->addView(sleepTitle);
+  sleepHeader->addView(sleepTimerStatusText);
+  sleepCard->addView(sleepHeader);
+
+  auto *sleepRow = new View();
+  sleepRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+  sleepTimerInput = new TextInputBox(kFontPath, 18);
+  sleepTimerInput->setFlex(1);
+  sleepTimerInput->setHeight(52);
+  sleepTimerInput->setEditingText("30");
+  sleepTimerInput->setThemedBackgroundColor(ui_theme::control);
+  sleepTimerInput->setThemedBorderColor(ui_theme::hairlineStrong);
+  sleepTimerInput->setBorderWidth(1);
+  sleepTimerInput->setCornerRadius(ui_theme::controlRadius());
+  sleepTimerInput->setThemedColor(ui_theme::textPrimary);
+  sleepTimerInput->setVAlign(TextView::MIDDLE);
+  sleepTimerInput->onSubmit(
+      [this](const std::string &) { setSleepTimerFromInput(); });
+  sleepTimerSetButton = makeButton("Set", 16, &sleepTimerSetText);
+  sleepTimerSetButton->setWidth(92);
+  styleButton(sleepTimerSetButton, sleepTimerSetText,
+              ui_theme::successAction, ui_theme::successActionHover,
+              ui_theme::successActionPressed, ui_theme::accentBorder);
+  sleepTimerSetButton->setOnClickListener(
+      [this]() { setSleepTimerFromInput(); });
+  sleepTimerClearButton = makeButton("Clear", 16, &sleepTimerClearText);
+  sleepTimerClearButton->setWidth(106);
+  sleepTimerClearButton->setOnClickListener(
+      [this]() { clearSleepTimer(); });
+  sleepRow->addView(sleepTimerInput);
+  sleepRow->addView(sleepTimerSetButton);
+  sleepRow->addView(sleepTimerClearButton);
+  sleepCard->addView(sleepRow);
+  queueColumn->addView(sleepCard);
+
   auto *privacyCard = new View();
   privacyCard->setHeight(112)
       ->setFlexDirection(FlexDirection::Column)
@@ -2416,6 +2587,7 @@ void MusicPlayerScene::refreshUi() {
                             ? "Ready."
                             : statusMessage);
   }
+  refreshSleepTimerUi();
   refreshSystemPlaybackPrivacyButtons();
   refreshNavigation();
   refreshLibraryArtwork(selectedLibraryTrack());
@@ -3757,6 +3929,35 @@ void MusicPlayerScene::cycleRepeatMode() {
   refreshUi();
 }
 
+void MusicPlayerScene::setSleepTimerFromInput() {
+  if (sleepTimerInput == nullptr) {
+    return;
+  }
+
+  std::string errorMessage;
+  const auto durationMicros =
+      parseSleepTimerDurationMicros(sleepTimerInput->getText(), errorMessage);
+  if (!durationMicros) {
+    setStatus(errorMessage);
+    return;
+  }
+
+  std::string status;
+  if (context.musicPlayer.SetSleepTimer(*durationMicros, status)) {
+    setStatus("Sleep timer: " + formatSleepTimerDuration(*durationMicros) +
+              ".");
+  } else {
+    setStatus(status);
+  }
+  refreshSleepTimerUi();
+}
+
+void MusicPlayerScene::clearSleepTimer() {
+  context.musicPlayer.ClearSleepTimer();
+  setStatus("Sleep timer off.");
+  refreshSleepTimerUi();
+}
+
 void MusicPlayerScene::toggleSystemPlaybackJacket() {
   context.settings.systemPlaybackShowJacket =
       !context.settings.systemPlaybackShowJacket;
@@ -3793,6 +3994,33 @@ void MusicPlayerScene::applySystemPlaybackPrivacy(bool persist) {
     }
   }
   refreshSystemPlaybackPrivacyButtons();
+}
+
+void MusicPlayerScene::refreshSleepTimerUi() {
+  const long long remainingMicros =
+      context.musicPlayer.SleepTimerRemainingMicros();
+  const bool active = remainingMicros > 0;
+  if (sleepTimerStatusText != nullptr) {
+    sleepTimerStatusText->setText(
+        active ? "Stops in " + formatSleepTimerDuration(remainingMicros)
+               : "Off");
+    sleepTimerStatusText->setThemedColor(active ? ui_theme::textPrimary
+                                                : ui_theme::textMuted);
+  }
+  if (sleepTimerSetButton != nullptr) {
+    styleButton(sleepTimerSetButton, sleepTimerSetText,
+                ui_theme::successAction, ui_theme::successActionHover,
+                ui_theme::successActionPressed, ui_theme::accentBorder);
+  }
+  if (sleepTimerClearButton != nullptr) {
+    styleButton(sleepTimerClearButton, sleepTimerClearText,
+                active ? ui_theme::warningAction : ui_theme::control,
+                active ? ui_theme::warningActionHover
+                       : ui_theme::controlHover,
+                active ? ui_theme::warningActionPressed
+                       : ui_theme::controlPressed,
+                active ? ui_theme::accentBorder : ui_theme::hairlineStrong);
+  }
 }
 
 void MusicPlayerScene::refreshSystemPlaybackPrivacyButtons() {

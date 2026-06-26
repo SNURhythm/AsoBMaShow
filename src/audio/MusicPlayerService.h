@@ -7,6 +7,8 @@
 #include "NativeMusicPlayer.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -112,6 +114,9 @@ public:
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
   bool Seek(long long positionMicros, std::string &errorMessage);
+  bool SetSleepTimer(long long durationMicros, std::string &statusMessage);
+  void ClearSleepTimer();
+  [[nodiscard]] long long SleepTimerRemainingMicros() const;
   bool ProcessNativeControlEvents(std::string &statusMessage);
   bool ConsumeNativeControlStatus(std::string &statusMessage);
   void CancelRender();
@@ -124,6 +129,7 @@ private:
   bool PlayPreviousLocked(std::string &errorMessage);
   bool PlayTrackLocked(const music_playlist::MusicTrack &track,
                        std::string &errorMessage);
+  bool StopPlaybackInternal(std::string &errorMessage);
   bool StartPlaybackAsync(PlaybackRequest request, std::string &statusMessage,
                           std::string successMessage);
   void PlaybackWorker(music_playlist::MusicTrack track,
@@ -151,6 +157,9 @@ private:
   void PersistQueueCursorLocked();
   void SyncNativeQueueLocked();
   void StopPlaybackWorker();
+  void EnsureSleepTimerWorker();
+  void StopSleepTimerWorker();
+  void SleepTimerWorker(const std::stop_token &stopToken);
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
   void NativeControlEventLoop(const std::stop_token &stopToken);
@@ -161,6 +170,9 @@ private:
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;
   std::mutex preloadThreadMutex;
+  mutable std::mutex sleepTimerMutex;
+  std::condition_variable sleepTimerCv;
+  std::mutex sleepTimerThreadMutex;
   std::vector<music_playlist::MusicTrack> libraryTracks;
   std::vector<music_playlist::MusicTrack> favoriteTracks;
   std::vector<MusicPlaylistInfo> playlists;
@@ -175,7 +187,9 @@ private:
   std::vector<music_playlist::MusicTrack> sessionPersistentQueueTracks;
   std::jthread playbackThread;
   std::jthread preloadThread;
+  std::jthread sleepTimerThread;
   std::jthread nativeControlEventThread;
+  std::optional<std::chrono::steady_clock::time_point> sleepTimerDeadline;
   bool nativeControlEventThreadStopping = false;
   std::string nativeControlStatusMessage;
   std::uint64_t nativeControlStatusRevision = 0;
