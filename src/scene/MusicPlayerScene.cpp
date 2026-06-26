@@ -1,5 +1,6 @@
 #include "MusicPlayerScene.h"
 
+#include "../PlayOptionUtils.h"
 #include "../path.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
@@ -180,6 +181,21 @@ std::string queueDisplayName(const std::string &name) {
 
 bool isNowPlayingPlaylistId(int playlistId) {
   return playlistId == kNowPlayingPlaylistId;
+}
+
+bool chartHasBgaEvents(const bms_parser::Chart &chart) {
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline != nullptr &&
+          (timeline->BgaBase != -1 || timeline->BgaLayer != -1)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 int adjustedDetachedNextIndex(std::optional<std::size_t> previousNextIndex,
@@ -457,6 +473,10 @@ void MusicPlayerScene::init() {
 }
 
 EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
+  if (videoFullscreenActive) {
+    handleVideoFullscreenEvents(event);
+    return {};
+  }
   if (handleSeekEvents(event)) {
     return {};
   }
@@ -493,6 +513,11 @@ void MusicPlayerScene::update(float) {
     lastLayoutHeight = rendering::window_height;
     rootLayout->setSize(rendering::window_width, rendering::window_height);
     rootLayout->applyYogaLayout();
+    if (videoOverlayRoot != nullptr) {
+      videoOverlayRoot->setSize(rendering::window_width,
+                                rendering::window_height);
+      videoOverlayRoot->applyYogaLayout();
+    }
   }
 
   std::string nativeStatus;
@@ -512,13 +537,23 @@ void MusicPlayerScene::update(float) {
   if (queueMayHaveChanged) {
     refreshActiveQueueList(true);
   }
+  updateVideoFullscreen();
   refreshUi();
+  refreshVideoOverlay();
 }
 
-void MusicPlayerScene::renderScene() {}
+void MusicPlayerScene::renderScene() { updateVideoFullscreen(); }
 
 void MusicPlayerScene::cleanupScene() {
+  if (videoVisualsLoaded || videoFullscreenActive) {
+    context.jukebox.unloadVisuals();
+  }
+  if (videoRestoresVisualsEnabled) {
+    context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
+  }
   rootLayout = nullptr;
+  videoOverlayRoot = nullptr;
+  videoControlsPanel = nullptr;
   libraryPage = nullptr;
   favoritesPage = nullptr;
   playlistsPage = nullptr;
@@ -549,7 +584,12 @@ void MusicPlayerScene::cleanupScene() {
   playbackText = nullptr;
   queueTitleText = nullptr;
   repeatModeButtonText = nullptr;
+  watchVideoButtonText = nullptr;
   artworkFallbackText = nullptr;
+  videoTitleText = nullptr;
+  videoDetailText = nullptr;
+  videoPlaybackText = nullptr;
+  videoPlayPauseButtonText = nullptr;
   artworkImage = nullptr;
   libraryArtworkImage = nullptr;
   favoritesArtworkImage = nullptr;
@@ -568,12 +608,23 @@ void MusicPlayerScene::cleanupScene() {
   deletePlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
   seekProgressFill = nullptr;
+  videoProgressTrack = nullptr;
+  videoProgressFill = nullptr;
   displayedLibraryArtworkPath.clear();
   displayedFavoritesArtworkPath.clear();
   displayedArtworkPath.clear();
   displayedQueueName.clear();
   seekMouseDown = false;
   activeSeekTouchId = -1;
+  videoSeekMouseDown = false;
+  activeVideoSeekTouchId = -1;
+  videoFullscreenActive = false;
+  videoVisualsLoaded = false;
+  videoRestoresVisualsEnabled = false;
+  videoControlsVisible = false;
+  videoControlsVisibleUntil = 0;
+  videoTrackId.clear();
+  videoChart.reset();
 }
 
 void MusicPlayerScene::buildView() {
@@ -709,6 +760,139 @@ void MusicPlayerScene::buildView() {
   rootLayout->addView(content);
   refreshNavigation();
   rootLayout->applyYogaLayout();
+  buildVideoOverlay();
+}
+
+void MusicPlayerScene::buildVideoOverlay() {
+  const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  videoOverlayRoot =
+      new View(0, 0, rendering::window_width, rendering::window_height);
+  videoOverlayRoot->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setJustifyContent(YGJustifyFlexEnd)
+      ->setPadding(Edge::Left, safe.left + 24)
+      ->setPadding(Edge::Right, safe.right + 24)
+      ->setPadding(Edge::Bottom, safe.bottom + 24);
+  videoOverlayRoot->setVisible(false);
+
+  videoControlsPanel = new View();
+  videoControlsPanel->setHeight(190)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10)
+      ->setPadding(Edge::All, 14)
+      ->setThemedBackgroundColor(
+          [] { return ui_theme::withAlpha(ui_theme::panelStrong(), 232); })
+      ->setThemedBorderColor(ui_theme::hairlineStrong)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::panelRadius());
+
+  auto *titleRow = new View();
+  titleRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(12);
+
+  auto *titleColumn = new View();
+  titleColumn->setFlex(1)
+      ->setMinWidth(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(2);
+
+  videoTitleText = new TextView(kFontPath, 20);
+  videoTitleText->setHeight(27);
+  videoTitleText->setThemedColor(ui_theme::textPrimary);
+  videoTitleText->setOverflow(TextView::TextOverflow::Marquee);
+  titleColumn->addView(videoTitleText);
+
+  videoDetailText = new TextView(kFontPath, 15);
+  videoDetailText->setHeight(22);
+  videoDetailText->setThemedColor(ui_theme::textSecondary);
+  videoDetailText->setOverflow(TextView::TextOverflow::Marquee);
+  titleColumn->addView(videoDetailText);
+
+  videoPlaybackText = new TextView(kFontPath, 17);
+  videoPlaybackText->setWidth(132);
+  videoPlaybackText->setHeight(52);
+  videoPlaybackText->setAlign(TextView::RIGHT);
+  videoPlaybackText->setVAlign(TextView::MIDDLE);
+  videoPlaybackText->setThemedColor(ui_theme::textSecondary);
+  titleRow->addView(titleColumn);
+  titleRow->addView(videoPlaybackText);
+  videoControlsPanel->addView(titleRow);
+
+  videoProgressTrack = new View();
+  videoProgressTrack->setHeight(24)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)
+      ->setThemedBackgroundColor(ui_theme::insetSurface)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  videoProgressFill = new MusicSeekProgressFillView();
+  videoProgressFill->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 1)
+      ->setPosition(Edge::Right, 1)
+      ->setPosition(Edge::Top, 1)
+      ->setPosition(Edge::Bottom, 1);
+  videoProgressTrack->addView(videoProgressFill);
+  videoControlsPanel->addView(videoProgressTrack);
+
+  auto *transportRow = new View();
+  transportRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setGap(10);
+
+  TextView *back10Text = nullptr;
+  auto *back10Button = makeButton("-10s", 17, &back10Text);
+  back10Button->setFlex(1);
+  styleButton(back10Button, back10Text, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  back10Button->setOnClickListener([this]() {
+    showVideoControls();
+    seekRelative(-10000000LL);
+  });
+
+  auto *playPauseButton = makeButton("Pause", 18, &videoPlayPauseButtonText);
+  playPauseButton->setFlex(1);
+  styleButton(playPauseButton, videoPlayPauseButtonText, ui_theme::infoAction,
+              ui_theme::infoActionHover, ui_theme::infoActionPressed,
+              ui_theme::accentBorder);
+  playPauseButton->setOnClickListener([this]() {
+    showVideoControls();
+    togglePlayback();
+  });
+
+  TextView *forward10Text = nullptr;
+  auto *forward10Button = makeButton("+10s", 17, &forward10Text);
+  forward10Button->setFlex(1);
+  styleButton(forward10Button, forward10Text, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  forward10Button->setOnClickListener([this]() {
+    showVideoControls();
+    seekRelative(10000000LL);
+  });
+
+  TextView *closeText = nullptr;
+  auto *closeButton = makeButton("Close", 17, &closeText);
+  closeButton->setFlex(1);
+  styleButton(closeButton, closeText, ui_theme::warningAction,
+              ui_theme::warningActionHover, ui_theme::warningActionPressed,
+              ui_theme::accentBorder);
+  closeButton->setOnClickListener([this]() { exitVideoFullscreen(); });
+
+  transportRow->addView(back10Button);
+  transportRow->addView(playPauseButton);
+  transportRow->addView(forward10Button);
+  transportRow->addView(closeButton);
+  videoControlsPanel->addView(transportRow);
+
+  videoOverlayRoot->addView(videoControlsPanel);
+  addView(videoOverlayRoot);
+  videoOverlayRoot->applyYogaLayout();
 }
 
 void MusicPlayerScene::buildLibraryPage(View *page) {
@@ -1371,6 +1555,13 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::hairlineStrong);
   repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
 
+  auto *watchVideoButton = makeButton("Watch Video", 17, &watchVideoButtonText);
+  watchVideoButton->setFlex(1);
+  styleButton(watchVideoButton, watchVideoButtonText, ui_theme::successAction,
+              ui_theme::successActionHover, ui_theme::successActionPressed,
+              ui_theme::accentBorder);
+  watchVideoButton->setOnClickListener([this]() { watchVideo(); });
+
   transportRowA->addView(previousButton);
   transportRowA->addView(playPauseButton);
   transportRowA->addView(nextButton);
@@ -1379,6 +1570,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   transportRowB->addView(stopButton);
   transportRowC->addView(playSelectedButton);
   transportRowC->addView(repeatButton);
+  transportRowC->addView(watchVideoButton);
   transport->addView(transportRowA);
   transport->addView(transportRowB);
   transport->addView(transportRowC);
@@ -3236,6 +3428,7 @@ void MusicPlayerScene::seekToFraction(float fraction) {
   std::string status;
   if (context.musicPlayer.Seek(target, status)) {
     setSeekFillFraction(seekProgressFill, fraction);
+    setSeekFillFraction(videoProgressFill, fraction);
   } else if (!status.empty()) {
     setStatus(status);
   }
@@ -3247,14 +3440,21 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
     activeSeekTouchId = -1;
     return false;
   }
-  if (seekProgressTrack == nullptr || !seekProgressTrack->getVisible()) {
+  return handleProgressSeekEvents(event, seekProgressTrack, seekMouseDown,
+                                  activeSeekTouchId);
+}
+
+bool MusicPlayerScene::handleProgressSeekEvents(
+    SDL_Event &event, View *progressTrack, bool &mouseDown,
+    SDL_FingerID &activeTouchId) {
+  if (progressTrack == nullptr || !progressTrack->getVisible()) {
     return false;
   }
 
-  const auto seekAt = [this](float uiX) {
-    const int width = std::max(1, seekProgressTrack->getWidth());
+  const auto seekAt = [this, progressTrack](float uiX) {
+    const int width = std::max(1, progressTrack->getWidth());
     const float fraction =
-        (uiX - static_cast<float>(seekProgressTrack->getX())) /
+        (uiX - static_cast<float>(progressTrack->getX())) /
         static_cast<float>(width);
     seekToFraction(fraction);
   };
@@ -3268,15 +3468,15 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
     int uiX = 0;
     int uiY = 0;
     mouseButtonEventToUi(event.button, uiX, uiY);
-    if (!isInsideView(seekProgressTrack, uiX, uiY)) {
+    if (!isInsideView(progressTrack, uiX, uiY)) {
       return false;
     }
-    seekMouseDown = true;
+    mouseDown = true;
     seekAt(static_cast<float>(uiX));
     return true;
   }
   case SDL_MOUSEMOTION: {
-    if (!seekMouseDown || event.motion.which == SDL_TOUCH_MOUSEID) {
+    if (!mouseDown || event.motion.which == SDL_TOUCH_MOUSEID) {
       return false;
     }
     int uiX = 0;
@@ -3287,11 +3487,11 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
     return true;
   }
   case SDL_MOUSEBUTTONUP: {
-    if (!seekMouseDown || event.button.button != SDL_BUTTON_LEFT ||
+    if (!mouseDown || event.button.button != SDL_BUTTON_LEFT ||
         event.button.which == SDL_TOUCH_MOUSEID) {
       return false;
     }
-    seekMouseDown = false;
+    mouseDown = false;
     int uiX = 0;
     int uiY = 0;
     mouseButtonEventToUi(event.button, uiX, uiY);
@@ -3300,21 +3500,21 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
     return true;
   }
   case SDL_FINGERDOWN: {
-    if (activeSeekTouchId != -1) {
+    if (activeTouchId != -1) {
       return false;
     }
     float uiX = 0.0f;
     float uiY = 0.0f;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
-    if (!isInsideView(seekProgressTrack, uiX, uiY)) {
+    if (!isInsideView(progressTrack, uiX, uiY)) {
       return false;
     }
-    activeSeekTouchId = event.tfinger.fingerId;
+    activeTouchId = event.tfinger.fingerId;
     seekAt(uiX);
     return true;
   }
   case SDL_FINGERMOTION: {
-    if (event.tfinger.fingerId != activeSeekTouchId) {
+    if (event.tfinger.fingerId != activeTouchId) {
       return false;
     }
     float uiX = 0.0f;
@@ -3325,10 +3525,10 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
     return true;
   }
   case SDL_FINGERUP: {
-    if (event.tfinger.fingerId != activeSeekTouchId) {
+    if (event.tfinger.fingerId != activeTouchId) {
       return false;
     }
-    activeSeekTouchId = -1;
+    activeTouchId = -1;
     float uiX = 0.0f;
     float uiY = 0.0f;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, uiX, uiY);
@@ -3341,7 +3541,264 @@ bool MusicPlayerScene::handleSeekEvents(SDL_Event &event) {
   }
 }
 
+void MusicPlayerScene::watchVideo() {
+  if (videoFullscreenActive) {
+    showVideoControls();
+    return;
+  }
+
+  const auto playback = context.musicPlayer.PlaybackState();
+  std::optional<MusicTrack> track = context.musicPlayer.CurrentTrackSnapshot();
+  if (!track) {
+    track = displayTrack();
+  }
+  if (!track) {
+    setStatus("Select or play a track first.");
+    return;
+  }
+
+  std::atomic_bool cancelled{false};
+  auto chart = play_options::parseChart(track->representativeChart, cancelled,
+                                        "music video");
+  if (cancelled.load()) {
+    setStatus("Video loading cancelled.");
+    return;
+  }
+  if (!chart) {
+    setStatus("Could not parse chart for video.");
+    return;
+  }
+  if (!chartHasBgaEvents(*chart)) {
+    setStatus("No BGA is available for this track.");
+    return;
+  }
+
+  if (!playback.loaded) {
+    playNowPlaying({*track}, 0, "Select a track first.",
+                   "Playing Now Playing.");
+  }
+
+  context.jukebox.stop();
+  videoPreviousVisualsEnabled = context.jukebox.getVisualsEnabled();
+  videoRestoresVisualsEnabled = true;
+  context.jukebox.setVisualsEnabled(true);
+  context.jukebox.loadVisuals(*chart, cancelled);
+  if (cancelled.load()) {
+    context.jukebox.unloadVisuals();
+    context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
+    videoRestoresVisualsEnabled = false;
+    setStatus("Video loading cancelled.");
+    return;
+  }
+
+  videoChart = std::move(chart);
+  videoTrackId = favoriteKeyForTrack(*track);
+  videoFullscreenActive = true;
+  videoVisualsLoaded = true;
+  videoSeekMouseDown = false;
+  activeVideoSeekTouchId = -1;
+  if (rootLayout != nullptr) {
+    rootLayout->setVisible(false);
+  }
+  if (videoOverlayRoot != nullptr) {
+    videoOverlayRoot->setVisible(true);
+    videoOverlayRoot->setSize(rendering::window_width,
+                              rendering::window_height);
+    videoOverlayRoot->applyYogaLayout();
+  }
+  showVideoControls(5000);
+  updateVideoFullscreen();
+  refreshVideoOverlay();
+  setStatus("Watching BGA.");
+}
+
+void MusicPlayerScene::exitVideoFullscreen() {
+  if (!videoFullscreenActive && !videoVisualsLoaded &&
+      !videoRestoresVisualsEnabled) {
+    return;
+  }
+
+  videoFullscreenActive = false;
+  videoVisualsLoaded = false;
+  videoTrackId.clear();
+  videoChart.reset();
+  videoSeekMouseDown = false;
+  activeVideoSeekTouchId = -1;
+  videoControlsVisible = false;
+  videoControlsVisibleUntil = 0;
+  if (videoOverlayRoot != nullptr) {
+    videoOverlayRoot->setVisible(false);
+  }
+  if (videoControlsPanel != nullptr) {
+    videoControlsPanel->setVisible(false);
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->setVisible(true);
+  }
+  context.jukebox.unloadVisuals();
+  if (videoRestoresVisualsEnabled) {
+    context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
+    videoRestoresVisualsEnabled = false;
+  }
+  refreshUi();
+}
+
+void MusicPlayerScene::updateVideoFullscreen() {
+  if (!videoFullscreenActive) {
+    return;
+  }
+
+  const auto current = context.musicPlayer.CurrentTrackSnapshot();
+  if (current && !videoTrackId.empty() &&
+      favoriteKeyForTrack(*current) != videoTrackId) {
+    exitVideoFullscreen();
+    setStatus("Video closed because the current track changed.");
+    return;
+  }
+
+  const auto playback = context.musicPlayer.PlaybackState();
+  const long long position = playback.loaded ? playback.positionMicros : 0;
+  if (videoVisualsLoaded) {
+    context.jukebox.seekVisualsToSongTime(position);
+  }
+
+  if (videoControlsVisible && videoControlsVisibleUntil > 0 &&
+      SDL_GetTicks64() > videoControlsVisibleUntil && !videoSeekMouseDown &&
+      activeVideoSeekTouchId == -1) {
+    hideVideoControls();
+  }
+}
+
+void MusicPlayerScene::refreshVideoOverlay() {
+  if (videoOverlayRoot == nullptr) {
+    return;
+  }
+  videoOverlayRoot->setVisible(videoFullscreenActive);
+  if (!videoFullscreenActive) {
+    return;
+  }
+
+  const auto playback = context.musicPlayer.PlaybackState();
+  const auto current = context.musicPlayer.CurrentTrackSnapshot();
+  const auto shown = current ? current : displayTrack();
+  if (videoTitleText != nullptr) {
+    videoTitleText->setText(shown ? trackTitle(*shown) : "No track selected");
+  }
+  if (videoDetailText != nullptr) {
+    videoDetailText->setText(shown ? trackDetail(*shown) : "No music loaded.");
+  }
+  if (videoPlaybackText != nullptr) {
+    if (!playback.loaded) {
+      videoPlaybackText->setText("Idle");
+    } else {
+      videoPlaybackText->setText(formatMusicTime(playback.positionMicros) +
+                                 " / " +
+                                 formatMusicTime(playback.durationMicros));
+    }
+  }
+  if (videoPlayPauseButtonText != nullptr) {
+    videoPlayPauseButtonText->setText(
+        playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+  }
+  if (videoProgressFill != nullptr) {
+    const float fraction =
+        playback.loaded && playback.durationMicros > 0
+            ? std::clamp(static_cast<float>(playback.positionMicros) /
+                             static_cast<float>(playback.durationMicros),
+                         0.0f, 1.0f)
+            : 0.0f;
+    setSeekFillFraction(videoProgressFill, fraction);
+  }
+  if (videoControlsPanel != nullptr) {
+    videoControlsPanel->setVisible(videoControlsVisible);
+  }
+}
+
+void MusicPlayerScene::showVideoControls(Uint64 durationMs) {
+  if (!videoFullscreenActive) {
+    return;
+  }
+  videoControlsVisible = true;
+  videoControlsVisibleUntil = SDL_GetTicks64() + durationMs;
+  if (videoControlsPanel != nullptr) {
+    videoControlsPanel->setVisible(true);
+  }
+  refreshVideoOverlay();
+}
+
+void MusicPlayerScene::hideVideoControls() {
+  if (videoSeekMouseDown || activeVideoSeekTouchId != -1) {
+    return;
+  }
+  videoControlsVisible = false;
+  videoControlsVisibleUntil = 0;
+  if (videoControlsPanel != nullptr) {
+    videoControlsPanel->setVisible(false);
+  }
+}
+
+bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
+  if (!videoFullscreenActive) {
+    return false;
+  }
+
+  if (event.type == SDL_KEYDOWN) {
+    showVideoControls();
+    switch (event.key.keysym.sym) {
+    case SDLK_ESCAPE:
+      exitVideoFullscreen();
+      return true;
+    case SDLK_SPACE:
+      togglePlayback();
+      return true;
+    case SDLK_LEFT:
+      seekRelative(-10000000LL);
+      return true;
+    case SDLK_RIGHT:
+      seekRelative(10000000LL);
+      return true;
+    default:
+      return true;
+    }
+  }
+
+  const bool controlsVisible =
+      videoControlsPanel != nullptr && videoControlsPanel->getVisible();
+  if (controlsVisible) {
+    if (handleProgressSeekEvents(event, videoProgressTrack, videoSeekMouseDown,
+                                 activeVideoSeekTouchId)) {
+      showVideoControls();
+      return true;
+    }
+    Scene::handleEvents(event);
+  }
+
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN:
+    if (event.button.button == SDL_BUTTON_LEFT &&
+        event.button.which != SDL_TOUCH_MOUSEID) {
+      showVideoControls();
+      return true;
+    }
+    break;
+  case SDL_FINGERDOWN:
+    showVideoControls();
+    return true;
+  case SDL_MOUSEBUTTONUP:
+  case SDL_MOUSEMOTION:
+  case SDL_FINGERUP:
+  case SDL_FINGERMOTION:
+    return true;
+  default:
+    break;
+  }
+  return true;
+}
+
 void MusicPlayerScene::playNext() {
+  if (videoFullscreenActive) {
+    exitVideoFullscreen();
+  }
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayNextAsync(status, "Playing next track.");
@@ -3350,6 +3807,9 @@ void MusicPlayerScene::playNext() {
 }
 
 void MusicPlayerScene::playPrevious() {
+  if (videoFullscreenActive) {
+    exitVideoFullscreen();
+  }
   context.jukebox.stop();
   std::string status;
   context.musicPlayer.PlayPreviousAsync(status, "Playing previous track.");
@@ -3358,6 +3818,9 @@ void MusicPlayerScene::playPrevious() {
 }
 
 void MusicPlayerScene::stopPlayback() {
+  if (videoFullscreenActive) {
+    exitVideoFullscreen();
+  }
   std::string status;
   if (context.musicPlayer.Stop(status)) {
     setStatus("Stopped.");
@@ -3367,6 +3830,10 @@ void MusicPlayerScene::stopPlayback() {
 }
 
 void MusicPlayerScene::goBack() {
+  if (videoFullscreenActive) {
+    exitVideoFullscreen();
+    return;
+  }
   if (context.sceneManager != nullptr) {
     context.sceneManager->changeScene("MainMenu", false);
   }

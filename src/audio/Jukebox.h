@@ -52,6 +52,7 @@ public:
                 std::atomic_bool &isCancelled,
                 std::optional<long long> noteScheduleCutoffMicros =
                     std::nullopt);
+  void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
   void play();
@@ -115,6 +116,9 @@ private:
   [[nodiscard]] long long
   getRawSongMicrosForBgaTarget(long long bgaTargetMicros) const;
   bool activateVisual(int visualId, bgfx::ViewId viewId);
+  bool activateVisualAt(int visualId, bgfx::ViewId viewId,
+                        long long elapsedMicros);
+  void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {
     float x = 0.0f;
@@ -133,6 +137,7 @@ private:
   std::vector<std::pair<long long, int>> bmpLayerList;
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;
+  long long lastVisualTimelineMicros = -1;
   std::unordered_map<int, path_t> wavTableAbs;
   std::unordered_map<int, std::unique_ptr<VideoPlayer>> videoPlayerTable;
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;

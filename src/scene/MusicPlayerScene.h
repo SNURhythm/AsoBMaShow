@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../audio/MusicPlaylist.h"
+#include "../bms_parser.hpp"
 #include "../view/RecyclerView.h"
 #include "Scene.h"
 
+#include <atomic>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -39,6 +42,7 @@ private:
   void buildTrackBrowserPage(View *page, TrackBrowserKind kind);
   void buildPlaylistsPage(View *page);
   void buildPlayerPage(View *page);
+  void buildVideoOverlay();
   View *makePanel(const std::string &title, TextView **subtitleText = nullptr);
   Button *makeButton(const std::string &label, int fontSize,
                      TextView **textOut = nullptr);
@@ -161,12 +165,24 @@ private:
   void seekRelative(long long deltaMicros);
   void seekToFraction(float fraction);
   bool handleSeekEvents(SDL_Event &event);
+  bool handleProgressSeekEvents(SDL_Event &event, View *progressTrack,
+                                bool &mouseDown,
+                                SDL_FingerID &activeTouchId);
+  void watchVideo();
+  void exitVideoFullscreen();
+  void updateVideoFullscreen();
+  void refreshVideoOverlay();
+  void showVideoControls(Uint64 durationMs = 4000);
+  void hideVideoControls();
+  bool handleVideoFullscreenEvents(SDL_Event &event);
   void playNext();
   void playPrevious();
   void stopPlayback();
   void goBack();
 
   View *rootLayout = nullptr;
+  View *videoOverlayRoot = nullptr;
+  View *videoControlsPanel = nullptr;
   View *libraryPage = nullptr;
   View *favoritesPage = nullptr;
   View *playlistsPage = nullptr;
@@ -198,7 +214,12 @@ private:
   TextView *libraryGroupButtonText = nullptr;
   TextView *queueTitleText = nullptr;
   TextView *repeatModeButtonText = nullptr;
+  TextView *watchVideoButtonText = nullptr;
   TextView *artworkFallbackText = nullptr;
+  TextView *videoTitleText = nullptr;
+  TextView *videoDetailText = nullptr;
+  TextView *videoPlaybackText = nullptr;
+  TextView *videoPlayPauseButtonText = nullptr;
   ImageView *artworkImage = nullptr;
   ImageView *libraryArtworkImage = nullptr;
   ImageView *favoritesArtworkImage = nullptr;
@@ -217,6 +238,8 @@ private:
   TextView *deletePlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;
   View *seekProgressFill = nullptr;
+  View *videoProgressTrack = nullptr;
+  View *videoProgressFill = nullptr;
 
   std::vector<MusicTrack> libraryTracks;
   std::vector<MusicTrack> filteredLibraryTracks;
@@ -252,4 +275,14 @@ private:
   int lastLayoutHeight = -1;
   bool seekMouseDown = false;
   SDL_FingerID activeSeekTouchId = -1;
+  bool videoSeekMouseDown = false;
+  SDL_FingerID activeVideoSeekTouchId = -1;
+  bool videoFullscreenActive = false;
+  bool videoVisualsLoaded = false;
+  bool videoPreviousVisualsEnabled = true;
+  bool videoRestoresVisualsEnabled = false;
+  bool videoControlsVisible = false;
+  Uint64 videoControlsVisibleUntil = 0;
+  std::string videoTrackId;
+  std::unique_ptr<bms_parser::Chart> videoChart;
 };

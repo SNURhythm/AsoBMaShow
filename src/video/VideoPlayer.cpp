@@ -372,6 +372,17 @@ void VideoPlayer::play() {
   eofCV.notify_all();
 }
 
+void VideoPlayer::playFrom(int64_t micro) {
+  micro = std::max<int64_t>(0, micro);
+  seek(micro);
+  startTime = stopwatch->elapsedMicros() - micro;
+  lastFramePTS = static_cast<double>(micro) / 1000000.0;
+  isPlaying = true;
+  isPaused = false;
+  isEOF = false;
+  eofCV.notify_all();
+}
+
 void VideoPlayer::pause() { isPaused = true; }
 
 void VideoPlayer::stop() {

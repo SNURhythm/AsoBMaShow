@@ -29,6 +29,7 @@ public:
   void update();
   void render();
   void play();
+  void playFrom(int64_t micro);
   void pause();
   void stop();
   void seek(int64_t micro);

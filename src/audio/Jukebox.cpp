@@ -1689,6 +1689,9 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 void Jukebox::clearVisualResources() {
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
+  bmpCursor = 0;
+  bmpLayerCursor = 0;
+  lastVisualTimelineMicros = -1;
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     videoPlayerTable.clear();
@@ -1707,6 +1710,7 @@ void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
                               std::atomic_bool &isCancelled) {
   bmpCursor = 0;
   bmpLayerCursor = 0;
+  lastVisualTimelineMicros = -1;
   bmpList.clear();
   bmpLayerList.clear();
   for (auto &measure : chart.Measures) {
@@ -1905,13 +1909,22 @@ Jukebox::getRawSongMicrosForBgaTarget(long long bgaTargetMicros) const {
 }
 
 bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
+  return activateVisualAt(visualId, viewId, 0);
+}
+
+bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
+                               long long elapsedMicros) {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     auto videoIt = videoPlayerTable.find(visualId);
     if (videoIt != videoPlayerTable.end()) {
       auto *videoPlayer = videoIt->second.get();
-      videoPlayer->seek(0);
-      videoPlayer->play();
+      if (elapsedMicros > 0) {
+        videoPlayer->playFrom(elapsedMicros);
+      } else {
+        videoPlayer->seek(0);
+        videoPlayer->play();
+      }
       videoPlayer->viewWidth = rendering::window_width;
       videoPlayer->viewHeight = rendering::window_height;
       videoPlayer->viewId = viewId;
@@ -1927,33 +1940,63 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
   return false;
 }
 
-void Jukebox::renderVisualsAt(long long micro) {
-  if (!visualsEnabled.load(std::memory_order_relaxed)) {
-    return;
-  }
+void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
+  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
 
   std::lock_guard<std::mutex> lock(seekLock);
-  stopwatch->seek(micro);
+  if (lastVisualTimelineMicros < 0 ||
+      bgaTimelineMicros < lastVisualTimelineMicros) {
+    currentBga.store(-1, std::memory_order_relaxed);
+    currentBmpLayer.store(-1, std::memory_order_relaxed);
+    bmpCursor = 0;
+    bmpLayerCursor = 0;
+    std::lock_guard<std::mutex> videoLock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      videoPlayer.second->stop();
+    }
+  }
+
+  stopwatch->seek(bgaTimelineMicros);
   while (bmpCursor < bmpList.size()) {
     const auto &target = bmpList[bmpCursor];
-    if (micro < target.first) {
+    if (bgaTimelineMicros < target.first) {
       break;
     }
-    if (activateVisual(target.second, rendering::bga_view)) {
+    const long long elapsedMicros =
+        std::max(0LL, bgaTimelineMicros - target.first);
+    if (activateVisualAt(target.second, rendering::bga_view, elapsedMicros)) {
       currentBga.store(target.second, std::memory_order_relaxed);
     }
     bmpCursor++;
   }
   while (bmpLayerCursor < bmpLayerList.size()) {
     const auto &target = bmpLayerList[bmpLayerCursor];
-    if (micro < target.first) {
+    if (bgaTimelineMicros < target.first) {
       break;
     }
-    if (activateVisual(target.second, rendering::bga_layer_view)) {
+    const long long elapsedMicros =
+        std::max(0LL, bgaTimelineMicros - target.first);
+    if (activateVisualAt(target.second, rendering::bga_layer_view,
+                         elapsedMicros)) {
       currentBmpLayer.store(target.second, std::memory_order_relaxed);
     }
     bmpLayerCursor++;
   }
+  lastVisualTimelineMicros = bgaTimelineMicros;
+}
+
+void Jukebox::seekVisualsToSongTime(long long rawSongMicros) {
+  if (!visualsEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+  advanceVisualsAtTimelineMicros(getBgaTimelineMicros(rawSongMicros));
+}
+
+void Jukebox::renderVisualsAt(long long micro) {
+  if (!visualsEnabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+  advanceVisualsAtTimelineMicros(micro);
   render();
 }
 
