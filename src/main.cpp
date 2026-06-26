@@ -728,7 +728,7 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
-  constexpr Uint32 kBackgroundIdleDelayMs = 250;
+  constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return event.type == SDL_APP_WILLENTERBACKGROUND ||
            event.type == SDL_APP_DIDENTERBACKGROUND ||
@@ -998,6 +998,14 @@ void run() {
       }
     };
 
+    auto waitForBackgroundEvent = [&]() {
+      SDL_Event waitEvent{};
+      if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
+        ++rawEventsInWindow;
+        processEvent(waitEvent);
+      }
+    };
+
     while (SDL_PollEvent(&e)) {
       ++rawEventsInWindow;
 
@@ -1063,9 +1071,11 @@ void run() {
     }
 #if TARGET_OS_ANDROID
     if (syncAndroidRenderSuspend()) {
-      SDL_Delay(context.appInBackground.load(std::memory_order_acquire)
-                    ? kBackgroundIdleDelayMs
-                    : 16);
+      if (context.appInBackground.load(std::memory_order_acquire)) {
+        waitForBackgroundEvent();
+      } else {
+        SDL_Delay(16);
+      }
       context.currentFrame++;
       continue;
     }
@@ -1085,7 +1095,7 @@ void run() {
 #endif
     if (context.appInBackground.load(std::memory_order_acquire) &&
         !context.replayVideoExportActive.load(std::memory_order_acquire)) {
-      SDL_Delay(kBackgroundIdleDelayMs);
+      waitForBackgroundEvent();
       context.currentFrame++;
       continue;
     }

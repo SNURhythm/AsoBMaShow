@@ -42,6 +42,7 @@ constexpr uint32_t kIconPlay = 0xf04b;
 constexpr uint32_t kIconPause = 0xf04c;
 constexpr uint32_t kIconRotateLeft = 0xf2ea;
 constexpr uint32_t kIconRotateRight = 0xf2f9;
+constexpr uint32_t kIconXmark = 0xf00d;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -904,13 +905,24 @@ void MusicPlayerScene::buildVideoOverlay() {
   videoControlsPanel->addView(videoProgressTrack);
 
   auto *transportRow = new View();
-  transportRow->setHeight(52)
+  transportRow->setHeight(56)
       ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
       ->setGap(10);
 
+  TextView *previousText = nullptr;
+  auto *previousButton = makeIconButton(kIconBackwardStep, 25, &previousText);
+  styleButton(previousButton, previousText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  previousButton->setOnClickListener([this]() {
+    showVideoControls();
+    playPrevious();
+  });
+
   TextView *back10Text = nullptr;
-  auto *back10Button = makeButton("-10s", 17, &back10Text);
-  back10Button->setFlex(1);
+  auto *back10Button = makeIconButton(kIconRotateLeft, 22, &back10Text);
   styleButton(back10Button, back10Text, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
@@ -919,8 +931,9 @@ void MusicPlayerScene::buildVideoOverlay() {
     seekRelative(-10000000LL);
   });
 
-  auto *playPauseButton = makeButton("Pause", 18, &videoPlayPauseButtonText);
-  playPauseButton->setFlex(1);
+  auto *playPauseButton =
+      makeIconButton(kIconPause, 31, &videoPlayPauseButtonText);
+  playPauseButton->setWidth(92);
   styleButton(playPauseButton, videoPlayPauseButtonText, ui_theme::infoAction,
               ui_theme::infoActionHover, ui_theme::infoActionPressed,
               ui_theme::accentBorder);
@@ -930,8 +943,7 @@ void MusicPlayerScene::buildVideoOverlay() {
   });
 
   TextView *forward10Text = nullptr;
-  auto *forward10Button = makeButton("+10s", 17, &forward10Text);
-  forward10Button->setFlex(1);
+  auto *forward10Button = makeIconButton(kIconRotateRight, 22, &forward10Text);
   styleButton(forward10Button, forward10Text, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
@@ -940,17 +952,27 @@ void MusicPlayerScene::buildVideoOverlay() {
     seekRelative(10000000LL);
   });
 
+  TextView *nextText = nullptr;
+  auto *nextButton = makeIconButton(kIconForwardStep, 25, &nextText);
+  styleButton(nextButton, nextText, ui_theme::control, ui_theme::controlHover,
+              ui_theme::controlPressed, ui_theme::hairlineStrong);
+  nextButton->setOnClickListener([this]() {
+    showVideoControls();
+    playNext();
+  });
+
   TextView *closeText = nullptr;
-  auto *closeButton = makeButton("Close", 17, &closeText);
-  closeButton->setFlex(1);
+  auto *closeButton = makeIconButton(kIconXmark, 25, &closeText);
   styleButton(closeButton, closeText, ui_theme::warningAction,
               ui_theme::warningActionHover, ui_theme::warningActionPressed,
               ui_theme::accentBorder);
   closeButton->setOnClickListener([this]() { exitVideoFullscreen(); });
 
+  transportRow->addView(previousButton);
   transportRow->addView(back10Button);
   transportRow->addView(playPauseButton);
   transportRow->addView(forward10Button);
+  transportRow->addView(nextButton);
   transportRow->addView(closeButton);
   videoControlsPanel->addView(transportRow);
 
@@ -3812,7 +3834,7 @@ void MusicPlayerScene::refreshVideoOverlay() {
   }
   if (videoPlayPauseButtonText != nullptr) {
     videoPlayPauseButtonText->setText(
-        playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+        utf8ForCodepoint(playback.playing ? kIconPause : kIconPlay));
   }
   if (videoProgressFill != nullptr) {
     const float fraction =
