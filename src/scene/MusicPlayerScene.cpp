@@ -38,13 +38,21 @@ constexpr float kRailWidth = 180.0f;
 constexpr int kTrackRowHeight = 82;
 constexpr int kPlaylistRowHeight = 58;
 constexpr int kNowPlayingPlaylistId = -1;
+constexpr long long kRelativeSeekEndGuardMicros = 250000LL;
 constexpr uint32_t kIconBackwardStep = 0xf048;
 constexpr uint32_t kIconForwardStep = 0xf051;
 constexpr uint32_t kIconPlay = 0xf04b;
 constexpr uint32_t kIconPause = 0xf04c;
+constexpr uint32_t kIconStop = 0xf04d;
+constexpr uint32_t kIconBan = 0xf05e;
+constexpr uint32_t kIconShuffle = 0xf074;
+constexpr uint32_t kIconList = 0xf03a;
 constexpr uint32_t kIconRotateLeft = 0xf2ea;
 constexpr uint32_t kIconRotateRight = 0xf2f9;
+constexpr uint32_t kIconRepeat = 0xf363;
+constexpr uint32_t kIconVideo = 0xf03d;
 constexpr uint32_t kIconXmark = 0xf00d;
+constexpr uint32_t kIconOne = 0x31;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -179,6 +187,18 @@ std::string repeatModeLabel(music_playlist::QueueRepeatMode mode) {
   case music_playlist::QueueRepeatMode::None:
   default:
     return "Loop Off";
+  }
+}
+
+uint32_t repeatModeStateIcon(music_playlist::QueueRepeatMode mode) {
+  switch (mode) {
+  case music_playlist::QueueRepeatMode::One:
+    return kIconOne;
+  case music_playlist::QueueRepeatMode::All:
+    return kIconList;
+  case music_playlist::QueueRepeatMode::None:
+  default:
+    return kIconBan;
   }
 }
 
@@ -595,6 +615,7 @@ void MusicPlayerScene::cleanupScene() {
   playbackText = nullptr;
   queueTitleText = nullptr;
   repeatModeButtonText = nullptr;
+  repeatModeBaseButtonText = nullptr;
   watchVideoButtonText = nullptr;
   systemPlaybackJacketButton = nullptr;
   systemPlaybackTitleButton = nullptr;
@@ -1615,31 +1636,39 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::accentBorderStrong);
   playSelectedButton->setOnClickListener([this]() { playSelectedQueueTrack(); });
 
-  auto *watchVideoButton = makeButton("Watch Video", 17, &watchVideoButtonText);
-  watchVideoButton->setFlex(1);
+  auto *watchVideoButton =
+      makeIconButton(kIconVideo, 22, &watchVideoButtonText);
+  watchVideoButton->setHeight(52)->setFlexGrow(1)->setFlexBasis(0);
   styleButton(watchVideoButton, watchVideoButtonText, ui_theme::successAction,
               ui_theme::successActionHover, ui_theme::successActionPressed,
               ui_theme::accentBorder);
   watchVideoButton->setOnClickListener([this]() { watchVideo(); });
 
-  auto *repeatButton = makeButton("Playlist Loop", 17, &repeatModeButtonText);
-  repeatButton->setFlex(1);
+  auto *repeatButton =
+      makeDualIconButton(kIconRepeat, repeatModeStateIcon(displayedRepeatMode),
+                         20, &repeatModeBaseButtonText,
+                         &repeatModeButtonText);
+  repeatButton->setHeight(52)->setFlexGrow(1)->setFlexBasis(0);
   styleButton(repeatButton, repeatModeButtonText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
+  if (repeatModeBaseButtonText != nullptr) {
+    repeatModeBaseButtonText->setThemedColor(
+        [] { return ui_theme::textOn(ui_theme::control()); });
+  }
   repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
 
   TextView *shuffleText = nullptr;
-  auto *shuffleButton = makeButton("Shuffle", 17, &shuffleText);
-  shuffleButton->setFlex(1);
+  auto *shuffleButton = makeIconButton(kIconShuffle, 22, &shuffleText);
+  shuffleButton->setHeight(52)->setFlexGrow(1)->setFlexBasis(0);
   styleButton(shuffleButton, shuffleText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   shuffleButton->setOnClickListener([this]() { shuffleQueue(); });
 
   TextView *stopText = nullptr;
-  auto *stopButton = makeButton("Stop", 17, &stopText);
-  stopButton->setWidth(126);
+  auto *stopButton = makeIconButton(kIconStop, 22, &stopText);
+  stopButton->setHeight(52)->setFlexGrow(1)->setFlexBasis(0);
   styleButton(stopButton, stopText, ui_theme::warningAction,
               ui_theme::warningActionHover, ui_theme::warningActionPressed,
               ui_theme::accentBorder);
@@ -1837,6 +1866,50 @@ Button *MusicPlayerScene::makeIconButton(uint32_t iconCodepoint, int fontSize,
   button->setContentView(text);
   if (textOut != nullptr) {
     *textOut = text;
+  }
+  return button;
+}
+
+Button *MusicPlayerScene::makeDualIconButton(uint32_t leadingIconCodepoint,
+                                             uint32_t trailingIconCodepoint,
+                                             int fontSize,
+                                             TextView **leadingTextOut,
+                                             TextView **trailingTextOut) {
+  auto *button = new Button();
+  button->setHeight(56);
+  button->setWidth(78);
+  button->setCornerRadius(ui_theme::controlRadius());
+
+  auto *row = new View();
+  row->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setGap(7);
+
+  auto *leadingText = new TextView(ui_icons::kFontAwesomeSolidPath, fontSize);
+  leadingText->setText(ui_icons::textForCodepoint(leadingIconCodepoint));
+  leadingText->setWidth(24);
+  leadingText->setHeight(56);
+  leadingText->setAlign(TextView::CENTER);
+  leadingText->setVAlign(TextView::MIDDLE);
+  leadingText->setOverflow(TextView::TextOverflow::Hidden);
+  row->addView(leadingText);
+
+  auto *trailingText = new TextView(ui_icons::kFontAwesomeSolidPath, fontSize);
+  trailingText->setText(ui_icons::textForCodepoint(trailingIconCodepoint));
+  trailingText->setWidth(22);
+  trailingText->setHeight(56);
+  trailingText->setAlign(TextView::CENTER);
+  trailingText->setVAlign(TextView::MIDDLE);
+  trailingText->setOverflow(TextView::TextOverflow::Hidden);
+  row->addView(trailingText);
+
+  button->setContentView(row);
+  if (leadingTextOut != nullptr) {
+    *leadingTextOut = leadingText;
+  }
+  if (trailingTextOut != nullptr) {
+    *trailingTextOut = trailingText;
   }
   return button;
 }
@@ -2335,7 +2408,8 @@ void MusicPlayerScene::refreshUi() {
         ui_icons::textForCodepoint(playback.playing ? kIconPause : kIconPlay));
   }
   if (repeatModeButtonText != nullptr) {
-    repeatModeButtonText->setText(repeatModeLabel(displayedRepeatMode));
+    repeatModeButtonText->setText(
+        ui_icons::textForCodepoint(repeatModeStateIcon(displayedRepeatMode)));
   }
   if (statusText != nullptr) {
     statusText->setText(statusMessage.empty()
@@ -3641,7 +3715,18 @@ void MusicPlayerScene::seekRelative(long long deltaMicros) {
   }
   long long target = std::max(0LL, playback.positionMicros + deltaMicros);
   if (playback.durationMicros > 0) {
-    target = std::min(target, playback.durationMicros);
+    if (deltaMicros > 0 && target >= playback.durationMicros) {
+      const long long guardedTarget =
+          std::max(0LL,
+                   playback.durationMicros - kRelativeSeekEndGuardMicros);
+      if (playback.positionMicros >= guardedTarget) {
+        setStatus("Near end of track.");
+        return;
+      }
+      target = guardedTarget;
+    } else {
+      target = std::min(target, playback.durationMicros);
+    }
   }
   std::string status;
   if (context.musicPlayer.Seek(target, status)) {
@@ -3868,7 +3953,9 @@ void MusicPlayerScene::watchVideo() {
   }
 
   const auto playback = context.musicPlayer.PlaybackState();
-  std::optional<MusicTrack> track = context.musicPlayer.CurrentTrackSnapshot();
+  std::optional<MusicTrack> currentTrack =
+      context.musicPlayer.CurrentTrackSnapshot();
+  std::optional<MusicTrack> track = currentTrack;
   if (!track) {
     track = displayTrack();
   }
@@ -3878,8 +3965,16 @@ void MusicPlayerScene::watchVideo() {
   }
 
   if (!playback.loaded) {
-    playNowPlaying({*track}, 0, "Select a track first.",
-                   "Playing Now Playing.");
+    if (currentTrack) {
+      context.jukebox.stop();
+      std::string status;
+      context.musicPlayer.PlayCurrentAsync(status, "Playing current track.");
+      refreshActiveQueueList(true);
+      setStatus(status);
+    } else {
+      playNowPlaying({*track}, 0, "Select a track first.",
+                     "Playing Now Playing.");
+    }
   } else {
     context.jukebox.stop();
   }

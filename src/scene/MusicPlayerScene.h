@@ -49,6 +49,10 @@ private:
                      TextView **textOut = nullptr);
   Button *makeIconButton(uint32_t iconCodepoint, int fontSize,
                          TextView **textOut = nullptr);
+  Button *makeDualIconButton(uint32_t leadingIconCodepoint,
+                             uint32_t trailingIconCodepoint, int fontSize,
+                             TextView **leadingTextOut = nullptr,
+                             TextView **trailingTextOut = nullptr);
   Button *makeNavButton(const std::string &label, TextView **textOut);
   void styleButton(Button *button, TextView *text,
                    View::ThemeColorProvider normal,
@@ -228,6 +232,7 @@ private:
   TextView *libraryGroupButtonText = nullptr;
   TextView *queueTitleText = nullptr;
   TextView *repeatModeButtonText = nullptr;
+  TextView *repeatModeBaseButtonText = nullptr;
   TextView *watchVideoButtonText = nullptr;
   Button *systemPlaybackJacketButton = nullptr;
   Button *systemPlaybackTitleButton = nullptr;
