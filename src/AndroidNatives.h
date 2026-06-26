@@ -24,6 +24,17 @@ struct AndroidNativeMusicMetadata {
   long long durationMicros = 0;
 };
 
+struct AndroidNativeMusicQueueItem {
+  AndroidNativeMusicMetadata metadata;
+  long long itemId = 0;
+};
+
+struct AndroidNativeMusicQueue {
+  std::string title;
+  std::vector<AndroidNativeMusicQueueItem> items;
+  int currentIndex = -1;
+};
+
 struct AndroidNativeMusicState {
   bool loaded = false;
   bool playing = false;
@@ -76,6 +87,8 @@ bool LoadAndroidNativeMusicFile(const std::string &filePath,
                                 std::string &errorMessage);
 bool UpdateAndroidNativeMusicMetadata(
     const AndroidNativeMusicMetadata &metadata, std::string &errorMessage);
+bool UpdateAndroidNativeMusicQueue(const AndroidNativeMusicQueue &queue,
+                                   std::string &errorMessage);
 bool PlayAndroidNativeMusic(std::string &errorMessage);
 bool PauseAndroidNativeMusic(std::string &errorMessage);
 bool StopAndroidNativeMusic(std::string &errorMessage);

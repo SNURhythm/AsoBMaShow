@@ -149,6 +149,7 @@ private:
       const std::vector<music_playlist::MusicTrack> &tracks,
       bool preserveCursor);
   void PersistQueueCursorLocked();
+  void SyncNativeQueueLocked();
   void StopPlaybackWorker();
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();

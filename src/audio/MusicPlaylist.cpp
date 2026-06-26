@@ -167,7 +167,8 @@ ShuffledTracks(std::vector<MusicTrack> tracks,
   return tracks;
 }
 
-native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
+native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track,
+                                                      bool includeArtwork) {
   std::string title = track.title;
   if (!track.subtitle.empty()) {
     title += " " + track.subtitle;
@@ -176,9 +177,14 @@ native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
       .title = std::move(title),
       .artist = combineArtists(track.artist, track.subArtist),
       .album = track.genre,
-      .artworkPath = nativeArtworkPathForTrack(track),
+      .artworkPath = includeArtwork ? nativeArtworkPathForTrack(track)
+                                    : std::filesystem::path{},
       .durationMicros = track.durationMicros,
   };
+}
+
+native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track) {
+  return MakeNativeMetadata(track, true);
 }
 
 void MusicQueue::SetPlaylist(std::vector<MusicTrack> newTracks,

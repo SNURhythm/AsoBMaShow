@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <thread>
 #include <unordered_set>
@@ -93,6 +94,61 @@ findPlaylistById(const std::vector<MusicPlaylistInfo> &playlists,
     return std::nullopt;
   }
   return *it;
+}
+
+std::uint64_t fnv1a64(const std::string &value) {
+  std::uint64_t hash = 14695981039346656037ull;
+  for (const unsigned char c : value) {
+    hash ^= static_cast<std::uint64_t>(c);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+long long nativeQueueItemIdForTrack(
+    const music_playlist::MusicTrack &track, std::size_t index) {
+  const std::string identity = !track.trackId.empty() ? track.trackId
+                               : !track.chartId.empty() ? track.chartId
+                                                        : track.title;
+  const std::string key = identity + "\n" + std::to_string(index);
+  std::uint64_t value =
+      fnv1a64(key) & static_cast<std::uint64_t>(
+                        std::numeric_limits<long long>::max());
+  if (value == 0) {
+    value = 1;
+  }
+  return static_cast<long long>(value);
+}
+
+native_music_player::QueueMetadata nativeQueueMetadataForSnapshot(
+    const music_playlist::MusicQueueSnapshot &snapshot,
+    const std::optional<music_playlist::MusicTrack> &loadedTrack) {
+  native_music_player::QueueMetadata queueMetadata;
+  queueMetadata.title =
+      snapshot.displayName.empty() ? music_playlist::kNowPlayingDisplayName
+                                   : snapshot.displayName;
+  if (snapshot.currentIndex &&
+      *snapshot.currentIndex < snapshot.tracks.size()) {
+    queueMetadata.currentIndex = static_cast<int>(*snapshot.currentIndex);
+  } else if (loadedTrack) {
+    if (const auto loadedIndex =
+            music_playlist::FindTrackIndex(snapshot.tracks, *loadedTrack)) {
+      queueMetadata.currentIndex = static_cast<int>(*loadedIndex);
+    }
+  }
+
+  queueMetadata.items.reserve(snapshot.tracks.size());
+  for (std::size_t i = 0; i < snapshot.tracks.size(); ++i) {
+    music_playlist::MusicTrack track = snapshot.tracks[i];
+    if (loadedTrack &&
+        music_playlist::SameTrackIdentity(track, *loadedTrack)) {
+      track.durationMicros = loadedTrack->durationMicros;
+    }
+    queueMetadata.items.push_back(
+        {.metadata = music_playlist::MakeNativeMetadata(track, false),
+         .itemId = nativeQueueItemIdForTrack(track, i)});
+  }
+  return queueMetadata;
 }
 
 } // namespace
@@ -263,11 +319,13 @@ void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
     MusicPlaylistDB &playlistDb, sqlite3 *db) {
   queue.SetRepeatMode(repeatModeFromRecordValue(persistedState.repeatMode));
   if (!queue.Empty()) {
+    SyncNativeQueueLocked();
     return;
   }
 
   auto nowPlayingTracks = loadNowPlayingTracks(playlistDb, db);
   if (nowPlayingTracks.empty()) {
+    SyncNativeQueueLocked();
     return;
   }
 
@@ -280,6 +338,7 @@ void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
   }
   queue.SetPlaylist(std::move(nowPlayingTracks),
                     static_cast<std::size_t>(cursor), std::move(displayName));
+  SyncNativeQueueLocked();
 }
 
 void MusicPlayerService::PersistPlayerStateLocked(
@@ -296,13 +355,14 @@ void MusicPlayerService::PersistQueueTracksLocked() {
 void MusicPlayerService::PersistQueueTracksLocked(
     const std::vector<music_playlist::MusicTrack> &tracks,
     bool preserveCursor) {
+  const auto snapshot = queue.Snapshot();
   MusicPlaylistDB playlistDb;
   sqlite3 *db = playlistDb.Connect();
   if (db == nullptr) {
+    SyncNativeQueueLocked();
     return;
   }
 
-  const auto snapshot = queue.Snapshot();
   MusicPlayerStateRecord nextState = persistedState;
   nextState.repeatMode = repeatModeToRecordValue(snapshot.repeatMode);
   nextState.queueDisplayName = snapshot.displayName;
@@ -330,16 +390,18 @@ void MusicPlayerService::PersistQueueTracksLocked(
   if (savedTracks && savedState) {
     persistedState = std::move(nextState);
   }
+  SyncNativeQueueLocked();
 }
 
 void MusicPlayerService::PersistQueueCursorLocked() {
+  const auto snapshot = queue.Snapshot();
   MusicPlaylistDB playlistDb;
   sqlite3 *db = playlistDb.Connect();
   if (db == nullptr) {
+    SyncNativeQueueLocked();
     return;
   }
 
-  const auto snapshot = queue.Snapshot();
   MusicPlayerStateRecord nextState = persistedState;
   nextState.repeatMode = repeatModeToRecordValue(snapshot.repeatMode);
   nextState.queueDisplayName = snapshot.displayName;
@@ -359,6 +421,13 @@ void MusicPlayerService::PersistQueueCursorLocked() {
   if (saved) {
     persistedState = std::move(nextState);
   }
+  SyncNativeQueueLocked();
+}
+
+void MusicPlayerService::SyncNativeQueueLocked() {
+  std::string ignored;
+  native_music_player::SetQueueMetadata(
+      nativeQueueMetadataForSnapshot(queue.Snapshot(), loadedTrack), ignored);
 }
 
 bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
@@ -1036,6 +1105,7 @@ bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
   }
 
   sessionOnlyQueueOrder = true;
+  SyncNativeQueueLocked();
   if (loadedTrack) {
     StopAdjacentPreloadWorker();
     StartAdjacentPreloadWorker(AdjacentTracksLocked());
@@ -1296,6 +1366,7 @@ bool MusicPlayerService::PlayTrackLocked(
     if (lastCacheResult.durationMicros > 0) {
       loadedTrack->durationMicros = lastCacheResult.durationMicros;
     }
+    SyncNativeQueueLocked();
     const auto keepPaths = PlaybackCacheKeepPathsLocked(lastCacheResult);
     auto adjacentTracks = AdjacentTracksLocked();
     chart_music_cache::PruneCacheExcept(keepPaths);
@@ -1433,6 +1504,7 @@ void MusicPlayerService::PlaybackWorker(
         if (cacheResult.durationMicros > 0) {
           loadedTrack->durationMicros = cacheResult.durationMicros;
         }
+        SyncNativeQueueLocked();
         keepCachePaths = PlaybackCacheKeepPathsLocked(cacheResult);
         adjacentTracks = AdjacentTracksLocked();
         playing = true;

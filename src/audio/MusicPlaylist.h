@@ -59,6 +59,8 @@ std::vector<MusicTrack>
 ShuffledTracks(std::vector<MusicTrack> tracks,
                std::optional<std::uint64_t> seed = std::nullopt);
 native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track);
+native_music_player::TrackMetadata MakeNativeMetadata(const MusicTrack &track,
+                                                      bool includeArtwork);
 
 class MusicQueue {
 public:

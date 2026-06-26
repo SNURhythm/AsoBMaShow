@@ -464,15 +464,35 @@ std::vector<std::string> splitLines(const std::string &value) {
   return lines;
 }
 
+std::string sanitizeMusicPayloadField(std::string value) {
+  std::replace(value.begin(), value.end(), '\n', ' ');
+  std::replace(value.begin(), value.end(), '\r', ' ');
+  std::replace(value.begin(), value.end(), '\t', ' ');
+  return value;
+}
+
 std::string musicMetadataPayload(const AndroidNativeMusicMetadata &metadata) {
-  auto sanitizeLine = [](std::string value) {
-    std::replace(value.begin(), value.end(), '\n', ' ');
-    std::replace(value.begin(), value.end(), '\r', ' ');
-    return value;
-  };
-  return sanitizeLine(metadata.title) + "\n" + sanitizeLine(metadata.artist) +
-         "\n" + sanitizeLine(metadata.album) + "\n" +
-         sanitizeLine(metadata.artworkPath);
+  return sanitizeMusicPayloadField(metadata.title) + "\n" +
+         sanitizeMusicPayloadField(metadata.artist) + "\n" +
+         sanitizeMusicPayloadField(metadata.album) + "\n" +
+         sanitizeMusicPayloadField(metadata.artworkPath);
+}
+
+std::string musicQueuePayload(const AndroidNativeMusicQueue &queue) {
+  std::ostringstream stream;
+  for (std::size_t i = 0; i < queue.items.size(); ++i) {
+    if (i > 0) {
+      stream << '\n';
+    }
+    const auto &item = queue.items[i];
+    stream << item.itemId << '\t'
+           << sanitizeMusicPayloadField(item.metadata.title) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.artist) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.album) << '\t'
+           << sanitizeMusicPayloadField(item.metadata.artworkPath) << '\t'
+           << std::max(0LL, item.metadata.durationMicros);
+  }
+  return stream.str();
 }
 
 long long parseLongLongOrZero(const std::string &value) {
@@ -995,6 +1015,23 @@ bool UpdateAndroidNativeMusicMetadata(
   const std::string result = callActivityStringMethodLong(
       "updateNativeMusicMetadata", "(Ljava/lang/String;J)Ljava/lang/String;",
       payload.c_str(), metadata.durationMicros, callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool UpdateAndroidNativeMusicQueue(const AndroidNativeMusicQueue &queue,
+                                   std::string &errorMessage) {
+  const std::string payload = musicQueuePayload(queue);
+  std::string callError;
+  const std::string result = callActivityStringMethod2Long(
+      "updateNativeMusicQueue",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      queue.title.c_str(), payload.c_str(),
+      static_cast<jlong>(queue.currentIndex), callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

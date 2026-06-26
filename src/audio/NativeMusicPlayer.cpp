@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace native_music_player {
@@ -22,6 +23,7 @@ std::vector<ControlEvent> gControlEvents;
 std::mutex gMetadataMutex;
 MetadataVisibility gMetadataVisibility;
 std::optional<TrackMetadata> gLastRawMetadata;
+std::optional<QueueMetadata> gLastRawQueue;
 
 std::string pathToUtf8(const std::filesystem::path &path) {
   return path_t_to_utf8(fspath_to_path_t(path));
@@ -56,6 +58,42 @@ TrackMetadata applyMetadataVisibility(TrackMetadata metadata,
   return metadata;
 }
 
+QueueMetadata normalizedQueueMetadata(QueueMetadata queue) {
+  if (queue.title.empty()) {
+    queue.title = "Now Playing";
+  }
+  for (std::size_t i = 0; i < queue.items.size(); ++i) {
+    TrackMetadata &metadata = queue.items[i].metadata;
+    if (metadata.title.empty()) {
+      metadata.title = "Untitled";
+    }
+    if (metadata.artist.empty()) {
+      metadata.artist = "AsoBMaShow";
+    }
+    if (!metadata.artworkPath.empty()) {
+      metadata.artworkPath = metadata.artworkPath.lexically_normal();
+    }
+    metadata.durationMicros = std::max(0LL, metadata.durationMicros);
+    if (queue.items[i].itemId <= 0) {
+      queue.items[i].itemId = static_cast<long long>(i + 1);
+    }
+  }
+  if (queue.currentIndex < 0 ||
+      static_cast<std::size_t>(queue.currentIndex) >= queue.items.size()) {
+    queue.currentIndex = -1;
+  }
+  return queue;
+}
+
+QueueMetadata applyQueueMetadataVisibility(QueueMetadata queue,
+                                           MetadataVisibility visibility) {
+  for (auto &item : queue.items) {
+    item.metadata = applyMetadataVisibility(std::move(item.metadata),
+                                            visibility);
+  }
+  return queue;
+}
+
 bool updatePlatformMetadata(const TrackMetadata &metadata,
                             std::string &errorMessage) {
   errorMessage.clear();
@@ -84,6 +122,47 @@ bool updatePlatformMetadata(const TrackMetadata &metadata,
 #endif
 }
 
+bool updatePlatformQueue(const QueueMetadata &queue,
+                         std::string &errorMessage) {
+  errorMessage.clear();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  IOSNativeMusicQueue iosQueue;
+  iosQueue.title = queue.title;
+  iosQueue.currentIndex = queue.currentIndex;
+  iosQueue.items.reserve(queue.items.size());
+  for (const auto &item : queue.items) {
+    IOSNativeMusicQueueItem iosItem;
+    iosItem.metadata.title = item.metadata.title;
+    iosItem.metadata.artist = item.metadata.artist;
+    iosItem.metadata.album = item.metadata.album;
+    iosItem.metadata.artworkPath = pathToUtf8(item.metadata.artworkPath);
+    iosItem.metadata.durationMicros = item.metadata.durationMicros;
+    iosItem.itemId = item.itemId;
+    iosQueue.items.push_back(std::move(iosItem));
+  }
+  return UpdateIOSNativeMusicQueue(iosQueue, errorMessage);
+#elif TARGET_OS_ANDROID
+  AndroidNativeMusicQueue androidQueue;
+  androidQueue.title = queue.title;
+  androidQueue.currentIndex = queue.currentIndex;
+  androidQueue.items.reserve(queue.items.size());
+  for (const auto &item : queue.items) {
+    AndroidNativeMusicQueueItem androidItem;
+    androidItem.metadata.title = item.metadata.title;
+    androidItem.metadata.artist = item.metadata.artist;
+    androidItem.metadata.album = item.metadata.album;
+    androidItem.metadata.artworkPath = pathToUtf8(item.metadata.artworkPath);
+    androidItem.metadata.durationMicros = item.metadata.durationMicros;
+    androidItem.itemId = item.itemId;
+    androidQueue.items.push_back(std::move(androidItem));
+  }
+  return UpdateAndroidNativeMusicQueue(androidQueue, errorMessage);
+#else
+  (void)queue;
+  return true;
+#endif
+}
+
 } // namespace
 
 bool IsSupported() {
@@ -98,6 +177,7 @@ bool SetMetadataVisibility(MetadataVisibility visibility,
                            std::string &errorMessage) {
   errorMessage.clear();
   std::optional<TrackMetadata> visibleMetadata;
+  std::optional<QueueMetadata> visibleQueue;
   {
     std::lock_guard<std::mutex> lock(gMetadataMutex);
     gMetadataVisibility = visibility;
@@ -105,11 +185,38 @@ bool SetMetadataVisibility(MetadataVisibility visibility,
       visibleMetadata =
           applyMetadataVisibility(*gLastRawMetadata, gMetadataVisibility);
     }
+    if (gLastRawQueue) {
+      visibleQueue =
+          applyQueueMetadataVisibility(*gLastRawQueue, gMetadataVisibility);
+    }
   }
-  if (!visibleMetadata) {
-    return true;
+  bool updated = true;
+  if (visibleMetadata &&
+      !updatePlatformMetadata(*visibleMetadata, errorMessage)) {
+    updated = false;
   }
-  return updatePlatformMetadata(*visibleMetadata, errorMessage);
+  if (visibleQueue) {
+    std::string queueError;
+    if (!updatePlatformQueue(*visibleQueue, queueError)) {
+      if (errorMessage.empty()) {
+        errorMessage = std::move(queueError);
+      }
+      updated = false;
+    }
+  }
+  return updated;
+}
+
+bool SetQueueMetadata(const QueueMetadata &queue, std::string &errorMessage) {
+  errorMessage.clear();
+  const QueueMetadata normalized = normalizedQueueMetadata(queue);
+  QueueMetadata visibleQueue;
+  {
+    std::lock_guard<std::mutex> lock(gMetadataMutex);
+    gLastRawQueue = normalized;
+    visibleQueue = applyQueueMetadataVisibility(normalized, gMetadataVisibility);
+  }
+  return updatePlatformQueue(visibleQueue, errorMessage);
 }
 
 bool Load(const std::filesystem::path &audioPath,

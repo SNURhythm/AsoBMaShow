@@ -47,6 +47,7 @@ UIDocumentInteractionController *gIOSRevealFileController = nil;
 AVAudioPlayer *gIOSNativeMusicPlayer = nil;
 IOSNativeMusicDelegate *gIOSNativeMusicDelegate = nil;
 IOSNativeMusicMetadata gIOSNativeMusicMetadata;
+IOSNativeMusicQueue gIOSNativeMusicQueue;
 bool gIOSNativeMusicRemoteCommandsConfigured = false;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
@@ -541,6 +542,17 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
         @(std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.currentTime));
     info[MPNowPlayingInfoPropertyPlaybackRate] =
         @(gIOSNativeMusicPlayer.playing ? 1.0 : 0.0);
+    const NSUInteger queueCount =
+        static_cast<NSUInteger>(gIOSNativeMusicQueue.items.size());
+    if (queueCount > 0) {
+      info[MPNowPlayingInfoPropertyPlaybackQueueCount] = @(queueCount);
+      if (gIOSNativeMusicQueue.currentIndex >= 0 &&
+          static_cast<NSUInteger>(gIOSNativeMusicQueue.currentIndex) <
+              queueCount) {
+        info[MPNowPlayingInfoPropertyPlaybackQueueIndex] =
+            @(gIOSNativeMusicQueue.currentIndex);
+      }
+    }
     center.nowPlayingInfo = info;
     if (@available(iOS 13.0, *)) {
       center.playbackState = gIOSNativeMusicPlayer.playing
@@ -2472,6 +2484,18 @@ bool UpdateIOSNativeMusicMetadata(const IOSNativeMusicMetadata &metadata,
       if (gIOSNativeMusicMetadata.durationMicros <= 0) {
         gIOSNativeMusicMetadata.durationMicros = currentDurationMicros;
       }
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool UpdateIOSNativeMusicQueue(const IOSNativeMusicQueue &queue,
+                               std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      gIOSNativeMusicQueue = queue;
       UpdateIOSNativeMusicNowPlayingInfoLocked();
       return true;
     }

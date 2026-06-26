@@ -20,6 +20,17 @@ struct TrackMetadata {
   long long durationMicros = 0;
 };
 
+struct QueueItemMetadata {
+  TrackMetadata metadata;
+  long long itemId = 0;
+};
+
+struct QueueMetadata {
+  std::string title;
+  std::vector<QueueItemMetadata> items;
+  int currentIndex = -1;
+};
+
 struct MetadataVisibility {
   bool showTitle = true;
   bool showArtist = true;
@@ -37,6 +48,7 @@ struct PlaybackState {
 bool IsSupported();
 bool SetMetadataVisibility(MetadataVisibility visibility,
                            std::string &errorMessage);
+bool SetQueueMetadata(const QueueMetadata &queue, std::string &errorMessage);
 bool Load(const std::filesystem::path &audioPath,
           const TrackMetadata &metadata, std::string &errorMessage);
 bool Play(std::string &errorMessage);

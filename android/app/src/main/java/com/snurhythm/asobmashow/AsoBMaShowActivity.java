@@ -9,6 +9,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
+import android.media.MediaDescription;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
 import android.media.session.MediaSession;
@@ -36,6 +37,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -49,6 +51,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final String ERROR_PREFIX = "__ERROR__:";
     private static final String PENDING_IMPORT_RESULT = "__PENDING_ARCHIVE_IMPORT__";
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
+    private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
 
     private final Object pickerLock = new Object();
     private CountDownLatch pickerLatch;
@@ -77,6 +80,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     private String nativeMusicArtworkPath = "";
     private Bitmap nativeMusicArtwork;
     private long nativeMusicDurationMicros = 0;
+    private String nativeMusicQueueTitle = "";
+    private final ArrayList<MediaSession.QueueItem> nativeMusicQueue = new ArrayList<>();
+    private long nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
 
     private static class PendingImportRequest {
         final Uri uri;
@@ -671,6 +677,63 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    public String updateNativeMusicQueue(String queueTitle, String queueText, long currentIndex) {
+        synchronized (nativeMusicLock) {
+            try {
+                ArrayList<MediaSession.QueueItem> nextQueue = new ArrayList<>();
+                String[] lines = queueText == null || queueText.isEmpty()
+                        ? new String[0]
+                        : queueText.split("\\n", -1);
+                for (String line : lines) {
+                    if (line == null || line.trim().isEmpty()) {
+                        continue;
+                    }
+                    String[] fields = line.split("\\t", -1);
+                    long itemId = parseLongOrDefault(
+                            metadataField(fields, 0, ""),
+                            nextQueue.size() + 1L);
+                    String title = metadataField(fields, 1, "AsoBMaShow");
+                    String artist = metadataField(fields, 2, "AsoBMaShow");
+                    String album = metadataField(fields, 3, "");
+                    String artworkPath = metadataField(fields, 4, "");
+                    MediaDescription.Builder description = new MediaDescription.Builder()
+                            .setMediaId(Long.toString(itemId))
+                            .setTitle(title)
+                            .setSubtitle(artist)
+                            .setDescription(album);
+                    if (!artworkPath.isEmpty()) {
+                        File artworkFile = new File(artworkPath);
+                        if (artworkFile.exists()) {
+                            description.setIconUri(Uri.fromFile(artworkFile));
+                        }
+                    }
+                    nextQueue.add(new MediaSession.QueueItem(
+                            description.build(), itemId));
+                }
+
+                nativeMusicQueueTitle =
+                        queueTitle == null || queueTitle.trim().isEmpty()
+                                ? "Now Playing"
+                                : queueTitle.trim();
+                nativeMusicQueue.clear();
+                nativeMusicQueue.addAll(nextQueue);
+                nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
+                if (currentIndex >= 0 && currentIndex < nativeMusicQueue.size()) {
+                    nativeMusicActiveQueueItemId =
+                            nativeMusicQueue.get((int) currentIndex).getQueueId();
+                }
+                if (nativeMusicSession != null) {
+                    boolean playing = nativeMusicPlayer != null && nativeMusicPlayer.isPlaying();
+                    updateNativeMusicSessionLocked(playing);
+                }
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(
+                        e, "Could not update music queue.");
+            }
+        }
+    }
+
     public String playNativeMusic() {
         synchronized (nativeMusicLock) {
             if (nativeMusicPlayer == null) {
@@ -845,11 +908,22 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private String metadataLine(String[] lines, int index, String fallback) {
-        if (lines == null || index < 0 || index >= lines.length) {
+        return metadataField(lines, index, fallback);
+    }
+
+    private String metadataField(String[] fields, int index, String fallback) {
+        if (fields == null || index < 0 || index >= fields.length) {
             return fallback;
         }
-        String value = lines[index] == null ? "" : lines[index].trim();
-        return value.isEmpty() ? fallback : value;
+        return fields[index] == null ? "" : fields[index].trim();
+    }
+
+    private long parseLongOrDefault(String value, long fallback) {
+        try {
+            return Long.parseLong(value);
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     private void ensureNativeMusicSessionLocked() {
@@ -917,6 +991,13 @@ public class AsoBMaShowActivity extends SDLActivity {
             metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, nativeMusicArtwork);
         }
         nativeMusicSession.setMetadata(metadata.build());
+        if (nativeMusicQueue.isEmpty()) {
+            nativeMusicSession.setQueue(null);
+            nativeMusicSession.setQueueTitle(null);
+        } else {
+            nativeMusicSession.setQueue(new ArrayList<>(nativeMusicQueue));
+            nativeMusicSession.setQueueTitle(nativeMusicQueueTitle);
+        }
 
         long actions = PlaybackState.ACTION_PLAY
                 | PlaybackState.ACTION_PAUSE
@@ -928,11 +1009,13 @@ public class AsoBMaShowActivity extends SDLActivity {
         int state = nativeMusicPlayer == null
                 ? PlaybackState.STATE_STOPPED
                 : (playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
-        PlaybackState playbackState = new PlaybackState.Builder()
+        PlaybackState.Builder playbackState = new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, positionMs, playing ? 1.0f : 0.0f)
-                .build();
-        nativeMusicSession.setPlaybackState(playbackState);
+                .setState(state, positionMs, playing ? 1.0f : 0.0f);
+        if (nativeMusicActiveQueueItemId != NATIVE_MUSIC_UNKNOWN_QUEUE_ID) {
+            playbackState.setActiveQueueItemId(nativeMusicActiveQueueItemId);
+        }
+        nativeMusicSession.setPlaybackState(playbackState.build());
         nativeMusicSession.setActive(nativeMusicPlayer != null);
         if (updateService) {
             updateNativeMusicForegroundServiceLocked(playing);
@@ -992,6 +1075,9 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeMusicAlbum = "";
         nativeMusicArtworkPath = "";
         nativeMusicArtwork = null;
+        nativeMusicQueueTitle = "";
+        nativeMusicQueue.clear();
+        nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
         if (nativeMusicSession != null) {
             try {
                 updateNativeMusicSessionLocked(false, false);

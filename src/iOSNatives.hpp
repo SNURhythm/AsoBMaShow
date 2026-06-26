@@ -56,6 +56,17 @@ struct IOSNativeMusicMetadata {
   long long durationMicros = 0;
 };
 
+struct IOSNativeMusicQueueItem {
+  IOSNativeMusicMetadata metadata;
+  long long itemId = 0;
+};
+
+struct IOSNativeMusicQueue {
+  std::string title;
+  std::vector<IOSNativeMusicQueueItem> items;
+  int currentIndex = -1;
+};
+
 struct IOSNativeMusicState {
   bool loaded = false;
   bool playing = false;
@@ -117,6 +128,8 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
                             std::string &errorMessage);
 bool UpdateIOSNativeMusicMetadata(const IOSNativeMusicMetadata &metadata,
                                   std::string &errorMessage);
+bool UpdateIOSNativeMusicQueue(const IOSNativeMusicQueue &queue,
+                               std::string &errorMessage);
 bool PlayIOSNativeMusic(std::string &errorMessage);
 bool PauseIOSNativeMusic(std::string &errorMessage);
 bool StopIOSNativeMusic(std::string &errorMessage);
