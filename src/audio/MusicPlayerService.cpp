@@ -22,22 +22,6 @@ void setEmptyPlaylistError(std::string &errorMessage) {
   errorMessage = "The music playlist is empty.";
 }
 
-bool sameTrackIdentity(const music_playlist::MusicTrack &a,
-                       const music_playlist::MusicTrack &b) {
-  return a.trackId == b.trackId && a.chartId == b.chartId;
-}
-
-std::optional<std::size_t>
-trackIndexInList(const std::vector<music_playlist::MusicTrack> &tracks,
-                 const music_playlist::MusicTrack &track) {
-  for (std::size_t i = 0; i < tracks.size(); ++i) {
-    if (sameTrackIdentity(tracks[i], track)) {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
-
 std::vector<music_playlist::MusicTrack>
 loadPlaylistTracks(MusicPlaylistDB &playlistDb, sqlite3 *db, int playlistId) {
   std::vector<MusicTrackRecord> records;
@@ -968,7 +952,7 @@ bool MusicPlayerService::AppendToQueue(
   persistentTracks.push_back(track);
 
   const auto loadedIndex =
-      loadedTrack ? trackIndexInList(visibleTracks, *loadedTrack)
+      loadedTrack ? music_playlist::FindTrackIndex(visibleTracks, *loadedTrack)
                   : std::nullopt;
   if (loadedTrack && !loadedIndex) {
     const std::size_t nextIndex =
@@ -1019,7 +1003,8 @@ bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
   std::optional<music_playlist::MusicTrack> anchorTrack;
   std::optional<std::size_t> anchorIndex;
   if (loadedTrack) {
-    if (const auto index = trackIndexInList(tracks, *loadedTrack)) {
+    if (const auto index =
+            music_playlist::FindTrackIndex(tracks, *loadedTrack)) {
       anchorTrack = *loadedTrack;
       anchorIndex = *index;
     }

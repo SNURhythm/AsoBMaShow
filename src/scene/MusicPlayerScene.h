@@ -117,8 +117,6 @@ private:
   std::optional<MusicTrack> displayTrack() const;
   PlaylistInfo nowPlayingPlaylistInfo() const;
   int playlistChoiceIndexForId(int playlistId) const;
-  int trackIndexInList(const std::vector<MusicTrack> &tracks,
-                       const MusicTrack &track) const;
   bool selectedPlaylistIsActiveQueue() const;
   bool isFavoriteTrack(const MusicTrack &track) const;
   void rebuildFavoriteTrackIds();

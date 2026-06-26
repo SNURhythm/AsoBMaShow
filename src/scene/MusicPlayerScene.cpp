@@ -157,17 +157,13 @@ bool trackMatchesSearch(const music_playlist::MusicTrack &track,
   return containsText(searchable, query);
 }
 
-bool sameTrackIdentity(const music_playlist::MusicTrack &a,
-                       const music_playlist::MusicTrack &b) {
-  return a.trackId == b.trackId && a.chartId == b.chartId;
-}
-
 bool sameTrackList(const std::vector<music_playlist::MusicTrack> &a,
                    const std::vector<music_playlist::MusicTrack> &b) {
   if (a.size() != b.size()) {
     return false;
   }
-  return std::equal(a.begin(), a.end(), b.begin(), sameTrackIdentity);
+  return std::equal(a.begin(), a.end(), b.begin(),
+                    music_playlist::SameTrackIdentity);
 }
 
 std::string favoriteKeyForTrack(const music_playlist::MusicTrack &track) {
@@ -2608,16 +2604,6 @@ int MusicPlayerScene::playlistChoiceIndexForId(int playlistId) const {
   return -1;
 }
 
-int MusicPlayerScene::trackIndexInList(const std::vector<MusicTrack> &tracks,
-                                       const MusicTrack &track) const {
-  for (std::size_t i = 0; i < tracks.size(); ++i) {
-    if (sameTrackIdentity(tracks[i], track)) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
-}
-
 bool MusicPlayerScene::selectedPlaylistIsActiveQueue() const {
   if (selectedPlaylistId <= 0 || isNowPlayingPlaylistId(selectedPlaylistId) ||
       playlistTracks.empty()) {
@@ -3246,7 +3232,7 @@ void MusicPlayerScene::removePlaylistTrack() {
                        std::max(0, static_cast<int>(tracks.size()) - 1));
       }
     } else if (previousCurrent && playback.loaded &&
-               sameTrackIdentity(*previousCurrent, *track)) {
+               music_playlist::SameTrackIdentity(*previousCurrent, *track)) {
       currentTrackRemoved = true;
     } else if (previousQueue.detachedCurrentNextIndex && playback.loaded) {
       currentTrackRemoved = true;
@@ -3421,7 +3407,11 @@ void MusicPlayerScene::syncActiveQueueAfterPlaylistEdit(
   }
   if (previousCurrent) {
     if (queueIndex < 0 && !currentTrackRemoved) {
-      queueIndex = trackIndexInList(playlistTracks, *previousCurrent);
+      if (const auto index =
+              music_playlist::FindTrackIndex(playlistTracks,
+                                             *previousCurrent)) {
+        queueIndex = static_cast<int>(*index);
+      }
     }
   }
   currentTrackRemoved =
@@ -3456,8 +3446,13 @@ void MusicPlayerScene::replaceNowPlaying(std::vector<MusicTrack> tracks,
                        ? 0
                        : std::clamp(preferredIndex, 0,
                                     static_cast<int>(tracks.size()) - 1);
-  const int currentIndex =
-      current && playback.loaded ? trackIndexInList(tracks, *current) : -1;
+  int currentIndex = -1;
+  if (current && playback.loaded) {
+    if (const auto index =
+            music_playlist::FindTrackIndex(tracks, *current)) {
+      currentIndex = static_cast<int>(*index);
+    }
+  }
   if (currentIndex >= 0) {
     startIndex = currentIndex;
   }

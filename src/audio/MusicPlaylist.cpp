@@ -145,6 +145,20 @@ MakeTracks(const std::vector<MusicTrackRecord> &records) {
   return tracks;
 }
 
+bool SameTrackIdentity(const MusicTrack &a, const MusicTrack &b) {
+  return a.trackId == b.trackId && a.chartId == b.chartId;
+}
+
+std::optional<std::size_t> FindTrackIndex(
+    const std::vector<MusicTrack> &tracks, const MusicTrack &track) {
+  for (std::size_t i = 0; i < tracks.size(); ++i) {
+    if (SameTrackIdentity(tracks[i], track)) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 std::vector<MusicTrack>
 ShuffledTracks(std::vector<MusicTrack> tracks,
                std::optional<std::uint64_t> seed) {

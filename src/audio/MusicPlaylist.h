@@ -52,6 +52,9 @@ std::filesystem::path ArtworkPathForChart(const bms_parser::ChartMeta &meta);
 MusicTrack MakeTrack(const MusicTrackRecord &record);
 std::vector<MusicTrack>
 MakeTracks(const std::vector<MusicTrackRecord> &records);
+bool SameTrackIdentity(const MusicTrack &a, const MusicTrack &b);
+std::optional<std::size_t> FindTrackIndex(
+    const std::vector<MusicTrack> &tracks, const MusicTrack &track);
 std::vector<MusicTrack>
 ShuffledTracks(std::vector<MusicTrack> tracks,
                std::optional<std::uint64_t> seed = std::nullopt);
