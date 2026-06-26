@@ -63,3 +63,25 @@ Release checklist:
   `installed/<triplet>/share/unarr/copyright`.
 - For binary releases that include unarr, include `assets/legal/unarr.txt` and
   keep the corresponding AsoBMaShow source and build scripts available.
+
+## Font Awesome Free
+
+AsoBMaShow bundles the Font Awesome Free solid icon font for music player
+controls.
+
+Current package checked for this notice: `@fortawesome/fontawesome-free` 6.5.2.
+
+License summary:
+
+- Font Awesome Free icons are licensed under CC BY 4.0.
+- Font Awesome Free fonts are licensed under SIL OFL 1.1.
+- Font Awesome Free code is licensed under MIT.
+
+The complete package license text is checked in at
+`assets/legal/fontawesome-free.txt`.
+
+Release checklist:
+
+- Keep `assets/fonts/fa-solid-900.ttf` and `assets/legal/fontawesome-free.txt`
+  in app bundles and release archives when music player icon controls are
+  shipped.

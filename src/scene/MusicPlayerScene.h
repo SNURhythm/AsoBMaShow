@@ -6,6 +6,7 @@
 #include "Scene.h"
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -46,6 +47,8 @@ private:
   View *makePanel(const std::string &title, TextView **subtitleText = nullptr);
   Button *makeButton(const std::string &label, int fontSize,
                      TextView **textOut = nullptr);
+  Button *makeIconButton(uint32_t iconCodepoint, int fontSize,
+                         TextView **textOut = nullptr);
   Button *makeNavButton(const std::string &label, TextView **textOut);
   void styleButton(Button *button, TextView *text,
                    View::ThemeColorProvider normal,

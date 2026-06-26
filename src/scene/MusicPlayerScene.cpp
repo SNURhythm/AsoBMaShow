@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iterator>
@@ -28,12 +29,19 @@
 namespace {
 
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kIconFontPath = "assets/fonts/fa-solid-900.ttf";
 constexpr float kScreenPadding = 18.0f;
 constexpr float kHeaderHeight = 82.0f;
 constexpr float kRailWidth = 180.0f;
 constexpr int kTrackRowHeight = 82;
 constexpr int kPlaylistRowHeight = 58;
 constexpr int kNowPlayingPlaylistId = -1;
+constexpr uint32_t kIconBackwardStep = 0xf048;
+constexpr uint32_t kIconForwardStep = 0xf051;
+constexpr uint32_t kIconPlay = 0xf04b;
+constexpr uint32_t kIconPause = 0xf04c;
+constexpr uint32_t kIconRotateLeft = 0xf2ea;
+constexpr uint32_t kIconRotateRight = 0xf2f9;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -41,6 +49,26 @@ struct SafeAreaInsets {
   int bottom = 0;
   int right = 0;
 };
+
+std::string utf8ForCodepoint(uint32_t codepoint) {
+  std::string result;
+  if (codepoint <= 0x7f) {
+    result.push_back(static_cast<char>(codepoint));
+  } else if (codepoint <= 0x7ff) {
+    result.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else if (codepoint <= 0xffff) {
+    result.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  } else if (codepoint <= 0x10ffff) {
+    result.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+    result.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+  }
+  return result;
+}
 
 SafeAreaInsets getSafeAreaInsetsUi() {
   SafeAreaInsets insets;
@@ -1519,79 +1547,66 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
-  transport->setHeight(178)
+  transport->setHeight(186)
       ->setFlexDirection(FlexDirection::Column)
+      ->setGap(9);
+  auto *transportRow = new View();
+  transportRow->setHeight(64)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
       ->setGap(10);
-  auto *transportRowA = new View();
-  transportRowA->setHeight(52)
+  auto *actionRowA = new View();
+  actionRowA->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
-  auto *transportRowB = new View();
-  transportRowB->setHeight(52)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setGap(10);
-  auto *transportRowC = new View();
-  transportRowC->setHeight(52)
+  auto *actionRowB = new View();
+  actionRowB->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
 
   TextView *previousText = nullptr;
-  auto *previousButton = makeButton("Previous", 15, &previousText);
-  previousButton->setFlex(1);
+  auto *previousButton = makeIconButton(kIconBackwardStep, 28, &previousText);
   styleButton(previousButton, previousText, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   previousButton->setOnClickListener([this]() { playPrevious(); });
-  auto *playPauseButton = makeButton("Play", 18, &playPauseButtonText);
-  playPauseButton->setFlex(1);
-  styleButton(playPauseButton, playPauseButtonText, ui_theme::infoAction,
-              ui_theme::infoActionHover, ui_theme::infoActionPressed,
-              ui_theme::accentBorder);
-  playPauseButton->setOnClickListener([this]() { togglePlayback(); });
-  TextView *nextText = nullptr;
-  auto *nextButton = makeButton("Next", 18, &nextText);
-  nextButton->setFlex(1);
-  styleButton(nextButton, nextText, ui_theme::control, ui_theme::controlHover,
-              ui_theme::controlPressed, ui_theme::hairlineStrong);
-  nextButton->setOnClickListener([this]() { playNext(); });
 
   TextView *back10Text = nullptr;
-  auto *back10Button = makeButton("-10s", 17, &back10Text);
-  back10Button->setFlex(1);
+  auto *back10Button = makeIconButton(kIconRotateLeft, 23, &back10Text);
   styleButton(back10Button, back10Text, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   back10Button->setOnClickListener([this]() { seekRelative(-10000000LL); });
+
+  auto *playPauseButton = makeIconButton(kIconPlay, 33, &playPauseButtonText);
+  playPauseButton->setWidth(96);
+  playPauseButton->setHeight(64);
+  styleButton(playPauseButton, playPauseButtonText, ui_theme::infoAction,
+              ui_theme::infoActionHover, ui_theme::infoActionPressed,
+              ui_theme::accentBorder);
+  playPauseButton->setOnClickListener([this]() { togglePlayback(); });
+
   TextView *forward10Text = nullptr;
-  auto *forward10Button = makeButton("+10s", 17, &forward10Text);
-  forward10Button->setFlex(1);
+  auto *forward10Button = makeIconButton(kIconRotateRight, 23, &forward10Text);
   styleButton(forward10Button, forward10Text, ui_theme::control,
               ui_theme::controlHover, ui_theme::controlPressed,
               ui_theme::hairlineStrong);
   forward10Button->setOnClickListener([this]() { seekRelative(10000000LL); });
-  TextView *stopText = nullptr;
-  auto *stopButton = makeButton("Stop", 18, &stopText);
-  stopButton->setFlex(1);
-  styleButton(stopButton, stopText, ui_theme::warningAction,
-              ui_theme::warningActionHover, ui_theme::warningActionPressed,
-              ui_theme::accentBorder);
-  stopButton->setOnClickListener([this]() { stopPlayback(); });
+
+  TextView *nextText = nullptr;
+  auto *nextButton = makeIconButton(kIconForwardStep, 28, &nextText);
+  styleButton(nextButton, nextText, ui_theme::control, ui_theme::controlHover,
+              ui_theme::controlPressed, ui_theme::hairlineStrong);
+  nextButton->setOnClickListener([this]() { playNext(); });
 
   TextView *playSelectedText = nullptr;
-  auto *playSelectedButton =
-      makeButton("Play Queue Track", 16, &playSelectedText);
+  auto *playSelectedButton = makeButton("Play Selected", 17, &playSelectedText);
   playSelectedButton->setFlex(1);
   styleButton(playSelectedButton, playSelectedText, ui_theme::primaryAction,
               ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
               ui_theme::accentBorderStrong);
   playSelectedButton->setOnClickListener([this]() { playSelectedQueueTrack(); });
-
-  auto *repeatButton = makeButton("Playlist Loop", 16, &repeatModeButtonText);
-  repeatButton->setFlex(1);
-  styleButton(repeatButton, repeatModeButtonText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
 
   auto *watchVideoButton = makeButton("Watch Video", 17, &watchVideoButtonText);
   watchVideoButton->setFlex(1);
@@ -1600,18 +1615,33 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::accentBorder);
   watchVideoButton->setOnClickListener([this]() { watchVideo(); });
 
-  transportRowA->addView(previousButton);
-  transportRowA->addView(playPauseButton);
-  transportRowA->addView(nextButton);
-  transportRowB->addView(back10Button);
-  transportRowB->addView(forward10Button);
-  transportRowB->addView(stopButton);
-  transportRowC->addView(playSelectedButton);
-  transportRowC->addView(repeatButton);
-  transportRowC->addView(watchVideoButton);
-  transport->addView(transportRowA);
-  transport->addView(transportRowB);
-  transport->addView(transportRowC);
+  auto *repeatButton = makeButton("Playlist Loop", 17, &repeatModeButtonText);
+  repeatButton->setFlex(1);
+  styleButton(repeatButton, repeatModeButtonText, ui_theme::control,
+              ui_theme::controlHover, ui_theme::controlPressed,
+              ui_theme::hairlineStrong);
+  repeatButton->setOnClickListener([this]() { cycleRepeatMode(); });
+
+  TextView *stopText = nullptr;
+  auto *stopButton = makeButton("Stop", 17, &stopText);
+  stopButton->setWidth(126);
+  styleButton(stopButton, stopText, ui_theme::warningAction,
+              ui_theme::warningActionHover, ui_theme::warningActionPressed,
+              ui_theme::accentBorder);
+  stopButton->setOnClickListener([this]() { stopPlayback(); });
+
+  transportRow->addView(previousButton);
+  transportRow->addView(back10Button);
+  transportRow->addView(playPauseButton);
+  transportRow->addView(forward10Button);
+  transportRow->addView(nextButton);
+  actionRowA->addView(playSelectedButton);
+  actionRowA->addView(watchVideoButton);
+  actionRowB->addView(repeatButton);
+  actionRowB->addView(stopButton);
+  transport->addView(transportRow);
+  transport->addView(actionRowA);
+  transport->addView(actionRowB);
   nowColumn->addView(transport);
   workspace->addView(nowColumn);
 
@@ -1725,6 +1755,25 @@ Button *MusicPlayerScene::makeButton(const std::string &label, int fontSize,
 
   auto *text = new TextView(kFontPath, fontSize);
   text->setText(label);
+  text->setAlign(TextView::CENTER);
+  text->setVAlign(TextView::MIDDLE);
+  text->setOverflow(TextView::TextOverflow::Hidden);
+  button->setContentView(text);
+  if (textOut != nullptr) {
+    *textOut = text;
+  }
+  return button;
+}
+
+Button *MusicPlayerScene::makeIconButton(uint32_t iconCodepoint, int fontSize,
+                                         TextView **textOut) {
+  auto *button = new Button();
+  button->setHeight(56);
+  button->setWidth(56);
+  button->setCornerRadius(ui_theme::controlRadius());
+
+  auto *text = new TextView(kIconFontPath, fontSize);
+  text->setText(utf8ForCodepoint(iconCodepoint));
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -2202,7 +2251,7 @@ void MusicPlayerScene::refreshUi() {
   }
   if (playPauseButtonText != nullptr) {
     playPauseButtonText->setText(
-        playback.playing ? "Pause" : (playback.loaded ? "Resume" : "Play"));
+        utf8ForCodepoint(playback.playing ? kIconPause : kIconPlay));
   }
   if (repeatModeButtonText != nullptr) {
     repeatModeButtonText->setText(repeatModeLabel(displayedRepeatMode));
