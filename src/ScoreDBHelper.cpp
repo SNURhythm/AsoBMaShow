@@ -1,5 +1,6 @@
 #include "ScoreDBHelper.h"
 
+#include "BmsMetadataText.h"
 #include "ChartDBHelper.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
@@ -11,7 +12,6 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +19,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
@@ -39,24 +40,11 @@ std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 }
 
 std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
+  return asobmshow::bms_metadata::trimCopy(value);
 }
 
 std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
 std::string normalizedHash(const std::string &value) {

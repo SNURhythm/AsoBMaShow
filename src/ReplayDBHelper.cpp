@@ -1,5 +1,6 @@
 #include "ReplayDBHelper.h"
 
+#include "BmsMetadataText.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -8,11 +9,11 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -30,24 +31,11 @@ std::filesystem::path toStoredChartPath(std::filesystem::path path) {
 }
 
 std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
+  return asobmshow::bms_metadata::trimCopy(value);
 }
 
 std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
 std::string normalizedHash(const std::string &value) {
