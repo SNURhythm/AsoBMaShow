@@ -113,6 +113,39 @@ std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
   return "path:" + chartPath;
 }
 
+struct ScoreChartMatch {
+  std::string chartPath;
+  std::string sha256;
+  std::string md5;
+};
+
+ScoreChartMatch scoreChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
+  return {
+      .chartPath =
+          Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath,
+                                                       "BMS/"),
+      .sha256 = normalizedHash(chartMeta.SHA256),
+      .md5 = normalizedHash(chartMeta.MD5),
+  };
+}
+
+std::string scoreChartMatchPredicate() {
+  return "((? != '' AND lower(trim(chart_sha256)) = ?) OR "
+         "(? != '' AND lower(trim(chart_md5)) = ?) OR "
+         "(? != '' AND chart_path = ?))";
+}
+
+int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
+                        const ScoreChartMatch &match) {
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
+  return bindIndex;
+}
+
 std::string courseKeyForSession(const CoursePlaySession &session) {
   std::ostringstream key;
   key << "course:" << session.courseName << "\n";
@@ -907,22 +940,17 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     return std::nullopt;
   }
 
-  const auto chartPath =
-      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
-  const std::string sha256 = normalizedHash(chartMeta.SHA256);
-  const std::string md5 = normalizedHash(chartMeta.MD5);
+  const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
   const bool legacyLongNoteModeFallback = longNoteMode == 1;
 
-  const char *query =
+  std::string query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
       "clear_type, created_at "
-      "FROM scores "
-      "WHERE ((? != '' AND lower(trim(chart_sha256)) = ?) OR "
-      "(? != '' AND lower(trim(chart_md5)) = ?) OR "
-      "(? != '' AND chart_path = ?)) "
-      "AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
+      "FROM scores WHERE ";
+  query += scoreChartMatchPredicate();
+  query += " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
       "AND (? = '' OR created_at < ?) "
       "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
       "score DESC, clear_type DESC, created_at DESC, id DESC "
@@ -935,12 +963,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   }
 
   int bindIndex = 1;
-  bindSqliteText(stmt.get(), bindIndex++, sha256);
-  bindSqliteText(stmt.get(), bindIndex++, sha256);
-  bindSqliteText(stmt.get(), bindIndex++, md5);
-  bindSqliteText(stmt.get(), bindIndex++, md5);
-  bindSqliteText(stmt.get(), bindIndex++, chartPath);
-  bindSqliteText(stmt.get(), bindIndex++, chartPath);
+  bindIndex = bindScoreChartMatch(stmt.get(), bindIndex, match);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    legacyLongNoteModeFallback ? 1 : 0);
