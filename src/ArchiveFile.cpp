@@ -575,6 +575,13 @@ std::string backendName(ArchiveIndexBackend backend) {
   }
 }
 
+std::uintmax_t maxBufferedReadSize() {
+  return std::min<std::uintmax_t>(
+      static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max()),
+      static_cast<std::uintmax_t>(
+          std::numeric_limits<std::streamsize>::max()));
+}
+
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
@@ -588,6 +595,12 @@ bool readRegularFile(const std::filesystem::path &path,
       bytes.clear();
       const Sint64 size = SDL_RWsize(rw.get());
       if (size > 0) {
+        if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
+          if (errorMessage != nullptr) {
+            *errorMessage = "Android asset is too large to read: " + assetPath;
+          }
+          return false;
+        }
         bytes.resize(static_cast<size_t>(size));
         const size_t read =
             SDL_RWread(rw.get(), bytes.data(), 1, bytes.size());
@@ -622,10 +635,16 @@ bool readRegularFile(const std::filesystem::path &path,
     return false;
   }
   file.seekg(0, std::ios::end);
-  const auto size = file.tellg();
+  const std::streamoff size = file.tellg();
   if (size < 0) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not read file size: " + path.string();
+    }
+    return false;
+  }
+  if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "File is too large to read: " + path.string();
     }
     return false;
   }
