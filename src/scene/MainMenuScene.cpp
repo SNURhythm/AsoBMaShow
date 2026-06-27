@@ -4168,8 +4168,7 @@ void MainMenuScene::startCourseDirect(
                   path_t_to_utf8(firstMeta->BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Course start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(firstMeta->BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
         }
         if (preparedChart == nullptr || parseCancelled) {
           if (replayStatusText != nullptr) {
@@ -4295,7 +4294,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+              fspath_to_utf8(record.meta.BmsPath));
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
@@ -4325,8 +4324,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (preparedChart != nullptr && !parseCancelled) {
           play_options::PlayOptionReplayInfo playInfo =
@@ -4417,8 +4415,7 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
 
   cancelPreviewLoading(false);
   archive_file::appendDebugLogLine(
-      "Open chart viewer: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+      "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
   context.jukebox.stop();
   context.sceneManager->changeScene(
       std::make_unique<ChartViewerScene>(context, record, chartRandomInfo.seed,
@@ -4446,8 +4443,7 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   std::string errorMessage;
   if (!revealPathInFileManager(record.meta.BmsPath, errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
-            path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)).c_str(),
-            errorMessage.c_str());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), errorMessage.c_str());
   }
 }
 
