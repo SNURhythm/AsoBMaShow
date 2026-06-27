@@ -2417,15 +2417,16 @@ void populateDifficultyTableLabels(
 
 sqlite3 *ChartDBHelper::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::cout << "DB Directory: " << directory.string() << "\n";
+  std::cout << "DB Directory: " << fspath_to_utf8(directory) << "\n";
   std::error_code directoryError;
   if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
-    std::cerr << "Can't create chart database directory " << directory.string()
-              << ": " << directoryError.message() << "\n";
+    std::cerr << "Can't create chart database directory "
+              << fspath_to_utf8(directory) << ": "
+              << directoryError.message() << "\n";
     return nullptr;
   }
   const std::filesystem::path path = directory / "chart.db";
-  std::cout << "DB Path: " << path.string() << "\n";
+  std::cout << "DB Path: " << fspath_to_utf8(path) << "\n";
   std::string openError;
   sqlite3 *db = openSqliteDatabase(path, openError);
   if (db == nullptr) {
@@ -4227,6 +4228,7 @@ int ChartDBHelper::ScanChartRoots(
       return;
     }
 
+    const std::string archiveText = fspath_to_utf8(archivePath);
     const ArchiveScanCacheRecord cache =
         selectArchiveScanCache(db, archivePath);
     if (archiveScanCacheMatches(cache, archiveSize, mtimeNs)) {
@@ -4237,13 +4239,11 @@ int ChartDBHelper::ScanChartRoots(
       if (!cache.solid && knownChartCount < cache.chartCount) {
         archive_file::appendDebugLogLine(
             "Archive scan cache incomplete; rescanning: " +
-            path_t_to_utf8(fspath_to_path_t(archivePath)) +
-            " cachedCharts=" + std::to_string(cache.chartCount) +
+            archiveText + " cachedCharts=" + std::to_string(cache.chartCount) +
             " dbCharts=" + std::to_string(knownChartCount));
       } else {
         archive_file::appendDebugLogLine(
-            "Using cached archive scan: " +
-            path_t_to_utf8(fspath_to_path_t(archivePath)) +
+            "Using cached archive scan: " + archiveText +
             " files=" + std::to_string(cache.fileCount) +
             " charts=" + std::to_string(cache.chartCount) +
             " solid=" + std::string(cache.solid ? "yes" : "no") +
@@ -4260,8 +4260,7 @@ int ChartDBHelper::ScanChartRoots(
     }
     if (cache.found) {
       archive_file::appendDebugLogLine(
-          "Archive scan cache invalidated: " +
-          path_t_to_utf8(fspath_to_path_t(archivePath)));
+          "Archive scan cache invalidated: " + archiveText);
     }
 
     const ArchiveScanResult archiveScan =
@@ -4322,8 +4321,7 @@ int ChartDBHelper::ScanChartRoots(
                                      stopToken)) {
         if (!androidError.empty()) {
           SDL_Log("Failed while scanning Android chart folder %s: %s",
-                  path_t_to_utf8(fspath_to_path_t(root)).c_str(),
-                  androidError.c_str());
+                  fspath_to_utf8(root).c_str(), androidError.c_str());
         }
         ++scannedRootCount;
         continue;
@@ -4343,7 +4341,7 @@ int ChartDBHelper::ScanChartRoots(
         if (archive_file::hasSupportedArchiveExtension(path)) {
           archive_file::appendDebugLogLine(
               "Skipping Android SAF archive during library scan: " +
-              path_t_to_utf8(fspath_to_path_t(path)));
+              fspath_to_utf8(path));
         }
       }
       ++scannedRootCount;
@@ -4354,8 +4352,7 @@ int ChartDBHelper::ScanChartRoots(
     const bool rootExists = std::filesystem::exists(root, error);
     if (error) {
       SDL_Log("Failed to check chart folder %s: %s",
-              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
-              error.message().c_str());
+              fspath_to_utf8(root).c_str(), error.message().c_str());
       ++scannedRootCount;
       continue;
     }
@@ -4407,8 +4404,7 @@ int ChartDBHelper::ScanChartRoots(
     }
     if (error) {
       SDL_Log("Failed while scanning chart folder %s: %s",
-              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
-              error.message().c_str());
+              fspath_to_utf8(root).c_str(), error.message().c_str());
     }
     ++scannedRootCount;
   }
@@ -4863,6 +4859,7 @@ int ChartDBHelper::ScanChartRoots(
   auto parseAndInsertChart =
       [&](const std::filesystem::path &path,
           const std::vector<unsigned char> *bytes) -> bool {
+    const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
     bms_parser::Chart *rawChart = nullptr;
     std::unique_ptr<bms_parser::Chart> chart;
@@ -4893,24 +4890,22 @@ int ChartDBHelper::ScanChartRoots(
         chart.reset(rawChart);
         rawChart = nullptr;
       }
-      SDL_Log("Error parsing %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+      SDL_Log("Error parsing %s: %s", chartText.c_str(), e.what());
       archive_file::appendDebugLogLine(
-          "DB parse failed: " + path_t_to_utf8(fspath_to_path_t(path)) +
-          ": " + e.what());
+          "DB parse failed: " + chartText + ": " + e.what());
       return false;
     }
 
     if (chart == nullptr) {
       archive_file::appendDebugLogLine(
-          "DB parse returned null: " + path_t_to_utf8(fspath_to_path_t(path)));
+          "DB parse returned null: " + chartText);
       return false;
     }
     if (!parsedChartLooksInsertable(*chart)) {
       SDL_Log("Skipping chart without measures or stable identity: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+              chartText.c_str());
       archive_file::appendDebugLogLine(
-          "DB skipped chart: " + path_t_to_utf8(fspath_to_path_t(path)) +
+          "DB skipped chart: " + chartText +
           " measures=" + std::to_string(chart->Measures.size()) +
           " md5=" + chart->Meta.MD5 +
           " sha256=" + chart->Meta.SHA256);
@@ -5023,6 +5018,7 @@ int ChartDBHelper::ScanChartRoots(
         batch.innerPaths.end());
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
+    const std::string archiveText = fspath_to_utf8(batch.archivePath);
     reportProgress(parseCurrent, parseTotal,
                    ChartScanProgressStage::ReadingArchive);
     if (!archive_file::readArchiveEntries(batch.archivePath, pendingInnerPaths,
@@ -5030,19 +5026,16 @@ int ChartDBHelper::ScanChartRoots(
                                           pauseCallback)) {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
-                path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
-                errorMessage.c_str());
+                archiveText.c_str(), errorMessage.c_str());
         archive_file::appendDebugLogLine(
-            "Failed to read DB chart batch: " +
-            path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+            "Failed to read DB chart batch: " + archiveText + ": " +
             errorMessage);
       }
       parseCurrent += static_cast<int>(pendingInnerPaths.size());
       continue;
     }
     archive_file::appendDebugLogLine(
-        "Parsing DB chart batch: " +
-        path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+        "Parsing DB chart batch: " + archiveText +
         " requested=" + std::to_string(pendingInnerPaths.size()) +
         " files=" + std::to_string(files.size()));
     bool parsedFullBatch = files.size() == pendingInnerPaths.size();
@@ -5101,8 +5094,7 @@ int ChartDBHelper::ScanChartRoots(
     } else {
       archive_file::appendDebugLogLine(
           "Skipped archive scan cache write because chart batch did not "
-          "complete: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+          "complete: " + archiveText +
           " requested=" + std::to_string(pendingInnerPaths.size()) +
           " files=" + std::to_string(files.size()));
     }
