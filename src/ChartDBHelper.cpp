@@ -54,6 +54,7 @@ using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::matchedChartPathSubquery;
 using asobmshow::chart_sql::normalizedSqlHash;
 using asobmshow::chart_sql::preferredChartPredicate;
+using asobmshow::chart_sql::sqlTextHasValue;
 
 constexpr int kNoPlayClearMarkRank = -1;
 
@@ -183,6 +184,20 @@ std::string storedChartPathText(std::filesystem::path path) {
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
   return fspath_to_utf8(path);
+}
+
+std::string sqlColumn(std::string_view alias, std::string_view column) {
+  return std::string(alias) + "." + std::string(column);
+}
+
+std::string normalizedSqlHashColumn(std::string_view alias,
+                                    std::string_view column) {
+  return normalizedSqlHash(sqlColumn(alias, column));
+}
+
+std::string sqlHashColumnHasValue(std::string_view alias,
+                                  std::string_view column) {
+  return sqlTextHasValue(sqlColumn(alias, column));
 }
 
 std::string chartFavoritePredicate(const char *chartAlias) {
@@ -1376,14 +1391,20 @@ void appendChartMetaFilters(std::string &query,
   }
 
   if (chartQuery.tableId > 0) {
-    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += normalizedSqlHashColumn("dte", "sha256");
+    query += " FROM "
              "difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
+             "WHERE dte.table_id = @table_id AND ";
+    query += sqlHashColumnHasValue("dte", "sha256");
     if (!chartQuery.tableLevel.empty()) {
       query += " AND dte.level = @table_level";
     }
-    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
+    query += ") OR cm.md5 IN (SELECT ";
+    query += normalizedSqlHashColumn("dte", "md5");
+    query += " FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND ";
+    query += sqlHashColumnHasValue("dte", "md5");
     if (!chartQuery.tableLevel.empty()) {
       query += " AND dte.level = @table_level";
     }
@@ -1391,10 +1412,13 @@ void appendChartMetaFilters(std::string &query,
   }
 
   if (chartMetaQueryHasCourseFilter(chartQuery)) {
-    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += normalizedSqlHashColumn("dce", "sha256");
+    query += " FROM "
              "difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE dce.sha256 != ''";
+             "WHERE ";
+    query += sqlHashColumnHasValue("dce", "sha256");
     if (chartQuery.courseId > 0) {
       query += " AND dce.course_id = @course_id";
     }
@@ -1404,10 +1428,12 @@ void appendChartMetaFilters(std::string &query,
     if (!chartQuery.courseGroupName.empty()) {
       query += " AND dc.group_name = @course_group_name";
     }
-    query +=
-        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "WHERE dce.md5 != ''";
+    query += ") OR cm.md5 IN (SELECT ";
+    query += normalizedSqlHashColumn("dce", "md5");
+    query += " FROM difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE ";
+    query += sqlHashColumnHasValue("dce", "md5");
     if (chartQuery.courseId > 0) {
       query += " AND dce.course_id = @course_id";
     }
@@ -1428,17 +1454,25 @@ void appendChartMetaFilters(std::string &query,
         "dte_filter.level) LIKE @difficulty_like "
         "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
         "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += normalizedSqlHashColumn("dte_filter", "sha256");
+    query += " FROM "
              "difficulty_table_entries dte_filter "
              "JOIN difficulty_tables dt_filter ON dt_filter.id = "
              "dte_filter.table_id "
-             "WHERE dte_filter.sha256 != '' ";
+             "WHERE ";
+    query += sqlHashColumnHasValue("dte_filter", "sha256");
+    query += " ";
     query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
+    query += ") OR cm.md5 IN (SELECT ";
+    query += normalizedSqlHashColumn("dte_filter", "md5");
+    query += " FROM "
              "difficulty_table_entries dte_filter "
              "JOIN difficulty_tables dt_filter ON dt_filter.id = "
              "dte_filter.table_id "
-             "WHERE dte_filter.md5 != '' ";
+             "WHERE ";
+    query += sqlHashColumnHasValue("dte_filter", "md5");
+    query += " ";
     query += difficultyClause;
     query += "))";
   }
