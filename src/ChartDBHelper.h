@@ -78,6 +78,14 @@ struct DifficultyCourseGroupInfo {
   int matchedChartCount = 0;
 };
 
+struct DifficultyCourseTableInfo {
+  int tableId = 0;
+  std::string tableName;
+  std::string tableSymbol;
+  int chartCount = 0;
+  int matchedChartCount = 0;
+};
+
 struct DifficultyCourseInfo {
   int id = 0;
   int tableId = 0;
@@ -204,8 +212,10 @@ public:
   std::vector<DifficultyTableInfo> SelectDifficultyTables(sqlite3 *db);
   std::vector<DifficultyLevelInfo> SelectDifficultyLevels(sqlite3 *db,
                                                           int tableId);
+  std::vector<DifficultyCourseTableInfo>
+  SelectDifficultyCourseTables(sqlite3 *db);
   std::vector<DifficultyCourseGroupInfo>
-  SelectDifficultyCourseGroups(sqlite3 *db);
+  SelectDifficultyCourseGroups(sqlite3 *db, int tableId);
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
