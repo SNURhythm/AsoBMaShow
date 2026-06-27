@@ -25,11 +25,8 @@ std::string normalizedHash(const std::string &value) {
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while %s: %s", context,
-            errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db));
+  if (const auto error = executeSqlite(db, query)) {
+    SDL_Log("SQL error while %s: %s", context, error->c_str());
     return false;
   }
   return true;

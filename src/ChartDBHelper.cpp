@@ -1035,12 +1035,8 @@ splitCourseFolderAndLevel(const std::string &courseName,
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while " << context << ": "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
+  if (const auto error = executeSqlite(db, query)) {
+    std::cerr << "SQL error while " << context << ": " << *error << "\n";
     return false;
   }
   return true;
@@ -1048,13 +1044,8 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 
 bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                                  const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK &&
-      !sqliteMessageContains(errMsg.get(), "duplicate column name")) {
-    std::cerr << "SQL error while " << context << ": "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
+  if (const auto error = executeSqlite(db, query, "duplicate column name")) {
+    std::cerr << "SQL error while " << context << ": " << *error << "\n";
     return false;
   }
   return true;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 #include <string>
 
 using SqliteConnectionHandle = UniqueResource<sqlite3, sqlite3_close>;
@@ -75,4 +76,17 @@ inline bool sqliteMessageContains(const char *message, const char *needle) {
   std::transform(lowerNeedle.begin(), lowerNeedle.end(), lowerNeedle.begin(),
                  lowerChar);
   return lowerMessage.find(lowerNeedle) != std::string::npos;
+}
+
+inline std::optional<std::string>
+executeSqlite(sqlite3 *db, const char *query,
+              const char *allowedErrorNeedle = nullptr) {
+  SqliteErrorMessageHandle errMsg;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
+  if (rc == SQLITE_OK ||
+      sqliteMessageContains(errMsg.get(), allowedErrorNeedle)) {
+    return std::nullopt;
+  }
+  return errMsg.get() != nullptr ? std::string(errMsg.get())
+                                 : std::string(sqlite3_errmsg(db));
 }

@@ -135,12 +135,8 @@ bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while " << context << ": "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
+  if (const auto error = executeSqlite(db, query)) {
+    std::cerr << "SQL error while " << context << ": " << *error << "\n";
     return false;
   }
   return true;
