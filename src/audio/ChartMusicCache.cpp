@@ -259,6 +259,12 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
   const std::filesystem::path tempPath = outputPath.string() + ".tmp";
   std::error_code error;
   std::filesystem::remove(tempPath, error);
+  if (error) {
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Could not remove stale music cache temp file: " +
+                       error.message()};
+  }
 
   const chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ChartTiming,
