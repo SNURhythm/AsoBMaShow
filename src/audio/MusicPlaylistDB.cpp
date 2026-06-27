@@ -452,59 +452,55 @@ void MusicPlaylistDB::Close(sqlite3 *db) {
 }
 
 bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
-  const char *playlistQuery =
-      "CREATE TABLE IF NOT EXISTS music_playlists ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "name TEXT NOT NULL UNIQUE,"
-      "created_at TEXT DEFAULT CURRENT_TIMESTAMP,"
-      "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
-      ")";
-  if (!execSql(db, playlistQuery, "creating music playlist table")) {
-    return false;
-  }
-
-  const char *itemsQuery =
-      "CREATE TABLE IF NOT EXISTS music_playlist_items ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "playlist_id INTEGER NOT NULL,"
-      "position INTEGER NOT NULL,"
-      "music_key_type TEXT NOT NULL,"
-      "music_key TEXT NOT NULL,"
-      "chart_path TEXT NOT NULL DEFAULT '',"
-      "chart_md5 TEXT NOT NULL DEFAULT '',"
-      "chart_sha256 TEXT NOT NULL DEFAULT '',"
-      "added_at TEXT DEFAULT CURRENT_TIMESTAMP,"
-      "FOREIGN KEY(playlist_id) REFERENCES music_playlists(id) "
-      "ON DELETE CASCADE,"
-      "UNIQUE(playlist_id, music_key_type, music_key)"
-      ")";
-  if (!execSql(db, itemsQuery, "creating music playlist item table")) {
-    return false;
-  }
-
-  const char *stateQuery =
-      "CREATE TABLE IF NOT EXISTS music_player_state ("
-      "key TEXT PRIMARY KEY,"
-      "value TEXT NOT NULL,"
-      "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
-      ")";
-  if (!execSql(db, stateQuery, "creating music player state table")) {
-    return false;
-  }
-
-  const char *nowPlayingQuery =
-      "CREATE TABLE IF NOT EXISTS music_now_playing_items ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "position INTEGER NOT NULL,"
-      "music_key_type TEXT NOT NULL,"
-      "music_key TEXT NOT NULL,"
-      "chart_path TEXT NOT NULL DEFAULT '',"
-      "chart_md5 TEXT NOT NULL DEFAULT '',"
-      "chart_sha256 TEXT NOT NULL DEFAULT '',"
-      "added_at TEXT DEFAULT CURRENT_TIMESTAMP"
-      ")";
-  if (!execSql(db, nowPlayingQuery, "creating now playing table")) {
-    return false;
+  struct SchemaStatement {
+    const char *query;
+    const char *context;
+  };
+  const SchemaStatement tables[] = {
+      {"CREATE TABLE IF NOT EXISTS music_playlists ("
+       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+       "name TEXT NOT NULL UNIQUE,"
+       "created_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+       "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+       ")",
+       "creating music playlist table"},
+      {"CREATE TABLE IF NOT EXISTS music_playlist_items ("
+       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+       "playlist_id INTEGER NOT NULL,"
+       "position INTEGER NOT NULL,"
+       "music_key_type TEXT NOT NULL,"
+       "music_key TEXT NOT NULL,"
+       "chart_path TEXT NOT NULL DEFAULT '',"
+       "chart_md5 TEXT NOT NULL DEFAULT '',"
+       "chart_sha256 TEXT NOT NULL DEFAULT '',"
+       "added_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+       "FOREIGN KEY(playlist_id) REFERENCES music_playlists(id) "
+       "ON DELETE CASCADE,"
+       "UNIQUE(playlist_id, music_key_type, music_key)"
+       ")",
+       "creating music playlist item table"},
+      {"CREATE TABLE IF NOT EXISTS music_player_state ("
+       "key TEXT PRIMARY KEY,"
+       "value TEXT NOT NULL,"
+       "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+       ")",
+       "creating music player state table"},
+      {"CREATE TABLE IF NOT EXISTS music_now_playing_items ("
+       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+       "position INTEGER NOT NULL,"
+       "music_key_type TEXT NOT NULL,"
+       "music_key TEXT NOT NULL,"
+       "chart_path TEXT NOT NULL DEFAULT '',"
+       "chart_md5 TEXT NOT NULL DEFAULT '',"
+       "chart_sha256 TEXT NOT NULL DEFAULT '',"
+       "added_at TEXT DEFAULT CURRENT_TIMESTAMP"
+       ")",
+       "creating now playing table"},
+  };
+  for (const SchemaStatement &table : tables) {
+    if (!execSql(db, table.query, table.context)) {
+      return false;
+    }
   }
 
   const char *indexes[] = {
