@@ -62,27 +62,43 @@ inline std::string chartArtworkOrderBy(std::string_view alias) {
          aliasText + ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
-inline std::string chartIdentityMatchPredicate(std::string_view itemAlias,
-                                               std::string_view chartAlias) {
+inline std::string chartIdentitySha256Condition(std::string_view itemAlias,
+                                                std::string_view chartAlias) {
   const std::string itemText(itemAlias);
   const std::string chartText(chartAlias);
-  return "((" + itemText + ".chart_sha256 != '' AND " + chartText +
-         ".sha256 = " + itemText + ".chart_sha256) OR (" + itemText +
-         ".chart_md5 != '' AND " + chartText + ".md5 = " + itemText +
-         ".chart_md5) OR (" + itemText + ".chart_path != '' AND " +
-         chartText + ".path = " + itemText + ".chart_path))";
+  return itemText + ".chart_sha256 != '' AND " + chartText +
+         ".sha256 = " + itemText + ".chart_sha256";
+}
+
+inline std::string chartIdentityMd5Condition(std::string_view itemAlias,
+                                             std::string_view chartAlias) {
+  const std::string itemText(itemAlias);
+  const std::string chartText(chartAlias);
+  return itemText + ".chart_md5 != '' AND " + chartText +
+         ".md5 = " + itemText + ".chart_md5";
+}
+
+inline std::string chartIdentityPathCondition(std::string_view itemAlias,
+                                              std::string_view chartAlias) {
+  const std::string itemText(itemAlias);
+  const std::string chartText(chartAlias);
+  return itemText + ".chart_path != '' AND " + chartText +
+         ".path = " + itemText + ".chart_path";
+}
+
+inline std::string chartIdentityMatchPredicate(std::string_view itemAlias,
+                                               std::string_view chartAlias) {
+  return "((" + chartIdentitySha256Condition(itemAlias, chartAlias) +
+         ") OR (" + chartIdentityMd5Condition(itemAlias, chartAlias) +
+         ") OR (" + chartIdentityPathCondition(itemAlias, chartAlias) + "))";
 }
 
 inline std::string chartIdentityPreferenceOrderBy(std::string_view itemAlias,
                                                   std::string_view chartAlias) {
-  const std::string itemText(itemAlias);
-  const std::string chartText(chartAlias);
-  return "CASE WHEN " + itemText + ".chart_sha256 != '' AND " + chartText +
-         ".sha256 = " + itemText + ".chart_sha256 THEN 0 WHEN " + itemText +
-         ".chart_md5 != '' AND " + chartText + ".md5 = " + itemText +
-         ".chart_md5 THEN 1 WHEN " + itemText + ".chart_path != '' AND " +
-         chartText + ".path = " + itemText +
-         ".chart_path THEN 2 ELSE 3 END";
+  return "CASE WHEN " + chartIdentitySha256Condition(itemAlias, chartAlias) +
+         " THEN 0 WHEN " + chartIdentityMd5Condition(itemAlias, chartAlias) +
+         " THEN 1 WHEN " + chartIdentityPathCondition(itemAlias, chartAlias) +
+         " THEN 2 ELSE 3 END";
 }
 
 inline std::string matchedChartPathSubquery(
