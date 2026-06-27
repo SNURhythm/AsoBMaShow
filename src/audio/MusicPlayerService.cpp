@@ -1,5 +1,7 @@
 #include "MusicPlayerService.h"
 
+#include "../SqliteRAII.h"
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -513,27 +515,26 @@ int MusicPlayerService::CreatePlaylistFromTracks(
   }
 
   MusicPlaylistDB playlistDb;
-  sqlite3 *db = playlistDb.Connect();
+  SqliteConnectionHandle dbHandle(playlistDb.Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     errorMessage = "Could not open chart database.";
     return 0;
   }
 
-  const int playlistId = playlistDb.EnsurePlaylist(db, name);
-  if (playlistId <= 0) {
-    playlistDb.Close(db);
-    errorMessage = "Could not create music playlist.";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  if (!transaction.active()) {
+    std::cerr << "SQL error while beginning music playlist save: "
+              << transactionError << "\n";
+    errorMessage = "Could not start music playlist save.";
     return 0;
   }
 
-  char *transactionError = nullptr;
-  const bool transactionStarted =
-      sqlite3_exec(db, "BEGIN IMMEDIATE", nullptr, nullptr,
-                   &transactionError) == SQLITE_OK;
-  if (transactionError != nullptr) {
-    std::cerr << "SQL error while beginning music playlist save: "
-              << transactionError << "\n";
-    sqlite3_free(transactionError);
+  const int playlistId = playlistDb.EnsurePlaylist(db, name);
+  if (playlistId <= 0) {
+    errorMessage = "Could not create music playlist.";
+    return 0;
   }
 
   bool insertedAll = true;
@@ -544,31 +545,22 @@ int MusicPlayerService::CreatePlaylistFromTracks(
     }
   }
 
-  if (transactionStarted) {
-    transactionError = nullptr;
-    const char *finishQuery = insertedAll ? "COMMIT" : "ROLLBACK";
-    if (sqlite3_exec(db, finishQuery, nullptr, nullptr, &transactionError) !=
-        SQLITE_OK) {
-      std::cerr << "SQL error while finishing music playlist save: "
-                << (transactionError != nullptr ? transactionError
-                                                : sqlite3_errmsg(db))
-                << "\n";
-      insertedAll = false;
-    }
-    if (transactionError != nullptr) {
-      sqlite3_free(transactionError);
-    }
+  if (!insertedAll) {
+    errorMessage = "Could not save every Now Playing track.";
+    return 0;
+  }
+
+  if (!transaction.commit(transactionError)) {
+    std::cerr << "SQL error while finishing music playlist save: "
+              << transactionError << "\n";
+    errorMessage = "Could not save music playlist.";
+    return 0;
   }
 
   RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
   persistedState.selectedPlaylistId = selectedPlaylistId;
   persistedState.playlistCursorIndex = -1;
   PersistPlayerStateLocked(playlistDb, db);
-  playlistDb.Close(db);
-  if (!insertedAll) {
-    errorMessage = "Could not save every Now Playing track.";
-    return 0;
-  }
   return playlistId;
 }
 
