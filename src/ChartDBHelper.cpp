@@ -217,8 +217,8 @@ ChartFavoriteIdentity chartFavoriteIdentityFor(
 }
 
 std::string chartFavoriteDeletePredicate() {
-  return "chart_path = ?1 OR (?2 != '' AND chart_sha256 = ?2) OR "
-         "(?3 != '' AND chart_md5 = ?3)";
+  return "chart_path = ?1 OR (?2 != '' AND lower(trim(chart_sha256)) = ?2) "
+         "OR (?3 != '' AND lower(trim(chart_md5)) = ?3)";
 }
 
 void bindChartFavoriteDeleteIdentity(sqlite3_stmt *stmt,
