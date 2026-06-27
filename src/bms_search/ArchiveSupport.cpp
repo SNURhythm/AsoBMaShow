@@ -638,6 +638,14 @@ readFileBytes(const std::filesystem::path &path, std::string &errorMessage) {
     errorMessage = "Could not read chart size: " + error.message();
     return std::nullopt;
   }
+  const auto maxBufferedSize = std::min<std::uintmax_t>(
+      static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max()),
+      static_cast<std::uintmax_t>(
+          std::numeric_limits<std::streamsize>::max()));
+  if (size > maxBufferedSize) {
+    errorMessage = "Chart file is too large to read for hash verification.";
+    return std::nullopt;
+  }
 
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -650,7 +658,8 @@ readFileBytes(const std::filesystem::path &path, std::string &errorMessage) {
     file.read(reinterpret_cast<char *>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
   }
-  if (!file && !file.eof()) {
+  if (file.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+      (!file && !file.eof())) {
     errorMessage = "Could not read chart file for hash verification.";
     return std::nullopt;
   }
@@ -727,7 +736,8 @@ htmlBodyFromDownloadedFile(const std::filesystem::path &path) {
   }
   std::string body(size, '\0');
   file.read(body.data(), static_cast<std::streamsize>(body.size()));
-  if (!file && !file.eof()) {
+  if (file.gcount() != static_cast<std::streamsize>(body.size()) ||
+      (!file && !file.eof())) {
     return std::nullopt;
   }
 
