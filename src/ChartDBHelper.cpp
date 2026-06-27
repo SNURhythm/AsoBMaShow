@@ -2049,10 +2049,9 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
       "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
       "@symbol AND source_url = @source_url";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, name);
@@ -2073,10 +2072,9 @@ int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
   auto query = "SELECT id FROM difficulty_tables WHERE source_url = "
                "@source_url ORDER BY id LIMIT 1";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table source URL: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table source URL",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, sourceUrl);
@@ -2184,17 +2182,16 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
       "(name, symbol, data_url, source_url, updated_at) "
       "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, insertQuery, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while inserting difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, insertQuery, stmt,
+                                    "inserting difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, name);
   bindSqliteText(stmt.get(), 2, symbol);
   bindSqliteText(stmt.get(), 3, dataUrl);
   bindSqliteText(stmt.get(), 4, sourceUrl);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return 0;
   }
