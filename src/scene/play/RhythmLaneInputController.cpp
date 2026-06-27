@@ -23,6 +23,32 @@ bool isChargeLongNoteType(bms_parser::LongNoteType type) {
          type == bms_parser::LongNoteType::HellChargeNote;
 }
 
+JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
+  if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
+      judgeResult.judgement == Poor) {
+    return JudgeResult(Bad, judgeResult.Diff);
+  }
+  return judgeResult;
+}
+
+JudgeResult judgeClassicLongNoteRelease(Judge &judge,
+                                        bms_parser::LongNote *tail,
+                                        long long releasedTime) {
+  if (tail == nullptr || !tail->IsTail() || tail->Head == nullptr) {
+    return JudgeResult(None, 0);
+  }
+
+  const JudgeResult headJudge =
+      judge.judgeNow(tail->Head, tail->Head->PlayedTime);
+  const JudgeResult tailJudge = judge.judgeNow(tail, releasedTime);
+  const auto absDiff = [](long long value) {
+    return value < 0 ? -value : value;
+  };
+  return normalizeLongNoteReleaseJudge(
+      absDiff(tailJudge.Diff) > absDiff(headJudge.Diff) ? tailJudge
+                                                        : headJudge);
+}
+
 long long noteTimingMicros(const bms_parser::Note *note) {
   return note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
                                                       : 0;
@@ -331,18 +357,12 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   longNote->Release(releasedTime);
   const auto judgeResult = judge.judgeNow(longNote, releasedTime);
   JudgeResult appliedJudge(None, 0);
-  if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
-      judgeResult.judgement == Poor) {
-    appliedJudge = JudgeResult(Bad, judgeResult.Diff);
-  } else {
-    const bool chargeLongNote =
-        isChargeLongNoteType(
-            effectiveLongNoteType(longNote, chart, longNoteModeOverride));
-    appliedJudge = chargeLongNote
-                       ? judgeResult
-                       : judge.judgeNow(longNote->Head,
-                                        longNote->Head->PlayedTime);
-  }
+  const bool chargeLongNote =
+      isChargeLongNoteType(
+          effectiveLongNoteType(longNote, chart, longNoteModeOverride));
+  appliedJudge =
+      chargeLongNote ? normalizeLongNoteReleaseJudge(judgeResult)
+                     : judgeClassicLongNoteRelease(judge, longNote, releasedTime);
   result.judge = appliedJudge;
   result.hasJudge = true;
   setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,

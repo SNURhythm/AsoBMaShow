@@ -702,21 +702,30 @@ bool isClassicLongNote(const bms_parser::LongNote *longNote,
          bms_parser::LongNoteType::LongNote;
 }
 
+bool longNoteTailJudgedBeforeTiming(const bms_parser::LongNote *longNote,
+                                    long long judgedTimeMicros) {
+  return longNote != nullptr && longNote->IsTail() &&
+         longNote->Timeline != nullptr && longNote->Head != nullptr &&
+         judgedTimeMicros < longNote->Timeline->Timing;
+}
+
 void markReplayMissedNote(bms_parser::Note *note, long long judgedTimeMicros) {
   if (note == nullptr) {
     return;
   }
   note->IsPlayed = true;
-  note->IsDead = true;
   note->PlayedTime = judgedTimeMicros;
   if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
       longNote != nullptr) {
+    note->IsDead = !longNoteTailJudgedBeforeTiming(longNote, judgedTimeMicros);
     longNote->IsHolding = false;
     if (longNote->IsTail() && longNote->Head != nullptr) {
       longNote->Head->IsHolding = false;
     } else if (!longNote->IsTail() && longNote->Tail != nullptr) {
       longNote->Tail->IsHolding = false;
     }
+  } else {
+    note->IsDead = true;
   }
 }
 

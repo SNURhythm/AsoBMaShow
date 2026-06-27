@@ -102,11 +102,45 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
 }
 
+bool wasLongNoteTailMissedWithHead(const bms_parser::LongNote *head) {
+  return head != nullptr && head->IsDead && head->Tail != nullptr &&
+         !head->Tail->IsDead && wasLongNoteTailReleasedEarly(head);
+}
+
+bool wasLongNoteTailResolvedAtOrAfterTiming(const bms_parser::LongNote *head) {
+  if (head == nullptr || head->Tail == nullptr || !head->Tail->IsPlayed ||
+      head->Tail->Timeline == nullptr) {
+    return false;
+  }
+  return head->Tail->PlayedTime >= head->Tail->Timeline->Timing;
+}
+
 bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
   return head != nullptr && !head->IsTail() && head->IsDead &&
-         head->Tail != nullptr && head->Tail->IsPlayed &&
-         !head->Tail->IsDead && head->Tail->Timeline != nullptr &&
-         head->Tail->PlayedTime < head->Tail->Timeline->Timing;
+         head->Tail != nullptr && head->Tail->Timeline != nullptr &&
+         !head->Tail->IsDead &&
+         !wasLongNoteTailResolvedAtOrAfterTiming(head);
+}
+
+bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart *chart) {
+  if (longNote == nullptr || chart == nullptr) {
+    return bms_parser::LongNoteType::LongNote;
+  }
+  const auto *head =
+      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                      : longNote;
+  auto type = bms_parser::ResolveLongNoteType(head->Type, chart->Meta.LnMode);
+  return type == bms_parser::LongNoteType::Undefined
+             ? bms_parser::LongNoteType::LongNote
+             : type;
+}
+
+bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
+                          const bms_parser::Chart *chart) {
+  return effectiveLongNoteType(longNote, chart) ==
+         bms_parser::LongNoteType::HellChargeNote;
 }
 
 void destroyTextureHandle(bgfx::TextureHandle &texture) {
@@ -1422,24 +1456,34 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
-  const bool tailReleasedEarly = wasLongNoteTailReleasedEarly(head);
-  if (head->Tail->IsPlayed && !tailReleasedEarly)
+  const bool tailMissedWithHead = wasLongNoteTailMissedWithHead(head);
+  const bool tailReleasedEarly =
+      wasLongNoteTailReleasedEarly(head) && !tailMissedWithHead;
+  const bool tailResolvedForRendering =
+      head->Tail->IsPlayed && !tailMissedWithHead;
+  if (tailResolvedForRendering && !tailReleasedEarly)
     return;
-  float startY = head->IsPlayed ? judgeY : headY;
+  float startY = head->IsPlayed && !head->IsDead ? judgeY : headY;
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
   const NoteUvRegion &headUv = sheet.longHead;
   const NoteUvRegion &tailUv = sheet.longTail;
+  const bool headHasReachedJudge = head->IsPlayed || head->IsDead ||
+                                   headY <= judgeY;
+  const bool hcnBodyRegrabbed =
+      headHasReachedJudge && isHellChargeLongNote(head, chart) &&
+      laneIsCurrentlyPressed(head->Lane);
+  const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
   const auto bodyTexture =
-      head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
+      bodyActive ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
   // Body
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
-    float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
-                                                : longBodyRenderHeightOff);
-    longBodyBatchFor(sheet, head->IsHolding)
+    float tileV = bodyHeight / (bodyActive ? longBodyRenderHeightOn
+                                           : longBodyRenderHeightOff);
+    longBodyBatchFor(sheet, bodyActive)
         .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
                  tileV, bodyTexture);
   }
@@ -3077,6 +3121,15 @@ inline float BMSRenderer::laneToX(int lane) const {
   }
   return computeLaneX(lane);
 }
+
+bool BMSRenderer::laneIsCurrentlyPressed(int lane) const {
+  const auto it = laneToOrderIndex.find(lane);
+  if (it == laneToOrderIndex.end()) {
+    return false;
+  }
+  return laneStatesByOrder[it->second].isPressed.load(std::memory_order_relaxed);
+}
+
 inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
   if (lane >= 0 && static_cast<size_t>(lane) < laneSheetLookup.size()) {
     if (const auto *sheet = laneSheetLookup[static_cast<size_t>(lane)];

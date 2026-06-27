@@ -88,6 +88,32 @@ bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
          bms_parser::LongNoteType::HellChargeNote;
 }
 
+JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
+  if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
+      judgeResult.judgement == Poor) {
+    return JudgeResult(Bad, judgeResult.Diff);
+  }
+  return judgeResult;
+}
+
+JudgeResult judgeClassicLongNoteRelease(Judge &judge,
+                                        bms_parser::LongNote *tail,
+                                        long long releasedTime) {
+  if (tail == nullptr || !tail->IsTail() || tail->Head == nullptr) {
+    return JudgeResult(None, 0);
+  }
+
+  const JudgeResult headJudge =
+      judge.judgeNow(tail->Head, tail->Head->PlayedTime);
+  const JudgeResult tailJudge = judge.judgeNow(tail, releasedTime);
+  const auto absDiff = [](long long value) {
+    return value < 0 ? -value : value;
+  };
+  return normalizeLongNoteReleaseJudge(
+      absDiff(tailJudge.Diff) > absDiff(headJudge.Diff) ? tailJudge
+                                                        : headJudge);
+}
+
 bool longNoteTailJudgedBeforeTiming(const bms_parser::LongNote *longNote,
                                     long long judgedTime) {
   return longNote != nullptr && longNote->IsTail() &&
@@ -1169,7 +1195,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                                 judgedTime, poorResult);
               continue;
             } else if (!longNote->IsTail()) {
-              longNote->MissPress(judgedTime);
+              markLongNoteMissed(longNote, judgedTime);
+              if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
+                markLongNoteMissed(longNote->Tail, judgedTime, false);
+              }
             }
           }
           const auto poorResult =
@@ -1217,9 +1246,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               longNote->Release(judgedTime);
               const auto judgeResult =
                   chargeLongNote
-                      ? judge.judgeNow(longNote, judgedTime)
-                      : judge.judgeNow(longNote->Head,
-                                       longNote->Head->PlayedTime);
+                      ? normalizeLongNoteReleaseJudge(
+                            judge.judgeNow(longNote, judgedTime))
+                      : judgeClassicLongNoteRelease(judge, longNote,
+                                                    judgedTime);
               onJudge(judgeResult, false);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
@@ -1473,9 +1503,11 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
 
         const long long headTime = longNote->Timeline->Timing;
         const long long tailTime = longNote->Tail->Timeline->Timing;
+        const bool tailJudgedBeforeTiming =
+            longNote->Tail->IsPlayed && longNote->Tail->PlayedTime < tailTime;
         if (tailTime <= headTime || gameplayTimeMicros <= headTime ||
-            previousTime >= tailTime || longNote->Tail->IsPlayed ||
-            longNote->Tail->IsDead) {
+            previousTime >= tailTime ||
+            (longNote->Tail->IsDead && !tailJudgedBeforeTiming)) {
           continue;
         }
 
@@ -1488,7 +1520,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
 
         activeHellChargeNotes.push_back(longNote);
         long long &balance = hellChargeGaugeBalanceMicros[longNote];
-        const bool gaining = longNote->IsHolding || options.autoPlay;
+        const bool gaining = longNote->IsHolding ||
+                             laneIsPressed(lanePressed, longNote->Lane) ||
+                             options.autoPlay;
         balance += gaining ? activeDelta : -activeDelta;
         while (balance > kHellChargeGaugeTickMicros) {
           state->applyGaugeJudgementRate(Great, 0.5f);
@@ -1838,21 +1872,17 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
   const auto judgeResult = precomputedJudge != nullptr
                                ? *precomputedJudge
                                : judge.judgeNow(LongNote, ReleasedTime);
-  // if tail judgement is not good/great/pgreat, make it bad
   JudgeResult appliedJudge(None, 0);
-  if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
-      judgeResult.judgement == Poor) {
-    appliedJudge = JudgeResult(Bad, judgeResult.Diff);
-  } else if (precomputedJudge != nullptr) {
+  const bool chargeLongNote =
+      isChargeLongNoteType(
+          effectiveLongNoteType(LongNote, chart, options.longNoteMode));
+  if (precomputedJudge != nullptr) {
     appliedJudge = *precomputedJudge;
   } else {
-    const bool chargeLongNote =
-        isChargeLongNoteType(
-            effectiveLongNoteType(LongNote, chart, options.longNoteMode));
-    appliedJudge =
-        chargeLongNote
-            ? judgeResult
-            : judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
+    appliedJudge = chargeLongNote
+                       ? normalizeLongNoteReleaseJudge(judgeResult)
+                       : judgeClassicLongNoteRelease(judge, LongNote,
+                                                     ReleasedTime);
   }
   onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
   if (recordEvent) {

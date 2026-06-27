@@ -328,6 +328,7 @@ private:
   NoteSheet blueSheet;
   NoteSheet scratchSheet;
   bms_parser::Chart *chart;
+  bool laneIsCurrentlyPressed(int lane) const;
 
 public:
   static std::unique_ptr<TextView> createAutoPlayMarkText();
