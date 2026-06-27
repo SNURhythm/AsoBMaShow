@@ -408,21 +408,80 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   return ok;
 }
 
-bool migrateScoreDatabaseSchema(sqlite3 *db) {
-  const int currentVersion = databaseUserVersion(db);
-  if (currentVersion >= kScoreDatabaseSchemaVersion) {
+class ScoreDatabaseMigrationPass {
+public:
+  using RunFunction = bool (*)(sqlite3 *, bool &completed);
+
+  constexpr ScoreDatabaseMigrationPass(int targetVersion, const char *name,
+                                       RunFunction run)
+      : targetVersion_(targetVersion), name_(name), run_(run) {}
+
+  int targetVersion() const { return targetVersion_; }
+  const char *name() const { return name_; }
+
+  bool run(sqlite3 *db, bool &completed) const { return run_(db, completed); }
+
+private:
+  int targetVersion_;
+  const char *name_;
+  RunFunction run_;
+};
+
+bool migrateScoreDatabaseToVersion1(sqlite3 *db, bool &completed) {
+  completed = false;
+  if (!execSqlAllowDuplicateColumn(
+          db, "ALTER TABLE scores ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+          "migrating score long note mode")) {
+    return false;
+  }
+  return migrateLegacyScoreLongNoteModes(db, completed);
+}
+
+bool runScoreDatabaseMigrationPasses(
+    sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
+    std::size_t passCount, int latestVersion) {
+  int currentVersion = databaseUserVersion(db);
+  if (currentVersion >= latestVersion) {
     return true;
   }
-  if (currentVersion < 1) {
+
+  for (std::size_t i = 0; i < passCount; ++i) {
+    const ScoreDatabaseMigrationPass &pass = passes[i];
+    if (currentVersion >= pass.targetVersion()) {
+      continue;
+    }
+
     bool completed = false;
-    if (!migrateLegacyScoreLongNoteModes(db, completed)) {
+    if (!pass.run(db, completed)) {
+      SDL_Log("Score database migration failed for version %d (%s)",
+              pass.targetVersion(), pass.name());
       return false;
     }
     if (!completed) {
       return true;
     }
+    if (!setDatabaseUserVersion(db, pass.targetVersion())) {
+      return false;
+    }
+    currentVersion = pass.targetVersion();
   }
-  return setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion);
+
+  if (currentVersion < latestVersion) {
+    SDL_Log("No score database migration pass reached version %d",
+            latestVersion);
+    return false;
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseSchema(sqlite3 *db) {
+  static constexpr ScoreDatabaseMigrationPass kMigrationPasses[] = {
+      {1, "score long note modes", migrateScoreDatabaseToVersion1},
+  };
+  return runScoreDatabaseMigrationPasses(
+      db, kMigrationPasses,
+      sizeof(kMigrationPasses) / sizeof(kMigrationPasses[0]),
+      kScoreDatabaseSchemaVersion);
 }
 } // namespace
 
@@ -586,13 +645,13 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   if (!execSql(db, query, "creating score table")) {
     return false;
   }
+
   if (existingScoreTable) {
-    if (!execSqlAllowDuplicateColumn(
-            db,
-            "ALTER TABLE scores ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
-            "migrating score long note mode")) {
+    if (!migrateScoreDatabaseSchema(db)) {
       return false;
     }
+  } else if (!setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+    return false;
   }
 
   const char *indexes[] = {
@@ -618,10 +677,7 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
       return false;
     }
   }
-  if (existingScoreTable) {
-    return migrateScoreDatabaseSchema(db);
-  }
-  return setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion);
+  return true;
 }
 
 bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {

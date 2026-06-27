@@ -1473,23 +1473,92 @@ bool backfillChartLongNoteMetadata(sqlite3 *db, bool &completed) {
   return true;
 }
 
-bool migrateChartDatabaseSchema(sqlite3 *db) {
-  const int currentVersion = databaseUserVersion(db);
-  if (currentVersion >= kChartDatabaseSchemaVersion) {
+class ChartDatabaseMigrationPass {
+public:
+  using RunFunction = bool (*)(sqlite3 *, bool &completed);
+
+  constexpr ChartDatabaseMigrationPass(int targetVersion, const char *name,
+                                       RunFunction run)
+      : targetVersion_(targetVersion), name_(name), run_(run) {}
+
+  int targetVersion() const { return targetVersion_; }
+  const char *name() const { return name_; }
+
+  bool run(sqlite3 *db, bool &completed) const { return run_(db, completed); }
+
+private:
+  int targetVersion_;
+  const char *name_;
+  RunFunction run_;
+};
+
+bool migrateChartDatabaseToVersion1(sqlite3 *db, bool &completed) {
+  completed = false;
+  if (!execSqlAllowDuplicateColumn(
+          db, "ALTER TABLE chart_meta ADD COLUMN source_priority INTEGER",
+          "migrating chart source priority")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE chart_meta ADD COLUMN source_archive_size INTEGER",
+          "migrating chart source archive size")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE chart_meta ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+          "migrating chart long note mode")) {
+    return false;
+  }
+  return backfillChartLongNoteMetadata(db, completed);
+}
+
+bool runChartDatabaseMigrationPasses(
+    sqlite3 *db, const ChartDatabaseMigrationPass *passes,
+    std::size_t passCount, int latestVersion) {
+  int currentVersion = databaseUserVersion(db);
+  if (currentVersion >= latestVersion) {
     return true;
   }
 
-  if (currentVersion < 1) {
+  for (std::size_t i = 0; i < passCount; ++i) {
+    const ChartDatabaseMigrationPass &pass = passes[i];
+    if (currentVersion >= pass.targetVersion()) {
+      continue;
+    }
+
     bool completed = false;
-    if (!backfillChartLongNoteMetadata(db, completed)) {
+    if (!pass.run(db, completed)) {
+      std::cerr << "Chart database migration failed for version "
+                << pass.targetVersion() << " (" << pass.name() << ")\n";
       return false;
     }
     if (!completed) {
       return true;
     }
+    if (!setDatabaseUserVersion(db, pass.targetVersion())) {
+      return false;
+    }
+    currentVersion = pass.targetVersion();
   }
 
-  return setDatabaseUserVersion(db, kChartDatabaseSchemaVersion);
+  if (currentVersion < latestVersion) {
+    std::cerr << "No chart database migration pass reached version "
+              << latestVersion << "\n";
+    return false;
+  }
+  return true;
+}
+
+bool migrateChartDatabaseSchema(sqlite3 *db) {
+  static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
+      {1, "chart long note metadata", migrateChartDatabaseToVersion1},
+  };
+  return runChartDatabaseMigrationPasses(
+      db, kMigrationPasses,
+      sizeof(kMigrationPasses) / sizeof(kMigrationPasses[0]),
+      kChartDatabaseSchemaVersion);
 }
 
 bool updateChartSourcePreferenceValues(sqlite3 *db,
@@ -2520,24 +2589,6 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   }
 
   if (existingChartMetaTable) {
-    if (!execSqlAllowDuplicateColumn(
-            db, "ALTER TABLE chart_meta ADD COLUMN source_priority INTEGER",
-            "migrating chart source priority")) {
-      return false;
-    }
-    if (!execSqlAllowDuplicateColumn(
-            db,
-            "ALTER TABLE chart_meta ADD COLUMN source_archive_size INTEGER",
-            "migrating chart source archive size")) {
-      return false;
-    }
-    if (!execSqlAllowDuplicateColumn(
-            db,
-            "ALTER TABLE chart_meta ADD COLUMN ln_mode INTEGER NOT NULL "
-            "DEFAULT 0",
-            "migrating chart long note mode")) {
-      return false;
-    }
     if (!migrateChartDatabaseSchema(db)) {
       return false;
     }
