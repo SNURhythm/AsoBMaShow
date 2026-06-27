@@ -2,6 +2,7 @@
 
 #include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
+#include "../RAII.h"
 #include "../Utils.h"
 #include "../path.h"
 #include "../targets.h"
@@ -117,6 +118,14 @@ std::string normalizedPathKey(const std::filesystem::path &path) {
   return path.lexically_normal().string();
 }
 
+SNDFILE *openSoundFileRead(const std::filesystem::path &path, SF_INFO &info) {
+#ifdef _WIN32
+  return sf_wchar_open(path.wstring().c_str(), SFM_READ, &info);
+#else
+  return sf_open(path.string().c_str(), SFM_READ, &info);
+#endif
+}
+
 } // namespace
 
 std::filesystem::path CacheDirectory() {
@@ -151,11 +160,10 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
   }
 
   SF_INFO info{};
-  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_READ, &info);
-  if (rawFile == nullptr) {
+  UniqueResource<SNDFILE, sf_close> file(openSoundFileRead(path, info));
+  if (file == nullptr) {
     return std::nullopt;
   }
-  sf_close(rawFile);
   if (info.frames <= 0 || info.samplerate <= 0) {
     return std::nullopt;
   }
@@ -251,7 +259,8 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
     return {.success = false, .audioPath = outputPath, .message = errorMessage};
   }
 
-  const std::filesystem::path tempPath = outputPath.string() + ".tmp";
+  std::filesystem::path tempPath = outputPath;
+  tempPath += PATH(".tmp");
   std::error_code error;
   std::filesystem::remove(tempPath, error);
   if (error) {
