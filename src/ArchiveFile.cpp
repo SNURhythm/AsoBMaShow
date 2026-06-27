@@ -90,6 +90,21 @@ void reportUnzipProgress(const UnzipProgressCallback &callback,
 
 using asobmshow::bms_metadata::lowerCopy;
 
+bool createDirectoriesForUnzip(const std::filesystem::path &path,
+                               std::string_view failurePrefix,
+                               std::string *errorMessage,
+                               std::error_code &error) {
+  error.clear();
+  std::filesystem::create_directories(path, error);
+  if (!error) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = std::string(failurePrefix) + ": " + error.message();
+  }
+  return false;
+}
+
 std::string replaceAll(std::string value, std::string_view needle,
                        std::string_view replacement) {
   if (needle.empty()) {
@@ -3677,11 +3692,9 @@ bool extractSevenZipArchiveFully(
     }
     if (entry.directory) {
       std::error_code error;
-      std::filesystem::create_directories(outputFolder / entry.path, error);
-      if (error) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Could not create unzip folder: " + error.message();
-        }
+      if (!createDirectoriesForUnzip(outputFolder / entry.path,
+                                     "Could not create unzip folder",
+                                     errorMessage, error)) {
         return false;
       }
     } else {
@@ -4541,11 +4554,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
                       "Preparing output folder");
 
   std::error_code error;
-  std::filesystem::create_directories(destinationRoot, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip folder: " + error.message();
-    }
+  if (!createDirectoriesForUnzip(destinationRoot,
+                                 "Could not create unzip folder", errorMessage,
+                                 error)) {
     return std::nullopt;
   }
 
@@ -4628,12 +4639,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
     }
     return std::nullopt;
   }
-  std::filesystem::create_directories(outputFolder, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip output folder: " +
-                      error.message();
-    }
+  if (!createDirectoriesForUnzip(outputFolder,
+                                 "Could not create unzip output folder",
+                                 errorMessage, error)) {
     return std::nullopt;
   }
 
@@ -4678,12 +4686,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
       continue;
     }
     const std::filesystem::path outputPath = outputFolder / *relative;
-    std::filesystem::create_directories(outputPath.parent_path(), error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not create unzip subfolder: " +
-                        error.message();
-      }
+    if (!createDirectoriesForUnzip(outputPath.parent_path(),
+                                   "Could not create unzip subfolder",
+                                   errorMessage, error)) {
       return std::nullopt;
     }
     std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
@@ -4824,12 +4829,9 @@ bool extractArchiveFullyWithBatchReader(
 
       std::error_code error;
       const std::filesystem::path outputPath = outputFolder / relativePath;
-      std::filesystem::create_directories(outputPath.parent_path(), error);
-      if (error) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Could not create unzip subfolder: " +
-                          error.message();
-        }
+      if (!createDirectoriesForUnzip(outputPath.parent_path(),
+                                     "Could not create unzip subfolder",
+                                     errorMessage, error)) {
         return false;
       }
 
@@ -4923,11 +4925,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 
   reportUnzipProgress(progressCallback, 0.06, 0, fileCount,
                       "Preparing output folder");
-  std::filesystem::create_directories(destinationRoot, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip folder: " + error.message();
-    }
+  if (!createDirectoriesForUnzip(destinationRoot,
+                                 "Could not create unzip folder", errorMessage,
+                                 error)) {
     return std::nullopt;
   }
 
@@ -4973,12 +4973,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     return std::nullopt;
   }
-  std::filesystem::create_directories(outputFolder, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip output folder: " +
-                      error.message();
-    }
+  if (!createDirectoriesForUnzip(outputFolder,
+                                 "Could not create unzip output folder",
+                                 errorMessage, error)) {
     return std::nullopt;
   }
   if (stopRequested(stopToken)) {
