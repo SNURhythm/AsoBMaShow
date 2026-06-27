@@ -1037,21 +1037,30 @@ splitCourseFolderAndLevel(const std::string &courseName,
   return {"", courseName};
 }
 
+void logSqlErrorText(const char *context, const std::string &error) {
+  std::cerr << "SQL error while " << context << ": " << error << "\n";
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlErrorText(context, sqliteDatabaseError(db));
+}
+
+void logSdlSqlErrorText(const char *context, const std::string &error) {
+  SDL_Log("SQL error while %s: %s", context, error.c_str());
+}
+
+void logSdlSqlError(const char *context, sqlite3 *db) {
+  logSdlSqlErrorText(context, sqliteDatabaseError(db));
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  if (const auto error = executeSqlite(db, query)) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                                  const char *context) {
-  if (const auto error = executeSqlite(db, query, "duplicate column name")) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText,
+                             "duplicate column name");
 }
 
 void beginSqliteTransaction(sqlite3 *db, const char *context) {
@@ -1070,8 +1079,7 @@ int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while reading chart database version: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("reading chart database version", db);
     return 0;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -1089,7 +1097,7 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
+    logSqlErrorText(context, *error);
     return false;
   }
   return true;
@@ -1377,16 +1385,14 @@ bool setChartMetadataRebuildRequired(sqlite3 *db, bool required) {
       "ON CONFLICT(id) DO UPDATE SET required = excluded.required, "
       "updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart metadata rebuild state",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, required ? 1 : 0);
   if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart metadata rebuild state", db);
     return false;
   }
   return true;
@@ -1529,10 +1535,9 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
       "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
       "OR source_archive_size IS NULL OR source_archive_size != ?)";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart source preference update: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart source preference update",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, priority);
@@ -1540,10 +1545,9 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
   bindSqliteText(stmt.get(), 3, storedPathText);
   sqlite3_bind_int(stmt.get(), 4, priority);
   sqlite3_bind_int64(stmt.get(), 5, archiveSize);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart source preference: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart source preference", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1685,10 +1689,9 @@ ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
       "archive_path, archive_size, archive_mtime_ns, last_inner_path "
       "FROM chart_scan_checkpoint WHERE id = 1";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting chart scan checkpoint",
+                                    logSqlErrorText)) {
     return checkpoint;
   }
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -1727,10 +1730,9 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
       "last_inner_path = excluded.last_inner_path,"
       "updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart scan checkpoint upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing chart scan checkpoint upsert",
+          logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, checkpoint.scanSignature);
@@ -1742,10 +1744,9 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
   sqlite3_bind_int64(stmt.get(), 7, checkpoint.archiveSize);
   sqlite3_bind_int64(stmt.get(), 8, checkpoint.archiveMtimeNs);
   bindSqliteText(stmt.get(), 9, checkpoint.lastInnerPath);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting chart scan checkpoint", db);
     return false;
   }
   return true;
@@ -1807,10 +1808,9 @@ ArchiveScanCacheRecord selectArchiveScanCache(
       "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
       "chart_count FROM archive_scan_cache WHERE path = ?";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting archive scan cache",
+                                    logSqlErrorText)) {
     return record;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1886,10 +1886,9 @@ bool upsertArchiveScanCache(sqlite3 *db,
       "OR archive_scan_cache.file_count != excluded.file_count "
       "OR archive_scan_cache.chart_count != excluded.chart_count";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing archive scan cache upsert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1899,10 +1898,9 @@ bool upsertArchiveScanCache(sqlite3 *db,
   sqlite3_bind_int64(stmt.get(), 5, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 6, std::max(0, fileCount));
   sqlite3_bind_int(stmt.get(), 7, std::max(0, chartCount));
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1913,18 +1911,15 @@ bool deleteArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath) {
   const std::string pathText = archivePathTextForDb(archivePath);
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(
-      db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt,
+          "preparing archive scan cache delete", logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1964,10 +1959,9 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
       "OR solid_archives.file_count != excluded.file_count "
       "OR solid_archives.mtime_ns != excluded.mtime_ns";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing solid archive insert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1976,10 +1970,9 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
   sqlite3_bind_int64(stmt.get(), 4, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 5, std::max(0, fileCount));
   sqlite3_bind_int64(stmt.get(), 6, mtimeNs);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("inserting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1989,18 +1982,15 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   const std::string pathText = storedChartPathText(archivePath);
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(
-      db, "DELETE FROM solid_archives WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM solid_archives WHERE path = ?", stmt,
+          "preparing solid archive delete", logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -2013,11 +2003,9 @@ bool deleteChartMetaInArchive(sqlite3 *db,
   ChartDBHelper::GetInstance().SelectAllChartMeta(db, chartMetas);
 
   SqliteStatementHandle stmt;
-  int rc =
-      prepareSqliteStatement(db, "DELETE FROM chart_meta WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive chart delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM chart_meta WHERE path = ?", stmt,
+          "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
 
@@ -2032,10 +2020,9 @@ bool deleteChartMetaInArchive(sqlite3 *db,
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
-    rc = sqlite3_step(stmt.get());
+    const int rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting archive chart: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting archive chart", db);
       return changed;
     }
     changed = sqlite3_changes(db) > 0 || changed;
@@ -2070,10 +2057,9 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
       "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
       "@symbol AND source_url = @source_url";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, name);
@@ -2094,10 +2080,9 @@ int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
   auto query = "SELECT id FROM difficulty_tables WHERE source_url = "
                "@source_url ORDER BY id LIMIT 1";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table source URL: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table source URL",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, sourceUrl);
@@ -2117,7 +2102,7 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
   if (rc != SQLITE_OK) {
     if (errorMessage != nullptr) {
       *errorMessage = std::string("Could not read table source URL: ") +
-                      sqlite3_errmsg(db);
+                      sqliteDatabaseError(db);
     }
     return false;
   }
@@ -2205,17 +2190,16 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
       "(name, symbol, data_url, source_url, updated_at) "
       "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, insertQuery, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while inserting difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, insertQuery, stmt,
+                                    "inserting difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(stmt.get(), 1, name);
   bindSqliteText(stmt.get(), 2, symbol);
   bindSqliteText(stmt.get(), 3, dataUrl);
   bindSqliteText(stmt.get(), 4, sourceUrl);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return 0;
   }
@@ -2358,10 +2342,9 @@ void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
                "WHERE dte.sha256 != '' OR dte.md5 != '' "
                "ORDER BY dt.id, dte.sort_order, label";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while loading difficulty labels: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "loading difficulty labels",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2617,10 +2600,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "@source_archive_size"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing statement to insert a chart: %s",
-            sqlite3_errmsg(db));
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert a chart",
+                                    logSdlSqlErrorText)) {
     return false;
   }
   const archive_file::SourcePreference sourcePreference =
@@ -2663,9 +2645,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   sqlite3_bind_int(stmt, 28, chartMeta.LnMode);
   sqlite3_bind_int(stmt, 29, sourcePreference.priority);
   sqlite3_bind_int64(stmt, 30, clampSqlInteger(sourcePreference.archiveSize));
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while inserting a chart: %s", sqlite3_errmsg(db));
+    logSdlSqlError("inserting a chart", db);
     return false;
   }
   bumpLibraryRevision();
@@ -2678,10 +2660,8 @@ void ChartDBHelper::SelectAllChartMeta(
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm ORDER BY cm.title";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all charts",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2713,10 +2693,9 @@ void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
            "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music tracks: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2757,10 +2736,9 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
            "cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting favorite music tracks: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting favorite music tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2798,17 +2776,15 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
   if (!favorite) {
     const char *query = "DELETE FROM chart_favorites WHERE chart_path = ?1";
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while preparing chart favorite delete: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "preparing chart favorite delete",
+                                      logSqlErrorText)) {
       return false;
     }
     bindSqliteText(stmt, 1, chartPath);
-    rc = sqlite3_step(stmt);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting chart favorite: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting chart favorite", db);
       return false;
     }
     bumpLibraryRevision();
@@ -2824,19 +2800,17 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
       "chart_sha256 = excluded.chart_sha256,"
       "added_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart favorite insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart favorite insert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt, 1, chartPath);
   bindSqliteText(stmt, 2, normalizedHash(chartMeta.MD5));
   bindSqliteText(stmt, 3, normalizedHash(chartMeta.SHA256));
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while saving chart favorite: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("saving chart favorite", db);
     return false;
   }
   bumpLibraryRevision();
@@ -2846,10 +2820,8 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
@@ -2862,10 +2834,9 @@ int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
 int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM solid_archives";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting solid archives: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "counting solid archives",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
@@ -2891,10 +2862,8 @@ void ChartDBHelper::SearchChartMeta(
   query += preferredChartPredicate("cm");
   query += " ORDER BY cm.title";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while searching for charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "searching for charts",
+                                    logSqlErrorText)) {
     return;
   }
   // %text%
@@ -2932,10 +2901,9 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying solid archives: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying solid archives",
+                                      logSqlErrorText)) {
       return;
     }
 
@@ -3021,10 +2989,9 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying difficulty entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying difficulty entries",
+                                      logSqlErrorText)) {
       return;
     }
 
@@ -3115,10 +3082,9 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying course entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying course entries",
+                                      logSqlErrorText)) {
       return;
     }
 
@@ -3245,10 +3211,8 @@ void ChartDBHelper::QueryChartMeta(
   }
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while querying charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "querying charts",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -3306,10 +3270,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
     }
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting solid archives: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting solid archives",
+                                      logSqlErrorText)) {
       return 0;
     }
     if (!chartQuery.keyword.empty()) {
@@ -3364,10 +3327,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting difficulty entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting difficulty entries",
+                                      logSqlErrorText)) {
       return 0;
     }
 
@@ -3449,10 +3411,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting course entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting course entries",
+                                      logSqlErrorText)) {
       return 0;
     }
 
@@ -3568,10 +3529,8 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   query += preferredChartPredicate("cm");
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
+                                    logSqlErrorText)) {
     return 0;
   }
 
@@ -3616,19 +3575,17 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cout << "SQL error while preparing statement to delete a chart: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete a chart",
+                                    logSqlErrorText)) {
     return false;
   }
   const auto target = fspath_to_utf8(path);
   SDL_Log("Deleting chart: %s", target.c_str());
   bindSqliteText(stmt, 1, target);
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cout << "SQL error while deleting a chart: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting a chart", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -3661,11 +3618,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
 
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete charts in "
-                 "directory: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing statement to delete charts in directory",
+          logSqlErrorText)) {
     return -1;
   }
 
@@ -3679,10 +3634,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     bindSqliteText(stmt, 1, target);
-    rc = sqlite3_step(stmt);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting a chart in directory: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting a chart in directory", db);
       return -1;
     }
     if (sqlite3_changes(db) > 0) {
@@ -3761,15 +3715,14 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
 
   auto query = "DELETE FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
 
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   const int chartChanges = sqlite3_changes(db);
@@ -3916,19 +3869,17 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
                "@ios_bookmark"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to insert an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert an entry",
+                                    logSqlErrorText)) {
     return false;
   }
   const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("inserting an entry", db);
     return false;
   }
   clearChartScanCheckpoint(db);
@@ -3942,10 +3893,8 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
                "COALESCE(ios_bookmark, '')"
                " FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all entries: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all entries",
+                                    logSqlErrorText)) {
     return std::vector<ChartEntry>();
   }
   std::vector<ChartEntry> entries;
@@ -4018,18 +3967,16 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete an entry",
+                                    logSqlErrorText)) {
     return false;
   }
   const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting an entry", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -4043,15 +3990,13 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -5755,10 +5700,9 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "ORDER BY dt.name COLLATE NOCASE";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty tables: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty tables",
+                                    logSqlErrorText)) {
     return {};
   }
 
@@ -5788,10 +5732,9 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty levels: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty levels",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
@@ -5832,10 +5775,9 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty course groups: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty course groups",
+                                    logSqlErrorText)) {
     return {};
   }
 
@@ -5877,10 +5819,9 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "ORDER BY dc.sort_order";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty courses: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty courses",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);

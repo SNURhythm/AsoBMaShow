@@ -20,6 +20,10 @@ inline void closeSqliteDatabase(sqlite3 *db) {
   }
 }
 
+inline std::string sqliteDatabaseError(sqlite3 *db) {
+  return db != nullptr ? sqlite3_errmsg(db) : "database is not open";
+}
+
 class SqliteErrorMessageHandle {
 public:
   SqliteErrorMessageHandle() = default;
@@ -69,6 +73,27 @@ inline int prepareSqliteStatement(sqlite3 *db, const char *query,
 inline int prepareSqliteStatement(sqlite3 *db, const std::string &query,
                                   SqliteStatementHandle &stmt) {
   return prepareSqliteStatement(db, query.c_str(), stmt);
+}
+
+template <typename LogSqlError>
+inline bool prepareSqliteStatementLogged(sqlite3 *db, const char *query,
+                                         SqliteStatementHandle &stmt,
+                                         const char *context,
+                                         const LogSqlError &logSqlError) {
+  if (prepareSqliteStatement(db, query, stmt) != SQLITE_OK) {
+    logSqlError(context, sqliteDatabaseError(db));
+    return false;
+  }
+  return true;
+}
+
+template <typename LogSqlError>
+inline bool prepareSqliteStatementLogged(sqlite3 *db, const std::string &query,
+                                         SqliteStatementHandle &stmt,
+                                         const char *context,
+                                         const LogSqlError &logSqlError) {
+  return prepareSqliteStatementLogged(db, query.c_str(), stmt, context,
+                                      logSqlError);
 }
 
 inline bool bindSqliteText(sqlite3_stmt *stmt, int idx,
@@ -126,7 +151,19 @@ executeSqlite(sqlite3 *db, const char *query,
     return std::nullopt;
   }
   return errMsg.get() != nullptr ? std::string(errMsg.get())
-                                 : std::string(sqlite3_errmsg(db));
+                                 : sqliteDatabaseError(db);
+}
+
+template <typename LogSqlError>
+inline bool executeSqliteLogged(sqlite3 *db, const char *query,
+                                const char *context,
+                                const LogSqlError &logSqlError,
+                                const char *allowedErrorNeedle = nullptr) {
+  if (const auto error = executeSqlite(db, query, allowedErrorNeedle)) {
+    logSqlError(context, *error);
+    return false;
+  }
+  return true;
 }
 
 inline std::optional<std::string>
@@ -146,7 +183,7 @@ attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
     return std::nullopt;
   }
   return errMsg.get() != nullptr ? std::string(errMsg.get())
-                                 : std::string(sqlite3_errmsg(db));
+                                 : sqliteDatabaseError(db);
 }
 
 inline std::optional<std::string>
@@ -158,7 +195,7 @@ querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
       stmt);
   if (rc != SQLITE_OK) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
   bindSqliteText(stmt, 1, tableName);
 
@@ -170,7 +207,7 @@ querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
   if (stepRc == SQLITE_DONE) {
     return std::nullopt;
   }
-  return sqlite3_errmsg(db);
+  return sqliteDatabaseError(db);
 }
 
 inline std::optional<std::string>
@@ -186,7 +223,7 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
   const int rc = prepareSqliteStatement(db, query, stmt);
   sqlite3_free(query);
   if (rc != SQLITE_OK) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
 
   int stepRc = SQLITE_OK;
@@ -197,7 +234,7 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
     }
   }
   if (stepRc != SQLITE_DONE) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
   return std::nullopt;
 }
