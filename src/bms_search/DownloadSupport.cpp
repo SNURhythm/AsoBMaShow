@@ -12,6 +12,18 @@
 
 namespace asobmshow::bms_search {
 
+bool ensureDownloadDirectory(const std::filesystem::path &path,
+                             const char *failurePrefix,
+                             std::string &errorMessage) {
+  std::error_code fsError;
+  std::filesystem::create_directories(path, fsError);
+  if (fsError) {
+    errorMessage = std::string(failurePrefix) + ": " + fsError.message();
+    return false;
+  }
+  return true;
+}
+
 std::optional<std::filesystem::path> saveIosDebugArtifacts(
     const std::string &key, const std::string &downloadUrl,
     const std::string &displayUrl, const std::filesystem::path &archivePath,
@@ -24,9 +36,8 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
   const std::filesystem::path debugDirectory =
       Utils::GetDocumentsPath("BMSSEARCH_DEBUG") / attemptId;
   std::error_code fsError;
-  std::filesystem::create_directories(debugDirectory, fsError);
-  if (fsError) {
-    errorMessage = "Could not create debug folder: " + fsError.message();
+  if (!ensureDownloadDirectory(debugDirectory, "Could not create debug folder",
+                               errorMessage)) {
     return std::nullopt;
   }
 
@@ -66,10 +77,8 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
   }
   metadata << "download_url=" << downloadUrl << '\n';
   metadata << "display_url=" << displayUrl << '\n';
-  metadata << "archive_path="
-           << path_t_to_utf8(fspath_to_path_t(archivePath)) << '\n';
-  metadata << "extract_path="
-           << path_t_to_utf8(fspath_to_path_t(extractDirectory)) << '\n';
+  metadata << "archive_path=" << fspath_to_utf8(archivePath) << '\n';
+  metadata << "extract_path=" << fspath_to_utf8(extractDirectory) << '\n';
   metadata.close();
   if (!metadata) {
     errorMessage = "Could not write debug metadata.";
@@ -443,11 +452,12 @@ bool downloadAndExtractArchive(
   const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);
   const std::filesystem::path archiveDirectory = baseDirectory / "_archives";
   const std::filesystem::path extractDirectory = baseDirectory / key;
-  std::error_code fsError;
-  std::filesystem::create_directories(archiveDirectory, fsError);
-  if (fsError) {
+  std::string directoryError;
+  if (!ensureDownloadDirectory(
+          archiveDirectory, "Could not create download folder",
+          directoryError)) {
     result.status = BmsSearchResult::Status::DownloadFailed;
-    result.message = "Could not create download folder: " + fsError.message();
+    result.message = directoryError;
     return false;
   }
 
@@ -458,15 +468,10 @@ bool downloadAndExtractArchive(
     }
 
     std::error_code error;
-    if (!std::filesystem::exists(archivePath, error) || error) {
-      return;
-    }
-    error.clear();
     std::filesystem::remove(archivePath, error);
     if (error) {
       SDL_Log("Could not delete downloaded archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
-              error.message().c_str());
+              fspath_to_utf8(archivePath).c_str(), error.message().c_str());
     }
   });
   if (progressCallback) {

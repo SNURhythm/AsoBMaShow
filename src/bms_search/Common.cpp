@@ -1,5 +1,6 @@
 #include "Internal.h"
 
+#include "../ArchiveFile.h"
 #include "../BmsMetadataText.h"
 
 namespace asobmshow::bms_search {
@@ -12,9 +13,8 @@ std::string lowerCopy(std::string value) {
   return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
-bool endsWith(std::string_view value, std::string_view suffix) {
-  return value.size() >= suffix.size() &&
-         value.substr(value.size() - suffix.size()) == suffix;
+std::string normalizedHash(const std::string &value) {
+  return asobmshow::bms_metadata::normalizedHash(value);
 }
 
 bool hostMatches(const std::string &host, std::string_view domain) {
@@ -317,18 +317,7 @@ std::string displayFileNameFromUrl(const std::string &url) {
 }
 
 std::string archiveExtensionFromName(std::string name) {
-  name = lowerCopy(std::move(name));
-  static constexpr std::array<std::string_view, 15> kArchiveExtensions = {
-      ".tar.bz2", ".tar.gz", ".tar.xz", ".tbz2", ".tgz",
-      ".txz",     ".zip",    ".7z",     ".rar",  ".lzh",
-      ".lha",     ".tar",    ".bz2",    ".gz",   ".xz",
-  };
-  for (const std::string_view extension : kArchiveExtensions) {
-    if (endsWith(name, extension)) {
-      return std::string(extension);
-    }
-  }
-  return "";
+  return archive_file::archiveExtensionFromName(name);
 }
 
 std::string stripArchiveExtension(std::string name) {
@@ -473,8 +462,7 @@ std::string archiveExtensionFromUrl(const std::string &url) {
 }
 
 bool isRecognizedArchiveExtension(const std::string &extension) {
-  return !extension.empty() &&
-         !archiveExtensionFromName("download" + extension).empty();
+  return archive_file::isRecognizedArchiveExtension(extension);
 }
 
 bool isSupportedArchiveExtension(const std::string &extension) {

@@ -1,6 +1,7 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
 #include "Utils.h"
+#include "path.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -64,6 +65,18 @@ std::string normalizeSettingToken(std::string value) {
                      return '-';
                    }
                    return static_cast<char>(std::tolower(ch));
+                 });
+  return value;
+}
+
+std::string normalizeUpperOptionToken(std::string value) {
+  value = trim(value);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::toupper(ch));
                  });
   return value;
 }
@@ -314,14 +327,7 @@ std::string parseGaugeTypeId(const std::string &value,
 }
 
 std::string normalizePlayOptionId(std::string value) {
-  value = trim(value);
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
+  value = normalizeUpperOptionToken(std::move(value));
   if (value == "OFF") {
     return AppSettings::kDefaultPlayOption;
   }
@@ -342,14 +348,7 @@ std::string parsePlayOptionId(const std::string &value,
 }
 
 std::string normalizeAssistOptionId(std::string value) {
-  value = trim(value);
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
+  value = normalizeUpperOptionToken(std::move(value));
   if (value == "DRAG" || value == "DRAG-MODE") {
     return "DRAG";
   }
@@ -564,7 +563,7 @@ bool AppSettings::save() const {
   std::ofstream file(path, std::ios::trunc);
   if (!file.is_open()) {
     SDL_Log("Failed to open settings file for writing: %s",
-            path.string().c_str());
+            fspath_to_utf8(path).c_str());
     return false;
   }
 

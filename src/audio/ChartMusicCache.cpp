@@ -1,18 +1,17 @@
 #include "ChartMusicCache.h"
 
+#include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
 #include "../Utils.h"
 #include "../path.h"
 #include "../targets.h"
+#include "SoundFileIO.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
 
 #include <SDL2/SDL.h>
-#include <sndfile.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <string_view>
 #include <system_error>
@@ -44,20 +43,8 @@ std::string hex64(std::uint64_t value) {
 }
 
 std::string lowerTrimmed(std::string value) {
-  value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
-                                              [](unsigned char ch) {
-                                                return std::isspace(ch) != 0;
-                                              }));
-  value.erase(std::find_if_not(value.rbegin(), value.rend(),
-                               [](unsigned char ch) {
-                                 return std::isspace(ch) != 0;
-                               }).base(),
-              value.end());
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   return static_cast<char>(std::tolower(ch));
-                 });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(
+      asobmshow::bms_metadata::trimCopy(value));
 }
 
 std::string sanitizeFileNamePart(const std::string &value) {
@@ -81,16 +68,14 @@ std::string sanitizeFileNamePart(const std::string &value) {
 }
 
 std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
-  const std::string sha256 = lowerTrimmed(meta.SHA256);
-  const std::string md5 = lowerTrimmed(meta.MD5);
+  const std::string sha256 =
+      asobmshow::bms_metadata::normalizedHash(meta.SHA256);
+  const std::string md5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
   const std::string identity =
       !sha256.empty() ? "sha256:" + sha256
                       : (!md5.empty() ? "md5:" + md5
-                                      : "path:" + path_t_to_utf8(
-                                                     fspath_to_path_t(
-                                                         meta.BmsPath)));
-  const std::string folder =
-      path_t_to_utf8(fspath_to_path_t(meta.Folder.lexically_normal()));
+                                      : "path:" + fspath_to_utf8(meta.BmsPath));
+  const std::string folder = fspath_to_utf8(meta.Folder.lexically_normal());
   std::uint64_t hash = 14695981039346656037ull;
   hash = fnv1a64Append(hash, folder);
   hash = fnv1a64Append(hash, identity);
@@ -111,13 +96,13 @@ void excludeCacheFromBackup(const std::filesystem::path &path) {
 }
 
 bool ensureCacheDirectory(std::string &errorMessage) {
+  const std::filesystem::path directory = CacheDirectory();
   std::error_code error;
-  std::filesystem::create_directories(CacheDirectory(), error);
-  if (error) {
+  if (!Utils::EnsureDirectoryExists(directory, error)) {
     errorMessage = "Could not create music cache directory: " + error.message();
     return false;
   }
-  excludeCacheFromBackup(CacheDirectory());
+  excludeCacheFromBackup(directory);
   return true;
 }
 
@@ -150,8 +135,14 @@ CachedAudioPathForChart(const bms_parser::ChartMeta &meta) {
 
 bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
   std::error_code error;
-  return std::filesystem::is_regular_file(CachedAudioPathForChart(meta), error) &&
-         !error;
+  const std::filesystem::path path = CachedAudioPathForChart(meta);
+  const bool cached = std::filesystem::is_regular_file(path, error);
+  if (error) {
+    SDL_Log("Could not check cached music file %s: %s",
+            fspath_to_utf8(path).c_str(), error.message().c_str());
+    return false;
+  }
+  return cached;
 }
 
 std::optional<long long>
@@ -161,11 +152,10 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
   }
 
   SF_INFO info{};
-  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_READ, &info);
-  if (rawFile == nullptr) {
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+  if (file == nullptr) {
     return std::nullopt;
   }
-  sf_close(rawFile);
   if (info.frames <= 0 || info.samplerate <= 0) {
     return std::nullopt;
   }
@@ -177,7 +167,14 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
 void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
   std::error_code error;
   const std::filesystem::path directory = CacheDirectory();
-  if (!std::filesystem::is_directory(directory, error) || error) {
+  const bool cacheDirectoryExists =
+      std::filesystem::is_directory(directory, error);
+  if (error) {
+    SDL_Log("Could not check music cache directory %s: %s",
+            fspath_to_utf8(directory).c_str(), error.message().c_str());
+    return;
+  }
+  if (!cacheDirectoryExists) {
     return;
   }
 
@@ -254,9 +251,16 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
     return {.success = false, .audioPath = outputPath, .message = errorMessage};
   }
 
-  const std::filesystem::path tempPath = outputPath.string() + ".tmp";
+  std::filesystem::path tempPath = outputPath;
+  tempPath += PATH(".tmp");
   std::error_code error;
   std::filesystem::remove(tempPath, error);
+  if (error) {
+    return {.success = false,
+            .audioPath = outputPath,
+            .message = "Could not remove stale music cache temp file: " +
+                       error.message()};
+  }
 
   const chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ChartTiming,

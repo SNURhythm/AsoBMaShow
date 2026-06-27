@@ -44,6 +44,7 @@ struct ChartMetaRecord {
 
 struct MusicTrackRecord {
   bms_parser::ChartMeta representativeChart;
+  int storedItemId = 0;
   int chartCount = 0;
   bool useChartPathIdentity = false;
 };
@@ -74,8 +75,17 @@ struct DifficultyCourseGroupInfo {
   int tableId = 0;
   std::string tableName;
   std::string groupName;
-  int chartCount = 0;
-  int matchedChartCount = 0;
+  int courseCount = 0;
+  int singletonCourseId = 0;
+  std::string singletonCourseLevel;
+  std::string singletonCourseName;
+  std::string singletonCourseConstraintJson;
+};
+
+struct DifficultyCourseTableInfo {
+  int tableId = 0;
+  std::string tableName;
+  std::string tableSymbol;
 };
 
 struct DifficultyCourseInfo {
@@ -86,8 +96,6 @@ struct DifficultyCourseInfo {
   std::string level;
   std::string name;
   std::string constraintJson;
-  int chartCount = 0;
-  int matchedChartCount = 0;
 };
 
 struct DifficultyTableImportProgress {
@@ -152,18 +160,16 @@ public:
   int CountSolidArchives(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
                           std::vector<bms_parser::ChartMeta> &chartMetas);
-  void SelectMusicTracks(sqlite3 *db,
-                         std::vector<MusicTrackRecord> &tracks);
   void SelectFavoriteMusicTracks(sqlite3 *db,
                                  std::vector<MusicTrackRecord> &tracks);
   int CountFavoriteCharts(sqlite3 *db);
   bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
                    bool favorite);
-  void SearchChartMeta(sqlite3 *db, const std::string &keyword,
-                       std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
                       std::vector<ChartMetaRecord> &chartMetas);
   int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);
+  int FindChartMetaIndex(sqlite3 *db, const ChartMetaQuery &query,
+                         const std::filesystem::path &path);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   int DeleteChartMetaInDirectory(sqlite3 *db,
                                  const std::filesystem::path &directory);
@@ -171,8 +177,6 @@ public:
                             const std::filesystem::path &archivePath);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
-  void BeginTransaction(sqlite3 *db);
-  void CommitTransaction(sqlite3 *db);
   bool CreateEntriesTable(sqlite3 *db);
   bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
                    const std::string &iosBookmark = "");
@@ -208,8 +212,10 @@ public:
   std::vector<DifficultyTableInfo> SelectDifficultyTables(sqlite3 *db);
   std::vector<DifficultyLevelInfo> SelectDifficultyLevels(sqlite3 *db,
                                                           int tableId);
+  std::vector<DifficultyCourseTableInfo>
+  SelectDifficultyCourseTables(sqlite3 *db);
   std::vector<DifficultyCourseGroupInfo>
-  SelectDifficultyCourseGroups(sqlite3 *db);
+  SelectDifficultyCourseGroups(sqlite3 *db, int tableId);
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
@@ -219,6 +225,7 @@ public:
       sqlite3 *db, const bms_parser::ChartMeta &meta);
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
 
+  static std::string StoredChartPathText(std::filesystem::path path);
   static void ToRelativePath(std::filesystem::path &path);
   static void ToAbsolutePath(std::filesystem::path &path);
 

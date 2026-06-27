@@ -79,6 +79,18 @@ void restorePrimaryRenderViews(ApplicationContext &context) {
   }
 }
 
+std::optional<std::string>
+ensureExportDirectoryError(const std::filesystem::path &path,
+                           const char *failureMessage) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return std::nullopt;
+  }
+
+  return std::string(failureMessage) + " (" +
+         fspath_to_utf8(path) + "): " + error.message();
+}
+
 class ScopedResultImageBgfxAccess {
 public:
   explicit ScopedResultImageBgfxAccess(ApplicationContext &context)
@@ -577,7 +589,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  if (!SaveImageToIOSPhotos(path.string(), errorMessage)) {
+  if (!SaveImageToIOSPhotos(fspath_to_utf8(path), errorMessage)) {
     return {.success = false, .outputPath = path, .message = errorMessage};
   }
   return {.success = true, .outputPath = path, .message = "Saved to Photos"};
@@ -612,12 +624,10 @@ ResultImageExporter::Export(ApplicationContext &context,
   }
 #endif
 
-  std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("result_exports");
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create result export directory"};
+  if (const auto error = ensureExportDirectoryError(
+          outputDir, "Failed to create result export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const auto outputPath =
@@ -661,12 +671,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   }
 #endif
 
-  std::error_code ec;
   const auto outputRoot = Utils::GetDocumentsPath("result_exports");
-  std::filesystem::create_directories(outputRoot, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create result export directory"};
+  if (const auto error = ensureExportDirectoryError(
+          outputRoot, "Failed to create result export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const std::string timestamp = makeTimestamp();
@@ -674,10 +682,9 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
       replay.courseName.empty() ? "Course Replay" : replay.courseName;
   const auto outputDir =
       outputRoot / (sanitizeFileNamePart(courseName) + "_" + timestamp);
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create course result export directory"};
+  if (const auto error = ensureExportDirectoryError(
+          outputDir, "Failed to create course result export directory")) {
+    return {.success = false, .message = *error};
   }
 
   std::vector<std::unique_ptr<bms_parser::Chart>> charts;

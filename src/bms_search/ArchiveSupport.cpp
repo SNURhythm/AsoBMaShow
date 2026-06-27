@@ -1,5 +1,7 @@
 #include "Internal.h"
 
+#include "../BmsChartFile.h"
+
 #if ASOBMSHOW_HAS_LIBARCHIVE
 #include "../ArchiveRAII.h"
 #endif
@@ -21,6 +23,18 @@ bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
     }
   }
   outPath = relative;
+  return true;
+}
+
+bool ensureArchiveOutputDirectory(const std::filesystem::path &path,
+                                  const char *failurePrefix,
+                                  std::string &errorMessage) {
+  std::error_code fsError;
+  std::filesystem::create_directories(path, fsError);
+  if (fsError) {
+    errorMessage = std::string(failurePrefix) + ": " + fsError.message();
+    return false;
+  }
   return true;
 }
 
@@ -190,17 +204,14 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
                        const std::filesystem::path &outputPath,
                        std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback) {
-  std::error_code fsError;
-  std::filesystem::create_directories(outputPath, fsError);
-  if (fsError) {
-    errorMessage = "Could not create output folder: " + fsError.message();
+  if (!ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage)) {
     return false;
   }
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   if (!mz_zip_reader_init_file(&archive, archiveText.c_str(), 0)) {
     errorMessage = "Could not open ZIP archive.";
     return false;
@@ -223,34 +234,32 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
     }
     const std::filesystem::path destination = outputPath / relativePath;
     if (mz_zip_reader_is_file_a_directory(&archive, i)) {
-      std::filesystem::create_directories(destination, fsError);
-      if (fsError) {
+      if (!ensureArchiveOutputDirectory(
+              destination, "Could not create archive folder", errorMessage)) {
         ok = false;
-        errorMessage = "Could not create archive folder: " + fsError.message();
         break;
       }
       continue;
     }
 
-    std::filesystem::create_directories(destination.parent_path(), fsError);
-    if (fsError) {
+    if (!ensureArchiveOutputDirectory(
+            destination.parent_path(), "Could not create archive folder",
+            errorMessage)) {
       ok = false;
-      errorMessage = "Could not create archive folder: " + fsError.message();
       break;
     }
 
     if (progressCallback) {
-      progressCallback({.message = "Extracting " + relativePath.string(),
+      progressCallback({.message = "Extracting " + fspath_to_utf8(relativePath),
                         .downloadedBytes = i,
                         .totalBytes = fileCount});
     }
 
-    const std::string destinationText =
-        path_t_to_utf8(fspath_to_path_t(destination));
+    const std::string destinationText = fspath_to_utf8(destination);
     if (!mz_zip_reader_extract_to_file(&archive, i, destinationText.c_str(),
                                        0)) {
       ok = false;
-      errorMessage = "Could not extract " + relativePath.string();
+      errorMessage = "Could not extract " + fspath_to_utf8(relativePath);
       break;
     }
     ++extractedFiles;
@@ -353,10 +362,8 @@ bool extractArchiveWithLibarchive(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputPath, std::string &errorMessage,
     BmsSearchDownloadProgressCallback progressCallback) {
-  std::error_code fsError;
-  std::filesystem::create_directories(outputPath, fsError);
-  if (fsError) {
-    errorMessage = "Could not create output folder: " + fsError.message();
+  if (!ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage)) {
     return false;
   }
 
@@ -371,8 +378,7 @@ bool extractArchiveWithLibarchive(
   archive_read_support_format_raw(archiveHandle.get());
   preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   int status = archive_read_open_filename(archiveHandle.get(),
                                           archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
@@ -432,10 +438,9 @@ bool extractArchiveWithLibarchive(
     if (fileType == AE_IFDIR ||
         (unknownFileType && entryNameLooksDirectory)) {
       ++directoryEntries;
-      std::filesystem::create_directories(destination, fsError);
-      if (fsError) {
+      if (!ensureArchiveOutputDirectory(
+              destination, "Could not create archive folder", errorMessage)) {
         ok = false;
-        errorMessage = "Could not create archive folder: " + fsError.message();
         break;
       }
       continue;
@@ -446,15 +451,15 @@ bool extractArchiveWithLibarchive(
       continue;
     }
 
-    std::filesystem::create_directories(destination.parent_path(), fsError);
-    if (fsError) {
+    if (!ensureArchiveOutputDirectory(
+            destination.parent_path(), "Could not create archive folder",
+            errorMessage)) {
       ok = false;
-      errorMessage = "Could not create archive folder: " + fsError.message();
       break;
     }
 
     if (progressCallback) {
-      progressCallback({.message = "Extracting " + relativePath.string(),
+      progressCallback({.message = "Extracting " + fspath_to_utf8(relativePath),
                         .downloadedBytes = entryIndex,
                         .totalBytes = 0});
     }
@@ -462,7 +467,7 @@ bool extractArchiveWithLibarchive(
     std::ofstream output(destination, std::ios::binary);
     if (!output) {
       ok = false;
-      errorMessage = "Could not create " + relativePath.string();
+      errorMessage = "Could not create " + fspath_to_utf8(relativePath);
       break;
     }
 
@@ -476,14 +481,14 @@ bool extractArchiveWithLibarchive(
       }
       if (bytes < 0) {
         ok = false;
-        errorMessage = "Could not extract " + relativePath.string() + ": " +
-                       archiveErrorString(archiveHandle.get(), "");
+        errorMessage = "Could not extract " + fspath_to_utf8(relativePath) +
+                       ": " + archiveErrorString(archiveHandle.get(), "");
         break;
       }
       output.write(buffer.data(), static_cast<std::streamsize>(bytes));
       if (!output) {
         ok = false;
-        errorMessage = "Could not write " + relativePath.string();
+        errorMessage = "Could not write " + fspath_to_utf8(relativePath);
         break;
       }
     }
@@ -549,8 +554,7 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
   archive_read_support_format_raw(archiveHandle.get());
   preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   int status = archive_read_open_filename(archiveHandle.get(),
                                           archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
@@ -595,11 +599,6 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
 }
 #endif
 
-bool isBmsChartPath(const std::filesystem::path &path) {
-  const std::string ext = lowerCopy(path.extension().string());
-  return ext == ".bms" || ext == ".bme" || ext == ".bml";
-}
-
 bool containsBmsFile(const std::filesystem::path &root) {
   std::error_code error;
   std::filesystem::recursive_directory_iterator iterator(
@@ -610,7 +609,7 @@ bool containsBmsFile(const std::filesystem::path &root) {
       error.clear();
       continue;
     }
-    if (isBmsChartPath(iterator->path())) {
+    if (asobmshow::bms_chart_file::isBmsChartPath(iterator->path())) {
       return true;
     }
   }
@@ -632,6 +631,14 @@ readFileBytes(const std::filesystem::path &path, std::string &errorMessage) {
     errorMessage = "Could not read chart size: " + error.message();
     return std::nullopt;
   }
+  const auto maxBufferedSize = std::min<std::uintmax_t>(
+      static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max()),
+      static_cast<std::uintmax_t>(
+          std::numeric_limits<std::streamsize>::max()));
+  if (size > maxBufferedSize) {
+    errorMessage = "Chart file is too large to read for hash verification.";
+    return std::nullopt;
+  }
 
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -644,7 +651,8 @@ readFileBytes(const std::filesystem::path &path, std::string &errorMessage) {
     file.read(reinterpret_cast<char *>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
   }
-  if (!file && !file.eof()) {
+  if (file.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+      (!file && !file.eof())) {
     errorMessage = "Could not read chart file for hash verification.";
     return std::nullopt;
   }
@@ -671,7 +679,7 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
       error.clear();
       continue;
     }
-    if (!isBmsChartPath(iterator->path())) {
+    if (!asobmshow::bms_chart_file::isBmsChartPath(iterator->path())) {
       continue;
     }
     sawBmsFile = true;
@@ -681,7 +689,7 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
     if (!bytes) {
       if (!readError.empty()) {
         SDL_Log("Skipping BMS hash verification for %s: %s",
-                iterator->path().string().c_str(), readError.c_str());
+                fspath_to_utf8(iterator->path()).c_str(), readError.c_str());
       }
       continue;
     }
@@ -721,7 +729,8 @@ htmlBodyFromDownloadedFile(const std::filesystem::path &path) {
   }
   std::string body(size, '\0');
   file.read(body.data(), static_cast<std::streamsize>(body.size()));
-  if (!file && !file.eof()) {
+  if (file.gcount() != static_cast<std::streamsize>(body.size()) ||
+      (!file && !file.eof())) {
     return std::nullopt;
   }
 

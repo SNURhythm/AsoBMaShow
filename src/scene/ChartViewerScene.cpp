@@ -2707,8 +2707,7 @@ void ChartViewerScene::parseAndRefresh(
         sourceBytes.empty()) {
       SDL_Log("Chart viewer read failed: %s", readError.c_str());
       archive_file::appendDebugLogLine(
-          "Chart viewer read failed: " +
-          path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) +
+          "Chart viewer read failed: " + fspath_to_utf8(record.meta.BmsPath) +
           (readError.empty() ? "" : ": " + readError));
     } else {
       parsed = play_options::parseChartBytes(
@@ -2718,9 +2717,8 @@ void ChartViewerScene::parseAndRefresh(
   } catch (const std::exception &e) {
     SDL_Log("Chart viewer parse failed: %s", e.what());
     archive_file::appendDebugLogLine(
-        "Chart viewer parse exception: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-        e.what());
+        "Chart viewer parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+        ": " + e.what());
   }
 
   if (parsed == nullptr || cancelled) {
@@ -3139,7 +3137,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
                                                     replayData, parseCancelled);
   } catch (const std::exception &e) {
     SDL_Log("Error parsing %s for ghost replay: %s",
-            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
   }
 
   if (replayChart == nullptr || parseCancelled) {
@@ -3799,13 +3797,12 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                                                 : "practice");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for %s: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(),
+                  fspath_to_utf8(record.meta.BmsPath).c_str(),
                   autoPlay ? "practice autoplay" : "practice", e.what());
           archive_file::appendDebugLogLine(
               std::string(autoPlay ? "Practice autoplay" : "Practice") +
-              " parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              " parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+              ": " + e.what());
         }
         if (practiceChart == nullptr || parseCancelled) {
           if (statusText != nullptr) {

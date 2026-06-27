@@ -34,6 +34,10 @@ inline std::string lowerCopy(std::string value) {
   return value;
 }
 
+inline std::string normalizedHash(const std::string &value) {
+  return lowerCopy(trimCopy(value));
+}
+
 inline std::string normalizedSearchText(const std::string &value) {
   std::string result;
   bool lastWasSpace = true;

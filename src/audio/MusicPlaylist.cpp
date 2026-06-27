@@ -1,10 +1,10 @@
 #include "MusicPlaylist.h"
 
 #include "../ArchiveFile.h"
+#include "../BmsMetadataText.h"
 #include "../path.h"
 
 #include <algorithm>
-#include <cctype>
 #include <random>
 #include <utility>
 
@@ -12,19 +12,8 @@ namespace music_playlist {
 namespace {
 
 std::string lowerTrimmed(std::string value) {
-  value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
-                                              [](unsigned char ch) {
-                                                return std::isspace(ch) != 0;
-                                              }));
-  value.erase(
-      std::find_if_not(value.rbegin(), value.rend(),
-                       [](unsigned char ch) { return std::isspace(ch) != 0; })
-          .base(),
-      value.end());
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(
+      asobmshow::bms_metadata::trimCopy(value));
 }
 
 std::string normalizedPathString(std::filesystem::path path) {
@@ -32,7 +21,7 @@ std::string normalizedPathString(std::filesystem::path path) {
     return {};
   }
   path = path.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(path));
+  return fspath_to_utf8(path);
 }
 
 std::string fallbackTitle(const bms_parser::ChartMeta &meta) {
@@ -40,7 +29,7 @@ std::string fallbackTitle(const bms_parser::ChartMeta &meta) {
     return meta.Title;
   }
   if (!meta.BmsPath.empty()) {
-    return path_t_to_utf8(fspath_to_path_t(meta.BmsPath.stem()));
+    return fspath_to_utf8(meta.BmsPath.stem());
   }
   return "Untitled";
 }
@@ -87,11 +76,12 @@ std::string ChartTrackIdForChart(const bms_parser::ChartMeta &meta) {
 }
 
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta) {
-  const std::string sha256 = lowerTrimmed(meta.SHA256);
+  const std::string sha256 =
+      asobmshow::bms_metadata::normalizedHash(meta.SHA256);
   if (!sha256.empty()) {
     return "sha256:" + sha256;
   }
-  const std::string md5 = lowerTrimmed(meta.MD5);
+  const std::string md5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
   if (!md5.empty()) {
     return "md5:" + md5;
   }
@@ -119,6 +109,7 @@ MusicTrack MakeTrack(const MusicTrackRecord &record) {
   const bool expandedChart = record.useChartPathIdentity;
   return {
       .trackId = expandedChart ? ChartTrackIdForChart(meta) : groupId,
+      .storedItemId = record.storedItemId,
       .chartId = ChartIdForChart(meta),
       .groupId = groupId,
       .representativeChart = meta,

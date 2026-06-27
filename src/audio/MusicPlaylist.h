@@ -22,6 +22,7 @@ enum class QueueRepeatMode {
 
 struct MusicTrack {
   std::string trackId;
+  int storedItemId = 0;
   std::string chartId;
   std::string groupId;
   bms_parser::ChartMeta representativeChart;

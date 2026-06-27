@@ -18,7 +18,7 @@
 using namespace asobmshow::bms_search;
 
 std::string BmsSearchService::patternUrlForSha256(const std::string &sha256) {
-  return std::string(kBaseUrl) + "/patterns/" + lowerCopy(trimCopy(sha256));
+  return std::string(kBaseUrl) + "/patterns/" + normalizedHash(sha256);
 }
 
 std::string BmsSearchService::searchUrlForText(const std::string &query) {
@@ -27,7 +27,7 @@ std::string BmsSearchService::searchUrlForText(const std::string &query) {
 
 std::string
 BmsSearchService::googleSearchUrlForSha256(const std::string &sha256) {
-  return googleSearchUrlForText(lowerCopy(trimCopy(sha256)));
+  return googleSearchUrlForText(normalizedHash(sha256));
 }
 
 BmsSearchResult BmsSearchService::findAndDownload(
@@ -36,8 +36,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
     BmsSearchDownloadProgressCallback progressCallback,
     const std::string &title, const std::string &artist) const {
   BmsSearchResult result;
-  const std::string hash = lowerCopy(trimCopy(sha256));
-  const std::string md5Hash = lowerCopy(trimCopy(md5));
+  const std::string hash = normalizedHash(sha256);
+  const std::string md5Hash = normalizedHash(md5);
   const std::string titleOnly = trimCopy(title);
   const std::string artistOnly = trimCopy(artist);
   const std::string titleQuery = trimCopy(
@@ -245,8 +245,8 @@ BmsSearchResult BmsSearchService::downloadCandidate(
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback) const {
   BmsSearchResult result;
-  const std::string hash = lowerCopy(trimCopy(sha256));
-  const std::string md5Hash = lowerCopy(trimCopy(md5));
+  const std::string hash = normalizedHash(sha256);
+  const std::string md5Hash = normalizedHash(md5);
   const std::string archiveKey = hash.empty() ? md5Hash : hash;
   if (progressCallback) {
     progressCallback({.message = "Preparing Horie archive download"});

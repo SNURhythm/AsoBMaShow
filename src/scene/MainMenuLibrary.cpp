@@ -1,5 +1,6 @@
 #include "MainMenuLibrary.h"
 
+#include "../ChartSqlExpressions.h"
 #include "../LongNoteModeUtils.h"
 #include "../SqliteRAII.h"
 #include "../view/ClearLampColors.h"
@@ -21,6 +22,10 @@ std::string folderKeyForLevel(int tableId, const std::string &level) {
   return "level:" + std::to_string(tableId) + ":" + level;
 }
 
+std::string folderKeyForCourseTable(int tableId) {
+  return "course-table:" + std::to_string(tableId);
+}
+
 std::string folderKeyForCourseGroup(int tableId,
                                     const std::string &groupName) {
   return "course-group:" + std::to_string(tableId) + ":" + groupName;
@@ -31,13 +36,11 @@ std::string folderKeyForCourse(int courseId) {
 }
 
 namespace {
+using asobmshow::chart_sql::matchedChartPathSubquery;
+using asobmshow::chart_sql::preferredChartPredicate;
+
 std::string_view columnText(sqlite3_stmt *stmt, int column) {
-  const auto *text =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, column));
-  if (text == nullptr) {
-    return {};
-  }
-  return {text, static_cast<size_t>(sqlite3_column_bytes(stmt, column))};
+  return sqliteColumnTextView(stmt, column);
 }
 
 struct FolderClearAggregate {
@@ -62,44 +65,6 @@ struct FolderClearAggregate {
     return minimumClearRank;
   }
 };
-
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
-
-std::string chartSourcePriorityExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_priority, 3)";
-}
-
-std::string chartSourceArchiveSizeExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_archive_size, " +
-         kMaxSqlIntegerText + ")";
-}
-
-std::string preferredChartPredicate(const std::string &alias) {
-  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
-  const std::string currentPriority = chartSourcePriorityExpr(alias);
-  const std::string betterArchiveSize =
-      chartSourceArchiveSizeExpr("cm_better");
-  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
-
-  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
-         "cm_better.path != " +
-         alias + ".path AND ((" + alias +
-         ".sha256 != '' AND cm_better.sha256 = " + alias +
-         ".sha256) OR (" + alias +
-         ".sha256 = '' AND " + alias +
-         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
-         betterPriority + " < " + currentPriority + " OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " = " + currentArchiveSize +
-         " AND cm_better.path < " + alias + ".path)))";
-}
-
-std::string chartSourceOrderBy(const std::string &alias) {
-  return chartSourcePriorityExpr(alias) + ", " +
-         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
-}
 
 void addClearMarkCount(FolderClearMarkCounts &counts,
                        const std::string &folderKey, int clearRank) {
@@ -199,13 +164,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_table_entries dte "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-      "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) "
-      "ORDER BY " +
-          chartSourceOrderBy("cm_match") +
-          " LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = " +
+          matchedChartPathSubquery("dte") + " "
       "ORDER BY dte.table_id, dte.level",
       [&](sqlite3_stmt *row) {
         const int tableId = sqlite3_column_int(row, 0);
@@ -244,6 +204,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       });
 
   int currentCourseId = 0;
+  int currentCourseTableId = 0;
+  std::string currentCourseTableKey;
   int currentCourseGroupTableId = 0;
   std::string currentCourseGroupName;
   std::string currentCourseGroupKey;
@@ -254,18 +216,17 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) "
-      "ORDER BY " +
-          chartSourceOrderBy("cm_match") +
-          " LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = " +
+          matchedChartPathSubquery("dce") + " "
       "ORDER BY dc.table_id, dc.group_name, dc.id, dce.sort_order",
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
         const std::string_view groupName = columnText(row, 2);
+        if (tableId != currentCourseTableId) {
+          currentCourseTableId = tableId;
+          currentCourseTableKey = folderKeyForCourseTable(tableId);
+        }
         if (tableId != currentCourseGroupTableId ||
             groupName != std::string_view(currentCourseGroupName)) {
           currentCourseGroupTableId = tableId;
@@ -280,6 +241,11 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
 
         addFolderChartForAllLongNoteModes(
             aggregates, scoreRanks, "courses", columnText(row, 3),
+            columnText(row, 4), columnText(row, 5),
+            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
+            sqlite3_column_int(row, 8));
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentCourseTableKey, columnText(row, 3),
             columnText(row, 4), columnText(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
             sqlite3_column_int(row, 8));

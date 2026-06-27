@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -110,7 +111,7 @@ struct PackageSourceLookupResult {
 
 std::string trimCopy(const std::string &value);
 std::string lowerCopy(std::string value);
-bool endsWith(std::string_view value, std::string_view suffix);
+std::string normalizedHash(const std::string &value);
 bool hostMatches(const std::string &host, std::string_view domain);
 std::string replaceAll(std::string value, std::string_view needle,
                        std::string_view replacement);

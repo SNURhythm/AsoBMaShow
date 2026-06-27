@@ -1,7 +1,8 @@
 #include "Utils.h"
-#include <codecvt>
-#include <iostream>
-#include <fstream>
+#include <cstdlib>
+#include <cstdint>
+#include <iterator>
+#include "path.h"
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
@@ -9,6 +10,38 @@
 #elif TARGET_OS_ANDROID
 #include "AndroidNatives.h"
 #endif
+
+namespace {
+constexpr char32_t kUnicodeReplacementChar = 0xFFFD;
+
+bool isUnicodeScalarValue(char32_t codePoint) {
+  return codePoint <= 0x10FFFF &&
+         (codePoint < 0xD800 || codePoint > 0xDFFF);
+}
+
+void appendUtf8CodePoint(std::string &output, char32_t codePoint) {
+  if (!isUnicodeScalarValue(codePoint)) {
+    codePoint = kUnicodeReplacementChar;
+  }
+
+  if (codePoint <= 0x7F) {
+    output.push_back(static_cast<char>(codePoint));
+  } else if (codePoint <= 0x7FF) {
+    output.push_back(static_cast<char>(0xC0 | (codePoint >> 6)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  } else if (codePoint <= 0xFFFF) {
+    output.push_back(static_cast<char>(0xE0 | (codePoint >> 12)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  } else {
+    output.push_back(static_cast<char>(0xF0 | (codePoint >> 18)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  }
+}
+} // namespace
+
 unsigned int parallel_worker_count(size_t n) {
   if (n == 0) {
     return 0;
@@ -63,15 +96,32 @@ void parallel_for(size_t n, std::function<void(int start, int end)> f) {
   }
 }
 
-std::string ws2s(const std::wstring &wstr) {
-  return std::string().assign(wstr.begin(), wstr.end());
-}
-
 std::string ws2s_utf8(const std::wstring &wstr) {
-  using convert_typeX = std::codecvt_utf8<wchar_t>;
-  std::wstring_convert<convert_typeX, wchar_t> converterX;
-
-  return converterX.to_bytes(wstr);
+  std::string output;
+  output.reserve(wstr.size());
+  for (std::size_t i = 0; i < wstr.size(); ++i) {
+    char32_t codePoint = static_cast<char32_t>(wstr[i]);
+    if constexpr (sizeof(wchar_t) == 2) {
+      if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+        if (i + 1 < wstr.size()) {
+          const char32_t low = static_cast<char32_t>(wstr[i + 1]);
+          if (low >= 0xDC00 && low <= 0xDFFF) {
+            codePoint =
+                0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+            ++i;
+          } else {
+            codePoint = kUnicodeReplacementChar;
+          }
+        } else {
+          codePoint = kUnicodeReplacementChar;
+        }
+      } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+        codePoint = kUnicodeReplacementChar;
+      }
+    }
+    appendUtf8CodePoint(output, codePoint);
+  }
+  return output;
 }
 
 std::filesystem::path
@@ -97,10 +147,64 @@ Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
   }
   return std::filesystem::path(WindowsUserDir) / GameName / SubPath;
 #else
-  // assume Unix
-  return std::filesystem::path(std::getenv("HOME")) / GameName / SubPath;
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return std::filesystem::path(home) / GameName / SubPath;
+  }
+  std::error_code currentPathError;
+  const std::filesystem::path currentPath =
+      std::filesystem::current_path(currentPathError);
+  if (!currentPathError && !currentPath.empty()) {
+    return currentPath / GameName / SubPath;
+  }
+  return std::filesystem::path(GameName) / SubPath;
 #endif
 #endif
+}
+
+std::filesystem::path Utils::GetStoragePathRelativeToDocuments(
+    const std::filesystem::path &Path, const std::filesystem::path &SubPath) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const std::filesystem::path documents =
+      GetDocumentsPath(SubPath).lexically_normal();
+  const std::filesystem::path normalizedPath = Path.lexically_normal();
+  const std::filesystem::path relative =
+      normalizedPath.lexically_relative(documents);
+  if (relative.empty()) {
+    return Path;
+  }
+
+  const auto firstComponent = relative.begin();
+  if (firstComponent == relative.end() ||
+      *firstComponent == std::filesystem::path("..")) {
+    return Path;
+  }
+  if (*firstComponent == std::filesystem::path(".") &&
+      std::next(firstComponent) == relative.end()) {
+    return {};
+  }
+  return relative;
+#else
+  (void)SubPath;
+  return Path;
+#endif
+}
+
+std::string Utils::GetStoragePathUtf8RelativeToDocuments(
+    const std::filesystem::path &Path, const std::filesystem::path &SubPath) {
+  return path_t_to_utf8(
+      fspath_to_path_t(GetStoragePathRelativeToDocuments(Path, SubPath)));
+}
+
+bool Utils::EnsureDirectoryExists(const std::filesystem::path &Path,
+                                  std::error_code &Error) {
+  Error.clear();
+  if (Path.empty()) {
+    Error = std::make_error_code(std::errc::invalid_argument);
+    return false;
+  }
+  std::filesystem::create_directories(Path, Error);
+  return !Error;
 }
 
 threadRAII::threadRAII(std::thread &&_th) { th = std::move(_th); }

@@ -136,7 +136,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
     BmsSearchResult &result) {
-  const std::string md5Hash = lowerCopy(trimCopy(md5));
+  const std::string md5Hash = normalizedHash(md5);
   if (!isHexStringOfLength(md5Hash, 32)) {
     return false;
   }

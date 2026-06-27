@@ -261,9 +261,8 @@ bool trackMatchesSearch(const music_playlist::MusicTrack &track,
       track.subArtist + " " + track.genre + " " + track.trackId + " " +
       track.chartId + " " + meta.Title + " " + meta.SubTitle + " " +
       meta.Artist + " " + meta.SubArtist + " " + meta.Genre + " " +
-      meta.MD5 + " " + meta.SHA256 + " " +
-      path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + " " +
-      path_t_to_utf8(fspath_to_path_t(meta.Folder));
+      meta.MD5 + " " + meta.SHA256 + " " + fspath_to_utf8(meta.BmsPath) +
+      " " + fspath_to_utf8(meta.Folder);
   return containsText(searchable, query);
 }
 
@@ -1172,9 +1171,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   panel->addView(workspace);
 
   auto *trackList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+      music_playlist::SameTrackIdentity);
   if (isLibrary) {
     libraryList = trackList;
   } else {
@@ -1521,10 +1518,8 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistSelectionDetailText->setThemedColor(ui_theme::textSecondary);
   editorColumn->addView(playlistSelectionDetailText);
 
-  playlistList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+  playlistList =
+      new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
   playlistList->setFlex(1);
   playlistList->itemHeight = kTrackRowHeight;
   playlistList->reserveScrollbarGutter = true;
@@ -1811,10 +1806,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueTitleText->setThemedColor(ui_theme::textSecondary);
   queueColumn->addView(queueTitleText);
 
-  playerQueueList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+  playerQueueList =
+      new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
   playerQueueList->setFlex(1);
   playerQueueList->itemHeight = kTrackRowHeight;
   playerQueueList->reserveScrollbarGutter = true;
@@ -3504,7 +3497,7 @@ void MusicPlayerScene::removePlaylistTrack() {
 
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromSelectedPlaylist(
-          track->representativeChart, errorMessage)) {
+          track->representativeChart, errorMessage, track->storedItemId)) {
     pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -3549,7 +3542,8 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
 
   std::string errorMessage;
   if (context.musicPlayer.MoveChartInSelectedPlaylist(
-          track->representativeChart, delta, errorMessage)) {
+          track->representativeChart, delta, errorMessage,
+          track->storedItemId)) {
     pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();

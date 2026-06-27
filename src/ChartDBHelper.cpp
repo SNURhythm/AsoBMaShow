@@ -2,7 +2,10 @@
 
 #include "ChartDBHelper.h"
 #include "ArchiveFile.h"
+#include "BmsChartFile.h"
 #include "BmsMetadataText.h"
+#include "ChartMetaSql.h"
+#include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -13,7 +16,6 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
-#include <codecvt>
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -26,6 +28,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,36 +45,15 @@
 
 namespace {
 using json = nlohmann::json;
+using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::kChartMetaColumnCount;
+using asobmshow::chart_sql::kChartMetaSelectColumns;
+using asobmshow::chart_sql::matchedChartPathSubquery;
+using asobmshow::chart_sql::normalizedSqlHash;
+using asobmshow::chart_sql::preferredChartPredicate;
+using asobmshow::chart_sql::sqlTextHasValue;
 
-constexpr const char *kChartMetaSelectColumns = "cm.path,"
-                                                "cm.md5,"
-                                                "cm.sha256,"
-                                                "cm.title,"
-                                                "cm.subtitle,"
-                                                "cm.genre,"
-                                                "cm.artist,"
-                                                "cm.sub_artist,"
-                                                "cm.folder,"
-                                                "cm.stage_file,"
-                                                "cm.banner,"
-                                                "cm.back_bmp,"
-                                                "cm.preview,"
-                                                "cm.level,"
-                                                "cm.difficulty,"
-                                                "cm.total,"
-                                                "cm.bpm,"
-                                                "cm.max_bpm,"
-                                                "cm.min_bpm,"
-                                                "cm.length,"
-                                                "cm.rank,"
-                                                "cm.player,"
-                                                "cm.keys,"
-                                                "cm.total_notes,"
-                                                "cm.total_long_notes,"
-                                                "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes,"
-                                                "cm.ln_mode";
-constexpr int kChartMetaColumnCount = 28;
 constexpr int kNoPlayClearMarkRank = -1;
 
 constexpr const char *kDifficultyEntrySelectColumns =
@@ -167,15 +149,11 @@ constexpr const char *kDifficultyCourseEntrySearchText =
 constexpr const char *kSolidArchiveSelectColumns =
     "sa.path, sa.name, sa.archive_size, sa.uncompressed_size, sa.file_count";
 constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
-constexpr int kChartDatabaseSchemaVersion = 1;
-constexpr const char *kChartFavoriteColumn =
-    "CASE WHEN EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-    "cf.chart_path = cm.path) THEN 1 ELSE 0 END";
+constexpr int kChartDatabaseSchemaVersion = 2;
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -188,30 +166,160 @@ DifficultyLabelCache gDifficultyLabelCache;
 std::atomic<std::uint64_t> gLibraryRevision{1};
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
+void invalidateDifficultyLabelCache();
 
 void bumpLibraryRevision() {
   gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::normalizedHash;
+using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::legacyBmsRelativePathExpr;
+
+std::string sqlColumn(std::string_view alias, std::string_view column) {
+  return std::string(alias) + "." + std::string(column);
 }
 
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
+std::string storedHashColumn(std::string_view alias, std::string_view column) {
+  return sqlColumn(alias, column);
 }
 
-std::string normalizedHash(const std::string &value) {
-  return lowerCopy(trimCopy(value));
+std::string sqlHashColumnHasValue(std::string_view alias,
+                                  std::string_view column) {
+  return sqlColumn(alias, column) + " != ''";
 }
 
-std::string storedChartPathText(std::filesystem::path path) {
-  if (path.empty()) {
-    return "";
+std::string chartFavoriteIdentityKey(const char *favoriteAlias);
+
+std::string chartFavoriteChartCandidateBranch(const std::string &matchCondition,
+                                              int identityRank) {
+  std::string query = "SELECT cm.*, cf.added_at AS favorite_added_at, ";
+  query += chartFavoriteIdentityKey("cf");
+  query += " AS favorite_identity_key, ";
+  query += std::to_string(identityRank);
+  query += " AS identity_rank FROM chart_favorites cf JOIN chart_meta cm ON ";
+  query += matchCondition;
+  return query;
+}
+
+std::string chartFavoriteChartCandidateQuery() {
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  const std::string favoriteSha256 = "cf.chart_sha256";
+  const std::string favoriteMd5 = "cf.chart_md5";
+  const std::string favoritePath = "cf.chart_path";
+  const std::string shaMatch =
+      favoriteSha256 + " != '' AND cm.sha256 = " + favoriteSha256;
+  const std::string md5Match =
+      favoriteMd5 + " != '' AND cm.md5 = " + favoriteMd5;
+  const std::string nonHashMatch =
+      "NOT (" + shaMatch + ") AND NOT (" + md5Match + ")";
+
+  std::vector<std::string> branches;
+  branches.push_back(chartFavoriteChartCandidateBranch(shaMatch, 0));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      md5Match + " AND NOT (" + shaMatch + ")", 1));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " != '' AND cm.path = " + favoritePath + " AND " +
+          nonHashMatch,
+      2));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " != '' AND cm.path = '" + prefix + "' || " +
+          favoritePath + " AND " + nonHashMatch,
+      2));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " LIKE '" + prefix + "%' AND cm.path = substr(" +
+          favoritePath + ", length('" + prefix + "') + 1) AND " +
+          nonHashMatch,
+      2));
+
+  std::string query;
+  for (std::size_t i = 0; i < branches.size(); ++i) {
+    if (i > 0) {
+      query += " UNION ALL ";
+    }
+    query += branches[i];
   }
-  ChartDBHelper::ToRelativePath(path);
-  path = path.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(path));
+  return query;
+}
+
+std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  return chartPath +
+         " != '' AND (EXISTS (SELECT 1 FROM chart_favorites cf_path WHERE "
+         "cf_path.chart_path = " +
+         chartPath +
+         ") OR EXISTS (SELECT 1 FROM chart_favorites cf_path_prefixed WHERE "
+         "cf_path_prefixed.chart_path = '" +
+         prefix + "' || " + chartPath +
+         ") OR (" + chartPath + " LIKE '" + prefix +
+         "%' AND EXISTS (SELECT 1 FROM chart_favorites cf_path_legacy WHERE "
+         "cf_path_legacy.chart_path = substr(" +
+         chartPath + ", length('" + prefix + "') + 1))))";
+}
+
+std::string chartFavoriteIndexedPredicate(const char *chartAlias) {
+  const std::string alias(chartAlias);
+  const std::string path = alias + ".path";
+  const std::string sha256 = alias + ".sha256";
+  const std::string md5 = alias + ".md5";
+  return "((" + chartFavoriteIndexedPathPredicate(path) + ") OR (" + sha256 +
+         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_sha WHERE "
+         "cf_sha.chart_sha256 = " +
+         sha256 +
+         ")) OR (" + md5 +
+         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_md5 WHERE "
+         "cf_md5.chart_md5 = " +
+         md5 + ")))";
+}
+
+std::string chartFavoriteColumnExpr(const char *chartAlias) {
+  return "CASE WHEN " + chartFavoriteIndexedPredicate(chartAlias) +
+         " THEN 1 ELSE 0 END";
+}
+
+std::string chartFavoriteIdentityKey(const char *favoriteAlias) {
+  const std::string alias(favoriteAlias);
+  return "COALESCE(NULLIF(" + alias + ".chart_sha256, ''), NULLIF(" + alias +
+         ".chart_md5, ''), " + alias + ".chart_path)";
+}
+
+struct ChartFavoriteIdentity {
+  std::string chartPath;
+  std::string sha256;
+  std::string md5;
+};
+
+ChartFavoriteIdentity chartFavoriteIdentityFor(
+    const bms_parser::ChartMeta &chartMeta) {
+  return {
+      .chartPath = ChartDBHelper::StoredChartPathText(chartMeta.BmsPath),
+      .sha256 = normalizedHash(chartMeta.SHA256),
+      .md5 = normalizedHash(chartMeta.MD5),
+  };
+}
+
+std::string chartFavoriteDeletePredicate() {
+  return "chart_path = ?1 OR (?2 != '' AND chart_sha256 = ?2) "
+         "OR (?3 != '' AND chart_md5 = ?3)";
+}
+
+void bindChartFavoriteDeleteIdentity(sqlite3_stmt *stmt,
+                                     const ChartFavoriteIdentity &identity) {
+  bindSqliteText(stmt, 1, identity.chartPath);
+  bindSqliteText(stmt, 2, identity.sha256);
+  bindSqliteText(stmt, 3, identity.md5);
+}
+
+std::string normalizedDifficultyText(const std::string &difficultyText) {
+  return lowerCopy(trimCopy(difficultyText));
+}
+
+void bindDifficultySearchText(sqlite3_stmt *stmt, int &bindIndex,
+                              const std::string &difficultyText) {
+  const std::string difficulty = normalizedDifficultyText(difficultyText);
+  bindSqliteText(stmt, bindIndex++, difficulty);
+  bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
 }
 
 std::string jsonValueToString(const json &value,
@@ -256,11 +364,6 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   std::ostringstream stream;
   stream << file.rdbuf();
   return stream.str();
-}
-
-bool sqliteMessageContains(const char *message, const char *needle) {
-  return message != nullptr && std::string(message).find(needle) !=
-                                   std::string::npos;
 }
 
 bool pathIsInsideDirectory(const std::filesystem::path &path,
@@ -346,14 +449,6 @@ bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
 
-bool isBmsChartFile(const std::filesystem::path &path) {
-  std::string ext = path.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return ext == ".bms" || ext == ".bme" || ext == ".bml";
-}
-
 bool hashLooksComplete(const std::string &value, size_t expectedLength) {
   if (value.size() != expectedLength) {
     return false;
@@ -393,9 +488,9 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   ArchiveScanResult result;
   std::vector<archive_file::Entry> entries;
   std::string errorMessage;
+  const std::string archiveText = fspath_to_utf8(archivePath);
   archive_file::appendDebugLogLine(
-      "Scanning archive for BMS charts: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)));
+      "Scanning archive for BMS charts: " + archiveText);
   if (!pauseIfNeeded()) {
     return result;
   }
@@ -403,12 +498,9 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
                                  pauseCallback)) {
     if (!errorMessage.empty()) {
       SDL_Log("Failed to scan archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
-              errorMessage.c_str());
+              archiveText.c_str(), errorMessage.c_str());
       archive_file::appendDebugLogLine(
-          "Failed to scan archive: " +
-          path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
-          errorMessage);
+          "Failed to scan archive: " + archiveText + ": " + errorMessage);
     }
     return result;
   }
@@ -436,7 +528,8 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
         result.readable = false;
         return result;
       }
-      if (entry.directory || !isBmsChartFile(entry.path)) {
+      if (entry.directory ||
+          !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
         continue;
       }
       const std::filesystem::path chartPath =
@@ -451,8 +544,7 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   }
 
   archive_file::appendDebugLogLine(
-      "Archive chart scan complete: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)) +
+      "Archive chart scan complete: " + archiveText +
       " charts=" + std::to_string(result.chartPaths.size()) +
       " entries=" + std::to_string(entries.size()) +
       " files=" + std::to_string(result.fileCount) +
@@ -460,8 +552,7 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
       " estimatedUnpacked=" + std::to_string(result.uncompressedSize));
   if (result.solid) {
     archive_file::appendDebugLogLine(
-        "Skipped chart probing for solid archive: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)));
+        "Skipped chart probing for solid archive: " + archiveText);
   }
   return result;
 }
@@ -1044,38 +1135,49 @@ splitCourseFolderAndLevel(const std::string &courseName,
   return {"", courseName};
 }
 
+void logSqlErrorText(const char *context, const std::string &error) {
+  std::cerr << "SQL error while " << context << ": " << error << "\n";
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlErrorText(context, sqliteDatabaseError(db));
+}
+
+void logSdlSqlErrorText(const char *context, const std::string &error) {
+  SDL_Log("SQL error while %s: %s", context, error.c_str());
+}
+
+void logSdlSqlError(const char *context, sqlite3 *db) {
+  logSdlSqlErrorText(context, sqliteDatabaseError(db));
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while " << context << ": "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                                  const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK &&
-      !sqliteMessageContains(errMsg.get(), "duplicate column name")) {
-    std::cerr << "SQL error while " << context << ": "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
-    return false;
+  return executeSqliteLogged(db, query, context, logSqlErrorText,
+                             "duplicate column name");
+}
+
+void beginSqliteTransaction(sqlite3 *db, const char *context) {
+  if (const auto error = executeSqlite(db, "BEGIN")) {
+    SDL_Log("Failed to begin %s transaction: %s", context, error->c_str());
   }
-  return true;
+}
+
+void commitSqliteTransaction(sqlite3 *db, const char *context) {
+  if (const auto error = executeSqlite(db, "COMMIT")) {
+    SDL_Log("Failed to commit %s transaction: %s", context, error->c_str());
+  }
 }
 
 int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while reading chart database version: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("reading chart database version", db);
     return 0;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -1092,34 +1194,11 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
-  exists = false;
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(
-      db,
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-      stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
-              << "\n";
+  if (const auto error = querySqliteTableExists(db, tableName, exists)) {
+    logSqlErrorText(context, *error);
     return false;
   }
-  sqlite3_bind_text(stmt.get(), 1, tableName, -1, SQLITE_STATIC);
-  const int stepRc = sqlite3_step(stmt.get());
-  if (stepRc == SQLITE_ROW) {
-    exists = true;
-    return true;
-  }
-  if (stepRc == SQLITE_DONE) {
-    return true;
-  }
-  std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
-            << "\n";
-  return false;
-}
-
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
-         SQLITE_OK;
+  return true;
 }
 
 bool createChartMetaTableSchema(sqlite3 *db) {
@@ -1173,7 +1252,7 @@ std::optional<std::string> normalizedPathTextForStorage(
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
 
-  const std::string normalized = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string normalized = fspath_to_utf8(path);
   if (normalized == original) {
     return std::nullopt;
   }
@@ -1184,7 +1263,7 @@ bool normalizedPathValueExists(sqlite3_stmt *stmt,
                                const std::string &normalized) {
   sqlite3_reset(stmt);
   sqlite3_clear_bindings(stmt);
-  bindText(stmt, 1, normalized);
+  bindSqliteText(stmt, 1, normalized);
   const bool exists = sqlite3_step(stmt) == SQLITE_ROW;
   return exists;
 }
@@ -1206,10 +1285,8 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   selectQuery += column;
   selectQuery += " != ''";
 
-  sqlite3_stmt *rawSelectStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, selectQuery.c_str(), -1, &rawSelectStmt,
-                              nullptr);
-  SqliteStatementHandle selectStmt(rawSelectStmt);
+  SqliteStatementHandle selectStmt;
+  int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -1235,25 +1312,21 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   std::string updateQuery =
       std::string(primaryKey ? "UPDATE OR IGNORE " : "UPDATE ") + table +
       " SET " + column + " = ? WHERE rowid = ?";
-  sqlite3_stmt *rawUpdateStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, updateQuery.c_str(), -1, &rawUpdateStmt, nullptr);
-  SqliteStatementHandle updateStmt(rawUpdateStmt);
+  SqliteStatementHandle updateStmt;
+  rc = prepareSqliteStatement(db, updateQuery, updateStmt);
   if (rc != SQLITE_OK) {
     return false;
   }
 
-  SqliteStatementHandle existsStmt(nullptr);
-  SqliteStatementHandle deleteStmt(nullptr);
+  SqliteStatementHandle existsStmt;
+  SqliteStatementHandle deleteStmt;
   if (primaryKey) {
     std::string existsQuery = "SELECT 1 FROM ";
     existsQuery += table;
     existsQuery += " WHERE ";
     existsQuery += column;
     existsQuery += " = ? LIMIT 1";
-    sqlite3_stmt *rawExistsStmt = nullptr;
-    rc = sqlite3_prepare_v2(db, existsQuery.c_str(), -1, &rawExistsStmt,
-                            nullptr);
-    existsStmt.reset(rawExistsStmt);
+    rc = prepareSqliteStatement(db, existsQuery, existsStmt);
     if (rc != SQLITE_OK) {
       return false;
     }
@@ -1261,10 +1334,7 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
     std::string deleteQuery = "DELETE FROM ";
     deleteQuery += table;
     deleteQuery += " WHERE rowid = ?";
-    sqlite3_stmt *rawDeleteStmt = nullptr;
-    rc = sqlite3_prepare_v2(db, deleteQuery.c_str(), -1, &rawDeleteStmt,
-                            nullptr);
-    deleteStmt.reset(rawDeleteStmt);
+    rc = prepareSqliteStatement(db, deleteQuery, deleteStmt);
     if (rc != SQLITE_OK) {
       return false;
     }
@@ -1274,7 +1344,7 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   for (const auto &item : pending) {
     sqlite3_reset(updateStmt.get());
     sqlite3_clear_bindings(updateStmt.get());
-    bindText(updateStmt.get(), 1, item.normalized);
+    bindSqliteText(updateStmt.get(), 1, item.normalized);
     sqlite3_bind_int64(updateStmt.get(), 2, item.rowid);
     rc = sqlite3_step(updateStmt.get());
     if (rc == SQLITE_DONE && sqlite3_changes(db) > 0) {
@@ -1301,53 +1371,29 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   return changed;
 }
 
+bool normalizeStoredHashColumnChecked(sqlite3 *db, const char *table,
+                                      const char *column, bool &changed) {
+  int changedCount = 0;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, table, column, normalizedSqlHash(column),
+          "normalizing stored chart hash column", logSqlErrorText,
+          &changedCount)) {
+    return false;
+  }
+
+  if (changedCount > 0) {
+    SDL_Log("Normalized %d stored chart hashes in %s.%s", changedCount, table,
+            column);
+    changed = true;
+  }
+  return true;
+}
+
 sqlite3_int64 clampSqlInteger(std::uint64_t value) {
   return value > static_cast<std::uint64_t>(
                      std::numeric_limits<sqlite3_int64>::max())
              ? std::numeric_limits<sqlite3_int64>::max()
              : static_cast<sqlite3_int64>(value);
-}
-
-std::string chartSourcePriorityExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_priority, 3)";
-}
-
-std::string chartSourceArchiveSizeExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_archive_size, " +
-         kMaxSqlIntegerText + ")";
-}
-
-std::string chartSourceOrderBy(const std::string &alias) {
-  return chartSourcePriorityExpr(alias) + ", " +
-         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
-}
-
-std::string chartArtworkOrderBy(const std::string &alias) {
-  return "CASE WHEN NULLIF(TRIM(" + alias +
-         ".stage_file), '') IS NOT NULL THEN 0 WHEN NULLIF(TRIM(" + alias +
-         ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
-}
-
-std::string preferredChartPredicate(const std::string &alias) {
-  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
-  const std::string currentPriority = chartSourcePriorityExpr(alias);
-  const std::string betterArchiveSize =
-      chartSourceArchiveSizeExpr("cm_better");
-  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
-
-  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
-         "cm_better.path != " +
-         alias + ".path AND ((" + alias +
-         ".sha256 != '' AND cm_better.sha256 = " + alias +
-         ".sha256) OR (" + alias +
-         ".sha256 = '' AND " + alias +
-         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
-         betterPriority + " < " + currentPriority + " OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " = " + currentArchiveSize +
-         " AND cm_better.path < " + alias + ".path)))";
 }
 
 std::string scoreLongNoteModeExpr(const std::string &alias,
@@ -1376,9 +1422,16 @@ std::string chartClearMarkPredicate(const std::string &alias,
                                     int selectedLongNoteMode) {
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
-  return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256", lnModeExpr) +
-         ", " + scoreRankLookupExpr("1", alias + ".md5", lnModeExpr) + ", " +
-         scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
+  return "COALESCE(" +
+         scoreRankLookupExpr("0", storedHashColumn(alias, "sha256"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("1", storedHashColumn(alias, "md5"),
+                             lnModeExpr) +
+         ", " + scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
+         scoreRankLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
+                             lnModeExpr) +
+         ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
@@ -1388,9 +1441,277 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreRankLookupExpr("0", entryAlias + ".sha256", lnModeExpr) + ", " +
-         scoreRankLookupExpr("1", entryAlias + ".md5", lnModeExpr) + ", " +
+         scoreRankLookupExpr("0", storedHashColumn(entryAlias, "sha256"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("1", storedHashColumn(entryAlias, "md5"),
+                             lnModeExpr) +
+         ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
+}
+
+bool chartMetaQueryHasCourseFilter(const ChartMetaQuery &chartQuery) {
+  return chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+         chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
+}
+
+bool chartMetaQueryUsesDifficultyEntries(const ChartMetaQuery &chartQuery) {
+  return chartQuery.tableId > 0 && !chartQuery.coursesOnly &&
+         chartQuery.courseId <= 0 && chartQuery.courseTableId <= 0 &&
+         chartQuery.courseGroupName.empty();
+}
+
+bool chartMetaQueryUsesCourseEntries(const ChartMetaQuery &chartQuery) {
+  return chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+         chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
+}
+
+std::string matchedDifficultyEntryIdSubquery(
+    const std::string &courseEntryAlias = "dce",
+    const std::string &courseAlias = "dc",
+    const std::string &matchAlias = "dte_match") {
+  return "(SELECT " + matchAlias +
+         ".id FROM difficulty_table_entries " + matchAlias + " WHERE " +
+         matchAlias + ".table_id = " + courseAlias + ".table_id AND ((" +
+         sqlHashColumnHasValue(courseEntryAlias, "sha256") + " AND " +
+         storedHashColumn(matchAlias, "sha256") +
+         " = " + storedHashColumn(courseEntryAlias, "sha256") +
+         ") OR (" + sqlHashColumnHasValue(courseEntryAlias, "md5") +
+         " AND " + storedHashColumn(matchAlias, "md5") +
+         " = " + storedHashColumn(courseEntryAlias, "md5") +
+         ")) ORDER BY " + matchAlias +
+         ".sort_order, " + matchAlias + ".title COLLATE NOCASE LIMIT 1)";
+}
+
+void appendChartMetaFilters(std::string &query,
+                            const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.keyword.empty()) {
+    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
+             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
+  }
+
+  if (chartQuery.tableId > 0) {
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += storedHashColumn("dte", "sha256");
+    query += " FROM "
+             "difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND ";
+    query += sqlHashColumnHasValue("dte", "sha256");
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += ") OR cm.md5 IN (SELECT ";
+    query += storedHashColumn("dte", "md5");
+    query += " FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND ";
+    query += sqlHashColumnHasValue("dte", "md5");
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += "))";
+  }
+
+  if (chartMetaQueryHasCourseFilter(chartQuery)) {
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += storedHashColumn("dce", "sha256");
+    query += " FROM "
+             "difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE ";
+    query += sqlHashColumnHasValue("dce", "sha256");
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += ") OR cm.md5 IN (SELECT ";
+    query += storedHashColumn("dce", "md5");
+    query += " FROM difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE ";
+    query += sqlHashColumnHasValue("dce", "md5");
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += "))";
+  }
+
+  if (!chartQuery.difficultyText.empty()) {
+    const char *difficultyClause =
+        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
+        "OR lower(dte_filter.level) = @difficulty "
+        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
+        "dte_filter.level) LIKE @difficulty_like "
+        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
+        "@difficulty_like)";
+    query += " AND (cm.sha256 IN (SELECT ";
+    query += storedHashColumn("dte_filter", "sha256");
+    query += " FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE ";
+    query += sqlHashColumnHasValue("dte_filter", "sha256");
+    query += " ";
+    query += difficultyClause;
+    query += ") OR cm.md5 IN (SELECT ";
+    query += storedHashColumn("dte_filter", "md5");
+    query += " FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE ";
+    query += sqlHashColumnHasValue("dte_filter", "md5");
+    query += " ";
+    query += difficultyClause;
+    query += "))";
+  }
+  if (chartQuery.clearMarkFilter) {
+    query += " AND ";
+    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
+  }
+  if (chartQuery.favoritesOnly) {
+    query += " AND ";
+    query += chartFavoriteIndexedPredicate("cm");
+  }
+
+  query += " AND ";
+  query += preferredChartPredicate("cm");
+}
+
+void bindChartMetaFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
+                                   const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.keyword.empty()) {
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (chartQuery.tableId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+    if (!chartQuery.tableLevel.empty()) {
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
+    }
+  }
+  if (chartMetaQueryHasCourseFilter(chartQuery)) {
+    if (chartQuery.courseId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
+    }
+    if (chartQuery.courseTableId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
+    }
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
+  }
+  if (chartQuery.clearMarkFilter) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
+  }
+}
+
+void appendDifficultyEntryFilters(std::string &query,
+                                  const ChartMetaQuery &chartQuery) {
+  query += "WHERE dte.table_id = @table_id";
+
+  if (!chartQuery.tableLevel.empty()) {
+    query += " AND dte.level = @table_level";
+  }
+  if (!chartQuery.keyword.empty()) {
+    query += " AND ";
+    query += kDifficultyEntrySearchText;
+    query += " LIKE @text";
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    query +=
+        " AND (lower(dt.symbol || dte.level) = @difficulty "
+        "OR lower(dte.level) = @difficulty "
+        "OR lower(dt.name || ' ' || dt.symbol || dte.level) LIKE "
+        "@difficulty_like "
+        "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
+  }
+  if (chartQuery.clearMarkFilter) {
+    query += " AND ";
+    query += difficultyEntryClearMarkPredicate(
+        "dte", "cm", chartQuery.selectedLongNoteMode);
+  }
+}
+
+void bindDifficultyEntryFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
+                                         const ChartMetaQuery &chartQuery) {
+  sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+  if (!chartQuery.tableLevel.empty()) {
+    bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
+  }
+  if (!chartQuery.keyword.empty()) {
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
+  }
+  if (chartQuery.clearMarkFilter) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
+  }
+}
+
+void appendDifficultyCourseEntryFilters(std::string &query,
+                                        const ChartMetaQuery &chartQuery) {
+  query += "WHERE 1 = 1";
+
+  if (chartQuery.courseId > 0) {
+    query += " AND dce.course_id = @course_id";
+  }
+  if (chartQuery.courseTableId > 0) {
+    query += " AND dc.table_id = @course_table_id";
+  }
+  if (!chartQuery.courseGroupName.empty()) {
+    query += " AND dc.group_name = @course_group_name";
+  }
+  if (!chartQuery.keyword.empty()) {
+    query += " AND ";
+    query += kDifficultyCourseEntrySearchText;
+    query += " LIKE @text";
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    query +=
+        " AND (lower(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0')) = "
+        "@difficulty "
+        "OR lower(dt.symbol || dte.level) = @difficulty "
+        "OR lower(dce.level) = @difficulty "
+        "OR lower(dte.level) = @difficulty "
+        "OR lower(dt.symbol || dc.level) = @difficulty "
+        "OR lower(dc.level) = @difficulty "
+        "OR lower(dc.name) LIKE @difficulty_like "
+        "OR lower(dc.group_name || ' ' || dc.level) LIKE @difficulty_like)";
+  }
+}
+
+void bindDifficultyCourseEntryFilterParameters(
+    sqlite3_stmt *stmt, int &bindIndex, const ChartMetaQuery &chartQuery) {
+  if (chartQuery.courseId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
+  }
+  if (chartQuery.courseTableId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
+  }
+  if (!chartQuery.courseGroupName.empty()) {
+    bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
+  }
+  if (!chartQuery.keyword.empty()) {
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
+  }
 }
 
 bool createChartMetadataRebuildStateTable(sqlite3 *db) {
@@ -1413,16 +1734,14 @@ bool setChartMetadataRebuildRequired(sqlite3 *db, bool required) {
       "ON CONFLICT(id) DO UPDATE SET required = excluded.required, "
       "updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart metadata rebuild state",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, required ? 1 : 0);
   if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart metadata rebuild state", db);
     return false;
   }
   return true;
@@ -1507,6 +1826,73 @@ bool migrateChartDatabaseToVersion1(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool normalizeExistingChartTablePaths(sqlite3 *db, const char *table,
+                                      const char *column, bool primaryKey,
+                                      bool &changed) {
+  bool exists = false;
+  if (!sqliteTableExists(db, table, exists,
+                         "checking chart path normalization table")) {
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+  changed = normalizeStoredPathColumn(db, table, column, primaryKey) || changed;
+  return true;
+}
+
+bool normalizeExistingChartTableHashes(sqlite3 *db, const char *table,
+                                       const char *md5Column,
+                                       const char *sha256Column,
+                                       bool &changed) {
+  bool exists = false;
+  if (!sqliteTableExists(db, table, exists,
+                         "checking chart hash normalization table")) {
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+  return normalizeStoredHashColumnChecked(db, table, md5Column, changed) &&
+         normalizeStoredHashColumnChecked(db, table, sha256Column, changed);
+}
+
+bool migrateChartDatabaseToVersion2(sqlite3 *db, bool &completed) {
+  bool changed = false;
+  if (!normalizeExistingChartTablePaths(db, "chart_meta", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_meta", "folder", false,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_favorites", "chart_path",
+                                        true, changed) ||
+      !normalizeExistingChartTablePaths(db, "solid_archives", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "entries", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_scan_checkpoint",
+                                        "last_path", false, changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_scan_checkpoint",
+                                        "archive_path", false, changed) ||
+      !normalizeExistingChartTablePaths(db, "archive_scan_cache", "path",
+                                        true, changed) ||
+      !normalizeExistingChartTableHashes(db, "chart_meta", "md5", "sha256",
+                                         changed) ||
+      !normalizeExistingChartTableHashes(db, "chart_favorites", "chart_md5",
+                                         "chart_sha256", changed) ||
+      !normalizeExistingChartTableHashes(db, "difficulty_table_entries", "md5",
+                                         "sha256", changed) ||
+      !normalizeExistingChartTableHashes(db, "difficulty_course_entries",
+                                         "md5", "sha256", changed)) {
+    return false;
+  }
+  if (changed) {
+    invalidateDifficultyLabelCache();
+    bumpLibraryRevision();
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -1547,6 +1933,7 @@ bool runChartDatabaseMigrationPasses(
 bool migrateChartDatabaseSchema(sqlite3 *db) {
   static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
       {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
+      {2, "normalize chart identity storage", migrateChartDatabaseToVersion2},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -1558,33 +1945,27 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
                                        const std::filesystem::path &chartPath,
                                        int priority,
                                        sqlite3_int64 archiveSize) {
-  std::filesystem::path storedPath = chartPath;
-  ChartDBHelper::ToRelativePath(storedPath);
   const std::string storedPathText =
-      path_t_to_utf8(fspath_to_path_t(storedPath));
+      ChartDBHelper::StoredChartPathText(chartPath);
 
   const char *query =
       "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
       "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
       "OR source_archive_size IS NULL OR source_archive_size != ?)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart source preference update: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart source preference update",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, priority);
   sqlite3_bind_int64(stmt.get(), 2, archiveSize);
-  sqlite3_bind_text(stmt.get(), 3, storedPathText.c_str(), -1,
-                    SQLITE_TRANSIENT);
+  bindSqliteText(stmt.get(), 3, storedPathText);
   sqlite3_bind_int(stmt.get(), 4, priority);
   sqlite3_bind_int64(stmt.get(), 5, archiveSize);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart source preference: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart source preference", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1617,7 +1998,8 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
                            sqlite3_int64 &archiveSize,
                            sqlite3_int64 &mtimeNs) {
   std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error) || error) {
+  const bool regularFile = std::filesystem::is_regular_file(path, error);
+  if (error || !regularFile) {
     return false;
   }
   error.clear();
@@ -1639,17 +2021,11 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
 }
 
 std::string archivePathTextForDb(const std::filesystem::path &archivePath) {
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  storedPath = storedPath.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(storedPath));
+  return ChartDBHelper::StoredChartPathText(archivePath);
 }
 
 std::string checkpointPathTextForDb(const std::filesystem::path &path) {
-  std::filesystem::path storedPath = path;
-  ChartDBHelper::ToRelativePath(storedPath);
-  storedPath = storedPath.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(storedPath));
+  return ChartDBHelper::StoredChartPathText(path);
 }
 
 std::filesystem::path checkpointPathFromDbText(const std::string &text) {
@@ -1715,27 +2091,19 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
   if (!execSql(db, query, "creating chart scan checkpoint table")) {
     return false;
   }
-  if (normalizeStoredPathColumn(db, "chart_scan_checkpoint", "last_path",
-                                false) |
-      normalizeStoredPathColumn(db, "chart_scan_checkpoint", "archive_path",
-                                false)) {
-    bumpLibraryRevision();
-  }
   return true;
 }
 
 ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
   ChartScanCheckpoint checkpoint;
-  sqlite3_stmt *rawStmt = nullptr;
   const char *query =
       "SELECT scan_signature, phase, next_index, sub_index, last_path, "
       "archive_path, archive_size, archive_mtime_ns, last_inner_path "
       "FROM chart_scan_checkpoint WHERE id = 1";
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting chart scan checkpoint",
+                                    logSqlErrorText)) {
     return checkpoint;
   }
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -1773,27 +2141,24 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
       "archive_mtime_ns = excluded.archive_mtime_ns,"
       "last_inner_path = excluded.last_inner_path,"
       "updated_at = CURRENT_TIMESTAMP";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart scan checkpoint upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing chart scan checkpoint upsert",
+          logSqlErrorText)) {
     return false;
   }
-  bindText(stmt.get(), 1, checkpoint.scanSignature);
-  bindText(stmt.get(), 2, checkpoint.phase);
+  bindSqliteText(stmt.get(), 1, checkpoint.scanSignature);
+  bindSqliteText(stmt.get(), 2, checkpoint.phase);
   sqlite3_bind_int(stmt.get(), 3, std::max(0, checkpoint.nextIndex));
   sqlite3_bind_int(stmt.get(), 4, std::max(0, checkpoint.subIndex));
-  bindText(stmt.get(), 5, checkpointPathTextForDb(checkpoint.lastPath));
-  bindText(stmt.get(), 6, checkpointPathTextForDb(checkpoint.archivePath));
+  bindSqliteText(stmt.get(), 5, checkpointPathTextForDb(checkpoint.lastPath));
+  bindSqliteText(stmt.get(), 6, checkpointPathTextForDb(checkpoint.archivePath));
   sqlite3_bind_int64(stmt.get(), 7, checkpoint.archiveSize);
   sqlite3_bind_int64(stmt.get(), 8, checkpoint.archiveMtimeNs);
-  bindText(stmt.get(), 9, checkpoint.lastInnerPath);
-  rc = sqlite3_step(stmt.get());
+  bindSqliteText(stmt.get(), 9, checkpoint.lastInnerPath);
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting chart scan checkpoint", db);
     return false;
   }
   return true;
@@ -1841,9 +2206,6 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
       return false;
     }
   }
-  if (normalizeStoredPathColumn(db, "archive_scan_cache", "path", true)) {
-    bumpLibraryRevision();
-  }
   return true;
 }
 
@@ -1854,15 +2216,13 @@ ArchiveScanCacheRecord selectArchiveScanCache(
   const char *query =
       "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
       "chart_count FROM archive_scan_cache WHERE path = ?";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting archive scan cache",
+                                    logSqlErrorText)) {
     return record;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     record.found = true;
     record.archiveSize = sqlite3_column_int64(stmt.get(), 0);
@@ -1878,10 +2238,9 @@ ArchiveScanCacheRecord selectArchiveScanCache(
 
 std::vector<std::filesystem::path> selectArchiveScanCachePaths(sqlite3 *db) {
   std::vector<std::filesystem::path> paths;
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "SELECT path FROM archive_scan_cache", -1,
-                              &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc =
+      prepareSqliteStatement(db, "SELECT path FROM archive_scan_cache", stmt);
   if (rc != SQLITE_OK) {
     return paths;
   }
@@ -1935,25 +2294,22 @@ bool upsertArchiveScanCache(sqlite3 *db,
       "OR archive_scan_cache.uncompressed_size != excluded.uncompressed_size "
       "OR archive_scan_cache.file_count != excluded.file_count "
       "OR archive_scan_cache.chart_count != excluded.chart_count";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing archive scan cache upsert",
+                                    logSqlErrorText)) {
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   sqlite3_bind_int64(stmt.get(), 2, archiveSize);
   sqlite3_bind_int64(stmt.get(), 3, mtimeNs);
   sqlite3_bind_int(stmt.get(), 4, solid ? 1 : 0);
   sqlite3_bind_int64(stmt.get(), 5, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 6, std::max(0, fileCount));
   sqlite3_bind_int(stmt.get(), 7, std::max(0, chartCount));
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1963,21 +2319,16 @@ bool upsertArchiveScanCache(sqlite3 *db,
 bool deleteArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath) {
   const std::string pathText = archivePathTextForDb(archivePath);
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(
-      db, "DELETE FROM archive_scan_cache WHERE path = ?", -1, &rawStmt,
-      nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache delete: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt,
+          "preparing archive scan cache delete", logSqlErrorText)) {
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  bindSqliteText(stmt.get(), 1, pathText);
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1997,9 +2348,8 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
     return false;
   }
 
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string pathText =
+      ChartDBHelper::StoredChartPathText(archivePath);
   const std::string name = solidArchiveNameForPath(archivePath);
 
   const char *query =
@@ -2018,24 +2368,21 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
       "OR solid_archives.uncompressed_size != excluded.uncompressed_size "
       "OR solid_archives.file_count != excluded.file_count "
       "OR solid_archives.mtime_ns != excluded.mtime_ns";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive insert: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing solid archive insert",
+                                    logSqlErrorText)) {
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
-  bindText(stmt.get(), 2, name);
+  bindSqliteText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 2, name);
   sqlite3_bind_int64(stmt.get(), 3, archiveSize);
   sqlite3_bind_int64(stmt.get(), 4, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 5, std::max(0, fileCount));
   sqlite3_bind_int64(stmt.get(), 6, mtimeNs);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("inserting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -2043,23 +2390,18 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 }
 
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "DELETE FROM solid_archives WHERE path = ?",
-                              -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive delete: "
-              << sqlite3_errmsg(db) << "\n";
+  const std::string pathText =
+      ChartDBHelper::StoredChartPathText(archivePath);
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM solid_archives WHERE path = ?", stmt,
+          "preparing solid archive delete", logSqlErrorText)) {
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  bindSqliteText(stmt.get(), 1, pathText);
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -2071,13 +2413,10 @@ bool deleteChartMetaInArchive(sqlite3 *db,
   std::vector<bms_parser::ChartMeta> chartMetas;
   ChartDBHelper::GetInstance().SelectAllChartMeta(db, chartMetas);
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "DELETE FROM chart_meta WHERE path = ?", -1,
-                              &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive chart delete: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM chart_meta WHERE path = ?", stmt,
+          "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
 
@@ -2088,16 +2427,14 @@ bool deleteChartMetaInArchive(sqlite3 *db,
       continue;
     }
 
-    std::filesystem::path storedPath = meta.BmsPath;
-    ChartDBHelper::ToRelativePath(storedPath);
-    const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+    const std::string pathText =
+        ChartDBHelper::StoredChartPathText(meta.BmsPath);
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
-    bindText(stmt.get(), 1, pathText);
-    rc = sqlite3_step(stmt.get());
+    bindSqliteText(stmt.get(), 1, pathText);
+    const int rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting archive chart: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting archive chart", db);
       return changed;
     }
     changed = sqlite3_changes(db) > 0 || changed;
@@ -2107,10 +2444,8 @@ bool deleteChartMetaInArchive(sqlite3 *db,
 
 std::vector<std::filesystem::path> selectSolidArchivePaths(sqlite3 *db) {
   std::vector<std::filesystem::path> paths;
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "SELECT path FROM solid_archives", -1, &rawStmt,
-                              nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, "SELECT path FROM solid_archives", stmt);
   if (rc != SQLITE_OK) {
     return paths;
   }
@@ -2133,17 +2468,15 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
   auto query =
       "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
       "@symbol AND source_url = @source_url";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
-  bindText(stmt.get(), 1, name);
-  bindText(stmt.get(), 2, symbol);
-  bindText(stmt.get(), 3, sourceUrl);
+  bindSqliteText(stmt.get(), 1, name);
+  bindSqliteText(stmt.get(), 2, symbol);
+  bindSqliteText(stmt.get(), 3, sourceUrl);
   int id = 0;
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     id = sqlite3_column_int(stmt.get(), 0);
@@ -2158,15 +2491,13 @@ int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
 
   auto query = "SELECT id FROM difficulty_tables WHERE source_url = "
                "@source_url ORDER BY id LIMIT 1";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while looking up difficulty table source URL: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "looking up difficulty table source URL",
+                                    logSqlErrorText)) {
     return 0;
   }
-  bindText(stmt.get(), 1, sourceUrl);
+  bindSqliteText(stmt.get(), 1, sourceUrl);
   int id = 0;
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     id = sqlite3_column_int(stmt.get(), 0);
@@ -2178,13 +2509,12 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
                                   std::string &sourceUrl,
                                   std::string *errorMessage) {
   auto query = "SELECT source_url FROM difficulty_tables WHERE id = @id";
-  sqlite3_stmt *rawStmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     if (errorMessage != nullptr) {
       *errorMessage = std::string("Could not read table source URL: ") +
-                      sqlite3_errmsg(db);
+                      sqliteDatabaseError(db);
     }
     return false;
   }
@@ -2192,9 +2522,7 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
 
   const int step = sqlite3_step(stmt.get());
   if (step == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 0));
-    sourceUrl = text != nullptr ? text : "";
+    sourceUrl = sqliteColumnString(stmt.get(), 0);
     return true;
   }
 
@@ -2205,12 +2533,11 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
 }
 
 bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
-  sqlite3_stmt *rawStmt = nullptr;
   auto deleteCourseEntries =
       "DELETE FROM difficulty_course_entries WHERE course_id IN "
       "(SELECT id FROM difficulty_courses WHERE table_id = @table_id)";
-  int rc = sqlite3_prepare_v2(db, deleteCourseEntries, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, deleteCourseEntries, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2222,9 +2549,7 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
 
   auto deleteCourses =
       "DELETE FROM difficulty_courses WHERE table_id = @table_id";
-  rawStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, deleteCourses, -1, &rawStmt, nullptr);
-  stmt.reset(rawStmt);
+  rc = prepareSqliteStatement(db, deleteCourses, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2236,9 +2561,7 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
 
   auto deleteEntries =
       "DELETE FROM difficulty_table_entries WHERE table_id = @table_id";
-  rawStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, deleteEntries, -1, &rawStmt, nullptr);
-  stmt.reset(rawStmt);
+  rc = prepareSqliteStatement(db, deleteEntries, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2258,15 +2581,14 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
     auto updateQuery =
         "UPDATE difficulty_tables SET name = @name, symbol = @symbol, "
         "data_url = @data_url, updated_at = CURRENT_TIMESTAMP WHERE id = @id";
-    sqlite3_stmt *rawStmt = nullptr;
-    int rc = sqlite3_prepare_v2(db, updateQuery, -1, &rawStmt, nullptr);
-    SqliteStatementHandle stmt(rawStmt);
+    SqliteStatementHandle stmt;
+    int rc = prepareSqliteStatement(db, updateQuery, stmt);
     if (rc != SQLITE_OK) {
       return 0;
     }
-    bindText(stmt.get(), 1, name);
-    bindText(stmt.get(), 2, symbol);
-    bindText(stmt.get(), 3, dataUrl);
+    bindSqliteText(stmt.get(), 1, name);
+    bindSqliteText(stmt.get(), 2, symbol);
+    bindSqliteText(stmt.get(), 3, dataUrl);
     sqlite3_bind_int(stmt.get(), 4, tableId);
     rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE || !clearDifficultyTableContent(db, tableId)) {
@@ -2279,19 +2601,17 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
       "INSERT INTO difficulty_tables "
       "(name, symbol, data_url, source_url, updated_at) "
       "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, insertQuery, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while inserting difficulty table: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, insertQuery, stmt,
+                                    "inserting difficulty table",
+                                    logSqlErrorText)) {
     return 0;
   }
-  bindText(stmt.get(), 1, name);
-  bindText(stmt.get(), 2, symbol);
-  bindText(stmt.get(), 3, dataUrl);
-  bindText(stmt.get(), 4, sourceUrl);
-  rc = sqlite3_step(stmt.get());
+  bindSqliteText(stmt.get(), 1, name);
+  bindSqliteText(stmt.get(), 2, symbol);
+  bindSqliteText(stmt.get(), 3, dataUrl);
+  bindSqliteText(stmt.get(), 4, sourceUrl);
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return 0;
   }
@@ -2306,22 +2626,21 @@ bool insertDifficultyTableEntry(sqlite3 *db, int tableId,
       "url, url_diff, sort_order) "
       "VALUES (@table_id, @level, @md5, @sha256, @title, @subtitle, "
       "@artist, @subartist, @url, @url_diff, @sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, chart.level);
-  bindText(stmt.get(), 3, chart.md5);
-  bindText(stmt.get(), 4, chart.sha256);
-  bindText(stmt.get(), 5, chart.title);
-  bindText(stmt.get(), 6, chart.subtitle);
-  bindText(stmt.get(), 7, chart.artist);
-  bindText(stmt.get(), 8, chart.subartist);
-  bindText(stmt.get(), 9, chart.url);
-  bindText(stmt.get(), 10, chart.urlDiff);
+  bindSqliteText(stmt.get(), 2, chart.level);
+  bindSqliteText(stmt.get(), 3, chart.md5);
+  bindSqliteText(stmt.get(), 4, chart.sha256);
+  bindSqliteText(stmt.get(), 5, chart.title);
+  bindSqliteText(stmt.get(), 6, chart.subtitle);
+  bindSqliteText(stmt.get(), 7, chart.artist);
+  bindSqliteText(stmt.get(), 8, chart.subartist);
+  bindSqliteText(stmt.get(), 9, chart.url);
+  bindSqliteText(stmt.get(), 10, chart.urlDiff);
   sqlite3_bind_int(stmt.get(), 11, sortOrder);
   rc = sqlite3_step(stmt.get());
   return rc == SQLITE_DONE;
@@ -2336,17 +2655,16 @@ int insertDifficultyCourse(sqlite3 *db, int tableId, const std::string &name,
       "(table_id, name, group_name, level, constraint_json, sort_order) "
       "VALUES (@table_id, @name, @group_name, @level, @constraint_json, "
       "@sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return 0;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, name);
-  bindText(stmt.get(), 3, groupName);
-  bindText(stmt.get(), 4, level);
-  bindText(stmt.get(), 5, constraintJson);
+  bindSqliteText(stmt.get(), 2, name);
+  bindSqliteText(stmt.get(), 3, groupName);
+  bindSqliteText(stmt.get(), 4, level);
+  bindSqliteText(stmt.get(), 5, constraintJson);
   sqlite3_bind_int(stmt.get(), 6, sortOrder);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -2363,22 +2681,21 @@ bool insertDifficultyCourseEntry(sqlite3 *db, int courseId,
                "VALUES (@course_id, @level, @md5, @sha256, @title, "
                "@subtitle, @artist, @subartist, @url, @url_diff, "
                "@sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, courseId);
-  bindText(stmt.get(), 2, chart.level);
-  bindText(stmt.get(), 3, chart.md5);
-  bindText(stmt.get(), 4, chart.sha256);
-  bindText(stmt.get(), 5, chart.title);
-  bindText(stmt.get(), 6, chart.subtitle);
-  bindText(stmt.get(), 7, chart.artist);
-  bindText(stmt.get(), 8, chart.subartist);
-  bindText(stmt.get(), 9, chart.url);
-  bindText(stmt.get(), 10, chart.urlDiff);
+  bindSqliteText(stmt.get(), 2, chart.level);
+  bindSqliteText(stmt.get(), 3, chart.md5);
+  bindSqliteText(stmt.get(), 4, chart.sha256);
+  bindSqliteText(stmt.get(), 5, chart.title);
+  bindSqliteText(stmt.get(), 6, chart.subtitle);
+  bindSqliteText(stmt.get(), 7, chart.artist);
+  bindSqliteText(stmt.get(), 8, chart.subartist);
+  bindSqliteText(stmt.get(), 9, chart.url);
+  bindSqliteText(stmt.get(), 10, chart.urlDiff);
   sqlite3_bind_int(stmt.get(), 11, sortOrder);
   rc = sqlite3_step(stmt.get());
   return rc == SQLITE_DONE;
@@ -2391,10 +2708,7 @@ int columnInt(sqlite3_stmt *stmt, int idx) {
 }
 
 std::string columnString(sqlite3_stmt *stmt, int idx) {
-  if (sqlite3_column_type(stmt, idx) == SQLITE_NULL) {
-    return "";
-  }
-  return reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+  return sqliteColumnString(stmt, idx);
 }
 
 void appendUniqueLabel(
@@ -2439,12 +2753,10 @@ void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
                "JOIN difficulty_tables dt ON dt.id = dte.table_id "
                "WHERE dte.sha256 != '' OR dte.md5 != '' "
                "ORDER BY dt.id, dte.sort_order, label";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while loading difficulty labels: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "loading difficulty labels",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2499,38 +2811,33 @@ void populateDifficultyTableLabels(
 } // namespace
 
 sqlite3 *ChartDBHelper::Connect() {
-  std::filesystem::path Directory = Utils::GetDocumentsPath("db");
-  std::cout << "DB Directory: " << Directory.string() << "\n";
-  std::filesystem::create_directories(Directory);
-  std::filesystem::path path = Directory / "chart.db";
-  std::cout << "DB Path: " << path.string() << "\n";
-  sqlite3 *db;
-  int rc;
-  rc = sqlite3_open(path.string().c_str(), &db);
-  sqlite3_busy_timeout(db, 1000);
-  if (rc) {
-    std::cerr << "Can't open database: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_close(db);
+  const std::filesystem::path directory = Utils::GetDocumentsPath("db");
+  std::cout << "DB Directory: " << fspath_to_utf8(directory) << "\n";
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create chart database directory "
+              << fspath_to_utf8(directory) << ": "
+              << directoryError.message() << "\n";
     return nullptr;
   }
-  // wal
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  const std::filesystem::path path = directory / "chart.db";
+  std::cout << "DB Path: " << fspath_to_utf8(path) << "\n";
+  std::string openError;
+  sqlite3 *db = openSqliteDatabase(path, openError);
+  if (db == nullptr) {
+    std::cerr << "Can't open chart database: " << openError << "\n";
+    return nullptr;
+  }
+  if (const auto pragmaError = applySqlitePragmas(
+          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+    std::cerr << "Could not configure chart database: " << *pragmaError
+              << "\n";
+  }
   return db;
 }
 
 void ChartDBHelper::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
-}
-
-void ChartDBHelper::BeginTransaction(sqlite3 *db) {
-  sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
-}
-
-void ChartDBHelper::CommitTransaction(sqlite3 *db) {
-  sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
+  closeSqliteDatabase(db);
 }
 
 bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
@@ -2553,7 +2860,13 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   }
 
   const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_path ON chart_meta(path)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_folder ON chart_meta(folder)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_folder_source "
+      "ON chart_meta(folder, source_priority, source_archive_size, path)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_title ON chart_meta(title)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_title_path "
+      "ON chart_meta(title, path)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256 ON chart_meta(sha256)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_md5 ON chart_meta(md5)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256_source "
@@ -2565,12 +2878,6 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating chart meta index")) {
       return false;
     }
-  }
-  const bool normalizedPaths =
-      normalizeStoredPathColumn(db, "chart_meta", "path", true) |
-      normalizeStoredPathColumn(db, "chart_meta", "folder", false);
-  if (normalizedPaths) {
-    bumpLibraryRevision();
   }
   return CreateFavoritesTable(db);
 }
@@ -2601,10 +2908,7 @@ bool ChartDBHelper::CreateFavoritesTable(sqlite3 *db) {
     }
   }
 
-  if (normalizeStoredPathColumn(db, "chart_favorites", "chart_path", true)) {
-    bumpLibraryRevision();
-  }
-  return true;
+  return migrateChartDatabaseSchema(db);
 }
 
 bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
@@ -2625,6 +2929,8 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_solid_archives_name "
       "ON solid_archives(name)",
+      "CREATE INDEX IF NOT EXISTS idx_solid_archives_name_path "
+      "ON solid_archives(name COLLATE NOCASE, path)",
       "CREATE INDEX IF NOT EXISTS idx_solid_archives_size "
       "ON solid_archives(uncompressed_size)",
   };
@@ -2632,9 +2938,6 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating solid archive index")) {
       return false;
     }
-  }
-  if (normalizeStoredPathColumn(db, "solid_archives", "path", true)) {
-    bumpLibraryRevision();
   }
   return true;
 }
@@ -2705,10 +3008,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "@source_archive_size"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing statement to insert a chart: %s",
-            sqlite3_errmsg(db));
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert a chart",
+                                    logSdlSqlErrorText)) {
     return false;
   }
   const archive_file::SourcePreference sourcePreference =
@@ -2718,34 +3020,22 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
 
-  sqlite3_bind_text(stmt, 1, path_t_to_utf8(fspath_to_path_t(path)).c_str(), -1,
-                    SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 2, md5.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, sha256.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 4, (chartMeta.Title).c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 5, (chartMeta.SubTitle).c_str(), -1,
-                    SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 6, (chartMeta.Genre).c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 7, (chartMeta.Artist).c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 8, (chartMeta.SubArtist).c_str(), -1,
-                    SQLITE_TRANSIENT);
+  bindSqliteText(stmt, 1, fspath_to_utf8(path));
+  bindSqliteText(stmt, 2, md5);
+  bindSqliteText(stmt, 3, sha256);
+  bindSqliteText(stmt, 4, chartMeta.Title);
+  bindSqliteText(stmt, 5, chartMeta.SubTitle);
+  bindSqliteText(stmt, 6, chartMeta.Genre);
+  bindSqliteText(stmt, 7, chartMeta.Artist);
+  bindSqliteText(stmt, 8, chartMeta.SubArtist);
 
   std::filesystem::path folder = chartMeta.Folder;
   ToRelativePath(folder);
-  sqlite3_bind_text(stmt, 9, path_t_to_utf8(fspath_to_path_t(folder)).c_str(),
-                    -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(
-      stmt, 10, path_t_to_utf8(fspath_to_path_t(chartMeta.StageFile)).c_str(),
-      -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 11,
-                    path_t_to_utf8(fspath_to_path_t(chartMeta.Banner)).c_str(),
-                    -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 12,
-                    path_t_to_utf8(fspath_to_path_t(chartMeta.BackBmp)).c_str(),
-                    -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 13,
-                    path_t_to_utf8(fspath_to_path_t(chartMeta.Preview)).c_str(),
-                    -1, SQLITE_TRANSIENT);
+  bindSqliteText(stmt, 9, fspath_to_utf8(folder));
+  bindSqliteText(stmt, 10, fspath_to_utf8(chartMeta.StageFile));
+  bindSqliteText(stmt, 11, fspath_to_utf8(chartMeta.Banner));
+  bindSqliteText(stmt, 12, fspath_to_utf8(chartMeta.BackBmp));
+  bindSqliteText(stmt, 13, fspath_to_utf8(chartMeta.Preview));
   sqlite3_bind_double(stmt, 14, chartMeta.PlayLevel);
   sqlite3_bind_int(stmt, 15, chartMeta.Difficulty);
   sqlite3_bind_double(stmt, 16, chartMeta.Total);
@@ -2763,9 +3053,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   sqlite3_bind_int(stmt, 28, chartMeta.LnMode);
   sqlite3_bind_int(stmt, 29, sourcePreference.priority);
   sqlite3_bind_int64(stmt, 30, clampSqlInteger(sourcePreference.archiveSize));
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while inserting a chart: %s", sqlite3_errmsg(db));
+    logSdlSqlError("inserting a chart", db);
     return false;
   }
   bumpLibraryRevision();
@@ -2778,10 +3068,8 @@ void ChartDBHelper::SelectAllChartMeta(
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm ORDER BY cm.title";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all charts",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2793,74 +3081,45 @@ void ChartDBHelper::SelectAllChartMeta(
   }
 }
 
-void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
-                                      std::vector<MusicTrackRecord> &tracks) {
-  const char *musicKey = "COALESCE(NULLIF(cm.folder, ''), cm.path)";
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "COUNT(*) OVER (PARTITION BY ";
-  query += musicKey;
-  query += ") AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY ";
-  query += musicKey;
-  query += " ORDER BY total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM chart_meta cm "
-           "WHERE ";
-  query += preferredChartPredicate("cm");
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.title COLLATE NOCASE, cm.path";
-
-  SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music tracks: " << sqlite3_errmsg(db)
-              << "\n";
-    return;
-  }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    MusicTrackRecord record;
-    record.representativeChart = ReadChartMeta(stmt);
-    record.chartCount =
-        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
-    tracks.push_back(std::move(record));
-  }
-}
-
 void ChartDBHelper::SelectFavoriteMusicTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateFavoritesTable(db)) {
     return;
   }
 
-  std::string query = "SELECT ";
+  std::string representativeOrder =
+      "choice.favorite_added_at DESC, ";
+  representativeOrder += chartArtworkOrderBy("choice");
+  representativeOrder +=
+      ", choice.identity_rank, choice.total_notes DESC, choice.length DESC, ";
+  representativeOrder += chartSourceOrderBy("choice");
+  representativeOrder += ", choice.title COLLATE NOCASE, choice.path";
+
+  std::string query = "WITH candidates AS (";
+  query += chartFavoriteChartCandidateQuery();
+  query += "), preferred_candidates AS (SELECT * FROM candidates pc WHERE ";
+  query += preferredChartPredicate("pc");
+  query +=
+      "), favorite_choices AS (SELECT pc.favorite_identity_key, "
+      "COUNT(*) AS music_chart_count, "
+      "(SELECT choice.path FROM preferred_candidates choice WHERE "
+      "choice.favorite_identity_key = pc.favorite_identity_key ORDER BY ";
+  query += representativeOrder;
+  query +=
+      " LIMIT 1) AS representative_path FROM preferred_candidates pc "
+      "GROUP BY pc.favorite_identity_key) SELECT ";
   query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "cf.added_at AS favorite_added_at, "
-           "COUNT(*) OVER (PARTITION BY cf.chart_path) AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY cf.chart_path ORDER BY ";
-  query += chartArtworkOrderBy("cm");
-  query += ", CASE WHEN cf.chart_sha256 != '' AND "
-           "cm.sha256 = cf.chart_sha256 THEN 0 WHEN cf.chart_md5 != '' AND "
-           "cm.md5 = cf.chart_md5 THEN 1 WHEN cf.chart_path != '' AND "
-           "cm.path = cf.chart_path THEN 2 ELSE 3 END, ";
-  query += "total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM chart_favorites cf JOIN chart_meta cm ON "
-           "cm.path = cf.chart_path WHERE ";
-  query += preferredChartPredicate("cm");
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.favorite_added_at DESC, cm.title COLLATE NOCASE, "
-           "cm.path";
+  query +=
+      ", favorite_choices.music_chart_count FROM preferred_candidates cm "
+      "JOIN favorite_choices ON favorite_choices.favorite_identity_key = "
+      "cm.favorite_identity_key AND favorite_choices.representative_path = "
+      "cm.path ORDER BY cm.favorite_added_at DESC, "
+      "cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting favorite music tracks: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting favorite music tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2878,9 +3137,23 @@ int ChartDBHelper::CountFavoriteCharts(sqlite3 *db) {
   if (db == nullptr || !CreateFavoritesTable(db)) {
     return 0;
   }
-  ChartMetaQuery query;
-  query.favoritesOnly = true;
-  return CountChartMeta(db, query);
+
+  std::string query = "SELECT COUNT(*) FROM chart_meta cm WHERE ";
+  query += chartFavoriteIndexedPredicate("cm");
+  query += " AND ";
+  query += preferredChartPredicate("cm");
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "counting favorite charts",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  int count = 0;
+  if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    count = sqlite3_column_int(stmt.get(), 0);
+  }
+  return count;
 }
 
 bool ChartDBHelper::SetFavorite(sqlite3 *db,
@@ -2890,28 +3163,29 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
     return false;
   }
 
-  const std::string chartPath = storedChartPathText(chartMeta.BmsPath);
-  if (chartPath.empty()) {
+  const ChartFavoriteIdentity identity = chartFavoriteIdentityFor(chartMeta);
+  if (identity.chartPath.empty()) {
     return false;
   }
 
   if (!favorite) {
-    const char *query = "DELETE FROM chart_favorites WHERE chart_path = ?1";
+    const std::string query =
+        "DELETE FROM chart_favorites WHERE " + chartFavoriteDeletePredicate();
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while preparing chart favorite delete: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "preparing chart favorite delete",
+                                      logSqlErrorText)) {
       return false;
     }
-    bindText(stmt, 1, chartPath);
-    rc = sqlite3_step(stmt);
+    bindChartFavoriteDeleteIdentity(stmt.get(), identity);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting chart favorite: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting chart favorite", db);
       return false;
     }
-    bumpLibraryRevision();
+    if (sqlite3_changes(db) > 0) {
+      bumpLibraryRevision();
+    }
     return true;
   }
 
@@ -2924,19 +3198,17 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
       "chart_sha256 = excluded.chart_sha256,"
       "added_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart favorite insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart favorite insert",
+                                    logSqlErrorText)) {
     return false;
   }
-  bindText(stmt, 1, chartPath);
-  bindText(stmt, 2, normalizedHash(chartMeta.MD5));
-  bindText(stmt, 3, normalizedHash(chartMeta.SHA256));
-  rc = sqlite3_step(stmt);
+  bindSqliteText(stmt, 1, identity.chartPath);
+  bindSqliteText(stmt, 2, identity.md5);
+  bindSqliteText(stmt, 3, identity.sha256);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while saving chart favorite: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("saving chart favorite", db);
     return false;
   }
   bumpLibraryRevision();
@@ -2946,10 +3218,8 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
@@ -2962,10 +3232,9 @@ int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
 int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM solid_archives";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting solid archives: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "counting solid archives",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
@@ -2973,40 +3242,6 @@ int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
     count = sqlite3_column_int(stmt, 0);
   }
   return count;
-}
-
-void ChartDBHelper::SearchChartMeta(
-    sqlite3 *db, const std::string &text,
-    std::vector<ChartMetaRecord> &chartMetas) {
-  if (!CreateFavoritesTable(db)) {
-    return;
-  }
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", '', 0, ";
-  query += kChartFavoriteColumn;
-  query += " FROM chart_meta cm WHERE rtrim(cm.title || ' ' || cm.subtitle || "
-           "' ' || cm.artist || ' ' || cm.sub_artist || ' ' || cm.genre) LIKE "
-           "@text AND ";
-  query += preferredChartPredicate("cm");
-  query += " ORDER BY cm.title";
-  SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while searching for charts: " << sqlite3_errmsg(db)
-              << "\n";
-    return;
-  }
-  // %text%
-  sqlite3_bind_text(stmt, 1, ("%" + text + "%").c_str(), -1, SQLITE_TRANSIENT);
-
-  // reserve space for the result
-  chartMetas.reserve(sqlite3_column_count(stmt));
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    chartMetas.push_back(std::move(ReadChartMetaRecord(stmt)));
-  }
-  populateDifficultyTableLabels(db, chartMetas);
 }
 
 void ChartDBHelper::QueryChartMeta(
@@ -3032,16 +3267,15 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying solid archives: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying solid archives",
+                                      logSqlErrorText)) {
       return;
     }
 
     int bindIndex = 1;
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (chartQuery.limit > 0) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
@@ -3071,47 +3305,17 @@ void ChartDBHelper::QueryChartMeta(
     return;
   }
 
-  const bool queryDifficultyEntries =
-      chartQuery.tableId > 0 && !chartQuery.coursesOnly &&
-      chartQuery.courseId <= 0 && chartQuery.courseTableId <= 0 &&
-      chartQuery.courseGroupName.empty();
-  if (queryDifficultyEntries) {
+  if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
     std::string query = "SELECT ";
     query += kDifficultyEntrySelectColumns;
     query += ", ";
-    query += kChartFavoriteColumn;
+    query += chartFavoriteColumnExpr("cm");
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
-             "LEFT JOIN chart_meta cm ON cm.path = ("
-             "SELECT cm_match.path FROM chart_meta cm_match "
-             "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-             "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) ";
-    query += "ORDER BY ";
-    query += chartSourceOrderBy("cm_match");
-    query += ", cm_match.title COLLATE NOCASE LIMIT 1) "
-             "WHERE dte.table_id = @table_id";
-
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    if (!chartQuery.keyword.empty()) {
-      query += " AND ";
-      query += kDifficultyEntrySearchText;
-      query += " LIKE @text";
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      query +=
-          " AND (lower(dt.symbol || dte.level) = @difficulty "
-          "OR lower(dte.level) = @difficulty "
-          "OR lower(dt.name || ' ' || dt.symbol || dte.level) LIKE "
-          "@difficulty_like "
-          "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
-    }
-    if (chartQuery.clearMarkFilter) {
-      query += " AND ";
-      query += difficultyEntryClearMarkPredicate(
-          "dte", "cm", chartQuery.selectedLongNoteMode);
-    }
+             "LEFT JOIN chart_meta cm ON cm.path = ";
+    query += matchedChartPathSubquery("dte", true);
+    query += " ";
+    appendDifficultyEntryFilters(query, chartQuery);
 
     query += " ORDER BY CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END, "
              "dte.sort_order, COALESCE(NULLIF(cm.title, ''), dte.title, '') "
@@ -3121,30 +3325,14 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying difficulty entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying difficulty entries",
+                                      logSqlErrorText)) {
       return;
     }
 
     int bindIndex = 1;
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-    if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      const std::string difficulty =
-          lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
-    }
-    if (chartQuery.clearMarkFilter) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-    }
+    bindDifficultyEntryFilterParameters(stmt, bindIndex, chartQuery);
     if (chartQuery.limit > 0) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
       sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
@@ -3156,59 +3344,20 @@ void ChartDBHelper::QueryChartMeta(
     return;
   }
 
-  const bool queryCourseEntries =
-      chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
-  if (queryCourseEntries) {
+  if (chartMetaQueryUsesCourseEntries(chartQuery)) {
     std::string query = "SELECT ";
     query += kDifficultyCourseEntrySelectColumns;
     query += ", ";
-    query += kChartFavoriteColumn;
+    query += chartFavoriteColumnExpr("cm");
     query += " FROM difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
              "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-             "LEFT JOIN difficulty_table_entries dte ON dte.id = ("
-             "SELECT dte_match.id FROM difficulty_table_entries dte_match "
-             "WHERE dte_match.table_id = dc.table_id "
-             "AND ((dce.sha256 != '' AND dte_match.sha256 = dce.sha256) "
-             "OR (dce.md5 != '' AND dte_match.md5 = dce.md5)) "
-             "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
-             "LIMIT 1) "
-             "LEFT JOIN chart_meta cm ON cm.path = ("
-             "SELECT cm_match.path FROM chart_meta cm_match "
-             "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-             "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-    query += "ORDER BY ";
-    query += chartSourceOrderBy("cm_match");
-    query += ", cm_match.title COLLATE NOCASE LIMIT 1) WHERE 1 = 1";
-
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    if (!chartQuery.keyword.empty()) {
-      query += " AND ";
-      query += kDifficultyCourseEntrySearchText;
-      query += " LIKE @text";
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      query +=
-          " AND (lower(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0')) = "
-          "@difficulty "
-          "OR lower(dt.symbol || dte.level) = @difficulty "
-          "OR lower(dce.level) = @difficulty "
-          "OR lower(dte.level) = @difficulty "
-          "OR lower(dt.symbol || dc.level) = @difficulty "
-          "OR lower(dc.level) = @difficulty "
-          "OR lower(dc.name) LIKE @difficulty_like "
-          "OR lower(dc.group_name || ' ' || dc.level) LIKE "
-          "@difficulty_like)";
-    }
+             "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+    query += matchedDifficultyEntryIdSubquery();
+    query += " LEFT JOIN chart_meta cm ON cm.path = ";
+    query += matchedChartPathSubquery("dce", true);
+    query += " ";
+    appendDifficultyCourseEntryFilters(query, chartQuery);
 
     query += " ORDER BY dc.sort_order, dce.sort_order, "
              "COALESCE(NULLIF(cm.title, ''), dce.title, '') COLLATE NOCASE, "
@@ -3218,32 +3367,14 @@ void ChartDBHelper::QueryChartMeta(
     }
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while querying course entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "querying course entries",
+                                      logSqlErrorText)) {
       return;
     }
 
     int bindIndex = 1;
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-    if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      const std::string difficulty =
-          lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
-    }
+    bindDifficultyCourseEntryFilterParameters(stmt, bindIndex, chartQuery);
     if (chartQuery.limit > 0) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
       sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
@@ -3258,137 +3389,22 @@ void ChartDBHelper::QueryChartMeta(
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
   query += ", '', 0, ";
-  query += kChartFavoriteColumn;
+  query += chartFavoriteColumnExpr("cm");
   query += " FROM chart_meta cm WHERE 1 = 1";
-
-  if (!chartQuery.keyword.empty()) {
-    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
-             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
-  }
-
-  if (chartQuery.tableId > 0) {
-    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
-             "difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += "))";
-  }
-
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
-             "difficulty_course_entries dce "
-             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE dce.sha256 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query +=
-        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "WHERE dce.md5 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query += "))";
-  }
-
-  if (!chartQuery.difficultyText.empty()) {
-    const char *difficultyClause =
-        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-        "OR lower(dte_filter.level) = @difficulty "
-        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-        "dte_filter.level) LIKE @difficulty_like "
-        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-        "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.sha256 != '' ";
-    query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.md5 != '' ";
-    query += difficultyClause;
-    query += "))";
-  }
-  if (chartQuery.clearMarkFilter) {
-    query += " AND ";
-    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
-  }
-  if (chartQuery.favoritesOnly) {
-    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-             "cf.chart_path = cm.path)";
-  }
-
-  query += " AND ";
-  query += preferredChartPredicate("cm");
+  appendChartMetaFilters(query, chartQuery);
   query += " ORDER BY cm.title, cm.path";
   if (chartQuery.limit > 0) {
     query += " LIMIT @limit OFFSET @offset";
   }
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while querying charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "querying charts",
+                                    logSqlErrorText)) {
     return;
   }
 
   int bindIndex = 1;
-  if (!chartQuery.keyword.empty()) {
-    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (chartQuery.tableId > 0) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-  }
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    const std::string difficulty =
-        lowerCopy(trimCopy(chartQuery.difficultyText));
-    bindText(stmt, bindIndex++, difficulty);
-    bindText(stmt, bindIndex++, "%" + difficulty + "%");
-  }
-  if (chartQuery.clearMarkFilter) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-  }
+  bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.limit > 0) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
     sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
@@ -3415,14 +3431,13 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
     }
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting solid archives: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting solid archives",
+                                      logSqlErrorText)) {
       return 0;
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, 1, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, 1, "%" + chartQuery.keyword + "%");
     }
     int count = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3431,72 +3446,25 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     return count;
   }
 
-  const bool queryDifficultyEntries =
-      chartQuery.tableId > 0 && !chartQuery.coursesOnly &&
-      chartQuery.courseId <= 0 && chartQuery.courseTableId <= 0 &&
-      chartQuery.courseGroupName.empty();
-  if (queryDifficultyEntries) {
+  if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
     std::string query = "SELECT COUNT(*) FROM difficulty_table_entries dte "
                         "JOIN difficulty_tables dt ON dt.id = dte.table_id ";
     if (!chartQuery.keyword.empty() || chartQuery.clearMarkFilter) {
-      query +=
-          "LEFT JOIN chart_meta cm ON cm.path = ("
-          "SELECT cm_match.path FROM chart_meta cm_match "
-          "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-          "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) ";
-      query += "ORDER BY ";
-      query += chartSourceOrderBy("cm_match");
-      query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
+      query += "LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dte", true);
+      query += " ";
     }
-    query += "WHERE dte.table_id = @table_id";
-
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    if (!chartQuery.keyword.empty()) {
-      query += " AND ";
-      query += kDifficultyEntrySearchText;
-      query += " LIKE @text";
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      query +=
-          " AND (lower(dt.symbol || dte.level) = @difficulty "
-          "OR lower(dte.level) = @difficulty "
-          "OR lower(dt.name || ' ' || dt.symbol || dte.level) LIKE "
-          "@difficulty_like "
-          "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
-    }
-    if (chartQuery.clearMarkFilter) {
-      query += " AND ";
-      query += difficultyEntryClearMarkPredicate(
-          "dte", "cm", chartQuery.selectedLongNoteMode);
-    }
+    appendDifficultyEntryFilters(query, chartQuery);
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting difficulty entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting difficulty entries",
+                                      logSqlErrorText)) {
       return 0;
     }
 
     int bindIndex = 1;
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-    if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      const std::string difficulty =
-          lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
-    }
-    if (chartQuery.clearMarkFilter) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-    }
+    bindDifficultyEntryFilterParameters(stmt, bindIndex, chartQuery);
 
     int count = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3505,88 +3473,36 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     return count;
   }
 
-  const bool countCourseEntries =
-      chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
-  if (countCourseEntries) {
+  if (chartMetaQueryUsesCourseEntries(chartQuery)) {
+    const bool needsDifficultyEntryJoin =
+        !chartQuery.keyword.empty() || !chartQuery.difficultyText.empty();
     std::string query =
         "SELECT COUNT(*) FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-        "LEFT JOIN difficulty_table_entries dte ON dte.id = ("
-        "SELECT dte_match.id FROM difficulty_table_entries dte_match "
-        "WHERE dte_match.table_id = dc.table_id "
-        "AND ((dce.sha256 != '' AND dte_match.sha256 = dce.sha256) "
-        "OR (dce.md5 != '' AND dte_match.md5 = dce.md5)) "
-        "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
-        "LIMIT 1) ";
-    if (!chartQuery.keyword.empty()) {
-      query +=
-          "LEFT JOIN chart_meta cm ON cm.path = ("
-          "SELECT cm_match.path FROM chart_meta cm_match "
-          "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-          "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-      query += "ORDER BY ";
-      query += chartSourceOrderBy("cm_match");
-      query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
-    }
-    query += "WHERE 1 = 1";
-
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    if (!chartQuery.keyword.empty()) {
-      query += " AND ";
-      query += kDifficultyCourseEntrySearchText;
-      query += " LIKE @text";
-    }
+        "JOIN difficulty_courses dc ON dc.id = dce.course_id ";
     if (!chartQuery.difficultyText.empty()) {
-      query +=
-          " AND (lower(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0')) = "
-          "@difficulty "
-          "OR lower(dt.symbol || dte.level) = @difficulty "
-          "OR lower(dce.level) = @difficulty "
-          "OR lower(dte.level) = @difficulty "
-          "OR lower(dt.symbol || dc.level) = @difficulty "
-          "OR lower(dc.level) = @difficulty "
-          "OR lower(dc.name) LIKE @difficulty_like "
-          "OR lower(dc.group_name || ' ' || dc.level) LIKE "
-          "@difficulty_like)";
+      query += "JOIN difficulty_tables dt ON dt.id = dc.table_id ";
     }
+    if (needsDifficultyEntryJoin) {
+      query += "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+      query += matchedDifficultyEntryIdSubquery();
+      query += " ";
+    }
+    if (!chartQuery.keyword.empty()) {
+      query += "LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dce", true);
+      query += " ";
+    }
+    appendDifficultyCourseEntryFilters(query, chartQuery);
 
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while counting course entries: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "counting course entries",
+                                      logSqlErrorText)) {
       return 0;
     }
 
     int bindIndex = 1;
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-    if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-    }
-    if (!chartQuery.difficultyText.empty()) {
-      const std::string difficulty =
-          lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
-    }
+    bindDifficultyCourseEntryFilterParameters(stmt, bindIndex, chartQuery);
 
     int count = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3596,131 +3512,16 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   }
 
   std::string query = "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1";
-
-  if (!chartQuery.keyword.empty()) {
-    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
-             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
-  }
-
-  if (chartQuery.tableId > 0) {
-    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
-             "difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += "))";
-  }
-
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
-             "difficulty_course_entries dce "
-             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE dce.sha256 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query +=
-        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "WHERE dce.md5 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query += "))";
-  }
-
-  if (!chartQuery.difficultyText.empty()) {
-    const char *difficultyClause =
-        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-        "OR lower(dte_filter.level) = @difficulty "
-        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-        "dte_filter.level) LIKE @difficulty_like "
-        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-        "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.sha256 != '' ";
-    query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.md5 != '' ";
-    query += difficultyClause;
-    query += "))";
-  }
-  if (chartQuery.clearMarkFilter) {
-    query += " AND ";
-    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
-  }
-  if (chartQuery.favoritesOnly) {
-    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-             "cf.chart_path = cm.path)";
-  }
-
-  query += " AND ";
-  query += preferredChartPredicate("cm");
+  appendChartMetaFilters(query, chartQuery);
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
+                                    logSqlErrorText)) {
     return 0;
   }
 
   int bindIndex = 1;
-  if (!chartQuery.keyword.empty()) {
-    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (chartQuery.tableId > 0) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-  }
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    const std::string difficulty =
-        lowerCopy(trimCopy(chartQuery.difficultyText));
-    bindText(stmt, bindIndex++, difficulty);
-    bindText(stmt, bindIndex++, "%" + difficulty + "%");
-  }
-  if (chartQuery.clearMarkFilter) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-  }
+  bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
 
   int count = 0;
   if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3729,24 +3530,207 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   return count;
 }
 
+int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
+                                      const ChartMetaQuery &chartQuery,
+                                      const std::filesystem::path &path) {
+  if (db == nullptr || path.empty() || !CreateFavoritesTable(db)) {
+    return -1;
+  }
+  if (queryNeedsDifficultyTableSchema(chartQuery) &&
+      !CreateDifficultyTableTables(db)) {
+    return -1;
+  }
+
+  const std::string targetPath = StoredChartPathText(path);
+  if (targetPath.empty()) {
+    return -1;
+  }
+
+  std::string query;
+  if (chartQuery.solidArchivesOnly) {
+    query =
+        "WITH target AS (SELECT sa.name AS target_name, "
+        "sa.path AS target_path FROM solid_archives sa WHERE 1 = 1";
+    if (!chartQuery.keyword.empty()) {
+      query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
+    }
+    query +=
+        " AND sa.path = @target_path) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*) FROM solid_archives sa, target WHERE 1 = 1";
+    if (!chartQuery.keyword.empty()) {
+      query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
+    }
+    query +=
+        " AND (sa.name COLLATE NOCASE < target.target_name COLLATE NOCASE "
+        "OR (sa.name COLLATE NOCASE = target.target_name COLLATE NOCASE "
+        "AND sa.path < target.target_path))) END";
+  } else if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
+    const std::string missingExpr =
+        "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
+    const std::string titleExpr =
+        "COALESCE(NULLIF(cm.title, ''), dte.title, '')";
+    auto appendDifficultyEntrySource = [&](std::string &targetQuery,
+                                           bool includeTarget = false) {
+      targetQuery += " FROM difficulty_table_entries dte "
+                     "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+                     "LEFT JOIN chart_meta cm ON cm.path = ";
+      targetQuery += matchedChartPathSubquery("dte", true);
+      targetQuery += " ";
+      if (includeTarget) {
+        targetQuery += "CROSS JOIN target ";
+      }
+      appendDifficultyEntryFilters(targetQuery, chartQuery);
+    };
+    auto appendDifficultyEntryBeforeTarget = [&](std::string &targetQuery) {
+      targetQuery += " AND ((";
+      targetQuery += missingExpr;
+      targetQuery += ") < target.target_missing OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order < "
+                     "target.target_sort) OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order = "
+                     "target.target_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE < target.target_title COLLATE NOCASE) "
+                     "OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order = "
+                     "target.target_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE = target.target_title COLLATE NOCASE "
+                     "AND dte.id < target.target_id))";
+    };
+
+    query =
+        "WITH target AS (SELECT ";
+    query += missingExpr;
+    query += " AS target_missing, dte.sort_order AS target_sort, ";
+    query += titleExpr;
+    query += " AS target_title, dte.id AS target_id";
+    appendDifficultyEntrySource(query);
+    query += " AND cm.path = @target_path ORDER BY ";
+    query += missingExpr;
+    query += ", dte.sort_order, ";
+    query += titleExpr;
+    query +=
+        " COLLATE NOCASE, dte.id LIMIT 1) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*)";
+    appendDifficultyEntrySource(query, true);
+    appendDifficultyEntryBeforeTarget(query);
+    query += ") END";
+  } else if (chartMetaQueryUsesCourseEntries(chartQuery)) {
+    const std::string titleExpr =
+        "COALESCE(NULLIF(cm.title, ''), dce.title, '')";
+    auto appendCourseEntrySource = [&](std::string &targetQuery,
+                                       bool includeTarget = false) {
+      targetQuery +=
+          " FROM difficulty_course_entries dce JOIN difficulty_courses dc "
+          "ON dc.id = dce.course_id JOIN difficulty_tables dt ON dt.id = "
+          "dc.table_id LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+      targetQuery += matchedDifficultyEntryIdSubquery();
+      targetQuery += " LEFT JOIN chart_meta cm ON cm.path = ";
+      targetQuery += matchedChartPathSubquery("dce", true);
+      targetQuery += " ";
+      if (includeTarget) {
+        targetQuery += "CROSS JOIN target ";
+      }
+      appendDifficultyCourseEntryFilters(targetQuery, chartQuery);
+    };
+    auto appendCourseEntryBeforeTarget = [&](std::string &targetQuery) {
+      targetQuery += " AND (dc.sort_order < target.target_course_sort OR "
+                     "(dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order < target.target_entry_sort) OR "
+                     "(dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order = target.target_entry_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE < target.target_title COLLATE NOCASE) "
+                     "OR (dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order = target.target_entry_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE = target.target_title COLLATE NOCASE "
+                     "AND dce.id < target.target_id))";
+    };
+
+    query =
+        "WITH target AS (SELECT dc.sort_order AS target_course_sort, "
+        "dce.sort_order AS target_entry_sort, ";
+    query += titleExpr;
+    query += " AS target_title, dce.id AS target_id";
+    appendCourseEntrySource(query);
+    query += " AND cm.path = @target_path ORDER BY dc.sort_order, "
+             "dce.sort_order, ";
+    query += titleExpr;
+    query +=
+        " COLLATE NOCASE, dce.id LIMIT 1) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*)";
+    appendCourseEntrySource(query, true);
+    appendCourseEntryBeforeTarget(query);
+    query += ") END";
+  } else {
+    query =
+        "WITH target AS (SELECT cm.title AS target_title, "
+        "cm.path AS target_path FROM chart_meta cm WHERE 1 = 1";
+    appendChartMetaFilters(query, chartQuery);
+    query +=
+        " AND cm.path = @target_path) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*) FROM chart_meta cm, target WHERE 1 = 1";
+    appendChartMetaFilters(query, chartQuery);
+    query +=
+        " AND ((target.target_title IS NOT NULL AND cm.title IS NULL) "
+        "OR (target.target_title IS NOT NULL AND cm.title IS NOT NULL "
+        "AND cm.title < target.target_title) "
+        "OR ((cm.title = target.target_title "
+        "OR (cm.title IS NULL AND target.target_title IS NULL)) "
+        "AND cm.path < target.target_path))) END";
+  }
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "finding chart index", logSqlErrorText)) {
+    return -1;
+  }
+
+  int bindIndex = 1;
+  if (chartQuery.solidArchivesOnly) {
+    if (!chartQuery.keyword.empty()) {
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+    }
+  } else if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
+    bindDifficultyEntryFilterParameters(stmt, bindIndex, chartQuery);
+  } else if (chartMetaQueryUsesCourseEntries(chartQuery)) {
+    bindDifficultyCourseEntryFilterParameters(stmt, bindIndex, chartQuery);
+  } else {
+    bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
+  }
+  bindSqliteText(stmt, bindIndex++, targetPath);
+
+  if (sqlite3_step(stmt) != SQLITE_ROW) {
+    return -1;
+  }
+  return sqlite3_column_int(stmt, 0);
+}
+
 bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   // std::cout << "Deleting chart: " << path.string() << std::endl;
   ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cout << "SQL error while preparing statement to delete a chart: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete a chart",
+                                    logSqlErrorText)) {
     return false;
   }
-  const auto target = path_t_to_utf8(fspath_to_path_t(path));
+  const auto target = fspath_to_utf8(path);
   SDL_Log("Deleting chart: %s", target.c_str());
-  sqlite3_bind_text(stmt, 1, target.c_str(), -1, SQLITE_TRANSIENT);
-  rc = sqlite3_step(stmt);
+  bindSqliteText(stmt, 1, target);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cout << "SQL error while deleting a chart: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting a chart", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -3779,11 +3763,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
 
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete charts in "
-                 "directory: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing statement to delete charts in directory",
+          logSqlErrorText)) {
     return -1;
   }
 
@@ -3793,16 +3775,14 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
       continue;
     }
 
-    std::filesystem::path storedPath = chartMeta.BmsPath;
-    ToRelativePath(storedPath);
-    const std::string target = path_t_to_utf8(fspath_to_path_t(storedPath));
+    const std::string target =
+        ChartDBHelper::StoredChartPathText(chartMeta.BmsPath);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, target.c_str(), -1, SQLITE_TRANSIENT);
-    rc = sqlite3_step(stmt);
+    bindSqliteText(stmt, 1, target);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting a chart in directory: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting a chart in directory", db);
       return -1;
     }
     if (sqlite3_changes(db) > 0) {
@@ -3845,7 +3825,13 @@ bool ChartDBHelper::DeleteArchiveRecords(
   createChartScanCheckpointTable(db);
 
   int changedCount = 0;
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start archive record delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   if (deleteChartMetaInArchive(db, archivePath)) {
     ++changedCount;
   }
@@ -3856,7 +3842,11 @@ bool ChartDBHelper::DeleteArchiveRecords(
     ++changedCount;
   }
   clearChartScanCheckpoint(db);
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit archive record delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
 
   if (changedCount > 0) {
     bumpLibraryRevision();
@@ -3871,15 +3861,14 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
 
   auto query = "DELETE FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
 
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   const int chartChanges = sqlite3_changes(db);
@@ -3905,61 +3894,18 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
 }
 
 bms_parser::ChartMeta ChartDBHelper::ReadChartMeta(sqlite3_stmt *stmt) {
-  int idx = 0;
-  bms_parser::ChartMeta chartMeta;
-  auto t = ReadPath(stmt, idx++);
-
-  std::filesystem::path path = std::filesystem::path(t);
-  if (!path.empty()) {
-    ToAbsolutePath(path);
-  }
-  chartMeta.BmsPath = path;
-  chartMeta.MD5 = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.SHA256 = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.Title = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.SubTitle = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.Genre = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.Artist = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  chartMeta.SubArtist = std::string(
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx++)));
-  auto folder_char = ReadPath(stmt, idx++);
-  std::filesystem::path folder = std::filesystem::path(folder_char);
-  if (!folder.empty()) {
-    ToAbsolutePath(folder);
-  }
-  chartMeta.Folder = folder;
-  auto stage_file_char = ReadPath(stmt, idx++);
-  chartMeta.StageFile = std::filesystem::path(stage_file_char);
-  auto banner_char = ReadPath(stmt, idx++);
-  chartMeta.Banner = std::filesystem::path(banner_char);
-  auto back_bmp_char = ReadPath(stmt, idx++);
-  chartMeta.BackBmp = std::filesystem::path(back_bmp_char);
-  auto preview_char = ReadPath(stmt, idx++);
-  chartMeta.Preview = std::filesystem::path(preview_char);
-
-  chartMeta.PlayLevel = sqlite3_column_double(stmt, idx++);
-  chartMeta.Difficulty = sqlite3_column_int(stmt, idx++);
-  chartMeta.Total = sqlite3_column_double(stmt, idx++);
-  chartMeta.Bpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MaxBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MinBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.PlayLength = sqlite3_column_int64(stmt, idx++);
-  chartMeta.Rank = sqlite3_column_int(stmt, idx++);
-  chartMeta.Player = sqlite3_column_int(stmt, idx++);
-  chartMeta.KeyMode = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
-
-  return chartMeta;
+  const auto absolutePathFromColumn = [this](sqlite3_stmt *row, int column) {
+    std::filesystem::path path(ReadPath(row, column));
+    if (!path.empty()) {
+      ToAbsolutePath(path);
+    }
+    return path;
+  };
+  const auto relativePathFromColumn = [this](sqlite3_stmt *row, int column) {
+    return std::filesystem::path(ReadPath(row, column));
+  };
+  return asobmshow::chart_sql::readChartMeta(stmt, absolutePathFromColumn,
+                                             relativePathFromColumn);
 }
 
 ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
@@ -3980,13 +3926,11 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
 
 std::string ChartDBHelper::DifficultyTableLabelsForChart(
     const bms_parser::ChartMeta &meta) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return {};
   }
-  std::string labels = DifficultyTableLabelsForChart(db, meta);
-  Close(db);
-  return labels;
+  return DifficultyTableLabelsForChart(connection.get(), meta);
 }
 
 std::string ChartDBHelper::DifficultyTableLabelsForChart(
@@ -4003,31 +3947,19 @@ std::string ChartDBHelper::DifficultyTableLabelsForChart(
 
 bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
   // save paths to search for charts
-  auto query = "CREATE TABLE IF NOT EXISTS entries ("
+  if (!execSql(db,
+               "CREATE TABLE IF NOT EXISTS entries ("
                "path       TEXT primary key,"
                "ios_bookmark TEXT DEFAULT ''"
-               ")";
-
-  SqliteErrorMessageHandle errMsg;
-  int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while creating entries table: "
-              << sqlite3_errmsg(db) << "\n";
+               ")",
+               "creating entries table")) {
     return false;
   }
 
-  errMsg.reset();
-  rc = sqlite3_exec(
-      db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
-      nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK &&
-      !sqliteMessageContains(errMsg.get(), "duplicate column name")) {
-    std::cerr << "SQL error while migrating entries table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!execSqlAllowDuplicateColumn(
+          db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
+          "migrating entries table")) {
     return false;
-  }
-  if (normalizeStoredPathColumn(db, "entries", "path", true)) {
-    bumpLibraryRevision();
   }
   return true;
 }
@@ -4044,21 +3976,17 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
                "@ios_bookmark"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to insert an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert an entry",
+                                    logSqlErrorText)) {
     return false;
   }
-  std::filesystem::path storedPath = path;
-  ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
-  sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 2, iosBookmark.c_str(), -1, SQLITE_TRANSIENT);
-  rc = sqlite3_step(stmt);
+  const std::string pathText = ChartDBHelper::StoredChartPathText(path);
+  bindSqliteText(stmt, 1, pathText);
+  bindSqliteText(stmt, 2, iosBookmark);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("inserting an entry", db);
     return false;
   }
   clearChartScanCheckpoint(db);
@@ -4072,10 +4000,8 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
                "COALESCE(ios_bookmark, '')"
                " FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all entries: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all entries",
+                                    logSqlErrorText)) {
     return std::vector<ChartEntry>();
   }
   std::vector<ChartEntry> entries;
@@ -4086,9 +4012,7 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
       ToAbsolutePath(path);
     }
     entry.path = fspath_to_path_t(path);
-    const char *bookmark =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    entry.iosBookmark = bookmark != nullptr ? bookmark : "";
+    entry.iosBookmark = sqliteColumnString(stmt, 1);
 #if TARGET_OS_ANDROID
     RegisterAndroidChartFolder(path, entry.iosBookmark);
 #endif
@@ -4120,7 +4044,10 @@ std::vector<ChartEntry> ChartDBHelper::SelectEffectiveEntries(sqlite3 *db) {
 #if TARGET_OS_ANDROID
   const auto defaultPath = DefaultBmsFolderPath();
   std::error_code errorCode;
-  std::filesystem::create_directories(defaultPath, errorCode);
+  if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
+    SDL_Log("Failed to create default BMS folder %s: %s",
+            fspath_to_utf8(defaultPath).c_str(), errorCode.message().c_str());
+  }
 
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
@@ -4147,20 +4074,16 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete an entry",
+                                    logSqlErrorText)) {
     return false;
   }
-  std::filesystem::path storedPath = path;
-  ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
-  sqlite3_bind_text(stmt, 1, pathText.c_str(), -1, SQLITE_TRANSIENT);
-  rc = sqlite3_step(stmt);
+  const std::string pathText = ChartDBHelper::StoredChartPathText(path);
+  bindSqliteText(stmt, 1, pathText);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting an entry", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -4174,15 +4097,13 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -4359,6 +4280,7 @@ int ChartDBHelper::ScanChartRoots(
       return;
     }
 
+    const std::string archiveText = fspath_to_utf8(archivePath);
     const ArchiveScanCacheRecord cache =
         selectArchiveScanCache(db, archivePath);
     if (archiveScanCacheMatches(cache, archiveSize, mtimeNs)) {
@@ -4369,13 +4291,11 @@ int ChartDBHelper::ScanChartRoots(
       if (!cache.solid && knownChartCount < cache.chartCount) {
         archive_file::appendDebugLogLine(
             "Archive scan cache incomplete; rescanning: " +
-            path_t_to_utf8(fspath_to_path_t(archivePath)) +
-            " cachedCharts=" + std::to_string(cache.chartCount) +
+            archiveText + " cachedCharts=" + std::to_string(cache.chartCount) +
             " dbCharts=" + std::to_string(knownChartCount));
       } else {
         archive_file::appendDebugLogLine(
-            "Using cached archive scan: " +
-            path_t_to_utf8(fspath_to_path_t(archivePath)) +
+            "Using cached archive scan: " + archiveText +
             " files=" + std::to_string(cache.fileCount) +
             " charts=" + std::to_string(cache.chartCount) +
             " solid=" + std::string(cache.solid ? "yes" : "no") +
@@ -4392,8 +4312,7 @@ int ChartDBHelper::ScanChartRoots(
     }
     if (cache.found) {
       archive_file::appendDebugLogLine(
-          "Archive scan cache invalidated: " +
-          path_t_to_utf8(fspath_to_path_t(archivePath)));
+          "Archive scan cache invalidated: " + archiveText);
     }
 
     const ArchiveScanResult archiveScan =
@@ -4454,8 +4373,7 @@ int ChartDBHelper::ScanChartRoots(
                                      stopToken)) {
         if (!androidError.empty()) {
           SDL_Log("Failed while scanning Android chart folder %s: %s",
-                  path_t_to_utf8(fspath_to_path_t(root)).c_str(),
-                  androidError.c_str());
+                  fspath_to_utf8(root).c_str(), androidError.c_str());
         }
         ++scannedRootCount;
         continue;
@@ -4464,7 +4382,7 @@ int ChartDBHelper::ScanChartRoots(
         if (shouldStop()) {
           return 0;
         }
-        if (isBmsChartFile(path)) {
+        if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
           const path_t key = fspath_to_path_t(path);
           if (knownChartPaths.find(key) == knownChartPaths.end()) {
             diffs.push_back({.path = path, .deleted = false});
@@ -4475,7 +4393,7 @@ int ChartDBHelper::ScanChartRoots(
         if (archive_file::hasSupportedArchiveExtension(path)) {
           archive_file::appendDebugLogLine(
               "Skipping Android SAF archive during library scan: " +
-              path_t_to_utf8(fspath_to_path_t(path)));
+              fspath_to_utf8(path));
         }
       }
       ++scannedRootCount;
@@ -4483,8 +4401,14 @@ int ChartDBHelper::ScanChartRoots(
     }
 #endif
     std::error_code error;
-    if (!std::filesystem::exists(root, error) || error) {
-      error.clear();
+    const bool rootExists = std::filesystem::exists(root, error);
+    if (error) {
+      SDL_Log("Failed to check chart folder %s: %s",
+              fspath_to_utf8(root).c_str(), error.message().c_str());
+      ++scannedRootCount;
+      continue;
+    }
+    if (!rootExists) {
       ++scannedRootCount;
       continue;
     }
@@ -4492,7 +4416,7 @@ int ChartDBHelper::ScanChartRoots(
     std::error_code rootTypeError;
     if (std::filesystem::is_regular_file(root, rootTypeError) &&
         !rootTypeError) {
-      if (isBmsChartFile(root)) {
+      if (asobmshow::bms_chart_file::isBmsChartPath(root)) {
         const path_t key = fspath_to_path_t(root);
         if (knownChartPaths.find(key) == knownChartPaths.end()) {
           diffs.push_back({.path = root, .deleted = false});
@@ -4518,7 +4442,7 @@ int ChartDBHelper::ScanChartRoots(
         continue;
       }
       const std::filesystem::path path = iterator->path();
-      if (isBmsChartFile(path)) {
+      if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
         const path_t key = fspath_to_path_t(path);
         if (knownChartPaths.find(key) == knownChartPaths.end()) {
           diffs.push_back({.path = path, .deleted = false});
@@ -4532,8 +4456,7 @@ int ChartDBHelper::ScanChartRoots(
     }
     if (error) {
       SDL_Log("Failed while scanning chart folder %s: %s",
-              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
-              error.message().c_str());
+              fspath_to_utf8(root).c_str(), error.message().c_str());
     }
     ++scannedRootCount;
   }
@@ -4616,9 +4539,12 @@ int ChartDBHelper::ScanChartRoots(
         rootKey += std::to_string(mtimeNs);
       } else {
         std::error_code error;
-        const bool directory =
-            std::filesystem::is_directory(root, error) && !error;
-        rootKey += directory ? "|dir" : "|missing";
+        const bool directory = std::filesystem::is_directory(root, error);
+        if (error) {
+          rootKey += "|unknown";
+        } else {
+          rootKey += directory ? "|dir" : "|missing";
+        }
       }
       rootKeys.push_back(std::move(rootKey));
     }
@@ -4820,7 +4746,7 @@ int ChartDBHelper::ScanChartRoots(
 
   int changedCount = 0;
   bool transactionOpen = false;
-  BeginTransaction(db);
+  beginSqliteTransaction(db, "chart scan");
   transactionOpen = true;
   std::uint64_t completedFlushRequest = 0;
 
@@ -4852,7 +4778,7 @@ int ChartDBHelper::ScanChartRoots(
 
   auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
     if (transactionOpen) {
-      CommitTransaction(db);
+      commitSqliteTransaction(db, "chart scan");
       transactionOpen = false;
     }
     if (!upsertChartScanCheckpoint(db, nextCheckpoint)) {
@@ -4862,7 +4788,7 @@ int ChartDBHelper::ScanChartRoots(
           " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
           " subIndex=" + std::to_string(nextCheckpoint.subIndex));
     }
-    BeginTransaction(db);
+    beginSqliteTransaction(db, "chart scan");
     transactionOpen = true;
   };
 
@@ -4985,6 +4911,7 @@ int ChartDBHelper::ScanChartRoots(
   auto parseAndInsertChart =
       [&](const std::filesystem::path &path,
           const std::vector<unsigned char> *bytes) -> bool {
+    const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
     bms_parser::Chart *rawChart = nullptr;
     std::unique_ptr<bms_parser::Chart> chart;
@@ -5015,24 +4942,22 @@ int ChartDBHelper::ScanChartRoots(
         chart.reset(rawChart);
         rawChart = nullptr;
       }
-      SDL_Log("Error parsing %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+      SDL_Log("Error parsing %s: %s", chartText.c_str(), e.what());
       archive_file::appendDebugLogLine(
-          "DB parse failed: " + path_t_to_utf8(fspath_to_path_t(path)) +
-          ": " + e.what());
+          "DB parse failed: " + chartText + ": " + e.what());
       return false;
     }
 
     if (chart == nullptr) {
       archive_file::appendDebugLogLine(
-          "DB parse returned null: " + path_t_to_utf8(fspath_to_path_t(path)));
+          "DB parse returned null: " + chartText);
       return false;
     }
     if (!parsedChartLooksInsertable(*chart)) {
       SDL_Log("Skipping chart without measures or stable identity: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+              chartText.c_str());
       archive_file::appendDebugLogLine(
-          "DB skipped chart: " + path_t_to_utf8(fspath_to_path_t(path)) +
+          "DB skipped chart: " + chartText +
           " measures=" + std::to_string(chart->Measures.size()) +
           " md5=" + chart->Meta.MD5 +
           " sha256=" + chart->Meta.SHA256);
@@ -5145,6 +5070,7 @@ int ChartDBHelper::ScanChartRoots(
         batch.innerPaths.end());
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
+    const std::string archiveText = fspath_to_utf8(batch.archivePath);
     reportProgress(parseCurrent, parseTotal,
                    ChartScanProgressStage::ReadingArchive);
     if (!archive_file::readArchiveEntries(batch.archivePath, pendingInnerPaths,
@@ -5152,19 +5078,16 @@ int ChartDBHelper::ScanChartRoots(
                                           pauseCallback)) {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
-                path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
-                errorMessage.c_str());
+                archiveText.c_str(), errorMessage.c_str());
         archive_file::appendDebugLogLine(
-            "Failed to read DB chart batch: " +
-            path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+            "Failed to read DB chart batch: " + archiveText + ": " +
             errorMessage);
       }
       parseCurrent += static_cast<int>(pendingInnerPaths.size());
       continue;
     }
     archive_file::appendDebugLogLine(
-        "Parsing DB chart batch: " +
-        path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+        "Parsing DB chart batch: " + archiveText +
         " requested=" + std::to_string(pendingInnerPaths.size()) +
         " files=" + std::to_string(files.size()));
     bool parsedFullBatch = files.size() == pendingInnerPaths.size();
@@ -5223,14 +5146,13 @@ int ChartDBHelper::ScanChartRoots(
     } else {
       archive_file::appendDebugLogLine(
           "Skipped archive scan cache write because chart batch did not "
-          "complete: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+          "complete: " + archiveText +
           " requested=" + std::to_string(pendingInnerPaths.size()) +
           " files=" + std::to_string(files.size()));
     }
   }
   if (transactionOpen) {
-    CommitTransaction(db);
+    commitSqliteTransaction(db, "chart scan");
     transactionOpen = false;
   }
   acknowledgeFlushRequest(pendingFlushRequest());
@@ -5309,8 +5231,14 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       "ON difficulty_table_entries(sha256)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_courses_group "
       "ON difficulty_courses(table_id, group_name)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_courses_table_sort_order "
+      "ON difficulty_courses(table_id, sort_order, id)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_courses_group_sort_order "
+      "ON difficulty_courses(table_id, group_name, sort_order, id)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course "
       "ON difficulty_course_entries(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course_sort_order "
+      "ON difficulty_course_entries(course_id, sort_order, id)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course_sha256 "
       "ON difficulty_course_entries(course_id, sha256)",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_course_entries_course_md5 "
@@ -5372,11 +5300,16 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   }
 
   invalidateDifficultyLabelCache();
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   const int tableId =
       upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
   if (tableId <= 0) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
@@ -5465,7 +5398,11 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
     }
   }
 
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   bumpLibraryRevision();
   SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
           symbol.c_str(), sourceUrl.c_str());
@@ -5736,29 +5673,35 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   }
 
   invalidateDifficultyLabelCache();
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start difficulty table delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   if (!clearDifficultyTableContent(db, tableId)) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
   auto query = "DELETE FROM difficulty_tables WHERE id = @id";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
   rc = sqlite3_step(stmt.get());
   const bool deleted = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
   if (!deleted) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit difficulty table delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   bumpLibraryRevision();
   return true;
 }
@@ -5769,7 +5712,7 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
   std::filesystem::create_directories(directory, ec);
   if (ec) {
     SDL_Log("Failed to create difficulty table directory %s: %s",
-            directory.string().c_str(), ec.message().c_str());
+            fspath_to_utf8(directory).c_str(), ec.message().c_str());
     return 0;
   }
 
@@ -5777,7 +5720,12 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
   std::unordered_set<std::string> importedHeaders;
   for (std::filesystem::recursive_directory_iterator it(directory, ec), end;
        !ec && it != end; it.increment(ec)) {
-    if (ec || !it->is_regular_file()) {
+    std::error_code typeEc;
+    if (!it->is_regular_file(typeEc)) {
+      if (typeEc) {
+        SDL_Log("Failed to read difficulty table path type %s: %s",
+                fspath_to_utf8(it->path()).c_str(), typeEc.message().c_str());
+      }
       continue;
     }
     const auto &path = it->path();
@@ -5804,7 +5752,7 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
                       ? document["data"]
                       : json{{"charts", document["charts"]}};
       if (ImportDifficultyTable(db, header.dump(), data.dump(),
-                                path.string())) {
+                                fspath_to_utf8(path))) {
         imported++;
       }
       continue;
@@ -5816,30 +5764,38 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
     }
 
     std::error_code canonicalEc;
-    const auto canonical =
-        std::filesystem::weakly_canonical(path, canonicalEc).string();
-    if (importedHeaders.find(canonical) != importedHeaders.end()) {
+    const auto canonicalPath =
+        std::filesystem::weakly_canonical(path, canonicalEc);
+    const std::filesystem::path headerPath =
+        canonicalEc ? path.lexically_normal() : canonicalPath;
+    const std::string headerKey = fspath_to_utf8(headerPath);
+    if (canonicalEc) {
+      SDL_Log("Failed to canonicalize difficulty table header %s: %s",
+              fspath_to_utf8(path).c_str(), canonicalEc.message().c_str());
+    }
+    if (importedHeaders.find(headerKey) != importedHeaders.end()) {
       continue;
     }
-    importedHeaders.insert(canonical);
+    importedHeaders.insert(headerKey);
 
     const std::string dataUrl = jsonStringAt(document, "data_url");
     std::filesystem::path dataPath = path.parent_path() / dataUrl;
-    if (!std::filesystem::exists(dataPath)) {
+    std::error_code dataPathError;
+    if (!std::filesystem::exists(dataPath, dataPathError) || dataPathError) {
       continue;
     }
     const auto dataRaw = readTextFile(dataPath);
     if (!dataRaw) {
       continue;
     }
-    if (ImportDifficultyTable(db, *raw, *dataRaw, path.string())) {
+    if (ImportDifficultyTable(db, *raw, *dataRaw, fspath_to_utf8(path))) {
       imported++;
     }
   }
 
   if (ec) {
     SDL_Log("Failed while scanning difficulty table directory %s: %s",
-            directory.string().c_str(), ec.message().c_str());
+            fspath_to_utf8(directory).c_str(), ec.message().c_str());
   }
   return imported;
 }
@@ -5856,12 +5812,10 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "GROUP BY dt.id "
                "ORDER BY dt.name COLLATE NOCASE";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty tables: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty tables",
+                                    logSqlErrorText)) {
     return {};
   }
 
@@ -5890,12 +5844,10 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "WHERE dte.table_id = @table_id "
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty levels: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty levels",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
@@ -5913,36 +5865,58 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
   return levels;
 }
 
+std::vector<DifficultyCourseTableInfo>
+ChartDBHelper::SelectDifficultyCourseTables(sqlite3 *db) {
+  if (!CreateDifficultyTableTables(db)) {
+    return {};
+  }
+  std::string query =
+      "SELECT dc.table_id, dt.name, dt.symbol "
+      "FROM difficulty_courses dc "
+      "JOIN difficulty_tables dt ON dt.id = dc.table_id "
+      "GROUP BY dc.table_id "
+      "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty course tables",
+                                    logSqlErrorText)) {
+    return {};
+  }
+
+  std::vector<DifficultyCourseTableInfo> tables;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    DifficultyCourseTableInfo table;
+    table.tableId = columnInt(stmt.get(), 0);
+    table.tableName = columnString(stmt.get(), 1);
+    table.tableSymbol = columnString(stmt.get(), 2);
+    tables.push_back(std::move(table));
+  }
+  return tables;
+}
+
 std::vector<DifficultyCourseGroupInfo>
-ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
+ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db, int tableId) {
   if (!CreateDifficultyTableTables(db)) {
     return {};
   }
   std::string query =
       "SELECT dc.table_id, dt.name, dc.group_name, "
-      "COUNT(dce.id), SUM(CASE WHEN cm.path IS NULL THEN 0 ELSE 1 END), "
-      "MIN(dc.sort_order) "
+      "COUNT(dc.id), MIN(dc.id), MIN(dc.level), MIN(dc.name), "
+      "MIN(dc.constraint_json) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-  query += "ORDER BY ";
-  query += chartSourceOrderBy("cm_match");
-  query += ", cm_match.title COLLATE NOCASE LIMIT 1) "
+      "WHERE dc.table_id = @table_id "
       "GROUP BY dc.table_id, dc.group_name "
-      "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
+      "ORDER BY MIN(dc.sort_order), dc.group_name COLLATE NOCASE";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty course groups: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty course groups",
+                                    logSqlErrorText)) {
     return {};
   }
+  sqlite3_bind_int(stmt.get(), 1, tableId);
 
   std::vector<DifficultyCourseGroupInfo> groups;
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -5950,8 +5924,15 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
     group.tableId = columnInt(stmt.get(), 0);
     group.tableName = columnString(stmt.get(), 1);
     group.groupName = columnString(stmt.get(), 2);
-    group.chartCount = columnInt(stmt.get(), 3);
-    group.matchedChartCount = columnInt(stmt.get(), 4);
+    group.courseCount = columnInt(stmt.get(), 3);
+    group.singletonCourseId = group.courseCount == 1 ? columnInt(stmt.get(), 4)
+                                                     : 0;
+    group.singletonCourseLevel =
+        group.courseCount == 1 ? columnString(stmt.get(), 5) : "";
+    group.singletonCourseName =
+        group.courseCount == 1 ? columnString(stmt.get(), 6) : "";
+    group.singletonCourseConstraintJson =
+        group.courseCount == 1 ? columnString(stmt.get(), 7) : "";
     groups.push_back(std::move(group));
   }
   return groups;
@@ -5965,32 +5946,20 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
   }
   std::string query =
       "SELECT dc.id, dc.table_id, dt.name, dc.group_name, dc.level, dc.name, "
-      "dc.constraint_json, COUNT(dce.id), "
-      "SUM(CASE WHEN cm.path IS NULL THEN 0 ELSE 1 END) "
+      "dc.constraint_json "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-  query += "ORDER BY ";
-  query += chartSourceOrderBy("cm_match");
-  query += ", cm_match.title COLLATE NOCASE LIMIT 1) "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
-      "GROUP BY dc.id "
-      "ORDER BY dc.sort_order";
+      "ORDER BY dc.sort_order, dc.id";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty courses: "
-              << sqlite3_errmsg(db) << "\n";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty courses",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, groupName);
+  bindSqliteText(stmt.get(), 2, groupName);
 
   std::vector<DifficultyCourseInfo> courses;
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -6002,8 +5971,6 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
     course.level = columnString(stmt.get(), 4);
     course.name = columnString(stmt.get(), 5);
     course.constraintJson = columnString(stmt.get(), 6);
-    course.chartCount = columnInt(stmt.get(), 7);
-    course.matchedChartCount = columnInt(stmt.get(), 8);
     courses.push_back(std::move(course));
   }
   return courses;
@@ -6017,6 +5984,15 @@ ChartDBHelper::ChartDBHelper() {
 
 std::uint64_t ChartDBHelper::GetLibraryRevision() const {
   return gLibraryRevision.load(std::memory_order_relaxed);
+}
+
+std::string ChartDBHelper::StoredChartPathText(std::filesystem::path path) {
+  if (path.empty()) {
+    return "";
+  }
+  ToRelativePath(path);
+  path = path.lexically_normal();
+  return fspath_to_utf8(path);
 }
 
 void ChartDBHelper::ToRelativePath(

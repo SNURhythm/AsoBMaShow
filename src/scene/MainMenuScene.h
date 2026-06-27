@@ -35,6 +35,7 @@
 class Button;
 class ScrollView;
 struct CoursePlaySession;
+struct ResultImageExportResult;
 struct StartOptions;
 class View;
 
@@ -147,6 +148,7 @@ private:
       DifficultyLevel,
       DifficultyClearMark,
       CoursesRoot,
+      CourseTable,
       CourseGroup,
       Course
     };
@@ -171,6 +173,20 @@ private:
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
+  struct LibraryFolderMetadataCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int allSongCount = 0;
+    int favoriteCount = 0;
+    int solidArchiveCount = 0;
+    std::vector<DifficultyTableInfo> tables;
+    std::unordered_map<int, std::vector<DifficultyLevelInfo>> levelsByTable;
+    std::vector<DifficultyCourseTableInfo> courseTables;
+    std::unordered_map<int, std::vector<DifficultyCourseGroupInfo>>
+        courseGroupsByTable;
+    std::unordered_map<std::string, std::vector<DifficultyCourseInfo>>
+        coursesByGroup;
+  };
   struct ChartListPageCache {
     sqlite3 *db = nullptr;
     ChartMetaQuery query;
@@ -396,10 +412,20 @@ private:
   std::optional<BmsSearchResult> pendingFindBmsResult;
 
   LibraryFolderItem activeFolder;
+  LibraryFolderMetadataCache folderMetadataCache;
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
   main_menu_library::FolderClearDataByLongNoteMode folderClearData;
+  struct CourseValidationCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int courseId = 0;
+    bool empty = true;
+    int firstMissingIndex = -1;
+    std::vector<ChartMetaRecord> records;
+  };
+  CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
@@ -462,6 +488,8 @@ private:
   void initView(ApplicationContext &context);
   void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
+  void refreshFavoriteFolderCount();
+  ChartMetaQuery chartQueryForActiveFolder() const;
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
@@ -546,6 +574,7 @@ private:
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
+  const CourseValidationCache &courseValidationForActiveFolder();
   void refreshStartButtonForActiveFolder();
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
@@ -619,6 +648,11 @@ private:
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
+  bool beginReplayExport(const std::string &progressTitle,
+                         const std::string &progressMessage,
+                         const std::string &statusMessage);
+  void queueReplayExportResult(const ReplayVideoExportResult &result);
+  void queueReplayExportResult(const ResultImageExportResult &result);
   bool selectedReplayIsAutoPlay() const;
   bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
@@ -635,8 +669,8 @@ private:
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayImageExport(const ChartMetaRecord &record, int replayId);
-  void applyReplayVideoExportProgress();
-  void applyReplayVideoExportResult();
+  void applyReplayExportProgress();
+  void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void addIOSFolderEntryFromFiles();
 #endif

@@ -1,6 +1,7 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../BmsChartFile.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
@@ -14,6 +15,7 @@
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
 #include "../SqliteRAII.h"
+#include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -31,6 +33,7 @@
 #include "../view/UiTheme.h"
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -93,6 +96,58 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://stellabms.xyz/sl/table.html",
     "https://stellabms.xyz/st/table.html",
 };
+
+void ensureLibraryFolderExists(const std::filesystem::path &path) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return;
+  }
+
+  throw std::runtime_error("Could not create library folder '" +
+                           fspath_to_utf8(path) + "': " + error.message());
+}
+
+bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
+                                 const char *description) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return true;
+  }
+
+  SDL_Log("Failed to create %s %s: %s", description,
+          fspath_to_utf8(path).c_str(), error.message().c_str());
+  return false;
+}
+
+const char *homeDirectoryEnvValue() {
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return home;
+  }
+#ifdef _WIN32
+  if (const char *profile = std::getenv("USERPROFILE");
+      profile != nullptr && profile[0] != '\0') {
+    return profile;
+  }
+#endif
+  return nullptr;
+}
+
+bool expandCurrentUserHomeShortcut(std::string &path) {
+  if (path.empty() || path.front() != '~') {
+    return true;
+  }
+  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+    return true;
+  }
+
+  const char *home = homeDirectoryEnvValue();
+  if (home == nullptr) {
+    return false;
+  }
+  path.replace(0, 1, home);
+  return true;
+}
 
 struct SafeAreaInsets {
   int top = 0;
@@ -420,21 +475,27 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     targetPath = archivePath;
   }
 
-  if (!std::filesystem::exists(targetPath, errorCode) || errorCode) {
+  const std::string targetPathText = fspath_to_utf8(targetPath);
+  const bool targetExists = std::filesystem::exists(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
+  if (!targetExists) {
     errorMessage = "Chart file does not exist: " +
-                   path_t_to_utf8(fspath_to_path_t(targetPath));
+                   targetPathText;
     return false;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return RevealIOSFileInFiles(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                              errorMessage);
+  return RevealIOSFileInFiles(targetPathText, errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
 #elif TARGET_OS_OSX
-  return RevealPathInFinder(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                            errorMessage);
+  return RevealPathInFinder(targetPathText, errorMessage);
 #elif defined(_WIN32)
   const std::wstring nativePath = targetPath.wstring();
   const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
@@ -464,6 +525,12 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   return true;
 #elif TARGET_OS_LINUX
   const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file type: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
   std::filesystem::path directoryPath =
       isDirectory ? targetPath : targetPath.parent_path();
   if (directoryPath.empty()) {
@@ -484,7 +551,7 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     return false;
   }
 
-  const std::string directoryText = directoryPath.string();
+  const std::string directoryText = fspath_to_utf8(directoryPath);
   pid_t pid = 0;
   char *argv[] = {const_cast<char *>(openerPath.c_str()),
                   const_cast<char *>(directoryText.c_str()), nullptr};
@@ -566,6 +633,7 @@ bool openExternalUrl(const std::string &url, std::string &errorMessage) {
 
 using main_menu_library::folderKeyForCourse;
 using main_menu_library::folderKeyForCourseGroup;
+using main_menu_library::folderKeyForCourseTable;
 using main_menu_library::folderKeyForLevel;
 using main_menu_library::folderKeyForTable;
 
@@ -1601,7 +1669,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
       auto path = ChartDBHelper::DefaultBmsFolderPath();
-      std::filesystem::create_directories(path);
+      ensureLibraryFolderExists(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
           .iosBookmark = "",
@@ -1609,7 +1677,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
 #elif TARGET_OS_ANDROID
     auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::filesystem::create_directories(path);
+    ensureLibraryFolderExists(path);
     dbHelper.InsertEntry(taskDb, path);
     entries = dbHelper.SelectEffectiveEntries(taskDb);
 #else
@@ -1634,8 +1702,10 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
           continue;
         }
 
-        if (folder[0] == '~') {
-          folder.replace(0, 1, getenv("HOME"));
+        if (!expandCurrentUserHomeShortcut(folder)) {
+          std::cout << "Could not expand ~ because no home directory is set.\n";
+          folder.clear();
+          continue;
         }
         std::ifstream test(folder);
         if (!test)
@@ -1713,8 +1783,8 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1761,8 +1831,8 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1908,9 +1978,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
                       "Preparing import");
   archive_file::appendDebugLogLine(
-      "Android import task requested: " +
-      path_t_to_utf8(fspath_to_path_t(importPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)));
+      "Android import task requested: " + fspath_to_utf8(importPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot));
 
   auto postImportProgress = [this, &task,
                              importingFolder](double fraction,
@@ -1925,10 +1994,10 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
 
   std::string errorMessage;
   std::error_code fsError;
-  std::filesystem::create_directories(outputRoot, fsError);
-  if (fsError) {
+  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
     throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder.");
+                             "folder: " +
+                             fsError.message());
   }
 
   std::filesystem::path outputFolder;
@@ -2316,7 +2385,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Solid archive selected without chart probing: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) +
+          fspath_to_utf8(meta.BmsPath) +
           " files=" + std::to_string(item.archiveFileCount) +
           " estimatedUnpacked=" + std::to_string(item.archiveUncompressedSize));
       return;
@@ -2334,7 +2403,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     bool suppressPreview = false;
@@ -2357,14 +2426,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
     previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
-      SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
 
       // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
@@ -2376,25 +2445,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       context.jukebox.stop();
-      SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
       std::unique_ptr<bms_parser::Chart> chart;
       try {
         chart = play_options::parseChart(meta.BmsPath, previewLoadCancelled,
                                          "preview");
       } catch (const std::exception &e) {
         SDL_Log("Preview parse failed %s: %s",
-                path_t_to_utf8(meta.BmsPath).c_str(), e.what());
+                fspath_to_utf8(meta.BmsPath).c_str(), e.what());
         archive_file::appendDebugLogLine(
-            "Preview parse exception: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + ": " + e.what());
+            "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
+            e.what());
         return;
       }
-      SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         archive_file::appendDebugLogLine(
-            "Preview chart is null: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+            "Preview chart is null: " + fspath_to_utf8(meta.BmsPath));
         return;
       }
 
@@ -2968,12 +3036,23 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const float previousScrollOffset =
       preserveViewState ? folderRecyclerView->scrollOffset : 0.0f;
-  auto dbHelper = ChartDBHelper::GetInstance();
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const std::uint64_t currentLibraryRevision = dbHelper.GetLibraryRevision();
+  if (!folderMetadataCache.valid ||
+      folderMetadataCache.libraryRevision != currentLibraryRevision) {
+    folderMetadataCache = LibraryFolderMetadataCache{};
+    folderMetadataCache.libraryRevision = currentLibraryRevision;
+    folderMetadataCache.allSongCount = dbHelper.CountAllChartMeta(db);
+    folderMetadataCache.favoriteCount = dbHelper.CountFavoriteCharts(db);
+    folderMetadataCache.solidArchiveCount = dbHelper.CountSolidArchives(db);
+    folderMetadataCache.tables = dbHelper.SelectDifficultyTables(db);
+    folderMetadataCache.courseTables = dbHelper.SelectDifficultyCourseTables(db);
+    folderMetadataCache.valid = true;
+  }
   std::vector<LibraryFolderItem> folders;
 
-  int allSongCount = 0;
-  allSongCount = dbHelper.CountAllChartMeta(db);
-  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  const int allSongCount = folderMetadataCache.allSongCount;
+  const int favoriteCount = folderMetadataCache.favoriteCount;
 
   auto isExpanded = [this](const std::string &key) {
     return expandedLibraryFolders.find(key) != expandedLibraryFolders.end();
@@ -3022,7 +3101,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .count = favoriteCount,
   });
 
-  const int solidArchiveCount = dbHelper.CountSolidArchives(db);
+  const int solidArchiveCount = folderMetadataCache.solidArchiveCount;
   if (solidArchiveCount > 0) {
     folders.push_back({
         .key = "solid-archives",
@@ -3033,8 +3112,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     });
   }
 
-  const auto tables = dbHelper.SelectDifficultyTables(db);
-  for (const auto &table : tables) {
+  for (const auto &table : folderMetadataCache.tables) {
     const std::string tableKey = folderKeyForTable(table.id);
     const LibraryFolderItem tableItem{
         .key = tableKey,
@@ -3053,7 +3131,14 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
     appendClearMarkFilters(tableItem, 1);
 
-    const auto levels = dbHelper.SelectDifficultyLevels(db, table.id);
+    auto levelsIt = folderMetadataCache.levelsByTable.find(table.id);
+    if (levelsIt == folderMetadataCache.levelsByTable.end()) {
+      levelsIt =
+          folderMetadataCache.levelsByTable
+              .emplace(table.id, dbHelper.SelectDifficultyLevels(db, table.id))
+              .first;
+    }
+    const auto &levels = levelsIt->second;
     for (const auto &level : levels) {
       const std::string levelKey =
           folderKeyForLevel(level.tableId, level.level);
@@ -3075,79 +3160,113 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
 
-  const auto courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
-  if (!courseGroups.empty()) {
-    int coursesCount = 0;
-    for (const auto &group : courseGroups) {
-      coursesCount += group.chartCount;
-    }
+  const auto &courseTables = folderMetadataCache.courseTables;
+  if (!courseTables.empty()) {
     const LibraryFolderItem coursesRootItem{
         .key = "courses",
         .label = "Courses",
         .type = LibraryFolderItem::Type::CoursesRoot,
         .depth = 0,
-        .count = coursesCount,
+        .count = -1,
         .expandable = true,
         .expanded = isExpanded("courses"),
     };
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
-      for (const auto &group : courseGroups) {
-        const auto courses = dbHelper.SelectDifficultyCourses(
-            db, group.tableId, group.groupName);
-        if (courses.empty()) {
-          continue;
-        }
-
-        const std::string label = group.groupName.empty()
-                                      ? group.tableName + " Courses"
-                                      : group.groupName;
-        const std::string groupKey =
-            folderKeyForCourseGroup(group.tableId, group.groupName);
-        const auto makeCourseItem = [&](const DifficultyCourseInfo &course,
-                                        int depth) {
-          const std::string courseLabel =
-              course.level.empty() ? course.name : course.level;
-          return LibraryFolderItem{
-              .key = folderKeyForCourse(course.id),
-              .label = courseLabel,
-              .type = LibraryFolderItem::Type::Course,
-              .depth = depth,
-              .count = course.chartCount,
-              .courseId = course.id,
-              .courseTableId = course.tableId,
-              .courseGroupName = course.groupName,
-              .courseConstraintJson = course.constraintJson,
-          };
+      const auto makeCourseItem =
+          [](int courseId, int tableId, const std::string &groupName,
+             const std::string &level, const std::string &name,
+             const std::string &constraintJson, int depth) {
+        const std::string courseLabel = level.empty() ? name : level;
+        return LibraryFolderItem{
+            .key = folderKeyForCourse(courseId),
+            .label = courseLabel,
+            .type = LibraryFolderItem::Type::Course,
+            .depth = depth,
+            .count = -1,
+            .courseId = courseId,
+            .courseTableId = tableId,
+            .courseGroupName = groupName,
+            .courseConstraintJson = constraintJson,
         };
+      };
+      const auto makeCourseInfoItem = [&](const DifficultyCourseInfo &course,
+                                          int depth) {
+        return makeCourseItem(course.id, course.tableId, course.groupName,
+                              course.level, course.name, course.constraintJson,
+                              depth);
+      };
 
-        const bool duplicateSingletonGroup =
-            courses.size() == 1 &&
-            (group.groupName.empty() || courses.front().name == label ||
-             courses.front().level == label);
-        if (duplicateSingletonGroup) {
-          folders.push_back(makeCourseItem(courses.front(), 1));
-          continue;
-        }
-
-        const LibraryFolderItem groupItem{
-            .key = groupKey,
-            .label = label,
-            .type = LibraryFolderItem::Type::CourseGroup,
+      for (const auto &table : courseTables) {
+        const std::string tableKey = folderKeyForCourseTable(table.tableId);
+        const LibraryFolderItem tableItem{
+            .key = tableKey,
+            .label = table.tableName,
+            .type = LibraryFolderItem::Type::CourseTable,
             .depth = 1,
-            .count = group.chartCount,
-            .courseTableId = group.tableId,
-            .courseGroupName = group.groupName,
+            .count = -1,
+            .courseTableId = table.tableId,
             .expandable = true,
-            .expanded = isExpanded(groupKey),
+            .expanded = isExpanded(tableKey),
         };
-        folders.push_back(groupItem);
-        if (!groupItem.expanded) {
+        folders.push_back(tableItem);
+        if (!tableItem.expanded) {
           continue;
         }
 
-        for (const auto &course : courses) {
-          folders.push_back(makeCourseItem(course, 2));
+        auto groupsIt =
+            folderMetadataCache.courseGroupsByTable.find(table.tableId);
+        if (groupsIt == folderMetadataCache.courseGroupsByTable.end()) {
+          groupsIt = folderMetadataCache.courseGroupsByTable
+                         .emplace(table.tableId,
+                                  dbHelper.SelectDifficultyCourseGroups(
+                                      db, table.tableId))
+                         .first;
+        }
+        for (const auto &group : groupsIt->second) {
+          const std::string label =
+              group.groupName.empty() ? "Ungrouped" : group.groupName;
+          const std::string groupKey =
+              folderKeyForCourseGroup(group.tableId, group.groupName);
+          const bool duplicateSingletonGroup =
+              group.courseCount == 1 && group.singletonCourseId > 0 &&
+              (group.groupName.empty() || group.singletonCourseName == label ||
+               group.singletonCourseLevel == label);
+          if (duplicateSingletonGroup) {
+            folders.push_back(makeCourseItem(
+                group.singletonCourseId, group.tableId, group.groupName,
+                group.singletonCourseLevel, group.singletonCourseName,
+                group.singletonCourseConstraintJson, 2));
+            continue;
+          }
+
+          const LibraryFolderItem groupItem{
+              .key = groupKey,
+              .label = label,
+              .type = LibraryFolderItem::Type::CourseGroup,
+              .depth = 2,
+              .count = -1,
+              .courseTableId = group.tableId,
+              .courseGroupName = group.groupName,
+              .expandable = true,
+              .expanded = isExpanded(groupKey),
+          };
+          folders.push_back(groupItem);
+          if (!groupItem.expanded) {
+            continue;
+          }
+
+          auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
+          if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
+            coursesIt = folderMetadataCache.coursesByGroup
+                            .emplace(groupKey,
+                                     dbHelper.SelectDifficultyCourses(
+                                         db, group.tableId, group.groupName))
+                            .first;
+          }
+          for (const auto &course : coursesIt->second) {
+            folders.push_back(makeCourseInfoItem(course, 3));
+          }
         }
       }
     }
@@ -3197,6 +3316,109 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   }
 }
 
+void MainMenuScene::refreshFavoriteFolderCount() {
+  if (folderRecyclerView == nullptr) {
+    return;
+  }
+
+  std::vector<LibraryFolderItem> folders = folderRecyclerView->getItems();
+  if (folders.empty()) {
+    reloadFolderItems(true);
+    return;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  if (folderMetadataCache.valid) {
+    folderMetadataCache.favoriteCount = favoriteCount;
+    folderMetadataCache.libraryRevision = dbHelper.GetLibraryRevision();
+  }
+  const float previousScrollOffset = folderRecyclerView->scrollOffset;
+  int activeIndex = std::clamp(folderRecyclerView->selectedIndex, 0,
+                               static_cast<int>(folders.size()) - 1);
+  bool foundFavorites = false;
+
+  for (int i = 0; i < static_cast<int>(folders.size()); ++i) {
+    auto &folder = folders[static_cast<std::size_t>(i)];
+    if (folder.key == "favorites") {
+      folder.count = favoriteCount;
+      foundFavorites = true;
+      if (activeFolder.key == folder.key) {
+        activeFolder = folder;
+      }
+    }
+    if (folder.key == activeFolder.key) {
+      activeIndex = i;
+    }
+  }
+
+  if (!foundFavorites) {
+    reloadFolderItems(true);
+    return;
+  }
+
+  const int folderCount = static_cast<int>(folders.size());
+  folderRecyclerView->setItems(std::move(folders));
+  folderRecyclerView->selectedIndex = activeIndex;
+  const float maxOffset =
+      std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
+                                            folderRecyclerView->itemHeight -
+                                        folderRecyclerView->getHeight()));
+  folderRecyclerView->scrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  folderRecyclerView->rebindVisibleItems();
+  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+  if (selectedView != nullptr) {
+    selectedView->onSelected();
+  }
+}
+
+ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
+  ChartMetaQuery query;
+  query.keyword = searchText;
+  query.difficultyText = difficultyText;
+  query.selectedLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
+
+  switch (activeFolder.type) {
+  case LibraryFolderItem::Type::SolidArchives:
+    query.solidArchivesOnly = true;
+    break;
+  case LibraryFolderItem::Type::Favorites:
+    query.favoritesOnly = true;
+    break;
+  case LibraryFolderItem::Type::DifficultyTable:
+    query.tableId = activeFolder.tableId;
+    break;
+  case LibraryFolderItem::Type::DifficultyLevel:
+    query.tableId = activeFolder.tableId;
+    query.tableLevel = activeFolder.tableLevel;
+    break;
+  case LibraryFolderItem::Type::DifficultyClearMark:
+    query.tableId = activeFolder.tableId;
+    query.tableLevel = activeFolder.tableLevel;
+    query.clearMarkFilter = true;
+    query.clearMarkRank = activeFolder.clearMarkRank;
+    break;
+  case LibraryFolderItem::Type::CoursesRoot:
+    query.coursesOnly = true;
+    break;
+  case LibraryFolderItem::Type::CourseTable:
+    query.courseTableId = activeFolder.courseTableId;
+    break;
+  case LibraryFolderItem::Type::CourseGroup:
+    query.courseTableId = activeFolder.courseTableId;
+    query.courseGroupName = activeFolder.courseGroupName;
+    break;
+  case LibraryFolderItem::Type::Course:
+    query.courseId = activeFolder.courseId;
+    break;
+  case LibraryFolderItem::Type::AllSongs:
+  default:
+    break;
+  }
+  return query;
+}
+
 void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr) {
     return;
@@ -3228,45 +3450,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
         fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
   }
 
-  ChartMetaQuery query;
-  query.keyword = searchText;
-  query.difficultyText = difficultyText;
-  query.selectedLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
-
-  switch (activeFolder.type) {
-  case LibraryFolderItem::Type::SolidArchives:
-    query.solidArchivesOnly = true;
-    break;
-  case LibraryFolderItem::Type::Favorites:
-    query.favoritesOnly = true;
-    break;
-  case LibraryFolderItem::Type::DifficultyTable:
-    query.tableId = activeFolder.tableId;
-    break;
-  case LibraryFolderItem::Type::DifficultyLevel:
-    query.tableId = activeFolder.tableId;
-    query.tableLevel = activeFolder.tableLevel;
-    break;
-  case LibraryFolderItem::Type::DifficultyClearMark:
-    query.tableId = activeFolder.tableId;
-    query.tableLevel = activeFolder.tableLevel;
-    query.clearMarkFilter = true;
-    query.clearMarkRank = activeFolder.clearMarkRank;
-    break;
-  case LibraryFolderItem::Type::CoursesRoot:
-    query.coursesOnly = true;
-    break;
-  case LibraryFolderItem::Type::CourseGroup:
-    query.courseTableId = activeFolder.courseTableId;
-    query.courseGroupName = activeFolder.courseGroupName;
-    break;
-  case LibraryFolderItem::Type::Course:
-    query.courseId = activeFolder.courseId;
-    break;
-  case LibraryFolderItem::Type::AllSongs:
-  default:
-    break;
-  }
+  ChartMetaQuery query = chartQueryForActiveFolder();
 
   std::optional<ChartMetaRecord> leadingRecord;
   if (activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -3292,6 +3476,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   }
   dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
+  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(db, query, dbCount, std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
@@ -3328,17 +3513,13 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int searchRadius = std::max(chartListCache.pageSize * 3, 1);
-    const int searchStart =
-        std::max(0, std::max(0, preferredIndex) - searchRadius);
-    const int searchEnd =
-        std::min(count, std::max(0, preferredIndex) + searchRadius + 1);
-    for (int i = searchStart; i < searchEnd; ++i) {
-      if (pathMatches(i, path)) {
-        return i;
-      }
+    const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+        db, query, std::filesystem::path(path));
+    if (dbIndex < 0) {
+      return -1;
     }
-    return -1;
+    const int index = dbIndex + leadingOffset;
+    return index >= 0 && index < count ? index : -1;
   };
 
   float restoredScrollOffset = std::clamp(previousScrollOffset, 0.0f, maxOffset);
@@ -3381,11 +3562,8 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
   }
 
   auto exec = [this](const char *query, const char *context) {
-    SqliteErrorMessageHandle error;
-    const int rc = sqlite3_exec(db, query, nullptr, nullptr, error.out());
-    if (rc != SQLITE_OK) {
-      SDL_Log("SQL error while %s: %s", context,
-              error.get() != nullptr ? error.get() : sqlite3_errmsg(db));
+    if (const auto error = executeSqlite(db, query)) {
+      SDL_Log("SQL error while %s: %s", context, error->c_str());
       return false;
     }
     return true;
@@ -3436,7 +3614,7 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
         sqlite3_reset(stmt.get());
         sqlite3_clear_bindings(stmt.get());
         sqlite3_bind_int(stmt.get(), 1, kind);
-        sqlite3_bind_text(stmt.get(), 2, key.c_str(), -1, SQLITE_TRANSIENT);
+        bindSqliteText(stmt.get(), 2, key);
         sqlite3_bind_int(stmt.get(), 3, lnMode);
         sqlite3_bind_int(stmt.get(), 4, rank);
         if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
@@ -3569,37 +3747,42 @@ void MainMenuScene::selectChartByPathAfterReload(
     return;
   }
   const path_t target = fspath_to_path_t(path);
-  for (int i = 0; i < recyclerView->size(); ++i) {
-    const ChartMetaRecord &record = recyclerView->get(i);
-    if (fspath_to_path_t(record.meta.BmsPath) != target) {
-      continue;
+  const ChartMetaQuery query = chartQueryForActiveFolder();
+  int index = ChartDBHelper::GetInstance().FindChartMetaIndex(db, query, path);
+  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0) {
+    index += 1;
+  }
+  if (index >= 0 && index < recyclerView->size()) {
+    const ChartMetaRecord &record = recyclerView->get(index);
+    if (fspath_to_path_t(record.meta.BmsPath) == target) {
+      const int previous = recyclerView->selectedIndex;
+      if (previous >= 0 && previous < recyclerView->size() &&
+          previous != index && recyclerView->onUnselected) {
+        recyclerView->onUnselected(recyclerView->get(previous), previous);
+      }
+      recyclerView->selectedIndex = index;
+      const float selectedY =
+          static_cast<float>(index * recyclerView->itemHeight);
+      const float viewportHeight =
+          static_cast<float>(recyclerView->getHeight());
+      const float itemHeight = static_cast<float>(recyclerView->itemHeight);
+      const float centeredOffset =
+          selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
+      const float maxOffset =
+          std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
+                                                recyclerView->itemHeight -
+                                            recyclerView->getHeight()));
+      recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+      recyclerView->rebindVisibleItems();
+      suppressPreviewForChartPath = record.meta.BmsPath;
+      if (recyclerView->onSelected) {
+        recyclerView->onSelected(record, index);
+      }
+      archive_file::appendDebugLogLine(
+          "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
+      return;
     }
-
-    const int previous = recyclerView->selectedIndex;
-    if (previous >= 0 && previous < recyclerView->size() && previous != i &&
-        recyclerView->onUnselected) {
-      recyclerView->onUnselected(recyclerView->get(previous), previous);
-    }
-    recyclerView->selectedIndex = i;
-    const float selectedY = static_cast<float>(i * recyclerView->itemHeight);
-    const float viewportHeight = static_cast<float>(recyclerView->getHeight());
-    const float itemHeight = static_cast<float>(recyclerView->itemHeight);
-    const float centeredOffset =
-        selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-    const float maxOffset =
-        std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
-                                              recyclerView->itemHeight -
-                                          recyclerView->getHeight()));
-    recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
-    recyclerView->rebindVisibleItems();
-    suppressPreviewForChartPath = record.meta.BmsPath;
-    if (recyclerView->onSelected) {
-      recyclerView->onSelected(record, i);
-    }
-    archive_file::appendDebugLogLine(
-        "Selected unzipped chart: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
-    return;
   }
 
   if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
@@ -3615,15 +3798,33 @@ void MainMenuScene::selectChartByPathAfterReload(
 }
 
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
-  activeFolder = item;
-  if (item.expandable) {
-    const auto it = expandedLibraryFolders.find(item.key);
+  auto toggleExpandedFolder = [this](const std::string &key) {
+    const auto it = expandedLibraryFolders.find(key);
     if (it == expandedLibraryFolders.end()) {
-      expandedLibraryFolders.insert(item.key);
+      expandedLibraryFolders.insert(key);
     } else {
       expandedLibraryFolders.erase(it);
     }
+  };
+
+  if (item.type == LibraryFolderItem::Type::CoursesRoot) {
+    const std::string previousActiveKey = activeFolder.key;
+    toggleExpandedFolder(item.key);
     reloadFolderItems(true);
+    if (activeFolder.key != previousActiveKey) {
+      reloadChartList();
+    }
+    return;
+  }
+
+  const bool chartQueryUnchanged = activeFolder.key == item.key;
+  activeFolder = item;
+  if (item.expandable) {
+    toggleExpandedFolder(item.key);
+    reloadFolderItems(true);
+  }
+  if (item.expandable && chartQueryUnchanged) {
+    return;
   }
   reloadChartList();
 }
@@ -3639,7 +3840,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
-  reloadFolderItems(true);
+  refreshFavoriteFolderCount();
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);
   } else if (recyclerView != nullptr) {
@@ -3926,6 +4127,44 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
 }
 
+const MainMenuScene::CourseValidationCache &
+MainMenuScene::courseValidationForActiveFolder() {
+  const std::uint64_t currentLibraryRevision =
+      ChartDBHelper::GetInstance().GetLibraryRevision();
+  if (courseValidationCache.valid &&
+      courseValidationCache.libraryRevision == currentLibraryRevision &&
+      courseValidationCache.courseId == activeFolder.courseId) {
+    return courseValidationCache;
+  }
+
+  courseValidationCache = CourseValidationCache{};
+  courseValidationCache.valid = true;
+  courseValidationCache.libraryRevision = currentLibraryRevision;
+  courseValidationCache.courseId = activeFolder.courseId;
+
+  if (activeFolder.type != LibraryFolderItem::Type::Course ||
+      activeFolder.courseId <= 0) {
+    return courseValidationCache;
+  }
+
+  ChartMetaQuery query;
+  query.courseId = activeFolder.courseId;
+  ChartDBHelper::GetInstance().QueryChartMeta(db, query,
+                                              courseValidationCache.records);
+  courseValidationCache.empty = courseValidationCache.records.empty();
+  for (int i = 0;
+       i < static_cast<int>(courseValidationCache.records.size()); ++i) {
+    const auto &record =
+        courseValidationCache.records[static_cast<std::size_t>(i)];
+    if (record.solidArchive || record.unavailable ||
+        record.meta.BmsPath.empty()) {
+      courseValidationCache.firstMissingIndex = i;
+      break;
+    }
+  }
+  return courseValidationCache;
+}
+
 void MainMenuScene::refreshStartButtonForActiveFolder() {
   if (startButtonText == nullptr || willStart.load()) {
     return;
@@ -3944,21 +4183,14 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
     }
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     startButtonText->setText("No Course");
     return;
   }
 
-  const bool hasMissing = std::any_of(
-      records.begin(), records.end(), [](const ChartMetaRecord &record) {
-        return record.solidArchive || record.unavailable ||
-               record.meta.BmsPath.empty();
-      });
-  startButtonText->setText(hasMissing ? "Missing" : "Start Course");
+  startButtonText->setText(validation.firstMissingIndex >= 0 ? "Missing"
+                                                             : "Start Course");
 }
 
 void MainMenuScene::startSelectedCourse() {
@@ -3970,11 +4202,8 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("No course charts");
     }
@@ -3982,30 +4211,23 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  int firstMissingIndex = -1;
-  for (int i = 0; i < static_cast<int>(records.size()); ++i) {
-    const auto &record = records[i];
-    if (record.solidArchive || record.unavailable ||
-        record.meta.BmsPath.empty()) {
-      firstMissingIndex = i;
-      break;
-    }
-  }
+  const auto &records = validation.records;
+  const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("Course has missing charts");
     }
     int visibleMissingIndex = -1;
-    for (int i = 0; i < recyclerView->size(); ++i) {
-      const auto &visibleRecord = recyclerView->get(i);
-      if (visibleRecord.courseStart) {
-        continue;
+    const auto &missingRecord =
+        records[static_cast<std::size_t>(firstMissingIndex)];
+    if (!missingRecord.meta.BmsPath.empty()) {
+      const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+          db, chartQueryForActiveFolder(), missingRecord.meta.BmsPath);
+      if (dbIndex >= 0) {
+        visibleMissingIndex = dbIndex + 1;
       }
-      if (visibleRecord.solidArchive || visibleRecord.unavailable ||
-          visibleRecord.meta.BmsPath.empty()) {
-        visibleMissingIndex = i;
-        break;
-      }
+    } else if (searchText.empty() && difficultyText.empty()) {
+      visibleMissingIndex = firstMissingIndex + 1;
     }
     if (visibleMissingIndex >= 0) {
       const int previous = recyclerView->selectedIndex;
@@ -4103,11 +4325,10 @@ void MainMenuScene::startCourseDirect(
                                                    parseCancelled, "course");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for course start: %s",
-                  path_t_to_utf8(firstMeta->BmsPath).c_str(), e.what());
+                  fspath_to_utf8(firstMeta->BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Course start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(firstMeta->BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
         }
         if (preparedChart == nullptr || parseCancelled) {
           if (replayStatusText != nullptr) {
@@ -4233,7 +4454,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+              fspath_to_utf8(record.meta.BmsPath));
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
@@ -4260,11 +4481,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
               chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (preparedChart != nullptr && !parseCancelled) {
           play_options::PlayOptionReplayInfo playInfo =
@@ -4355,8 +4575,7 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
 
   cancelPreviewLoading(false);
   archive_file::appendDebugLogLine(
-      "Open chart viewer: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+      "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
   context.jukebox.stop();
   context.sceneManager->changeScene(
       std::make_unique<ChartViewerScene>(context, record, chartRandomInfo.seed,
@@ -4384,8 +4603,7 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   std::string errorMessage;
   if (!revealPathInFileManager(record.meta.BmsPath, errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
-            path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)).c_str(),
-            errorMessage.c_str());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), errorMessage.c_str());
   }
 }
 
@@ -4550,9 +4768,8 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     outputRoot = ".";
   }
   archive_file::appendDebugLogLine(
-      "Unzip requested: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)) + " mode=full-archive");
+      "Unzip requested: " + fspath_to_utf8(record.meta.BmsPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot) + " mode=full-archive");
 
   unzipThread = std::jthread([this, record, outputRoot, fullArchiveUnzip,
                               sourceArchivePath](
@@ -4817,7 +5034,17 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
 
   const std::filesystem::path archivePath = *unzipDeleteCandidatePath;
   std::error_code error;
-  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+  const bool archiveExists =
+      std::filesystem::is_regular_file(archivePath, error);
+  if (error) {
+    updateUnzipProgressUi(1.0,
+                          "Could not check archive: " + error.message(), 0, 0);
+    archive_file::appendDebugLogLine(
+        "Failed to check source archive before delete: " +
+        fspath_to_utf8(archivePath) + ": " + error.message());
+    return;
+  }
+  if (!archiveExists) {
     updateUnzipProgressUi(1.0, "Archive is already unavailable", 0, 0);
     setUnzipDeleteArchiveButtonVisible(false);
     unzipDeleteCandidatePath.reset();
@@ -4832,8 +5059,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
             (error ? std::string(": ") + error.message() : std::string()),
         0, 0);
     archive_file::appendDebugLogLine(
-        "Failed to delete source archive: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)) +
+        "Failed to delete source archive: " + fspath_to_utf8(archivePath) +
         (error ? ": " + error.message() : ""));
     return;
   }
@@ -4855,8 +5081,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
   }
   updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
   archive_file::appendDebugLogLine(
-      "Deleted source archive after unzip: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)));
+      "Deleted source archive after unzip: " + fspath_to_utf8(archivePath));
 }
 
 void MainMenuScene::applyUnzipProgress() {
@@ -4928,9 +5153,8 @@ void MainMenuScene::applyUnzipResult() {
   }
   archive_file::appendDebugLogLine(
       result->message +
-      (result->chartPath.empty()
-           ? ""
-           : ": " + path_t_to_utf8(fspath_to_path_t(result->chartPath))));
+      (result->chartPath.empty() ? ""
+                                 : ": " + fspath_to_utf8(result->chartPath)));
 
   defer(
       [this, hideModal = result->success && !canDeleteArchive]() {
@@ -4994,10 +5218,12 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   auto entries = dbHelper.SelectEffectiveEntries(db);
   if (entries.empty()) {
     const auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::error_code errorCode;
-    std::filesystem::create_directories(path, errorCode);
+    const bool pathReady =
+        ensureDirectoryExistsLogged(path, "BMS download root");
 #if !(TARGET_OS_ANDROID)
-    dbHelper.InsertEntry(db, path);
+    if (pathReady) {
+      dbHelper.InsertEntry(db, path);
+    }
 #endif
     return path;
   }
@@ -5006,8 +5232,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   return ResolveIOSFolderEntryPath(entries.front());
 #elif TARGET_OS_ANDROID
   const auto path = ChartDBHelper::DefaultBmsFolderPath();
-  std::error_code errorCode;
-  std::filesystem::create_directories(path, errorCode);
+  ensureDirectoryExistsLogged(path, "BMS download root");
   return path;
 #else
   return std::filesystem::path(entries.front().path);
@@ -6200,12 +6425,10 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) + "\n";
   }
   if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Saved to " +
-              path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath)) +
+    detail += "Saved to " + fspath_to_utf8(findBmsResult.outputPath) +
               "\nRefreshing the library will make newly found charts playable.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
@@ -6234,20 +6457,17 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "The archive was extracted, but it does not contain the selected "
               "BMS chart hash.";
     if (!findBmsResult.outputPath.empty()) {
-      detail += "\nKept at " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath));
+      detail += "\nKept at " + fspath_to_utf8(findBmsResult.outputPath);
     }
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
     detail += "Automatic download failed. Open the source page or refresh "
               "after downloading.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else {
     detail +=
@@ -7339,11 +7559,10 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
         chartRandomInfo.values, parseCancelled, "autoplay");
   } catch (const std::exception &e) {
     SDL_Log("Error parsing %s for autoplay: %s",
-            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
-        "Autoplay parse exception: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-        e.what());
+        "Autoplay parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+        ": " + e.what());
   }
   if (preparedChart == nullptr || parseCancelled) {
     return false;
@@ -7661,11 +7880,11 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
       true);
 }
 
-void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
-                                           int replayId,
-                                           ReplayVideoExportOptions options) {
+bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
+                                      const std::string &progressMessage,
+                                      const std::string &statusMessage) {
   if (replayExportInProgress.exchange(true)) {
-    return;
+    return false;
   }
   if (replayExportThread.joinable()) {
     replayExportThread.join();
@@ -7679,9 +7898,41 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress.reset();
   }
-  showReplayExportProgress();
+  showReplayExportProgress(progressTitle, progressMessage);
   if (replayStatusText != nullptr) {
-    replayStatusText->setText("Exporting...");
+    replayStatusText->setText(statusMessage);
+  }
+  return true;
+}
+
+void MainMenuScene::queueReplayExportResult(
+    const ReplayVideoExportResult &result) {
+  std::lock_guard<std::mutex> lock(replayExportResultMutex);
+  pendingReplayExportResult = PendingReplayExportResult{
+      .success = result.success,
+      .photo = false,
+      .outputPath = result.outputPath,
+      .message = result.message,
+  };
+}
+
+void MainMenuScene::queueReplayExportResult(
+    const ResultImageExportResult &result) {
+  std::lock_guard<std::mutex> lock(replayExportResultMutex);
+  pendingReplayExportResult = PendingReplayExportResult{
+      .success = result.success,
+      .photo = true,
+      .outputPath = result.outputPath,
+      .message = result.message,
+  };
+}
+
+void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
+                                           int replayId,
+                                           ReplayVideoExportOptions options) {
+  if (!beginReplayExport("Exporting Replay", "Preparing export",
+                         "Exporting...")) {
+    return;
   }
 
 #if TARGET_OS_ANDROID
@@ -7699,13 +7950,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 
   auto complete = [this](const ReplayVideoExportResult &result) {
-    std::lock_guard<std::mutex> lock(replayExportResultMutex);
-    pendingReplayExportResult = PendingReplayExportResult{
-        .success = result.success,
-        .photo = false,
-        .outputPath = result.outputPath,
-        .message = result.message,
-    };
+    queueReplayExportResult(result);
   };
   const GaugeType autoPlayGaugeType = selectedGaugeType;
   const bool autoPlayGaugeAutoShift = selectedGaugeAutoShift;
@@ -7758,11 +8003,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
               parseCancelled, "autoplay export");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for autoplay export: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Autoplay export parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (chart == nullptr || parseCancelled) {
           complete({.success = false, .message = "No Chart"});
@@ -7819,7 +8063,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
 #if TARGET_OS_ANDROID
   runExport(nullptr);
-  applyReplayVideoExportResult();
+  applyReplayExportResult();
 #else
   replayExportThread = std::jthread(
       [runExport = std::move(runExport)](const std::stop_token &stopToken) {
@@ -7833,34 +8077,13 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
   if (replay_autoplay::isAutoPlayReplayId(replayId)) {
     return;
   }
-  if (replayExportInProgress.exchange(true)) {
+  if (!beginReplayExport("Exporting Photo", "Preparing photo",
+                         "Exporting photo...")) {
     return;
-  }
-  if (replayExportThread.joinable()) {
-    replayExportThread.join();
-  }
-
-  willStart.store(true);
-  previewLoadCancelled = true;
-  selectedChartMediaReady.store(false);
-  selectedChartReusableForStart.store(false);
-  {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress.reset();
-  }
-  showReplayExportProgress("Exporting Photo", "Preparing photo");
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText("Exporting photo...");
   }
 
   auto complete = [this](const ResultImageExportResult &result) {
-    std::lock_guard<std::mutex> lock(replayExportResultMutex);
-    pendingReplayExportResult = PendingReplayExportResult{
-        .success = result.success,
-        .photo = true,
-        .outputPath = result.outputPath,
-        .message = result.message,
-    };
+    queueReplayExportResult(result);
   };
 
   try {
@@ -7874,14 +8097,14 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
       auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
       if (!replay.has_value()) {
         complete({.success = false, .message = "No Replay"});
-        applyReplayVideoExportResult();
+        applyReplayExportResult();
         return;
       }
 
       updateReplayExportProgressUi(0.65, "Rendering photos");
       complete(ResultImageExporter::ExportCourseReplay(context,
                                                        replay.value()));
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7889,7 +8112,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
         replayId, replayLoadMetaForRecord(record));
     if (!replay.has_value()) {
       complete({.success = false, .message = "No Replay"});
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7900,7 +8123,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
                                                   parseCancelled);
     if (chart == nullptr || parseCancelled) {
       complete({.success = false, .message = "No Chart"});
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7912,10 +8135,10 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     complete({.success = false,
               .message = "Unexpected photo export failure"});
   }
-  applyReplayVideoExportResult();
+  applyReplayExportResult();
 }
 
-void MainMenuScene::applyReplayVideoExportProgress() {
+void MainMenuScene::applyReplayExportProgress() {
   std::optional<PendingReplayExportProgress> progress;
   {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
@@ -7929,7 +8152,7 @@ void MainMenuScene::applyReplayVideoExportProgress() {
   updateReplayExportProgressUi(progress->fraction, progress->message);
 }
 
-void MainMenuScene::applyReplayVideoExportResult() {
+void MainMenuScene::applyReplayExportResult() {
   std::optional<PendingReplayExportResult> result;
   {
     std::lock_guard<std::mutex> lock(replayExportResultMutex);
@@ -7985,11 +8208,12 @@ void MainMenuScene::applyReplayVideoExportResult() {
   if (result->success) {
     SDL_Log("Replay %s exported: %s (%s)",
             result->photo ? "image" : "video",
-            result->outputPath.string().c_str(), result->message.c_str());
+            fspath_to_utf8(result->outputPath).c_str(),
+            result->message.c_str());
   } else {
     SDL_Log("Replay %s export failed: %s (%s)",
             result->photo ? "image" : "video", result->message.c_str(),
-            result->outputPath.string().c_str());
+            fspath_to_utf8(result->outputPath).c_str());
   }
 
   defer(
@@ -8011,8 +8235,8 @@ void MainMenuScene::update(float dt) {
   applyFindBmsUpdates();
   applyUnzipProgress();
   applyUnzipResult();
-  applyReplayVideoExportProgress();
-  applyReplayVideoExportResult();
+  applyReplayExportProgress();
+  applyReplayExportResult();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
   applyPendingAndroidArchiveImport();
@@ -8402,16 +8626,12 @@ void MainMenuScene::FindFilesWin(const std::filesystem::path &path,
       if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
         path_t filename(findFileData.cFileName);
 
-        if (filename.size() > 4) {
-          path_t ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
-          if (ext == L".bms" || ext == L".bme" || ext == L".bml") {
-            path_t dirPath;
+        if (asobmshow::bms_chart_file::isBmsChartFileName(filename)) {
+          path_t dirPath;
 
-            path_t fullPath = path.wstring() + L"\\" + filename;
-            if (oldFilesWs.find(fullPath) == oldFilesWs.end()) {
-              diffs.push_back({fullPath, Added});
-            }
+          path_t fullPath = path.wstring() + L"\\" + filename;
+          if (oldFilesWs.find(fullPath) == oldFilesWs.end()) {
+            diffs.push_back({fullPath, Added});
           }
         }
       } else if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -8456,14 +8676,10 @@ void MainMenuScene::FindFilesUnix(
       resolveDType(directoryPath, entry);
       if (entry->d_type == DT_REG) {
         std::string filename = entry->d_name;
-        if (filename.size() > 4) {
-          std::string ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-          if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
-            std::filesystem::path fullPath = directoryPath / filename;
-            if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {
-              diffs.push_back({fullPath, Added});
-            }
+        if (asobmshow::bms_chart_file::isBmsChartFileName(filename)) {
+          std::filesystem::path fullPath = directoryPath / filename;
+          if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {
+            diffs.push_back({fullPath, Added});
           }
         }
       } else if (entry->d_type == DT_DIR) {
@@ -8492,7 +8708,7 @@ void MainMenuScene::FindFilesIOS(
       error);
   if (error) {
     SDL_Log("Failed to open iOS directory: %s (%s)",
-            directoryPath.string().c_str(), error.message().c_str());
+            fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
     return;
   }
 
@@ -8503,7 +8719,7 @@ void MainMenuScene::FindFilesIOS(
     }
     if (error) {
       SDL_Log("Failed while reading iOS directory: %s (%s)",
-              directoryPath.string().c_str(), error.message().c_str());
+              fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
       error.clear();
       continue;
     }
@@ -8511,11 +8727,7 @@ void MainMenuScene::FindFilesIOS(
     const std::filesystem::directory_entry &entry = *iterator;
     std::error_code typeError;
     if (entry.is_regular_file(typeError)) {
-      std::string ext = entry.path().extension().string();
-      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-      });
-      if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
+      if (asobmshow::bms_chart_file::isBmsChartPath(entry.path())) {
         if (oldFilesWs.find(fspath_to_path_t(entry.path())) ==
             oldFilesWs.end()) {
           diffs.push_back({entry.path(), Added});
@@ -8525,7 +8737,8 @@ void MainMenuScene::FindFilesIOS(
       directoriesToVisit.push_back(entry.path());
     } else if (typeError) {
       SDL_Log("Failed to inspect iOS path: %s (%s)",
-              entry.path().string().c_str(), typeError.message().c_str());
+              fspath_to_utf8(entry.path()).c_str(),
+              typeError.message().c_str());
     }
   }
 }
