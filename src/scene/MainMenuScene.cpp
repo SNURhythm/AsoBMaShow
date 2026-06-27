@@ -94,6 +94,17 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://stellabms.xyz/st/table.html",
 };
 
+void ensureLibraryFolderExists(const std::filesystem::path &path) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return;
+  }
+
+  throw std::runtime_error("Could not create library folder '" +
+                           path_t_to_utf8(fspath_to_path_t(path)) +
+                           "': " + error.message());
+}
+
 struct SafeAreaInsets {
   int top = 0;
   int left = 0;
@@ -1601,7 +1612,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
       auto path = ChartDBHelper::DefaultBmsFolderPath();
-      std::filesystem::create_directories(path);
+      ensureLibraryFolderExists(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
           .iosBookmark = "",
@@ -1609,7 +1620,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
 #elif TARGET_OS_ANDROID
     auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::filesystem::create_directories(path);
+    ensureLibraryFolderExists(path);
     dbHelper.InsertEntry(taskDb, path);
     entries = dbHelper.SelectEffectiveEntries(taskDb);
 #else
