@@ -22,8 +22,7 @@ struct ScoreRankByLongNoteMode {
   std::array<int, 4> ranks{kNoClearTypeRank, kNoClearTypeRank,
                            kNoClearTypeRank, kNoClearTypeRank};
 
-  [[nodiscard]] int bestRankForMode(int lnMode,
-                                    bool legacyLongNoteModeFallback) const;
+  [[nodiscard]] int bestRankForMode(int lnMode) const;
 };
 
 using ScoreRankMap = std::unordered_map<std::string, ScoreRankByLongNoteMode,
@@ -38,7 +37,6 @@ struct ScoreClearRankCache {
   ScoreRankMap rankByMd5;
   ScoreRankMap rankByPath;
   CourseScoreRankMap rankByCourseId;
-  bool legacyLongNoteModeFallback = false;
 
   [[nodiscard]] int bestRankFor(const bms_parser::ChartMeta &chartMeta,
                                 int selectedLongNoteMode = 0) const;

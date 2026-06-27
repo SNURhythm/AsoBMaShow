@@ -3576,8 +3576,7 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
       for (int lnMode = 0; lnMode < static_cast<int>(rankByMode.ranks.size());
            ++lnMode) {
         int rank = rankByMode.ranks[static_cast<size_t>(lnMode)];
-        if (scoreClearRanks.legacyLongNoteModeFallback && lnMode > 0 &&
-            rank == kNoClearTypeRank &&
+        if (lnMode == 1 && rank == kNoClearTypeRank &&
             rankByMode.ranks[0] != kNoClearTypeRank) {
           rank = rankByMode.ranks[0];
         }
