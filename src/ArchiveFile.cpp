@@ -1122,6 +1122,25 @@ bool sevenZipBoolProperty(IInArchive *archive, UInt32 index, PROPID property,
   return defaultValue;
 }
 
+bool sevenZipArchiveBoolProperty(IInArchive *archive, PROPID property,
+                                 bool defaultValue = false) {
+  SevenZipPropVariant value;
+  if (archive == nullptr ||
+      archive->GetArchiveProperty(property, &value) != S_OK) {
+    return defaultValue;
+  }
+  if (value.vt == VT_BOOL) {
+    return value.boolVal != VARIANT_FALSE;
+  }
+  if (value.vt == VT_UI4) {
+    return value.ulVal != 0;
+  }
+  if (value.vt == VT_UI8) {
+    return value.uhVal.QuadPart != 0;
+  }
+  return defaultValue;
+}
+
 std::uint64_t sevenZipUInt64Property(IInArchive *archive, UInt32 index,
                                      PROPID property,
                                      std::uint64_t defaultValue = 0) {
@@ -5712,6 +5731,396 @@ bool readSevenZipEntriesByIndexStreaming(
   return true;
 }
 
+bool sevenZipEntryMatchesTarget(IInArchive *archive, UInt32 itemIndex,
+                                const SevenZipReadTarget &target,
+                                std::string *errorMessage) {
+  if (archive == nullptr) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive is unavailable.";
+    }
+    return false;
+  }
+
+  auto actualPath = sevenZipStringProperty(archive, itemIndex, kpidPath);
+  if (!actualPath.has_value() || actualPath->empty()) {
+    actualPath = sevenZipStringProperty(archive, itemIndex, kpidName);
+  }
+  std::filesystem::path relativePath;
+  if (!actualPath.has_value() || !safeEntryPath(*actualPath, relativePath) ||
+      normalizeEntryName(relativePath.generic_string()) !=
+          normalizeEntryName(target.entryPath.generic_string())) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive index did not match cached entry path.";
+    }
+    return false;
+  }
+
+  if (sevenZipBoolProperty(archive, itemIndex, kpidIsDir, false) ||
+      sevenZipBoolProperty(archive, itemIndex, kpidEncrypted, false)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive entry is not extractable.";
+    }
+    return false;
+  }
+  const bool actualSolid =
+      sevenZipBoolProperty(archive, itemIndex, kpidSolid, false);
+  if (actualSolid != target.solid) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive solid flag did not match cached index.";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool readSevenZipTargetByIndex(IInArchive *archive,
+                               const SevenZipReadTarget &target,
+                               FileData &file, std::string *errorMessage,
+                               const PauseCallback &pauseCallback) {
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (archive == nullptr) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive is unavailable.";
+    }
+    return false;
+  }
+  if (target.order > std::numeric_limits<UInt32>::max()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive index is out of range.";
+    }
+    return false;
+  }
+
+  UInt32 itemCount = 0;
+  HRESULT result = archive->GetNumberOfItems(&itemCount);
+  if (result != S_OK) {
+    if (errorMessage != nullptr) {
+      *errorMessage = sevenZipResultMessage(result);
+    }
+    return false;
+  }
+
+  const auto itemIndex = static_cast<UInt32>(target.order);
+  if (itemIndex >= itemCount) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive index is out of range.";
+    }
+    return false;
+  }
+  if (!sevenZipEntryMatchesTarget(archive, itemIndex, target, errorMessage)) {
+    return false;
+  }
+
+  file.path = target.entryPath;
+  file.bytes.clear();
+  if (target.size > 0) {
+    reserveBufferedBytes(file.bytes, target.size);
+  }
+
+  std::unordered_map<UInt32, FileData *> outputTargets;
+  outputTargets.emplace(itemIndex, &file);
+  auto *callback =
+      new SevenZipExtractCallback(std::move(outputTargets), pauseCallback);
+  IArchiveExtractCallback *callbackInterface = callback;
+  callbackInterface->AddRef();
+  CMyComPtr<IArchiveExtractCallback> callbackHandle;
+  callbackHandle.Attach(callbackInterface);
+
+  result = archive->Extract(&itemIndex, 1, 0, callbackHandle);
+  if (result != S_OK || callback->failed() || callback->cancelled()) {
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          callback->cancelled()
+              ? "Operation cancelled"
+              : result != S_OK
+              ? sevenZipResultMessage(result)
+              : "7-Zip archive extraction failed with operation result: " +
+                    std::to_string(callback->operationResult());
+    }
+    return false;
+  }
+  return true;
+}
+
+bool readSevenZipEntriesByIndexConcurrent(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::optional<EntryRange> &range, const FileDataCallback &onFile,
+    std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
+  if (innerPaths.empty()) {
+    return true;
+  }
+  if (!onFile) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive file consumer is unavailable.";
+    }
+    return false;
+  }
+
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
+      index->sevenZipFormat !=
+          static_cast<unsigned char>(SevenZipFormat::Rar5)) {
+    return false;
+  }
+
+  std::vector<SevenZipReadTarget> readTargets;
+  readTargets.reserve(innerPaths.size());
+  for (const auto &innerPath : innerPaths) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return false;
+    }
+    const Entry *entry = findIndexedEntry(*index, innerPath);
+    if (entry == nullptr || entry->directory) {
+      continue;
+    }
+    if (entry->order > std::numeric_limits<UInt32>::max()) {
+      continue;
+    }
+    if (range.has_value() &&
+        (entry->order < range->start || entry->order > range->end)) {
+      continue;
+    }
+    if (entry->solid) {
+      if (errorMessage != nullptr) {
+        *errorMessage =
+            "RAR5 entry is solid; parallel random extraction is disabled.";
+      }
+      return false;
+    }
+    if (entry->size >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "RAR5 entry is too large to read into memory.";
+      }
+      return false;
+    }
+    readTargets.push_back({
+        .entryPath = entry->path,
+        .order = entry->order,
+        .size = entry->size,
+        .solid = entry->solid,
+    });
+  }
+  if (readTargets.empty()) {
+    return true;
+  }
+
+  std::sort(readTargets.begin(), readTargets.end(),
+            [](const SevenZipReadTarget &a, const SevenZipReadTarget &b) {
+              return a.order < b.order;
+            });
+  readTargets.erase(std::unique(readTargets.begin(), readTargets.end(),
+                                [](const SevenZipReadTarget &a,
+                                   const SevenZipReadTarget &b) {
+                                  return a.order == b.order;
+                                }),
+                    readTargets.end());
+
+  maxWorkers =
+      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
+  if (maxInFlightBytes == 0) {
+    maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
+  }
+
+  std::mutex stateMutex;
+  std::condition_variable spaceCv;
+  std::size_t nextTarget = 0;
+  std::size_t emittedFiles = 0;
+  std::uint64_t inFlightBytes = 0;
+  bool failed = false;
+  std::string failureMessage;
+  long long acquireMicros = 0;
+  long long openMicros = 0;
+  long long extractMicros = 0;
+  long long callbackMicros = 0;
+
+  auto setFailure = [&](std::string message) {
+    {
+      std::lock_guard lock(stateMutex);
+      if (!failed) {
+        failed = true;
+        failureMessage = std::move(message);
+      }
+    }
+    spaceCv.notify_all();
+  };
+
+  auto acquireBytes = [&](std::uint64_t bytes) {
+    std::unique_lock lock(stateMutex);
+    for (;;) {
+      if (failed) {
+        return false;
+      }
+      if (inFlightBytes == 0 || inFlightBytes + bytes <= maxInFlightBytes) {
+        inFlightBytes += bytes;
+        return true;
+      }
+      lock.unlock();
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        return false;
+      }
+      lock.lock();
+      spaceCv.wait_for(lock, std::chrono::milliseconds(20));
+    }
+  };
+
+  auto releaseBytes = [&](std::uint64_t bytes) {
+    {
+      std::lock_guard lock(stateMutex);
+      inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
+    }
+    spaceCv.notify_all();
+  };
+
+  auto worker = [&]() {
+    long long localAcquireMicros = 0;
+    long long localOpenMicros = 0;
+    long long localExtractMicros = 0;
+    long long localCallbackMicros = 0;
+
+    CMyComPtr<IInArchive> archiveHandle;
+    CMyComPtr<IInStream> streamHandle;
+    std::string openError;
+    const auto openStart = std::chrono::steady_clock::now();
+    if (!openSevenZipArchive(archivePath, index->sevenZipFormat, archiveHandle,
+                             streamHandle, &openError, pauseCallback)) {
+      setFailure(openError.empty()
+                     ? "Could not open RAR5 archive for parallel extraction."
+                     : openError);
+      return;
+    }
+    localOpenMicros += elapsedMicrosSince(openStart);
+    IInArchive *archive = archiveHandle.Interface();
+    if (sevenZipArchiveBoolProperty(archive, kpidSolid, false)) {
+      setFailure("RAR5 archive is solid; parallel extraction is disabled.");
+      return;
+    }
+
+    for (;;) {
+      SevenZipReadTarget target;
+      {
+        std::lock_guard lock(stateMutex);
+        if (failed || nextTarget >= readTargets.size()) {
+          break;
+        }
+        target = readTargets[nextTarget++];
+      }
+
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        break;
+      }
+
+      const auto acquireStart = std::chrono::steady_clock::now();
+      if (!acquireBytes(target.size)) {
+        break;
+      }
+      localAcquireMicros += elapsedMicrosSince(acquireStart);
+
+      FileData file;
+      std::string readError;
+      const auto extractStart = std::chrono::steady_clock::now();
+      bool ok = readSevenZipTargetByIndex(archive, target, file, &readError,
+                                          pauseCallback);
+      localExtractMicros += elapsedMicrosSince(extractStart);
+      if (ok) {
+        {
+          std::lock_guard lock(stateMutex);
+          ok = !failed;
+        }
+      }
+      if (ok) {
+        const auto callbackStart = std::chrono::steady_clock::now();
+        ok = emitFileData(std::move(file), onFile, &readError);
+        localCallbackMicros += elapsedMicrosSince(callbackStart);
+      }
+      releaseBytes(target.size);
+
+      if (!ok) {
+        setFailure(readError.empty()
+                       ? "Could not extract RAR5 entry by index."
+                       : readError);
+        break;
+      }
+      {
+        std::lock_guard lock(stateMutex);
+        ++emittedFiles;
+      }
+    }
+
+    {
+      std::lock_guard lock(stateMutex);
+      acquireMicros += localAcquireMicros;
+      openMicros += localOpenMicros;
+      extractMicros += localExtractMicros;
+      callbackMicros += localCallbackMicros;
+    }
+  };
+
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  appendDebugLogLineImpl("Starting concurrent 7-Zip RAR5 extraction: " +
+                         pathForLog(archivePath) +
+                         " targets=" + std::to_string(readTargets.size()) +
+                         " workers=" + std::to_string(maxWorkers) +
+                         " firstOrder=" +
+                         std::to_string(readTargets.front().order) +
+                         " lastOrder=" +
+                         std::to_string(readTargets.back().order) +
+                         " maxInFlightBytes=" +
+                         std::to_string(maxInFlightBytes));
+
+  std::vector<std::thread> workers;
+  workers.reserve(maxWorkers);
+  for (std::size_t i = 0; i < maxWorkers; ++i) {
+    workers.emplace_back(worker);
+  }
+  for (auto &thread : workers) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+
+  if (failed) {
+    if (errorMessage != nullptr) {
+      *errorMessage = failureMessage.empty()
+                          ? "Parallel RAR5 extraction failed."
+                          : failureMessage;
+    }
+    return false;
+  }
+
+  const auto extractMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                            start)
+          .count();
+  appendDebugLogLineImpl("Finished concurrent 7-Zip RAR5 extraction: " +
+                         pathForLog(archivePath) +
+                         " targets=" + std::to_string(readTargets.size()) +
+                         " files=" + std::to_string(emittedFiles) +
+                         " workers=" + std::to_string(maxWorkers) +
+                         " maxInFlightBytes=" +
+                         std::to_string(maxInFlightBytes) +
+                         " extractMs=" + std::to_string(extractMs) +
+                         " workerOpenMs=" +
+                         std::to_string(openMicros / 1000) +
+                         " workerExtractMs=" +
+                         std::to_string(extractMicros / 1000) +
+                         " callbackMs=" +
+                         std::to_string(callbackMicros / 1000) +
+                         " acquireMs=" +
+                         std::to_string(acquireMicros / 1000));
+  return true;
+}
+
 bool extractSevenZipArchiveFully(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputFolder,
@@ -6383,7 +6792,10 @@ bool readArchiveEntriesConcurrently(
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
   std::string unarrError;
-  if (hasRarArchiveExtension(archivePath) &&
+  const RarSignature rarArchiveSignature =
+      hasRarArchiveExtension(archivePath) ? rarSignature(archivePath)
+                                          : RarSignature::Unknown;
+  if (rarArchiveSignature == RarSignature::Rar4 &&
       readUnarrRarEntriesByOffsetConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
           maxInFlightBytes, &unarrError, pauseCallback)) {
@@ -6394,7 +6806,7 @@ bool readArchiveEntriesConcurrently(
         " workers=" + std::to_string(maxWorkers));
     return true;
   }
-  if (hasRarArchiveExtension(archivePath)) {
+  if (rarArchiveSignature == RarSignature::Rar4) {
     if (!unarrError.empty()) {
       appendDebugLogLineImpl("Concurrent unarr RAR read failed: " +
                              pathForLog(archivePath) + ": " + unarrError);
@@ -6404,6 +6816,34 @@ bool readArchiveEntriesConcurrently(
           unarrError.empty()
               ? "Archive is not a non-solid random-access RAR4 archive."
               : unarrError;
+    }
+    return false;
+  }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
+  std::string sevenZipError;
+  if (hasRarArchiveExtension(archivePath) &&
+      rarSignature(archivePath) == RarSignature::Rar5 &&
+      readSevenZipEntriesByIndexConcurrent(
+          archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
+          maxInFlightBytes, &sevenZipError, pauseCallback)) {
+    appendDebugLogLineImpl("Read archive batch via concurrent 7-Zip RAR5: " +
+                           pathForLog(archivePath) +
+                           " targets=" + std::to_string(innerPaths.size()) +
+                           " workers=" + std::to_string(maxWorkers));
+    return true;
+  }
+  if (hasRarArchiveExtension(archivePath) &&
+      rarSignature(archivePath) == RarSignature::Rar5) {
+    if (!sevenZipError.empty()) {
+      appendDebugLogLineImpl("Concurrent 7-Zip RAR5 read failed: " +
+                             pathForLog(archivePath) + ": " + sevenZipError);
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          sevenZipError.empty()
+              ? "Archive is not a non-solid random-access RAR5 archive."
+              : sevenZipError;
     }
     return false;
   }
