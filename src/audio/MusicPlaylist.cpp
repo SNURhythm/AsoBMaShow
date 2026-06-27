@@ -1,10 +1,10 @@
 #include "MusicPlaylist.h"
 
 #include "../ArchiveFile.h"
+#include "../BmsMetadataText.h"
 #include "../path.h"
 
 #include <algorithm>
-#include <cctype>
 #include <random>
 #include <utility>
 
@@ -12,19 +12,8 @@ namespace music_playlist {
 namespace {
 
 std::string lowerTrimmed(std::string value) {
-  value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
-                                              [](unsigned char ch) {
-                                                return std::isspace(ch) != 0;
-                                              }));
-  value.erase(
-      std::find_if_not(value.rbegin(), value.rend(),
-                       [](unsigned char ch) { return std::isspace(ch) != 0; })
-          .base(),
-      value.end());
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(
+      asobmshow::bms_metadata::trimCopy(value));
 }
 
 std::string normalizedPathString(std::filesystem::path path) {
