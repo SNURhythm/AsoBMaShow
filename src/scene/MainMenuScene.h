@@ -641,8 +641,8 @@ private:
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayImageExport(const ChartMetaRecord &record, int replayId);
-  void applyReplayVideoExportProgress();
-  void applyReplayVideoExportResult();
+  void applyReplayExportProgress();
+  void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   void addIOSFolderEntryFromFiles();
 #endif

@@ -7845,7 +7845,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
 #if TARGET_OS_ANDROID
   runExport(nullptr);
-  applyReplayVideoExportResult();
+  applyReplayExportResult();
 #else
   replayExportThread = std::jthread(
       [runExport = std::move(runExport)](const std::stop_token &stopToken) {
@@ -7879,14 +7879,14 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
       auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
       if (!replay.has_value()) {
         complete({.success = false, .message = "No Replay"});
-        applyReplayVideoExportResult();
+        applyReplayExportResult();
         return;
       }
 
       updateReplayExportProgressUi(0.65, "Rendering photos");
       complete(ResultImageExporter::ExportCourseReplay(context,
                                                        replay.value()));
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7894,7 +7894,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
         replayId, replayLoadMetaForRecord(record));
     if (!replay.has_value()) {
       complete({.success = false, .message = "No Replay"});
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7905,7 +7905,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
                                                   parseCancelled);
     if (chart == nullptr || parseCancelled) {
       complete({.success = false, .message = "No Chart"});
-      applyReplayVideoExportResult();
+      applyReplayExportResult();
       return;
     }
 
@@ -7917,10 +7917,10 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     complete({.success = false,
               .message = "Unexpected photo export failure"});
   }
-  applyReplayVideoExportResult();
+  applyReplayExportResult();
 }
 
-void MainMenuScene::applyReplayVideoExportProgress() {
+void MainMenuScene::applyReplayExportProgress() {
   std::optional<PendingReplayExportProgress> progress;
   {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
@@ -7934,7 +7934,7 @@ void MainMenuScene::applyReplayVideoExportProgress() {
   updateReplayExportProgressUi(progress->fraction, progress->message);
 }
 
-void MainMenuScene::applyReplayVideoExportResult() {
+void MainMenuScene::applyReplayExportResult() {
   std::optional<PendingReplayExportResult> result;
   {
     std::lock_guard<std::mutex> lock(replayExportResultMutex);
@@ -8016,8 +8016,8 @@ void MainMenuScene::update(float dt) {
   applyFindBmsUpdates();
   applyUnzipProgress();
   applyUnzipResult();
-  applyReplayVideoExportProgress();
-  applyReplayVideoExportResult();
+  applyReplayExportProgress();
+  applyReplayExportResult();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
   applyPendingAndroidArchiveImport();
