@@ -1037,21 +1037,23 @@ splitCourseFolderAndLevel(const std::string &courseName,
   return {"", courseName};
 }
 
+void logSqlErrorText(const char *context, const std::string &error) {
+  std::cerr << "SQL error while " << context << ": " << error << "\n";
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlErrorText(context, db != nullptr ? sqlite3_errmsg(db)
+                                         : "database is not open");
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  if (const auto error = executeSqlite(db, query)) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                                  const char *context) {
-  if (const auto error = executeSqlite(db, query, "duplicate column name")) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText,
+                             "duplicate column name");
 }
 
 void beginSqliteTransaction(sqlite3 *db, const char *context) {
@@ -1070,8 +1072,7 @@ int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while reading chart database version: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("reading chart database version", db);
     return 0;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -1089,7 +1090,7 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
+    logSqlErrorText(context, *error);
     return false;
   }
   return true;
