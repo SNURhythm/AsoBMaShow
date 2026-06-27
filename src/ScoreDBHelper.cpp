@@ -805,8 +805,8 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   int bindIndex = 1;
   bindSqliteText(stmt.get(), bindIndex++, chartPath);
-  bindSqliteText(stmt.get(), bindIndex++, chartMeta.MD5);
-  bindSqliteText(stmt.get(), bindIndex++, chartMeta.SHA256);
+  bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.MD5));
+  bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.SHA256));
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    scoreLongNoteModeForClearLamp(chartMeta));
   bindSqliteText(stmt.get(), bindIndex++, chartMeta.Title);
