@@ -62,20 +62,36 @@ inline std::string chartArtworkOrderBy(std::string_view alias) {
          aliasText + ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
+inline std::string normalizedSqlHash(std::string_view expression) {
+  return "lower(trim(" + std::string(expression) + "))";
+}
+
+inline std::string sqlTextHasValue(std::string_view expression) {
+  return "NULLIF(TRIM(" + std::string(expression) + "), '') IS NOT NULL";
+}
+
+inline std::string chartIdentityHashCondition(std::string_view itemAlias,
+                                              std::string_view itemColumn,
+                                              std::string_view chartAlias,
+                                              std::string_view chartColumn) {
+  const std::string itemText(itemAlias);
+  const std::string itemColumnText(itemColumn);
+  const std::string chartText(chartAlias);
+  const std::string chartColumnText(chartColumn);
+  const std::string itemExpr = itemText + "." + itemColumnText;
+  return sqlTextHasValue(itemExpr) + " AND " + chartText + "." +
+         chartColumnText + " = " + normalizedSqlHash(itemExpr);
+}
+
 inline std::string chartIdentitySha256Condition(std::string_view itemAlias,
                                                 std::string_view chartAlias) {
-  const std::string itemText(itemAlias);
-  const std::string chartText(chartAlias);
-  return itemText + ".chart_sha256 != '' AND " + chartText +
-         ".sha256 = " + itemText + ".chart_sha256";
+  return chartIdentityHashCondition(itemAlias, "chart_sha256", chartAlias,
+                                    "sha256");
 }
 
 inline std::string chartIdentityMd5Condition(std::string_view itemAlias,
                                              std::string_view chartAlias) {
-  const std::string itemText(itemAlias);
-  const std::string chartText(chartAlias);
-  return itemText + ".chart_md5 != '' AND " + chartText +
-         ".md5 = " + itemText + ".chart_md5";
+  return chartIdentityHashCondition(itemAlias, "chart_md5", chartAlias, "md5");
 }
 
 inline std::string chartIdentityPathCondition(std::string_view itemAlias,

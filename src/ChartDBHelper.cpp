@@ -52,6 +52,7 @@ using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::matchedChartPathSubquery;
+using asobmshow::chart_sql::normalizedSqlHash;
 using asobmshow::chart_sql::preferredChartPredicate;
 
 constexpr int kNoPlayClearMarkRank = -1;
@@ -195,8 +196,9 @@ std::string chartFavoriteColumnExpr(const char *chartAlias) {
 
 std::string chartFavoriteIdentityKey(const char *favoriteAlias) {
   const std::string alias(favoriteAlias);
-  return "COALESCE(NULLIF(" + alias + ".chart_sha256, ''), NULLIF(" + alias +
-         ".chart_md5, ''), " + alias + ".chart_path)";
+  return "COALESCE(NULLIF(" + normalizedSqlHash(alias + ".chart_sha256") +
+         ", ''), NULLIF(" + normalizedSqlHash(alias + ".chart_md5") +
+         ", ''), " + alias + ".chart_path)";
 }
 
 struct ChartFavoriteIdentity {
