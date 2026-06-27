@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <iterator>
+#include "path.h"
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
@@ -187,6 +188,12 @@ std::filesystem::path Utils::GetStoragePathRelativeToDocuments(
   (void)SubPath;
   return Path;
 #endif
+}
+
+std::string Utils::GetStoragePathUtf8RelativeToDocuments(
+    const std::filesystem::path &Path, const std::filesystem::path &SubPath) {
+  return path_t_to_utf8(
+      fspath_to_path_t(GetStoragePathRelativeToDocuments(Path, SubPath)));
 }
 
 bool Utils::EnsureDirectoryExists(const std::filesystem::path &Path,

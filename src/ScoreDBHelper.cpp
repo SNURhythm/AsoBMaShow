@@ -6,7 +6,6 @@
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
-#include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -124,8 +123,7 @@ std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
     return "md5:" + md5;
   }
   const std::string chartPath =
-      path_t_to_utf8(fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          chartMeta.BmsPath, "BMS/")));
+      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   return "path:" + chartPath;
 }
 
@@ -540,8 +538,7 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 int ScoreClearRankCache::bestRankFor(
     const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode) const {
   const auto chartPath =
-      path_t_to_utf8(fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          chartMeta.BmsPath, "BMS/")));
+      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   return bestRankForHashes(
       chartMeta.SHA256, chartMeta.MD5, chartPath,
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
@@ -787,9 +784,8 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
     return false;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   int bindIndex = 1;
   bindSqliteText(stmt.get(), bindIndex++, chartPath);
   bindSqliteText(stmt.get(), bindIndex++, chartMeta.MD5);
@@ -946,9 +942,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     return std::nullopt;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string cutoff = beforeCreatedAt.value_or("");

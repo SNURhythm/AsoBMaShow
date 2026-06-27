@@ -25,6 +25,8 @@ public:
   GetDocumentsPath(const std::filesystem::path &SubPath = "");
   static std::filesystem::path GetStoragePathRelativeToDocuments(
       const std::filesystem::path &Path, const std::filesystem::path &SubPath);
+  static std::string GetStoragePathUtf8RelativeToDocuments(
+      const std::filesystem::path &Path, const std::filesystem::path &SubPath);
   static bool EnsureDirectoryExists(const std::filesystem::path &Path,
                                     std::error_code &Error);
 };

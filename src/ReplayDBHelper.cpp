@@ -4,7 +4,6 @@
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
-#include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -83,9 +82,9 @@ struct ReplayChartMatch {
 
 ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   return {
-      .chartPath = path_t_to_utf8(
-          fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-              chartMeta.BmsPath, "BMS/"))),
+      .chartPath =
+          Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath,
+                                                       "BMS/"),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -317,9 +316,9 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(replay.chartMeta.BmsPath,
+                                                   "BMS/");
   int bindIndex = 1;
   bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
   bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
@@ -703,9 +702,9 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(replay.chartMeta.BmsPath,
+                                                   "BMS/");
   int bindIndex = 1;
   bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
   bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
