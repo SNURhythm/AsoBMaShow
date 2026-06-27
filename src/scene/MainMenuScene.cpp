@@ -4874,7 +4874,18 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
 
   const std::filesystem::path archivePath = *unzipDeleteCandidatePath;
   std::error_code error;
-  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+  const bool archiveExists =
+      std::filesystem::is_regular_file(archivePath, error);
+  if (error) {
+    updateUnzipProgressUi(1.0,
+                          "Could not check archive: " + error.message(), 0, 0);
+    archive_file::appendDebugLogLine(
+        "Failed to check source archive before delete: " +
+        path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
+        error.message());
+    return;
+  }
+  if (!archiveExists) {
     updateUnzipProgressUi(1.0, "Archive is already unavailable", 0, 0);
     setUnzipDeleteArchiveButtonVisible(false);
     unzipDeleteCandidatePath.reset();
