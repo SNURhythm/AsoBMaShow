@@ -157,6 +157,15 @@ bool readArchiveEntriesStreaming(
     FileDataCallback onFile,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
+// Calls onFile from extractor worker threads. The callback must be thread-safe.
+bool readArchiveEntriesConcurrently(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile,
+    std::size_t maxWorkers,
+    std::uint64_t maxInFlightBytes,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
 bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,

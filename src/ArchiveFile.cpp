@@ -16,6 +16,7 @@
 #include <cerrno>
 #include <chrono>
 #include <clocale>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
@@ -3374,6 +3375,62 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
   return true;
 }
 
+bool readZipTargetByFileIndex(mz_zip_archive *archive,
+                              const ZipReadTarget &target, FileData &file,
+                              std::string *errorMessage,
+                              const PauseCallback &pauseCallback) {
+  if (target.order > std::numeric_limits<mz_uint>::max()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP index is out of range.";
+    }
+    return false;
+  }
+  const auto fileIndex = static_cast<mz_uint>(target.order);
+  const mz_uint fileCount = mz_zip_reader_get_num_files(archive);
+  if (fileIndex >= fileCount) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP index is out of range.";
+    }
+    return false;
+  }
+
+  mz_zip_archive_file_stat stat{};
+  if (!mz_zip_reader_file_stat(archive, fileIndex, &stat)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not read ZIP central directory entry.";
+    }
+    return false;
+  }
+  if (stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry is not supported by direct reader.";
+    }
+    return false;
+  }
+  if (stat.m_uncomp_size != target.size) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP central directory size did not match archive index.";
+    }
+    return false;
+  }
+  const auto filename = minizFilename(archive, fileIndex);
+  if (!filename.has_value()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not read ZIP central directory filename.";
+    }
+    return false;
+  }
+  if (compareZipEntryName(*filename, target.normalized) ==
+      ZipNameMatch::Mismatches) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP central directory order did not match archive index.";
+    }
+    return false;
+  }
+  return readZipEntryByFileIndex(archive, fileIndex, target.entryPath, file,
+                                 errorMessage, pauseCallback);
+}
+
 bool readZipEntriesByName(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
@@ -3739,6 +3796,232 @@ bool readZipEntriesByIndexStreaming(
   }
 
   mz_zip_reader_end(&archive);
+  return true;
+}
+
+bool readZipEntriesByIndexConcurrent(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::optional<EntryRange> &range, const FileDataCallback &onFile,
+    std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
+  if (innerPaths.empty()) {
+    return true;
+  }
+  if (!onFile) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive file consumer is unavailable.";
+    }
+    return false;
+  }
+
+  std::unordered_map<std::string, std::filesystem::path> targets;
+  for (const auto &innerPath : innerPaths) {
+    const std::string target = normalizeEntryName(innerPath.generic_string());
+    if (!target.empty()) {
+      targets.emplace(target, innerPath);
+    }
+  }
+  if (targets.empty()) {
+    return true;
+  }
+
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (index == nullptr) {
+    return false;
+  }
+  if (index->backend != ArchiveIndexBackend::MinizZip) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive is not a random-access ZIP archive.";
+    }
+    return false;
+  }
+
+  std::vector<ZipReadTarget> readTargets;
+  readTargets.reserve(targets.size());
+  for (const auto &targetPair : targets) {
+    const std::filesystem::path &requestedPath = targetPair.second;
+    const Entry *entry = findIndexedEntry(*index, requestedPath);
+    if (entry == nullptr || entry->directory) {
+      continue;
+    }
+    if (range.has_value() &&
+        (entry->order < range->start || entry->order > range->end)) {
+      continue;
+    }
+
+    readTargets.push_back({
+        .normalized = normalizeEntryName(entry->path.generic_string()),
+        .entryPath = entry->path,
+        .order = entry->order,
+        .size = entry->size,
+    });
+  }
+  if (readTargets.empty()) {
+    return true;
+  }
+  std::sort(readTargets.begin(), readTargets.end(),
+            [](const ZipReadTarget &a, const ZipReadTarget &b) {
+              return a.order < b.order;
+            });
+  readTargets.erase(std::unique(readTargets.begin(), readTargets.end(),
+                                [](const ZipReadTarget &a,
+                                   const ZipReadTarget &b) {
+                                  return a.order == b.order;
+                                }),
+                    readTargets.end());
+
+  maxWorkers =
+      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
+  if (maxInFlightBytes == 0) {
+    maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
+  }
+
+  std::mutex stateMutex;
+  std::condition_variable spaceCv;
+  std::size_t nextTarget = 0;
+  std::size_t emittedFiles = 0;
+  std::uint64_t inFlightBytes = 0;
+  bool failed = false;
+  std::string failureMessage;
+
+  auto setFailure = [&](std::string message) {
+    {
+      std::lock_guard lock(stateMutex);
+      if (!failed) {
+        failed = true;
+        failureMessage = std::move(message);
+      }
+    }
+    spaceCv.notify_all();
+  };
+
+  auto acquireBytes = [&](std::uint64_t bytes) {
+    std::unique_lock lock(stateMutex);
+    for (;;) {
+      if (failed) {
+        return false;
+      }
+      if (inFlightBytes == 0 || inFlightBytes + bytes <= maxInFlightBytes) {
+        inFlightBytes += bytes;
+        return true;
+      }
+      lock.unlock();
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        return false;
+      }
+      lock.lock();
+      spaceCv.wait_for(lock, std::chrono::milliseconds(20));
+    }
+  };
+
+  auto releaseBytes = [&](std::uint64_t bytes) {
+    {
+      std::lock_guard lock(stateMutex);
+      inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
+    }
+    spaceCv.notify_all();
+  };
+
+  auto worker = [&]() {
+    mz_zip_archive archive{};
+    mz_zip_zero_struct(&archive);
+    const std::string archiveText = fspath_to_utf8(archivePath);
+    if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
+                                    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY,
+                                    0, 0)) {
+      setFailure("Could not open ZIP central directory.");
+      return;
+    }
+
+    for (;;) {
+      ZipReadTarget target;
+      {
+        std::lock_guard lock(stateMutex);
+        if (failed || nextTarget >= readTargets.size()) {
+          break;
+        }
+        target = readTargets[nextTarget++];
+      }
+
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        break;
+      }
+
+      const std::uint64_t targetBytes = target.size;
+      if (!acquireBytes(targetBytes)) {
+        break;
+      }
+
+      FileData file;
+      std::string readError;
+      bool ok = readZipTargetByFileIndex(&archive, target, file, &readError,
+                                         pauseCallback);
+      if (ok) {
+        {
+          std::lock_guard lock(stateMutex);
+          ok = !failed;
+        }
+      }
+      if (ok) {
+        ok = emitFileData(std::move(file), onFile, &readError);
+      }
+      releaseBytes(targetBytes);
+
+      if (!ok) {
+        setFailure(readError.empty()
+                       ? "Could not extract ZIP entry by index."
+                       : readError);
+        break;
+      }
+      {
+        std::lock_guard lock(stateMutex);
+        ++emittedFiles;
+      }
+    }
+
+    mz_zip_reader_end(&archive);
+  };
+
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  std::vector<std::thread> workers;
+  workers.reserve(maxWorkers);
+  for (std::size_t i = 0; i < maxWorkers; ++i) {
+    workers.emplace_back(worker);
+  }
+  for (auto &thread : workers) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+
+  if (failed) {
+    if (errorMessage != nullptr) {
+      *errorMessage = failureMessage.empty()
+                          ? "Parallel ZIP extraction failed."
+                          : failureMessage;
+    }
+    return false;
+  }
+
+  const auto extractMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                            start)
+          .count();
+  appendDebugLogLineImpl("Finished concurrent miniz ZIP extraction: " +
+                         pathForLog(archivePath) +
+                         " targets=" + std::to_string(readTargets.size()) +
+                         " files=" + std::to_string(emittedFiles) +
+                         " workers=" + std::to_string(maxWorkers) +
+                         " maxInFlightBytes=" +
+                         std::to_string(maxInFlightBytes) +
+                         " extractMs=" + std::to_string(extractMs));
   return true;
 }
 #endif
@@ -5114,6 +5397,75 @@ bool readArchiveEntriesStreaming(
       pathForLog(archivePath));
   return false;
 #endif
+}
+
+bool readArchiveEntriesConcurrently(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile,
+    std::size_t maxWorkers,
+    std::uint64_t maxInFlightBytes,
+    std::string *errorMessage,
+    PauseCallback pauseCallback) {
+  if (!onFile) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive file consumer is unavailable.";
+    }
+    return false;
+  }
+  if (maxWorkers <= 1) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Parallel archive reading needs more than one worker.";
+    }
+    return false;
+  }
+  if (!isArchiveSupportAvailable() || !hasSupportedArchiveExtension(archivePath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive format is not supported for direct browsing.";
+    }
+    return false;
+  }
+
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type mtime{};
+  if (!fileState(archivePath, size, mtime)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
+    }
+    return false;
+  }
+
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  std::string zipError;
+  if (hasZipArchiveExtension(archivePath) &&
+      readZipEntriesByIndexConcurrent(archivePath, innerPaths, std::nullopt,
+                                      onFile, maxWorkers, maxInFlightBytes,
+                                      &zipError, pauseCallback)) {
+    appendDebugLogLineImpl("Read archive batch via concurrent miniz ZIP: " +
+                           pathForLog(archivePath) +
+                           " targets=" + std::to_string(innerPaths.size()) +
+                           " workers=" + std::to_string(maxWorkers));
+    return true;
+  }
+  if (hasZipArchiveExtension(archivePath)) {
+    if (!zipError.empty()) {
+      appendDebugLogLineImpl("Concurrent miniz ZIP read failed: " +
+                             pathForLog(archivePath) + ": " + zipError);
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = zipError.empty()
+                          ? "Archive is not a random-access ZIP archive."
+                          : zipError;
+    }
+    return false;
+  }
+#endif
+
+  if (errorMessage != nullptr) {
+    *errorMessage =
+        "Archive format does not support confident parallel reading.";
+  }
+  return false;
 }
 
 bool readArchiveEntriesInRange(

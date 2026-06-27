@@ -5069,6 +5069,96 @@ int ChartDBHelper::ScanChartRoots(
           const std::vector<std::filesystem::path> &pendingInnerPaths,
           std::string &errorMessage)
       -> std::optional<std::vector<ArchiveParsedChart>> {
+    auto parseArchiveBatchConcurrently =
+        [&](std::string &concurrentError)
+        -> std::optional<std::vector<ArchiveParsedChart>> {
+      const std::size_t workerCount =
+          archiveParseWorkerCount(pendingInnerPaths.size());
+      if (workerCount <= 1) {
+        return std::nullopt;
+      }
+
+      std::unordered_map<std::string, std::size_t> sequenceByInnerPath;
+      sequenceByInnerPath.reserve(pendingInnerPaths.size());
+      for (std::size_t i = 0; i < pendingInnerPaths.size(); ++i) {
+        sequenceByInnerPath.emplace(
+            checkpointInnerPathText(pendingInnerPaths[i]), i);
+      }
+
+      std::mutex resultMutex;
+      std::vector<std::optional<ArchiveParsedChart>> results(
+          pendingInnerPaths.size());
+      std::string callbackError;
+
+      auto onFile = [&](archive_file::FileData &&file) {
+        const auto sequenceIt =
+            sequenceByInnerPath.find(checkpointInnerPathText(file.path));
+        if (sequenceIt == sequenceByInnerPath.end()) {
+          std::lock_guard lock(resultMutex);
+          callbackError = "Parallel ZIP entry was not in the requested batch.";
+          return false;
+        }
+
+        ArchiveParsedChart parsed{
+            .innerPath = file.path,
+            .chartPath =
+                archive_file::makeVirtualPath(batch.archivePath, file.path),
+            .meta = std::nullopt,
+        };
+        parsed.meta = parseChartMeta(parsed.chartPath, &file.bytes);
+
+        {
+          std::lock_guard lock(resultMutex);
+          results[sequenceIt->second] = std::move(parsed);
+        }
+        return true;
+      };
+
+      const bool readOk = archive_file::readArchiveEntriesConcurrently(
+          batch.archivePath, pendingInnerPaths, std::move(onFile), workerCount,
+          kArchiveParseMaxInFlightBytes, &concurrentError, pauseCallback);
+      if (!readOk) {
+        std::lock_guard lock(resultMutex);
+        if (!callbackError.empty()) {
+          concurrentError = callbackError;
+        }
+        return std::nullopt;
+      }
+
+      std::vector<ArchiveParsedChart> parsedCharts;
+      parsedCharts.reserve(results.size());
+      for (auto &result : results) {
+        if (result.has_value()) {
+          parsedCharts.push_back(std::move(*result));
+        }
+      }
+
+      archive_file::appendDebugLogLine(
+          "Finished concurrent DB chart batch parse: " +
+          fspath_to_utf8(batch.archivePath) +
+          " requested=" + std::to_string(pendingInnerPaths.size()) +
+          " files=" + std::to_string(parsedCharts.size()) +
+          " workers=" + std::to_string(workerCount) +
+          " maxInFlightBytes=" +
+          std::to_string(kArchiveParseMaxInFlightBytes));
+      return parsedCharts;
+    };
+
+    std::string concurrentError;
+    if (auto parsedCharts = parseArchiveBatchConcurrently(concurrentError)) {
+      return parsedCharts;
+    }
+    if (shouldStop()) {
+      errorMessage = concurrentError.empty() ? "Operation cancelled"
+                                             : concurrentError;
+      return std::nullopt;
+    }
+    if (!concurrentError.empty()) {
+      archive_file::appendDebugLogLine(
+          "Falling back to serial archive streaming for DB chart batch: " +
+          fspath_to_utf8(batch.archivePath) + ": " + concurrentError);
+    }
+
     struct ArchiveParseTask {
       std::size_t sequence = 0;
       archive_file::FileData file;
