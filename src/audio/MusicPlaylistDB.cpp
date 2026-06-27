@@ -27,6 +27,7 @@ constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartIdentityMatchPredicate;
 using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
@@ -338,9 +339,9 @@ storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
   query += kChartMetaTable;
   query += " cm ON ";
   query += config.itemAlias;
-  query += ".music_key_type = 'path' AND cm.path = ";
-  query += config.itemAlias;
-  query += ".music_key WHERE ";
+  query += ".music_key_type = 'path' AND ";
+  query += chartIdentityMatchPredicate(config.itemAlias, "cm");
+  query += " WHERE ";
   if (config.wherePrefix != nullptr) {
     query += config.wherePrefix;
   }
