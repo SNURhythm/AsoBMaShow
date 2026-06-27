@@ -27,6 +27,7 @@ constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
@@ -982,10 +983,9 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
            "ROW_NUMBER() OVER (PARTITION BY mnp.id "
            "ORDER BY ";
   query += chartArtworkOrderBy("cm");
-  query += ", CASE WHEN mnp.chart_sha256 != '' AND "
-           "cm.sha256 = mnp.chart_sha256 THEN 0 WHEN mnp.chart_md5 != '' AND "
-           "cm.md5 = mnp.chart_md5 THEN 1 WHEN mnp.chart_path != '' AND "
-           "cm.path = mnp.chart_path THEN 2 ELSE 3 END, ";
+  query += ", ";
+  query += chartIdentityPreferenceOrderBy("mnp", "cm");
+  query += ", ";
   query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "
@@ -1031,10 +1031,9 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
            "ROW_NUMBER() OVER (PARTITION BY mpi.id "
            "ORDER BY ";
   query += chartArtworkOrderBy("cm");
-  query += ", CASE WHEN mpi.chart_sha256 != '' AND "
-           "cm.sha256 = mpi.chart_sha256 THEN 0 WHEN mpi.chart_md5 != '' AND "
-           "cm.md5 = mpi.chart_md5 THEN 1 WHEN mpi.chart_path != '' AND "
-           "cm.path = mpi.chart_path THEN 2 ELSE 3 END, ";
+  query += ", ";
+  query += chartIdentityPreferenceOrderBy("mpi", "cm");
+  query += ", ";
   query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "

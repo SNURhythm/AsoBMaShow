@@ -46,6 +46,7 @@
 namespace {
 using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
@@ -2893,10 +2894,9 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
            "COUNT(*) OVER (PARTITION BY cf.chart_path) AS music_chart_count, "
            "ROW_NUMBER() OVER (PARTITION BY cf.chart_path ORDER BY ";
   query += chartArtworkOrderBy("cm");
-  query += ", CASE WHEN cf.chart_sha256 != '' AND "
-           "cm.sha256 = cf.chart_sha256 THEN 0 WHEN cf.chart_md5 != '' AND "
-           "cm.md5 = cf.chart_md5 THEN 1 WHEN cf.chart_path != '' AND "
-           "cm.path = cf.chart_path THEN 2 ELSE 3 END, ";
+  query += ", ";
+  query += chartIdentityPreferenceOrderBy("cf", "cm");
+  query += ", ";
   query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "

@@ -62,6 +62,18 @@ inline std::string chartArtworkOrderBy(std::string_view alias) {
          aliasText + ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
+inline std::string chartIdentityPreferenceOrderBy(std::string_view itemAlias,
+                                                  std::string_view chartAlias) {
+  const std::string itemText(itemAlias);
+  const std::string chartText(chartAlias);
+  return "CASE WHEN " + itemText + ".chart_sha256 != '' AND " + chartText +
+         ".sha256 = " + itemText + ".chart_sha256 THEN 0 WHEN " + itemText +
+         ".chart_md5 != '' AND " + chartText + ".md5 = " + itemText +
+         ".chart_md5 THEN 1 WHEN " + itemText + ".chart_path != '' AND " +
+         chartText + ".path = " + itemText +
+         ".chart_path THEN 2 ELSE 3 END";
+}
+
 inline std::string matchedChartPathSubquery(
     std::string_view sourceAlias, bool includeTitleTieBreaker = false,
     std::string_view matchAlias = "cm_match") {
