@@ -3137,7 +3137,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
                                                     replayData, parseCancelled);
   } catch (const std::exception &e) {
     SDL_Log("Error parsing %s for ghost replay: %s",
-            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
   }
 
   if (replayChart == nullptr || parseCancelled) {
@@ -3797,7 +3797,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                                                 : "practice");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for %s: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(),
+                  fspath_to_utf8(record.meta.BmsPath).c_str(),
                   autoPlay ? "practice autoplay" : "practice", e.what());
           archive_file::appendDebugLogLine(
               std::string(autoPlay ? "Practice autoplay" : "Practice") +

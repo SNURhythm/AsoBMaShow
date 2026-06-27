@@ -856,7 +856,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
                                          "course");
   } catch (const std::exception &e) {
     SDL_Log("Course parse failed %s: %s",
-            path_t_to_utf8(nextMeta->BmsPath).c_str(), e.what());
+            fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
         "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) + ": " +
         e.what());

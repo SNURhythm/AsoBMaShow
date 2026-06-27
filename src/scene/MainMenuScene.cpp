@@ -2431,7 +2431,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     context.musicPlayer.Stop(musicStopError);
     previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
-      SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
 
       // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
@@ -2443,20 +2443,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       context.jukebox.stop();
-      SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
       std::unique_ptr<bms_parser::Chart> chart;
       try {
         chart = play_options::parseChart(meta.BmsPath, previewLoadCancelled,
                                          "preview");
       } catch (const std::exception &e) {
         SDL_Log("Preview parse failed %s: %s",
-                path_t_to_utf8(meta.BmsPath).c_str(), e.what());
+                fspath_to_utf8(meta.BmsPath).c_str(), e.what());
         archive_file::appendDebugLogLine(
             "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
             e.what());
         return;
       }
-      SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         archive_file::appendDebugLogLine(
@@ -4165,7 +4165,7 @@ void MainMenuScene::startCourseDirect(
                                                    parseCancelled, "course");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for course start: %s",
-                  path_t_to_utf8(firstMeta->BmsPath).c_str(), e.what());
+                  fspath_to_utf8(firstMeta->BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Course start parse exception: " +
               fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
@@ -4321,7 +4321,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
               chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Start parse exception: " +
               fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
@@ -7399,7 +7399,7 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
         chartRandomInfo.values, parseCancelled, "autoplay");
   } catch (const std::exception &e) {
     SDL_Log("Error parsing %s for autoplay: %s",
-            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
         "Autoplay parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
         ": " + e.what());
@@ -7843,7 +7843,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
               parseCancelled, "autoplay export");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for autoplay export: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Autoplay export parse exception: " +
               fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
