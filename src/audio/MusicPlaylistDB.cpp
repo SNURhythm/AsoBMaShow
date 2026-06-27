@@ -157,6 +157,16 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
   return true;
 }
 
+void touchPlaylistUpdatedAt(sqlite3 *db, int playlistId) {
+  const char *query =
+      "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, query, stmt) == SQLITE_OK) {
+    sqlite3_bind_int(stmt, 1, playlistId);
+    sqlite3_step(stmt);
+  }
+}
+
 std::filesystem::path pathFromDbText(const std::string &value) {
   return std::filesystem::path(utf8_to_path_t(value));
 }
@@ -539,13 +549,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
     return false;
   }
 
-  const char *updateQuery =
-      "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
-  SqliteStatementHandle updateStmt;
-  if (prepareSqliteStatement(db, updateQuery, updateStmt) == SQLITE_OK) {
-    sqlite3_bind_int(updateStmt, 1, playlistId);
-    sqlite3_step(updateStmt);
-  }
+  touchPlaylistUpdatedAt(db, playlistId);
   return true;
 }
 
@@ -582,14 +586,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
   const bool deleted = sqlite3_changes(db) > 0;
   if (deleted) {
     compactPlaylistPositions(db, playlistId);
-    const char *updateQuery =
-        "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = "
-        "?1";
-    SqliteStatementHandle updateStmt;
-    if (prepareSqliteStatement(db, updateQuery, updateStmt) == SQLITE_OK) {
-      sqlite3_bind_int(updateStmt, 1, playlistId);
-      sqlite3_step(updateStmt);
-    }
+    touchPlaylistUpdatedAt(db, playlistId);
   }
   return deleted;
 }
@@ -667,14 +664,11 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
 
-  const char *updateQuery =
-      "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
-  SqliteStatementHandle updateStmt;
-  if (prepareSqliteStatement(db, updateQuery, updateStmt) == SQLITE_OK) {
-    sqlite3_bind_int(updateStmt, 1, playlistId);
-    sqlite3_step(updateStmt);
+  const bool moved = sqlite3_changes(db) > 0;
+  if (moved) {
+    touchPlaylistUpdatedAt(db, playlistId);
   }
-  return sqlite3_changes(db) > 0;
+  return moved;
 }
 
 bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
@@ -696,13 +690,7 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
     return false;
   }
 
-  const char *updateQuery =
-      "UPDATE music_playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
-  SqliteStatementHandle updateStmt;
-  if (prepareSqliteStatement(db, updateQuery, updateStmt) == SQLITE_OK) {
-    sqlite3_bind_int(updateStmt, 1, playlistId);
-    sqlite3_step(updateStmt);
-  }
+  touchPlaylistUpdatedAt(db, playlistId);
   return true;
 }
 
