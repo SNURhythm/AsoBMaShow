@@ -176,6 +176,7 @@ void bumpLibraryRevision() {
 using asobmshow::bms_metadata::lowerCopy;
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::legacyBmsRelativePathExpr;
 
 std::string sqlColumn(std::string_view alias, std::string_view column) {
   return std::string(alias) + "." + std::string(column);
@@ -1359,6 +1360,9 @@ std::string chartClearMarkPredicate(const std::string &alias,
          scoreRankLookupExpr("1", normalizedSqlHashColumn(alias, "md5"),
                              lnModeExpr) +
          ", " + scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
+         scoreRankLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
+                             lnModeExpr) +
+         ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 

@@ -30,9 +30,19 @@ using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
+using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
+
+constexpr std::string_view kStoredDocumentsBmsPrefix = "Documents/BMS/";
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
+}
+
+std::string legacyBmsRelativePath(std::string_view path) {
+  if (!path.starts_with(kStoredDocumentsBmsPrefix)) {
+    return "";
+  }
+  return std::string(path.substr(kStoredDocumentsBmsPrefix.size()));
 }
 
 void logSqlErrorText(const char *context, const std::string &error) {
@@ -215,6 +225,27 @@ void storeBestCourseRank(CourseScoreRankMap &ranks, const std::string &key,
   }
 }
 
+int bestRankForPathKey(const ScoreRankMap &ranks, std::string_view path,
+                       int longNoteMode) {
+  if (path.empty()) {
+    return kNoClearTypeRank;
+  }
+  const auto pathIt = ranks.find(path);
+  if (pathIt != ranks.end()) {
+    return pathIt->second.bestRankForMode(longNoteMode);
+  }
+
+  const std::string legacyPath = legacyBmsRelativePath(path);
+  if (legacyPath.empty()) {
+    return kNoClearTypeRank;
+  }
+  const auto legacyPathIt = ranks.find(legacyPath);
+  if (legacyPathIt != ranks.end()) {
+    return legacyPathIt->second.bestRankForMode(longNoteMode);
+  }
+  return kNoClearTypeRank;
+}
+
 std::string bestClearMarkRankExpr() {
   return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
          std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
@@ -320,10 +351,6 @@ std::string scoreMigrationHashHasValue(std::string_view columnName) {
          ") != ''";
 }
 
-std::string scoreMigrationPathHasValue() {
-  return "scores.chart_path IS NOT NULL AND scores.chart_path != ''";
-}
-
 std::string scoreMigrationHashMatchCondition(std::string_view scoreColumn,
                                              std::string_view chartAlias,
                                              std::string_view chartColumn) {
@@ -336,8 +363,8 @@ std::string scoreMigrationHashMatchCondition(std::string_view scoreColumn,
 
 std::string scoreMigrationPathMatchCondition(std::string_view chartAlias) {
   const std::string alias(chartAlias);
-  return scoreMigrationPathHasValue() + " AND " + alias +
-         ".path = scores.chart_path";
+  return storedOrLegacyBmsPathMatchCondition("scores.chart_path",
+                                             alias + ".path");
 }
 
 std::string scoreMigrationChartMatchPredicate(std::string_view chartAlias) {
@@ -597,9 +624,10 @@ int ScoreClearRankCache::bestRankForHashes(const std::string &sha256,
   }
 
   const std::string normalizedChartPath = normalizedPath(path);
-  const auto pathIt = rankByPath.find(normalizedChartPath);
-  if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+  const int pathRank =
+      bestRankForPathKey(rankByPath, normalizedChartPath, longNoteMode);
+  if (pathRank != kNoClearTypeRank) {
+    return pathRank;
   }
 
   return kNoClearTypeRank;
@@ -619,9 +647,9 @@ int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
     return md5It->second.bestRankForMode(longNoteMode);
   }
 
-  const auto pathIt = rankByPath.find(path);
-  if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+  const int pathRank = bestRankForPathKey(rankByPath, path, longNoteMode);
+  if (pathRank != kNoClearTypeRank) {
+    return pathRank;
   }
 
   return kNoClearTypeRank;

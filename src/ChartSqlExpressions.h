@@ -70,6 +70,21 @@ inline std::string sqlTextHasValue(std::string_view expression) {
   return "NULLIF(TRIM(" + std::string(expression) + "), '') IS NOT NULL";
 }
 
+inline std::string legacyBmsRelativePathExpr(std::string_view expression) {
+  const std::string text(expression);
+  return "CASE WHEN " + text + " LIKE 'Documents/BMS/%' THEN substr(" + text +
+         ", length('Documents/BMS/') + 1) ELSE " + text + " END";
+}
+
+inline std::string storedOrLegacyBmsPathMatchCondition(
+    std::string_view storedPathExpression,
+    std::string_view chartPathExpression) {
+  const std::string storedPath(storedPathExpression);
+  const std::string chartPath(chartPathExpression);
+  return storedPath + " != '' AND (" + chartPath + " = " + storedPath +
+         " OR " + chartPath + " = 'Documents/BMS/' || " + storedPath + ")";
+}
+
 inline std::string chartIdentityHashCondition(std::string_view itemAlias,
                                               std::string_view itemColumn,
                                               std::string_view chartAlias,
@@ -98,8 +113,8 @@ inline std::string chartIdentityPathCondition(std::string_view itemAlias,
                                               std::string_view chartAlias) {
   const std::string itemText(itemAlias);
   const std::string chartText(chartAlias);
-  return itemText + ".chart_path != '' AND " + chartText +
-         ".path = " + itemText + ".chart_path";
+  return storedOrLegacyBmsPathMatchCondition(itemText + ".chart_path",
+                                             chartText + ".path");
 }
 
 inline std::string chartIdentityMatchPredicate(std::string_view itemAlias,
