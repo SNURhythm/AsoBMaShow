@@ -298,9 +298,76 @@ std::string musicRepresentativeOrderBy(const std::string &alias) {
          textLengthOrderExpr(alias, {"title", "subtitle"});
 }
 
+struct StoredMusicTrackSelectQuery {
+  const char *itemTable;
+  const char *itemAlias;
+  const char *positionAlias;
+  const char *keyTypeAlias;
+  const char *wherePrefix;
+};
+
+std::string
+storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", cm.music_chart_count, cm.";
+  query += config.keyTypeAlias;
+  query += " FROM (SELECT cm.*, ";
+  query += config.itemAlias;
+  query += ".position AS ";
+  query += config.positionAlias;
+  query += ", COUNT(*) OVER (PARTITION BY ";
+  query += config.itemAlias;
+  query += ".id) AS music_chart_count, ";
+  query += config.itemAlias;
+  query += ".music_key_type AS ";
+  query += config.keyTypeAlias;
+  query += ", ROW_NUMBER() OVER (PARTITION BY ";
+  query += config.itemAlias;
+  query += ".id ORDER BY ";
+  query += chartArtworkOrderBy("cm");
+  query += ", ";
+  query += chartIdentityPreferenceOrderBy(config.itemAlias, "cm");
+  query += ", total_notes DESC, length DESC, ";
+  query += chartSourceOrderBy("cm");
+  query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
+  query += config.itemTable;
+  query += " ";
+  query += config.itemAlias;
+  query += " JOIN ";
+  query += kChartMetaTable;
+  query += " cm ON ";
+  query += config.itemAlias;
+  query += ".music_key_type = 'path' AND cm.path = ";
+  query += config.itemAlias;
+  query += ".music_key WHERE ";
+  if (config.wherePrefix != nullptr) {
+    query += config.wherePrefix;
+  }
+  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+                                                         kChartMetaTable);
+  query += ") cm WHERE cm.music_rank = 1 ORDER BY cm.";
+  query += config.positionAlias;
+  query += ", cm.title COLLATE NOCASE, cm.path";
+  return query;
+}
+
 bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
   return asobmshow::chart_sql::readChartMeta(
       stmt, absolutePathFromColumn, relativePathFromColumn);
+}
+
+void readStoredMusicTrackRows(sqlite3_stmt *stmt,
+                              std::vector<MusicTrackRecord> &tracks) {
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    MusicTrackRecord record;
+    record.representativeChart = readChartMeta(stmt);
+    record.chartCount =
+        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    record.useChartPathIdentity =
+        columnString(stmt, kChartMetaColumnCount + 1) == "path";
+    tracks.push_back(std::move(record));
+  }
 }
 
 } // namespace
@@ -966,46 +1033,16 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
     return;
   }
 
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count, cm.queue_music_key_type FROM (SELECT "
-           "cm.*, mnp.position AS "
-           "queue_position, COUNT(*) OVER (PARTITION BY mnp.id) AS "
-           "music_chart_count, mnp.music_key_type AS queue_music_key_type, "
-           "ROW_NUMBER() OVER (PARTITION BY mnp.id "
-           "ORDER BY ";
-  query += chartArtworkOrderBy("cm");
-  query += ", ";
-  query += chartIdentityPreferenceOrderBy("mnp", "cm");
-  query += ", ";
-  query += "total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM music_now_playing_items mnp JOIN ";
-  query += kChartMetaTable;
-  query += " cm ON mnp.music_key_type = 'path' AND cm.path = mnp.music_key "
-           "WHERE ";
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
-                                                         kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.queue_position, cm.title COLLATE NOCASE, cm.path";
-
+  const std::string query = storedMusicTrackSelectQuery(
+      {"music_now_playing_items", "mnp", "queue_position",
+       "queue_music_key_type", ""});
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "selecting now playing tracks",
                                     logSqlErrorText)) {
     return;
   }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    MusicTrackRecord record;
-    record.representativeChart = readChartMeta(stmt);
-    record.chartCount =
-        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
-    record.useChartPathIdentity =
-        columnString(stmt, kChartMetaColumnCount + 1) == "path";
-    tracks.push_back(std::move(record));
-  }
+  readStoredMusicTrackRows(stmt, tracks);
 }
 
 void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
@@ -1014,30 +1051,9 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
     return;
   }
 
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count, cm.playlist_music_key_type FROM (SELECT "
-           "cm.*, mpi.position AS "
-           "playlist_position, COUNT(*) OVER (PARTITION BY mpi.id) AS "
-           "music_chart_count, mpi.music_key_type AS playlist_music_key_type, "
-           "ROW_NUMBER() OVER (PARTITION BY mpi.id "
-           "ORDER BY ";
-  query += chartArtworkOrderBy("cm");
-  query += ", ";
-  query += chartIdentityPreferenceOrderBy("mpi", "cm");
-  query += ", ";
-  query += "total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM music_playlist_items mpi JOIN ";
-  query += kChartMetaTable;
-  query += " cm ON mpi.music_key_type = 'path' AND cm.path = mpi.music_key "
-           "WHERE mpi.playlist_id = ?1 AND ";
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
-                                                         kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.playlist_position, cm.title COLLATE NOCASE, cm.path";
-
+  const std::string query = storedMusicTrackSelectQuery(
+      {"music_playlist_items", "mpi", "playlist_position",
+       "playlist_music_key_type", "mpi.playlist_id = ?1 AND "});
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "selecting music playlist tracks",
@@ -1045,14 +1061,5 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
     return;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    MusicTrackRecord record;
-    record.representativeChart = readChartMeta(stmt);
-    record.chartCount =
-        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
-    record.useChartPathIdentity =
-        columnString(stmt, kChartMetaColumnCount + 1) == "path";
-    tracks.push_back(std::move(record));
-  }
+  readStoredMusicTrackRows(stmt, tracks);
 }
