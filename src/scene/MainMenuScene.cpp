@@ -3186,7 +3186,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
             .label = courseLabel,
             .type = LibraryFolderItem::Type::Course,
             .depth = depth,
-            .count = course.chartCount,
+            .count = -1,
             .courseId = course.id,
             .courseTableId = course.tableId,
             .courseGroupName = course.groupName,

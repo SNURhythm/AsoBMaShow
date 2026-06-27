@@ -6,6 +6,11 @@
 namespace {
 constexpr int kBottomGap = 6;
 constexpr int kDepthIndent = 18;
+constexpr int kCardLeftPadding = 8;
+constexpr int kLeafCardLeftPadding = 2;
+constexpr int kDisclosureWidth = 14;
+constexpr int kLeafDisclosureWidth = 4;
+constexpr int kCountWidth = 48;
 } // namespace
 
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
@@ -26,7 +31,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   addView(contentCard);
 
   disclosureView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  disclosureView->setWidth(14);
+  disclosureView->setWidth(kDisclosureWidth);
   disclosureView->setHeight(26);
   disclosureView->setAlign(TextView::CENTER);
   disclosureView->setVAlign(TextView::MIDDLE);
@@ -51,7 +56,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   countView->setAlign(TextView::RIGHT);
   countView->setVAlign(TextView::MIDDLE);
   countView->setOverflow(TextView::TextOverflow::Hidden);
-  countView->setWidth(48);
+  countView->setWidth(kCountWidth);
   contentCard->addView(countView);
 }
 
@@ -62,12 +67,19 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
   itemDepth = depth;
   itemClearRank = clearRank;
   itemClearMarkFolder = clearMarkFolder;
+  const bool leaf = !expandable;
   contentCard->setMargin(Edge::Left,
                          static_cast<float>(std::max(0, itemDepth) *
                                             kDepthIndent));
+  contentCard->setPadding(Edge::Left,
+                          leaf ? kLeafCardLeftPadding : kCardLeftPadding);
+  disclosureView->setWidth(expandable ? kDisclosureWidth
+                                      : kLeafDisclosureWidth);
   disclosureView->setText(expandable ? (expanded ? "v" : ">") : "");
   labelView->setText(label);
-  countView->setText(count >= 0 ? std::to_string(count) : "");
+  const bool showCount = count >= 0;
+  countView->setWidth(showCount ? kCountWidth : 0);
+  countView->setText(showCount ? std::to_string(count) : "");
   if (hasClearLampColor(clearRank)) {
     const Color clearColor = clearLampColorForRank(clearRank);
     clearLamp->setBackgroundColor(
