@@ -26,12 +26,8 @@ constexpr int kScoreDatabaseSchemaVersion = 2;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 
-using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
-
-std::string normalizedHash(const std::string &value) {
-  return lowerCopy(trimCopy(value));
-}
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);

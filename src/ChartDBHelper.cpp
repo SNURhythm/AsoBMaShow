@@ -194,11 +194,8 @@ void bumpLibraryRevision() {
 }
 
 using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
-
-std::string normalizedHash(const std::string &value) {
-  return lowerCopy(trimCopy(value));
-}
 
 std::string storedChartPathText(std::filesystem::path path) {
   if (path.empty()) {

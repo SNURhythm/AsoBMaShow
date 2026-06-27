@@ -17,12 +17,8 @@
 #include <vector>
 
 namespace {
-using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
-
-std::string normalizedHash(const std::string &value) {
-  return lowerCopy(trimCopy(value));
-}
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   if (const auto error = executeSqlite(db, query)) {
