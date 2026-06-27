@@ -94,7 +94,6 @@ private:
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
     bool rebuildLibraryMetadata = false;
-    bool runWhileScenePaused = false;
   };
   struct LibraryTaskInfo {
     std::uint64_t id = 0;
@@ -501,19 +500,18 @@ private:
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
   void startLibraryRebuild();
-  void startLibraryTaskWorker(bool allowWhilePaused = false);
+  void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
   void pauseLibraryTaskWorker();
   void resumeLibraryTaskWorker();
+  void syncLibraryTaskPauseStateWithForegroundScene();
   bool waitForLibraryTaskResume(std::uint64_t id,
-                                const std::stop_token &stopToken,
-                                bool allowWhilePaused = false);
+                                const std::stop_token &stopToken);
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "",
-      bool rebuildLibraryMetadata = false,
-      bool runWhileScenePaused = false);
+      bool rebuildLibraryMetadata = false);
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,
