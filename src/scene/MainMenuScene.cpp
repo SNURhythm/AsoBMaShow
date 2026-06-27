@@ -3162,16 +3162,12 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const auto &courseTables = folderMetadataCache.courseTables;
   if (!courseTables.empty()) {
-    int coursesCount = 0;
-    for (const auto &table : courseTables) {
-      coursesCount += table.chartCount;
-    }
     const LibraryFolderItem coursesRootItem{
         .key = "courses",
         .label = "Courses",
         .type = LibraryFolderItem::Type::CoursesRoot,
         .depth = 0,
-        .count = coursesCount,
+        .count = -1,
         .expandable = true,
         .expanded = isExpanded("courses"),
     };
@@ -3208,7 +3204,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
             .label = table.tableName,
             .type = LibraryFolderItem::Type::CourseTable,
             .depth = 1,
-            .count = table.chartCount,
+            .count = -1,
             .courseTableId = table.tableId,
             .expandable = true,
             .expanded = isExpanded(tableKey),
@@ -3249,7 +3245,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
               .label = label,
               .type = LibraryFolderItem::Type::CourseGroup,
               .depth = 2,
-              .count = group.chartCount,
+              .count = -1,
               .courseTableId = group.tableId,
               .courseGroupName = group.groupName,
               .expandable = true,

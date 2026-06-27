@@ -74,8 +74,6 @@ struct DifficultyCourseGroupInfo {
   int tableId = 0;
   std::string tableName;
   std::string groupName;
-  int chartCount = 0;
-  int matchedChartCount = 0;
   int courseCount = 0;
   int singletonCourseId = 0;
   std::string singletonCourseLevel;
@@ -87,8 +85,6 @@ struct DifficultyCourseTableInfo {
   int tableId = 0;
   std::string tableName;
   std::string tableSymbol;
-  int chartCount = 0;
-  int matchedChartCount = 0;
 };
 
 struct DifficultyCourseInfo {
@@ -99,8 +95,6 @@ struct DifficultyCourseInfo {
   std::string level;
   std::string name;
   std::string constraintJson;
-  int chartCount = 0;
-  int matchedChartCount = 0;
 };
 
 struct DifficultyTableImportProgress {

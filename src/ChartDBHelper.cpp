@@ -5904,11 +5904,9 @@ ChartDBHelper::SelectDifficultyCourseTables(sqlite3 *db) {
     return {};
   }
   std::string query =
-      "SELECT dc.table_id, dt.name, dt.symbol, COUNT(dce.id), 0, "
-      "MIN(dc.sort_order) "
+      "SELECT dc.table_id, dt.name, dt.symbol "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "GROUP BY dc.table_id "
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
@@ -5925,8 +5923,6 @@ ChartDBHelper::SelectDifficultyCourseTables(sqlite3 *db) {
     table.tableId = columnInt(stmt.get(), 0);
     table.tableName = columnString(stmt.get(), 1);
     table.tableSymbol = columnString(stmt.get(), 2);
-    table.chartCount = columnInt(stmt.get(), 3);
-    table.matchedChartCount = columnInt(stmt.get(), 4);
     tables.push_back(std::move(table));
   }
   return tables;
@@ -5938,13 +5934,11 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db, int tableId) {
     return {};
   }
   std::string query =
-      "SELECT dc.table_id, dt.name, dc.group_name, COUNT(dce.id), 0, "
-      "COUNT(DISTINCT dc.id), MIN(dc.id), MIN(dc.level), MIN(dc.name), "
-      "MIN(dc.constraint_json), "
-      "MIN(dc.sort_order) "
+      "SELECT dc.table_id, dt.name, dc.group_name, "
+      "COUNT(dc.id), MIN(dc.id), MIN(dc.level), MIN(dc.name), "
+      "MIN(dc.constraint_json) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "WHERE dc.table_id = @table_id "
       "GROUP BY dc.table_id, dc.group_name "
       "ORDER BY MIN(dc.sort_order), dc.group_name COLLATE NOCASE";
@@ -5963,17 +5957,15 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db, int tableId) {
     group.tableId = columnInt(stmt.get(), 0);
     group.tableName = columnString(stmt.get(), 1);
     group.groupName = columnString(stmt.get(), 2);
-    group.chartCount = columnInt(stmt.get(), 3);
-    group.matchedChartCount = columnInt(stmt.get(), 4);
-    group.courseCount = columnInt(stmt.get(), 5);
-    group.singletonCourseId = group.courseCount == 1 ? columnInt(stmt.get(), 6)
+    group.courseCount = columnInt(stmt.get(), 3);
+    group.singletonCourseId = group.courseCount == 1 ? columnInt(stmt.get(), 4)
                                                      : 0;
     group.singletonCourseLevel =
-        group.courseCount == 1 ? columnString(stmt.get(), 7) : "";
+        group.courseCount == 1 ? columnString(stmt.get(), 5) : "";
     group.singletonCourseName =
-        group.courseCount == 1 ? columnString(stmt.get(), 8) : "";
+        group.courseCount == 1 ? columnString(stmt.get(), 6) : "";
     group.singletonCourseConstraintJson =
-        group.courseCount == 1 ? columnString(stmt.get(), 9) : "";
+        group.courseCount == 1 ? columnString(stmt.get(), 7) : "";
     groups.push_back(std::move(group));
   }
   return groups;
@@ -5987,12 +5979,10 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
   }
   std::string query =
       "SELECT dc.id, dc.table_id, dt.name, dc.group_name, dc.level, dc.name, "
-      "dc.constraint_json, COUNT(dce.id), 0 "
+      "dc.constraint_json "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
-      "GROUP BY dc.id "
       "ORDER BY dc.sort_order, dc.id";
 
   SqliteStatementHandle stmt;
@@ -6014,8 +6004,6 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
     course.level = columnString(stmt.get(), 4);
     course.name = columnString(stmt.get(), 5);
     course.constraintJson = columnString(stmt.get(), 6);
-    course.chartCount = columnInt(stmt.get(), 7);
-    course.matchedChartCount = columnInt(stmt.get(), 8);
     courses.push_back(std::move(course));
   }
   return courses;
