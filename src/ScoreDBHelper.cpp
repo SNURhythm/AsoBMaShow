@@ -181,9 +181,8 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
   }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 0));
-    if (text == nullptr) {
+    const std::string text = sqliteColumnString(stmt.get(), 0);
+    if (text.empty()) {
       continue;
     }
     const std::string key =
@@ -970,9 +969,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
   snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
   snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
-  const auto *createdAt =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 6));
-  snapshot.createdAt = createdAt != nullptr ? std::string(createdAt) : "";
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
   return snapshot;
 }
 
@@ -1021,9 +1018,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
   snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
   snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
-  const auto *createdAt =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 6));
-  snapshot.createdAt = createdAt != nullptr ? std::string(createdAt) : "";
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
   return snapshot;
 }
 
