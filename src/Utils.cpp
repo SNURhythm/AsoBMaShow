@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
@@ -153,6 +154,34 @@ Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
   }
   return std::filesystem::current_path() / GameName / SubPath;
 #endif
+#endif
+}
+
+std::filesystem::path Utils::GetStoragePathRelativeToDocuments(
+    const std::filesystem::path &Path, const std::filesystem::path &SubPath) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const std::filesystem::path documents =
+      GetDocumentsPath(SubPath).lexically_normal();
+  const std::filesystem::path normalizedPath = Path.lexically_normal();
+  const std::filesystem::path relative =
+      normalizedPath.lexically_relative(documents);
+  if (relative.empty()) {
+    return Path;
+  }
+
+  const auto firstComponent = relative.begin();
+  if (firstComponent == relative.end() ||
+      *firstComponent == std::filesystem::path("..")) {
+    return Path;
+  }
+  if (*firstComponent == std::filesystem::path(".") &&
+      std::next(firstComponent) == relative.end()) {
+    return {};
+  }
+  return relative;
+#else
+  (void)SubPath;
+  return Path;
 #endif
 }
 

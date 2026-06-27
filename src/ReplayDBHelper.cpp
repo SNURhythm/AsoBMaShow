@@ -5,7 +5,6 @@
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
-#include "targets.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -17,19 +16,6 @@
 #include <vector>
 
 namespace {
-std::filesystem::path toStoredChartPath(std::filesystem::path path) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static const std::filesystem::path documents =
-      Utils::GetDocumentsPath("BMS/");
-  const std::string documentString = documents.string();
-  const std::string pathString = path.string();
-  if (pathString.find(documentString) == 0) {
-    path = pathString.substr(documentString.length());
-  }
-#endif
-  return path;
-}
-
 std::string trimCopy(const std::string &value) {
   return asobmshow::bms_metadata::trimCopy(value);
 }
@@ -107,7 +93,8 @@ struct ReplayChartMatch {
 ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   return {
       .chartPath = path_t_to_utf8(
-          fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath))),
+          fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+              chartMeta.BmsPath, "BMS/"))),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -340,7 +327,8 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(replay.chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
   bindText(replayStmt.get(), bindIndex++, chartPath);
   bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
@@ -730,7 +718,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(replay.chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
   bindText(replayStmt.get(), bindIndex++, chartPath);
   bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);

@@ -22,6 +22,8 @@ public:
   inline static std::string TeamName = "SNURhythm";
   static std::filesystem::path
   GetDocumentsPath(const std::filesystem::path &SubPath = "");
+  static std::filesystem::path GetStoragePathRelativeToDocuments(
+      const std::filesystem::path &Path, const std::filesystem::path &SubPath);
 };
 
 class threadRAII {
