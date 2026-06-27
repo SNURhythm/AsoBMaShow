@@ -33,6 +33,7 @@ using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::kMaxSqlIntegerText;
+using asobmshow::chart_sql::kStoredDocumentsBmsPrefix;
 using asobmshow::chart_sql::normalizedSqlHash;
 
 int parseIntOr(const std::string &value, int fallback) {
@@ -455,6 +456,13 @@ void bindStoredMusicTrackIdentity(sqlite3_stmt *stmt, int firstIndex,
 
 std::string sqlParam(int index) { return "?" + std::to_string(index); }
 
+std::string storedMusicTrackPathParamPredicate(const std::string &pathParam) {
+  const std::string prefix(kStoredDocumentsBmsPrefix);
+  return pathParam + " != '' AND (chart_path = " + pathParam +
+         " OR chart_path = '" + prefix + "' || " + pathParam + " OR " +
+         pathParam + " = '" + prefix + "' || chart_path)";
+}
+
 std::string storedMusicTrackRowPredicate(int firstIndex) {
   const std::string keyTypeParam = sqlParam(firstIndex);
   const std::string musicKeyParam = sqlParam(firstIndex + 1);
@@ -465,8 +473,7 @@ std::string storedMusicTrackRowPredicate(int firstIndex) {
          musicKeyParam + ") OR (" + sha256Param +
          " != '' AND lower(trim(chart_sha256)) = " + sha256Param + ") OR (" +
          md5Param + " != '' AND lower(trim(chart_md5)) = " + md5Param +
-         ") OR (" + chartPathParam + " != '' AND chart_path = " +
-         chartPathParam + "))";
+         ") OR (" + storedMusicTrackPathParamPredicate(chartPathParam) + "))";
 }
 
 std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
@@ -480,7 +487,7 @@ std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
          " != '' AND lower(trim(chart_sha256)) = " + sha256Param +
          " THEN 1 WHEN " + md5Param +
          " != '' AND lower(trim(chart_md5)) = " + md5Param + " THEN 2 WHEN " +
-         chartPathParam + " != '' AND chart_path = " + chartPathParam +
+         storedMusicTrackPathParamPredicate(chartPathParam) +
          " THEN 3 ELSE 4 END";
 }
 

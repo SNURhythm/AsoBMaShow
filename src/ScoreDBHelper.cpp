@@ -197,6 +197,7 @@ int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;
 }
 

@@ -84,9 +84,11 @@ inline std::string storedOrLegacyBmsPathMatchCondition(
     std::string_view chartPathExpression) {
   const std::string storedPath(storedPathExpression);
   const std::string chartPath(chartPathExpression);
-  return storedPath + " != '' AND (" + chartPath + " = " + storedPath +
-         " OR " + chartPath + " = '" +
-         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath + ")";
+  return storedPath + " != '' AND " + chartPath + " != '' AND (" +
+         chartPath + " = " + storedPath + " OR " + chartPath + " = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath +
+         " OR " + storedPath + " = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + chartPath + ")";
 }
 
 inline std::string boundNormalizedHashMatchCondition(
@@ -99,7 +101,8 @@ inline std::string boundStoredOrLegacyBmsPathMatchCondition(
     std::string_view storedPathExpression) {
   const std::string storedPath(storedPathExpression);
   return "? != '' AND (" + storedPath + " = ? OR " + storedPath +
-         " = '" + std::string(kStoredDocumentsBmsPrefix) + "' || ?)";
+         " = '" + std::string(kStoredDocumentsBmsPrefix) + "' || ? OR ? = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath + ")";
 }
 
 inline std::string chartIdentityHashCondition(std::string_view itemAlias,
