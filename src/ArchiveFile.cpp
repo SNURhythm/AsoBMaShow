@@ -4615,15 +4615,13 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
   error.clear();
-  if (std::filesystem::exists(outputFolder, error) && !error) {
-    std::filesystem::remove_all(outputFolder, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not replace incomplete unzip folder: " +
-                        error.message();
-      }
-      return std::nullopt;
+  std::filesystem::remove_all(outputFolder, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not replace incomplete unzip folder: " +
+                      error.message();
     }
+    return std::nullopt;
   }
   std::filesystem::create_directories(outputFolder, error);
   if (error) {
@@ -4962,15 +4960,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
   error.clear();
-  if (std::filesystem::exists(outputFolder, error) && !error) {
-    std::filesystem::remove_all(outputFolder, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not replace incomplete unzip folder: " +
-                        error.message();
-      }
-      return std::nullopt;
+  std::filesystem::remove_all(outputFolder, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not replace incomplete unzip folder: " +
+                      error.message();
     }
+    return std::nullopt;
   }
   std::filesystem::create_directories(outputFolder, error);
   if (error) {
