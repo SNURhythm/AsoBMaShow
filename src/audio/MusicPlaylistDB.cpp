@@ -1,6 +1,7 @@
 #include "MusicPlaylistDB.h"
 
 #include "../BmsMetadataText.h"
+#include "../ChartMetaSql.h"
 #include "../ChartSqlExpressions.h"
 #include "../SqliteRAII.h"
 #include "../Utils.h"
@@ -273,39 +274,8 @@ std::string musicRepresentativeOrderBy(const std::string &alias) {
 }
 
 bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
-  int idx = 0;
-  bms_parser::ChartMeta chartMeta;
-  chartMeta.BmsPath = absolutePathFromColumn(stmt, idx++);
-  chartMeta.MD5 = columnString(stmt, idx++);
-  chartMeta.SHA256 = columnString(stmt, idx++);
-  chartMeta.Title = columnString(stmt, idx++);
-  chartMeta.SubTitle = columnString(stmt, idx++);
-  chartMeta.Genre = columnString(stmt, idx++);
-  chartMeta.Artist = columnString(stmt, idx++);
-  chartMeta.SubArtist = columnString(stmt, idx++);
-  chartMeta.Folder = absolutePathFromColumn(stmt, idx++);
-  chartMeta.StageFile = relativePathFromColumn(stmt, idx++);
-  chartMeta.Banner = relativePathFromColumn(stmt, idx++);
-  chartMeta.BackBmp = relativePathFromColumn(stmt, idx++);
-  chartMeta.Preview = relativePathFromColumn(stmt, idx++);
-
-  chartMeta.PlayLevel = sqlite3_column_double(stmt, idx++);
-  chartMeta.Difficulty = sqlite3_column_int(stmt, idx++);
-  chartMeta.Total = sqlite3_column_double(stmt, idx++);
-  chartMeta.Bpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MaxBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MinBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.PlayLength = sqlite3_column_int64(stmt, idx++);
-  chartMeta.Rank = sqlite3_column_int(stmt, idx++);
-  chartMeta.Player = sqlite3_column_int(stmt, idx++);
-  chartMeta.KeyMode = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
-
-  return chartMeta;
+  return asobmshow::chart_sql::readChartMeta(
+      stmt, absolutePathFromColumn, relativePathFromColumn);
 }
 
 } // namespace

@@ -4,6 +4,7 @@
 #include "ArchiveFile.h"
 #include "BmsChartFile.h"
 #include "BmsMetadataText.h"
+#include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
@@ -3676,54 +3677,18 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
 }
 
 bms_parser::ChartMeta ChartDBHelper::ReadChartMeta(sqlite3_stmt *stmt) {
-  int idx = 0;
-  bms_parser::ChartMeta chartMeta;
-  auto t = ReadPath(stmt, idx++);
-
-  std::filesystem::path path = std::filesystem::path(t);
-  if (!path.empty()) {
-    ToAbsolutePath(path);
-  }
-  chartMeta.BmsPath = path;
-  chartMeta.MD5 = sqliteColumnString(stmt, idx++);
-  chartMeta.SHA256 = sqliteColumnString(stmt, idx++);
-  chartMeta.Title = sqliteColumnString(stmt, idx++);
-  chartMeta.SubTitle = sqliteColumnString(stmt, idx++);
-  chartMeta.Genre = sqliteColumnString(stmt, idx++);
-  chartMeta.Artist = sqliteColumnString(stmt, idx++);
-  chartMeta.SubArtist = sqliteColumnString(stmt, idx++);
-  auto folder_char = ReadPath(stmt, idx++);
-  std::filesystem::path folder = std::filesystem::path(folder_char);
-  if (!folder.empty()) {
-    ToAbsolutePath(folder);
-  }
-  chartMeta.Folder = folder;
-  auto stage_file_char = ReadPath(stmt, idx++);
-  chartMeta.StageFile = std::filesystem::path(stage_file_char);
-  auto banner_char = ReadPath(stmt, idx++);
-  chartMeta.Banner = std::filesystem::path(banner_char);
-  auto back_bmp_char = ReadPath(stmt, idx++);
-  chartMeta.BackBmp = std::filesystem::path(back_bmp_char);
-  auto preview_char = ReadPath(stmt, idx++);
-  chartMeta.Preview = std::filesystem::path(preview_char);
-
-  chartMeta.PlayLevel = sqlite3_column_double(stmt, idx++);
-  chartMeta.Difficulty = sqlite3_column_int(stmt, idx++);
-  chartMeta.Total = sqlite3_column_double(stmt, idx++);
-  chartMeta.Bpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MaxBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.MinBpm = sqlite3_column_double(stmt, idx++);
-  chartMeta.PlayLength = sqlite3_column_int64(stmt, idx++);
-  chartMeta.Rank = sqlite3_column_int(stmt, idx++);
-  chartMeta.Player = sqlite3_column_int(stmt, idx++);
-  chartMeta.KeyMode = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
-  chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
-
-  return chartMeta;
+  const auto absolutePathFromColumn = [this](sqlite3_stmt *row, int column) {
+    std::filesystem::path path(ReadPath(row, column));
+    if (!path.empty()) {
+      ToAbsolutePath(path);
+    }
+    return path;
+  };
+  const auto relativePathFromColumn = [this](sqlite3_stmt *row, int column) {
+    return std::filesystem::path(ReadPath(row, column));
+  };
+  return asobmshow::chart_sql::readChartMeta(stmt, absolutePathFromColumn,
+                                             relativePathFromColumn);
 }
 
 ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
