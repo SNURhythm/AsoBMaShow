@@ -1944,9 +1944,7 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
     return false;
   }
 
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string pathText = storedChartPathText(archivePath);
   const std::string name = solidArchiveNameForPath(archivePath);
 
   const char *query =
@@ -1989,9 +1987,7 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 }
 
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string pathText = storedChartPathText(archivePath);
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(
       db, "DELETE FROM solid_archives WHERE path = ?", stmt);
@@ -2032,9 +2028,7 @@ bool deleteChartMetaInArchive(sqlite3 *db,
       continue;
     }
 
-    std::filesystem::path storedPath = meta.BmsPath;
-    ChartDBHelper::ToRelativePath(storedPath);
-    const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+    const std::string pathText = storedChartPathText(meta.BmsPath);
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
@@ -2635,7 +2629,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
 
-  bindSqliteText(stmt, 1, path_t_to_utf8(fspath_to_path_t(path)));
+  bindSqliteText(stmt, 1, fspath_to_utf8(path));
   bindSqliteText(stmt, 2, md5);
   bindSqliteText(stmt, 3, sha256);
   bindSqliteText(stmt, 4, chartMeta.Title);
@@ -2646,15 +2640,11 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
 
   std::filesystem::path folder = chartMeta.Folder;
   ToRelativePath(folder);
-  bindSqliteText(stmt, 9, path_t_to_utf8(fspath_to_path_t(folder)));
-  bindSqliteText(stmt, 10,
-                 path_t_to_utf8(fspath_to_path_t(chartMeta.StageFile)));
-  bindSqliteText(stmt, 11,
-                 path_t_to_utf8(fspath_to_path_t(chartMeta.Banner)));
-  bindSqliteText(stmt, 12,
-                 path_t_to_utf8(fspath_to_path_t(chartMeta.BackBmp)));
-  bindSqliteText(stmt, 13,
-                 path_t_to_utf8(fspath_to_path_t(chartMeta.Preview)));
+  bindSqliteText(stmt, 9, fspath_to_utf8(folder));
+  bindSqliteText(stmt, 10, fspath_to_utf8(chartMeta.StageFile));
+  bindSqliteText(stmt, 11, fspath_to_utf8(chartMeta.Banner));
+  bindSqliteText(stmt, 12, fspath_to_utf8(chartMeta.BackBmp));
+  bindSqliteText(stmt, 13, fspath_to_utf8(chartMeta.Preview));
   sqlite3_bind_double(stmt, 14, chartMeta.PlayLevel);
   sqlite3_bind_int(stmt, 15, chartMeta.Difficulty);
   sqlite3_bind_double(stmt, 16, chartMeta.Total);
@@ -3631,7 +3621,7 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  const auto target = path_t_to_utf8(fspath_to_path_t(path));
+  const auto target = fspath_to_utf8(path);
   SDL_Log("Deleting chart: %s", target.c_str());
   bindSqliteText(stmt, 1, target);
   rc = sqlite3_step(stmt);
@@ -3684,9 +3674,7 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
       continue;
     }
 
-    std::filesystem::path storedPath = chartMeta.BmsPath;
-    ToRelativePath(storedPath);
-    const std::string target = path_t_to_utf8(fspath_to_path_t(storedPath));
+    const std::string target = storedChartPathText(chartMeta.BmsPath);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     bindSqliteText(stmt, 1, target);
@@ -3933,9 +3921,7 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  std::filesystem::path storedPath = path;
-  ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
   rc = sqlite3_step(stmt);
@@ -4003,8 +3989,7 @@ std::vector<ChartEntry> ChartDBHelper::SelectEffectiveEntries(sqlite3 *db) {
   std::error_code errorCode;
   if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
     SDL_Log("Failed to create default BMS folder %s: %s",
-            path_t_to_utf8(fspath_to_path_t(defaultPath)).c_str(),
-            errorCode.message().c_str());
+            fspath_to_utf8(defaultPath).c_str(), errorCode.message().c_str());
   }
 
   bool hasDefaultEntry = false;
@@ -4038,9 +4023,7 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  std::filesystem::path storedPath = path;
-  ToRelativePath(storedPath);
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
