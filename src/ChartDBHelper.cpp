@@ -4496,8 +4496,15 @@ int ChartDBHelper::ScanChartRoots(
     }
 #endif
     std::error_code error;
-    if (!std::filesystem::exists(root, error) || error) {
-      error.clear();
+    const bool rootExists = std::filesystem::exists(root, error);
+    if (error) {
+      SDL_Log("Failed to check chart folder %s: %s",
+              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
+              error.message().c_str());
+      ++scannedRootCount;
+      continue;
+    }
+    if (!rootExists) {
       ++scannedRootCount;
       continue;
     }
