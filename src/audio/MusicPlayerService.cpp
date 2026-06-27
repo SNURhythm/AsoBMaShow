@@ -36,12 +36,12 @@ std::vector<music_playlist::MusicTrack>
 loadFavoriteTracks() {
   std::vector<MusicTrackRecord> records;
   auto &chartDb = ChartDBHelper::GetInstance();
-  sqlite3 *db = chartDb.Connect();
+  SqliteConnectionHandle dbHandle(chartDb.Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     return {};
   }
   chartDb.SelectFavoriteMusicTracks(db, records);
-  chartDb.Close(db);
   return music_playlist::MakeTracks(records);
 }
 
@@ -167,7 +167,8 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   errorMessage.clear();
 
   MusicPlaylistDB playlistDb;
-  sqlite3 *db = playlistDb.Connect();
+  SqliteConnectionHandle dbHandle(playlistDb.Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     errorMessage = "Could not open chart database.";
     return false;
@@ -176,7 +177,6 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectLibraryTracks(db, records);
   favoriteTracks = loadFavoriteTracks();
-  playlistDb.Close(db);
 
   libraryTracks = music_playlist::MakeTracks(records);
   return true;
@@ -188,7 +188,8 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
   errorMessage.clear();
 
   MusicPlaylistDB playlistDb;
-  sqlite3 *db = playlistDb.Connect();
+  SqliteConnectionHandle dbHandle(playlistDb.Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     errorMessage = "Could not open chart database.";
     return false;
@@ -202,12 +203,10 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
 
   RefreshPlaylistCachesLocked(playlistDb, db, preferredSelectedPlaylistId);
   if (defaultPlaylistId <= 0) {
-    playlistDb.Close(db);
     errorMessage = "Could not create music playlist.";
     return false;
   }
   RestoreQueueFromPersistedStateLocked(playlistDb, db);
-  playlistDb.Close(db);
   return true;
 }
 
@@ -241,7 +240,8 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
   }
 
   MusicPlaylistDB playlistDb;
-  sqlite3 *db = playlistDb.Connect();
+  SqliteConnectionHandle dbHandle(playlistDb.Connect());
+  sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
     errorMessage = "Could not open chart database.";
     return false;
@@ -250,7 +250,6 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectLibraryGroupTracks(db, groupTrack.representativeChart,
                                       records);
-  playlistDb.Close(db);
 
   tracks = music_playlist::MakeTracks(records);
   if (tracks.empty()) {
@@ -267,14 +266,14 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
   errorMessage.clear();
 
   auto &chartDb = ChartDBHelper::GetInstance();
-  sqlite3 *chartDbConnection = chartDb.Connect();
+  SqliteConnectionHandle chartDbHandle(chartDb.Connect());
+  sqlite3 *chartDbConnection = chartDbHandle.get();
   if (chartDbConnection == nullptr) {
     errorMessage = "Could not open chart database.";
     return false;
   }
   const bool updated =
       chartDb.SetFavorite(chartDbConnection, chartMeta, favorite);
-  chartDb.Close(chartDbConnection);
   favoriteTracks = loadFavoriteTracks();
   if (!updated) {
     errorMessage = favorite ? "Could not add favorite."
