@@ -28,8 +28,6 @@ constexpr int kMusicPlaylistDatabaseSchemaVersion = 1;
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::chartArtworkOrderBy;
-using asobmshow::chart_sql::chartIdentityMatchPredicate;
-using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
@@ -175,6 +173,18 @@ bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
       "ON chart_meta(path)",
       "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder "
       "ON chart_meta(folder)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder_source "
+      "ON chart_meta(folder, source_priority, source_archive_size, path)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_title_path "
+      "ON chart_meta(title, path)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_sha256 "
+      "ON chart_meta(sha256)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_md5 "
+      "ON chart_meta(md5)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_sha256_source "
+      "ON chart_meta(sha256, source_priority, source_archive_size, path)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_md5_source "
+      "ON chart_meta(md5, source_priority, source_archive_size, path)",
   };
   for (const char *query : indexes) {
     if (!execSql(db, query, "creating attached chart index")) {
@@ -525,7 +535,9 @@ std::string storedMusicTrackPathParamPredicate(const std::string &pathParam) {
   const std::string prefix(kStoredDocumentsBmsPrefix);
   return pathParam + " != '' AND (chart_path = " + pathParam +
          " OR chart_path = '" + prefix + "' || " + pathParam + " OR " +
-         pathParam + " = '" + prefix + "' || chart_path)";
+         "(" + pathParam + " LIKE '" + prefix +
+         "%' AND chart_path = substr(" + pathParam + ", length('" + prefix +
+         "') + 1)))";
 }
 
 std::string storedMusicTrackRowPredicate(int firstIndex) {
@@ -536,9 +548,9 @@ std::string storedMusicTrackRowPredicate(int firstIndex) {
   const std::string sha256Param = sqlParam(firstIndex + 4);
   return "((music_key_type = " + keyTypeParam + " AND music_key = " +
          musicKeyParam + ") OR (" + sha256Param +
-         " != '' AND lower(trim(chart_sha256)) = " + sha256Param + ") OR (" +
-         md5Param + " != '' AND lower(trim(chart_md5)) = " + md5Param +
-         ") OR (" + storedMusicTrackPathParamPredicate(chartPathParam) + "))";
+         " != '' AND chart_sha256 = " + sha256Param + ") OR (" + md5Param +
+         " != '' AND chart_md5 = " + md5Param + ") OR (" +
+         storedMusicTrackPathParamPredicate(chartPathParam) + "))";
 }
 
 std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
@@ -549,9 +561,8 @@ std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
   const std::string sha256Param = sqlParam(firstIndex + 4);
   return "CASE WHEN music_key_type = " + keyTypeParam + " AND music_key = " +
          musicKeyParam + " THEN 0 WHEN " + sha256Param +
-         " != '' AND lower(trim(chart_sha256)) = " + sha256Param +
-         " THEN 1 WHEN " + md5Param +
-         " != '' AND lower(trim(chart_md5)) = " + md5Param + " THEN 2 WHEN " +
+         " != '' AND chart_sha256 = " + sha256Param + " THEN 1 WHEN " +
+         md5Param + " != '' AND chart_md5 = " + md5Param + " THEN 2 WHEN " +
          storedMusicTrackPathParamPredicate(chartPathParam) +
          " THEN 3 ELSE 4 END";
 }
@@ -701,47 +712,116 @@ struct StoredMusicTrackSelectQuery {
   const char *wherePrefix;
 };
 
-std::string
-storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count, cm.";
-  query += config.keyTypeAlias;
-  query += " FROM (SELECT cm.*, ";
+std::string storedMusicTrackItemColumn(const StoredMusicTrackSelectQuery &config,
+                                       const char *column) {
+  std::string result = config.itemAlias;
+  result += ".";
+  result += column;
+  return result;
+}
+
+std::string storedMusicTrackCandidateBranch(
+    const StoredMusicTrackSelectQuery &config,
+    const std::string &matchCondition, int identityRank) {
+  std::string query = "SELECT cm.*, ";
+  query += config.itemAlias;
+  query += ".id AS item_id, ";
   query += config.itemAlias;
   query += ".position AS ";
   query += config.positionAlias;
-  query += ", COUNT(*) OVER (PARTITION BY ";
-  query += config.itemAlias;
-  query += ".id) AS music_chart_count, ";
+  query += ", ";
   query += config.itemAlias;
   query += ".music_key_type AS ";
   query += config.keyTypeAlias;
-  query += ", ROW_NUMBER() OVER (PARTITION BY ";
-  query += config.itemAlias;
-  query += ".id ORDER BY ";
-  query += chartArtworkOrderBy("cm");
   query += ", ";
-  query += chartIdentityPreferenceOrderBy(config.itemAlias, "cm");
-  query += ", total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
+  query += std::to_string(identityRank);
+  query += " AS identity_rank FROM ";
   query += config.itemTable;
   query += " ";
   query += config.itemAlias;
   query += " JOIN ";
   query += kChartMetaTable;
   query += " cm ON ";
-  query += config.itemAlias;
-  query += ".music_key_type = 'path' AND ";
-  query += chartIdentityMatchPredicate(config.itemAlias, "cm");
+  query += matchCondition;
   query += " WHERE ";
   if (config.wherePrefix != nullptr) {
     query += config.wherePrefix;
   }
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+  query += config.itemAlias;
+  query += ".music_key_type = 'path'";
+  return query;
+}
+
+std::string storedMusicTrackCandidateQuery(
+    const StoredMusicTrackSelectQuery &config) {
+  const std::string prefix(kStoredDocumentsBmsPrefix);
+  const std::string itemSha256 =
+      storedMusicTrackItemColumn(config, "chart_sha256");
+  const std::string itemMd5 = storedMusicTrackItemColumn(config, "chart_md5");
+  const std::string itemPath =
+      storedMusicTrackItemColumn(config, "chart_path");
+  const std::string shaMatch =
+      itemSha256 + " != '' AND cm.sha256 = " + itemSha256;
+  const std::string md5Match = itemMd5 + " != '' AND cm.md5 = " + itemMd5;
+  const std::string nonHashMatch =
+      "NOT (" + shaMatch + ") AND NOT (" + md5Match + ")";
+
+  std::vector<std::string> branches;
+  branches.push_back(storedMusicTrackCandidateBranch(config, shaMatch, 0));
+  branches.push_back(storedMusicTrackCandidateBranch(
+      config, md5Match + " AND NOT (" + shaMatch + ")", 1));
+  branches.push_back(storedMusicTrackCandidateBranch(
+      config, itemPath + " != '' AND cm.path = " + itemPath + " AND " +
+                  nonHashMatch,
+      2));
+  branches.push_back(storedMusicTrackCandidateBranch(
+      config, itemPath + " != '' AND cm.path = '" + prefix + "' || " +
+                  itemPath + " AND " + nonHashMatch,
+      2));
+  branches.push_back(storedMusicTrackCandidateBranch(
+      config, itemPath + " LIKE '" + prefix + "%' AND cm.path = substr(" +
+                  itemPath + ", length('" + prefix + "') + 1) AND " +
+                  nonHashMatch,
+      2));
+
+  std::string query;
+  for (std::size_t i = 0; i < branches.size(); ++i) {
+    if (i > 0) {
+      query += " UNION ALL ";
+    }
+    query += branches[i];
+  }
+  return query;
+}
+
+std::string
+storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
+  std::string representativeOrder = chartArtworkOrderBy("choice");
+  representativeOrder +=
+      ", choice.identity_rank, choice.total_notes DESC, choice.length DESC, ";
+  representativeOrder += chartSourceOrderBy("choice");
+  representativeOrder += ", choice.title COLLATE NOCASE, choice.path";
+
+  std::string query =
+      "WITH candidates AS (";
+  query += storedMusicTrackCandidateQuery(config);
+  query += "), preferred_candidates AS (SELECT * FROM candidates pc WHERE ";
+  query += asobmshow::chart_sql::preferredChartPredicate("pc",
                                                          kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 ORDER BY cm.";
+  query +=
+      "), item_choices AS (SELECT pc.item_id, COUNT(*) AS music_chart_count, "
+      "(SELECT choice.path FROM preferred_candidates choice WHERE "
+      "choice.item_id = pc.item_id ORDER BY ";
+  query += representativeOrder;
+  query += " LIMIT 1) AS representative_path FROM preferred_candidates pc "
+           "GROUP BY pc.item_id) SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", item_choices.music_chart_count, cm.";
+  query += config.keyTypeAlias;
+  query +=
+      " FROM preferred_candidates cm JOIN item_choices ON "
+      "item_choices.item_id = cm.item_id AND "
+      "item_choices.representative_path = cm.path ORDER BY cm.";
   query += config.positionAlias;
   query += ", cm.title COLLATE NOCASE, cm.path";
   return query;
@@ -1370,28 +1450,48 @@ void MusicPlaylistDB::SelectLibraryTracks(
     return;
   }
 
-  const char *musicKey = "COALESCE(NULLIF(cm.folder, ''), cm.path)";
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "COUNT(*) OVER (PARTITION BY ";
-  query += musicKey;
-  query += ") AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY ";
-  query += musicKey;
-  query += " ORDER BY ";
-  query += musicRepresentativeOrderBy("cm");
-  query += ", ";
-  query += chartArtworkOrderBy("cm");
-  query += ", total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
+  const std::string preferredChart =
+      asobmshow::chart_sql::preferredChartPredicate("cm", kChartMetaTable);
+  const std::string preferredRepresentative =
+      asobmshow::chart_sql::preferredChartPredicate("rep", kChartMetaTable);
+  std::string representativeOrder = musicRepresentativeOrderBy("rep");
+  representativeOrder += ", ";
+  representativeOrder += chartArtworkOrderBy("rep");
+  representativeOrder +=
+      ", rep.total_notes DESC, rep.length DESC, ";
+  representativeOrder += chartSourceOrderBy("rep");
+  representativeOrder += ", rep.title COLLATE NOCASE, rep.path";
+
+  std::string query =
+      "WITH folder_groups AS ("
+      "SELECT cm.folder AS music_key, COUNT(*) AS music_chart_count, "
+      "(SELECT rep.path FROM ";
   query += kChartMetaTable;
-  query += " cm WHERE ";
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
-                                                         kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.title COLLATE NOCASE, cm.path";
+  query += " rep WHERE rep.folder = cm.folder AND ";
+  query += preferredRepresentative;
+  query += " ORDER BY ";
+  query += representativeOrder;
+  query += " LIMIT 1) AS representative_path FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE cm.folder IS NOT NULL AND cm.folder != '' AND ";
+  query += preferredChart;
+  query += " GROUP BY cm.folder), path_groups AS ("
+           "SELECT cm.path AS music_key, 1 AS music_chart_count, "
+           "cm.path AS representative_path FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE (cm.folder IS NULL OR cm.folder = '') AND ";
+  query += preferredChart;
+  query += "), music_groups AS ("
+           "SELECT music_key, music_chart_count, representative_path "
+           "FROM folder_groups UNION ALL "
+           "SELECT music_key, music_chart_count, representative_path "
+           "FROM path_groups) SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", mg.music_chart_count FROM music_groups mg JOIN ";
+  query += kChartMetaTable;
+  query +=
+      " cm ON cm.path = mg.representative_path "
+      "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,

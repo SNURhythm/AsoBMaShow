@@ -172,6 +172,18 @@ private:
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
+  struct LibraryFolderMetadataCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int allSongCount = 0;
+    int favoriteCount = 0;
+    int solidArchiveCount = 0;
+    std::vector<DifficultyTableInfo> tables;
+    std::unordered_map<int, std::vector<DifficultyLevelInfo>> levelsByTable;
+    std::vector<DifficultyCourseGroupInfo> courseGroups;
+    std::unordered_map<std::string, std::vector<DifficultyCourseInfo>>
+        coursesByGroup;
+  };
   struct ChartListPageCache {
     sqlite3 *db = nullptr;
     ChartMetaQuery query;
@@ -397,10 +409,20 @@ private:
   std::optional<BmsSearchResult> pendingFindBmsResult;
 
   LibraryFolderItem activeFolder;
+  LibraryFolderMetadataCache folderMetadataCache;
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
   main_menu_library::FolderClearDataByLongNoteMode folderClearData;
+  struct CourseValidationCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int courseId = 0;
+    bool empty = true;
+    int firstMissingIndex = -1;
+    std::vector<ChartMetaRecord> records;
+  };
+  CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
@@ -463,6 +485,8 @@ private:
   void initView(ApplicationContext &context);
   void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
+  void refreshFavoriteFolderCount();
+  ChartMetaQuery chartQueryForActiveFolder() const;
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
@@ -547,6 +571,7 @@ private:
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
+  const CourseValidationCache &courseValidationForActiveFolder();
   void refreshStartButtonForActiveFolder();
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);

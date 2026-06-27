@@ -94,7 +94,7 @@ inline std::string storedOrLegacyBmsPathMatchCondition(
 inline std::string boundNormalizedHashMatchCondition(
     std::string_view storedHashExpression) {
   const std::string storedHash(storedHashExpression);
-  return "? != '' AND " + normalizedSqlHash(storedHash) + " = ?";
+  return "? != '' AND " + storedHash + " = ?";
 }
 
 inline std::string boundStoredOrLegacyBmsPathMatchCondition(
@@ -114,8 +114,8 @@ inline std::string chartIdentityHashCondition(std::string_view itemAlias,
   const std::string chartText(chartAlias);
   const std::string chartColumnText(chartColumn);
   const std::string itemExpr = itemText + "." + itemColumnText;
-  return sqlTextHasValue(itemExpr) + " AND " + chartText + "." +
-         chartColumnText + " = " + normalizedSqlHash(itemExpr);
+  return itemExpr + " != '' AND " + chartText + "." + chartColumnText +
+         " = " + itemExpr;
 }
 
 inline std::string chartIdentitySha256Condition(std::string_view itemAlias,
@@ -161,10 +161,9 @@ inline std::string matchedChartPathSubquery(
   const std::string sourceMd5 = sourceText + ".md5";
   std::string query = "(SELECT " + matchText + ".path FROM " +
                       kChartMetaTable + " " + matchText + " WHERE ((" +
-                      sqlTextHasValue(sourceSha256) + " AND " + matchText +
-                      ".sha256 = " + normalizedSqlHash(sourceSha256) + ") OR (" +
-                      sqlTextHasValue(sourceMd5) + " AND " + matchText +
-                      ".md5 = " + normalizedSqlHash(sourceMd5) +
+                      sourceSha256 + " != '' AND " + matchText +
+                      ".sha256 = " + sourceSha256 + ") OR (" + sourceMd5 +
+                      " != '' AND " + matchText + ".md5 = " + sourceMd5 +
                       ")) ORDER BY " +
                       chartSourceOrderBy(matchText);
   if (includeTitleTieBreaker) {

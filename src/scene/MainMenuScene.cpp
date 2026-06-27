@@ -3035,12 +3035,23 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const float previousScrollOffset =
       preserveViewState ? folderRecyclerView->scrollOffset : 0.0f;
-  auto dbHelper = ChartDBHelper::GetInstance();
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const std::uint64_t currentLibraryRevision = dbHelper.GetLibraryRevision();
+  if (!folderMetadataCache.valid ||
+      folderMetadataCache.libraryRevision != currentLibraryRevision) {
+    folderMetadataCache = LibraryFolderMetadataCache{};
+    folderMetadataCache.libraryRevision = currentLibraryRevision;
+    folderMetadataCache.allSongCount = dbHelper.CountAllChartMeta(db);
+    folderMetadataCache.favoriteCount = dbHelper.CountFavoriteCharts(db);
+    folderMetadataCache.solidArchiveCount = dbHelper.CountSolidArchives(db);
+    folderMetadataCache.tables = dbHelper.SelectDifficultyTables(db);
+    folderMetadataCache.courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+    folderMetadataCache.valid = true;
+  }
   std::vector<LibraryFolderItem> folders;
 
-  int allSongCount = 0;
-  allSongCount = dbHelper.CountAllChartMeta(db);
-  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  const int allSongCount = folderMetadataCache.allSongCount;
+  const int favoriteCount = folderMetadataCache.favoriteCount;
 
   auto isExpanded = [this](const std::string &key) {
     return expandedLibraryFolders.find(key) != expandedLibraryFolders.end();
@@ -3089,7 +3100,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .count = favoriteCount,
   });
 
-  const int solidArchiveCount = dbHelper.CountSolidArchives(db);
+  const int solidArchiveCount = folderMetadataCache.solidArchiveCount;
   if (solidArchiveCount > 0) {
     folders.push_back({
         .key = "solid-archives",
@@ -3100,8 +3111,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     });
   }
 
-  const auto tables = dbHelper.SelectDifficultyTables(db);
-  for (const auto &table : tables) {
+  for (const auto &table : folderMetadataCache.tables) {
     const std::string tableKey = folderKeyForTable(table.id);
     const LibraryFolderItem tableItem{
         .key = tableKey,
@@ -3120,7 +3130,14 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
     appendClearMarkFilters(tableItem, 1);
 
-    const auto levels = dbHelper.SelectDifficultyLevels(db, table.id);
+    auto levelsIt = folderMetadataCache.levelsByTable.find(table.id);
+    if (levelsIt == folderMetadataCache.levelsByTable.end()) {
+      levelsIt =
+          folderMetadataCache.levelsByTable
+              .emplace(table.id, dbHelper.SelectDifficultyLevels(db, table.id))
+              .first;
+    }
+    const auto &levels = levelsIt->second;
     for (const auto &level : levels) {
       const std::string levelKey =
           folderKeyForLevel(level.tableId, level.level);
@@ -3142,7 +3159,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
 
-  const auto courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+  const auto &courseGroups = folderMetadataCache.courseGroups;
   if (!courseGroups.empty()) {
     int coursesCount = 0;
     for (const auto &group : courseGroups) {
@@ -3160,17 +3177,25 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
       for (const auto &group : courseGroups) {
-        const auto courses = dbHelper.SelectDifficultyCourses(
-            db, group.tableId, group.groupName);
-        if (courses.empty()) {
-          continue;
-        }
-
         const std::string label = group.groupName.empty()
                                       ? group.tableName + " Courses"
                                       : group.groupName;
         const std::string groupKey =
             folderKeyForCourseGroup(group.tableId, group.groupName);
+        auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
+        if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
+          coursesIt =
+              folderMetadataCache.coursesByGroup
+                  .emplace(groupKey,
+                           dbHelper.SelectDifficultyCourses(
+                               db, group.tableId, group.groupName))
+                  .first;
+        }
+        const auto &courses = coursesIt->second;
+        if (courses.empty()) {
+          continue;
+        }
+
         const auto makeCourseItem = [&](const DifficultyCourseInfo &course,
                                         int depth) {
           const std::string courseLabel =
@@ -3264,37 +3289,64 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   }
 }
 
-void MainMenuScene::reloadChartList(bool preserveViewState) {
-  if (recyclerView == nullptr) {
+void MainMenuScene::refreshFavoriteFolderCount() {
+  if (folderRecyclerView == nullptr) {
     return;
   }
 
-  const float previousScrollOffset =
-      preserveViewState ? recyclerView->scrollOffset : 0.0f;
-  const int previousSelectedIndex =
-      preserveViewState ? recyclerView->selectedIndex : -1;
-  path_t previousSelectedPath;
-  if (preserveViewState && previousSelectedIndex >= 0 &&
-      previousSelectedIndex < recyclerView->size()) {
-    previousSelectedPath =
-        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
-  }
-  int previousTopIndex = -1;
-  float previousTopItemOffset = 0.0f;
-  path_t previousTopPath;
-  if (preserveViewState && recyclerView->itemHeight > 0 &&
-      recyclerView->size() > 0) {
-    previousTopIndex = std::clamp(
-        static_cast<int>(previousScrollOffset /
-                         static_cast<float>(recyclerView->itemHeight)),
-        0, recyclerView->size() - 1);
-    previousTopItemOffset =
-        previousScrollOffset -
-        static_cast<float>(previousTopIndex * recyclerView->itemHeight);
-    previousTopPath =
-        fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
+  std::vector<LibraryFolderItem> folders = folderRecyclerView->getItems();
+  if (folders.empty()) {
+    reloadFolderItems(true);
+    return;
   }
 
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  if (folderMetadataCache.valid) {
+    folderMetadataCache.favoriteCount = favoriteCount;
+    folderMetadataCache.libraryRevision = dbHelper.GetLibraryRevision();
+  }
+  const float previousScrollOffset = folderRecyclerView->scrollOffset;
+  int activeIndex = std::clamp(folderRecyclerView->selectedIndex, 0,
+                               static_cast<int>(folders.size()) - 1);
+  bool foundFavorites = false;
+
+  for (int i = 0; i < static_cast<int>(folders.size()); ++i) {
+    auto &folder = folders[static_cast<std::size_t>(i)];
+    if (folder.key == "favorites") {
+      folder.count = favoriteCount;
+      foundFavorites = true;
+      if (activeFolder.key == folder.key) {
+        activeFolder = folder;
+      }
+    }
+    if (folder.key == activeFolder.key) {
+      activeIndex = i;
+    }
+  }
+
+  if (!foundFavorites) {
+    reloadFolderItems(true);
+    return;
+  }
+
+  const int folderCount = static_cast<int>(folders.size());
+  folderRecyclerView->setItems(std::move(folders));
+  folderRecyclerView->selectedIndex = activeIndex;
+  const float maxOffset =
+      std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
+                                            folderRecyclerView->itemHeight -
+                                        folderRecyclerView->getHeight()));
+  folderRecyclerView->scrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  folderRecyclerView->rebindVisibleItems();
+  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+  if (selectedView != nullptr) {
+    selectedView->onSelected();
+  }
+}
+
+ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   ChartMetaQuery query;
   query.keyword = searchText;
   query.difficultyText = difficultyText;
@@ -3334,6 +3386,41 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   default:
     break;
   }
+  return query;
+}
+
+void MainMenuScene::reloadChartList(bool preserveViewState) {
+  if (recyclerView == nullptr) {
+    return;
+  }
+
+  const float previousScrollOffset =
+      preserveViewState ? recyclerView->scrollOffset : 0.0f;
+  const int previousSelectedIndex =
+      preserveViewState ? recyclerView->selectedIndex : -1;
+  path_t previousSelectedPath;
+  if (preserveViewState && previousSelectedIndex >= 0 &&
+      previousSelectedIndex < recyclerView->size()) {
+    previousSelectedPath =
+        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
+  }
+  int previousTopIndex = -1;
+  float previousTopItemOffset = 0.0f;
+  path_t previousTopPath;
+  if (preserveViewState && recyclerView->itemHeight > 0 &&
+      recyclerView->size() > 0) {
+    previousTopIndex = std::clamp(
+        static_cast<int>(previousScrollOffset /
+                         static_cast<float>(recyclerView->itemHeight)),
+        0, recyclerView->size() - 1);
+    previousTopItemOffset =
+        previousScrollOffset -
+        static_cast<float>(previousTopIndex * recyclerView->itemHeight);
+    previousTopPath =
+        fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
+  }
+
+  ChartMetaQuery query = chartQueryForActiveFolder();
 
   std::optional<ChartMetaRecord> leadingRecord;
   if (activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -3359,6 +3446,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   }
   dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
+  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(db, query, dbCount, std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
@@ -3395,17 +3483,13 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int searchRadius = std::max(chartListCache.pageSize * 3, 1);
-    const int searchStart =
-        std::max(0, std::max(0, preferredIndex) - searchRadius);
-    const int searchEnd =
-        std::min(count, std::max(0, preferredIndex) + searchRadius + 1);
-    for (int i = searchStart; i < searchEnd; ++i) {
-      if (pathMatches(i, path)) {
-        return i;
-      }
+    const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+        db, query, std::filesystem::path(path));
+    if (dbIndex < 0) {
+      return -1;
     }
-    return -1;
+    const int index = dbIndex + leadingOffset;
+    return index >= 0 && index < count ? index : -1;
   };
 
   float restoredScrollOffset = std::clamp(previousScrollOffset, 0.0f, maxOffset);
@@ -3633,36 +3717,42 @@ void MainMenuScene::selectChartByPathAfterReload(
     return;
   }
   const path_t target = fspath_to_path_t(path);
-  for (int i = 0; i < recyclerView->size(); ++i) {
-    const ChartMetaRecord &record = recyclerView->get(i);
-    if (fspath_to_path_t(record.meta.BmsPath) != target) {
-      continue;
+  const ChartMetaQuery query = chartQueryForActiveFolder();
+  int index = ChartDBHelper::GetInstance().FindChartMetaIndex(db, query, path);
+  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0) {
+    index += 1;
+  }
+  if (index >= 0 && index < recyclerView->size()) {
+    const ChartMetaRecord &record = recyclerView->get(index);
+    if (fspath_to_path_t(record.meta.BmsPath) == target) {
+      const int previous = recyclerView->selectedIndex;
+      if (previous >= 0 && previous < recyclerView->size() &&
+          previous != index && recyclerView->onUnselected) {
+        recyclerView->onUnselected(recyclerView->get(previous), previous);
+      }
+      recyclerView->selectedIndex = index;
+      const float selectedY =
+          static_cast<float>(index * recyclerView->itemHeight);
+      const float viewportHeight =
+          static_cast<float>(recyclerView->getHeight());
+      const float itemHeight = static_cast<float>(recyclerView->itemHeight);
+      const float centeredOffset =
+          selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
+      const float maxOffset =
+          std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
+                                                recyclerView->itemHeight -
+                                            recyclerView->getHeight()));
+      recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+      recyclerView->rebindVisibleItems();
+      suppressPreviewForChartPath = record.meta.BmsPath;
+      if (recyclerView->onSelected) {
+        recyclerView->onSelected(record, index);
+      }
+      archive_file::appendDebugLogLine(
+          "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
+      return;
     }
-
-    const int previous = recyclerView->selectedIndex;
-    if (previous >= 0 && previous < recyclerView->size() && previous != i &&
-        recyclerView->onUnselected) {
-      recyclerView->onUnselected(recyclerView->get(previous), previous);
-    }
-    recyclerView->selectedIndex = i;
-    const float selectedY = static_cast<float>(i * recyclerView->itemHeight);
-    const float viewportHeight = static_cast<float>(recyclerView->getHeight());
-    const float itemHeight = static_cast<float>(recyclerView->itemHeight);
-    const float centeredOffset =
-        selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-    const float maxOffset =
-        std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
-                                              recyclerView->itemHeight -
-                                          recyclerView->getHeight()));
-    recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
-    recyclerView->rebindVisibleItems();
-    suppressPreviewForChartPath = record.meta.BmsPath;
-    if (recyclerView->onSelected) {
-      recyclerView->onSelected(record, i);
-    }
-    archive_file::appendDebugLogLine(
-        "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
-    return;
   }
 
   if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
@@ -3702,7 +3792,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
-  reloadFolderItems(true);
+  refreshFavoriteFolderCount();
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);
   } else if (recyclerView != nullptr) {
@@ -3989,6 +4079,44 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
 }
 
+const MainMenuScene::CourseValidationCache &
+MainMenuScene::courseValidationForActiveFolder() {
+  const std::uint64_t currentLibraryRevision =
+      ChartDBHelper::GetInstance().GetLibraryRevision();
+  if (courseValidationCache.valid &&
+      courseValidationCache.libraryRevision == currentLibraryRevision &&
+      courseValidationCache.courseId == activeFolder.courseId) {
+    return courseValidationCache;
+  }
+
+  courseValidationCache = CourseValidationCache{};
+  courseValidationCache.valid = true;
+  courseValidationCache.libraryRevision = currentLibraryRevision;
+  courseValidationCache.courseId = activeFolder.courseId;
+
+  if (activeFolder.type != LibraryFolderItem::Type::Course ||
+      activeFolder.courseId <= 0) {
+    return courseValidationCache;
+  }
+
+  ChartMetaQuery query;
+  query.courseId = activeFolder.courseId;
+  ChartDBHelper::GetInstance().QueryChartMeta(db, query,
+                                              courseValidationCache.records);
+  courseValidationCache.empty = courseValidationCache.records.empty();
+  for (int i = 0;
+       i < static_cast<int>(courseValidationCache.records.size()); ++i) {
+    const auto &record =
+        courseValidationCache.records[static_cast<std::size_t>(i)];
+    if (record.solidArchive || record.unavailable ||
+        record.meta.BmsPath.empty()) {
+      courseValidationCache.firstMissingIndex = i;
+      break;
+    }
+  }
+  return courseValidationCache;
+}
+
 void MainMenuScene::refreshStartButtonForActiveFolder() {
   if (startButtonText == nullptr || willStart.load()) {
     return;
@@ -4007,21 +4135,14 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
     }
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     startButtonText->setText("No Course");
     return;
   }
 
-  const bool hasMissing = std::any_of(
-      records.begin(), records.end(), [](const ChartMetaRecord &record) {
-        return record.solidArchive || record.unavailable ||
-               record.meta.BmsPath.empty();
-      });
-  startButtonText->setText(hasMissing ? "Missing" : "Start Course");
+  startButtonText->setText(validation.firstMissingIndex >= 0 ? "Missing"
+                                                             : "Start Course");
 }
 
 void MainMenuScene::startSelectedCourse() {
@@ -4033,11 +4154,8 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("No course charts");
     }
@@ -4045,30 +4163,23 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  int firstMissingIndex = -1;
-  for (int i = 0; i < static_cast<int>(records.size()); ++i) {
-    const auto &record = records[i];
-    if (record.solidArchive || record.unavailable ||
-        record.meta.BmsPath.empty()) {
-      firstMissingIndex = i;
-      break;
-    }
-  }
+  const auto &records = validation.records;
+  const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("Course has missing charts");
     }
     int visibleMissingIndex = -1;
-    for (int i = 0; i < recyclerView->size(); ++i) {
-      const auto &visibleRecord = recyclerView->get(i);
-      if (visibleRecord.courseStart) {
-        continue;
+    const auto &missingRecord =
+        records[static_cast<std::size_t>(firstMissingIndex)];
+    if (!missingRecord.meta.BmsPath.empty()) {
+      const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+          db, chartQueryForActiveFolder(), missingRecord.meta.BmsPath);
+      if (dbIndex >= 0) {
+        visibleMissingIndex = dbIndex + 1;
       }
-      if (visibleRecord.solidArchive || visibleRecord.unavailable ||
-          visibleRecord.meta.BmsPath.empty()) {
-        visibleMissingIndex = i;
-        break;
-      }
+    } else if (searchText.empty() && difficultyText.empty()) {
+      visibleMissingIndex = firstMissingIndex + 1;
     }
     if (visibleMissingIndex >= 0) {
       const int previous = recyclerView->selectedIndex;
