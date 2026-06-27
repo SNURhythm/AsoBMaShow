@@ -445,7 +445,9 @@ private:
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
     std::string longNoteMode = AppSettings::kDefaultLnMode;
+    std::string assistOption = assist_options::kOff;
     bool longNoteModeLocked = false;
+    bool assistOptionLocked = false;
   };
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
@@ -523,6 +525,7 @@ private:
   void refreshLongNoteModeButtons();
   void setAssistOptionSelection(const std::string &option);
   void refreshAssistOptionButtons();
+  bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;
   bool currentPlayOptionSelectionAllowed(const std::string &option) const;

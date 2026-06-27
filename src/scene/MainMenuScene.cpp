@@ -2272,6 +2272,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     refreshReplayAvailability(&item);
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
+    refreshAssistOptionButtons();
     if (!replayExportInProgress.load() && replayStatusText != nullptr) {
       replayStatusText->setText("");
     }
@@ -3287,6 +3288,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     refreshReplayAvailability(nullptr);
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
+    refreshAssistOptionButtons();
   }
   dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
@@ -3297,6 +3299,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       });
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
+  refreshAssistOptionButtons();
   refreshStartButtonForActiveFolder();
   if (!preserveViewState && activeFolder.type == LibraryFolderItem::Type::Course &&
       count > 0) {
@@ -3354,6 +3357,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   recyclerView->selectedIndex = restoredSelectedIndex;
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
+  refreshAssistOptionButtons();
   if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
     refreshReplayAvailability(nullptr);
     setPlayableChartActionsVisible(false);
@@ -3660,6 +3664,7 @@ MainMenuScene::currentEffectivePlayOptionSelection() const {
   selection.playOption = play_options::normalizePlayOption(selectedPlayOption);
   selection.longNoteMode =
       long_note_mode::parseId(selectedLnMode, AppSettings::kDefaultLnMode);
+  selection.assistOption = assist_options::normalize(selectedAssistOption);
 
   const auto record = selectedRecordSnapshot();
   const bool selectedCourseStart =
@@ -3679,6 +3684,8 @@ MainMenuScene::currentEffectivePlayOptionSelection() const {
           constraintSettings.rules.longNoteMode);
       selection.longNoteModeLocked = true;
     }
+    selection.assistOption = assist_options::kOff;
+    selection.assistOptionLocked = true;
     return selection;
   }
 
@@ -3720,6 +3727,16 @@ bool MainMenuScene::currentLongNoteModeSelectionAllowed(
   }
   return long_note_mode::parseId(mode, AppSettings::kDefaultLnMode) ==
          selection.longNoteMode;
+}
+
+bool MainMenuScene::currentAssistOptionSelectionAllowed(
+    const std::string &option) const {
+  const EffectivePlayOptionSelection selection =
+      currentEffectivePlayOptionSelection();
+  if (!selection.assistOptionLocked) {
+    return true;
+  }
+  return assist_options::normalize(option) == selection.assistOption;
 }
 
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
@@ -3851,6 +3868,9 @@ void MainMenuScene::refreshLongNoteModeButtons() {
 }
 
 void MainMenuScene::setAssistOptionSelection(const std::string &option) {
+  if (!currentAssistOptionSelectionAllowed(option)) {
+    return;
+  }
   selectedAssistOption = assist_options::normalize(option);
   context.settings.selectedAssistOption = selectedAssistOption;
   context.settings.sanitize();
@@ -3861,15 +3881,29 @@ void MainMenuScene::setAssistOptionSelection(const std::string &option) {
 }
 
 void MainMenuScene::refreshAssistOptionButtons() {
+  const EffectivePlayOptionSelection effective =
+      currentEffectivePlayOptionSelection();
   for (auto &item : assistOptionButtons) {
     if (item.button == nullptr || item.text == nullptr) {
       continue;
     }
 
+    const bool allowed = currentAssistOptionSelectionAllowed(item.option);
     item.text->setText(item.option);
-    styleOptionButton(item.button, item.text,
-                      assist_options::normalize(item.option) ==
-                          selectedAssistOption);
+    if (allowed && !effective.assistOptionLocked) {
+      item.button->setOnClickListener(
+          [this, option = item.option]() { setAssistOptionSelection(option); });
+    } else {
+      item.button->setOnClickListener(std::function<void()>{});
+    }
+
+    const bool selected =
+        assist_options::normalize(item.option) == effective.assistOption;
+    if (effective.assistOptionLocked || !allowed) {
+      styleLockedOptionButton(item.button, item.text, selected);
+    } else {
+      styleOptionButton(item.button, item.text, selected);
+    }
   }
   refreshReadySettingsSummary();
 }
@@ -3888,7 +3922,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
                                  effective.longNoteMode);
   }
   if (readyAssistOptionText != nullptr) {
-    readyAssistOptionText->setText("Assist: " + selectedAssistOption);
+    readyAssistOptionText->setText("Assist: " + effective.assistOption);
   }
 }
 
@@ -4018,7 +4052,7 @@ void MainMenuScene::startSelectedCourse() {
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption =
       coursePlayOptionForConstraints(selectedPlayOption, constraintSettings);
-  session->assistOption = selectedAssistOption;
+  session->assistOption = assist_options::kOff;
   session->autoKeySound = !context.settings.inputKeysoundEnabled;
   startCourseDirect(std::move(session));
 }
@@ -4042,6 +4076,9 @@ void MainMenuScene::startCourseDirect(
           ? normalizeChartLongNoteModeValue(session->longNoteMode)
           : long_note_mode::valueFromId(selectedLnMode);
   session->longNoteMode = selectedLongNoteMode;
+  if (!session->courseReplayPlayback) {
+    session->assistOption = assist_options::kOff;
+  }
 
   defer(
       [this, session, selectedLongNoteMode]() {
