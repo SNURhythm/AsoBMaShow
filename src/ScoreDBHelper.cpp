@@ -32,10 +32,9 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
+using asobmshow::chart_sql::kStoredDocumentsBmsPrefix;
 using asobmshow::chart_sql::normalizedSqlHash;
 using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
-
-constexpr std::string_view kStoredDocumentsBmsPrefix = "Documents/BMS/";
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);

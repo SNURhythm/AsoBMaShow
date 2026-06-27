@@ -7,6 +7,7 @@ namespace asobmshow::chart_sql {
 
 inline constexpr const char *kChartMetaTable = "chart_meta";
 inline constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+inline constexpr std::string_view kStoredDocumentsBmsPrefix = "Documents/BMS/";
 inline constexpr const char *kChartMetaSelectColumns =
     "cm.path,"
     "cm.md5,"
@@ -72,8 +73,10 @@ inline std::string sqlTextHasValue(std::string_view expression) {
 
 inline std::string legacyBmsRelativePathExpr(std::string_view expression) {
   const std::string text(expression);
-  return "CASE WHEN " + text + " LIKE 'Documents/BMS/%' THEN substr(" + text +
-         ", length('Documents/BMS/') + 1) ELSE " + text + " END";
+  return "CASE WHEN " + text + " LIKE '" +
+         std::string(kStoredDocumentsBmsPrefix) + "%' THEN substr(" + text +
+         ", length('" + std::string(kStoredDocumentsBmsPrefix) +
+         "') + 1) ELSE " + text + " END";
 }
 
 inline std::string storedOrLegacyBmsPathMatchCondition(
@@ -82,7 +85,8 @@ inline std::string storedOrLegacyBmsPathMatchCondition(
   const std::string storedPath(storedPathExpression);
   const std::string chartPath(chartPathExpression);
   return storedPath + " != '' AND (" + chartPath + " = " + storedPath +
-         " OR " + chartPath + " = 'Documents/BMS/' || " + storedPath + ")";
+         " OR " + chartPath + " = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath + ")";
 }
 
 inline std::string boundNormalizedHashMatchCondition(
@@ -95,7 +99,7 @@ inline std::string boundStoredOrLegacyBmsPathMatchCondition(
     std::string_view storedPathExpression) {
   const std::string storedPath(storedPathExpression);
   return "? != '' AND (" + storedPath + " = ? OR " + storedPath +
-         " = 'Documents/BMS/' || ?)";
+         " = '" + std::string(kStoredDocumentsBmsPrefix) + "' || ?)";
 }
 
 inline std::string chartIdentityHashCondition(std::string_view itemAlias,
