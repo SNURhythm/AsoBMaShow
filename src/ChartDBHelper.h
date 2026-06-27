@@ -24,6 +24,7 @@ struct ChartMetaQuery {
   std::string difficultyText;
   bool clearMarkFilter = false;
   int clearMarkRank = -1;
+  int selectedLongNoteMode = 1;
   bool favoritesOnly = false;
   int limit = 0;
   int offset = 0;

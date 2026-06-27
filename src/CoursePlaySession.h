@@ -101,6 +101,25 @@ inline bool chartContainsUndefinedLongNote(const bms_parser::Chart &chart) {
   return false;
 }
 
+inline bool chartContainsLongNote(const bms_parser::Chart &chart) {
+  for (auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (auto *note : timeline->Notes) {
+        if (note != nullptr && note->IsLongNote()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 inline void recalculateEffectiveLongNoteCounts(
     bms_parser::Chart &chart, int longNoteModeOverride = 0) {
   int totalNotes = 0;
@@ -159,8 +178,7 @@ inline void recalculateEffectiveLongNoteCounts(
 inline void applyEffectiveLongNoteModeToChart(
     bms_parser::Chart &chart, int longNoteModeOverride = 0) {
   const int lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
-  if (chart.Meta.LnMode == 0 && lnMode > 0 &&
-      chartContainsUndefinedLongNote(chart)) {
+  if (chart.Meta.LnMode == 0 && lnMode > 0 && chartContainsLongNote(chart)) {
     chart.Meta.LnMode = lnMode;
   }
   recalculateEffectiveLongNoteCounts(chart, lnMode);

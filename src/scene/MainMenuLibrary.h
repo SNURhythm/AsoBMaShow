@@ -17,9 +17,11 @@ std::string folderKeyForCourseGroup(int tableId, const std::string &groupName);
 std::string folderKeyForCourse(int courseId);
 
 std::unordered_map<std::string, int>
-LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks);
+LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks,
+                     int selectedLongNoteMode);
 
 FolderClearMarkCounts
-LoadFolderClearMarkCounts(sqlite3 *db, const ScoreClearRankCache &scoreRanks);
+LoadFolderClearMarkCounts(sqlite3 *db, const ScoreClearRankCache &scoreRanks,
+                          int selectedLongNoteMode);
 
 } // namespace main_menu_library

@@ -102,6 +102,13 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
 }
 
+bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
+  return head != nullptr && !head->IsTail() && head->IsDead &&
+         head->Tail != nullptr && head->Tail->IsPlayed &&
+         !head->Tail->IsDead && head->Tail->Timeline != nullptr &&
+         head->Tail->PlayedTime < head->Tail->Timeline->Timing;
+}
+
 void destroyTextureHandle(bgfx::TextureHandle &texture) {
   if (bgfx::isValid(texture)) {
     bgfx::destroy(texture);
@@ -2031,9 +2038,24 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       if (note == nullptr) {
         return;
       }
+      auto keepDeadLongNoteBody = [&]() {
+        if (!note->IsLongNote()) {
+          return false;
+        }
+        auto *longNote = static_cast<bms_parser::LongNote *>(note);
+        if (!shouldKeepDeadLongNoteBody(longNote)) {
+          return false;
+        }
+        state.orphanLongNotes.insert(longNote);
+        longNoteLookahead[longNote] = lowerBound;
+        return true;
+      };
       if (timeLine->Timing >= micro - latePoorTiming) {
         // note is in the hittable timing
         if (note->IsDead) {
+          if (keepDeadLongNoteBody()) {
+            return;
+          }
           return;
         }
         if (note->IsLandmineNote()) {
@@ -2068,6 +2090,9 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       } else {
         // note has passed the last hittable timing
         if (note->IsDead) {
+          if (keepDeadLongNoteBody()) {
+            return;
+          }
           return;
         }
         if (note->IsLandmineNote()) {

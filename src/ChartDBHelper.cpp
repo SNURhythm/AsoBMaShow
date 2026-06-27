@@ -68,8 +68,9 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_notes,"
                                                 "cm.total_long_notes,"
                                                 "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes";
-constexpr int kChartMetaColumnCount = 27;
+                                                "cm.total_backspin_notes,"
+                                                "cm.ln_mode";
+constexpr int kChartMetaColumnCount = 28;
 constexpr int kNoPlayClearMarkRank = -1;
 
 constexpr const char *kDifficultyEntrySelectColumns =
@@ -101,6 +102,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.total_long_notes, 0),"
     "COALESCE(cm.total_scratch_notes, 0),"
     "COALESCE(cm.total_backspin_notes, 0),"
+    "COALESCE(cm.ln_mode, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -145,6 +147,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.total_long_notes, 0),"
     "COALESCE(cm.total_scratch_notes, 0),"
     "COALESCE(cm.total_backspin_notes, 0),"
+    "COALESCE(cm.ln_mode, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -168,6 +171,7 @@ constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
+constexpr int kChartDatabaseSchemaVersion = 1;
 constexpr const char *kChartFavoriteColumn =
     "CASE WHEN EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
     "cf.chart_path = cm.path) THEN 1 ELSE 0 END";
@@ -1065,6 +1069,53 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
   return true;
 }
 
+int databaseUserVersion(sqlite3 *db) {
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while reading chart database version: "
+              << sqlite3_errmsg(db) << "\n";
+    return 0;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return 0;
+  }
+  return sqlite3_column_int(stmt.get(), 0);
+}
+
+bool setDatabaseUserVersion(sqlite3 *db, int version) {
+  const std::string query =
+      "PRAGMA user_version = " + std::to_string(std::max(0, version));
+  return execSql(db, query.c_str(), "updating chart database version");
+}
+
+bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
+                       const char *context) {
+  exists = false;
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+      stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
+              << "\n";
+    return false;
+  }
+  sqlite3_bind_text(stmt.get(), 1, tableName, -1, SQLITE_STATIC);
+  const int stepRc = sqlite3_step(stmt.get());
+  if (stepRc == SQLITE_ROW) {
+    exists = true;
+    return true;
+  }
+  if (stepRc == SQLITE_DONE) {
+    return true;
+  }
+  std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
+            << "\n";
+  return false;
+}
+
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
   return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
          SQLITE_OK;
@@ -1261,24 +1312,184 @@ std::string preferredChartPredicate(const std::string &alias) {
          " AND cm_better.path < " + alias + ".path)))";
 }
 
+int normalizeScoreQueryLongNoteMode(int lnMode) {
+  return lnMode >= 1 && lnMode <= 3 ? lnMode : 1;
+}
+
+std::string scoreLongNoteModeExpr(const std::string &alias,
+                                  int selectedLongNoteMode) {
+  const std::string selected =
+      std::to_string(normalizeScoreQueryLongNoteMode(selectedLongNoteMode));
+  return "(CASE WHEN COALESCE(" + alias + ".total_long_notes, 0) + COALESCE(" +
+         alias + ".total_backspin_notes, 0) <= 0 THEN 0 "
+         "WHEN COALESCE(" +
+         alias + ".ln_mode, 0) BETWEEN 1 AND 3 THEN " + alias +
+         ".ln_mode ELSE " + selected + " END)";
+}
+
 std::string scoreRankLookupExpr(const std::string &kind,
-                                const std::string &keyExpr) {
+                                const std::string &keyExpr,
+                                const std::string &lnModeExpr) {
   return "(SELECT scr.rank FROM temp.score_clear_rank_cache scr WHERE "
          "scr.kind = " +
-         kind + " AND scr.key = " + keyExpr + " LIMIT 1)";
+         kind + " AND scr.key = " + keyExpr + " AND scr.ln_mode = " +
+         lnModeExpr + " LIMIT 1)";
 }
 
-std::string chartClearMarkPredicate(const std::string &alias) {
-  return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256") + ", " +
-         scoreRankLookupExpr("1", alias + ".md5") + ", " +
-         scoreRankLookupExpr("2", alias + ".path") + ", " +
+std::string chartClearMarkPredicate(const std::string &alias,
+                                    int selectedLongNoteMode) {
+  const std::string lnModeExpr =
+      scoreLongNoteModeExpr(alias, selectedLongNoteMode);
+  return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256", lnModeExpr) +
+         ", " + scoreRankLookupExpr("1", alias + ".md5", lnModeExpr) + ", " +
+         scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
-std::string difficultyEntryClearMarkPredicate(const std::string &alias) {
-  return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256") + ", " +
-         scoreRankLookupExpr("1", alias + ".md5") + ", " +
+std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
+                                             const std::string &chartAlias,
+                                             int selectedLongNoteMode) {
+  const std::string lnModeExpr =
+      scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
+  return "COALESCE(" +
+         scoreRankLookupExpr("0", entryAlias + ".sha256", lnModeExpr) + ", " +
+         scoreRankLookupExpr("1", entryAlias + ".md5", lnModeExpr) + ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
+}
+
+int normalizedChartLongNoteModeForStorage(int lnMode) {
+  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
+}
+
+bool parseChartMetadataForMigration(const std::filesystem::path &path,
+                                    bms_parser::ChartMeta &meta) {
+  bms_parser::Parser parser;
+  bms_parser::Chart *rawChart = nullptr;
+  std::unique_ptr<bms_parser::Chart> chart;
+  std::atomic_bool cancelled(false);
+  try {
+    archive_file::parseChart(parser, path, &rawChart, false, true, cancelled);
+    chart.reset(rawChart);
+    rawChart = nullptr;
+  } catch (const std::exception &e) {
+    if (rawChart != nullptr) {
+      chart.reset(rawChart);
+      rawChart = nullptr;
+    }
+    SDL_Log("Chart ln_mode migration parse failed for %s: %s",
+            path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+    return false;
+  }
+  if (cancelled || chart == nullptr) {
+    return false;
+  }
+  meta = chart->Meta;
+  meta.LnMode = normalizedChartLongNoteModeForStorage(meta.LnMode);
+  return true;
+}
+
+bool backfillChartLongNoteMetadata(sqlite3 *db, bool &completed) {
+  completed = false;
+  SqliteStatementHandle selectStmt;
+  int rc = prepareSqliteStatement(
+      db,
+      "SELECT path FROM chart_meta WHERE path IS NOT NULL AND path != '' "
+      "ORDER BY path",
+      selectStmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while selecting charts for ln_mode migration: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+
+  SqliteStatementHandle updateStmt;
+  rc = prepareSqliteStatement(
+      db,
+      "UPDATE chart_meta SET ln_mode = ?, total_notes = ?, "
+      "total_long_notes = ?, total_scratch_notes = ?, "
+      "total_backspin_notes = ? WHERE path = ?",
+      updateStmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing chart ln_mode migration update: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
+
+  if (!execSql(db, "SAVEPOINT chart_lnmode_migration",
+               "starting chart ln_mode migration")) {
+    return false;
+  }
+
+  bool ok = true;
+  int migratedCount = 0;
+  int failedCount = 0;
+  while (sqlite3_step(selectStmt.get()) == SQLITE_ROW) {
+    const std::string storedPath = columnString(selectStmt.get(), 0);
+    std::filesystem::path chartPath(utf8_to_path_t(storedPath));
+    ChartDBHelper::ToAbsolutePath(chartPath);
+
+    bms_parser::ChartMeta parsedMeta;
+    if (!parseChartMetadataForMigration(chartPath, parsedMeta)) {
+      ++failedCount;
+      continue;
+    }
+
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+    sqlite3_bind_int(updateStmt.get(), 1, parsedMeta.LnMode);
+    sqlite3_bind_int(updateStmt.get(), 2, parsedMeta.TotalNotes);
+    sqlite3_bind_int(updateStmt.get(), 3, parsedMeta.TotalLongNotes);
+    sqlite3_bind_int(updateStmt.get(), 4, parsedMeta.TotalScratchNotes);
+    sqlite3_bind_int(updateStmt.get(), 5, parsedMeta.TotalBackSpinNotes);
+    bindText(updateStmt.get(), 6, storedPath);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      std::cerr << "SQL error while updating chart ln_mode migration row: "
+                << sqlite3_errmsg(db) << "\n";
+      ok = false;
+      break;
+    }
+    ++migratedCount;
+  }
+
+  if (!ok) {
+    execSql(db, "ROLLBACK TO chart_lnmode_migration",
+            "rolling back chart ln_mode migration");
+    execSql(db, "RELEASE chart_lnmode_migration",
+            "releasing chart ln_mode migration");
+    return false;
+  }
+
+  if (!execSql(db, "RELEASE chart_lnmode_migration",
+               "committing chart ln_mode migration")) {
+    return false;
+  }
+
+  SDL_Log("Chart ln_mode migration completed: migrated=%d failed=%d",
+          migratedCount, failedCount);
+  if (migratedCount > 0) {
+    bumpLibraryRevision();
+  }
+  completed = failedCount == 0;
+  return true;
+}
+
+bool migrateChartDatabaseSchema(sqlite3 *db) {
+  const int currentVersion = databaseUserVersion(db);
+  if (currentVersion >= kChartDatabaseSchemaVersion) {
+    return true;
+  }
+
+  if (currentVersion < 1) {
+    bool completed = false;
+    if (!backfillChartLongNoteMetadata(db, completed)) {
+      return false;
+    }
+    if (!completed) {
+      return true;
+    }
+  }
+
+  return setDatabaseUserVersion(db, kChartDatabaseSchemaVersion);
 }
 
 bool updateChartSourcePreferenceValues(sqlite3 *db,
@@ -2261,6 +2472,12 @@ void ChartDBHelper::CommitTransaction(sqlite3 *db) {
 }
 
 bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
+  bool existingChartMetaTable = false;
+  if (!sqliteTableExists(db, "chart_meta", existingChartMetaTable,
+                         "checking chart meta table existence")) {
+    return false;
+  }
+
   auto query = "CREATE TABLE IF NOT EXISTS chart_meta ("
                "path       TEXT primary key,"
                "md5        TEXT not null,"
@@ -2289,6 +2506,7 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
                "total_long_notes INTEGER,"
                "total_scratch_notes INTEGER,"
                "total_backspin_notes INTEGER,"
+               "ln_mode INTEGER NOT NULL DEFAULT 0,"
                "source_priority INTEGER,"
                "source_archive_size INTEGER"
                ")";
@@ -2301,14 +2519,29 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
     return false;
   }
 
-  if (!execSqlAllowDuplicateColumn(
-          db, "ALTER TABLE chart_meta ADD COLUMN source_priority INTEGER",
-          "migrating chart source priority")) {
-    return false;
-  }
-  if (!execSqlAllowDuplicateColumn(
-          db, "ALTER TABLE chart_meta ADD COLUMN source_archive_size INTEGER",
-          "migrating chart source archive size")) {
+  if (existingChartMetaTable) {
+    if (!execSqlAllowDuplicateColumn(
+            db, "ALTER TABLE chart_meta ADD COLUMN source_priority INTEGER",
+            "migrating chart source priority")) {
+      return false;
+    }
+    if (!execSqlAllowDuplicateColumn(
+            db,
+            "ALTER TABLE chart_meta ADD COLUMN source_archive_size INTEGER",
+            "migrating chart source archive size")) {
+      return false;
+    }
+    if (!execSqlAllowDuplicateColumn(
+            db,
+            "ALTER TABLE chart_meta ADD COLUMN ln_mode INTEGER NOT NULL "
+            "DEFAULT 0",
+            "migrating chart long note mode")) {
+      return false;
+    }
+    if (!migrateChartDatabaseSchema(db)) {
+      return false;
+    }
+  } else if (!setDatabaseUserVersion(db, kChartDatabaseSchemaVersion)) {
     return false;
   }
 
@@ -2429,6 +2662,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "total_long_notes,"
                "total_scratch_notes,"
                "total_backspin_notes,"
+               "ln_mode,"
                "source_priority,"
                "source_archive_size"
                ") VALUES("
@@ -2459,6 +2693,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "@total_long_notes,"
                "@total_scratch_notes,"
                "@total_backspin_notes,"
+               "@ln_mode,"
                "@source_priority,"
                "@source_archive_size"
                ")";
@@ -2518,8 +2753,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   sqlite3_bind_int(stmt, 25, chartMeta.TotalLongNotes);
   sqlite3_bind_int(stmt, 26, chartMeta.TotalScratchNotes);
   sqlite3_bind_int(stmt, 27, chartMeta.TotalBackSpinNotes);
-  sqlite3_bind_int(stmt, 28, sourcePreference.priority);
-  sqlite3_bind_int64(stmt, 29, clampSqlInteger(sourcePreference.archiveSize));
+  sqlite3_bind_int(stmt, 28, chartMeta.LnMode);
+  sqlite3_bind_int(stmt, 29, sourcePreference.priority);
+  sqlite3_bind_int64(stmt, 30, clampSqlInteger(sourcePreference.archiveSize));
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while inserting a chart: %s", sqlite3_errmsg(db));
@@ -2866,7 +3102,8 @@ void ChartDBHelper::QueryChartMeta(
     }
     if (chartQuery.clearMarkFilter) {
       query += " AND ";
-      query += difficultyEntryClearMarkPredicate("dte");
+      query += difficultyEntryClearMarkPredicate(
+          "dte", "cm", chartQuery.selectedLongNoteMode);
     }
 
     query += " ORDER BY CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END, "
@@ -3092,7 +3329,7 @@ void ChartDBHelper::QueryChartMeta(
   }
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
-    query += chartClearMarkPredicate("cm");
+    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
   }
   if (chartQuery.favoritesOnly) {
     query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
@@ -3194,7 +3431,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   if (queryDifficultyEntries) {
     std::string query = "SELECT COUNT(*) FROM difficulty_table_entries dte "
                         "JOIN difficulty_tables dt ON dt.id = dte.table_id ";
-    if (!chartQuery.keyword.empty()) {
+    if (!chartQuery.keyword.empty() || chartQuery.clearMarkFilter) {
       query +=
           "LEFT JOIN chart_meta cm ON cm.path = ("
           "SELECT cm_match.path FROM chart_meta cm_match "
@@ -3224,7 +3461,8 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     }
     if (chartQuery.clearMarkFilter) {
       query += " AND ";
-      query += difficultyEntryClearMarkPredicate("dte");
+      query += difficultyEntryClearMarkPredicate(
+          "dte", "cm", chartQuery.selectedLongNoteMode);
     }
 
     SqliteStatementHandle stmt;
@@ -3427,7 +3665,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   }
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
-    query += chartClearMarkPredicate("cm");
+    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
   }
   if (chartQuery.favoritesOnly) {
     query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
@@ -3712,6 +3950,7 @@ bms_parser::ChartMeta ChartDBHelper::ReadChartMeta(sqlite3_stmt *stmt) {
   chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
+  chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
 
   return chartMeta;
 }

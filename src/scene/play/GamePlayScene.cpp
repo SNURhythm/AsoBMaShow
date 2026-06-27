@@ -88,12 +88,20 @@ bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
          bms_parser::LongNoteType::HellChargeNote;
 }
 
-void markLongNoteMissed(bms_parser::LongNote *longNote, long long judgedTime) {
+bool longNoteTailJudgedBeforeTiming(const bms_parser::LongNote *longNote,
+                                    long long judgedTime) {
+  return longNote != nullptr && longNote->IsTail() &&
+         longNote->Timeline != nullptr && longNote->Head != nullptr &&
+         judgedTime < longNote->Timeline->Timing;
+}
+
+void markLongNoteMissed(bms_parser::LongNote *longNote, long long judgedTime,
+                        bool dead = true) {
   if (longNote == nullptr) {
     return;
   }
   longNote->IsPlayed = true;
-  longNote->IsDead = true;
+  longNote->IsDead = dead;
   longNote->PlayedTime = judgedTime;
   longNote->IsHolding = false;
 }
@@ -103,16 +111,18 @@ void markReplayMissedNote(bms_parser::Note *note, long long judgedTime) {
     return;
   }
   note->IsPlayed = true;
-  note->IsDead = true;
   note->PlayedTime = judgedTime;
   if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
       longNote != nullptr) {
+    note->IsDead = !longNoteTailJudgedBeforeTiming(longNote, judgedTime);
     longNote->IsHolding = false;
     if (longNote->IsTail() && longNote->Head != nullptr) {
       longNote->Head->IsHolding = false;
     } else if (!longNote->IsTail() && longNote->Tail != nullptr) {
       longNote->Tail->IsHolding = false;
     }
+  } else {
+    note->IsDead = true;
   }
 }
 
@@ -1138,7 +1148,10 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
                 if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
-                  markLongNoteMissed(longNote->Tail, judgedTime);
+                  markLongNoteMissed(
+                      longNote->Tail, judgedTime,
+                      !longNoteTailJudgedBeforeTiming(longNote->Tail,
+                                                      judgedTime));
                   onJudge(poorResult, false);
                   appendReplayEvent(ReplayEventAction::Miss,
                                     longNote->Tail->Lane, longNote->Tail, time,

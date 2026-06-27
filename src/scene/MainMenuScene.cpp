@@ -3390,6 +3390,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   ChartMetaQuery query;
   query.keyword = searchText;
   query.difficultyText = difficultyText;
+  query.selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
 
   switch (activeFolder.type) {
   case LibraryFolderItem::Type::SolidArchives:
@@ -3520,10 +3521,13 @@ void MainMenuScene::reloadScoreClearRanks() {
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
   scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
   rebuildScoreClearRankTempTable();
+  const int selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
   folderClearRanks =
-      main_menu_library::LoadFolderClearRanks(db, scoreClearRanks);
+      main_menu_library::LoadFolderClearRanks(db, scoreClearRanks,
+                                              selectedLongNoteMode);
   folderClearMarkCounts =
-      main_menu_library::LoadFolderClearMarkCounts(db, scoreClearRanks);
+      main_menu_library::LoadFolderClearMarkCounts(db, scoreClearRanks,
+                                                   selectedLongNoteMode);
 }
 
 void MainMenuScene::rebuildScoreClearRankTempTable() {
@@ -3547,8 +3551,9 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
       !exec("CREATE TEMP TABLE score_clear_rank_cache ("
             "kind INTEGER NOT NULL,"
             "key TEXT NOT NULL,"
+            "ln_mode INTEGER NOT NULL,"
             "rank INTEGER NOT NULL,"
-            "PRIMARY KEY(kind, key)"
+            "PRIMARY KEY(kind, key, ln_mode)"
             ") WITHOUT ROWID",
             "creating score clear rank cache") ||
       !exec("BEGIN", "starting score clear rank cache rebuild")) {
@@ -3558,8 +3563,8 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(
       db,
-      "INSERT INTO temp.score_clear_rank_cache(kind, key, rank) VALUES (?, ?, "
-      "?)",
+      "INSERT INTO temp.score_clear_rank_cache(kind, key, ln_mode, rank) "
+      "VALUES (?, ?, ?, ?)",
       stmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing score clear rank cache insert: %s",
@@ -3569,19 +3574,27 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
   }
 
   auto insertRanks = [&](int kind, const ScoreRankMap &ranks) {
-    for (const auto &[key, rank] : ranks) {
+    for (const auto &[key, rankByMode] : ranks) {
       if (key.empty()) {
         continue;
       }
-      sqlite3_reset(stmt.get());
-      sqlite3_clear_bindings(stmt.get());
-      sqlite3_bind_int(stmt.get(), 1, kind);
-      sqlite3_bind_text(stmt.get(), 2, key.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_int(stmt.get(), 3, rank);
-      if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-        SDL_Log("SQL error while inserting score clear rank cache row: %s",
-                sqlite3_errmsg(db));
-        return false;
+      for (int lnMode = 0; lnMode < static_cast<int>(rankByMode.ranks.size());
+           ++lnMode) {
+        const int rank = rankByMode.ranks[static_cast<size_t>(lnMode)];
+        if (rank < kNoClearTypeRank) {
+          continue;
+        }
+        sqlite3_reset(stmt.get());
+        sqlite3_clear_bindings(stmt.get());
+        sqlite3_bind_int(stmt.get(), 1, kind);
+        sqlite3_bind_text(stmt.get(), 2, key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt.get(), 3, lnMode);
+        sqlite3_bind_int(stmt.get(), 4, rank);
+        if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+          SDL_Log("SQL error while inserting score clear rank cache row: %s",
+                  sqlite3_errmsg(db));
+          return false;
+        }
       }
     }
     return true;
@@ -3643,7 +3656,8 @@ int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
   if (record.solidArchive) {
     return kNoClearTypeRank;
   }
-  return scoreClearRanks.bestRankFor(record.meta);
+  return scoreClearRanks.bestRankFor(record.meta,
+                                     longNoteModeMetaValue(selectedLnMode));
 }
 
 int MainMenuScene::clearRankForFolder(const std::string &key) const {
@@ -3845,6 +3859,7 @@ void MainMenuScene::refreshPlayOptionButtons() {
 }
 
 void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
+  const std::string previousMode = selectedLnMode;
   selectedLnMode = normalizeLongNoteModeOption(mode);
   context.settings.selectedLnMode = selectedLnMode;
   context.settings.sanitize();
@@ -3852,6 +3867,9 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
     SDL_Log("Failed to save long note mode selection");
   }
   refreshLongNoteModeButtons();
+  if (selectedLnMode != previousMode) {
+    refreshScoreClearRankViews();
+  }
 }
 
 void MainMenuScene::refreshLongNoteModeButtons() {
