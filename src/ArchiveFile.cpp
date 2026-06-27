@@ -424,7 +424,11 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
   bytes = 0;
   entries = 0;
   std::error_code error;
-  if (std::filesystem::is_regular_file(root, error) && !error) {
+  const bool rootIsFile = std::filesystem::is_regular_file(root, error);
+  if (error) {
+    return false;
+  }
+  if (rootIsFile) {
     const std::uintmax_t size = std::filesystem::file_size(root, error);
     if (error) {
       return false;
@@ -433,7 +437,8 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
     entries = 1;
     return true;
   }
-  if (error || !std::filesystem::is_directory(root, error) || error) {
+  const bool rootIsDirectory = std::filesystem::is_directory(root, error);
+  if (error || !rootIsDirectory) {
     return false;
   }
 
