@@ -126,3 +126,49 @@ applySqlitePragmas(sqlite3 *db, std::initializer_list<const char *> pragmas) {
   }
   return std::nullopt;
 }
+
+class SqliteTransactionHandle {
+public:
+  SqliteTransactionHandle(sqlite3 *db, const char *beginQuery,
+                          std::string &errorMessage)
+      : db_(db) {
+    if (db_ == nullptr) {
+      errorMessage = "database is not open";
+      return;
+    }
+    if (const auto error = executeSqlite(db_, beginQuery)) {
+      errorMessage = *error;
+      return;
+    }
+    active_ = true;
+  }
+
+  SqliteTransactionHandle(const SqliteTransactionHandle &) = delete;
+  SqliteTransactionHandle &
+  operator=(const SqliteTransactionHandle &) = delete;
+
+  ~SqliteTransactionHandle() {
+    if (active_) {
+      sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    }
+  }
+
+  bool active() const { return active_; }
+
+  bool commit(std::string &errorMessage) {
+    if (!active_) {
+      errorMessage = "transaction is not active";
+      return false;
+    }
+    if (const auto error = executeSqlite(db_, "COMMIT")) {
+      errorMessage = *error;
+      return false;
+    }
+    active_ = false;
+    return true;
+  }
+
+private:
+  sqlite3 *db_ = nullptr;
+  bool active_ = false;
+};

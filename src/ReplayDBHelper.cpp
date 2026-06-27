@@ -677,8 +677,16 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  if (!CreateReplayTables(db) ||
-      !execSql(db, "BEGIN IMMEDIATE TRANSACTION", "starting replay save")) {
+  if (!CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    SDL_Log("SQL error while starting replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -700,7 +708,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   int rc = prepareSqliteStatement(db, replayInsert, replayStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -749,7 +756,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   replayStmt.reset();
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving replay: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -766,7 +772,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -780,6 +785,9 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   eventStmt.reset();
+  if (!eventOk) {
+    return std::nullopt;
+  }
 
   const char *touchSampleInsert =
       "INSERT INTO replay_touch_samples ("
@@ -791,7 +799,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay touch sample insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -807,6 +814,9 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   touchSampleStmt.reset();
+  if (!touchSampleOk) {
+    return std::nullopt;
+  }
 
   const char *laneCoverEventInsert =
       "INSERT INTO replay_lane_cover_events ("
@@ -819,7 +829,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay lane cover event insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -835,10 +844,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   laneCoverEventStmt.reset();
+  if (!laneCoverEventOk) {
+    return std::nullopt;
+  }
 
-  if (!eventOk || !touchSampleOk || !laneCoverEventOk ||
-      !execSql(db, "COMMIT", "committing replay save")) {
-    execSql(db, "ROLLBACK", "rolling back replay save");
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("SQL error while committing replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -857,9 +869,16 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     return std::nullopt;
   }
 
-  if (!CreateReplayTables(db) ||
-      !execSql(db, "BEGIN IMMEDIATE TRANSACTION",
-               "starting course replay save")) {
+  if (!CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    SDL_Log("SQL error while starting course replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -876,7 +895,6 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing course replay insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
@@ -906,7 +924,6 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   courseStmt.reset();
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving course replay: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
@@ -921,14 +938,12 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing course replay stage insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     auto stageReplayId = insertReplayRows(db, replay.stages[i].replay);
     if (!stageReplayId.has_value()) {
-      execSql(db, "ROLLBACK", "rolling back course replay save");
       return std::nullopt;
     }
 
@@ -942,13 +957,13 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     if (sqlite3_step(stageStmt.get()) != SQLITE_DONE) {
       SDL_Log("SQL error while saving course replay stage: %s",
               sqlite3_errmsg(db));
-      execSql(db, "ROLLBACK", "rolling back course replay save");
       return std::nullopt;
     }
   }
 
-  if (!execSql(db, "COMMIT", "committing course replay save")) {
-    execSql(db, "ROLLBACK", "rolling back course replay save");
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("SQL error while committing course replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
   return courseReplayId;
