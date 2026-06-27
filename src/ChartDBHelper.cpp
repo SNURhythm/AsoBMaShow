@@ -3753,7 +3753,13 @@ bool ChartDBHelper::DeleteArchiveRecords(
   createChartScanCheckpointTable(db);
 
   int changedCount = 0;
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start archive record delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   if (deleteChartMetaInArchive(db, archivePath)) {
     ++changedCount;
   }
@@ -3764,7 +3770,11 @@ bool ChartDBHelper::DeleteArchiveRecords(
     ++changedCount;
   }
   clearChartScanCheckpoint(db);
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit archive record delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
 
   if (changedCount > 0) {
     bumpLibraryRevision();

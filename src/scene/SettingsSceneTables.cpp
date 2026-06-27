@@ -736,15 +736,19 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         }
 
         const std::filesystem::path entryPath(entryIt->path);
-        dbHelper.BeginTransaction(settingsDb);
-        const int removedChartCount =
-            dbHelper.DeleteChartMetaInDirectory(settingsDb, entryPath);
-        const bool removed = removedChartCount >= 0 &&
-                             dbHelper.DeleteEntry(settingsDb, entryPath);
-        if (removed) {
-          dbHelper.CommitTransaction(settingsDb);
-        } else {
-          sqlite3_exec(settingsDb, "ROLLBACK", nullptr, nullptr, nullptr);
+        int removedChartCount = -1;
+        bool removed = false;
+        std::string transactionError;
+        SqliteTransactionHandle transaction(settingsDb, "BEGIN",
+                                            transactionError);
+        if (transaction.active()) {
+          removedChartCount =
+              dbHelper.DeleteChartMetaInDirectory(settingsDb, entryPath);
+          removed = removedChartCount >= 0 &&
+                    dbHelper.DeleteEntry(settingsDb, entryPath);
+          if (removed && !transaction.commit(transactionError)) {
+            removed = false;
+          }
         }
 
         if (token.stop_requested()) {
