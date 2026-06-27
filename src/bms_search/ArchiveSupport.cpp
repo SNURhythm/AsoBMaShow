@@ -24,6 +24,18 @@ bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
   return true;
 }
 
+bool ensureArchiveOutputDirectory(const std::filesystem::path &path,
+                                  const char *failurePrefix,
+                                  std::string &errorMessage) {
+  std::error_code fsError;
+  std::filesystem::create_directories(path, fsError);
+  if (fsError) {
+    errorMessage = std::string(failurePrefix) + ": " + fsError.message();
+    return false;
+  }
+  return true;
+}
+
 bool isValidUtf8(const std::string &value) {
   const auto *bytes = reinterpret_cast<const unsigned char *>(value.data());
   size_t i = 0;
@@ -190,10 +202,8 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
                        const std::filesystem::path &outputPath,
                        std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback) {
-  std::error_code fsError;
-  std::filesystem::create_directories(outputPath, fsError);
-  if (fsError) {
-    errorMessage = "Could not create output folder: " + fsError.message();
+  if (!ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage)) {
     return false;
   }
 
@@ -223,19 +233,18 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
     }
     const std::filesystem::path destination = outputPath / relativePath;
     if (mz_zip_reader_is_file_a_directory(&archive, i)) {
-      std::filesystem::create_directories(destination, fsError);
-      if (fsError) {
+      if (!ensureArchiveOutputDirectory(
+              destination, "Could not create archive folder", errorMessage)) {
         ok = false;
-        errorMessage = "Could not create archive folder: " + fsError.message();
         break;
       }
       continue;
     }
 
-    std::filesystem::create_directories(destination.parent_path(), fsError);
-    if (fsError) {
+    if (!ensureArchiveOutputDirectory(
+            destination.parent_path(), "Could not create archive folder",
+            errorMessage)) {
       ok = false;
-      errorMessage = "Could not create archive folder: " + fsError.message();
       break;
     }
 
@@ -353,10 +362,8 @@ bool extractArchiveWithLibarchive(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputPath, std::string &errorMessage,
     BmsSearchDownloadProgressCallback progressCallback) {
-  std::error_code fsError;
-  std::filesystem::create_directories(outputPath, fsError);
-  if (fsError) {
-    errorMessage = "Could not create output folder: " + fsError.message();
+  if (!ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage)) {
     return false;
   }
 
@@ -432,10 +439,9 @@ bool extractArchiveWithLibarchive(
     if (fileType == AE_IFDIR ||
         (unknownFileType && entryNameLooksDirectory)) {
       ++directoryEntries;
-      std::filesystem::create_directories(destination, fsError);
-      if (fsError) {
+      if (!ensureArchiveOutputDirectory(
+              destination, "Could not create archive folder", errorMessage)) {
         ok = false;
-        errorMessage = "Could not create archive folder: " + fsError.message();
         break;
       }
       continue;
@@ -446,10 +452,10 @@ bool extractArchiveWithLibarchive(
       continue;
     }
 
-    std::filesystem::create_directories(destination.parent_path(), fsError);
-    if (fsError) {
+    if (!ensureArchiveOutputDirectory(
+            destination.parent_path(), "Could not create archive folder",
+            errorMessage)) {
       ok = false;
-      errorMessage = "Could not create archive folder: " + fsError.message();
       break;
     }
 
