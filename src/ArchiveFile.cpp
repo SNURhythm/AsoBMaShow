@@ -4663,8 +4663,15 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
       break;
     }
 
-    if (unzipMarkerMatches(candidateMarker, key) &&
-        std::filesystem::exists(candidateChart, error) && !error) {
+    if (!unzipMarkerMatches(candidateMarker, key)) {
+      continue;
+    }
+    bool candidateChartExists = false;
+    if (!pathExistsForUnzip(candidateChart, "Could not check unzipped chart",
+                            candidateChartExists, errorMessage, error)) {
+      return std::nullopt;
+    }
+    if (candidateChartExists) {
       reportUnzipProgress(progressCallback, 1.0, innerPaths.size(),
                           innerPaths.size(), "Using existing unzipped folder");
       appendDebugLogLineImpl("Using existing unzipped archive folder: " +
