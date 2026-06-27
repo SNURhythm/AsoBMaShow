@@ -268,6 +268,15 @@ std::string formatString(const char *format, va_list args) {
   return std::string(buffer.data(), static_cast<size_t>(length));
 }
 
+SNDFILE *openSoundFile(const std::filesystem::path &path, int mode,
+                       SF_INFO &info) {
+#ifdef _WIN32
+  return sf_wchar_open(path.wstring().c_str(), mode, &info);
+#else
+  return sf_open(path.string().c_str(), mode, &info);
+#endif
+}
+
 class ReplayVideoExportLog {
 public:
   explicit ReplayVideoExportLog(const std::filesystem::path &path)
@@ -275,7 +284,7 @@ public:
     file.open(path, std::ios::out | std::ios::trunc);
     if (!file.is_open()) {
       SDL_Log("Replay export could not open log file: %s",
-              path.string().c_str());
+              fspath_to_utf8(path).c_str());
     }
   }
 
@@ -692,7 +701,7 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
   }
 
   SF_INFO inputInfo{};
-  SNDFILE *input = sf_open(path.string().c_str(), SFM_READ, &inputInfo);
+  SNDFILE *input = openSoundFile(path, SFM_READ, inputInfo);
   if (input == nullptr) {
     errorMessage = std::string("Failed to open course replay stage audio: ") +
                    sf_strerror(nullptr);
@@ -742,7 +751,7 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = sf_open(outputPath.string().c_str(), SFM_WRITE, &outputInfo);
+  SNDFILE *output = openSoundFile(outputPath, SFM_WRITE, outputInfo);
   if (output == nullptr) {
     errorMessage = std::string("Failed to create aligned replay audio: ") +
                    sf_strerror(nullptr);
@@ -776,7 +785,7 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
+  SNDFILE *output = openSoundFile(path, SFM_WRITE, outputInfo);
   if (output == nullptr) {
     return {.success = false,
             .outputPath = path,
@@ -1649,11 +1658,7 @@ public:
     audioStream->time_base = audioContext->time_base;
 
     SF_INFO audioInfo{};
-#ifdef _WIN32
-    audioFile = sf_wchar_open(wavPath.wstring().c_str(), SFM_READ, &audioInfo);
-#else
-    audioFile = sf_open(wavPath.string().c_str(), SFM_READ, &audioInfo);
-#endif
+    audioFile = openSoundFile(wavPath, SFM_READ, audioInfo);
     if (audioFile == nullptr) {
       return failOpen(std::string("Failed to open replay audio track: ") +
                       sf_strerror(nullptr));
