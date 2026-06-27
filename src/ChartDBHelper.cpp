@@ -3965,13 +3965,11 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
 
 std::string ChartDBHelper::DifficultyTableLabelsForChart(
     const bms_parser::ChartMeta &meta) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return {};
   }
-  std::string labels = DifficultyTableLabelsForChart(db, meta);
-  Close(db);
-  return labels;
+  return DifficultyTableLabelsForChart(connection.get(), meta);
 }
 
 std::string ChartDBHelper::DifficultyTableLabelsForChart(
