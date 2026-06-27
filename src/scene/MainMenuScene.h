@@ -148,6 +148,7 @@ private:
       DifficultyLevel,
       DifficultyClearMark,
       CoursesRoot,
+      CourseTable,
       CourseGroup,
       Course
     };
@@ -180,7 +181,9 @@ private:
     int solidArchiveCount = 0;
     std::vector<DifficultyTableInfo> tables;
     std::unordered_map<int, std::vector<DifficultyLevelInfo>> levelsByTable;
-    std::vector<DifficultyCourseGroupInfo> courseGroups;
+    std::vector<DifficultyCourseTableInfo> courseTables;
+    std::unordered_map<int, std::vector<DifficultyCourseGroupInfo>>
+        courseGroupsByTable;
     std::unordered_map<std::string, std::vector<DifficultyCourseInfo>>
         coursesByGroup;
   };

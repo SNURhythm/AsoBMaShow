@@ -22,6 +22,10 @@ std::string folderKeyForLevel(int tableId, const std::string &level) {
   return "level:" + std::to_string(tableId) + ":" + level;
 }
 
+std::string folderKeyForCourseTable(int tableId) {
+  return "course-table:" + std::to_string(tableId);
+}
+
 std::string folderKeyForCourseGroup(int tableId,
                                     const std::string &groupName) {
   return "course-group:" + std::to_string(tableId) + ":" + groupName;
@@ -200,6 +204,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       });
 
   int currentCourseId = 0;
+  int currentCourseTableId = 0;
+  std::string currentCourseTableKey;
   int currentCourseGroupTableId = 0;
   std::string currentCourseGroupName;
   std::string currentCourseGroupKey;
@@ -217,6 +223,10 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
         const std::string_view groupName = columnText(row, 2);
+        if (tableId != currentCourseTableId) {
+          currentCourseTableId = tableId;
+          currentCourseTableKey = folderKeyForCourseTable(tableId);
+        }
         if (tableId != currentCourseGroupTableId ||
             groupName != std::string_view(currentCourseGroupName)) {
           currentCourseGroupTableId = tableId;
@@ -231,6 +241,11 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
 
         addFolderChartForAllLongNoteModes(
             aggregates, scoreRanks, "courses", columnText(row, 3),
+            columnText(row, 4), columnText(row, 5),
+            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
+            sqlite3_column_int(row, 8));
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentCourseTableKey, columnText(row, 3),
             columnText(row, 4), columnText(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
             sqlite3_column_int(row, 8));

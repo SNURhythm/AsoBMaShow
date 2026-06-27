@@ -74,8 +74,17 @@ struct DifficultyCourseGroupInfo {
   int tableId = 0;
   std::string tableName;
   std::string groupName;
-  int chartCount = 0;
-  int matchedChartCount = 0;
+  int courseCount = 0;
+  int singletonCourseId = 0;
+  std::string singletonCourseLevel;
+  std::string singletonCourseName;
+  std::string singletonCourseConstraintJson;
+};
+
+struct DifficultyCourseTableInfo {
+  int tableId = 0;
+  std::string tableName;
+  std::string tableSymbol;
 };
 
 struct DifficultyCourseInfo {
@@ -86,8 +95,6 @@ struct DifficultyCourseInfo {
   std::string level;
   std::string name;
   std::string constraintJson;
-  int chartCount = 0;
-  int matchedChartCount = 0;
 };
 
 struct DifficultyTableImportProgress {
@@ -204,8 +211,10 @@ public:
   std::vector<DifficultyTableInfo> SelectDifficultyTables(sqlite3 *db);
   std::vector<DifficultyLevelInfo> SelectDifficultyLevels(sqlite3 *db,
                                                           int tableId);
+  std::vector<DifficultyCourseTableInfo>
+  SelectDifficultyCourseTables(sqlite3 *db);
   std::vector<DifficultyCourseGroupInfo>
-  SelectDifficultyCourseGroups(sqlite3 *db);
+  SelectDifficultyCourseGroups(sqlite3 *db, int tableId);
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);

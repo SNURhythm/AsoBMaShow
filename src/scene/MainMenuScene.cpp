@@ -633,6 +633,7 @@ bool openExternalUrl(const std::string &url, std::string &errorMessage) {
 
 using main_menu_library::folderKeyForCourse;
 using main_menu_library::folderKeyForCourseGroup;
+using main_menu_library::folderKeyForCourseTable;
 using main_menu_library::folderKeyForLevel;
 using main_menu_library::folderKeyForTable;
 
@@ -3045,7 +3046,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folderMetadataCache.favoriteCount = dbHelper.CountFavoriteCharts(db);
     folderMetadataCache.solidArchiveCount = dbHelper.CountSolidArchives(db);
     folderMetadataCache.tables = dbHelper.SelectDifficultyTables(db);
-    folderMetadataCache.courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+    folderMetadataCache.courseTables = dbHelper.SelectDifficultyCourseTables(db);
     folderMetadataCache.valid = true;
   }
   std::vector<LibraryFolderItem> folders;
@@ -3159,87 +3160,113 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
 
-  const auto &courseGroups = folderMetadataCache.courseGroups;
-  if (!courseGroups.empty()) {
-    int coursesCount = 0;
-    for (const auto &group : courseGroups) {
-      coursesCount += group.chartCount;
-    }
+  const auto &courseTables = folderMetadataCache.courseTables;
+  if (!courseTables.empty()) {
     const LibraryFolderItem coursesRootItem{
         .key = "courses",
         .label = "Courses",
         .type = LibraryFolderItem::Type::CoursesRoot,
         .depth = 0,
-        .count = coursesCount,
+        .count = -1,
         .expandable = true,
         .expanded = isExpanded("courses"),
     };
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
-      for (const auto &group : courseGroups) {
-        const std::string label = group.groupName.empty()
-                                      ? group.tableName + " Courses"
-                                      : group.groupName;
-        const std::string groupKey =
-            folderKeyForCourseGroup(group.tableId, group.groupName);
-        auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
-        if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
-          coursesIt =
-              folderMetadataCache.coursesByGroup
-                  .emplace(groupKey,
-                           dbHelper.SelectDifficultyCourses(
-                               db, group.tableId, group.groupName))
-                  .first;
-        }
-        const auto &courses = coursesIt->second;
-        if (courses.empty()) {
-          continue;
-        }
-
-        const auto makeCourseItem = [&](const DifficultyCourseInfo &course,
-                                        int depth) {
-          const std::string courseLabel =
-              course.level.empty() ? course.name : course.level;
-          return LibraryFolderItem{
-              .key = folderKeyForCourse(course.id),
-              .label = courseLabel,
-              .type = LibraryFolderItem::Type::Course,
-              .depth = depth,
-              .count = course.chartCount,
-              .courseId = course.id,
-              .courseTableId = course.tableId,
-              .courseGroupName = course.groupName,
-              .courseConstraintJson = course.constraintJson,
-          };
+      const auto makeCourseItem =
+          [](int courseId, int tableId, const std::string &groupName,
+             const std::string &level, const std::string &name,
+             const std::string &constraintJson, int depth) {
+        const std::string courseLabel = level.empty() ? name : level;
+        return LibraryFolderItem{
+            .key = folderKeyForCourse(courseId),
+            .label = courseLabel,
+            .type = LibraryFolderItem::Type::Course,
+            .depth = depth,
+            .count = -1,
+            .courseId = courseId,
+            .courseTableId = tableId,
+            .courseGroupName = groupName,
+            .courseConstraintJson = constraintJson,
         };
+      };
+      const auto makeCourseInfoItem = [&](const DifficultyCourseInfo &course,
+                                          int depth) {
+        return makeCourseItem(course.id, course.tableId, course.groupName,
+                              course.level, course.name, course.constraintJson,
+                              depth);
+      };
 
-        const bool duplicateSingletonGroup =
-            courses.size() == 1 &&
-            (group.groupName.empty() || courses.front().name == label ||
-             courses.front().level == label);
-        if (duplicateSingletonGroup) {
-          folders.push_back(makeCourseItem(courses.front(), 1));
-          continue;
-        }
-
-        const LibraryFolderItem groupItem{
-            .key = groupKey,
-            .label = label,
-            .type = LibraryFolderItem::Type::CourseGroup,
+      for (const auto &table : courseTables) {
+        const std::string tableKey = folderKeyForCourseTable(table.tableId);
+        const LibraryFolderItem tableItem{
+            .key = tableKey,
+            .label = table.tableName,
+            .type = LibraryFolderItem::Type::CourseTable,
             .depth = 1,
-            .count = group.chartCount,
-            .courseTableId = group.tableId,
-            .courseGroupName = group.groupName,
+            .count = -1,
+            .courseTableId = table.tableId,
             .expandable = true,
-            .expanded = isExpanded(groupKey),
+            .expanded = isExpanded(tableKey),
         };
-        folders.push_back(groupItem);
-        if (!groupItem.expanded) {
+        folders.push_back(tableItem);
+        if (!tableItem.expanded) {
           continue;
         }
 
-        for (const auto &course : courses) {
-          folders.push_back(makeCourseItem(course, 2));
+        auto groupsIt =
+            folderMetadataCache.courseGroupsByTable.find(table.tableId);
+        if (groupsIt == folderMetadataCache.courseGroupsByTable.end()) {
+          groupsIt = folderMetadataCache.courseGroupsByTable
+                         .emplace(table.tableId,
+                                  dbHelper.SelectDifficultyCourseGroups(
+                                      db, table.tableId))
+                         .first;
+        }
+        for (const auto &group : groupsIt->second) {
+          const std::string label =
+              group.groupName.empty() ? "Ungrouped" : group.groupName;
+          const std::string groupKey =
+              folderKeyForCourseGroup(group.tableId, group.groupName);
+          const bool duplicateSingletonGroup =
+              group.courseCount == 1 && group.singletonCourseId > 0 &&
+              (group.groupName.empty() || group.singletonCourseName == label ||
+               group.singletonCourseLevel == label);
+          if (duplicateSingletonGroup) {
+            folders.push_back(makeCourseItem(
+                group.singletonCourseId, group.tableId, group.groupName,
+                group.singletonCourseLevel, group.singletonCourseName,
+                group.singletonCourseConstraintJson, 2));
+            continue;
+          }
+
+          const LibraryFolderItem groupItem{
+              .key = groupKey,
+              .label = label,
+              .type = LibraryFolderItem::Type::CourseGroup,
+              .depth = 2,
+              .count = -1,
+              .courseTableId = group.tableId,
+              .courseGroupName = group.groupName,
+              .expandable = true,
+              .expanded = isExpanded(groupKey),
+          };
+          folders.push_back(groupItem);
+          if (!groupItem.expanded) {
+            continue;
+          }
+
+          auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
+          if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
+            coursesIt = folderMetadataCache.coursesByGroup
+                            .emplace(groupKey,
+                                     dbHelper.SelectDifficultyCourses(
+                                         db, group.tableId, group.groupName))
+                            .first;
+          }
+          for (const auto &course : coursesIt->second) {
+            folders.push_back(makeCourseInfoItem(course, 3));
+          }
         }
       }
     }
@@ -3374,6 +3401,9 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
     break;
   case LibraryFolderItem::Type::CoursesRoot:
     query.coursesOnly = true;
+    break;
+  case LibraryFolderItem::Type::CourseTable:
+    query.courseTableId = activeFolder.courseTableId;
     break;
   case LibraryFolderItem::Type::CourseGroup:
     query.courseTableId = activeFolder.courseTableId;
@@ -3768,15 +3798,33 @@ void MainMenuScene::selectChartByPathAfterReload(
 }
 
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
-  activeFolder = item;
-  if (item.expandable) {
-    const auto it = expandedLibraryFolders.find(item.key);
+  auto toggleExpandedFolder = [this](const std::string &key) {
+    const auto it = expandedLibraryFolders.find(key);
     if (it == expandedLibraryFolders.end()) {
-      expandedLibraryFolders.insert(item.key);
+      expandedLibraryFolders.insert(key);
     } else {
       expandedLibraryFolders.erase(it);
     }
+  };
+
+  if (item.type == LibraryFolderItem::Type::CoursesRoot) {
+    const std::string previousActiveKey = activeFolder.key;
+    toggleExpandedFolder(item.key);
     reloadFolderItems(true);
+    if (activeFolder.key != previousActiveKey) {
+      reloadChartList();
+    }
+    return;
+  }
+
+  const bool chartQueryUnchanged = activeFolder.key == item.key;
+  activeFolder = item;
+  if (item.expandable) {
+    toggleExpandedFolder(item.key);
+    reloadFolderItems(true);
+  }
+  if (item.expandable && chartQueryUnchanged) {
+    return;
   }
   reloadChartList();
 }

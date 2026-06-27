@@ -20,6 +20,7 @@ struct FolderClearDataByLongNoteMode {
 
 std::string folderKeyForTable(int tableId);
 std::string folderKeyForLevel(int tableId, const std::string &level);
+std::string folderKeyForCourseTable(int tableId);
 std::string folderKeyForCourseGroup(int tableId, const std::string &groupName);
 std::string folderKeyForCourse(int courseId);
 
