@@ -6,6 +6,7 @@
 #include "../ResultImageExporter.h"
 #include "../ResultPresentationUtils.h"
 #include "../ScoreDBHelper.h"
+#include "../path.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -719,11 +720,11 @@ void ResultScene::exportPhoto() {
                                        ? "Saved"
                                        : "Exported");
     SDL_Log("Result image exported: %s (%s)",
-            result.outputPath.string().c_str(), result.message.c_str());
+            fspath_to_utf8(result.outputPath).c_str(), result.message.c_str());
   } else {
     exportPhotoButtonText->setText("Export Failed");
     SDL_Log("Result image export failed: %s (%s)", result.message.c_str(),
-            result.outputPath.string().c_str());
+            fspath_to_utf8(result.outputPath).c_str());
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -786,9 +787,8 @@ void ResultScene::continueCourse() {
     SDL_Log("Course parse failed %s: %s",
             path_t_to_utf8(nextMeta->BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
-        "Course parse exception: " +
-        path_t_to_utf8(fspath_to_path_t(nextMeta->BmsPath)) + ": " +
-        e.what());
+        "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) +
+        ": " + e.what());
     showCourseResult();
     return;
   }

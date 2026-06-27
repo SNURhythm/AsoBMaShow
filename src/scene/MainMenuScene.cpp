@@ -14,6 +14,7 @@
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
 #include "../SqliteRAII.h"
+#include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -102,8 +103,7 @@ void ensureLibraryFolderExists(const std::filesystem::path &path) {
   }
 
   throw std::runtime_error("Could not create library folder '" +
-                           path_t_to_utf8(fspath_to_path_t(path)) +
-                           "': " + error.message());
+                           fspath_to_utf8(path) + "': " + error.message());
 }
 
 bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
@@ -114,8 +114,7 @@ bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
   }
 
   SDL_Log("Failed to create %s %s: %s", description,
-          path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-          error.message().c_str());
+          fspath_to_utf8(path).c_str(), error.message().c_str());
   return false;
 }
 
@@ -475,8 +474,7 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     targetPath = archivePath;
   }
 
-  const std::string targetPathText =
-      path_t_to_utf8(fspath_to_path_t(targetPath));
+  const std::string targetPathText = fspath_to_utf8(targetPath);
   const bool targetExists = std::filesystem::exists(targetPath, errorCode);
   if (errorCode) {
     errorMessage =
@@ -491,14 +489,12 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return RevealIOSFileInFiles(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                              errorMessage);
+  return RevealIOSFileInFiles(targetPathText, errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
 #elif TARGET_OS_OSX
-  return RevealPathInFinder(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                            errorMessage);
+  return RevealPathInFinder(targetPathText, errorMessage);
 #elif defined(_WIN32)
   const std::wstring nativePath = targetPath.wstring();
   const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
@@ -554,7 +550,7 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     return false;
   }
 
-  const std::string directoryText = directoryPath.string();
+  const std::string directoryText = fspath_to_utf8(directoryPath);
   pid_t pid = 0;
   char *argv[] = {const_cast<char *>(openerPath.c_str()),
                   const_cast<char *>(directoryText.c_str()), nullptr};
@@ -8071,11 +8067,12 @@ void MainMenuScene::applyReplayExportResult() {
   if (result->success) {
     SDL_Log("Replay %s exported: %s (%s)",
             result->photo ? "image" : "video",
-            result->outputPath.string().c_str(), result->message.c_str());
+            fspath_to_utf8(result->outputPath).c_str(),
+            result->message.c_str());
   } else {
     SDL_Log("Replay %s export failed: %s (%s)",
             result->photo ? "image" : "video", result->message.c_str(),
-            result->outputPath.string().c_str());
+            fspath_to_utf8(result->outputPath).c_str());
   }
 
   defer(
@@ -8581,7 +8578,7 @@ void MainMenuScene::FindFilesIOS(
       error);
   if (error) {
     SDL_Log("Failed to open iOS directory: %s (%s)",
-            directoryPath.string().c_str(), error.message().c_str());
+            fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
     return;
   }
 
@@ -8592,7 +8589,7 @@ void MainMenuScene::FindFilesIOS(
     }
     if (error) {
       SDL_Log("Failed while reading iOS directory: %s (%s)",
-              directoryPath.string().c_str(), error.message().c_str());
+              fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
       error.clear();
       continue;
     }
@@ -8614,7 +8611,8 @@ void MainMenuScene::FindFilesIOS(
       directoriesToVisit.push_back(entry.path());
     } else if (typeError) {
       SDL_Log("Failed to inspect iOS path: %s (%s)",
-              entry.path().string().c_str(), typeError.message().c_str());
+              fspath_to_utf8(entry.path()).c_str(),
+              typeError.message().c_str());
     }
   }
 }
