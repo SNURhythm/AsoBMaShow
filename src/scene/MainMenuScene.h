@@ -35,6 +35,7 @@
 class Button;
 class ScrollView;
 struct CoursePlaySession;
+struct ResultImageExportResult;
 struct StartOptions;
 class View;
 
@@ -619,6 +620,11 @@ private:
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
+  bool beginReplayExport(const std::string &progressTitle,
+                         const std::string &progressMessage,
+                         const std::string &statusMessage);
+  void queueReplayExportResult(const ReplayVideoExportResult &result);
+  void queueReplayExportResult(const ResultImageExportResult &result);
   bool selectedReplayIsAutoPlay() const;
   bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
