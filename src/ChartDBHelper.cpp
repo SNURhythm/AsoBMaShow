@@ -1294,6 +1294,128 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
+bool chartMetaQueryHasCourseFilter(const ChartMetaQuery &chartQuery) {
+  return chartQuery.coursesOnly || chartQuery.courseId > 0 ||
+         !chartQuery.courseGroupName.empty();
+}
+
+void appendChartMetaFilters(std::string &query,
+                            const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.keyword.empty()) {
+    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
+             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
+  }
+
+  if (chartQuery.tableId > 0) {
+    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
+             "difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
+             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
+    if (!chartQuery.tableLevel.empty()) {
+      query += " AND dte.level = @table_level";
+    }
+    query += "))";
+  }
+
+  if (chartMetaQueryHasCourseFilter(chartQuery)) {
+    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
+             "difficulty_course_entries dce "
+             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+             "WHERE dce.sha256 != ''";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query +=
+        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
+        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+        "WHERE dce.md5 != ''";
+    if (chartQuery.courseId > 0) {
+      query += " AND dce.course_id = @course_id";
+    }
+    if (chartQuery.courseTableId > 0) {
+      query += " AND dc.table_id = @course_table_id";
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      query += " AND dc.group_name = @course_group_name";
+    }
+    query += "))";
+  }
+
+  if (!chartQuery.difficultyText.empty()) {
+    const char *difficultyClause =
+        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
+        "OR lower(dte_filter.level) = @difficulty "
+        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
+        "dte_filter.level) LIKE @difficulty_like "
+        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
+        "@difficulty_like)";
+    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE dte_filter.sha256 != '' ";
+    query += difficultyClause;
+    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
+             "difficulty_table_entries dte_filter "
+             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
+             "dte_filter.table_id "
+             "WHERE dte_filter.md5 != '' ";
+    query += difficultyClause;
+    query += "))";
+  }
+  if (chartQuery.clearMarkFilter) {
+    query += " AND ";
+    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
+  }
+  if (chartQuery.favoritesOnly) {
+    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
+             "cf.chart_path = cm.path)";
+  }
+
+  query += " AND ";
+  query += preferredChartPredicate("cm");
+}
+
+void bindChartMetaFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
+                                   const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.keyword.empty()) {
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+  }
+  if (chartQuery.tableId > 0) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
+    if (!chartQuery.tableLevel.empty()) {
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
+    }
+  }
+  if (chartMetaQueryHasCourseFilter(chartQuery)) {
+    if (chartQuery.courseId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
+    }
+    if (chartQuery.courseTableId > 0) {
+      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
+    }
+    if (!chartQuery.courseGroupName.empty()) {
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
+    }
+  }
+  if (!chartQuery.difficultyText.empty()) {
+    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
+  }
+  if (chartQuery.clearMarkFilter) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
+  }
+}
+
 bool createChartMetadataRebuildStateTable(sqlite3 *db) {
   const char *query =
       "CREATE TABLE IF NOT EXISTS chart_meta_rebuild_state ("
@@ -3049,91 +3171,7 @@ void ChartDBHelper::QueryChartMeta(
   query += ", '', 0, ";
   query += kChartFavoriteColumn;
   query += " FROM chart_meta cm WHERE 1 = 1";
-
-  if (!chartQuery.keyword.empty()) {
-    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
-             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
-  }
-
-  if (chartQuery.tableId > 0) {
-    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
-             "difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += "))";
-  }
-
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
-             "difficulty_course_entries dce "
-             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE dce.sha256 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query +=
-        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "WHERE dce.md5 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query += "))";
-  }
-
-  if (!chartQuery.difficultyText.empty()) {
-    const char *difficultyClause =
-        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-        "OR lower(dte_filter.level) = @difficulty "
-        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-        "dte_filter.level) LIKE @difficulty_like "
-        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-        "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.sha256 != '' ";
-    query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.md5 != '' ";
-    query += difficultyClause;
-    query += "))";
-  }
-  if (chartQuery.clearMarkFilter) {
-    query += " AND ";
-    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
-  }
-  if (chartQuery.favoritesOnly) {
-    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-             "cf.chart_path = cm.path)";
-  }
-
-  query += " AND ";
-  query += preferredChartPredicate("cm");
+  appendChartMetaFilters(query, chartQuery);
   query += " ORDER BY cm.title, cm.path";
   if (chartQuery.limit > 0) {
     query += " LIMIT @limit OFFSET @offset";
@@ -3146,33 +3184,7 @@ void ChartDBHelper::QueryChartMeta(
   }
 
   int bindIndex = 1;
-  if (!chartQuery.keyword.empty()) {
-    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (chartQuery.tableId > 0) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-  }
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
-  }
-  if (chartQuery.clearMarkFilter) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-  }
+  bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.limit > 0) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
     sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
@@ -3371,91 +3383,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   }
 
   std::string query = "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1";
-
-  if (!chartQuery.keyword.empty()) {
-    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
-             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
-  }
-
-  if (chartQuery.tableId > 0) {
-    query += " AND (cm.sha256 IN (SELECT dte.sha256 FROM "
-             "difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.sha256 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += ") OR cm.md5 IN (SELECT dte.md5 FROM difficulty_table_entries dte "
-             "WHERE dte.table_id = @table_id AND dte.md5 != ''";
-    if (!chartQuery.tableLevel.empty()) {
-      query += " AND dte.level = @table_level";
-    }
-    query += "))";
-  }
-
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    query += " AND (cm.sha256 IN (SELECT dce.sha256 FROM "
-             "difficulty_course_entries dce "
-             "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-             "WHERE dce.sha256 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query +=
-        ") OR cm.md5 IN (SELECT dce.md5 FROM difficulty_course_entries dce "
-        "JOIN difficulty_courses dc ON dc.id = dce.course_id "
-        "WHERE dce.md5 != ''";
-    if (chartQuery.courseId > 0) {
-      query += " AND dce.course_id = @course_id";
-    }
-    if (chartQuery.courseTableId > 0) {
-      query += " AND dc.table_id = @course_table_id";
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      query += " AND dc.group_name = @course_group_name";
-    }
-    query += "))";
-  }
-
-  if (!chartQuery.difficultyText.empty()) {
-    const char *difficultyClause =
-        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-        "OR lower(dte_filter.level) = @difficulty "
-        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-        "dte_filter.level) LIKE @difficulty_like "
-        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-        "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT dte_filter.sha256 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.sha256 != '' ";
-    query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT dte_filter.md5 FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE dte_filter.md5 != '' ";
-    query += difficultyClause;
-    query += "))";
-  }
-  if (chartQuery.clearMarkFilter) {
-    query += " AND ";
-    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
-  }
-  if (chartQuery.favoritesOnly) {
-    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-             "cf.chart_path = cm.path)";
-  }
-
-  query += " AND ";
-  query += preferredChartPredicate("cm");
+  appendChartMetaFilters(query, chartQuery);
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
@@ -3464,33 +3392,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   }
 
   int bindIndex = 1;
-  if (!chartQuery.keyword.empty()) {
-    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (chartQuery.tableId > 0) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
-    if (!chartQuery.tableLevel.empty()) {
-      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
-    }
-  }
-  if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
-      !chartQuery.courseGroupName.empty()) {
-    if (chartQuery.courseId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseId);
-    }
-    if (chartQuery.courseTableId > 0) {
-      sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
-    }
-    if (!chartQuery.courseGroupName.empty()) {
-      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
-    }
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
-  }
-  if (chartQuery.clearMarkFilter) {
-    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
-  }
+  bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
 
   int count = 0;
   if (sqlite3_step(stmt) == SQLITE_ROW) {
