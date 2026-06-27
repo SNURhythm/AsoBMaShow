@@ -3405,10 +3405,41 @@ struct ZipDirectReadTarget {
   mz_uint32 crc32 = 0;
 };
 
+struct ZipDirectReadTiming {
+  long long readMicros = 0;
+  long long inflateMicros = 0;
+  long long crcMicros = 0;
+};
+
+struct ZipDirectExtractionStats {
+  std::size_t files = 0;
+  long long acquireMicros = 0;
+  long long readMicros = 0;
+  long long inflateMicros = 0;
+  long long crcMicros = 0;
+  long long callbackMicros = 0;
+};
+
 constexpr std::uint32_t kZipLocalHeaderSignature = 0x04034b50u;
 constexpr std::size_t kZipLocalHeaderSize = 30;
 constexpr std::size_t kZipLocalHeaderFilenameLengthOffset = 26;
 constexpr std::size_t kZipLocalHeaderExtraLengthOffset = 28;
+
+long long elapsedMicrosSince(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+void addZipDirectExtractionStats(ZipDirectExtractionStats &total,
+                                 const ZipDirectExtractionStats &delta) {
+  total.files += delta.files;
+  total.acquireMicros += delta.acquireMicros;
+  total.readMicros += delta.readMicros;
+  total.inflateMicros += delta.inflateMicros;
+  total.crcMicros += delta.crcMicros;
+  total.callbackMicros += delta.callbackMicros;
+}
 
 std::uint16_t readZipLe16(const unsigned char *data) {
   return static_cast<std::uint16_t>(data[0]) |
@@ -3623,6 +3654,7 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
                          const ZipDirectReadTarget &target, FileData &file,
                          std::vector<unsigned char> &compressedScratch,
                          std::string *errorMessage,
+                         ZipDirectReadTiming *timing,
                          const PauseCallback &pauseCallback) {
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
@@ -3656,19 +3688,31 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       }
       return false;
     }
+    const auto readStart = std::chrono::steady_clock::now();
     if (!archiveFile.readAt(target.dataOffset, file.bytes.data(),
                             file.bytes.size(), errorMessage)) {
       return false;
     }
+    if (timing != nullptr) {
+      timing->readMicros += elapsedMicrosSince(readStart);
+    }
   } else if (target.method == MZ_DEFLATED) {
     compressedScratch.resize(static_cast<std::size_t>(target.compressedSize));
+    const auto readStart = std::chrono::steady_clock::now();
     if (!archiveFile.readAt(target.dataOffset, compressedScratch.data(),
                             compressedScratch.size(), errorMessage)) {
       return false;
     }
+    if (timing != nullptr) {
+      timing->readMicros += elapsedMicrosSince(readStart);
+    }
+    const auto inflateStart = std::chrono::steady_clock::now();
     const size_t decompressed = tinfl_decompress_mem_to_mem(
         file.bytes.data(), file.bytes.size(), compressedScratch.data(),
         compressedScratch.size(), 0);
+    if (timing != nullptr) {
+      timing->inflateMicros += elapsedMicrosSince(inflateStart);
+    }
     if (decompressed == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ||
         decompressed != file.bytes.size()) {
       if (errorMessage != nullptr) {
@@ -3683,8 +3727,12 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     return false;
   }
 
+  const auto crcStart = std::chrono::steady_clock::now();
   const mz_ulong crc =
       mz_crc32(MZ_CRC32_INIT, file.bytes.data(), file.bytes.size());
+  if (timing != nullptr) {
+    timing->crcMicros += elapsedMicrosSince(crcStart);
+  }
   if (crc != target.crc32) {
     if (errorMessage != nullptr) {
       *errorMessage = "ZIP CRC check failed.";
@@ -4367,6 +4415,39 @@ bool readZipEntriesByIndexConcurrent(
     return true;
   }
 
+  auto addSaturated = [](std::uint64_t &total, std::uint64_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max() - total) {
+      total = std::numeric_limits<std::uint64_t>::max();
+    } else {
+      total += value;
+    }
+  };
+
+  std::uint64_t totalCompressedBytes = 0;
+  std::uint64_t totalUncompressedBytes = 0;
+  std::uint64_t minDataOffset = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t maxDataEnd = 0;
+  std::size_t storedTargets = 0;
+  std::size_t deflatedTargets = 0;
+  for (const ZipDirectReadTarget &target : directTargets) {
+    addSaturated(totalCompressedBytes, target.compressedSize);
+    addSaturated(totalUncompressedBytes, target.size);
+    minDataOffset = std::min(minDataOffset, target.dataOffset);
+    const std::uint64_t dataEnd =
+        target.compressedSize >
+                std::numeric_limits<std::uint64_t>::max() - target.dataOffset
+            ? std::numeric_limits<std::uint64_t>::max()
+            : target.dataOffset + target.compressedSize;
+    maxDataEnd = std::max(maxDataEnd, dataEnd);
+    if (target.method == 0) {
+      ++storedTargets;
+    } else if (target.method == MZ_DEFLATED) {
+      ++deflatedTargets;
+    }
+  }
+  const std::uint64_t targetDataSpan =
+      maxDataEnd > minDataOffset ? maxDataEnd - minDataOffset : 0;
+
   maxWorkers =
       std::max<std::size_t>(1, std::min(maxWorkers, directTargets.size()));
   if (maxInFlightBytes == 0) {
@@ -4379,6 +4460,7 @@ bool readZipEntriesByIndexConcurrent(
   std::uint64_t inFlightBytes = 0;
   bool failed = false;
   std::string failureMessage;
+  ZipDirectExtractionStats aggregateStats;
 
   auto setFailure = [&](std::string message) {
     {
@@ -4424,6 +4506,7 @@ bool readZipEntriesByIndexConcurrent(
       (directTargets.size() + maxWorkers - 1) / maxWorkers;
 
   auto worker = [&](std::size_t begin, std::size_t end) {
+    ZipDirectExtractionStats localStats;
     RandomAccessFile archiveFile;
     std::string openError;
     if (!archiveFile.open(archivePath, &openError)) {
@@ -4454,15 +4537,21 @@ bool readZipEntriesByIndexConcurrent(
                             target.compressedSize
               ? std::numeric_limits<std::uint64_t>::max()
               : target.size + target.compressedSize;
+      const auto acquireStart = std::chrono::steady_clock::now();
       if (!acquireBytes(targetBytes)) {
         break;
       }
+      localStats.acquireMicros += elapsedMicrosSince(acquireStart);
 
       FileData file;
       std::string readError;
+      ZipDirectReadTiming timing;
       bool ok = readZipDirectTarget(archiveFile, target, file,
-                                    compressedScratch, &readError,
+                                    compressedScratch, &readError, &timing,
                                     pauseCallback);
+      localStats.readMicros += timing.readMicros;
+      localStats.inflateMicros += timing.inflateMicros;
+      localStats.crcMicros += timing.crcMicros;
       if (ok) {
         {
           std::lock_guard lock(stateMutex);
@@ -4470,7 +4559,9 @@ bool readZipEntriesByIndexConcurrent(
         }
       }
       if (ok) {
+        const auto callbackStart = std::chrono::steady_clock::now();
         ok = emitFileData(std::move(file), onFile, &readError);
+        localStats.callbackMicros += elapsedMicrosSince(callbackStart);
       }
       releaseBytes(targetBytes);
 
@@ -4484,6 +4575,12 @@ bool readZipEntriesByIndexConcurrent(
         std::lock_guard lock(stateMutex);
         ++emittedFiles;
       }
+      ++localStats.files;
+    }
+
+    {
+      std::lock_guard lock(stateMutex);
+      addZipDirectExtractionStats(aggregateStats, localStats);
     }
   };
 
@@ -4528,10 +4625,28 @@ bool readZipEntriesByIndexConcurrent(
                          " files=" + std::to_string(emittedFiles) +
                          " workers=" + std::to_string(maxWorkers) +
                          " chunkSize=" + std::to_string(targetBatchSize) +
+                         " stored=" + std::to_string(storedTargets) +
+                         " deflated=" + std::to_string(deflatedTargets) +
+                         " compressedBytes=" +
+                         std::to_string(totalCompressedBytes) +
+                         " uncompressedBytes=" +
+                         std::to_string(totalUncompressedBytes) +
+                         " targetDataSpan=" +
+                         std::to_string(targetDataSpan) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes) +
                          " prepareMs=" + std::to_string(prepareMs) +
-                         " extractMs=" + std::to_string(extractMs));
+                         " extractMs=" + std::to_string(extractMs) +
+                         " readMs=" +
+                         std::to_string(aggregateStats.readMicros / 1000) +
+                         " inflateMs=" +
+                         std::to_string(aggregateStats.inflateMicros / 1000) +
+                         " crcMs=" +
+                         std::to_string(aggregateStats.crcMicros / 1000) +
+                         " callbackMs=" +
+                         std::to_string(aggregateStats.callbackMicros / 1000) +
+                         " acquireMs=" +
+                         std::to_string(aggregateStats.acquireMicros / 1000));
   return true;
 }
 #endif
