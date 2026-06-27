@@ -51,13 +51,8 @@ constexpr const char *kChartDatabaseFileName = "chart.db";
 constexpr const char *kChartDatabaseSchema = "chart_library";
 constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
-}
-
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
