@@ -397,6 +397,37 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
          *first != std::filesystem::path(".");
 }
 
+bool splitStoredArchiveVirtualPath(const std::filesystem::path &path,
+                                   std::filesystem::path &archivePath,
+                                   std::filesystem::path &innerPath) {
+  archivePath.clear();
+  innerPath.clear();
+  if (path.empty()) {
+    return false;
+  }
+
+  std::filesystem::path current;
+  bool foundArchive = false;
+  for (const auto &part : path.lexically_normal()) {
+    if (!foundArchive) {
+      current /= part;
+      if (archive_file::hasSupportedArchiveExtension(current)) {
+        archivePath = current;
+        foundArchive = true;
+      }
+      continue;
+    }
+    innerPath /= part;
+  }
+
+  if (!foundArchive || innerPath.empty()) {
+    archivePath.clear();
+    innerPath.clear();
+    return false;
+  }
+  return true;
+}
+
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 std::optional<std::filesystem::path>
 relativeToCurrentDocumentsPath(const std::filesystem::path &path) {
@@ -4231,10 +4262,15 @@ int ChartDBHelper::ScanChartRoots(
   std::vector<std::filesystem::path> reindexedArchives;
   std::unordered_set<path_t> knownChartPaths;
   std::unordered_map<path_t, int> knownArchiveChartCounts;
+  std::unordered_map<path_t, int> storedArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
   diffs.reserve(chartMetas.size());
   sourcePreferenceRefreshPaths.reserve(chartMetas.size());
   cachedSourcePreferenceUpdates.reserve(chartMetas.size());
+
+  auto archiveScanKey = [](const std::filesystem::path &archivePath) {
+    return fspath_to_path_t(archivePath.lexically_normal());
+  };
 
   struct ArchiveKnownState {
     bool checked = false;
@@ -4246,7 +4282,7 @@ int ChartDBHelper::ScanChartRoots(
   std::unordered_map<path_t, ArchiveKnownState> archiveStates;
   auto archiveStateForPath = [&](const std::filesystem::path &archivePath)
       -> ArchiveKnownState & {
-    const path_t archiveKey = fspath_to_path_t(archivePath);
+    const path_t archiveKey = archiveScanKey(archivePath);
     auto [it, inserted] = archiveStates.emplace(archiveKey, ArchiveKnownState{});
     ArchiveKnownState &state = it->second;
     if (!state.checked) {
@@ -4271,22 +4307,39 @@ int ChartDBHelper::ScanChartRoots(
 
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chartMeta.BmsPath, archivePath,
-                                       innerPath)) {
-      const path_t archiveKey = fspath_to_path_t(archivePath);
-      ++knownArchiveChartCounts[archiveKey];
+    const bool liveArchivePath =
+        archive_file::splitVirtualPath(chartMeta.BmsPath, archivePath,
+                                       innerPath);
+    std::filesystem::path storedArchivePathValue;
+    std::filesystem::path storedInnerPath;
+    const bool storedArchivePath =
+        splitStoredArchiveVirtualPath(chartMeta.BmsPath,
+                                      storedArchivePathValue, storedInnerPath);
+    if (storedArchivePath) {
+      ++storedArchiveChartCounts[archiveScanKey(storedArchivePathValue)];
+    }
+    if (!liveArchivePath && storedArchivePath) {
+      archivePath = storedArchivePathValue;
+      innerPath = storedInnerPath;
+    }
+    if (liveArchivePath || storedArchivePath) {
       const ArchiveKnownState &archiveState = archiveStateForPath(archivePath);
-      if (archiveState.fileAvailable &&
-          archiveScanCacheMatches(archiveState.cache, archiveState.archiveSize,
-                                  archiveState.mtimeNs)) {
-        knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
-        cachedSourcePreferenceUpdates.push_back({
-            .path = chartMeta.BmsPath,
-            .priority = archiveState.cache.solid ? 2 : 1,
-            .archiveSize = archiveState.archiveSize,
-        });
+      if (liveArchivePath || archiveState.fileAvailable) {
+        const path_t archiveKey = archiveScanKey(archivePath);
+        ++knownArchiveChartCounts[archiveKey];
+        if (archiveState.fileAvailable &&
+            archiveScanCacheMatches(archiveState.cache,
+                                    archiveState.archiveSize,
+                                    archiveState.mtimeNs)) {
+          knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
+          cachedSourcePreferenceUpdates.push_back({
+              .path = chartMeta.BmsPath,
+              .priority = archiveState.cache.solid ? 2 : 1,
+              .archiveSize = archiveState.archiveSize,
+          });
+        }
+        continue;
       }
-      continue;
     }
 
     if (archive_file::exists(chartMeta.BmsPath)) {
@@ -4312,7 +4365,7 @@ int ChartDBHelper::ScanChartRoots(
     if (shouldStop()) {
       return;
     }
-    const path_t archiveKey = fspath_to_path_t(archivePath);
+    const path_t archiveKey = archiveScanKey(archivePath);
     if (scannedArchivePaths.find(archiveKey) != scannedArchivePaths.end()) {
       return;
     }
@@ -4328,10 +4381,23 @@ int ChartDBHelper::ScanChartRoots(
     const ArchiveScanCacheRecord cache =
         selectArchiveScanCache(db, archivePath);
     if (archiveScanCacheMatches(cache, archiveSize, mtimeNs)) {
-      const int knownChartCount =
+      int knownChartCount =
           knownArchiveChartCounts.contains(archiveKey)
               ? knownArchiveChartCounts.at(archiveKey)
               : 0;
+      const int storedChartCount =
+          storedArchiveChartCounts.contains(archiveKey)
+              ? storedArchiveChartCounts.at(archiveKey)
+              : 0;
+      if (!cache.solid && knownChartCount < cache.chartCount &&
+          storedChartCount > knownChartCount) {
+        archive_file::appendDebugLogLine(
+            "Recovered archive DB chart count by stored path prefix: " +
+            archiveText + " splitRows=" + std::to_string(knownChartCount) +
+            " storedRows=" + std::to_string(storedChartCount) +
+            " cachedCharts=" + std::to_string(cache.chartCount));
+        knownChartCount = storedChartCount;
+      }
       if (!cache.solid && knownChartCount < cache.chartCount) {
         archive_file::appendDebugLogLine(
             "Archive scan cache incomplete; rescanning: " +
@@ -4540,7 +4606,7 @@ int ChartDBHelper::ScanChartRoots(
       continue;
     }
 
-    const path_t archiveKey = fspath_to_path_t(archivePath);
+    const path_t archiveKey = archiveScanKey(archivePath);
     auto batchIt = archiveBatches.find(archiveKey);
     if (batchIt == archiveBatches.end()) {
       archiveBatchOrder.push_back(archiveKey);
@@ -4873,7 +4939,7 @@ int ChartDBHelper::ScanChartRoots(
         if (!resumePlan.valid || !resumePlan.archivePhase) {
           return false;
         }
-        const path_t archiveKey = fspath_to_path_t(archivePath);
+        const path_t archiveKey = archiveScanKey(archivePath);
         return resumePlan.protectedArchiveKeys.find(archiveKey) !=
                resumePlan.protectedArchiveKeys.end();
       };
@@ -5073,7 +5139,7 @@ int ChartDBHelper::ScanChartRoots(
                                                   : 0;
   auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch) {
     const auto cacheIt =
-        pendingArchiveCacheDiffs.find(fspath_to_path_t(batch.archivePath));
+        pendingArchiveCacheDiffs.find(archiveScanKey(batch.archivePath));
     if (cacheIt == pendingArchiveCacheDiffs.end()) {
       return;
     }
