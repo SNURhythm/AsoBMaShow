@@ -133,28 +133,6 @@ std::string replaceAll(std::string value, std::string_view needle,
   return value;
 }
 
-bool endsWith(std::string_view value, std::string_view suffix) {
-  return value.size() >= suffix.size() &&
-         value.compare(value.size() - suffix.size(), suffix.size(), suffix) ==
-             0;
-}
-
-std::string archiveExtensionFromPath(const std::filesystem::path &path) {
-  std::string name = lowerCopy(fspath_to_utf8(path.filename()));
-  static constexpr std::array<std::string_view, 22> kArchiveExtensions = {
-      ".tar.bz2", ".tar.gz", ".tar.xz", ".tar.zst", ".tbz2", ".tgz",
-      ".txz",     ".tzst",   ".zip",    ".zipx",    ".cbz",  ".7z",
-      ".cb7",     ".rar",    ".cbr",    ".lzh",     ".lha",  ".tar",
-      ".bz2",     ".gz",     ".xz",     ".zst",
-  };
-  for (std::string_view extension : kArchiveExtensions) {
-    if (endsWith(name, extension)) {
-      return std::string(extension);
-    }
-  }
-  return "";
-}
-
 bool hasZipArchiveExtension(const std::filesystem::path &path) {
   const std::string extension = archiveExtensionFromPath(path);
   return extension == ".zip" || extension == ".cbz";
