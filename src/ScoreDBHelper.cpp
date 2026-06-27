@@ -71,27 +71,11 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
-  exists = false;
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(
-      db,
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-      stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while %s: %s", context, sqlite3_errmsg(db));
+  if (const auto error = querySqliteTableExists(db, tableName, exists)) {
+    SDL_Log("SQL error while %s: %s", context, error->c_str());
     return false;
   }
-  sqlite3_bind_text(stmt.get(), 1, tableName, -1, SQLITE_STATIC);
-  const int stepRc = sqlite3_step(stmt.get());
-  if (stepRc == SQLITE_ROW) {
-    exists = true;
-    return true;
-  }
-  if (stepRc == SQLITE_DONE) {
-    return true;
-  }
-  SDL_Log("SQL error while %s: %s", context, sqlite3_errmsg(db));
-  return false;
+  return true;
 }
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {

@@ -1081,29 +1081,11 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
-  exists = false;
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(
-      db,
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
-      stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
-              << "\n";
+  if (const auto error = querySqliteTableExists(db, tableName, exists)) {
+    std::cerr << "SQL error while " << context << ": " << *error << "\n";
     return false;
   }
-  sqlite3_bind_text(stmt.get(), 1, tableName, -1, SQLITE_STATIC);
-  const int stepRc = sqlite3_step(stmt.get());
-  if (stepRc == SQLITE_ROW) {
-    exists = true;
-    return true;
-  }
-  if (stepRc == SQLITE_DONE) {
-    return true;
-  }
-  std::cerr << "SQL error while " << context << ": " << sqlite3_errmsg(db)
-            << "\n";
-  return false;
+  return true;
 }
 
 bool createChartMetaTableSchema(sqlite3 *db) {

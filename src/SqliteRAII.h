@@ -119,6 +119,30 @@ attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
                                  : std::string(sqlite3_errmsg(db));
 }
 
+inline std::optional<std::string>
+querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
+  exists = false;
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+      stmt);
+  if (rc != SQLITE_OK) {
+    return sqlite3_errmsg(db);
+  }
+  bindSqliteText(stmt, 1, tableName);
+
+  const int stepRc = sqlite3_step(stmt.get());
+  if (stepRc == SQLITE_ROW) {
+    exists = true;
+    return std::nullopt;
+  }
+  if (stepRc == SQLITE_DONE) {
+    return std::nullopt;
+  }
+  return sqlite3_errmsg(db);
+}
+
 inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
                                    std::string &errorMessage,
                                    int busyTimeoutMs = 1000) {
