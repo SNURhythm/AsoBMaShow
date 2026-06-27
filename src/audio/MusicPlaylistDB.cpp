@@ -106,6 +106,34 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
+bool addMissingColumn(sqlite3 *db, const char *table, const char *column,
+                      const char *definition) {
+  bool hasColumn = false;
+  if (const auto error = querySqliteTableHasColumn(db, table, column,
+                                                   hasColumn)) {
+    logSqlErrorText("checking music playlist schema", *error);
+    return false;
+  }
+  if (hasColumn) {
+    return true;
+  }
+
+  std::string query = "ALTER TABLE ";
+  query += table;
+  query += " ADD COLUMN ";
+  query += definition;
+  return execSql(db, query.c_str(), "adding music playlist identity column");
+}
+
+bool ensureStoredMusicTrackIdentityColumns(sqlite3 *db, const char *table) {
+  return addMissingColumn(db, table, "chart_path",
+                          "chart_path TEXT NOT NULL DEFAULT ''") &&
+         addMissingColumn(db, table, "chart_md5",
+                          "chart_md5 TEXT NOT NULL DEFAULT ''") &&
+         addMissingColumn(db, table, "chart_sha256",
+                          "chart_sha256 TEXT NOT NULL DEFAULT ''");
+}
+
 bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
                                const char *column) {
   std::string query = "UPDATE ";
@@ -203,13 +231,209 @@ std::filesystem::path relativePathFromColumn(sqlite3_stmt *stmt, int idx) {
   return pathFromDbText(columnString(stmt, idx));
 }
 
-std::string storedPathText(std::filesystem::path path) {
-  if (path.empty()) {
-    return "";
+std::string storedPathTextForDbValue(const std::string &value) {
+  return ChartDBHelper::StoredChartPathText(pathFromDbText(value));
+}
+
+struct PendingStoredPathNormalization {
+  sqlite3_int64 rowid = 0;
+  int playlistId = 0;
+  std::string normalized;
+};
+
+bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
+                               const char *column,
+                               const char *extraWhere = nullptr) {
+  std::string selectQuery = "SELECT rowid, ";
+  selectQuery += column;
+  selectQuery += " FROM ";
+  selectQuery += table;
+  selectQuery += " WHERE ";
+  selectQuery += column;
+  selectQuery += " IS NOT NULL AND ";
+  selectQuery += column;
+  selectQuery += " != ''";
+  if (extraWhere != nullptr && extraWhere[0] != '\0') {
+    selectQuery += " AND ";
+    selectQuery += extraWhere;
   }
-  ChartDBHelper::ToRelativePath(path);
-  path = path.lexically_normal();
-  return fspath_to_utf8(path);
+
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(
+          db, selectQuery, selectStmt,
+          "preparing stored music path normalization select",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  std::vector<PendingStoredPathNormalization> pending;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(selectStmt)) == SQLITE_ROW) {
+    const std::string original = columnString(selectStmt, 1);
+    const std::string normalized = storedPathTextForDbValue(original);
+    if (!normalized.empty() && normalized != original) {
+      pending.push_back({.rowid = sqlite3_column_int64(selectStmt, 0),
+                         .normalized = normalized});
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("selecting stored music paths to normalize", db);
+    return false;
+  }
+  if (pending.empty()) {
+    return true;
+  }
+
+  std::string updateQuery = "UPDATE ";
+  updateQuery += table;
+  updateQuery += " SET ";
+  updateQuery += column;
+  updateQuery += " = ?1 WHERE rowid = ?2";
+  SqliteStatementHandle updateStmt;
+  if (!prepareSqliteStatementLogged(
+          db, updateQuery, updateStmt,
+          "preparing stored music path normalization update",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  for (const auto &item : pending) {
+    sqlite3_reset(updateStmt);
+    sqlite3_clear_bindings(updateStmt);
+    bindSqliteText(updateStmt, 1, item.normalized);
+    sqlite3_bind_int64(updateStmt, 2, item.rowid);
+    if (sqlite3_step(updateStmt) != SQLITE_DONE) {
+      logSqlError("normalizing stored music path", db);
+      return false;
+    }
+  }
+  return true;
+}
+
+bool backfillStoredChartPathFromMusicKey(sqlite3 *db, const char *table) {
+  std::string query = "UPDATE ";
+  query += table;
+  query += " SET chart_path = music_key WHERE music_key_type = 'path' "
+           "AND chart_path = '' AND music_key != ''";
+  return execSql(db, query.c_str(), "backfilling stored music chart paths");
+}
+
+bool playlistMusicKeyExists(sqlite3_stmt *stmt, int playlistId,
+                            sqlite3_int64 rowid,
+                            const std::string &musicKey) {
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  sqlite3_bind_int(stmt, 1, playlistId);
+  bindSqliteText(stmt, 2, musicKey);
+  sqlite3_bind_int64(stmt, 3, rowid);
+  return sqlite3_step(stmt) == SQLITE_ROW;
+}
+
+bool normalizePlaylistItemMusicKeys(sqlite3 *db) {
+  const char *selectQuery =
+      "SELECT rowid, playlist_id, music_key FROM music_playlist_items "
+      "WHERE music_key_type = 'path' AND music_key != ''";
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(
+          db, selectQuery, selectStmt,
+          "preparing music playlist key normalization select",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  std::vector<PendingStoredPathNormalization> pending;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(selectStmt)) == SQLITE_ROW) {
+    const std::string original = columnString(selectStmt, 2);
+    const std::string normalized = storedPathTextForDbValue(original);
+    if (!normalized.empty() && normalized != original) {
+      pending.push_back({.rowid = sqlite3_column_int64(selectStmt, 0),
+                         .playlistId = sqlite3_column_int(selectStmt, 1),
+                         .normalized = normalized});
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("selecting music playlist keys to normalize", db);
+    return false;
+  }
+  if (pending.empty()) {
+    return true;
+  }
+
+  const char *updateQuery =
+      "UPDATE OR IGNORE music_playlist_items SET music_key = ?1 "
+      "WHERE rowid = ?2";
+  SqliteStatementHandle updateStmt;
+  if (!prepareSqliteStatementLogged(
+          db, updateQuery, updateStmt,
+          "preparing music playlist key normalization update",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  const char *existsQuery =
+      "SELECT 1 FROM music_playlist_items WHERE playlist_id = ?1 "
+      "AND music_key_type = 'path' AND music_key = ?2 AND rowid != ?3 "
+      "LIMIT 1";
+  SqliteStatementHandle existsStmt;
+  if (!prepareSqliteStatementLogged(
+          db, existsQuery, existsStmt,
+          "preparing music playlist key normalization duplicate select",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  const char *deleteQuery =
+      "DELETE FROM music_playlist_items WHERE rowid = ?1";
+  SqliteStatementHandle deleteStmt;
+  if (!prepareSqliteStatementLogged(
+          db, deleteQuery, deleteStmt,
+          "preparing music playlist key normalization duplicate delete",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  std::vector<int> affectedPlaylists;
+  for (const auto &item : pending) {
+    sqlite3_reset(updateStmt);
+    sqlite3_clear_bindings(updateStmt);
+    bindSqliteText(updateStmt, 1, item.normalized);
+    sqlite3_bind_int64(updateStmt, 2, item.rowid);
+    if (sqlite3_step(updateStmt) != SQLITE_DONE) {
+      logSqlError("normalizing music playlist key", db);
+      return false;
+    }
+    if (sqlite3_changes(db) > 0) {
+      affectedPlaylists.push_back(item.playlistId);
+      continue;
+    }
+
+    if (!playlistMusicKeyExists(existsStmt, item.playlistId, item.rowid,
+                                item.normalized)) {
+      continue;
+    }
+    sqlite3_reset(deleteStmt);
+    sqlite3_clear_bindings(deleteStmt);
+    sqlite3_bind_int64(deleteStmt, 1, item.rowid);
+    if (sqlite3_step(deleteStmt) != SQLITE_DONE) {
+      logSqlError("deleting duplicate normalized music playlist key", db);
+      return false;
+    }
+    if (sqlite3_changes(db) > 0) {
+      affectedPlaylists.push_back(item.playlistId);
+    }
+  }
+
+  std::sort(affectedPlaylists.begin(), affectedPlaylists.end());
+  affectedPlaylists.erase(
+      std::unique(affectedPlaylists.begin(), affectedPlaylists.end()),
+      affectedPlaylists.end());
+  for (int playlistId : affectedPlaylists) {
+    if (!compactPlaylistPositions(db, playlistId)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 struct StoredMusicTrackIdentity {
@@ -223,7 +447,7 @@ struct StoredMusicTrackIdentity {
 StoredMusicTrackIdentity
 storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   StoredMusicTrackIdentity identity;
-  identity.chartPath = storedPathText(chartMeta.BmsPath);
+  identity.chartPath = ChartDBHelper::StoredChartPathText(chartMeta.BmsPath);
   identity.md5 = normalizedHash(chartMeta.MD5);
   identity.sha256 = normalizedHash(chartMeta.SHA256);
 
@@ -575,6 +799,10 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
       return false;
     }
   }
+  if (!ensureStoredMusicTrackIdentityColumns(db, "music_playlist_items") ||
+      !ensureStoredMusicTrackIdentityColumns(db, "music_now_playing_items")) {
+    return false;
+  }
 
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_playlist_position "
@@ -591,7 +819,14 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
       return false;
     }
   }
-  if (!normalizeStoredHashColumn(db, "music_playlist_items", "chart_md5") ||
+  if (!backfillStoredChartPathFromMusicKey(db, "music_playlist_items") ||
+      !backfillStoredChartPathFromMusicKey(db, "music_now_playing_items") ||
+      !normalizeStoredPathColumn(db, "music_playlist_items", "chart_path") ||
+      !normalizePlaylistItemMusicKeys(db) ||
+      !normalizeStoredPathColumn(db, "music_now_playing_items", "chart_path") ||
+      !normalizeStoredPathColumn(db, "music_now_playing_items", "music_key",
+                                 "music_key_type = 'path'") ||
+      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_md5") ||
       !normalizeStoredHashColumn(db, "music_playlist_items", "chart_sha256") ||
       !normalizeStoredHashColumn(db, "music_now_playing_items", "chart_md5") ||
       !normalizeStoredHashColumn(db, "music_now_playing_items",
@@ -1133,7 +1368,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   if (!useFolder) {
     groupPath = chartMeta.BmsPath;
   }
-  const std::string groupKey = storedPathText(groupPath);
+  const std::string groupKey = ChartDBHelper::StoredChartPathText(groupPath);
   if (groupKey.empty()) {
     return;
   }

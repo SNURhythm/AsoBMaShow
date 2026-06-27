@@ -177,15 +177,6 @@ using asobmshow::bms_metadata::lowerCopy;
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 
-std::string storedChartPathText(std::filesystem::path path) {
-  if (path.empty()) {
-    return "";
-  }
-  ChartDBHelper::ToRelativePath(path);
-  path = path.lexically_normal();
-  return fspath_to_utf8(path);
-}
-
 std::string sqlColumn(std::string_view alias, std::string_view column) {
   return std::string(alias) + "." + std::string(column);
 }
@@ -225,7 +216,7 @@ struct ChartFavoriteIdentity {
 ChartFavoriteIdentity chartFavoriteIdentityFor(
     const bms_parser::ChartMeta &chartMeta) {
   return {
-      .chartPath = storedChartPathText(chartMeta.BmsPath),
+      .chartPath = ChartDBHelper::StoredChartPathText(chartMeta.BmsPath),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -1815,7 +1806,8 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
                                        const std::filesystem::path &chartPath,
                                        int priority,
                                        sqlite3_int64 archiveSize) {
-  const std::string storedPathText = storedChartPathText(chartPath);
+  const std::string storedPathText =
+      ChartDBHelper::StoredChartPathText(chartPath);
 
   const char *query =
       "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
@@ -1890,11 +1882,11 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
 }
 
 std::string archivePathTextForDb(const std::filesystem::path &archivePath) {
-  return storedChartPathText(archivePath);
+  return ChartDBHelper::StoredChartPathText(archivePath);
 }
 
 std::string checkpointPathTextForDb(const std::filesystem::path &path) {
-  return storedChartPathText(path);
+  return ChartDBHelper::StoredChartPathText(path);
 }
 
 std::filesystem::path checkpointPathFromDbText(const std::string &text) {
@@ -2226,7 +2218,8 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
     return false;
   }
 
-  const std::string pathText = storedChartPathText(archivePath);
+  const std::string pathText =
+      ChartDBHelper::StoredChartPathText(archivePath);
   const std::string name = solidArchiveNameForPath(archivePath);
 
   const char *query =
@@ -2267,7 +2260,8 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 }
 
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
-  const std::string pathText = storedChartPathText(archivePath);
+  const std::string pathText =
+      ChartDBHelper::StoredChartPathText(archivePath);
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, "DELETE FROM solid_archives WHERE path = ?", stmt,
@@ -2303,7 +2297,8 @@ bool deleteChartMetaInArchive(sqlite3 *db,
       continue;
     }
 
-    const std::string pathText = storedChartPathText(meta.BmsPath);
+    const std::string pathText =
+        ChartDBHelper::StoredChartPathText(meta.BmsPath);
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
@@ -3452,7 +3447,8 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
       continue;
     }
 
-    const std::string target = storedChartPathText(chartMeta.BmsPath);
+    const std::string target =
+        ChartDBHelper::StoredChartPathText(chartMeta.BmsPath);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     bindSqliteText(stmt, 1, target);
@@ -3660,7 +3656,7 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = storedChartPathText(path);
+  const std::string pathText = ChartDBHelper::StoredChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
   int rc = sqlite3_step(stmt);
@@ -3758,7 +3754,7 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = storedChartPathText(path);
+  const std::string pathText = ChartDBHelper::StoredChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
@@ -5639,6 +5635,15 @@ ChartDBHelper::ChartDBHelper() {
 
 std::uint64_t ChartDBHelper::GetLibraryRevision() const {
   return gLibraryRevision.load(std::memory_order_relaxed);
+}
+
+std::string ChartDBHelper::StoredChartPathText(std::filesystem::path path) {
+  if (path.empty()) {
+    return "";
+  }
+  ToRelativePath(path);
+  path = path.lexically_normal();
+  return fspath_to_utf8(path);
 }
 
 void ChartDBHelper::ToRelativePath(

@@ -213,6 +213,7 @@ public:
       sqlite3 *db, const bms_parser::ChartMeta &meta);
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
 
+  static std::string StoredChartPathText(std::filesystem::path path);
   static void ToRelativePath(std::filesystem::path &path);
   static void ToAbsolutePath(std::filesystem::path &path);
 
