@@ -46,8 +46,6 @@
 namespace {
 using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
-using asobmshow::chart_sql::chartIdentityMatchPredicate;
-using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
@@ -192,8 +190,92 @@ std::string sqlHashColumnHasValue(std::string_view alias,
   return sqlColumn(alias, column) + " != ''";
 }
 
-std::string chartFavoritePredicate(const char *chartAlias) {
-  return chartIdentityMatchPredicate("cf", chartAlias);
+std::string chartFavoriteIdentityKey(const char *favoriteAlias);
+
+std::string chartFavoriteChartCandidateBranch(const std::string &matchCondition,
+                                              int identityRank) {
+  std::string query = "SELECT cm.*, cf.added_at AS favorite_added_at, ";
+  query += chartFavoriteIdentityKey("cf");
+  query += " AS favorite_identity_key, ";
+  query += std::to_string(identityRank);
+  query += " AS identity_rank FROM chart_favorites cf JOIN chart_meta cm ON ";
+  query += matchCondition;
+  return query;
+}
+
+std::string chartFavoriteChartCandidateQuery() {
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  const std::string favoriteSha256 = "cf.chart_sha256";
+  const std::string favoriteMd5 = "cf.chart_md5";
+  const std::string favoritePath = "cf.chart_path";
+  const std::string shaMatch =
+      favoriteSha256 + " != '' AND cm.sha256 = " + favoriteSha256;
+  const std::string md5Match =
+      favoriteMd5 + " != '' AND cm.md5 = " + favoriteMd5;
+  const std::string nonHashMatch =
+      "NOT (" + shaMatch + ") AND NOT (" + md5Match + ")";
+
+  std::vector<std::string> branches;
+  branches.push_back(chartFavoriteChartCandidateBranch(shaMatch, 0));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      md5Match + " AND NOT (" + shaMatch + ")", 1));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " != '' AND cm.path = " + favoritePath + " AND " +
+          nonHashMatch,
+      2));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " != '' AND cm.path = '" + prefix + "' || " +
+          favoritePath + " AND " + nonHashMatch,
+      2));
+  branches.push_back(chartFavoriteChartCandidateBranch(
+      favoritePath + " LIKE '" + prefix + "%' AND cm.path = substr(" +
+          favoritePath + ", length('" + prefix + "') + 1) AND " +
+          nonHashMatch,
+      2));
+
+  std::string query;
+  for (std::size_t i = 0; i < branches.size(); ++i) {
+    if (i > 0) {
+      query += " UNION ALL ";
+    }
+    query += branches[i];
+  }
+  return query;
+}
+
+std::string chartFavoritePreferredChartExists(
+    const std::string &matchCondition) {
+  std::string query = "EXISTS (SELECT 1 FROM chart_meta cm WHERE ";
+  query += matchCondition;
+  query += " AND ";
+  query += preferredChartPredicate("cm");
+  query += ")";
+  return query;
+}
+
+std::string chartFavoritePreferredChartExistsPredicate() {
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  const std::string favoriteSha256 = "cf.chart_sha256";
+  const std::string favoriteMd5 = "cf.chart_md5";
+  const std::string favoritePath = "cf.chart_path";
+  const std::string shaMatch =
+      favoriteSha256 + " != '' AND cm.sha256 = " + favoriteSha256;
+  const std::string md5Match =
+      favoriteMd5 + " != '' AND cm.md5 = " + favoriteMd5;
+  const std::string pathDirect =
+      favoritePath + " != '' AND cm.path = " + favoritePath;
+  const std::string pathPrefixed =
+      favoritePath + " != '' AND cm.path = '" + prefix + "' || " +
+      favoritePath;
+  const std::string pathLegacy =
+      favoritePath + " LIKE '" + prefix + "%' AND cm.path = substr(" +
+      favoritePath + ", length('" + prefix + "') + 1)";
+
+  return "(" + chartFavoritePreferredChartExists(shaMatch) + " OR " +
+         chartFavoritePreferredChartExists(md5Match) + " OR " +
+         chartFavoritePreferredChartExists(pathDirect) + " OR " +
+         chartFavoritePreferredChartExists(pathPrefixed) + " OR " +
+         chartFavoritePreferredChartExists(pathLegacy) + ")";
 }
 
 std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
@@ -3034,24 +3116,18 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
     return;
   }
 
-  const std::string favoriteKey = chartFavoriteIdentityKey("cf");
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "cf.added_at AS favorite_added_at, COUNT(*) OVER (PARTITION BY ";
-  query += favoriteKey;
-  query += ") AS music_chart_count, ROW_NUMBER() OVER (PARTITION BY ";
-  query += favoriteKey;
-  query += " ORDER BY cf.added_at DESC, ";
+  query += ", cm.music_chart_count FROM (SELECT cm.*, COUNT(*) OVER "
+           "(PARTITION BY cm.favorite_identity_key) AS music_chart_count, "
+           "ROW_NUMBER() OVER (PARTITION BY cm.favorite_identity_key "
+           "ORDER BY cm.favorite_added_at DESC, ";
   query += chartArtworkOrderBy("cm");
-  query += ", ";
-  query += chartIdentityPreferenceOrderBy("cf", "cm");
-  query += ", ";
-  query += "total_notes DESC, length DESC, ";
+  query += ", cm.identity_rank, total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM chart_favorites cf JOIN chart_meta cm ON ";
-  query += chartFavoritePredicate("cm");
+  query += ", title COLLATE NOCASE, path) AS music_rank FROM (";
+  query += chartFavoriteChartCandidateQuery();
+  query += ") cm";
   query += " WHERE ";
   query += preferredChartPredicate("cm");
   query += ") cm WHERE cm.music_rank = 1 "
@@ -3080,13 +3156,8 @@ int ChartDBHelper::CountFavoriteCharts(sqlite3 *db) {
     return 0;
   }
 
-  std::string query =
-      "SELECT COUNT(*) FROM chart_favorites cf WHERE EXISTS ("
-      "SELECT 1 FROM chart_meta cm WHERE ";
-  query += chartFavoritePredicate("cm");
-  query += " AND ";
-  query += preferredChartPredicate("cm");
-  query += ")";
+  std::string query = "SELECT COUNT(*) FROM chart_favorites cf WHERE ";
+  query += chartFavoritePreferredChartExistsPredicate();
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,

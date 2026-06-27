@@ -3035,12 +3035,23 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const float previousScrollOffset =
       preserveViewState ? folderRecyclerView->scrollOffset : 0.0f;
-  auto dbHelper = ChartDBHelper::GetInstance();
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const std::uint64_t currentLibraryRevision = dbHelper.GetLibraryRevision();
+  if (!folderMetadataCache.valid ||
+      folderMetadataCache.libraryRevision != currentLibraryRevision) {
+    folderMetadataCache = LibraryFolderMetadataCache{};
+    folderMetadataCache.libraryRevision = currentLibraryRevision;
+    folderMetadataCache.allSongCount = dbHelper.CountAllChartMeta(db);
+    folderMetadataCache.favoriteCount = dbHelper.CountFavoriteCharts(db);
+    folderMetadataCache.solidArchiveCount = dbHelper.CountSolidArchives(db);
+    folderMetadataCache.tables = dbHelper.SelectDifficultyTables(db);
+    folderMetadataCache.courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+    folderMetadataCache.valid = true;
+  }
   std::vector<LibraryFolderItem> folders;
 
-  int allSongCount = 0;
-  allSongCount = dbHelper.CountAllChartMeta(db);
-  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  const int allSongCount = folderMetadataCache.allSongCount;
+  const int favoriteCount = folderMetadataCache.favoriteCount;
 
   auto isExpanded = [this](const std::string &key) {
     return expandedLibraryFolders.find(key) != expandedLibraryFolders.end();
@@ -3089,7 +3100,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .count = favoriteCount,
   });
 
-  const int solidArchiveCount = dbHelper.CountSolidArchives(db);
+  const int solidArchiveCount = folderMetadataCache.solidArchiveCount;
   if (solidArchiveCount > 0) {
     folders.push_back({
         .key = "solid-archives",
@@ -3100,8 +3111,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     });
   }
 
-  const auto tables = dbHelper.SelectDifficultyTables(db);
-  for (const auto &table : tables) {
+  for (const auto &table : folderMetadataCache.tables) {
     const std::string tableKey = folderKeyForTable(table.id);
     const LibraryFolderItem tableItem{
         .key = tableKey,
@@ -3120,7 +3130,14 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
     appendClearMarkFilters(tableItem, 1);
 
-    const auto levels = dbHelper.SelectDifficultyLevels(db, table.id);
+    auto levelsIt = folderMetadataCache.levelsByTable.find(table.id);
+    if (levelsIt == folderMetadataCache.levelsByTable.end()) {
+      levelsIt =
+          folderMetadataCache.levelsByTable
+              .emplace(table.id, dbHelper.SelectDifficultyLevels(db, table.id))
+              .first;
+    }
+    const auto &levels = levelsIt->second;
     for (const auto &level : levels) {
       const std::string levelKey =
           folderKeyForLevel(level.tableId, level.level);
@@ -3142,7 +3159,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     }
   }
 
-  const auto courseGroups = dbHelper.SelectDifficultyCourseGroups(db);
+  const auto &courseGroups = folderMetadataCache.courseGroups;
   if (!courseGroups.empty()) {
     int coursesCount = 0;
     for (const auto &group : courseGroups) {
@@ -3160,17 +3177,25 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
       for (const auto &group : courseGroups) {
-        const auto courses = dbHelper.SelectDifficultyCourses(
-            db, group.tableId, group.groupName);
-        if (courses.empty()) {
-          continue;
-        }
-
         const std::string label = group.groupName.empty()
                                       ? group.tableName + " Courses"
                                       : group.groupName;
         const std::string groupKey =
             folderKeyForCourseGroup(group.tableId, group.groupName);
+        auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
+        if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
+          coursesIt =
+              folderMetadataCache.coursesByGroup
+                  .emplace(groupKey,
+                           dbHelper.SelectDifficultyCourses(
+                               db, group.tableId, group.groupName))
+                  .first;
+        }
+        const auto &courses = coursesIt->second;
+        if (courses.empty()) {
+          continue;
+        }
+
         const auto makeCourseItem = [&](const DifficultyCourseInfo &course,
                                         int depth) {
           const std::string courseLabel =
@@ -3258,6 +3283,63 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         std::clamp(previousScrollOffset, 0.0f, maxOffset);
     folderRecyclerView->rebindVisibleItems();
   }
+  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+  if (selectedView != nullptr) {
+    selectedView->onSelected();
+  }
+}
+
+void MainMenuScene::refreshFavoriteFolderCount() {
+  if (folderRecyclerView == nullptr) {
+    return;
+  }
+
+  std::vector<LibraryFolderItem> folders = folderRecyclerView->getItems();
+  if (folders.empty()) {
+    reloadFolderItems(true);
+    return;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  if (folderMetadataCache.valid) {
+    folderMetadataCache.favoriteCount = favoriteCount;
+    folderMetadataCache.libraryRevision = dbHelper.GetLibraryRevision();
+  }
+  const float previousScrollOffset = folderRecyclerView->scrollOffset;
+  int activeIndex = std::clamp(folderRecyclerView->selectedIndex, 0,
+                               static_cast<int>(folders.size()) - 1);
+  bool foundFavorites = false;
+
+  for (int i = 0; i < static_cast<int>(folders.size()); ++i) {
+    auto &folder = folders[static_cast<std::size_t>(i)];
+    if (folder.key == "favorites") {
+      folder.count = favoriteCount;
+      foundFavorites = true;
+      if (activeFolder.key == folder.key) {
+        activeFolder = folder;
+      }
+    }
+    if (folder.key == activeFolder.key) {
+      activeIndex = i;
+    }
+  }
+
+  if (!foundFavorites) {
+    reloadFolderItems(true);
+    return;
+  }
+
+  const int folderCount = static_cast<int>(folders.size());
+  folderRecyclerView->setItems(std::move(folders));
+  folderRecyclerView->selectedIndex = activeIndex;
+  const float maxOffset =
+      std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
+                                            folderRecyclerView->itemHeight -
+                                        folderRecyclerView->getHeight()));
+  folderRecyclerView->scrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  folderRecyclerView->rebindVisibleItems();
   auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
   if (selectedView != nullptr) {
     selectedView->onSelected();
@@ -3702,7 +3784,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
-  reloadFolderItems(true);
+  refreshFavoriteFolderCount();
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);
   } else if (recyclerView != nullptr) {

@@ -274,12 +274,12 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
   }
   const bool updated =
       chartDb.SetFavorite(chartDbConnection, chartMeta, favorite);
-  favoriteTracks = loadFavoriteTracks();
   if (!updated) {
     errorMessage = favorite ? "Could not add favorite."
                             : "Could not remove favorite.";
     return false;
   }
+  favoriteTracks = loadFavoriteTracks();
   return true;
 }
 

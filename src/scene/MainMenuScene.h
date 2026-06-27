@@ -172,6 +172,18 @@ private:
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
+  struct LibraryFolderMetadataCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int allSongCount = 0;
+    int favoriteCount = 0;
+    int solidArchiveCount = 0;
+    std::vector<DifficultyTableInfo> tables;
+    std::unordered_map<int, std::vector<DifficultyLevelInfo>> levelsByTable;
+    std::vector<DifficultyCourseGroupInfo> courseGroups;
+    std::unordered_map<std::string, std::vector<DifficultyCourseInfo>>
+        coursesByGroup;
+  };
   struct ChartListPageCache {
     sqlite3 *db = nullptr;
     ChartMetaQuery query;
@@ -397,6 +409,7 @@ private:
   std::optional<BmsSearchResult> pendingFindBmsResult;
 
   LibraryFolderItem activeFolder;
+  LibraryFolderMetadataCache folderMetadataCache;
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
@@ -463,6 +476,7 @@ private:
   void initView(ApplicationContext &context);
   void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
+  void refreshFavoriteFolderCount();
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
