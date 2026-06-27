@@ -475,9 +475,18 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     targetPath = archivePath;
   }
 
-  if (!std::filesystem::exists(targetPath, errorCode) || errorCode) {
+  const std::string targetPathText =
+      path_t_to_utf8(fspath_to_path_t(targetPath));
+  const bool targetExists = std::filesystem::exists(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
+  if (!targetExists) {
     errorMessage = "Chart file does not exist: " +
-                   path_t_to_utf8(fspath_to_path_t(targetPath));
+                   targetPathText;
     return false;
   }
 
@@ -519,6 +528,12 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   return true;
 #elif TARGET_OS_LINUX
   const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file type: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
   std::filesystem::path directoryPath =
       isDirectory ? targetPath : targetPath.parent_path();
   if (directoryPath.empty()) {
