@@ -262,6 +262,30 @@ std::string coursePlayOptionForConstraints(
   return normalized;
 }
 
+bool coursePlayOptionLocksSelection(
+    const CourseConstraintSettings &constraintSettings) {
+  return constraintSettings.gradeConstraint.has_value() &&
+         (*constraintSettings.gradeConstraint == "grade" ||
+          *constraintSettings.gradeConstraint == "grade_mirror");
+}
+
+bool coursePlayOptionAllowedByConstraints(
+    const std::string &option,
+    const CourseConstraintSettings &constraintSettings) {
+  if (!coursePlayOptionLocksSelection(constraintSettings)) {
+    return true;
+  }
+
+  const std::string normalized = play_options::normalizePlayOption(option);
+  if (*constraintSettings.gradeConstraint == "grade") {
+    return normalized == "NORMAL";
+  }
+  if (*constraintSettings.gradeConstraint == "grade_mirror") {
+    return normalized == "NORMAL" || normalized == "MIRROR";
+  }
+  return true;
+}
+
 std::string normalizeLongNoteModeOption(std::string value) {
   value.erase(value.begin(),
               std::find_if(value.begin(), value.end(),
@@ -293,6 +317,23 @@ std::string normalizeLongNoteModeOption(std::string value) {
     return "HCN";
   }
   return AppSettings::kDefaultLnMode;
+}
+
+std::string longNoteModeOptionFromMetaValue(int lnMode) {
+  switch (normalizeChartLongNoteModeValue(lnMode)) {
+  case 2:
+    return "CN";
+  case 3:
+    return "HCN";
+  case 1:
+    return "LN";
+  default:
+    return AppSettings::kDefaultLnMode;
+  }
+}
+
+std::string longNoteModeOptionFromCourseConstraint(CourseLongNoteMode mode) {
+  return longNoteModeOptionFromMetaValue(courseLongNoteModeToChartMetaValue(mode));
 }
 
 int longNoteModeMetaValue(const std::string &mode) {
@@ -934,6 +975,23 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
                             ui_theme::controlHover, ui_theme::controlPressed,
                             ui_theme::hairlineStrong);
   }
+}
+
+void styleLockedOptionButton(Button *button, TextView *text, bool selected) {
+  if (button == nullptr || text == nullptr) {
+    return;
+  }
+
+  if (selected) {
+    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
+                            ui_theme::primaryAction, ui_theme::primaryAction,
+                            ui_theme::accentBorderStrong);
+    return;
+  }
+
+  styleThemedActionButton(button, text, false, ui_theme::control,
+                          ui_theme::controlHover, ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
 }
 
 TextView *makeModalLabel(const std::string &text) {
@@ -2437,6 +2495,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       selectedView->onSelected();
     }
     refreshReplayAvailability(&item);
+    refreshPlayOptionButtons();
+    refreshLongNoteModeButtons();
     if (!replayExportInProgress.load() && replayStatusText != nullptr) {
       replayStatusText->setText("");
     }
@@ -3448,6 +3508,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   int dbCount = 0;
   if (!preserveViewState || previousSelectedPath.empty()) {
     refreshReplayAvailability(nullptr);
+    refreshPlayOptionButtons();
+    refreshLongNoteModeButtons();
   }
   dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
@@ -3456,6 +3518,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
       });
+  refreshPlayOptionButtons();
+  refreshLongNoteModeButtons();
   refreshStartButtonForActiveFolder();
   if (!preserveViewState && activeFolder.type == LibraryFolderItem::Type::Course &&
       count > 0) {
@@ -3511,6 +3575,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       findPathNear(previousSelectedPath, previousSelectedIndex);
 
   recyclerView->selectedIndex = restoredSelectedIndex;
+  refreshPlayOptionButtons();
+  refreshLongNoteModeButtons();
   if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
     refreshReplayAvailability(nullptr);
     setPlayableChartActionsVisible(false);
@@ -3803,6 +3869,83 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
   return true;
 }
 
+std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const {
+  if (recyclerView == nullptr || recyclerView->selectedIndex < 0 ||
+      recyclerView->selectedIndex >= recyclerView->size()) {
+    return std::nullopt;
+  }
+  return recyclerView->get(recyclerView->selectedIndex);
+}
+
+MainMenuScene::EffectivePlayOptionSelection
+MainMenuScene::currentEffectivePlayOptionSelection() const {
+  EffectivePlayOptionSelection selection;
+  selection.playOption = play_options::normalizePlayOption(selectedPlayOption);
+  selection.longNoteMode = normalizeLongNoteModeOption(selectedLnMode);
+
+  const auto record = selectedRecordSnapshot();
+  const bool selectedCourseStart =
+      record.has_value() && record->courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0;
+  if (selectedCourseStart) {
+    const CourseConstraintSettings constraintSettings =
+        courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
+    if (coursePlayOptionLocksSelection(constraintSettings)) {
+      selection.playOption =
+          coursePlayOptionForConstraints(selectedPlayOption, constraintSettings);
+      selection.playOptionLocked = true;
+      selection.playOptionLockSource = "Course";
+    }
+    if (constraintSettings.rules.longNoteMode !=
+        CourseLongNoteMode::Unspecified) {
+      selection.longNoteMode = longNoteModeOptionFromCourseConstraint(
+          constraintSettings.rules.longNoteMode);
+      selection.longNoteModeLocked = true;
+      selection.longNoteModeLockSource = "Course";
+    }
+    return selection;
+  }
+
+  if (record.has_value()) {
+    const int chartLnMode =
+        normalizeChartLongNoteModeValue(record->meta.LnMode);
+    if (chartLnMode > 0) {
+      selection.longNoteMode = longNoteModeOptionFromMetaValue(chartLnMode);
+      selection.longNoteModeLocked = true;
+      selection.longNoteModeLockSource = "Chart";
+    }
+  }
+
+  return selection;
+}
+
+bool MainMenuScene::currentPlayOptionSelectionAllowed(
+    const std::string &option) const {
+  const auto record = selectedRecordSnapshot();
+  const bool selectedCourseStart =
+      record.has_value() && record->courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0;
+  if (!selectedCourseStart) {
+    return true;
+  }
+
+  const CourseConstraintSettings constraintSettings =
+      courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
+  return coursePlayOptionAllowedByConstraints(option, constraintSettings);
+}
+
+bool MainMenuScene::currentLongNoteModeSelectionAllowed(
+    const std::string &mode) const {
+  const EffectivePlayOptionSelection selection =
+      currentEffectivePlayOptionSelection();
+  if (!selection.longNoteModeLocked) {
+    return true;
+  }
+  return normalizeLongNoteModeOption(mode) == selection.longNoteMode;
+}
+
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
   selectedGaugeType = gaugeType;
   selectedGaugeAutoShift = autoShift;
@@ -3846,6 +3989,9 @@ void MainMenuScene::refreshGaugeSelectionButtons() {
 }
 
 void MainMenuScene::setPlayOptionSelection(const std::string &option) {
+  if (!currentPlayOptionSelectionAllowed(option)) {
+    return;
+  }
   selectedPlayOption = play_options::normalizePlayOption(option);
   context.settings.selectedPlayOption = selectedPlayOption;
   context.settings.sanitize();
@@ -3856,20 +4002,37 @@ void MainMenuScene::setPlayOptionSelection(const std::string &option) {
 }
 
 void MainMenuScene::refreshPlayOptionButtons() {
+  const EffectivePlayOptionSelection effective =
+      currentEffectivePlayOptionSelection();
   for (auto &item : playOptionButtons) {
     if (item.button == nullptr || item.text == nullptr) {
       continue;
     }
 
+    const std::string normalized =
+        play_options::normalizePlayOption(item.option);
+    const bool allowed = currentPlayOptionSelectionAllowed(item.option);
     item.text->setText(item.option);
-    styleOptionButton(item.button, item.text,
-                      play_options::normalizePlayOption(item.option) ==
-                          selectedPlayOption);
+    if (allowed) {
+      item.button->setOnClickListener(
+          [this, option = item.option]() { setPlayOptionSelection(option); });
+    } else {
+      item.button->setOnClickListener(std::function<void()>{});
+    }
+    const bool selected = normalized == effective.playOption;
+    if (!allowed) {
+      styleLockedOptionButton(item.button, item.text, selected);
+    } else {
+      styleOptionButton(item.button, item.text, selected);
+    }
   }
   refreshReadySettingsSummary();
 }
 
 void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
+  if (!currentLongNoteModeSelectionAllowed(mode)) {
+    return;
+  }
   const std::string previousMode = selectedLnMode;
   selectedLnMode = normalizeLongNoteModeOption(mode);
   context.settings.selectedLnMode = selectedLnMode;
@@ -3884,15 +4047,28 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
 }
 
 void MainMenuScene::refreshLongNoteModeButtons() {
+  const EffectivePlayOptionSelection effective =
+      currentEffectivePlayOptionSelection();
   for (auto &item : longNoteModeButtons) {
     if (item.button == nullptr || item.text == nullptr) {
       continue;
     }
 
+    const std::string normalized = normalizeLongNoteModeOption(item.mode);
+    const bool allowed = currentLongNoteModeSelectionAllowed(item.mode);
     item.text->setText(item.mode);
-    styleOptionButton(item.button, item.text,
-                      normalizeLongNoteModeOption(item.mode) ==
-                          selectedLnMode);
+    if (allowed && !effective.longNoteModeLocked) {
+      item.button->setOnClickListener(
+          [this, mode = item.mode]() { setLongNoteModeSelection(mode); });
+    } else {
+      item.button->setOnClickListener(std::function<void()>{});
+    }
+    const bool selected = normalized == effective.longNoteMode;
+    if (effective.longNoteModeLocked || !allowed) {
+      styleLockedOptionButton(item.button, item.text, selected);
+    } else {
+      styleOptionButton(item.button, item.text, selected);
+    }
   }
   refreshReadySettingsSummary();
 }
@@ -3922,6 +4098,8 @@ void MainMenuScene::refreshAssistOptionButtons() {
 }
 
 void MainMenuScene::refreshReadySettingsSummary() {
+  const EffectivePlayOptionSelection effective =
+      currentEffectivePlayOptionSelection();
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(
         gaugeButtonLabel(selectedGaugeType, selectedGaugeAutoShift));
@@ -3929,8 +4107,8 @@ void MainMenuScene::refreshReadySettingsSummary() {
         readyGaugeTextColor(selectedGaugeType, selectedGaugeAutoShift));
   }
   if (readyPlayOptionText != nullptr) {
-    readyPlayOptionText->setText("Option: " + selectedPlayOption + " / " +
-                                 selectedLnMode);
+    readyPlayOptionText->setText("Option: " + effective.playOption + " / " +
+                                 effective.longNoteMode);
   }
   if (readyAssistOptionText != nullptr) {
     readyAssistOptionText->setText("Assist: " + selectedAssistOption);
@@ -4049,11 +4227,17 @@ void MainMenuScene::startSelectedCourse() {
   }
   const CourseConstraintSettings constraintSettings =
       courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
+  int courseLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  if (constraintSettings.rules.longNoteMode !=
+      CourseLongNoteMode::Unspecified) {
+    courseLongNoteMode = courseLongNoteModeToChartMetaValue(
+        constraintSettings.rules.longNoteMode);
+  }
   session->currentIndex = 0;
   session->gaugeType = selectedGaugeType;
   session->gaugeProfile = constraintSettings.gaugeProfile;
   session->gaugeAutoShift = selectedGaugeAutoShift;
-  session->longNoteMode = longNoteModeMetaValue(selectedLnMode);
+  session->longNoteMode = courseLongNoteMode;
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption =
       coursePlayOptionForConstraints(selectedPlayOption, constraintSettings);
@@ -4076,7 +4260,10 @@ void MainMenuScene::startCourseDirect(
   previewLoadCancelled = true;
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
-  const int selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  const int selectedLongNoteMode =
+      normalizeChartLongNoteModeValue(session->longNoteMode) > 0
+          ? normalizeChartLongNoteModeValue(session->longNoteMode)
+          : longNoteModeMetaValue(selectedLnMode);
   session->longNoteMode = selectedLongNoteMode;
 
   defer(
@@ -4198,7 +4385,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const bool gaugeAutoShift = selectedGaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = selectedPlayOption;
-  const int selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
+  if (selectedLongNoteMode == 0) {
+    selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  }
   const std::string assistOption = selectedAssistOption;
   const std::string normalizedPlayOption =
       play_options::normalizePlayOption(playOption);

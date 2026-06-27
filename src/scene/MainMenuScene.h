@@ -442,6 +442,14 @@ private:
   };
   std::vector<AssistOptionButton> assistOptionButtons;
   std::string selectedAssistOption = assist_options::kOff;
+  struct EffectivePlayOptionSelection {
+    std::string playOption = "NORMAL";
+    std::string longNoteMode = AppSettings::kDefaultLnMode;
+    bool playOptionLocked = false;
+    bool longNoteModeLocked = false;
+    std::string playOptionLockSource;
+    std::string longNoteModeLockSource;
+  };
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -518,6 +526,10 @@ private:
   void refreshLongNoteModeButtons();
   void setAssistOptionSelection(const std::string &option);
   void refreshAssistOptionButtons();
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
+  EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;
+  bool currentPlayOptionSelectionAllowed(const std::string &option) const;
+  bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
   void refreshReadySettingsSummary();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,
