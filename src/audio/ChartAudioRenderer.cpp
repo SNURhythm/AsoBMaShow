@@ -246,14 +246,12 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     const auto readStart = std::chrono::steady_clock::now();
     if (!readArchiveAudioBatch(batch, range, files, &errorMessage)) {
       logMessage(options, "Chart audio archived preload failed: " +
-                              path_t_to_utf8(fspath_to_path_t(
-                                  batch.archivePath)) +
+                              fspath_to_utf8(batch.archivePath) +
                               ": " + errorMessage);
       continue;
     }
     logMessage(options, "Chart audio archive batch read: " +
-                            path_t_to_utf8(fspath_to_path_t(
-                                batch.archivePath)) +
+                            fspath_to_utf8(batch.archivePath) +
                             " files=" + std::to_string(files.size()) +
                             " time=" + secondsString(elapsedMicros(readStart)) +
                             "s");
@@ -299,15 +297,13 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     decodedCount += decodedInBatch.load(std::memory_order_relaxed);
     if (failedInBatch.load(std::memory_order_relaxed) > 0) {
       logMessage(options, "Chart audio archive decode failures: " +
-                              path_t_to_utf8(fspath_to_path_t(
-                                  batch.archivePath)) +
+                              fspath_to_utf8(batch.archivePath) +
                               " count=" +
                               std::to_string(failedInBatch.load(
                                   std::memory_order_relaxed)));
     }
     logMessage(options, "Chart audio archive batch decode: " +
-                            path_t_to_utf8(fspath_to_path_t(
-                                batch.archivePath)) +
+                            fspath_to_utf8(batch.archivePath) +
                             " time=" +
                             secondsString(elapsedMicros(decodeStart)) + "s");
   }
