@@ -137,8 +137,15 @@ CachedAudioPathForChart(const bms_parser::ChartMeta &meta) {
 
 bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
   std::error_code error;
-  return std::filesystem::is_regular_file(CachedAudioPathForChart(meta), error) &&
-         !error;
+  const std::filesystem::path path = CachedAudioPathForChart(meta);
+  const bool cached = std::filesystem::is_regular_file(path, error);
+  if (error) {
+    SDL_Log("Could not check cached music file %s: %s",
+            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+            error.message().c_str());
+    return false;
+  }
+  return cached;
 }
 
 std::optional<long long>
@@ -164,7 +171,15 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
 void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
   std::error_code error;
   const std::filesystem::path directory = CacheDirectory();
-  if (!std::filesystem::is_directory(directory, error) || error) {
+  const bool cacheDirectoryExists =
+      std::filesystem::is_directory(directory, error);
+  if (error) {
+    SDL_Log("Could not check music cache directory %s: %s",
+            path_t_to_utf8(fspath_to_path_t(directory)).c_str(),
+            error.message().c_str());
+    return;
+  }
+  if (!cacheDirectoryExists) {
     return;
   }
 
