@@ -14,8 +14,6 @@
 unsigned int parallel_worker_count(size_t n);
 void parallel_for(size_t n, std::function<void(int start, int end)> f);
 
-std::string ws2s(const std::wstring &wstr);
-
 std::string ws2s_utf8(const std::wstring &wstr);
 
 class Utils {

@@ -96,10 +96,6 @@ void parallel_for(size_t n, std::function<void(int start, int end)> f) {
   }
 }
 
-std::string ws2s(const std::wstring &wstr) {
-  return std::string().assign(wstr.begin(), wstr.end());
-}
-
 std::string ws2s_utf8(const std::wstring &wstr) {
   std::string output;
   output.reserve(wstr.size());
