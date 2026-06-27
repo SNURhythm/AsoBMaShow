@@ -4375,7 +4375,6 @@ bool readZipEntriesByIndexConcurrent(
 
   std::mutex stateMutex;
   std::condition_variable spaceCv;
-  std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
   bool failed = false;
@@ -4421,7 +4420,10 @@ bool readZipEntriesByIndexConcurrent(
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  const std::size_t targetBatchSize =
+      (directTargets.size() + maxWorkers - 1) / maxWorkers;
+
+  auto worker = [&](std::size_t begin, std::size_t end) {
     RandomAccessFile archiveFile;
     std::string openError;
     if (!archiveFile.open(archivePath, &openError)) {
@@ -4432,14 +4434,13 @@ bool readZipEntriesByIndexConcurrent(
     }
     std::vector<unsigned char> compressedScratch;
 
-    for (;;) {
-      ZipDirectReadTarget target;
+    for (std::size_t targetIndex = begin; targetIndex < end; ++targetIndex) {
+      const ZipDirectReadTarget &target = directTargets[targetIndex];
       {
         std::lock_guard lock(stateMutex);
-        if (failed || nextTarget >= directTargets.size()) {
+        if (failed) {
           break;
         }
-        target = directTargets[nextTarget++];
       }
 
       std::string pauseError;
@@ -4490,7 +4491,13 @@ bool readZipEntriesByIndexConcurrent(
   std::vector<std::thread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
-    workers.emplace_back(worker);
+    const std::size_t begin = i * targetBatchSize;
+    if (begin >= directTargets.size()) {
+      break;
+    }
+    const std::size_t end =
+        std::min(directTargets.size(), begin + targetBatchSize);
+    workers.emplace_back(worker, begin, end);
   }
   for (auto &thread : workers) {
     if (thread.joinable()) {
@@ -4520,6 +4527,7 @@ bool readZipEntriesByIndexConcurrent(
                          " targets=" + std::to_string(directTargets.size()) +
                          " files=" + std::to_string(emittedFiles) +
                          " workers=" + std::to_string(maxWorkers) +
+                         " chunkSize=" + std::to_string(targetBatchSize) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes) +
                          " prepareMs=" + std::to_string(prepareMs) +
