@@ -567,7 +567,7 @@ void SettingsScene::refreshChartLibrary() {
   pendingDeleteChartEntryPath.clear();
   if (context.requestRebuildChartLibrary) {
     context.requestRebuildChartLibrary();
-    chartFolderStatusMessage = "Chart list rebuild queued in Tasks.";
+    chartFolderStatusMessage = "Chart list rebuild started in the background.";
     chartFolderStatusColor = {181, 228, 165, 255};
     if (chartFolderStatusText != nullptr) {
       chartFolderStatusText->setText(chartFolderStatusMessage);

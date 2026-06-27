@@ -1074,15 +1074,16 @@ void MainMenuScene::applyThemeChange() {
   }
 }
 
-void MainMenuScene::startLibraryTaskWorker() {
+void MainMenuScene::startLibraryTaskWorker(bool allowWhilePaused) {
   std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  if (libraryTaskWorkerPaused.load()) {
+  const bool workerPaused = libraryTaskWorkerPaused.load();
+  if (workerPaused && !allowWhilePaused) {
     return;
   }
   if (checkEntriesThread.joinable()) {
     return;
   }
-  {
+  if (!workerPaused) {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     bool changed = false;
     for (auto &task : libraryTasks) {
@@ -1165,8 +1166,9 @@ void MainMenuScene::resumeLibraryTaskWorker() {
 }
 
 bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
-                                             const std::stop_token &stopToken) {
-  if (!libraryTaskWorkerPaused.load()) {
+                                             const std::stop_token &stopToken,
+                                             bool allowWhilePaused) {
+  if (!libraryTaskWorkerPaused.load() || allowWhilePaused) {
     return !stopToken.stop_requested();
   }
 
@@ -1196,8 +1198,8 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
-  startLibraryTaskWorker();
+    const std::string &iosBookmark, bool rebuildLibraryMetadata,
+    bool runWhileScenePaused) {
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
@@ -1208,6 +1210,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .folderToAdd = folderToAdd,
         .iosBookmark = iosBookmark,
         .rebuildLibraryMetadata = rebuildLibraryMetadata,
+        .runWhileScenePaused = runWhileScenePaused,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
@@ -1233,6 +1236,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
     }
     bumpLibraryTasksRevisionLocked();
   }
+  startLibraryTaskWorker(runWhileScenePaused);
   libraryTaskCv.notify_one();
 }
 
@@ -1466,17 +1470,37 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
     {
       std::unique_lock<std::mutex> lock(libraryTaskMutex);
       libraryTaskCv.wait(lock, [this, &stopToken]() {
-        return stopToken.stop_requested() ||
-               (!libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty());
+        if (stopToken.stop_requested()) {
+          return true;
+        }
+        if (!libraryTaskWorkerPaused.load()) {
+          return !libraryTaskQueue.empty();
+        }
+        return std::any_of(libraryTaskQueue.begin(), libraryTaskQueue.end(),
+                           [](const LibraryTaskRequest &queuedTask) {
+                             return queuedTask.runWhileScenePaused;
+                           });
       });
       if (stopToken.stop_requested()) {
         break;
       }
-      task = libraryTaskQueue.front();
-      libraryTaskQueue.pop_front();
+      auto taskIt = libraryTaskQueue.begin();
+      if (libraryTaskWorkerPaused.load()) {
+        taskIt = std::find_if(
+            libraryTaskQueue.begin(), libraryTaskQueue.end(),
+            [](const LibraryTaskRequest &queuedTask) {
+              return queuedTask.runWhileScenePaused;
+            });
+      }
+      if (taskIt == libraryTaskQueue.end()) {
+        continue;
+      }
+      task = *taskIt;
+      libraryTaskQueue.erase(taskIt);
     }
 
-    if (!waitForLibraryTaskResume(task.id, stopToken)) {
+    if (!waitForLibraryTaskResume(task.id, stopToken,
+                                  task.runWhileScenePaused)) {
       pausedTask = task;
       break;
     }
@@ -1607,7 +1631,8 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   dbHelper.CreateDifficultyTableTables(taskDb);
 
   auto pauseTask = [&]() {
-    return waitForLibraryTaskResume(task.id, stopToken);
+    return waitForLibraryTaskResume(task.id, stopToken,
+                                    task.runWhileScenePaused);
   };
   if (!pauseTask()) {
     return;
@@ -1752,8 +1777,9 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
       [this, taskId = task.id](const ChartScanProgress &progress) {
         updateLibraryTaskProgress(taskId, progress);
       },
-      [this, taskId = task.id, &stopToken]() {
-        return waitForLibraryTaskResume(taskId, stopToken);
+      [this, taskId = task.id, &stopToken,
+       allowWhilePaused = task.runWhileScenePaused]() {
+        return waitForLibraryTaskResume(taskId, stopToken, allowWhilePaused);
       });
 }
 
@@ -5196,7 +5222,7 @@ void MainMenuScene::startLibraryRebuild() {
     return;
   }
   enqueueLibraryRefreshTask("Rebuild Library", std::filesystem::path(), "",
-                            true);
+                            true, true);
   tasksModalOpenRequested.store(true);
 }
 
