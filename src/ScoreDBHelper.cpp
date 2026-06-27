@@ -197,17 +197,20 @@ void storeBestCourseRank(CourseScoreRankMap &ranks, const std::string &key,
   }
 }
 
+std::string bestClearMarkRankExpr() {
+  return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
+         std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
+         std::to_string(kClearTypeFullComboRank) +
+         " ELSE clear_type END)";
+}
+
 void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
                             ScoreRankMap &ranks, bool hashColumn) {
-  const std::string clearMarkExpr =
-      "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
-      std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-      std::to_string(kClearTypeFullComboRank) +
-      " ELSE clear_type END)";
   const std::string query =
-      std::string("SELECT ") + columnName + ", ln_mode, " + clearMarkExpr +
-      " FROM scores WHERE " + columnName + " IS NOT NULL AND " + columnName +
-      " != '' GROUP BY " + columnName + ", ln_mode";
+      std::string("SELECT ") + columnName + ", ln_mode, " +
+      bestClearMarkRankExpr() + " FROM scores WHERE " + columnName +
+      " IS NOT NULL AND " + columnName + " != '' GROUP BY " + columnName +
+      ", ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading score clear ranks",
@@ -228,13 +231,8 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
 }
 
 void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks) {
-  const std::string clearMarkExpr =
-      "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
-      std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-      std::to_string(kClearTypeFullComboRank) +
-      " ELSE clear_type END)";
   const std::string query =
-      "SELECT course_id, " + clearMarkExpr +
+      "SELECT course_id, " + bestClearMarkRankExpr() +
       " FROM course_scores WHERE course_id IS NOT NULL AND course_id > 0 "
       "GROUP BY course_id";
   SqliteStatementHandle stmt;
