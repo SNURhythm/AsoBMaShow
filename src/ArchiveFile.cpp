@@ -5115,9 +5115,24 @@ materializeFileBytes(const std::filesystem::path &path,
 
   std::filesystem::path output = materializedFileCachePath(path);
   bool needsWrite = true;
-  if (std::filesystem::exists(output, error) && !error) {
-    std::uintmax_t size = std::filesystem::file_size(output, error);
-    needsWrite = error || size != bytes.size();
+  const bool outputExists = std::filesystem::exists(output, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not check cached archive entry: " +
+                      error.message();
+    }
+    return std::nullopt;
+  }
+  if (outputExists) {
+    const std::uintmax_t size = std::filesystem::file_size(output, error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not read cached archive entry size: " +
+                        error.message();
+      }
+      return std::nullopt;
+    }
+    needsWrite = size != bytes.size();
   }
   if (needsWrite) {
     std::ofstream file(output, std::ios::binary | std::ios::trunc);
@@ -5131,6 +5146,13 @@ materializeFileBytes(const std::filesystem::path &path,
     if (!bytes.empty()) {
       file.write(reinterpret_cast<const char *>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!file) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not write cached archive entry: " +
+                        output.string();
+      }
+      return std::nullopt;
     }
   }
   return output;
