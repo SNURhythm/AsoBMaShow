@@ -7265,6 +7265,15 @@ bool MainMenuScene::selectedReplayIsAutoPlay() const {
          replaySummaries[selectedReplayIndex].autoPlay;
 }
 
+bms_parser::ChartMeta
+MainMenuScene::replayLoadMetaForRecord(const ChartMetaRecord &record) const {
+  bms_parser::ChartMeta meta = record.meta;
+  if (normalizeChartLongNoteModeValue(meta.LnMode) == 0) {
+    meta.LnMode = longNoteModeMetaValue(selectedLnMode);
+  }
+  return meta;
+}
+
 ReplaySummary
 MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
   std::optional<std::string> playOption;
@@ -7272,8 +7281,9 @@ MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
     playOption = selectedPlayOption;
   }
   return replay_autoplay::BuildSummary(
-      record.meta, selectedGaugeType, selectedGaugeAutoShift, playOption,
-      std::nullopt, std::nullopt, std::nullopt, selectedAssistOption);
+      replayLoadMetaForRecord(record), selectedGaugeType,
+      selectedGaugeAutoShift, playOption, std::nullopt, std::nullopt,
+      std::nullopt, selectedAssistOption);
 }
 
 bool MainMenuScene::prepareAutoPlayChartForRecord(
@@ -7373,8 +7383,8 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return true;
         }
 
-        auto replay =
-            ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+        auto replay = ReplayDBHelper::GetInstance().LoadReplay(
+            replayId, replayLoadMetaForRecord(record));
         if (!replay.has_value()) {
           resetReplayWatchLoadingUi();
           refreshReplayAvailability(&record);
@@ -7620,8 +7630,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
-      auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId,
-                                                             record.meta);
+      auto replay = ReplayDBHelper::GetInstance().LoadReplay(
+          replayId, replayLoadMetaForRecord(record));
       if (!replay.has_value()) {
         complete({.success = false, .message = "No Replay"});
         return;
@@ -7700,7 +7710,8 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     }
     context.jukebox.stop();
 
-    auto replay = ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+    auto replay = ReplayDBHelper::GetInstance().LoadReplay(
+        replayId, replayLoadMetaForRecord(record));
     if (!replay.has_value()) {
       complete({.success = false, .message = "No Replay"});
       applyReplayVideoExportResult();

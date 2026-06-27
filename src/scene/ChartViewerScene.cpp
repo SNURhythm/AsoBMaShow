@@ -3213,8 +3213,10 @@ void ChartViewerScene::loadSelectedGhostReplay() {
           return true;
         }
 
+        const bms_parser::ChartMeta &loadMeta =
+            chart != nullptr ? chart->Meta : record.meta;
         auto replay =
-            ReplayDBHelper::GetInstance().LoadReplay(replayId, record.meta);
+            ReplayDBHelper::GetInstance().LoadReplay(replayId, loadMeta);
         if (!replay.has_value()) {
           if (statusText != nullptr) {
             statusText->setText("Ghost load failed");

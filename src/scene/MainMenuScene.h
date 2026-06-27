@@ -608,6 +608,8 @@ private:
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
   bool selectedReplayIsAutoPlay() const;
+  bms_parser::ChartMeta
+  replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
   bool prepareAutoPlayChartForRecord(
       const ChartMetaRecord &record,

@@ -209,6 +209,10 @@ GaugeType gaugeTypeFromInt(int value) {
   return gaugeTypeAtIndex(value);
 }
 
+int normalizeReplayLongNoteModeValue(int lnMode) {
+  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
+}
+
 Judgement judgementFromInt(int value) {
   if (value < 0 || value >= JudgementCount) {
     return None;
@@ -350,6 +354,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
                             "chart_sha256 TEXT,"
                             "chart_title TEXT,"
                             "chart_artist TEXT,"
+                            "ln_mode INTEGER NOT NULL DEFAULT 0,"
                             "gauge_type INTEGER NOT NULL,"
                             "gauge_auto_shift INTEGER NOT NULL,"
                             "final_score INTEGER NOT NULL,"
@@ -406,6 +411,13 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!tableHasColumn(db, "replays", "assist_option") &&
       !execSql(db, "ALTER TABLE replays ADD COLUMN assist_option TEXT",
                "adding replay assist option column")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "replays", "ln_mode") &&
+      !execSql(db,
+               "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL "
+               "DEFAULT 0",
+               "adding replay long note mode column")) {
     return false;
   }
 
@@ -501,13 +513,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
       "gauge_type, gauge_auto_shift, final_score, final_gauge, clear_type,"
       "random_seed, random_prng, random_values, play_option, play_option_seed,"
-      "play_option2, play_option2_seed, assist_option"
+      "play_option2, play_option2_seed, assist_option, ln_mode"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
       "@gauge_type, @gauge_auto_shift, @final_score, @final_gauge,"
       "@clear_type, @random_seed, @random_prng, @random_values,"
       "@play_option, @play_option_seed, @play_option2, @play_option2_seed,"
-      "@assist_option"
+      "@assist_option, @ln_mode"
       ")";
 
   SqliteStatementHandle replayStmt;
@@ -555,6 +567,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
   bindText(replayStmt.get(), bindIndex++,
            assist_options::normalize(replay.assistOption));
+  sqlite3_bind_int(replayStmt.get(), bindIndex++,
+                   normalizeReplayLongNoteModeValue(replay.chartMeta.LnMode));
 
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -721,7 +735,8 @@ ReplayDBHelper::LoadReplay(int replayId,
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
       "clear_type, created_at, random_seed, random_prng, random_values,"
       "play_option,"
-      "play_option_seed, play_option2, play_option2_seed, assist_option "
+      "play_option_seed, play_option2, play_option2_seed, assist_option, "
+      "ln_mode "
       "FROM replays WHERE id = ? AND "
       "((? != '' AND chart_sha256 = ?) OR "
       "(? != '' AND chart_md5 = ?) OR "
@@ -783,6 +798,11 @@ ReplayDBHelper::LoadReplay(int replayId,
     }
     if (sqlite3_column_type(stmt.get(), 19) != SQLITE_NULL) {
       loaded.assistOption = assist_options::normalize(readText(stmt.get(), 19));
+    }
+    const int replayLongNoteMode =
+        normalizeReplayLongNoteModeValue(sqlite3_column_int(stmt.get(), 20));
+    if (replayLongNoteMode > 0) {
+      loaded.chartMeta.LnMode = replayLongNoteMode;
     }
     replay = std::move(loaded);
   }
