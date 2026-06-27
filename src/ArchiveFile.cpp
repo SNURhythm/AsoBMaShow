@@ -1,5 +1,6 @@
 #include "ArchiveFile.h"
 
+#include "BmsMetadataText.h"
 #include "targets.h"
 #include "RAII.h"
 #if TARGET_OS_ANDROID
@@ -12,7 +13,6 @@
 #endif
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <clocale>
@@ -85,15 +85,10 @@ bool stopRequested(const std::stop_token *stopToken);
 bool pauseIfNeeded(const PauseCallback &pauseCallback,
                    std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
-                         double fraction, std::uint64_t current,
-                         std::uint64_t total, std::string message);
+                          double fraction, std::uint64_t current,
+                          std::uint64_t total, std::string message);
 
-std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
+using asobmshow::bms_metadata::lowerCopy;
 
 std::string replaceAll(std::string value, std::string_view needle,
                        std::string_view replacement) {
