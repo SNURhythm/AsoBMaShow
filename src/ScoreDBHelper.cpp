@@ -53,9 +53,9 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
 
 int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("reading score database version", db);
+  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
+                                    "reading score database version",
+                                    logSqlErrorText)) {
     return 0;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -81,9 +81,9 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("reading score migration value", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "reading score migration value",
+                                    logSqlErrorText)) {
     return fallback;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -174,9 +174,9 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
       " FROM scores WHERE " + columnName + " IS NOT NULL AND " + columnName +
       " != '' GROUP BY " + columnName + ", ln_mode";
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("loading score clear ranks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "loading score clear ranks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -203,9 +203,9 @@ void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks) {
       " FROM course_scores WHERE course_id IS NOT NULL AND course_id > 0 "
       "GROUP BY course_id";
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("loading course score clear ranks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "loading course score clear ranks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -748,9 +748,9 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       ")";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing score insert", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing score insert",
+                                    logSqlErrorText)) {
     return false;
   }
 
@@ -779,7 +779,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getClearTypeRank());
 
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     logSqlError("saving score", db);
     return false;
@@ -809,9 +809,9 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
       ")";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing course score insert", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing course score insert",
+                                    logSqlErrorText)) {
     return false;
   }
 
@@ -857,7 +857,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
   }
   sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
 
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     logSqlError("saving course score", db);
     return false;
@@ -933,9 +933,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
       "LIMIT 1";
 
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(connection.get(), query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("loading best score", connection.get());
+  if (!prepareSqliteStatementLogged(connection.get(), query, stmt,
+                                    "loading best score", logSqlErrorText)) {
     return std::nullopt;
   }
 
@@ -989,9 +988,9 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
       "LIMIT 1";
 
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(connection.get(), query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("loading best course score", connection.get());
+  if (!prepareSqliteStatementLogged(connection.get(), query, stmt,
+                                    "loading best course score",
+                                    logSqlErrorText)) {
     return std::nullopt;
   }
 
