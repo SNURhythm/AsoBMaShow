@@ -166,6 +166,31 @@ inline bool executeSqliteLogged(sqlite3 *db, const char *query,
   return true;
 }
 
+template <typename LogSqlError>
+inline bool updateSqliteColumnWithExpressionLogged(
+    sqlite3 *db, const char *tableName, const char *columnName,
+    const std::string &expression, const char *context,
+    const LogSqlError &logSqlError, int *changedRows = nullptr) {
+  std::string query = "UPDATE ";
+  query += tableName;
+  query += " SET ";
+  query += columnName;
+  query += " = ";
+  query += expression;
+  query += " WHERE ";
+  query += columnName;
+  query += " != ";
+  query += expression;
+
+  if (!executeSqliteLogged(db, query.c_str(), context, logSqlError)) {
+    return false;
+  }
+  if (changedRows != nullptr) {
+    *changedRows = sqlite3_changes(db);
+  }
+  return true;
+}
+
 inline std::optional<std::string>
 attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
                      const char *schemaName) {
@@ -237,6 +262,23 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
     return sqliteDatabaseError(db);
   }
   return std::nullopt;
+}
+
+template <typename LogSqlError>
+inline bool ensureSqliteTableColumnLogged(sqlite3 *db, const char *tableName,
+                                          const char *columnName,
+                                          const char *alterQuery,
+                                          const char *schemaContext,
+                                          const char *alterContext,
+                                          const LogSqlError &logSqlError) {
+  bool hasColumn = false;
+  if (const auto error =
+          querySqliteTableHasColumn(db, tableName, columnName, hasColumn)) {
+    logSqlError(schemaContext, *error);
+    return false;
+  }
+  return hasColumn ||
+         executeSqliteLogged(db, alterQuery, alterContext, logSqlError);
 }
 
 inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,

@@ -1171,9 +1171,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   panel->addView(workspace);
 
   auto *trackList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+      music_playlist::SameTrackIdentity);
   if (isLibrary) {
     libraryList = trackList;
   } else {
@@ -1520,10 +1518,8 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistSelectionDetailText->setThemedColor(ui_theme::textSecondary);
   editorColumn->addView(playlistSelectionDetailText);
 
-  playlistList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+  playlistList =
+      new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
   playlistList->setFlex(1);
   playlistList->itemHeight = kTrackRowHeight;
   playlistList->reserveScrollbarGutter = true;
@@ -1810,10 +1806,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueTitleText->setThemedColor(ui_theme::textSecondary);
   queueColumn->addView(queueTitleText);
 
-  playerQueueList = new RecyclerView<MusicTrack>(
-      [](const MusicTrack &a, const MusicTrack &b) {
-        return a.trackId == b.trackId && a.chartId == b.chartId;
-      });
+  playerQueueList =
+      new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
   playerQueueList->setFlex(1);
   playerQueueList->itemHeight = kTrackRowHeight;
   playerQueueList->reserveScrollbarGutter = true;

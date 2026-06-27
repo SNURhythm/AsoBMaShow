@@ -7,6 +7,7 @@ namespace asobmshow::chart_sql {
 
 inline constexpr const char *kChartMetaTable = "chart_meta";
 inline constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+inline constexpr std::string_view kStoredDocumentsBmsPrefix = "Documents/BMS/";
 inline constexpr const char *kChartMetaSelectColumns =
     "cm.path,"
     "cm.md5,"
@@ -62,28 +63,78 @@ inline std::string chartArtworkOrderBy(std::string_view alias) {
          aliasText + ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
+inline std::string normalizedSqlHash(std::string_view expression) {
+  return "lower(trim(" + std::string(expression) + "))";
+}
+
+inline std::string sqlTextHasValue(std::string_view expression) {
+  return "NULLIF(TRIM(" + std::string(expression) + "), '') IS NOT NULL";
+}
+
+inline std::string legacyBmsRelativePathExpr(std::string_view expression) {
+  const std::string text(expression);
+  return "CASE WHEN " + text + " LIKE '" +
+         std::string(kStoredDocumentsBmsPrefix) + "%' THEN substr(" + text +
+         ", length('" + std::string(kStoredDocumentsBmsPrefix) +
+         "') + 1) ELSE " + text + " END";
+}
+
+inline std::string storedOrLegacyBmsPathMatchCondition(
+    std::string_view storedPathExpression,
+    std::string_view chartPathExpression) {
+  const std::string storedPath(storedPathExpression);
+  const std::string chartPath(chartPathExpression);
+  return storedPath + " != '' AND " + chartPath + " != '' AND (" +
+         chartPath + " = " + storedPath + " OR " + chartPath + " = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath +
+         " OR " + storedPath + " = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + chartPath + ")";
+}
+
+inline std::string boundNormalizedHashMatchCondition(
+    std::string_view storedHashExpression) {
+  const std::string storedHash(storedHashExpression);
+  return "? != '' AND " + normalizedSqlHash(storedHash) + " = ?";
+}
+
+inline std::string boundStoredOrLegacyBmsPathMatchCondition(
+    std::string_view storedPathExpression) {
+  const std::string storedPath(storedPathExpression);
+  return "? != '' AND (" + storedPath + " = ? OR " + storedPath +
+         " = '" + std::string(kStoredDocumentsBmsPrefix) + "' || ? OR ? = '" +
+         std::string(kStoredDocumentsBmsPrefix) + "' || " + storedPath + ")";
+}
+
+inline std::string chartIdentityHashCondition(std::string_view itemAlias,
+                                              std::string_view itemColumn,
+                                              std::string_view chartAlias,
+                                              std::string_view chartColumn) {
+  const std::string itemText(itemAlias);
+  const std::string itemColumnText(itemColumn);
+  const std::string chartText(chartAlias);
+  const std::string chartColumnText(chartColumn);
+  const std::string itemExpr = itemText + "." + itemColumnText;
+  return sqlTextHasValue(itemExpr) + " AND " + chartText + "." +
+         chartColumnText + " = " + normalizedSqlHash(itemExpr);
+}
+
 inline std::string chartIdentitySha256Condition(std::string_view itemAlias,
                                                 std::string_view chartAlias) {
-  const std::string itemText(itemAlias);
-  const std::string chartText(chartAlias);
-  return itemText + ".chart_sha256 != '' AND " + chartText +
-         ".sha256 = " + itemText + ".chart_sha256";
+  return chartIdentityHashCondition(itemAlias, "chart_sha256", chartAlias,
+                                    "sha256");
 }
 
 inline std::string chartIdentityMd5Condition(std::string_view itemAlias,
                                              std::string_view chartAlias) {
-  const std::string itemText(itemAlias);
-  const std::string chartText(chartAlias);
-  return itemText + ".chart_md5 != '' AND " + chartText +
-         ".md5 = " + itemText + ".chart_md5";
+  return chartIdentityHashCondition(itemAlias, "chart_md5", chartAlias, "md5");
 }
 
 inline std::string chartIdentityPathCondition(std::string_view itemAlias,
                                               std::string_view chartAlias) {
   const std::string itemText(itemAlias);
   const std::string chartText(chartAlias);
-  return itemText + ".chart_path != '' AND " + chartText +
-         ".path = " + itemText + ".chart_path";
+  return storedOrLegacyBmsPathMatchCondition(itemText + ".chart_path",
+                                             chartText + ".path");
 }
 
 inline std::string chartIdentityMatchPredicate(std::string_view itemAlias,
@@ -106,12 +157,15 @@ inline std::string matchedChartPathSubquery(
     std::string_view matchAlias = "cm_match") {
   const std::string sourceText(sourceAlias);
   const std::string matchText(matchAlias);
+  const std::string sourceSha256 = sourceText + ".sha256";
+  const std::string sourceMd5 = sourceText + ".md5";
   std::string query = "(SELECT " + matchText + ".path FROM " +
                       kChartMetaTable + " " + matchText + " WHERE ((" +
-                      sourceText + ".sha256 != '' AND " + matchText +
-                      ".sha256 = " + sourceText + ".sha256) OR (" +
-                      sourceText + ".md5 != '' AND " + matchText +
-                      ".md5 = " + sourceText + ".md5)) ORDER BY " +
+                      sqlTextHasValue(sourceSha256) + " AND " + matchText +
+                      ".sha256 = " + normalizedSqlHash(sourceSha256) + ") OR (" +
+                      sqlTextHasValue(sourceMd5) + " AND " + matchText +
+                      ".md5 = " + normalizedSqlHash(sourceMd5) +
+                      ")) ORDER BY " +
                       chartSourceOrderBy(matchText);
   if (includeTitleTieBreaker) {
     query += ", " + matchText + ".title COLLATE NOCASE";

@@ -76,11 +76,12 @@ std::string ChartTrackIdForChart(const bms_parser::ChartMeta &meta) {
 }
 
 std::string ChartIdForChart(const bms_parser::ChartMeta &meta) {
-  const std::string sha256 = lowerTrimmed(meta.SHA256);
+  const std::string sha256 =
+      asobmshow::bms_metadata::normalizedHash(meta.SHA256);
   if (!sha256.empty()) {
     return "sha256:" + sha256;
   }
-  const std::string md5 = lowerTrimmed(meta.MD5);
+  const std::string md5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
   if (!md5.empty()) {
     return "md5:" + md5;
   }

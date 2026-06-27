@@ -68,8 +68,9 @@ std::string sanitizeFileNamePart(const std::string &value) {
 }
 
 std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
-  const std::string sha256 = lowerTrimmed(meta.SHA256);
-  const std::string md5 = lowerTrimmed(meta.MD5);
+  const std::string sha256 =
+      asobmshow::bms_metadata::normalizedHash(meta.SHA256);
+  const std::string md5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
   const std::string identity =
       !sha256.empty() ? "sha256:" + sha256
                       : (!md5.empty() ? "md5:" + md5

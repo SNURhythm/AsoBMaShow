@@ -23,16 +23,28 @@
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-constexpr int kScoreDatabaseSchemaVersion = 2;
+constexpr int kScoreDatabaseSchemaVersion = 3;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
+using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
+using asobmshow::chart_sql::kStoredDocumentsBmsPrefix;
+using asobmshow::chart_sql::normalizedSqlHash;
+using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
+}
+
+std::string legacyBmsRelativePath(std::string_view path) {
+  if (!path.starts_with(kStoredDocumentsBmsPrefix)) {
+    return "";
+  }
+  return std::string(path.substr(kStoredDocumentsBmsPrefix.size()));
 }
 
 void logSqlErrorText(const char *context, const std::string &error) {
@@ -77,6 +89,47 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
     logSqlErrorText(context, *error);
     return false;
+  }
+  return true;
+}
+
+bool ensureScoreChartIdentityColumns(sqlite3 *db) {
+  return ensureSqliteTableColumnLogged(
+             db, "scores", "chart_path",
+             "ALTER TABLE scores ADD COLUMN chart_path TEXT",
+             "reading score schema", "adding score chart path column",
+             logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "chart_md5",
+             "ALTER TABLE scores ADD COLUMN chart_md5 TEXT",
+             "reading score schema", "adding score chart md5 column",
+             logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "chart_sha256",
+             "ALTER TABLE scores ADD COLUMN chart_sha256 TEXT",
+             "reading score schema", "adding score chart sha256 column",
+             logSqlErrorText);
+}
+
+bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
+  int changedRows = 0;
+  int totalChangedRows = 0;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, "scores", "chart_md5", normalizedSqlHash("chart_md5"),
+          "normalizing stored score md5 hashes", logSqlErrorText,
+          &changedRows)) {
+    return false;
+  }
+  totalChangedRows += changedRows;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, "scores", "chart_sha256", normalizedSqlHash("chart_sha256"),
+          "normalizing stored score sha256 hashes", logSqlErrorText,
+          &changedRows)) {
+    return false;
+  }
+  totalChangedRows += changedRows;
+  if (totalChangedRows > 0) {
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
 }
@@ -130,9 +183,9 @@ ScoreChartMatch scoreChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
 }
 
 std::string scoreChartMatchPredicate() {
-  return "((? != '' AND lower(trim(chart_sha256)) = ?) OR "
-         "(? != '' AND lower(trim(chart_md5)) = ?) OR "
-         "(? != '' AND chart_path = ?))";
+  return "((" + boundNormalizedHashMatchCondition("chart_sha256") + ") OR (" +
+         boundNormalizedHashMatchCondition("chart_md5") + ") OR (" +
+         boundStoredOrLegacyBmsPathMatchCondition("chart_path") + "))";
 }
 
 int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
@@ -141,6 +194,8 @@ int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
   bindSqliteText(stmt, bindIndex++, match.sha256);
   bindSqliteText(stmt, bindIndex++, match.md5);
   bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;
@@ -195,6 +250,27 @@ void storeBestCourseRank(CourseScoreRankMap &ranks, const std::string &key,
   if (it == ranks.end() || rank > it->second) {
     ranks[key] = rank;
   }
+}
+
+int bestRankForPathKey(const ScoreRankMap &ranks, std::string_view path,
+                       int longNoteMode) {
+  if (path.empty()) {
+    return kNoClearTypeRank;
+  }
+  const auto pathIt = ranks.find(path);
+  if (pathIt != ranks.end()) {
+    return pathIt->second.bestRankForMode(longNoteMode);
+  }
+
+  const std::string legacyPath = legacyBmsRelativePath(path);
+  if (legacyPath.empty()) {
+    return kNoClearTypeRank;
+  }
+  const auto legacyPathIt = ranks.find(legacyPath);
+  if (legacyPathIt != ranks.end()) {
+    return legacyPathIt->second.bestRankForMode(longNoteMode);
+  }
+  return kNoClearTypeRank;
 }
 
 std::string bestClearMarkRankExpr() {
@@ -302,10 +378,6 @@ std::string scoreMigrationHashHasValue(std::string_view columnName) {
          ") != ''";
 }
 
-std::string scoreMigrationPathHasValue() {
-  return "scores.chart_path IS NOT NULL AND scores.chart_path != ''";
-}
-
 std::string scoreMigrationHashMatchCondition(std::string_view scoreColumn,
                                              std::string_view chartAlias,
                                              std::string_view chartColumn) {
@@ -318,8 +390,8 @@ std::string scoreMigrationHashMatchCondition(std::string_view scoreColumn,
 
 std::string scoreMigrationPathMatchCondition(std::string_view chartAlias) {
   const std::string alias(chartAlias);
-  return scoreMigrationPathHasValue() + " AND " + alias +
-         ".path = scores.chart_path";
+  return storedOrLegacyBmsPathMatchCondition("scores.chart_path",
+                                             alias + ".path");
 }
 
 std::string scoreMigrationChartMatchPredicate(std::string_view chartAlias) {
@@ -474,6 +546,11 @@ bool migrateScoreDatabaseToVersion2(sqlite3 *db, bool &completed) {
   return migrateLegacyScoreLongNoteModes(db, completed);
 }
 
+bool migrateScoreDatabaseToVersion3(sqlite3 *db, bool &completed) {
+  completed = normalizeScoreChartIdentityHashes(db);
+  return completed;
+}
+
 bool runScoreDatabaseMigrationPasses(
     sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -516,6 +593,7 @@ bool migrateScoreDatabaseSchema(sqlite3 *db) {
       {1, "score long note modes", migrateScoreDatabaseToVersion1},
       {2, "repair legacy score long note modes",
        migrateScoreDatabaseToVersion2},
+      {3, "normalize score chart hashes", migrateScoreDatabaseToVersion3},
   };
   return runScoreDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -579,9 +657,10 @@ int ScoreClearRankCache::bestRankForHashes(const std::string &sha256,
   }
 
   const std::string normalizedChartPath = normalizedPath(path);
-  const auto pathIt = rankByPath.find(normalizedChartPath);
-  if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+  const int pathRank =
+      bestRankForPathKey(rankByPath, normalizedChartPath, longNoteMode);
+  if (pathRank != kNoClearTypeRank) {
+    return pathRank;
   }
 
   return kNoClearTypeRank;
@@ -601,9 +680,9 @@ int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
     return md5It->second.bestRankForMode(longNoteMode);
   }
 
-  const auto pathIt = rankByPath.find(path);
-  if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+  const int pathRank = bestRankForPathKey(rankByPath, path, longNoteMode);
+  if (pathRank != kNoClearTypeRank) {
+    return pathRank;
   }
 
   return kNoClearTypeRank;
@@ -685,6 +764,10 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
       "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating score table")) {
+    return false;
+  }
+
+  if (!ensureScoreChartIdentityColumns(db)) {
     return false;
   }
 
@@ -805,8 +888,8 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
   int bindIndex = 1;
   bindSqliteText(stmt.get(), bindIndex++, chartPath);
-  bindSqliteText(stmt.get(), bindIndex++, chartMeta.MD5);
-  bindSqliteText(stmt.get(), bindIndex++, chartMeta.SHA256);
+  bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.MD5));
+  bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.SHA256));
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    scoreLongNoteModeForClearLamp(chartMeta));
   bindSqliteText(stmt.get(), bindIndex++, chartMeta.Title);
