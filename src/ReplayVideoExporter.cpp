@@ -207,6 +207,17 @@ long long gameplayResultTransitionMicrosForReplay(
       chart, latePoorTiming);
 }
 
+long long courseStageGameplayDurationMicrosForReplay(
+    const bms_parser::Chart &chart, long long audioDurationMicros,
+    bool includeResultScreen) {
+  const long long transitionDurationMicros =
+      gameplayResultTransitionMicrosForReplay(chart);
+  if (includeResultScreen) {
+    return transitionDurationMicros;
+  }
+  return std::max(transitionDurationMicros, std::max(0LL, audioDurationMicros));
+}
+
 std::string formatString(const char *format, va_list args) {
   va_list sizeArgs;
   va_copy(sizeArgs, args);
@@ -3591,7 +3602,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
             ? std::max(0LL, replay.stages[i].restMicrosAfterStage)
             : 0LL;
     const long long gameplayDurationMicros =
-        gameplayResultTransitionMicrosForReplay(*chart);
+        courseStageGameplayDurationMicrosForReplay(
+            *chart, audioResult.durationMicros,
+            resolvedOptions.includeResultScreen);
     RhythmState resultState = replay_result::BuildResultState(
         *chart, stageReplay, replay.gaugeProfile);
     audioSegments.push_back(CourseReplayAudioSegment{
