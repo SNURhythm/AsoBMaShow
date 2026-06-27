@@ -128,20 +128,9 @@ bool ensureStoredMusicTrackIdentityColumns(sqlite3 *db, const char *table) {
 
 bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
                                const char *column) {
-  std::string query = "UPDATE ";
-  query += table;
-  query += " SET ";
-  query += column;
-  query += " = ";
-  query += normalizedSqlHash(column);
-  query += " WHERE ";
-  query += column;
-  query += " != ";
-  query += normalizedSqlHash(column);
-  if (!execSql(db, query.c_str(), "normalizing stored playlist hash column")) {
-    return false;
-  }
-  return true;
+  return updateSqliteColumnWithExpressionLogged(
+      db, table, column, normalizedSqlHash(column),
+      "normalizing stored playlist hash column", logSqlErrorText);
 }
 
 bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {

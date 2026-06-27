@@ -1297,22 +1297,14 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
 
 bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
                                const char *column) {
-  std::string query = "UPDATE ";
-  query += table;
-  query += " SET ";
-  query += column;
-  query += " = ";
-  query += normalizedSqlHash(column);
-  query += " WHERE ";
-  query += column;
-  query += " != ";
-  query += normalizedSqlHash(column);
-
-  if (!execSql(db, query.c_str(), "normalizing stored chart hash column")) {
+  int changedCount = 0;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, table, column, normalizedSqlHash(column),
+          "normalizing stored chart hash column", logSqlErrorText,
+          &changedCount)) {
     return false;
   }
 
-  const int changedCount = sqlite3_changes(db);
   if (changedCount > 0) {
     SDL_Log("Normalized %d stored chart hashes in %s.%s", changedCount, table,
             column);

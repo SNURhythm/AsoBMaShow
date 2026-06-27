@@ -22,6 +22,7 @@ using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
+using asobmshow::chart_sql::normalizedSqlHash;
 
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
@@ -41,6 +42,15 @@ bool ensureTableColumn(sqlite3 *db, const char *tableName,
   return ensureSqliteTableColumnLogged(db, tableName, columnName, alterQuery,
                                        "reading replay schema", context,
                                        logSqlErrorText);
+}
+
+bool normalizeReplayChartIdentityHashes(sqlite3 *db) {
+  return updateSqliteColumnWithExpressionLogged(
+             db, "replays", "chart_md5", normalizedSqlHash("chart_md5"),
+             "normalizing stored replay md5 hashes", logSqlErrorText) &&
+         updateSqliteColumnWithExpressionLogged(
+             db, "replays", "chart_sha256", normalizedSqlHash("chart_sha256"),
+             "normalizing stored replay sha256 hashes", logSqlErrorText);
 }
 
 void bindOptionalText(sqlite3_stmt *stmt, int idx,
@@ -536,6 +546,9 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
                            migration.alterQuery, migration.context)) {
       return false;
     }
+  }
+  if (!normalizeReplayChartIdentityHashes(db)) {
+    return false;
   }
 
   const char *eventQuery =

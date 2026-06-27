@@ -32,6 +32,7 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
+using asobmshow::chart_sql::normalizedSqlHash;
 using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
 
 constexpr std::string_view kStoredDocumentsBmsPrefix = "Documents/BMS/";
@@ -109,6 +110,29 @@ bool ensureScoreChartIdentityColumns(sqlite3 *db) {
              "ALTER TABLE scores ADD COLUMN chart_sha256 TEXT",
              "reading score schema", "adding score chart sha256 column",
              logSqlErrorText);
+}
+
+bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
+  int changedRows = 0;
+  int totalChangedRows = 0;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, "scores", "chart_md5", normalizedSqlHash("chart_md5"),
+          "normalizing stored score md5 hashes", logSqlErrorText,
+          &changedRows)) {
+    return false;
+  }
+  totalChangedRows += changedRows;
+  if (!updateSqliteColumnWithExpressionLogged(
+          db, "scores", "chart_sha256", normalizedSqlHash("chart_sha256"),
+          "normalizing stored score sha256 hashes", logSqlErrorText,
+          &changedRows)) {
+    return false;
+  }
+  totalChangedRows += changedRows;
+  if (totalChangedRows > 0) {
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+  return true;
 }
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
@@ -738,6 +762,9 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   }
 
   if (!ensureScoreChartIdentityColumns(db)) {
+    return false;
+  }
+  if (!normalizeScoreChartIdentityHashes(db)) {
     return false;
   }
 
