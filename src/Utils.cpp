@@ -1,7 +1,8 @@
 #include "Utils.h"
 #include <codecvt>
-#include <iostream>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "iOSNatives.hpp"
@@ -97,8 +98,11 @@ Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
   }
   return std::filesystem::path(WindowsUserDir) / GameName / SubPath;
 #else
-  // assume Unix
-  return std::filesystem::path(std::getenv("HOME")) / GameName / SubPath;
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return std::filesystem::path(home) / GameName / SubPath;
+  }
+  return std::filesystem::current_path() / GameName / SubPath;
 #endif
 #endif
 }
