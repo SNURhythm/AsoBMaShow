@@ -1336,9 +1336,13 @@ std::string chartClearMarkPredicate(const std::string &alias,
                                     int selectedLongNoteMode) {
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
-  return "COALESCE(" + scoreRankLookupExpr("0", alias + ".sha256", lnModeExpr) +
-         ", " + scoreRankLookupExpr("1", alias + ".md5", lnModeExpr) + ", " +
-         scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
+  return "COALESCE(" +
+         scoreRankLookupExpr("0", normalizedSqlHashColumn(alias, "sha256"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("1", normalizedSqlHashColumn(alias, "md5"),
+                             lnModeExpr) +
+         ", " + scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
@@ -1348,8 +1352,13 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreRankLookupExpr("0", entryAlias + ".sha256", lnModeExpr) + ", " +
-         scoreRankLookupExpr("1", entryAlias + ".md5", lnModeExpr) + ", " +
+         scoreRankLookupExpr("0",
+                             normalizedSqlHashColumn(entryAlias, "sha256"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("1", normalizedSqlHashColumn(entryAlias, "md5"),
+                             lnModeExpr) +
+         ", " +
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
