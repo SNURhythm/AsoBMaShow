@@ -1194,22 +1194,6 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark) {
-  std::filesystem::path taskFolderToAdd = folderToAdd;
-  std::string taskIOSBookmark = iosBookmark;
-  if (!taskFolderToAdd.empty()) {
-    auto &dbHelper = ChartDBHelper::GetInstance();
-    SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
-    sqlite3 *taskDb = taskDbHandle.get();
-    if (taskDb != nullptr) {
-      dbHelper.CreateEntriesTable(taskDb);
-      if (dbHelper.InsertEntry(taskDb, taskFolderToAdd, taskIOSBookmark)) {
-        taskFolderToAdd.clear();
-        taskIOSBookmark.clear();
-        requestLibraryReload(true);
-      }
-    }
-  }
-
   startLibraryTaskWorker();
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
@@ -1218,8 +1202,8 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .id = id,
         .kind = LibraryTaskKind::RefreshLibrary,
         .title = title,
-        .folderToAdd = taskFolderToAdd,
-        .iosBookmark = taskIOSBookmark,
+        .folderToAdd = folderToAdd,
+        .iosBookmark = iosBookmark,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
@@ -1625,10 +1609,18 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     return;
   }
 
+  std::vector<ChartEntry> entries;
   if (!task.folderToAdd.empty()) {
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
                         "Adding folder");
-    dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark);
+    if (!dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark)) {
+      throw std::runtime_error("Failed to add folder");
+    }
+    requestLibraryReload(true);
+    entries.push_back({
+        .path = fspath_to_path_t(task.folderToAdd),
+        .iosBookmark = task.iosBookmark,
+    });
   }
 
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
@@ -1645,7 +1637,9 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }
-  auto entries = dbHelper.SelectEffectiveEntries(taskDb);
+  if (entries.empty()) {
+    entries = dbHelper.SelectEffectiveEntries(taskDb);
+  }
 
   if (stopToken.stop_requested()) {
     return;
