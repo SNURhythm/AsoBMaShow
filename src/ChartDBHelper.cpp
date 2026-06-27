@@ -2503,23 +2503,28 @@ void populateDifficultyTableLabels(
 } // namespace
 
 sqlite3 *ChartDBHelper::Connect() {
-  std::filesystem::path Directory = Utils::GetDocumentsPath("db");
-  std::cout << "DB Directory: " << Directory.string() << "\n";
+  const std::filesystem::path directory = Utils::GetDocumentsPath("db");
+  std::cout << "DB Directory: " << directory.string() << "\n";
   std::error_code directoryError;
-  if (!Utils::EnsureDirectoryExists(Directory, directoryError)) {
-    std::cerr << "Can't create chart database directory " << Directory.string()
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create chart database directory " << directory.string()
               << ": " << directoryError.message() << "\n";
     return nullptr;
   }
-  std::filesystem::path path = Directory / "chart.db";
+  const std::filesystem::path path = directory / "chart.db";
   std::cout << "DB Path: " << path.string() << "\n";
-  sqlite3 *db;
-  int rc;
-  rc = sqlite3_open(path.string().c_str(), &db);
-  sqlite3_busy_timeout(db, 1000);
-  if (rc) {
-    std::cerr << "Can't open database: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_close(db);
+  sqlite3 *db = nullptr;
+  const int rc = sqlite3_open(path.string().c_str(), &db);
+  if (db != nullptr) {
+    sqlite3_busy_timeout(db, 1000);
+  }
+  if (rc != SQLITE_OK) {
+    std::cerr << "Can't open chart database: "
+              << (db != nullptr ? sqlite3_errmsg(db) : "unknown error")
+              << "\n";
+    if (db != nullptr) {
+      sqlite3_close(db);
+    }
     return nullptr;
   }
   // wal
