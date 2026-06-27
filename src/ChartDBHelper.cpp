@@ -5283,11 +5283,16 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   }
 
   invalidateDifficultyLabelCache();
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   const int tableId =
       upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
   if (tableId <= 0) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
@@ -5376,7 +5381,11 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
     }
   }
 
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   bumpLibraryRevision();
   SDL_Log("Imported difficulty table %s (%s) from %s", name.c_str(),
           symbol.c_str(), sourceUrl.c_str());
@@ -5647,9 +5656,14 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   }
 
   invalidateDifficultyLabelCache();
-  BeginTransaction(db);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start difficulty table delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   if (!clearDifficultyTableContent(db, tableId)) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
@@ -5657,18 +5671,20 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
   rc = sqlite3_step(stmt.get());
   const bool deleted = rc == SQLITE_DONE && sqlite3_changes(db) > 0;
   if (!deleted) {
-    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
-  CommitTransaction(db);
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit difficulty table delete transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
   bumpLibraryRevision();
   return true;
 }
