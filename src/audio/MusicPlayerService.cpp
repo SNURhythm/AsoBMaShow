@@ -650,7 +650,8 @@ bool MusicPlayerService::AddChartToPlaylist(
 }
 
 bool MusicPlayerService::RemoveChartFromSelectedPlaylist(
-    const bms_parser::ChartMeta &chartMeta, std::string &errorMessage) {
+    const bms_parser::ChartMeta &chartMeta, std::string &errorMessage,
+    int storedItemId) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
@@ -666,7 +667,7 @@ bool MusicPlayerService::RemoveChartFromSelectedPlaylist(
   const int playlistId = selectedPlaylistId;
   const bool deleted =
       playlistId > 0 &&
-      playlistDb.DeleteTrack(db, playlistId, chartMeta);
+      playlistDb.DeleteTrack(db, playlistId, chartMeta, storedItemId);
   RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
   if (!deleted) {
     errorMessage = "Selected chart is not in this playlist.";
@@ -677,7 +678,7 @@ bool MusicPlayerService::RemoveChartFromSelectedPlaylist(
 
 bool MusicPlayerService::MoveChartInSelectedPlaylist(
     const bms_parser::ChartMeta &chartMeta, int delta,
-    std::string &errorMessage) {
+    std::string &errorMessage, int storedItemId) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
@@ -693,7 +694,7 @@ bool MusicPlayerService::MoveChartInSelectedPlaylist(
   const int playlistId = selectedPlaylistId;
   const bool moved =
       playlistId > 0 &&
-      playlistDb.MoveTrack(db, playlistId, chartMeta, delta);
+      playlistDb.MoveTrack(db, playlistId, chartMeta, delta, storedItemId);
   RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
   if (!moved) {
     errorMessage = delta < 0 ? "Selected track is already at the top."

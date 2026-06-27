@@ -57,9 +57,11 @@ public:
                           const bms_parser::ChartMeta &chartMeta,
                           std::string &errorMessage);
   bool RemoveChartFromSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
-                                       std::string &errorMessage);
+                                       std::string &errorMessage,
+                                       int storedItemId = 0);
   bool MoveChartInSelectedPlaylist(const bms_parser::ChartMeta &chartMeta,
-                                   int delta, std::string &errorMessage);
+                                   int delta, std::string &errorMessage,
+                                   int storedItemId = 0);
   bool ClearSelectedPlaylist(std::string &errorMessage);
   bool DeleteSelectedPlaylist(std::string &errorMessage);
   bool SavePlaylistCursor(int playlistId, int cursorIndex,

@@ -44,6 +44,7 @@ struct ChartMetaRecord {
 
 struct MusicTrackRecord {
   bms_parser::ChartMeta representativeChart;
+  int storedItemId = 0;
   int chartCount = 0;
   bool useChartPathIdentity = false;
 };

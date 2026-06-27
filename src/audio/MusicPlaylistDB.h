@@ -32,9 +32,11 @@ public:
   bool InsertTrack(sqlite3 *db, int playlistId,
                    const bms_parser::ChartMeta &chartMeta);
   bool DeleteTrack(sqlite3 *db, int playlistId,
-                   const bms_parser::ChartMeta &chartMeta);
+                   const bms_parser::ChartMeta &chartMeta,
+                   int storedItemId = 0);
   bool MoveTrack(sqlite3 *db, int playlistId,
-                 const bms_parser::ChartMeta &chartMeta, int delta);
+                 const bms_parser::ChartMeta &chartMeta, int delta,
+                 int storedItemId = 0);
   bool ClearPlaylist(sqlite3 *db, int playlistId);
   bool DeletePlaylist(sqlite3 *db, int playlistId);
   MusicPlayerStateRecord SelectPlayerState(sqlite3 *db);

@@ -3497,7 +3497,7 @@ void MusicPlayerScene::removePlaylistTrack() {
 
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromSelectedPlaylist(
-          track->representativeChart, errorMessage)) {
+          track->representativeChart, errorMessage, track->storedItemId)) {
     pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();
@@ -3542,7 +3542,8 @@ void MusicPlayerScene::movePlaylistTrack(int delta) {
 
   std::string errorMessage;
   if (context.musicPlayer.MoveChartInSelectedPlaylist(
-          track->representativeChart, delta, errorMessage)) {
+          track->representativeChart, delta, errorMessage,
+          track->storedItemId)) {
     pendingClearPlaylistId = 0;
     playlists = context.musicPlayer.PlaylistsSnapshot();
     playlistTracks = context.musicPlayer.SelectedPlaylistTracksSnapshot();

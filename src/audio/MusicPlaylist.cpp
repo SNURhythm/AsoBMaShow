@@ -109,6 +109,7 @@ MusicTrack MakeTrack(const MusicTrackRecord &record) {
   const bool expandedChart = record.useChartPathIdentity;
   return {
       .trackId = expandedChart ? ChartTrackIdForChart(meta) : groupId,
+      .storedItemId = record.storedItemId,
       .chartId = ChartIdForChart(meta),
       .groupId = groupId,
       .representativeChart = meta,

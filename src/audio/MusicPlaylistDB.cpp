@@ -816,7 +816,7 @@ storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
   query += " LIMIT 1) AS representative_path FROM preferred_candidates pc "
            "GROUP BY pc.item_id) SELECT ";
   query += kChartMetaSelectColumns;
-  query += ", item_choices.music_chart_count, cm.";
+  query += ", item_choices.music_chart_count, cm.item_id, cm.";
   query += config.keyTypeAlias;
   query +=
       " FROM preferred_candidates cm JOIN item_choices ON "
@@ -839,8 +839,10 @@ void readStoredMusicTrackRows(sqlite3_stmt *stmt,
     record.representativeChart = readChartMeta(stmt);
     record.chartCount =
         std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
+    record.storedItemId =
+        sqlite3_column_int(stmt, kChartMetaColumnCount + 1);
     record.useChartPathIdentity =
-        columnString(stmt, kChartMetaColumnCount + 1) == "path";
+        columnString(stmt, kChartMetaColumnCount + 2) == "path";
     tracks.push_back(std::move(record));
   }
 }
@@ -1138,20 +1140,26 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
 }
 
 bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
-                                  const bms_parser::ChartMeta &chartMeta) {
+                                  const bms_parser::ChartMeta &chartMeta,
+                                  int storedItemId) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
   }
 
-  const auto identity = storedMusicTrackIdentity(chartMeta);
-  if (identity.musicKey.empty()) {
-    std::cerr << "Cannot delete music playlist track without a music key.\n";
-    return false;
+  std::string query = "DELETE FROM music_playlist_items "
+                      "WHERE playlist_id = ?1 AND ";
+  StoredMusicTrackIdentity identity;
+  if (storedItemId > 0) {
+    query += "id = ?2";
+  } else {
+    identity = storedMusicTrackIdentity(chartMeta);
+    if (identity.musicKey.empty()) {
+      std::cerr << "Cannot delete music playlist track without a music key.\n";
+      return false;
+    }
+    query += storedMusicTrackRowPredicate(2);
   }
 
-  std::string query =
-      "DELETE FROM music_playlist_items WHERE playlist_id = ?1 AND ";
-  query += storedMusicTrackRowPredicate(2);
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "preparing music playlist track delete",
@@ -1159,7 +1167,11 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindStoredMusicTrackIdentity(stmt, 2, identity);
+  if (storedItemId > 0) {
+    sqlite3_bind_int(stmt, 2, storedItemId);
+  } else {
+    bindStoredMusicTrackIdentity(stmt, 2, identity);
+  }
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("deleting music playlist track", db);
@@ -1176,24 +1188,29 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
 
 bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
                                 const bms_parser::ChartMeta &chartMeta,
-                                int delta) {
+                                int delta, int storedItemId) {
   if (playlistId <= 0 || delta == 0 || !CreateTables(db)) {
     return false;
   }
 
-  const auto identity = storedMusicTrackIdentity(chartMeta);
-  if (identity.musicKey.empty()) {
-    std::cerr << "Cannot move music playlist track without a music key.\n";
-    return false;
-  }
-
   std::string selectCurrentQuery =
-      "SELECT id, position FROM music_playlist_items WHERE playlist_id = ?1 "
-      "AND ";
-  selectCurrentQuery += storedMusicTrackRowPredicate(2);
-  selectCurrentQuery += " ORDER BY ";
-  selectCurrentQuery += storedMusicTrackRowPreferenceOrderBy(2);
-  selectCurrentQuery += ", position, id LIMIT 1";
+      "SELECT id, position FROM music_playlist_items "
+      "WHERE playlist_id = ?1 AND ";
+  StoredMusicTrackIdentity identity;
+  if (storedItemId > 0) {
+    selectCurrentQuery += "id = ?2";
+  } else {
+    identity = storedMusicTrackIdentity(chartMeta);
+    if (identity.musicKey.empty()) {
+      std::cerr << "Cannot move music playlist track without a music key.\n";
+      return false;
+    }
+    selectCurrentQuery += storedMusicTrackRowPredicate(2);
+    selectCurrentQuery += " ORDER BY ";
+    selectCurrentQuery += storedMusicTrackRowPreferenceOrderBy(2);
+    selectCurrentQuery += ", position, id";
+  }
+  selectCurrentQuery += " LIMIT 1";
   SqliteStatementHandle currentStmt;
   if (!prepareSqliteStatementLogged(
           db, selectCurrentQuery, currentStmt,
@@ -1201,7 +1218,11 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
-  bindStoredMusicTrackIdentity(currentStmt, 2, identity);
+  if (storedItemId > 0) {
+    sqlite3_bind_int(currentStmt, 2, storedItemId);
+  } else {
+    bindStoredMusicTrackIdentity(currentStmt, 2, identity);
+  }
   if (sqlite3_step(currentStmt) != SQLITE_ROW) {
     return false;
   }

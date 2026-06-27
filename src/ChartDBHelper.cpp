@@ -243,41 +243,6 @@ std::string chartFavoriteChartCandidateQuery() {
   return query;
 }
 
-std::string chartFavoritePreferredChartExists(
-    const std::string &matchCondition) {
-  std::string query = "EXISTS (SELECT 1 FROM chart_meta cm WHERE ";
-  query += matchCondition;
-  query += " AND ";
-  query += preferredChartPredicate("cm");
-  query += ")";
-  return query;
-}
-
-std::string chartFavoritePreferredChartExistsPredicate() {
-  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
-  const std::string favoriteSha256 = "cf.chart_sha256";
-  const std::string favoriteMd5 = "cf.chart_md5";
-  const std::string favoritePath = "cf.chart_path";
-  const std::string shaMatch =
-      favoriteSha256 + " != '' AND cm.sha256 = " + favoriteSha256;
-  const std::string md5Match =
-      favoriteMd5 + " != '' AND cm.md5 = " + favoriteMd5;
-  const std::string pathDirect =
-      favoritePath + " != '' AND cm.path = " + favoritePath;
-  const std::string pathPrefixed =
-      favoritePath + " != '' AND cm.path = '" + prefix + "' || " +
-      favoritePath;
-  const std::string pathLegacy =
-      favoritePath + " LIKE '" + prefix + "%' AND cm.path = substr(" +
-      favoritePath + ", length('" + prefix + "') + 1)";
-
-  return "(" + chartFavoritePreferredChartExists(shaMatch) + " OR " +
-         chartFavoritePreferredChartExists(md5Match) + " OR " +
-         chartFavoritePreferredChartExists(pathDirect) + " OR " +
-         chartFavoritePreferredChartExists(pathPrefixed) + " OR " +
-         chartFavoritePreferredChartExists(pathLegacy) + ")";
-}
-
 std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
   const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
   return chartPath +
@@ -3173,8 +3138,10 @@ int ChartDBHelper::CountFavoriteCharts(sqlite3 *db) {
     return 0;
   }
 
-  std::string query = "SELECT COUNT(*) FROM chart_favorites cf WHERE ";
-  query += chartFavoritePreferredChartExistsPredicate();
+  std::string query = "SELECT COUNT(*) FROM chart_meta cm WHERE ";
+  query += chartFavoriteIndexedPredicate("cm");
+  query += " AND ";
+  query += preferredChartPredicate("cm");
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
