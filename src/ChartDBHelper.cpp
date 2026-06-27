@@ -2654,10 +2654,8 @@ void ChartDBHelper::SelectAllChartMeta(
   query += kChartMetaSelectColumns;
   query += " FROM chart_meta cm ORDER BY cm.title";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all charts",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2689,10 +2687,9 @@ void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
            "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music tracks: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2733,10 +2730,9 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
            "cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting favorite music tracks: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting favorite music tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -2774,17 +2770,15 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
   if (!favorite) {
     const char *query = "DELETE FROM chart_favorites WHERE chart_path = ?1";
     SqliteStatementHandle stmt;
-    int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while preparing chart favorite delete: "
-                << sqlite3_errmsg(db) << "\n";
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "preparing chart favorite delete",
+                                      logSqlErrorText)) {
       return false;
     }
     bindSqliteText(stmt, 1, chartPath);
-    rc = sqlite3_step(stmt);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting chart favorite: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting chart favorite", db);
       return false;
     }
     bumpLibraryRevision();
@@ -2800,19 +2794,17 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
       "chart_sha256 = excluded.chart_sha256,"
       "added_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart favorite insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart favorite insert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt, 1, chartPath);
   bindSqliteText(stmt, 2, normalizedHash(chartMeta.MD5));
   bindSqliteText(stmt, 3, normalizedHash(chartMeta.SHA256));
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while saving chart favorite: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("saving chart favorite", db);
     return false;
   }
   bumpLibraryRevision();
@@ -2822,10 +2814,8 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
 int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting charts: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "counting charts",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
@@ -2838,10 +2828,9 @@ int ChartDBHelper::CountAllChartMeta(sqlite3 *db) {
 int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM solid_archives";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while counting solid archives: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "counting solid archives",
+                                    logSqlErrorText)) {
     return 0;
   }
   int count = 0;
