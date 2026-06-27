@@ -100,8 +100,7 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
 }
 
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
-         SQLITE_OK;
+  return bindSqliteText(stmt, idx, value);
 }
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {

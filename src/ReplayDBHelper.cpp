@@ -62,8 +62,7 @@ bool ensureTableColumn(sqlite3 *db, const char *tableName,
 }
 
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
-         SQLITE_OK;
+  return bindSqliteText(stmt, idx, value);
 }
 
 void bindOptionalText(sqlite3_stmt *stmt, int idx,

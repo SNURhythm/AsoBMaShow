@@ -61,6 +61,12 @@ inline int prepareSqliteStatement(sqlite3 *db, const std::string &query,
   return prepareSqliteStatement(db, query.c_str(), stmt);
 }
 
+inline bool bindSqliteText(sqlite3_stmt *stmt, int idx,
+                           const std::string &value) {
+  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
+         SQLITE_OK;
+}
+
 inline bool sqliteMessageContains(const char *message, const char *needle) {
   if (message == nullptr || needle == nullptr) {
     return false;
