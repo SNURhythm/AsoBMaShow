@@ -129,10 +129,6 @@ void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
   }
 }
 
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return bindSqliteText(stmt, idx, value);
-}
-
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   if (const auto error = executeSqlite(db, query)) {
     std::cerr << "SQL error while " << context << ": " << *error << "\n";
@@ -527,7 +523,7 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
               << sqlite3_errmsg(db) << "\n";
     return 0;
   }
-  bindText(insertStmt, 1, playlistName);
+  bindSqliteText(insertStmt, 1, playlistName);
   rc = sqlite3_step(insertStmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while inserting music playlist: "
@@ -543,7 +539,7 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
               << sqlite3_errmsg(db) << "\n";
     return 0;
   }
-  bindText(selectStmt, 1, playlistName);
+  bindSqliteText(selectStmt, 1, playlistName);
   if (sqlite3_step(selectStmt) == SQLITE_ROW) {
     return sqlite3_column_int(selectStmt, 0);
   }
@@ -587,7 +583,7 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(updateStmt, 1, playlistName);
+  bindSqliteText(updateStmt, 1, playlistName);
   sqlite3_bind_int(updateStmt, 2, playlistId);
   rc = sqlite3_step(updateStmt);
   if (rc != SQLITE_DONE) {
@@ -660,11 +656,11 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   }
 
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindText(stmt, 2, identity.keyType);
-  bindText(stmt, 3, identity.musicKey);
-  bindText(stmt, 4, identity.chartPath);
-  bindText(stmt, 5, identity.md5);
-  bindText(stmt, 6, identity.sha256);
+  bindSqliteText(stmt, 2, identity.keyType);
+  bindSqliteText(stmt, 3, identity.musicKey);
+  bindSqliteText(stmt, 4, identity.chartPath);
+  bindSqliteText(stmt, 5, identity.md5);
+  bindSqliteText(stmt, 6, identity.sha256);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while inserting music playlist track: "
@@ -705,8 +701,8 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindText(stmt, 2, identity.keyType);
-  bindText(stmt, 3, identity.musicKey);
+  bindSqliteText(stmt, 2, identity.keyType);
+  bindSqliteText(stmt, 3, identity.musicKey);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while deleting music playlist track: "
@@ -753,8 +749,8 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
-  bindText(currentStmt, 2, identity.keyType);
-  bindText(currentStmt, 3, identity.musicKey);
+  bindSqliteText(currentStmt, 2, identity.keyType);
+  bindSqliteText(currentStmt, 3, identity.musicKey);
   if (sqlite3_step(currentStmt) != SQLITE_ROW) {
     return false;
   }
@@ -939,8 +935,8 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
   const auto saveValue = [&](const char *key, const std::string &value) {
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
-    bindText(stmt, 1, key);
-    bindText(stmt, 2, value);
+    bindSqliteText(stmt, 1, key);
+    bindSqliteText(stmt, 2, value);
     const int stepRc = sqlite3_step(stmt);
     if (stepRc != SQLITE_DONE) {
       std::cerr << "SQL error while saving music player state: "
@@ -1002,11 +998,11 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     sqlite3_reset(insertStmt);
     sqlite3_clear_bindings(insertStmt);
     sqlite3_bind_int(insertStmt, 1, static_cast<int>(i));
-    bindText(insertStmt, 2, identity.keyType);
-    bindText(insertStmt, 3, identity.musicKey);
-    bindText(insertStmt, 4, identity.chartPath);
-    bindText(insertStmt, 5, identity.md5);
-    bindText(insertStmt, 6, identity.sha256);
+    bindSqliteText(insertStmt, 2, identity.keyType);
+    bindSqliteText(insertStmt, 3, identity.musicKey);
+    bindSqliteText(insertStmt, 4, identity.chartPath);
+    bindSqliteText(insertStmt, 5, identity.md5);
+    bindSqliteText(insertStmt, 6, identity.sha256);
     const int rc = sqlite3_step(insertStmt);
     if (rc != SQLITE_DONE) {
       std::cerr << "SQL error while saving now playing track: "
@@ -1110,7 +1106,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
               << sqlite3_errmsg(db) << "\n";
     return;
   }
-  bindText(stmt, 1, groupKey);
+  bindSqliteText(stmt, 1, groupKey);
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     MusicTrackRecord record;
