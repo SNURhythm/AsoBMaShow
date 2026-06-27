@@ -94,6 +94,14 @@ int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
   return bindIndex;
 }
 
+std::string replayChartMatchPredicate(const char *alias) {
+  const std::string prefix =
+      alias != nullptr && alias[0] != '\0' ? std::string(alias) + "." : "";
+  return "((? != '' AND " + prefix + "chart_sha256 = ?) OR " +
+         "(? != '' AND " + prefix + "chart_md5 = ?) OR " +
+         "(? != '' AND " + prefix + "chart_path = ?))";
+}
+
 std::string readText(sqlite3_stmt *stmt, int idx) {
   return sqliteColumnString(stmt, idx);
 }
@@ -949,7 +957,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   const auto match = replayChartMatchFor(chartMeta);
   limit = std::max(1, limit);
 
-  const char *query =
+  std::string query =
       "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
       "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
@@ -957,14 +965,11 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "r.play_option2_seed, r.assist_option,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id) "
-      "FROM replays r "
-      "WHERE ((? != '' AND r.chart_sha256 = ?) OR "
-      "(? != '' AND r.chart_md5 = ?) OR "
-      "(? != '' AND r.chart_path = ?)) "
-      "AND NOT EXISTS ("
-      "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
-      ") "
-      "ORDER BY r.id DESC LIMIT ?";
+      "FROM replays r WHERE ";
+  query += replayChartMatchPredicate("r");
+  query += " AND NOT EXISTS ("
+           "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
+           ") ORDER BY r.id DESC LIMIT ?";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -1063,17 +1068,15 @@ ReplayDBHelper::LoadReplay(int replayId,
   }
 
   const auto match = replayChartMatchFor(chartMeta);
-  const char *query =
+  std::string query =
       "SELECT id, chart_path, chart_md5, chart_sha256, chart_title,"
       "chart_artist, gauge_type, gauge_auto_shift, final_score, final_gauge,"
       "clear_type, created_at, random_seed, random_prng, random_values,"
       "play_option,"
       "play_option_seed, play_option2, play_option2_seed, assist_option, "
       "ln_mode "
-      "FROM replays WHERE id = ? AND "
-      "((? != '' AND chart_sha256 = ?) OR "
-      "(? != '' AND chart_md5 = ?) OR "
-      "(? != '' AND chart_path = ?))";
+      "FROM replays WHERE id = ? AND ";
+  query += replayChartMatchPredicate("");
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,

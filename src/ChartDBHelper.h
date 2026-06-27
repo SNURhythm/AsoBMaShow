@@ -152,15 +152,11 @@ public:
   int CountSolidArchives(sqlite3 *db);
   void SelectAllChartMeta(sqlite3 *db,
                           std::vector<bms_parser::ChartMeta> &chartMetas);
-  void SelectMusicTracks(sqlite3 *db,
-                         std::vector<MusicTrackRecord> &tracks);
   void SelectFavoriteMusicTracks(sqlite3 *db,
                                  std::vector<MusicTrackRecord> &tracks);
   int CountFavoriteCharts(sqlite3 *db);
   bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
                    bool favorite);
-  void SearchChartMeta(sqlite3 *db, const std::string &keyword,
-                       std::vector<ChartMetaRecord> &chartMetas);
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
                       std::vector<ChartMetaRecord> &chartMetas);
   int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);

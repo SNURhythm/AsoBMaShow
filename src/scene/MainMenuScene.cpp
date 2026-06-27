@@ -1,6 +1,7 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../BmsChartFile.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
@@ -8466,16 +8467,12 @@ void MainMenuScene::FindFilesWin(const std::filesystem::path &path,
       if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
         path_t filename(findFileData.cFileName);
 
-        if (filename.size() > 4) {
-          path_t ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
-          if (ext == L".bms" || ext == L".bme" || ext == L".bml") {
-            path_t dirPath;
+        if (asobmshow::bms_chart_file::isBmsChartFileName(filename)) {
+          path_t dirPath;
 
-            path_t fullPath = path.wstring() + L"\\" + filename;
-            if (oldFilesWs.find(fullPath) == oldFilesWs.end()) {
-              diffs.push_back({fullPath, Added});
-            }
+          path_t fullPath = path.wstring() + L"\\" + filename;
+          if (oldFilesWs.find(fullPath) == oldFilesWs.end()) {
+            diffs.push_back({fullPath, Added});
           }
         }
       } else if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -8520,17 +8517,10 @@ void MainMenuScene::FindFilesUnix(
       resolveDType(directoryPath, entry);
       if (entry->d_type == DT_REG) {
         std::string filename = entry->d_name;
-        if (filename.size() > 4) {
-          std::string ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(),
-                         [](unsigned char c) {
-                           return static_cast<char>(std::tolower(c));
-                         });
-          if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
-            std::filesystem::path fullPath = directoryPath / filename;
-            if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {
-              diffs.push_back({fullPath, Added});
-            }
+        if (asobmshow::bms_chart_file::isBmsChartFileName(filename)) {
+          std::filesystem::path fullPath = directoryPath / filename;
+          if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {
+            diffs.push_back({fullPath, Added});
           }
         }
       } else if (entry->d_type == DT_DIR) {
@@ -8578,11 +8568,7 @@ void MainMenuScene::FindFilesIOS(
     const std::filesystem::directory_entry &entry = *iterator;
     std::error_code typeError;
     if (entry.is_regular_file(typeError)) {
-      std::string ext = entry.path().extension().string();
-      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-      });
-      if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
+      if (asobmshow::bms_chart_file::isBmsChartPath(entry.path())) {
         if (oldFilesWs.find(fspath_to_path_t(entry.path())) ==
             oldFilesWs.end()) {
           diffs.push_back({entry.path(), Added});

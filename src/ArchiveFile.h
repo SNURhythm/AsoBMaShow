@@ -4,7 +4,9 @@
 #include "bms_parser.hpp"
 #include "path.h"
 
+#include <array>
 #include <atomic>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -15,6 +17,60 @@
 #include <vector>
 
 namespace archive_file {
+
+inline constexpr std::array<std::string_view, 22> kArchiveExtensions = {
+    ".tar.bz2", ".tar.gz", ".tar.xz", ".tar.zst", ".tbz2", ".tgz",
+    ".txz",     ".tzst",   ".zip",    ".zipx",    ".cbz",  ".7z",
+    ".cb7",     ".rar",    ".cbr",    ".lzh",     ".lha",  ".tar",
+    ".bz2",     ".gz",     ".xz",     ".zst",
+};
+
+namespace detail {
+
+inline std::string asciiLowerCopy(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (unsigned char ch : value) {
+    result.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  return result;
+}
+
+inline bool endsWithArchiveExtension(std::string_view value,
+                                     std::string_view extension) {
+  return value.size() >= extension.size() &&
+         value.compare(value.size() - extension.size(), extension.size(),
+                       extension) == 0;
+}
+
+} // namespace detail
+
+inline std::string archiveExtensionFromName(std::string_view name) {
+  const std::string lowerName = detail::asciiLowerCopy(name);
+  for (std::string_view extension : kArchiveExtensions) {
+    if (detail::endsWithArchiveExtension(lowerName, extension)) {
+      return std::string(extension);
+    }
+  }
+  return "";
+}
+
+inline std::string archiveExtensionFromPath(const std::filesystem::path &path) {
+  return archiveExtensionFromName(fspath_to_utf8(path.filename()));
+}
+
+inline bool isRecognizedArchiveExtension(std::string_view extension) {
+  if (extension.empty()) {
+    return false;
+  }
+  const std::string lowerExtension = detail::asciiLowerCopy(extension);
+  for (std::string_view archiveExtension : kArchiveExtensions) {
+    if (lowerExtension == archiveExtension) {
+      return true;
+    }
+  }
+  return false;
+}
 
 struct Entry {
   std::filesystem::path path;

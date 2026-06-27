@@ -4,6 +4,7 @@
 #include "../ChartPlaybackDuration.h"
 #include "../Utils.h"
 #include "../path.h"
+#include "ChartAssetExtensions.h"
 #include "SoundFileIO.h"
 #include "decoder.h"
 
@@ -11,7 +12,6 @@
 #include <sndfile.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -27,9 +27,6 @@
 
 namespace chart_audio {
 namespace {
-
-const std::array<std::string, 4> kAudioExtensions = {"flac", "wav", "ogg",
-                                                     "mp3"};
 
 struct DecodedSound {
   std::vector<short> pcm;
@@ -78,11 +75,9 @@ resolveSoundPath(const bms_parser::Chart &chart, int wav) {
   }
 
   const std::filesystem::path basePath = chart.Meta.Folder / wavIt->second;
-  std::vector<std::string_view> extensions;
-  extensions.reserve(kAudioExtensions.size());
-  for (const auto &ext : kAudioExtensions) {
-    extensions.emplace_back(ext);
-  }
+  std::vector<std::string_view> extensions(
+      asobmshow::chart_assets::kAudioExtensions.begin(),
+      asobmshow::chart_assets::kAudioExtensions.end());
   return archive_file::findFileWithExtensions(basePath, extensions);
 }
 
