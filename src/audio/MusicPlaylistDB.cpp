@@ -100,13 +100,13 @@ void sqliteArtistHasObjectNotation(sqlite3_context *context, int argc,
                                                                           : 0);
 }
 
-void logSqlError(const char *context, const std::string &error) {
+void logSqlErrorText(const char *context, const std::string &error) {
   std::cerr << "SQL error while " << context << ": " << error << "\n";
 }
 
 void logSqlError(const char *context, sqlite3 *db) {
-  logSqlError(context, db != nullptr ? sqlite3_errmsg(db)
-                                     : "database is not open");
+  logSqlErrorText(context, db != nullptr ? sqlite3_errmsg(db)
+                                         : "database is not open");
 }
 
 void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
@@ -123,16 +123,12 @@ void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  if (const auto error = executeSqlite(db, query)) {
-    logSqlError(context, *error);
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
   if (const auto error = attachSqliteDatabase(db, path, kChartDatabaseSchema)) {
-    logSqlError("attaching chart database", *error);
+    logSqlErrorText("attaching chart database", *error);
     return false;
   }
   return true;
@@ -918,7 +914,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
   if (!transaction.active()) {
-    logSqlError("beginning now playing save", transactionError);
+    logSqlErrorText("beginning now playing save", transactionError);
     return false;
   }
 
@@ -966,7 +962,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   }
 
   if (!transaction.commit(transactionError)) {
-    logSqlError("committing now playing save", transactionError);
+    logSqlErrorText("committing now playing save", transactionError);
     return false;
   }
   return true;

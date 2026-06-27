@@ -129,6 +129,18 @@ executeSqlite(sqlite3 *db, const char *query,
                                  : std::string(sqlite3_errmsg(db));
 }
 
+template <typename LogSqlError>
+inline bool executeSqliteLogged(sqlite3 *db, const char *query,
+                                const char *context,
+                                const LogSqlError &logSqlError,
+                                const char *allowedErrorNeedle = nullptr) {
+  if (const auto error = executeSqlite(db, query, allowedErrorNeedle)) {
+    logSqlError(context, *error);
+    return false;
+  }
+  return true;
+}
+
 inline std::optional<std::string>
 attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
                      const char *schemaName) {
