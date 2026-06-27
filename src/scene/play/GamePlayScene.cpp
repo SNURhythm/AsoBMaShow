@@ -4,6 +4,7 @@
 
 #include "GamePlayScene.h"
 #include "../../PlayOptionUtils.h"
+#include "../../rendering/SimpleBatchRenderer.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
 #include "RhythmLaneInputController.h"
@@ -27,6 +28,9 @@ namespace {
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
 constexpr long long kHellChargeGaugeTickMicros = 200000LL;
+constexpr long long kCoursePauseHoldMicros = 650000LL;
+constexpr long long kCoursePauseRewindMicros = 260000LL;
+constexpr float kPi = 3.14159265358979323846f;
 
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -67,6 +71,52 @@ bool laneIsPressed(const std::unordered_map<int, bool> &lanePressed,
                    int lane) {
   const auto it = lanePressed.find(lane);
   return it != lanePressed.end() && it->second;
+}
+
+bool isInsideButton(const Button &button, float uiX, float uiY) {
+  return uiX >= button.getX() && uiX <= button.getX() + button.getWidth() &&
+         uiY >= button.getY() && uiY <= button.getY() + button.getHeight();
+}
+
+void mouseEventToUi(const SDL_MouseButtonEvent &event, float &uiX,
+                    float &uiY) {
+  const float screenX = static_cast<float>(event.x) * rendering::widthScale;
+  const float screenY = static_cast<float>(event.y) * rendering::heightScale;
+  rendering::screenToUi(screenX, screenY, uiX, uiY);
+}
+
+void mouseMotionToUi(const SDL_MouseMotionEvent &event, float &uiX,
+                     float &uiY) {
+  const float screenX = static_cast<float>(event.x) * rendering::widthScale;
+  const float screenY = static_cast<float>(event.y) * rendering::heightScale;
+  rendering::screenToUi(screenX, screenY, uiX, uiY);
+}
+
+void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX,
+                     float &uiY) {
+  rendering::normalizedToUi(event.x, event.y, uiX, uiY);
+}
+
+void addRingArc(rendering::SimpleBatchRenderer &batch, float cx, float cy,
+                float radius, float startAngle, float sweep, float thickness,
+                uint32_t color) {
+  if (radius <= 0.0f || thickness <= 0.0f || sweep <= 0.0f) {
+    return;
+  }
+
+  const int segments =
+      std::max(2, static_cast<int>(std::ceil(std::abs(sweep) / (kPi / 28.0f))));
+  float previousX = cx + std::cos(startAngle) * radius;
+  float previousY = cy + std::sin(startAngle) * radius;
+  for (int i = 1; i <= segments; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(segments);
+    const float angle = startAngle + sweep * t;
+    const float x = cx + std::cos(angle) * radius;
+    const float y = cy + std::sin(angle) * radius;
+    batch.addLine(previousX, previousY, x, y, thickness, color);
+    previousX = x;
+    previousY = y;
+  }
 }
 
 bms_parser::LongNoteType
@@ -372,6 +422,7 @@ void GamePlayScene::init() {
   }
 
   /* pause screen */
+  const bool coursePlayback = isCoursePlayback();
   pauseLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   addView(pauseLayout);
@@ -417,32 +468,33 @@ void GamePlayScene::init() {
 
       auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
       pauseText->setSize(420, 72);
-      pauseText->setText("PAUSED");
+      pauseText->setText(coursePlayback ? "COURSE MENU" : "PAUSED");
       pauseText->setAlign(TextView::CENTER);
       pauseText->setVAlign(TextView::MIDDLE);
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
       pauseScreen->addView(makePauseButton(
-          "Resume", Color(22, 132, 126, 238), Color(28, 151, 144, 248),
+          coursePlayback ? "Close" : "Resume", Color(22, 132, 126, 238),
+          Color(28, 151, 144, 248),
           Color(40, 173, 164, 255), ui_theme::accentBorderStrong(), [this]() {
-        context.jukebox.resume();
-        pauseLayout->setVisible(false);
-        if (pauseButton != nullptr) {
-          pauseButton->setVisible(true);
-        }
+        closePauseMenu();
       }));
       pauseScreen->addView(makePauseButton(
-          isReplayPlayback() ? "Replay" : "Retry", Color(57, 105, 42, 238),
+          coursePlayback ? "Restart Course"
+                         : (isReplayPlayback() ? "Replay" : "Retry"),
+          Color(57, 105, 42, 238),
           Color(72, 127, 51, 248), Color(91, 153, 61, 255),
           ui_theme::lime(), [this]() {
-            if (isReplayPlayback() || options.practiceMode ||
+            if (isCoursePlayback()) {
+              restartCourseFromBeginning();
+            } else if (isReplayPlayback() || options.practiceMode ||
                 options.autoPlay) {
               restartCurrentPattern();
             } else {
               retryWithNewPattern();
             }
           }));
-      if (!isReplayPlayback() && !options.practiceMode &&
+      if (!coursePlayback && !isReplayPlayback() && !options.practiceMode &&
           chart != nullptr && gameplayHasSamePatternRandomization(*chart,
                                                                   options)) {
         pauseScreen->addView(makePauseButton(
@@ -493,12 +545,10 @@ void GamePlayScene::init() {
                                ui_theme::withAlpha(ui_theme::amber(), 190));
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
-    context.jukebox.pause();
-    if (renderer != nullptr) {
-      renderer->clearLiveTouchPoints();
+    if (isCoursePlayback()) {
+      return;
     }
-    pauseLayout->setVisible(true);
-    pauseButton->setVisible(false);
+    showPauseMenu(true);
   });
 }
 
@@ -598,11 +648,43 @@ void GamePlayScene::reset() {
   updateGaugeStatusText();
 }
 
-void GamePlayScene::restartCurrentPattern() {
-  pauseLayout->setVisible(false);
+void GamePlayScene::showPauseMenu(bool pausePlayback) {
+  if (pausePlayback) {
+    context.jukebox.pause();
+  }
+  if (renderer != nullptr) {
+    renderer->clearLiveTouchPoints();
+  }
+  if (pauseLayout != nullptr) {
+    pauseLayout->setVisible(true);
+  }
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(false);
+  }
+  resetCoursePauseHold();
+}
+
+void GamePlayScene::closePauseMenu() {
+  if (!isCoursePlayback() && context.jukebox.isPaused()) {
+    context.jukebox.resume();
+  }
+  if (pauseLayout != nullptr) {
+    pauseLayout->setVisible(false);
+  }
   if (pauseButton != nullptr) {
     pauseButton->setVisible(true);
   }
+  resetCoursePauseHold();
+}
+
+void GamePlayScene::restartCurrentPattern() {
+  if (pauseLayout != nullptr) {
+    pauseLayout->setVisible(false);
+  }
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
+  resetCoursePauseHold();
   context.jukebox.stop();
   defer(
       [this]() {
@@ -610,6 +692,43 @@ void GamePlayScene::restartCurrentPattern() {
         return true;
       },
       0, true);
+}
+
+bool GamePlayScene::restartCourseFromBeginning() {
+  auto session = options.courseSession;
+  if (session == nullptr || session->entries.empty()) {
+    return false;
+  }
+
+  if (pauseLayout != nullptr) {
+    pauseLayout->setVisible(false);
+  }
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(true);
+  }
+  resetCoursePauseHold();
+
+  session->currentIndex = 0;
+  session->completedResults.clear();
+  session->carriedGauge.reset();
+  session->carriedCombo = 0;
+  session->maxCombo = 0;
+  session->courseScoreSaved = false;
+  session->playOption.reset();
+  session->playOptionSeed.reset();
+  session->playOption2.reset();
+  session->playOption2Seed.reset();
+  context.jukebox.stop();
+  defer(
+      [this]() {
+        if (!startCourseChartAtCurrentIndex()) {
+          SDL_Log("Failed to restart course from the first chart.");
+          context.sceneManager->changeScene("MainMenu");
+        }
+        return false;
+      },
+      0, true);
+  return true;
 }
 
 void GamePlayScene::retryWithNewPattern() {
@@ -622,6 +741,7 @@ void GamePlayScene::retryWithNewPattern() {
   if (pauseButton != nullptr) {
     pauseButton->setVisible(true);
   }
+  resetCoursePauseHold();
   context.jukebox.stop();
 
   defer(
@@ -684,13 +804,12 @@ bool GamePlayScene::shouldPersistRecordedReplay() const {
   return shouldRecordReplay() && !options.practiceMode;
 }
 
-bool GamePlayScene::startNextCourseChart() {
+bool GamePlayScene::startCourseChartAtCurrentIndex() {
   auto session = options.courseSession;
-  if (session == nullptr || !session->hasNextChart()) {
+  if (session == nullptr || !session->validCurrentIndex()) {
     return false;
   }
 
-  session->currentIndex++;
   const bms_parser::ChartMeta *nextMeta = session->currentMeta();
   if (nextMeta == nullptr || nextMeta->BmsPath.empty()) {
     return false;
@@ -752,6 +871,16 @@ bool GamePlayScene::startNextCourseChart() {
                                       std::move(nextOptions)),
       false);
   return true;
+}
+
+bool GamePlayScene::startNextCourseChart() {
+  auto session = options.courseSession;
+  if (session == nullptr || !session->hasNextChart()) {
+    return false;
+  }
+
+  session->currentIndex++;
+  return startCourseChartAtCurrentIndex();
 }
 
 void GamePlayScene::beginReplayRecording() {
@@ -925,6 +1054,7 @@ void GamePlayScene::update(float dt) {
   if (inputHandler != nullptr) {
     inputHandler->pumpPendingTouchEvents();
   }
+  updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
     return;
   }
@@ -1015,6 +1145,7 @@ void GamePlayScene::renderScene() {
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
   renderer->render(renderContext, getVisualTimeMicros(gameplayTimeMicros),
                    gameplayTimeMicros);
+  renderCoursePauseHoldRing();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }
@@ -1022,6 +1153,206 @@ void GamePlayScene::renderScene() {
 
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
   return view != pauseLayout && view != pauseButton;
+}
+
+bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
+  if (!isCoursePlayback() || pauseButton == nullptr ||
+      !pauseButton->getVisible()) {
+    return false;
+  }
+
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    mouseEventToUi(event.button, uiX, uiY);
+    if (!isInsideButton(*pauseButton, uiX, uiY)) {
+      return false;
+    }
+    beginCoursePauseHold(false, -1);
+    return true;
+  }
+  case SDL_MOUSEBUTTONUP: {
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID || !coursePauseHoldActive ||
+        coursePauseHoldTouch) {
+      return false;
+    }
+    cancelCoursePauseHold();
+    return true;
+  }
+  case SDL_MOUSEMOTION: {
+    if (!coursePauseHoldActive || coursePauseHoldTouch) {
+      return false;
+    }
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    mouseMotionToUi(event.motion, uiX, uiY);
+    if (!isInsideButton(*pauseButton, uiX, uiY)) {
+      cancelCoursePauseHold();
+    }
+    return true;
+  }
+  case SDL_FINGERDOWN: {
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    fingerEventToUi(event.tfinger, uiX, uiY);
+    if (!isInsideButton(*pauseButton, uiX, uiY)) {
+      return false;
+    }
+    if (!coursePauseHoldActive) {
+      beginCoursePauseHold(true, event.tfinger.fingerId);
+    }
+    return true;
+  }
+  case SDL_FINGERUP: {
+    if (!coursePauseHoldActive || !coursePauseHoldTouch ||
+        event.tfinger.fingerId != coursePauseHoldFinger) {
+      return false;
+    }
+    cancelCoursePauseHold();
+    return true;
+  }
+  case SDL_FINGERMOTION: {
+    if (!coursePauseHoldActive || !coursePauseHoldTouch ||
+        event.tfinger.fingerId != coursePauseHoldFinger) {
+      return false;
+    }
+    float uiX = 0.0f;
+    float uiY = 0.0f;
+    fingerEventToUi(event.tfinger, uiX, uiY);
+    if (!isInsideButton(*pauseButton, uiX, uiY)) {
+      cancelCoursePauseHold();
+    }
+    return true;
+  }
+  case SDL_WINDOWEVENT:
+    if (event.window.event == SDL_WINDOWEVENT_LEAVE &&
+        coursePauseHoldActive && !coursePauseHoldTouch) {
+      cancelCoursePauseHold();
+      return true;
+    }
+    break;
+  default:
+    break;
+  }
+
+  return false;
+}
+
+void GamePlayScene::beginCoursePauseHold(bool touch, SDL_FingerID fingerId) {
+  coursePauseHoldActive = true;
+  coursePauseHoldRewinding = false;
+  coursePauseHoldTouch = touch;
+  coursePauseHoldFinger = fingerId;
+  coursePauseHoldStartMicros = nowMicros() -
+                               static_cast<long long>(
+                                   coursePauseHoldProgress *
+                                   static_cast<float>(kCoursePauseHoldMicros));
+}
+
+void GamePlayScene::cancelCoursePauseHold() {
+  if (!coursePauseHoldActive) {
+    return;
+  }
+
+  updateCoursePauseHoldProgress(nowMicros());
+  coursePauseHoldActive = false;
+  coursePauseHoldTouch = false;
+  coursePauseHoldFinger = -1;
+  if (coursePauseHoldProgress <= 0.0f) {
+    resetCoursePauseHold();
+    return;
+  }
+
+  coursePauseHoldRewinding = true;
+  coursePauseHoldRewindStartMicros = nowMicros();
+  coursePauseHoldRewindStartProgress = coursePauseHoldProgress;
+}
+
+void GamePlayScene::resetCoursePauseHold() {
+  coursePauseHoldActive = false;
+  coursePauseHoldRewinding = false;
+  coursePauseHoldTouch = false;
+  coursePauseHoldFinger = -1;
+  coursePauseHoldStartMicros = 0;
+  coursePauseHoldRewindStartMicros = 0;
+  coursePauseHoldProgress = 0.0f;
+  coursePauseHoldRewindStartProgress = 0.0f;
+}
+
+void GamePlayScene::updateCoursePauseHoldProgress(long long currentMicros) {
+  if (!isCoursePlayback()) {
+    resetCoursePauseHold();
+    return;
+  }
+
+  if (coursePauseHoldActive) {
+    const float progress = static_cast<float>(
+                               currentMicros - coursePauseHoldStartMicros) /
+                           static_cast<float>(kCoursePauseHoldMicros);
+    coursePauseHoldProgress = std::clamp(progress, 0.0f, 1.0f);
+    if (coursePauseHoldProgress >= 1.0f) {
+      showPauseMenu(false);
+    }
+    return;
+  }
+
+  if (!coursePauseHoldRewinding) {
+    return;
+  }
+
+  const float rewindProgress =
+      static_cast<float>(currentMicros - coursePauseHoldRewindStartMicros) /
+      static_cast<float>(kCoursePauseRewindMicros);
+  if (rewindProgress >= 1.0f) {
+    resetCoursePauseHold();
+    return;
+  }
+  coursePauseHoldProgress =
+      coursePauseHoldRewindStartProgress *
+      (1.0f - std::clamp(rewindProgress, 0.0f, 1.0f));
+}
+
+void GamePlayScene::renderCoursePauseHoldRing() {
+  if (!isCoursePlayback() || pauseButton == nullptr ||
+      !pauseButton->getVisible()) {
+    return;
+  }
+
+  updateCoursePauseHoldProgress(nowMicros());
+  if (pauseButton == nullptr || !pauseButton->getVisible()) {
+    return;
+  }
+
+  const float cx = static_cast<float>(pauseButton->getX()) +
+                   static_cast<float>(pauseButton->getWidth()) * 0.5f;
+  const float cy = static_cast<float>(pauseButton->getY()) +
+                   static_cast<float>(pauseButton->getHeight()) * 0.5f;
+  const float radius =
+      static_cast<float>(std::max(pauseButton->getWidth(),
+                                  pauseButton->getHeight())) *
+          0.5f +
+      8.0f;
+  constexpr float thickness = 4.0f;
+  const uint32_t baseColor = Color(236, 253, 255, 72).toABGR();
+  const uint32_t progressColor = ui_theme::amber().toABGR();
+
+  rendering::SimpleBatchRenderer batch;
+  batch.setSubmitView(rendering::ui_view);
+  batch.begin();
+  addRingArc(batch, cx, cy, radius, -kPi * 0.5f, kPi * 2.0f, thickness,
+             baseColor);
+  if (coursePauseHoldProgress > 0.001f) {
+    addRingArc(batch, cx, cy, radius, -kPi * 0.5f,
+               kPi * 2.0f * std::clamp(coursePauseHoldProgress, 0.0f, 1.0f),
+               thickness + 1.0f, progressColor);
+  }
+  batch.end();
 }
 
 void GamePlayScene::cleanupScene() {
@@ -1894,24 +2225,23 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
+  if (handleCoursePauseButtonEvent(event)) {
+    return {};
+  }
+
   Scene::handleEvents(event);
   if (event.type == SDL_KEYDOWN) {
     if (event.key.keysym.sym == SDLK_ESCAPE) {
-      if (context.jukebox.isPaused()) {
-        context.jukebox.resume();
-        pauseLayout->setVisible(false);
-        if (pauseButton != nullptr) {
-          pauseButton->setVisible(true);
+      if (isCoursePlayback()) {
+        if (pauseLayout != nullptr && pauseLayout->getVisible()) {
+          closePauseMenu();
+        } else {
+          showPauseMenu(false);
         }
+      } else if (context.jukebox.isPaused()) {
+        closePauseMenu();
       } else {
-        context.jukebox.pause();
-        if (renderer != nullptr) {
-          renderer->clearLiveTouchPoints();
-        }
-        pauseLayout->setVisible(true);
-        if (pauseButton != nullptr) {
-          pauseButton->setVisible(false);
-        }
+        showPauseMenu(true);
       }
     }
   }
