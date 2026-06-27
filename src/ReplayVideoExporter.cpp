@@ -203,10 +203,13 @@ std::string replayVideoH264LevelString(int level) {
   return std::to_string(level / 10) + "." + std::to_string(level % 10);
 }
 
+size_t replayVideoFrameBytes(int width, int height) {
+  return static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+}
+
 size_t replayVideoFrameBufferCount(int width, int height) {
   constexpr size_t kMaxFrameBufferMemoryBytes = 128ULL * 1024ULL * 1024ULL;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t memoryLimitedBuffers =
       frameBytes == 0 ? 3 : kMaxFrameBufferMemoryBytes / frameBytes;
   const auto hardwareThreads = std::thread::hardware_concurrency();
@@ -2265,8 +2268,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
@@ -2829,8 +2831,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
