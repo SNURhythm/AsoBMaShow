@@ -527,6 +527,7 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   }
 
   if (!result.solid) {
+    std::unordered_set<path_t> seenArchiveChartPaths;
     for (const auto &entry : entries) {
       if (!pauseIfNeeded()) {
         result.readable = false;
@@ -539,9 +540,10 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
       const std::filesystem::path chartPath =
           archive_file::makeVirtualPath(archivePath, entry.path);
       const path_t key = fspath_to_path_t(chartPath);
-      if (knownChartPaths.find(key) != knownChartPaths.end()) {
+      if (seenArchiveChartPaths.find(key) != seenArchiveChartPaths.end()) {
         continue;
       }
+      seenArchiveChartPaths.insert(key);
       result.chartPaths.push_back(chartPath);
       knownChartPaths.insert(key);
     }
