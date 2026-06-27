@@ -99,6 +99,10 @@ inline std::string sqliteValueString(sqlite3_value *value) {
   return text != nullptr ? reinterpret_cast<const char *>(text) : "";
 }
 
+inline std::string sqliteDatabaseError(sqlite3 *db) {
+  return db != nullptr ? sqlite3_errmsg(db) : "database is not open";
+}
+
 inline bool sqliteMessageContains(const char *message, const char *needle) {
   if (message == nullptr || needle == nullptr) {
     return false;
@@ -126,7 +130,7 @@ executeSqlite(sqlite3 *db, const char *query,
     return std::nullopt;
   }
   return errMsg.get() != nullptr ? std::string(errMsg.get())
-                                 : std::string(sqlite3_errmsg(db));
+                                 : sqliteDatabaseError(db);
 }
 
 template <typename LogSqlError>
@@ -158,7 +162,7 @@ attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
     return std::nullopt;
   }
   return errMsg.get() != nullptr ? std::string(errMsg.get())
-                                 : std::string(sqlite3_errmsg(db));
+                                 : sqliteDatabaseError(db);
 }
 
 inline std::optional<std::string>
@@ -170,7 +174,7 @@ querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
       stmt);
   if (rc != SQLITE_OK) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
   bindSqliteText(stmt, 1, tableName);
 
@@ -182,7 +186,7 @@ querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
   if (stepRc == SQLITE_DONE) {
     return std::nullopt;
   }
-  return sqlite3_errmsg(db);
+  return sqliteDatabaseError(db);
 }
 
 inline std::optional<std::string>
@@ -198,7 +202,7 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
   const int rc = prepareSqliteStatement(db, query, stmt);
   sqlite3_free(query);
   if (rc != SQLITE_OK) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
 
   int stepRc = SQLITE_OK;
@@ -209,7 +213,7 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
     }
   }
   if (stepRc != SQLITE_DONE) {
-    return sqlite3_errmsg(db);
+    return sqliteDatabaseError(db);
   }
   return std::nullopt;
 }

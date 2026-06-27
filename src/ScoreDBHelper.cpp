@@ -38,8 +38,7 @@ void logSqlErrorText(const char *context, const std::string &error) {
 }
 
 void logSqlError(const char *context, sqlite3 *db) {
-  logSqlErrorText(context, db != nullptr ? sqlite3_errmsg(db)
-                                         : "database is not open");
+  logSqlErrorText(context, sqliteDatabaseError(db));
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
