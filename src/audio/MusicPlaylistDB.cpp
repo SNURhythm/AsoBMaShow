@@ -508,8 +508,10 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
     return 0;
   }
 
-  const std::string playlistName =
-      trimCopy(name).empty() ? "My Playlist" : trimCopy(name);
+  std::string playlistName = trimCopy(name);
+  if (playlistName.empty()) {
+    playlistName = "My Playlist";
+  }
   const char *insertQuery =
       "INSERT OR IGNORE INTO music_playlists (name) VALUES (@name)";
   SqliteStatementHandle insertStmt;
