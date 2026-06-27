@@ -1311,6 +1311,20 @@ bool chartMetaQueryUsesCourseEntries(const ChartMetaQuery &chartQuery) {
          chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
 }
 
+std::string matchedDifficultyEntryIdSubquery(
+    const std::string &courseEntryAlias = "dce",
+    const std::string &courseAlias = "dc",
+    const std::string &matchAlias = "dte_match") {
+  return "(SELECT " + matchAlias +
+         ".id FROM difficulty_table_entries " + matchAlias + " WHERE " +
+         matchAlias + ".table_id = " + courseAlias + ".table_id AND ((" +
+         courseEntryAlias + ".sha256 != '' AND " + matchAlias +
+         ".sha256 = " + courseEntryAlias + ".sha256) OR (" +
+         courseEntryAlias + ".md5 != '' AND " + matchAlias + ".md5 = " +
+         courseEntryAlias + ".md5)) ORDER BY " + matchAlias +
+         ".sort_order, " + matchAlias + ".title COLLATE NOCASE LIMIT 1)";
+}
+
 void appendChartMetaFilters(std::string &query,
                             const ChartMetaQuery &chartQuery) {
   if (!chartQuery.keyword.empty()) {
@@ -3144,14 +3158,9 @@ void ChartDBHelper::QueryChartMeta(
     query += " FROM difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
              "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-             "LEFT JOIN difficulty_table_entries dte ON dte.id = ("
-             "SELECT dte_match.id FROM difficulty_table_entries dte_match "
-             "WHERE dte_match.table_id = dc.table_id "
-             "AND ((dce.sha256 != '' AND dte_match.sha256 = dce.sha256) "
-             "OR (dce.md5 != '' AND dte_match.md5 = dce.md5)) "
-             "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
-             "LIMIT 1) "
-             "LEFT JOIN chart_meta cm ON cm.path = ";
+             "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+    query += matchedDifficultyEntryIdSubquery();
+    query += " LEFT JOIN chart_meta cm ON cm.path = ";
     query += matchedChartPathSubquery("dce", true);
     query += " ";
     appendDifficultyCourseEntryFilters(query, chartQuery);
@@ -3275,13 +3284,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
         "SELECT COUNT(*) FROM difficulty_course_entries dce "
         "JOIN difficulty_courses dc ON dc.id = dce.course_id "
         "JOIN difficulty_tables dt ON dt.id = dc.table_id "
-        "LEFT JOIN difficulty_table_entries dte ON dte.id = ("
-        "SELECT dte_match.id FROM difficulty_table_entries dte_match "
-        "WHERE dte_match.table_id = dc.table_id "
-        "AND ((dce.sha256 != '' AND dte_match.sha256 = dce.sha256) "
-        "OR (dce.md5 != '' AND dte_match.md5 = dce.md5)) "
-        "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
-        "LIMIT 1) ";
+        "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+    query += matchedDifficultyEntryIdSubquery();
+    query += " ";
     if (!chartQuery.keyword.empty()) {
       query += "LEFT JOIN chart_meta cm ON cm.path = ";
       query += matchedChartPathSubquery("dce", true);
