@@ -57,6 +57,13 @@ bool tableHasColumn(sqlite3 *db, const char *tableName,
   return found;
 }
 
+bool ensureTableColumn(sqlite3 *db, const char *tableName,
+                       const char *columnName, const char *alterQuery,
+                       const char *context) {
+  return tableHasColumn(db, tableName, columnName) ||
+         execSql(db, alterQuery, context);
+}
+
 bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
   return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
          SQLITE_OK;
@@ -515,52 +522,39 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!execSql(db, replayQuery, "creating replay table")) {
     return false;
   }
-  if (!tableHasColumn(db, "replays", "random_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
-               "adding replay random seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "random_prng") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_prng TEXT",
-               "adding replay random PRNG column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "random_values") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_values TEXT",
-               "adding replay random values column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option TEXT",
-               "adding replay play option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
-               "adding replay play option seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option2") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
-               "adding replay 2P play option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option2_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
-               "adding replay 2P play option seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "assist_option") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN assist_option TEXT",
-               "adding replay assist option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "ln_mode") &&
-      !execSql(db,
-               "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL "
-               "DEFAULT 0",
-               "adding replay long note mode column")) {
-    return false;
+  struct ColumnMigration {
+    const char *columnName;
+    const char *alterQuery;
+    const char *context;
+  };
+  const ColumnMigration replayColumnMigrations[] = {
+      {"random_seed", "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
+       "adding replay random seed column"},
+      {"random_prng", "ALTER TABLE replays ADD COLUMN random_prng TEXT",
+       "adding replay random PRNG column"},
+      {"random_values", "ALTER TABLE replays ADD COLUMN random_values TEXT",
+       "adding replay random values column"},
+      {"play_option", "ALTER TABLE replays ADD COLUMN play_option TEXT",
+       "adding replay play option column"},
+      {"play_option_seed",
+       "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
+       "adding replay play option seed column"},
+      {"play_option2", "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
+       "adding replay 2P play option column"},
+      {"play_option2_seed",
+       "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
+       "adding replay 2P play option seed column"},
+      {"assist_option", "ALTER TABLE replays ADD COLUMN assist_option TEXT",
+       "adding replay assist option column"},
+      {"ln_mode",
+       "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+       "adding replay long note mode column"},
+  };
+  for (const ColumnMigration &migration : replayColumnMigrations) {
+    if (!ensureTableColumn(db, "replays", migration.columnName,
+                           migration.alterQuery, migration.context)) {
+      return false;
+    }
   }
 
   const char *eventQuery =
