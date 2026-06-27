@@ -1059,6 +1059,18 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
   return true;
 }
 
+void beginSqliteTransaction(sqlite3 *db, const char *context) {
+  if (const auto error = executeSqlite(db, "BEGIN")) {
+    SDL_Log("Failed to begin %s transaction: %s", context, error->c_str());
+  }
+}
+
+void commitSqliteTransaction(sqlite3 *db, const char *context) {
+  if (const auto error = executeSqlite(db, "COMMIT")) {
+    SDL_Log("Failed to commit %s transaction: %s", context, error->c_str());
+  }
+}
+
 int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
@@ -2457,14 +2469,6 @@ void ChartDBHelper::Close(sqlite3 *db) {
   if (db != nullptr) {
     sqlite3_close(db);
   }
-}
-
-void ChartDBHelper::BeginTransaction(sqlite3 *db) {
-  sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
-}
-
-void ChartDBHelper::CommitTransaction(sqlite3 *db) {
-  sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
 }
 
 bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
@@ -4741,7 +4745,7 @@ int ChartDBHelper::ScanChartRoots(
 
   int changedCount = 0;
   bool transactionOpen = false;
-  BeginTransaction(db);
+  beginSqliteTransaction(db, "chart scan");
   transactionOpen = true;
   std::uint64_t completedFlushRequest = 0;
 
@@ -4773,7 +4777,7 @@ int ChartDBHelper::ScanChartRoots(
 
   auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
     if (transactionOpen) {
-      CommitTransaction(db);
+      commitSqliteTransaction(db, "chart scan");
       transactionOpen = false;
     }
     if (!upsertChartScanCheckpoint(db, nextCheckpoint)) {
@@ -4783,7 +4787,7 @@ int ChartDBHelper::ScanChartRoots(
           " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
           " subIndex=" + std::to_string(nextCheckpoint.subIndex));
     }
-    BeginTransaction(db);
+    beginSqliteTransaction(db, "chart scan");
     transactionOpen = true;
   };
 
@@ -5151,7 +5155,7 @@ int ChartDBHelper::ScanChartRoots(
     }
   }
   if (transactionOpen) {
-    CommitTransaction(db);
+    commitSqliteTransaction(db, "chart scan");
     transactionOpen = false;
   }
   acknowledgeFlushRequest(pendingFlushRequest());
