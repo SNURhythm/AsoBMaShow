@@ -4608,9 +4608,8 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     outputRoot = ".";
   }
   archive_file::appendDebugLogLine(
-      "Unzip requested: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)) + " mode=full-archive");
+      "Unzip requested: " + fspath_to_utf8(record.meta.BmsPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot) + " mode=full-archive");
 
   unzipThread = std::jthread([this, record, outputRoot, fullArchiveUnzip,
                               sourceArchivePath](
@@ -4882,8 +4881,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
                           "Could not check archive: " + error.message(), 0, 0);
     archive_file::appendDebugLogLine(
         "Failed to check source archive before delete: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
-        error.message());
+        fspath_to_utf8(archivePath) + ": " + error.message());
     return;
   }
   if (!archiveExists) {
@@ -4901,8 +4899,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
             (error ? std::string(": ") + error.message() : std::string()),
         0, 0);
     archive_file::appendDebugLogLine(
-        "Failed to delete source archive: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)) +
+        "Failed to delete source archive: " + fspath_to_utf8(archivePath) +
         (error ? ": " + error.message() : ""));
     return;
   }
@@ -4924,8 +4921,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
   }
   updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
   archive_file::appendDebugLogLine(
-      "Deleted source archive after unzip: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)));
+      "Deleted source archive after unzip: " + fspath_to_utf8(archivePath));
 }
 
 void MainMenuScene::applyUnzipProgress() {
@@ -4997,9 +4993,8 @@ void MainMenuScene::applyUnzipResult() {
   }
   archive_file::appendDebugLogLine(
       result->message +
-      (result->chartPath.empty()
-           ? ""
-           : ": " + path_t_to_utf8(fspath_to_path_t(result->chartPath))));
+      (result->chartPath.empty() ? ""
+                                 : ": " + fspath_to_utf8(result->chartPath)));
 
   defer(
       [this, hideModal = result->success && !canDeleteArchive]() {
