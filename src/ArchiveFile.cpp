@@ -4030,7 +4030,7 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   std::filesystem::file_time_type mtime{};
   if (!fileState(archivePath, size, mtime)) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive file is unavailable: " + archivePath.string();
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
     }
     appendDebugLogLineImpl("Archive batch read unavailable: " +
                            pathForLog(archivePath));
@@ -4149,7 +4149,7 @@ bool readArchiveEntriesInRange(
   std::filesystem::file_time_type mtime{};
   if (!fileState(archivePath, size, mtime)) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive file is unavailable: " + archivePath.string();
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
     }
     appendDebugLogLineImpl("Archive ranged read unavailable: " +
                            pathForLog(archivePath));
@@ -4750,7 +4750,7 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
     if (!output) {
       if (errorMessage != nullptr) {
         *errorMessage = "Could not write unzipped file: " +
-                        outputPath.string();
+                        pathForLog(outputPath);
       }
       return std::nullopt;
     }
@@ -4761,7 +4761,7 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
     if (!output) {
       if (errorMessage != nullptr) {
         *errorMessage = "Failed while writing unzipped file: " +
-                        outputPath.string();
+                        pathForLog(outputPath);
       }
       return std::nullopt;
     }
@@ -4774,7 +4774,7 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   if (!marker) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not finalize unzip folder: " +
-                      markerPath.string();
+                      pathForLog(markerPath);
     }
     return std::nullopt;
   }
@@ -4894,7 +4894,7 @@ bool extractArchiveFullyWithBatchReader(
       if (!output) {
         if (errorMessage != nullptr) {
           *errorMessage = "Could not write unzipped file: " +
-                          outputPath.string();
+                          pathForLog(outputPath);
         }
         return false;
       }
@@ -4905,7 +4905,7 @@ bool extractArchiveFullyWithBatchReader(
       if (!output) {
         if (errorMessage != nullptr) {
           *errorMessage = "Failed while writing unzipped file: " +
-                          outputPath.string();
+                          pathForLog(outputPath);
         }
         return false;
       }
@@ -5090,7 +5090,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (!marker) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not finalize unzip folder: " +
-                      markerPath.string();
+                      pathForLog(markerPath);
     }
     return std::nullopt;
   }
@@ -5199,7 +5199,7 @@ materializeFileBytes(const std::filesystem::path &path,
     if (!file) {
       if (errorMessage != nullptr) {
         *errorMessage = "Could not create cached archive entry: " +
-                        output.string();
+                        pathForLog(output);
       }
       return std::nullopt;
     }
@@ -5210,7 +5210,7 @@ materializeFileBytes(const std::filesystem::path &path,
     if (!file) {
       if (errorMessage != nullptr) {
         *errorMessage = "Could not write cached archive entry: " +
-                        output.string();
+                        pathForLog(output);
       }
       return std::nullopt;
     }
@@ -5366,8 +5366,7 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
     appendDebugLogLineImpl("Reading Android SAF chart: " + pathForLog(path));
     if (!readFile(path, bytes, &errorMessage)) {
       SDL_Log("Failed to read Android SAF chart %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-              errorMessage.c_str());
+              pathForLog(path).c_str(), errorMessage.c_str());
       appendDebugLogLineImpl("Failed to read Android SAF chart: " +
                              pathForLog(path) + ": " + errorMessage);
       return;
@@ -5396,8 +5395,7 @@ void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,
   appendDebugLogLineImpl("Reading archive chart: " + pathForLog(path));
   if (!readFile(path, bytes, &errorMessage)) {
     SDL_Log("Failed to read chart from archive %s: %s",
-            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-            errorMessage.c_str());
+            pathForLog(path).c_str(), errorMessage.c_str());
     appendDebugLogLineImpl("Failed to read archive chart: " +
                            pathForLog(path) + ": " + errorMessage);
     return;
