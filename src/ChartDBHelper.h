@@ -160,6 +160,8 @@ public:
   void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
                       std::vector<ChartMetaRecord> &chartMetas);
   int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);
+  int FindChartMetaIndex(sqlite3 *db, const ChartMetaQuery &query,
+                         const std::filesystem::path &path);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   int DeleteChartMetaInDirectory(sqlite3 *db,
                                  const std::filesystem::path &directory);

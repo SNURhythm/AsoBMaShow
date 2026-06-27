@@ -3346,37 +3346,7 @@ void MainMenuScene::refreshFavoriteFolderCount() {
   }
 }
 
-void MainMenuScene::reloadChartList(bool preserveViewState) {
-  if (recyclerView == nullptr) {
-    return;
-  }
-
-  const float previousScrollOffset =
-      preserveViewState ? recyclerView->scrollOffset : 0.0f;
-  const int previousSelectedIndex =
-      preserveViewState ? recyclerView->selectedIndex : -1;
-  path_t previousSelectedPath;
-  if (preserveViewState && previousSelectedIndex >= 0 &&
-      previousSelectedIndex < recyclerView->size()) {
-    previousSelectedPath =
-        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
-  }
-  int previousTopIndex = -1;
-  float previousTopItemOffset = 0.0f;
-  path_t previousTopPath;
-  if (preserveViewState && recyclerView->itemHeight > 0 &&
-      recyclerView->size() > 0) {
-    previousTopIndex = std::clamp(
-        static_cast<int>(previousScrollOffset /
-                         static_cast<float>(recyclerView->itemHeight)),
-        0, recyclerView->size() - 1);
-    previousTopItemOffset =
-        previousScrollOffset -
-        static_cast<float>(previousTopIndex * recyclerView->itemHeight);
-    previousTopPath =
-        fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
-  }
-
+ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   ChartMetaQuery query;
   query.keyword = searchText;
   query.difficultyText = difficultyText;
@@ -3416,6 +3386,41 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   default:
     break;
   }
+  return query;
+}
+
+void MainMenuScene::reloadChartList(bool preserveViewState) {
+  if (recyclerView == nullptr) {
+    return;
+  }
+
+  const float previousScrollOffset =
+      preserveViewState ? recyclerView->scrollOffset : 0.0f;
+  const int previousSelectedIndex =
+      preserveViewState ? recyclerView->selectedIndex : -1;
+  path_t previousSelectedPath;
+  if (preserveViewState && previousSelectedIndex >= 0 &&
+      previousSelectedIndex < recyclerView->size()) {
+    previousSelectedPath =
+        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
+  }
+  int previousTopIndex = -1;
+  float previousTopItemOffset = 0.0f;
+  path_t previousTopPath;
+  if (preserveViewState && recyclerView->itemHeight > 0 &&
+      recyclerView->size() > 0) {
+    previousTopIndex = std::clamp(
+        static_cast<int>(previousScrollOffset /
+                         static_cast<float>(recyclerView->itemHeight)),
+        0, recyclerView->size() - 1);
+    previousTopItemOffset =
+        previousScrollOffset -
+        static_cast<float>(previousTopIndex * recyclerView->itemHeight);
+    previousTopPath =
+        fspath_to_path_t(recyclerView->get(previousTopIndex).meta.BmsPath);
+  }
+
+  ChartMetaQuery query = chartQueryForActiveFolder();
 
   std::optional<ChartMetaRecord> leadingRecord;
   if (activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -3441,6 +3446,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   }
   dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
+  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(db, query, dbCount, std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
@@ -3477,17 +3483,13 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int searchRadius = std::max(chartListCache.pageSize * 3, 1);
-    const int searchStart =
-        std::max(0, std::max(0, preferredIndex) - searchRadius);
-    const int searchEnd =
-        std::min(count, std::max(0, preferredIndex) + searchRadius + 1);
-    for (int i = searchStart; i < searchEnd; ++i) {
-      if (pathMatches(i, path)) {
-        return i;
-      }
+    const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+        db, query, std::filesystem::path(path));
+    if (dbIndex < 0) {
+      return -1;
     }
-    return -1;
+    const int index = dbIndex + leadingOffset;
+    return index >= 0 && index < count ? index : -1;
   };
 
   float restoredScrollOffset = std::clamp(previousScrollOffset, 0.0f, maxOffset);
@@ -3715,36 +3717,42 @@ void MainMenuScene::selectChartByPathAfterReload(
     return;
   }
   const path_t target = fspath_to_path_t(path);
-  for (int i = 0; i < recyclerView->size(); ++i) {
-    const ChartMetaRecord &record = recyclerView->get(i);
-    if (fspath_to_path_t(record.meta.BmsPath) != target) {
-      continue;
+  const ChartMetaQuery query = chartQueryForActiveFolder();
+  int index = ChartDBHelper::GetInstance().FindChartMetaIndex(db, query, path);
+  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0) {
+    index += 1;
+  }
+  if (index >= 0 && index < recyclerView->size()) {
+    const ChartMetaRecord &record = recyclerView->get(index);
+    if (fspath_to_path_t(record.meta.BmsPath) == target) {
+      const int previous = recyclerView->selectedIndex;
+      if (previous >= 0 && previous < recyclerView->size() &&
+          previous != index && recyclerView->onUnselected) {
+        recyclerView->onUnselected(recyclerView->get(previous), previous);
+      }
+      recyclerView->selectedIndex = index;
+      const float selectedY =
+          static_cast<float>(index * recyclerView->itemHeight);
+      const float viewportHeight =
+          static_cast<float>(recyclerView->getHeight());
+      const float itemHeight = static_cast<float>(recyclerView->itemHeight);
+      const float centeredOffset =
+          selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
+      const float maxOffset =
+          std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
+                                                recyclerView->itemHeight -
+                                            recyclerView->getHeight()));
+      recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+      recyclerView->rebindVisibleItems();
+      suppressPreviewForChartPath = record.meta.BmsPath;
+      if (recyclerView->onSelected) {
+        recyclerView->onSelected(record, index);
+      }
+      archive_file::appendDebugLogLine(
+          "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
+      return;
     }
-
-    const int previous = recyclerView->selectedIndex;
-    if (previous >= 0 && previous < recyclerView->size() && previous != i &&
-        recyclerView->onUnselected) {
-      recyclerView->onUnselected(recyclerView->get(previous), previous);
-    }
-    recyclerView->selectedIndex = i;
-    const float selectedY = static_cast<float>(i * recyclerView->itemHeight);
-    const float viewportHeight = static_cast<float>(recyclerView->getHeight());
-    const float itemHeight = static_cast<float>(recyclerView->itemHeight);
-    const float centeredOffset =
-        selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-    const float maxOffset =
-        std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
-                                              recyclerView->itemHeight -
-                                          recyclerView->getHeight()));
-    recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
-    recyclerView->rebindVisibleItems();
-    suppressPreviewForChartPath = record.meta.BmsPath;
-    if (recyclerView->onSelected) {
-      recyclerView->onSelected(record, i);
-    }
-    archive_file::appendDebugLogLine(
-        "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
-    return;
   }
 
   if (activeFolder.type != LibraryFolderItem::Type::AllSongs) {
@@ -4141,14 +4149,18 @@ void MainMenuScene::startSelectedCourse() {
       replayStatusText->setText("Course has missing charts");
     }
     int visibleMissingIndex = -1;
-    for (int i = 0; i < recyclerView->size(); ++i) {
-      const auto &visibleRecord = recyclerView->get(i);
+    ChartMetaQuery visibleQuery = chartQueryForActiveFolder();
+    std::vector<ChartMetaRecord> visibleRecords;
+    ChartDBHelper::GetInstance().QueryChartMeta(db, visibleQuery,
+                                                visibleRecords);
+    for (int i = 0; i < static_cast<int>(visibleRecords.size()); ++i) {
+      const auto &visibleRecord = visibleRecords[static_cast<std::size_t>(i)];
       if (visibleRecord.courseStart) {
         continue;
       }
       if (visibleRecord.solidArchive || visibleRecord.unavailable ||
           visibleRecord.meta.BmsPath.empty()) {
-        visibleMissingIndex = i;
+        visibleMissingIndex = i + 1;
         break;
       }
     }

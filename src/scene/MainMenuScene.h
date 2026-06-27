@@ -477,6 +477,7 @@ private:
   void applyThemeChange();
   void reloadFolderItems(bool preserveViewState = false);
   void refreshFavoriteFolderCount();
+  ChartMetaQuery chartQueryForActiveFolder() const;
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
