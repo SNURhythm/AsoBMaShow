@@ -98,13 +98,13 @@ void excludeCacheFromBackup(const std::filesystem::path &path) {
 }
 
 bool ensureCacheDirectory(std::string &errorMessage) {
+  const std::filesystem::path directory = CacheDirectory();
   std::error_code error;
-  std::filesystem::create_directories(CacheDirectory(), error);
-  if (error) {
+  if (!Utils::EnsureDirectoryExists(directory, error)) {
     errorMessage = "Could not create music cache directory: " + error.message();
     return false;
   }
-  excludeCacheFromBackup(CacheDirectory());
+  excludeCacheFromBackup(directory);
   return true;
 }
 
