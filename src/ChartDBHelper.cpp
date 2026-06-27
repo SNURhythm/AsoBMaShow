@@ -5790,7 +5790,12 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
   std::unordered_set<std::string> importedHeaders;
   for (std::filesystem::recursive_directory_iterator it(directory, ec), end;
        !ec && it != end; it.increment(ec)) {
-    if (ec || !it->is_regular_file()) {
+    std::error_code typeEc;
+    if (!it->is_regular_file(typeEc)) {
+      if (typeEc) {
+        SDL_Log("Failed to read difficulty table path type %s: %s",
+                it->path().string().c_str(), typeEc.message().c_str());
+      }
       continue;
     }
     const auto &path = it->path();
@@ -5829,12 +5834,18 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
     }
 
     std::error_code canonicalEc;
-    const auto canonical =
-        std::filesystem::weakly_canonical(path, canonicalEc).string();
-    if (importedHeaders.find(canonical) != importedHeaders.end()) {
+    const auto canonicalPath =
+        std::filesystem::weakly_canonical(path, canonicalEc);
+    const std::string headerKey =
+        canonicalEc ? path.lexically_normal().string() : canonicalPath.string();
+    if (canonicalEc) {
+      SDL_Log("Failed to canonicalize difficulty table header %s: %s",
+              path.string().c_str(), canonicalEc.message().c_str());
+    }
+    if (importedHeaders.find(headerKey) != importedHeaders.end()) {
       continue;
     }
-    importedHeaders.insert(canonical);
+    importedHeaders.insert(headerKey);
 
     const std::string dataUrl = jsonStringAt(document, "data_url");
     std::filesystem::path dataPath = path.parent_path() / dataUrl;
