@@ -106,6 +106,7 @@ struct UnzipProgress {
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
 using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
+using FileDataCallback = std::function<bool(FileData &&)>;
 
 struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
@@ -150,6 +151,12 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
                         std::vector<FileData> &files,
                         std::string *errorMessage = nullptr,
                         PauseCallback pauseCallback = nullptr);
+bool readArchiveEntriesStreaming(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
 bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
