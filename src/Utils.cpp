@@ -183,6 +183,17 @@ std::filesystem::path Utils::GetStoragePathRelativeToDocuments(
 #endif
 }
 
+bool Utils::EnsureDirectoryExists(const std::filesystem::path &Path,
+                                  std::error_code &Error) {
+  Error.clear();
+  if (Path.empty()) {
+    Error = std::make_error_code(std::errc::invalid_argument);
+    return false;
+  }
+  std::filesystem::create_directories(Path, Error);
+  return !Error;
+}
+
 threadRAII::threadRAII(std::thread &&_th) { th = std::move(_th); }
 threadRAII::~threadRAII() {
   if (th.joinable()) {

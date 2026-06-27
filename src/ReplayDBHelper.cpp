@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -458,7 +459,12 @@ ReplayDBHelper &ReplayDBHelper::GetInstance() {
 
 sqlite3 *ReplayDBHelper::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    SDL_Log("Can't create replay database directory %s: %s",
+            directory.string().c_str(), directoryError.message().c_str());
+    return nullptr;
+  }
   const std::filesystem::path path = directory / "replay.db";
 
   sqlite3 *db = nullptr;

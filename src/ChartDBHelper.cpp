@@ -25,6 +25,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -2504,7 +2505,12 @@ void populateDifficultyTableLabels(
 sqlite3 *ChartDBHelper::Connect() {
   std::filesystem::path Directory = Utils::GetDocumentsPath("db");
   std::cout << "DB Directory: " << Directory.string() << "\n";
-  std::filesystem::create_directories(Directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(Directory, directoryError)) {
+    std::cerr << "Can't create chart database directory " << Directory.string()
+              << ": " << directoryError.message() << "\n";
+    return nullptr;
+  }
   std::filesystem::path path = Directory / "chart.db";
   std::cout << "DB Path: " << path.string() << "\n";
   sqlite3 *db;

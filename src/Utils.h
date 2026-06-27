@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <functional>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -24,6 +25,8 @@ public:
   GetDocumentsPath(const std::filesystem::path &SubPath = "");
   static std::filesystem::path GetStoragePathRelativeToDocuments(
       const std::filesystem::path &Path, const std::filesystem::path &SubPath);
+  static bool EnsureDirectoryExists(const std::filesystem::path &Path,
+                                    std::error_code &Error);
 };
 
 class threadRAII {

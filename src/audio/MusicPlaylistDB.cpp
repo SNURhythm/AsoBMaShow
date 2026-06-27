@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
@@ -416,7 +417,13 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
 
 sqlite3 *MusicPlaylistDB::Connect() {
   std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create music playlist database directory "
+              << directory.string() << ": " << directoryError.message()
+              << "\n";
+    return nullptr;
+  }
   const std::filesystem::path playlistPath =
       directory / kPlaylistDatabaseFileName;
   const std::filesystem::path chartPath = directory / kChartDatabaseFileName;

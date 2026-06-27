@@ -18,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace {
@@ -641,7 +642,12 @@ ScoreDBHelper &ScoreDBHelper::GetInstance() {
 
 sqlite3 *ScoreDBHelper::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    SDL_Log("Can't create score database directory %s: %s",
+            directory.string().c_str(), directoryError.message().c_str());
+    return nullptr;
+  }
   const std::filesystem::path path = directory / "score.db";
 
   sqlite3 *db = nullptr;
