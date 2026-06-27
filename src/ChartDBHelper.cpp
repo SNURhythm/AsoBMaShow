@@ -1385,10 +1385,13 @@ std::string matchedDifficultyEntryIdSubquery(
   return "(SELECT " + matchAlias +
          ".id FROM difficulty_table_entries " + matchAlias + " WHERE " +
          matchAlias + ".table_id = " + courseAlias + ".table_id AND ((" +
-         courseEntryAlias + ".sha256 != '' AND " + matchAlias +
-         ".sha256 = " + courseEntryAlias + ".sha256) OR (" +
-         courseEntryAlias + ".md5 != '' AND " + matchAlias + ".md5 = " +
-         courseEntryAlias + ".md5)) ORDER BY " + matchAlias +
+         sqlHashColumnHasValue(courseEntryAlias, "sha256") + " AND " +
+         normalizedSqlHashColumn(matchAlias, "sha256") +
+         " = " + normalizedSqlHashColumn(courseEntryAlias, "sha256") +
+         ") OR (" + sqlHashColumnHasValue(courseEntryAlias, "md5") +
+         " AND " + normalizedSqlHashColumn(matchAlias, "md5") +
+         " = " + normalizedSqlHashColumn(courseEntryAlias, "md5") +
+         ")) ORDER BY " + matchAlias +
          ".sort_order, " + matchAlias + ".title COLLATE NOCASE LIMIT 1)";
 }
 
