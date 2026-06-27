@@ -253,15 +253,6 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   return stream.str();
 }
 
-bool sqliteMessageContains(const char *message, const char *needle) {
-  if (message == nullptr || needle == nullptr) {
-    return false;
-  }
-  const std::string lowerMessage = lowerCopy(message);
-  const std::string lowerNeedle = lowerCopy(needle);
-  return lowerMessage.find(lowerNeedle) != std::string::npos;
-}
-
 bool pathIsInsideDirectory(const std::filesystem::path &path,
                            const std::filesystem::path &directory) {
   if (path.empty() || directory.empty()) {

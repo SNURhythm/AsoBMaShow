@@ -37,15 +37,6 @@ std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
 }
 
-bool sqliteMessageContains(const char *message, const char *needle) {
-  if (message == nullptr || needle == nullptr) {
-    return false;
-  }
-  std::string lowerMessage = lowerCopy(message);
-  std::string lowerNeedle = lowerCopy(needle);
-  return lowerMessage.find(lowerNeedle) != std::string::npos;
-}
-
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   SqliteErrorMessageHandle errMsg;
   const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());

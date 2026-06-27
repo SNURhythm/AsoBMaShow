@@ -3,6 +3,8 @@
 #include "RAII.h"
 #include "sqlite3.h"
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 using SqliteConnectionHandle = UniqueResource<sqlite3, sqlite3_close>;
@@ -56,4 +58,21 @@ inline int prepareSqliteStatement(sqlite3 *db, const char *query,
 inline int prepareSqliteStatement(sqlite3 *db, const std::string &query,
                                   SqliteStatementHandle &stmt) {
   return prepareSqliteStatement(db, query.c_str(), stmt);
+}
+
+inline bool sqliteMessageContains(const char *message, const char *needle) {
+  if (message == nullptr || needle == nullptr) {
+    return false;
+  }
+
+  std::string lowerMessage(message);
+  std::string lowerNeedle(needle);
+  const auto lowerChar = [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  };
+  std::transform(lowerMessage.begin(), lowerMessage.end(),
+                 lowerMessage.begin(), lowerChar);
+  std::transform(lowerNeedle.begin(), lowerNeedle.end(), lowerNeedle.begin(),
+                 lowerChar);
+  return lowerMessage.find(lowerNeedle) != std::string::npos;
 }
