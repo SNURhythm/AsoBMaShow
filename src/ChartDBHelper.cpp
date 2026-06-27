@@ -1121,6 +1121,43 @@ bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
          SQLITE_OK;
 }
 
+bool createChartMetaTableSchema(sqlite3 *db) {
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS chart_meta ("
+      "path       TEXT primary key,"
+      "md5        TEXT not null,"
+      "sha256     TEXT not null,"
+      "title      TEXT,"
+      "subtitle   TEXT,"
+      "genre      TEXT,"
+      "artist     TEXT,"
+      "sub_artist  TEXT,"
+      "folder     TEXT,"
+      "stage_file  TEXT,"
+      "banner     TEXT,"
+      "back_bmp    TEXT,"
+      "preview    TEXT,"
+      "level      REAL,"
+      "difficulty INTEGER,"
+      "total     REAL,"
+      "bpm       REAL,"
+      "max_bpm     REAL,"
+      "min_bpm     REAL,"
+      "length     INTEGER,"
+      "rank      INTEGER,"
+      "player    INTEGER,"
+      "keys     INTEGER,"
+      "total_notes INTEGER,"
+      "total_long_notes INTEGER,"
+      "total_scratch_notes INTEGER,"
+      "total_backspin_notes INTEGER,"
+      "ln_mode INTEGER NOT NULL DEFAULT 0,"
+      "source_priority INTEGER,"
+      "source_archive_size INTEGER"
+      ")";
+  return execSql(db, query, "creating chart meta table");
+}
+
 std::optional<std::string> normalizedPathTextForStorage(
     const std::string &original) {
   if (original.empty()) {
@@ -1357,119 +1394,94 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
          std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
 }
 
-int normalizedChartLongNoteModeForStorage(int lnMode) {
-  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
+bool createChartMetadataRebuildStateTable(sqlite3 *db) {
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS chart_meta_rebuild_state ("
+      "id INTEGER PRIMARY KEY CHECK(id = 1),"
+      "required INTEGER NOT NULL DEFAULT 0,"
+      "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
+      ")";
+  return execSql(db, query, "creating chart metadata rebuild state table");
 }
 
-bool parseChartMetadataForMigration(const std::filesystem::path &path,
-                                    bms_parser::ChartMeta &meta) {
-  bms_parser::Parser parser;
-  bms_parser::Chart *rawChart = nullptr;
-  std::unique_ptr<bms_parser::Chart> chart;
-  std::atomic_bool cancelled(false);
-  try {
-    archive_file::parseChart(parser, path, &rawChart, false, true, cancelled);
-    chart.reset(rawChart);
-    rawChart = nullptr;
-  } catch (const std::exception &e) {
-    if (rawChart != nullptr) {
-      chart.reset(rawChart);
-      rawChart = nullptr;
-    }
-    SDL_Log("Chart ln_mode migration parse failed for %s: %s",
-            path_t_to_utf8(fspath_to_path_t(path)).c_str(), e.what());
+bool setChartMetadataRebuildRequired(sqlite3 *db, bool required) {
+  if (!createChartMetadataRebuildStateTable(db)) {
     return false;
   }
-  if (cancelled || chart == nullptr) {
+  const char *query =
+      "INSERT INTO chart_meta_rebuild_state (id, required, updated_at) "
+      "VALUES (1, ?, CURRENT_TIMESTAMP) "
+      "ON CONFLICT(id) DO UPDATE SET required = excluded.required, "
+      "updated_at = CURRENT_TIMESTAMP";
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    std::cerr << "SQL error while preparing chart metadata rebuild state: "
+              << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  meta = chart->Meta;
-  meta.LnMode = normalizedChartLongNoteModeForStorage(meta.LnMode);
+  sqlite3_bind_int(stmt.get(), 1, required ? 1 : 0);
+  if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+    std::cerr << "SQL error while updating chart metadata rebuild state: "
+              << sqlite3_errmsg(db) << "\n";
+    return false;
+  }
   return true;
 }
 
-bool backfillChartLongNoteMetadata(sqlite3 *db, bool &completed) {
+bool clearChartMetadataRebuildRequiredIfPresent(sqlite3 *db) {
+  bool tableExists = false;
+  if (!sqliteTableExists(db, "chart_meta_rebuild_state", tableExists,
+                         "checking chart metadata rebuild state table")) {
+    return false;
+  }
+  if (!tableExists) {
+    return true;
+  }
+  return setChartMetadataRebuildRequired(db, false);
+}
+
+bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
   completed = false;
-  SqliteStatementHandle selectStmt;
-  int rc = prepareSqliteStatement(
-      db,
-      "SELECT path FROM chart_meta WHERE path IS NOT NULL AND path != '' "
-      "ORDER BY path",
-      selectStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting charts for ln_mode migration: "
-              << sqlite3_errmsg(db) << "\n";
-    return false;
-  }
-
-  SqliteStatementHandle updateStmt;
-  rc = prepareSqliteStatement(
-      db,
-      "UPDATE chart_meta SET ln_mode = ?, total_notes = ?, "
-      "total_long_notes = ?, total_scratch_notes = ?, "
-      "total_backspin_notes = ? WHERE path = ?",
-      updateStmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart ln_mode migration update: "
-              << sqlite3_errmsg(db) << "\n";
-    return false;
-  }
-
-  if (!execSql(db, "SAVEPOINT chart_lnmode_migration",
-               "starting chart ln_mode migration")) {
+  if (!execSql(db, "SAVEPOINT chart_metadata_rebuild_migration",
+               "starting chart metadata rebuild migration")) {
     return false;
   }
 
   bool ok = true;
-  int migratedCount = 0;
-  int failedCount = 0;
-  while (sqlite3_step(selectStmt.get()) == SQLITE_ROW) {
-    const std::string storedPath = columnString(selectStmt.get(), 0);
-    std::filesystem::path chartPath(utf8_to_path_t(storedPath));
-    ChartDBHelper::ToAbsolutePath(chartPath);
-
-    bms_parser::ChartMeta parsedMeta;
-    if (!parseChartMetadataForMigration(chartPath, parsedMeta)) {
-      ++failedCount;
-      continue;
-    }
-
-    sqlite3_reset(updateStmt.get());
-    sqlite3_clear_bindings(updateStmt.get());
-    sqlite3_bind_int(updateStmt.get(), 1, parsedMeta.LnMode);
-    sqlite3_bind_int(updateStmt.get(), 2, parsedMeta.TotalNotes);
-    sqlite3_bind_int(updateStmt.get(), 3, parsedMeta.TotalLongNotes);
-    sqlite3_bind_int(updateStmt.get(), 4, parsedMeta.TotalScratchNotes);
-    sqlite3_bind_int(updateStmt.get(), 5, parsedMeta.TotalBackSpinNotes);
-    bindText(updateStmt.get(), 6, storedPath);
-    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
-      std::cerr << "SQL error while updating chart ln_mode migration row: "
-                << sqlite3_errmsg(db) << "\n";
+  const char *queries[] = {
+      "DROP TABLE IF EXISTS chart_meta",
+      "DROP TABLE IF EXISTS solid_archives",
+      "DROP TABLE IF EXISTS archive_scan_cache",
+      "DROP TABLE IF EXISTS chart_scan_checkpoint",
+  };
+  for (const auto *query : queries) {
+    if (!execSql(db, query, "invalidating chart metadata cache")) {
       ok = false;
       break;
     }
-    ++migratedCount;
+  }
+  if (ok) {
+    ok = createChartMetaTableSchema(db);
+  }
+  if (ok) {
+    ok = setChartMetadataRebuildRequired(db, true);
   }
 
-  if (!ok) {
-    execSql(db, "ROLLBACK TO chart_lnmode_migration",
-            "rolling back chart ln_mode migration");
-    execSql(db, "RELEASE chart_lnmode_migration",
-            "releasing chart ln_mode migration");
+  if (ok) {
+    ok = execSql(db, "RELEASE chart_metadata_rebuild_migration",
+                 "committing chart metadata rebuild migration");
+  } else {
+    execSql(db, "ROLLBACK TO chart_metadata_rebuild_migration",
+            "rolling back chart metadata rebuild migration");
+    execSql(db, "RELEASE chart_metadata_rebuild_migration",
+            "releasing chart metadata rebuild migration");
     return false;
   }
 
-  if (!execSql(db, "RELEASE chart_lnmode_migration",
-               "committing chart ln_mode migration")) {
-    return false;
-  }
-
-  SDL_Log("Chart ln_mode migration completed: migrated=%d failed=%d",
-          migratedCount, failedCount);
-  if (migratedCount > 0) {
-    bumpLibraryRevision();
-  }
-  completed = failedCount == 0;
+  SDL_Log("Chart metadata cache invalidated; normal library scan will rebuild");
+  bumpLibraryRevision();
+  completed = true;
   return true;
 }
 
@@ -1493,25 +1505,7 @@ private:
 };
 
 bool migrateChartDatabaseToVersion1(sqlite3 *db, bool &completed) {
-  completed = false;
-  if (!execSqlAllowDuplicateColumn(
-          db, "ALTER TABLE chart_meta ADD COLUMN source_priority INTEGER",
-          "migrating chart source priority")) {
-    return false;
-  }
-  if (!execSqlAllowDuplicateColumn(
-          db,
-          "ALTER TABLE chart_meta ADD COLUMN source_archive_size INTEGER",
-          "migrating chart source archive size")) {
-    return false;
-  }
-  if (!execSqlAllowDuplicateColumn(
-          db,
-          "ALTER TABLE chart_meta ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
-          "migrating chart long note mode")) {
-    return false;
-  }
-  return backfillChartLongNoteMetadata(db, completed);
+  return invalidateChartMetadataForNormalScan(db, completed);
 }
 
 bool runChartDatabaseMigrationPasses(
@@ -1553,7 +1547,7 @@ bool runChartDatabaseMigrationPasses(
 
 bool migrateChartDatabaseSchema(sqlite3 *db) {
   static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
-      {1, "chart long note metadata", migrateChartDatabaseToVersion1},
+      {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -2547,44 +2541,7 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
     return false;
   }
 
-  auto query = "CREATE TABLE IF NOT EXISTS chart_meta ("
-               "path       TEXT primary key,"
-               "md5        TEXT not null,"
-               "sha256     TEXT not null,"
-               "title      TEXT,"
-               "subtitle   TEXT,"
-               "genre      TEXT,"
-               "artist     TEXT,"
-               "sub_artist  TEXT,"
-               "folder     TEXT,"
-               "stage_file  TEXT,"
-               "banner     TEXT,"
-               "back_bmp    TEXT,"
-               "preview    TEXT,"
-               "level      REAL,"
-               "difficulty INTEGER,"
-               "total     REAL,"
-               "bpm       REAL,"
-               "max_bpm     REAL,"
-               "min_bpm     REAL,"
-               "length     INTEGER,"
-               "rank      INTEGER,"
-               "player    INTEGER,"
-               "keys     INTEGER,"
-               "total_notes INTEGER,"
-               "total_long_notes INTEGER,"
-               "total_scratch_notes INTEGER,"
-               "total_backspin_notes INTEGER,"
-               "ln_mode INTEGER NOT NULL DEFAULT 0,"
-               "source_priority INTEGER,"
-               "source_archive_size INTEGER"
-               ")";
-  SqliteErrorMessageHandle errMsg;
-  int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while creating chart meta table: "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
-              << "\n";
+  if (!createChartMetaTableSchema(db)) {
     return false;
   }
 
@@ -4262,6 +4219,7 @@ int ChartDBHelper::ScanChartRoots(
   CreateChartMetaTable(db);
   CreateSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
+  createChartScanCheckpointTable(db);
 
   std::vector<bms_parser::ChartMeta> chartMetas;
   SelectAllChartMeta(db, chartMetas);
@@ -4578,6 +4536,7 @@ int ChartDBHelper::ScanChartRoots(
       staleSolidArchives.empty() && reindexedArchives.empty();
   if (noScanWork) {
     clearChartScanCheckpoint(db);
+    clearChartMetadataRebuildRequiredIfPresent(db);
     return 0;
   }
   if (shouldStop()) {
@@ -5267,6 +5226,7 @@ int ChartDBHelper::ScanChartRoots(
   acknowledgeFlushRequest(pendingFlushRequest());
   if (!stopRequested(stopToken)) {
     clearChartScanCheckpoint(db);
+    clearChartMetadataRebuildRequiredIfPresent(db);
   }
 
   if (changedCount > 0) {

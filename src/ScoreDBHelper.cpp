@@ -336,6 +336,20 @@ bool chartDatabaseHasRowsForScoreMigration(sqlite3 *db) {
   return selectScalarInt(db, query, 0) > 0;
 }
 
+bool chartDatabaseRebuildRequiredForScoreMigration(sqlite3 *db) {
+  const std::string tableExistsQuery =
+      std::string("SELECT 1 FROM ") + kScoreMigrationChartSchema +
+      ".sqlite_master WHERE type = 'table' AND "
+      "name = 'chart_meta_rebuild_state' LIMIT 1";
+  if (selectScalarInt(db, tableExistsQuery, 0) <= 0) {
+    return false;
+  }
+  const std::string requiredQuery =
+      std::string("SELECT COALESCE(MAX(required), 0) FROM ") +
+      kScoreMigrationChartSchema + ".chart_meta_rebuild_state";
+  return selectScalarInt(db, requiredQuery, 0) > 0;
+}
+
 bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   completed = false;
   if (!ensureChartDatabaseReadyForScoreMigration()) {
@@ -346,6 +360,12 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   }
 
   const int scoreCount = selectScalarInt(db, "SELECT COUNT(*) FROM scores", 0);
+  if (scoreCount > 0 && chartDatabaseRebuildRequiredForScoreMigration(db)) {
+    detachChartDatabaseForScoreMigration(db);
+    SDL_Log("Deferred score ln_mode migration because chart metadata is "
+            "scheduled for rebuild");
+    return true;
+  }
   if (scoreCount > 0 && !chartDatabaseHasRowsForScoreMigration(db)) {
     detachChartDatabaseForScoreMigration(db);
     SDL_Log("Deferred score ln_mode migration because chart metadata is empty");
