@@ -3521,13 +3521,8 @@ void MainMenuScene::reloadScoreClearRanks() {
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
   scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
   rebuildScoreClearRankTempTable();
-  const int selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
-  folderClearRanks =
-      main_menu_library::LoadFolderClearRanks(db, scoreClearRanks,
-                                              selectedLongNoteMode);
-  folderClearMarkCounts =
-      main_menu_library::LoadFolderClearMarkCounts(db, scoreClearRanks,
-                                                   selectedLongNoteMode);
+  folderClearData = main_menu_library::LoadFolderClearDataByLongNoteMode(
+      db, scoreClearRanks);
 }
 
 void MainMenuScene::rebuildScoreClearRankTempTable() {
@@ -3580,7 +3575,12 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
       }
       for (int lnMode = 0; lnMode < static_cast<int>(rankByMode.ranks.size());
            ++lnMode) {
-        const int rank = rankByMode.ranks[static_cast<size_t>(lnMode)];
+        int rank = rankByMode.ranks[static_cast<size_t>(lnMode)];
+        if (scoreClearRanks.legacyLongNoteModeFallback && lnMode > 0 &&
+            rank == kNoClearTypeRank &&
+            rankByMode.ranks[0] != kNoClearTypeRank) {
+          rank = rankByMode.ranks[0];
+        }
         if (rank < kNoClearTypeRank) {
           continue;
         }
@@ -3610,6 +3610,10 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
 
 void MainMenuScene::refreshScoreClearRankViews() {
   reloadScoreClearRanks();
+  refreshLongNoteModeClearRankViews();
+}
+
+void MainMenuScene::refreshLongNoteModeClearRankViews() {
   if (folderRecyclerView != nullptr) {
     reloadFolderItems(true);
   }
@@ -3661,14 +3665,19 @@ int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
 }
 
 int MainMenuScene::clearRankForFolder(const std::string &key) const {
-  const auto it = folderClearRanks.find(key);
-  return it == folderClearRanks.end() ? kNoClearTypeRank : it->second;
+  const int mode = longNoteModeMetaValue(selectedLnMode);
+  const auto &clearRanks = folderClearData.clearRanks[static_cast<size_t>(mode)];
+  const auto it = clearRanks.find(key);
+  return it == clearRanks.end() ? kNoClearTypeRank : it->second;
 }
 
 int MainMenuScene::clearMarkCountForFolder(const std::string &key,
                                            int clearMarkRank) const {
-  const auto folderIt = folderClearMarkCounts.find(key);
-  if (folderIt == folderClearMarkCounts.end()) {
+  const int mode = longNoteModeMetaValue(selectedLnMode);
+  const auto &clearMarkCounts =
+      folderClearData.clearMarkCounts[static_cast<size_t>(mode)];
+  const auto folderIt = clearMarkCounts.find(key);
+  if (folderIt == clearMarkCounts.end()) {
     return 0;
   }
   const auto countIt = folderIt->second.find(clearMarkRank);
@@ -3868,7 +3877,7 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
   }
   refreshLongNoteModeButtons();
   if (selectedLnMode != previousMode) {
-    refreshScoreClearRankViews();
+    refreshLongNoteModeClearRankViews();
   }
 }
 

@@ -22,6 +22,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -398,8 +399,7 @@ private:
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
-  std::unordered_map<std::string, int> folderClearRanks;
-  main_menu_library::FolderClearMarkCounts folderClearMarkCounts;
+  main_menu_library::FolderClearDataByLongNoteMode folderClearData;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
@@ -459,6 +459,7 @@ private:
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
   void refreshScoreClearRankViews();
+  void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();

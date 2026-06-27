@@ -510,9 +510,14 @@ std::size_t TransparentStringHash::operator()(std::string_view value) const
   return std::hash<std::string_view>{}(value);
 }
 
-int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
+int ScoreRankByLongNoteMode::bestRankForMode(
+    int lnMode, bool legacyLongNoteModeFallback) const {
   const int mode = normalizedScoreLongNoteMode(lnMode);
-  return ranks[static_cast<size_t>(mode)];
+  const int rank = ranks[static_cast<size_t>(mode)];
+  if (rank != kNoClearTypeRank || mode == 0 || !legacyLongNoteModeFallback) {
+    return rank;
+  }
+  return ranks[0];
 }
 
 int scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &chartMeta,
@@ -546,19 +551,22 @@ int ScoreClearRankCache::bestRankForHashes(const std::string &sha256,
   const std::string normalizedSha = normalizedHash(sha256);
   const auto shaIt = rankBySha256.find(normalizedSha);
   if (shaIt != rankBySha256.end()) {
-    return shaIt->second.bestRankForMode(longNoteMode);
+    return shaIt->second.bestRankForMode(longNoteMode,
+                                         legacyLongNoteModeFallback);
   }
 
   const std::string normalizedMd5 = normalizedHash(md5);
   const auto md5It = rankByMd5.find(normalizedMd5);
   if (md5It != rankByMd5.end()) {
-    return md5It->second.bestRankForMode(longNoteMode);
+    return md5It->second.bestRankForMode(longNoteMode,
+                                         legacyLongNoteModeFallback);
   }
 
   const std::string normalizedChartPath = normalizedPath(path);
   const auto pathIt = rankByPath.find(normalizedChartPath);
   if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+    return pathIt->second.bestRankForMode(longNoteMode,
+                                          legacyLongNoteModeFallback);
   }
 
   return kNoClearTypeRank;
@@ -570,17 +578,20 @@ int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
                                                int longNoteMode) const {
   const auto shaIt = rankBySha256.find(sha256);
   if (shaIt != rankBySha256.end()) {
-    return shaIt->second.bestRankForMode(longNoteMode);
+    return shaIt->second.bestRankForMode(longNoteMode,
+                                         legacyLongNoteModeFallback);
   }
 
   const auto md5It = rankByMd5.find(md5);
   if (md5It != rankByMd5.end()) {
-    return md5It->second.bestRankForMode(longNoteMode);
+    return md5It->second.bestRankForMode(longNoteMode,
+                                         legacyLongNoteModeFallback);
   }
 
   const auto pathIt = rankByPath.find(path);
   if (pathIt != rankByPath.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
+    return pathIt->second.bestRankForMode(longNoteMode,
+                                          legacyLongNoteModeFallback);
   }
 
   return kNoClearTypeRank;
@@ -946,6 +957,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
+  const bool legacyLongNoteModeFallback =
+      databaseUserVersion(connection.get()) < kScoreDatabaseSchemaVersion;
 
   const char *query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
@@ -954,9 +967,10 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
       "WHERE ((? != '' AND lower(trim(chart_sha256)) = ?) OR "
       "(? != '' AND lower(trim(chart_md5)) = ?) OR "
       "(? != '' AND chart_path = ?)) "
-      "AND ln_mode = ? "
+      "AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
       "AND (? = '' OR created_at < ?) "
-      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
+      "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
+      "score DESC, clear_type DESC, created_at DESC, id DESC "
       "LIMIT 1";
 
   SqliteStatementHandle stmt;
@@ -975,8 +989,11 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   bindText(stmt.get(), bindIndex++, chartPath);
   bindText(stmt.get(), bindIndex++, chartPath);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   legacyLongNoteModeFallback && longNoteMode > 0 ? 1 : 0);
   bindText(stmt.get(), bindIndex++, cutoff);
   bindText(stmt.get(), bindIndex++, cutoff);
+  sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
 
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
     return std::nullopt;
@@ -1056,6 +1073,8 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   SqliteConnectionHandle connection(db);
 
   if (CreateScoreTable(connection.get())) {
+    cache.legacyLongNoteModeFallback =
+        databaseUserVersion(connection.get()) < kScoreDatabaseSchemaVersion;
     loadBestRanksForColumn(connection.get(), "chart_sha256",
                            cache.rankBySha256, true);
     loadBestRanksForColumn(connection.get(), "chart_md5", cache.rankByMd5,
