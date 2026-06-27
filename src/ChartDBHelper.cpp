@@ -153,7 +153,6 @@ constexpr const char *kSolidArchiveSelectColumns =
 constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
 constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
-constexpr std::size_t kArchiveParseMaxWorkers = 3;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
 constexpr std::uint64_t kArchiveParseMaxInFlightBytes = 16ull * 1024ull * 1024ull;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
@@ -5052,16 +5051,7 @@ int ChartDBHelper::ScanChartRoots(
   };
 
   auto archiveParseWorkerCount = [](std::size_t fileCount) {
-    if (fileCount <= 1) {
-      return std::size_t{1};
-    }
-    const unsigned int hardwareThreads = std::thread::hardware_concurrency();
-    const std::size_t hardwareLimited =
-        hardwareThreads == 0
-            ? std::size_t{2}
-            : std::max<std::size_t>(1, (hardwareThreads + 2) / 3);
-    return std::max<std::size_t>(
-        1, std::min({fileCount, kArchiveParseMaxWorkers, hardwareLimited}));
+    return static_cast<std::size_t>(parallel_worker_count(fileCount));
   };
 
   auto parseArchiveBatchStreaming =
