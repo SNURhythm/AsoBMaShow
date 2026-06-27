@@ -1513,7 +1513,7 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
   std::filesystem::file_time_type ignoredMtime{};
   if (!fileState(archivePath, archiveSize, ignoredMtime)) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive file is unavailable: " + archivePath.string();
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
     }
     return false;
   }
@@ -1523,7 +1523,7 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
   if (!fileStream->isOpen()) {
     delete fileStream;
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not open archive file: " + archivePath.string();
+      *errorMessage = "Could not open archive file: " + pathForLog(archivePath);
     }
     return false;
   }
@@ -1583,7 +1583,7 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   std::filesystem::file_time_type archiveMtime{};
   if (!fileState(archivePath, archiveSize, archiveMtime)) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive file is unavailable: " + archivePath.string();
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
     }
     return nullptr;
   }
@@ -2419,7 +2419,7 @@ bool extractArchiveFullyWithLibarchive(
     }
     std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
     if (!output) {
-      return fail("Could not write unzipped file: " + outputPath.string());
+      return fail("Could not write unzipped file: " + pathForLog(outputPath));
     }
     for (;;) {
       if (stopRequested(stopToken)) {
@@ -2437,7 +2437,7 @@ bool extractArchiveFullyWithLibarchive(
       output.write(reinterpret_cast<const char *>(buffer.data()), count);
       if (!output) {
         return fail("Failed while writing unzipped file: " +
-                    outputPath.string());
+                    pathForLog(outputPath));
       }
     }
     ++completedFiles;
@@ -2515,7 +2515,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::filesystem::file_time_type mtime{};
   if (!fileState(archivePath, size, mtime)) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive file is unavailable: " + archivePath.string();
+      *errorMessage = "Archive file is unavailable: " + pathForLog(archivePath);
     }
     return nullptr;
   }
@@ -2913,7 +2913,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -3039,7 +3039,7 @@ bool readZipEntriesByName(
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
@@ -3187,7 +3187,7 @@ bool readZipEntriesByIndex(
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
                                   MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
                                   0)) {
