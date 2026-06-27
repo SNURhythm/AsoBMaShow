@@ -138,14 +138,15 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
       "SELECT id FROM music_playlist_items WHERE playlist_id = ?1 "
       "ORDER BY position, id";
   SqliteStatementHandle selectStmt;
-  int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist compact select", db);
+  if (!prepareSqliteStatementLogged(
+          db, selectQuery, selectStmt,
+          "preparing music playlist compact select", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(selectStmt, 1, playlistId);
 
   std::vector<int> ids;
+  int rc = SQLITE_OK;
   while ((rc = sqlite3_step(selectStmt)) == SQLITE_ROW) {
     ids.push_back(sqlite3_column_int(selectStmt, 0));
   }
@@ -157,9 +158,9 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
   const char *updateQuery =
       "UPDATE music_playlist_items SET position = ?1 WHERE id = ?2";
   SqliteStatementHandle updateStmt;
-  rc = prepareSqliteStatement(db, updateQuery, updateStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist compact update", db);
+  if (!prepareSqliteStatementLogged(
+          db, updateQuery, updateStmt,
+          "preparing music playlist compact update", logSqlErrorText)) {
     return false;
   }
 
@@ -490,13 +491,13 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   const char *insertQuery =
       "INSERT OR IGNORE INTO music_playlists (name) VALUES (@name)";
   SqliteStatementHandle insertStmt;
-  int rc = prepareSqliteStatement(db, insertQuery, insertStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist insert", db);
+  if (!prepareSqliteStatementLogged(db, insertQuery, insertStmt,
+                                    "preparing music playlist insert",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(insertStmt, 1, playlistName);
-  rc = sqlite3_step(insertStmt);
+  int rc = sqlite3_step(insertStmt);
   if (rc != SQLITE_DONE) {
     logSqlError("inserting music playlist", db);
     return 0;
@@ -504,9 +505,9 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
 
   const char *selectQuery = "SELECT id FROM music_playlists WHERE name = @name";
   SqliteStatementHandle selectStmt;
-  rc = prepareSqliteStatement(db, selectQuery, selectStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist select", db);
+  if (!prepareSqliteStatementLogged(db, selectQuery, selectStmt,
+                                    "preparing music playlist select",
+                                    logSqlErrorText)) {
     return 0;
   }
   bindSqliteText(selectStmt, 1, playlistName);
@@ -529,9 +530,9 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
 
   const char *selectQuery = "SELECT name FROM music_playlists WHERE id = ?1";
   SqliteStatementHandle selectStmt;
-  int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist rename select", db);
+  if (!prepareSqliteStatementLogged(
+          db, selectQuery, selectStmt,
+          "preparing music playlist rename select", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(selectStmt, 1, playlistId);
@@ -546,14 +547,14 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
       "UPDATE music_playlists SET name = ?1, updated_at = CURRENT_TIMESTAMP "
       "WHERE id = ?2";
   SqliteStatementHandle updateStmt;
-  rc = prepareSqliteStatement(db, updateQuery, updateStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist rename", db);
+  if (!prepareSqliteStatementLogged(db, updateQuery, updateStmt,
+                                    "preparing music playlist rename",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(updateStmt, 1, playlistName);
   sqlite3_bind_int(updateStmt, 2, playlistId);
-  rc = sqlite3_step(updateStmt);
+  int rc = sqlite3_step(updateStmt);
   if (rc != SQLITE_DONE) {
     logSqlError("renaming music playlist", db);
     return false;
@@ -574,9 +575,9 @@ std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
       "GROUP BY mp.id, mp.name "
       "ORDER BY mp.id";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting music playlists", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music playlists",
+                                    logSqlErrorText)) {
     return playlists;
   }
 
@@ -614,9 +615,9 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
       "chart_sha256 = excluded.chart_sha256,"
       "added_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist track insert", db);
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing music playlist track insert",
+          logSqlErrorText)) {
     return false;
   }
 
@@ -626,7 +627,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   bindSqliteText(stmt, 4, identity.chartPath);
   bindSqliteText(stmt, 5, identity.md5);
   bindSqliteText(stmt, 6, identity.sha256);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("inserting music playlist track", db);
     return false;
@@ -658,15 +659,15 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
       "DELETE FROM music_playlist_items "
       "WHERE playlist_id = ?1 AND music_key_type = ?2 AND music_key = ?3";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist track delete", db);
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing music playlist track delete",
+          logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
   bindSqliteText(stmt, 2, identity.keyType);
   bindSqliteText(stmt, 3, identity.musicKey);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("deleting music playlist track", db);
     return false;
@@ -704,9 +705,9 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
       "SELECT id, position FROM music_playlist_items "
       "WHERE playlist_id = ?1 AND music_key_type = ?2 AND music_key = ?3";
   SqliteStatementHandle currentStmt;
-  int rc = prepareSqliteStatement(db, selectCurrentQuery, currentStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist move select", db);
+  if (!prepareSqliteStatementLogged(
+          db, selectCurrentQuery, currentStmt,
+          "preparing music playlist move select", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
@@ -727,9 +728,9 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
             "WHERE playlist_id = ?1 AND position > ?2 "
             "ORDER BY position ASC, id ASC LIMIT 1";
   SqliteStatementHandle neighborStmt;
-  rc = prepareSqliteStatement(db, selectNeighborQuery, neighborStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist move neighbor select", db);
+  if (!prepareSqliteStatementLogged(
+          db, selectNeighborQuery, neighborStmt,
+          "preparing music playlist move neighbor select", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(neighborStmt, 1, playlistId);
@@ -745,16 +746,16 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
       "CASE id WHEN ?1 THEN ?2 WHEN ?3 THEN ?4 ELSE position END "
       "WHERE id IN (?1, ?3)";
   SqliteStatementHandle swapStmt;
-  rc = prepareSqliteStatement(db, swapQuery, swapStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist move swap", db);
+  if (!prepareSqliteStatementLogged(db, swapQuery, swapStmt,
+                                    "preparing music playlist move swap",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(swapStmt, 1, currentId);
   sqlite3_bind_int(swapStmt, 2, neighborPosition);
   sqlite3_bind_int(swapStmt, 3, neighborId);
   sqlite3_bind_int(swapStmt, 4, currentPosition);
-  rc = sqlite3_step(swapStmt);
+  int rc = sqlite3_step(swapStmt);
   if (rc != SQLITE_DONE) {
     logSqlError("moving music playlist track", db);
     return false;
@@ -777,13 +778,13 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
 
   const char *query = "DELETE FROM music_playlist_items WHERE playlist_id = ?1";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist clear", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing music playlist clear",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("clearing music playlist", db);
     return false;
@@ -807,13 +808,13 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   const char *deleteItemsQuery =
       "DELETE FROM music_playlist_items WHERE playlist_id = ?1";
   SqliteStatementHandle deleteItemsStmt;
-  int rc = prepareSqliteStatement(db, deleteItemsQuery, deleteItemsStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist item delete", db);
+  if (!prepareSqliteStatementLogged(
+          db, deleteItemsQuery, deleteItemsStmt,
+          "preparing music playlist item delete", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(deleteItemsStmt, 1, playlistId);
-  rc = sqlite3_step(deleteItemsStmt);
+  int rc = sqlite3_step(deleteItemsStmt);
   if (rc != SQLITE_DONE) {
     logSqlError("deleting music playlist items", db);
     return false;
@@ -822,9 +823,9 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   const char *deletePlaylistQuery =
       "DELETE FROM music_playlists WHERE id = ?1";
   SqliteStatementHandle deletePlaylistStmt;
-  rc = prepareSqliteStatement(db, deletePlaylistQuery, deletePlaylistStmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music playlist delete", db);
+  if (!prepareSqliteStatementLogged(
+          db, deletePlaylistQuery, deletePlaylistStmt,
+          "preparing music playlist delete", logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(deletePlaylistStmt, 1, playlistId);
@@ -844,9 +845,9 @@ MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
 
   const char *query = "SELECT key, value FROM music_player_state";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting music player state", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music player state",
+                                    logSqlErrorText)) {
     return state;
   }
 
@@ -875,9 +876,9 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
       "ON CONFLICT(key) DO UPDATE SET "
       "value = excluded.value, updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("preparing music player state save", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing music player state save",
+                                    logSqlErrorText)) {
     return false;
   }
 
@@ -926,9 +927,9 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
       "VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
   SqliteStatementHandle insertStmt;
   if (ok) {
-    const int rc = prepareSqliteStatement(db, insertQuery, insertStmt);
-    if (rc != SQLITE_OK) {
-      logSqlError("preparing now playing insert", db);
+    if (!prepareSqliteStatementLogged(db, insertQuery, insertStmt,
+                                      "preparing now playing insert",
+                                      logSqlErrorText)) {
       ok = false;
     }
   }
@@ -996,9 +997,9 @@ void MusicPlaylistDB::SelectLibraryTracks(
            "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting music library tracks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music library tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -1043,9 +1044,9 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   query += chartSourceOrderBy("cm");
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting music library group tracks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music library group tracks",
+                                    logSqlErrorText)) {
     return;
   }
   bindSqliteText(stmt, 1, groupKey);
@@ -1090,9 +1091,9 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
            "ORDER BY cm.queue_position, cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting now playing tracks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting now playing tracks",
+                                    logSqlErrorText)) {
     return;
   }
 
@@ -1138,9 +1139,9 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
            "ORDER BY cm.playlist_position, cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    logSqlError("selecting music playlist tracks", db);
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting music playlist tracks",
+                                    logSqlErrorText)) {
     return;
   }
   sqlite3_bind_int(stmt, 1, playlistId);

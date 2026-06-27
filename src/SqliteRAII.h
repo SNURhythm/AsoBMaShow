@@ -20,6 +20,10 @@ inline void closeSqliteDatabase(sqlite3 *db) {
   }
 }
 
+inline std::string sqliteDatabaseError(sqlite3 *db) {
+  return db != nullptr ? sqlite3_errmsg(db) : "database is not open";
+}
+
 class SqliteErrorMessageHandle {
 public:
   SqliteErrorMessageHandle() = default;
@@ -71,6 +75,27 @@ inline int prepareSqliteStatement(sqlite3 *db, const std::string &query,
   return prepareSqliteStatement(db, query.c_str(), stmt);
 }
 
+template <typename LogSqlError>
+inline bool prepareSqliteStatementLogged(sqlite3 *db, const char *query,
+                                         SqliteStatementHandle &stmt,
+                                         const char *context,
+                                         const LogSqlError &logSqlError) {
+  if (prepareSqliteStatement(db, query, stmt) != SQLITE_OK) {
+    logSqlError(context, sqliteDatabaseError(db));
+    return false;
+  }
+  return true;
+}
+
+template <typename LogSqlError>
+inline bool prepareSqliteStatementLogged(sqlite3 *db, const std::string &query,
+                                         SqliteStatementHandle &stmt,
+                                         const char *context,
+                                         const LogSqlError &logSqlError) {
+  return prepareSqliteStatementLogged(db, query.c_str(), stmt, context,
+                                      logSqlError);
+}
+
 inline bool bindSqliteText(sqlite3_stmt *stmt, int idx,
                            const std::string &value) {
   return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
@@ -97,10 +122,6 @@ inline std::string sqliteValueString(sqlite3_value *value) {
   }
   const unsigned char *text = sqlite3_value_text(value);
   return text != nullptr ? reinterpret_cast<const char *>(text) : "";
-}
-
-inline std::string sqliteDatabaseError(sqlite3 *db) {
-  return db != nullptr ? sqlite3_errmsg(db) : "database is not open";
 }
 
 inline bool sqliteMessageContains(const char *message, const char *needle) {
