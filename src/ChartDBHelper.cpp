@@ -4004,27 +4004,18 @@ std::string ChartDBHelper::DifficultyTableLabelsForChart(
 
 bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
   // save paths to search for charts
-  auto query = "CREATE TABLE IF NOT EXISTS entries ("
+  if (!execSql(db,
+               "CREATE TABLE IF NOT EXISTS entries ("
                "path       TEXT primary key,"
                "ios_bookmark TEXT DEFAULT ''"
-               ")";
-
-  SqliteErrorMessageHandle errMsg;
-  int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while creating entries table: "
-              << sqlite3_errmsg(db) << "\n";
+               ")",
+               "creating entries table")) {
     return false;
   }
 
-  errMsg.reset();
-  rc = sqlite3_exec(
-      db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
-      nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK &&
-      !sqliteMessageContains(errMsg.get(), "duplicate column name")) {
-    std::cerr << "SQL error while migrating entries table: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!execSqlAllowDuplicateColumn(
+          db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
+          "migrating entries table")) {
     return false;
   }
   if (normalizeStoredPathColumn(db, "entries", "path", true)) {
