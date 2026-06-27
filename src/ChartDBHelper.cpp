@@ -2490,23 +2490,17 @@ sqlite3 *ChartDBHelper::Connect() {
   }
   const std::filesystem::path path = directory / "chart.db";
   std::cout << "DB Path: " << path.string() << "\n";
-  sqlite3 *db = nullptr;
-  const int rc = sqlite3_open(path.string().c_str(), &db);
-  if (db != nullptr) {
-    sqlite3_busy_timeout(db, 1000);
-  }
-  if (rc != SQLITE_OK) {
-    std::cerr << "Can't open chart database: "
-              << (db != nullptr ? sqlite3_errmsg(db) : "unknown error")
-              << "\n";
-    if (db != nullptr) {
-      sqlite3_close(db);
-    }
+  std::string openError;
+  sqlite3 *db = openSqliteDatabase(path, openError);
+  if (db == nullptr) {
+    std::cerr << "Can't open chart database: " << openError << "\n";
     return nullptr;
   }
-  // wal
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  if (const auto pragmaError = applySqlitePragmas(
+          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+    std::cerr << "Could not configure chart database: " << *pragmaError
+              << "\n";
+  }
   return db;
 }
 

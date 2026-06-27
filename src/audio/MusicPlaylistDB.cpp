@@ -418,23 +418,18 @@ sqlite3 *MusicPlaylistDB::Connect() {
       directory / kPlaylistDatabaseFileName;
   const std::filesystem::path chartPath = directory / kChartDatabaseFileName;
 
-  sqlite3 *db = nullptr;
-  const int rc = sqlite3_open(playlistPath.string().c_str(), &db);
-  if (db != nullptr) {
-    sqlite3_busy_timeout(db, 1000);
-  }
-  if (rc != SQLITE_OK) {
-    std::cerr << "Can't open music playlist database: "
-              << (db != nullptr ? sqlite3_errmsg(db) : "unknown error")
-              << "\n";
-    if (db != nullptr) {
-      sqlite3_close(db);
-    }
+  std::string openError;
+  sqlite3 *db = openSqliteDatabase(playlistPath, openError);
+  if (db == nullptr) {
+    std::cerr << "Can't open music playlist database: " << openError << "\n";
     return nullptr;
   }
 
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  if (const auto pragmaError = applySqlitePragmas(
+          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+    std::cerr << "Could not configure music playlist database: "
+              << *pragmaError << "\n";
+  }
   registerMusicPlaylistSqliteFunctions(db);
   attachChartDatabase(db, chartPath);
   return db;

@@ -465,23 +465,19 @@ sqlite3 *ReplayDBHelper::Connect() {
   }
   const std::filesystem::path path = directory / "replay.db";
 
-  sqlite3 *db = nullptr;
-  const int rc = sqlite3_open(path.string().c_str(), &db);
-  if (db != nullptr) {
-    sqlite3_busy_timeout(db, 1000);
-  }
-  if (rc != SQLITE_OK) {
-    SDL_Log("Can't open replay database: %s",
-            db != nullptr ? sqlite3_errmsg(db) : "unknown error");
-    if (db != nullptr) {
-      sqlite3_close(db);
-    }
+  std::string openError;
+  sqlite3 *db = openSqliteDatabase(path, openError);
+  if (db == nullptr) {
+    SDL_Log("Can't open replay database: %s", openError.c_str());
     return nullptr;
   }
 
-  sqlite3_exec(db, "PRAGMA foreign_keys=ON", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  if (const auto pragmaError =
+          applySqlitePragmas(db, {"PRAGMA foreign_keys=ON",
+                                  "PRAGMA journal_mode=WAL",
+                                  "PRAGMA synchronous=NORMAL"})) {
+    SDL_Log("Could not configure replay database: %s", pragmaError->c_str());
+  }
   return db;
 }
 

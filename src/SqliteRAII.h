@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+#include <initializer_list>
 #include <optional>
 #include <string>
 
@@ -95,4 +97,32 @@ executeSqlite(sqlite3 *db, const char *query,
   }
   return errMsg.get() != nullptr ? std::string(errMsg.get())
                                  : std::string(sqlite3_errmsg(db));
+}
+
+inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
+                                   std::string &errorMessage,
+                                   int busyTimeoutMs = 1000) {
+  sqlite3 *db = nullptr;
+  const int rc = sqlite3_open(path.string().c_str(), &db);
+  if (db != nullptr) {
+    sqlite3_busy_timeout(db, busyTimeoutMs);
+  }
+  if (rc != SQLITE_OK) {
+    errorMessage = db != nullptr ? sqlite3_errmsg(db) : "unknown error";
+    if (db != nullptr) {
+      sqlite3_close(db);
+    }
+    return nullptr;
+  }
+  return db;
+}
+
+inline std::optional<std::string>
+applySqlitePragmas(sqlite3 *db, std::initializer_list<const char *> pragmas) {
+  for (const char *pragma : pragmas) {
+    if (const auto error = executeSqlite(db, pragma)) {
+      return std::string(pragma) + ": " + *error;
+    }
+  }
+  return std::nullopt;
 }
