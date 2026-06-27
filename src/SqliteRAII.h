@@ -13,6 +13,12 @@
 
 using SqliteConnectionHandle = UniqueResource<sqlite3, sqlite3_close>;
 
+inline void closeSqliteDatabase(sqlite3 *db) {
+  if (db != nullptr) {
+    sqlite3_close(db);
+  }
+}
+
 class SqliteErrorMessageHandle {
 public:
   SqliteErrorMessageHandle() = default;

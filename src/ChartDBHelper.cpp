@@ -2461,9 +2461,7 @@ sqlite3 *ChartDBHelper::Connect() {
 }
 
 void ChartDBHelper::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
+  closeSqliteDatabase(db);
 }
 
 bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {

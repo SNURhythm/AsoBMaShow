@@ -459,9 +459,7 @@ sqlite3 *ReplayDBHelper::Connect() {
 }
 
 void ReplayDBHelper::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
+  closeSqliteDatabase(db);
 }
 
 bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {

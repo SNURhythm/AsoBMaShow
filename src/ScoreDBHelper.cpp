@@ -603,9 +603,7 @@ sqlite3 *ScoreDBHelper::Connect() {
 }
 
 void ScoreDBHelper::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
+  closeSqliteDatabase(db);
 }
 
 bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {

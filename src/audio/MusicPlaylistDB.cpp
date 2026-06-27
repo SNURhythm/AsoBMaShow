@@ -407,9 +407,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
 }
 
 void MusicPlaylistDB::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
+  closeSqliteDatabase(db);
 }
 
 bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
