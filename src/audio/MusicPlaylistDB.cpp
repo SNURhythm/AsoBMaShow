@@ -229,6 +229,37 @@ void bindStoredMusicTrackIdentity(sqlite3_stmt *stmt, int firstIndex,
   bindSqliteText(stmt, firstIndex + 4, identity.sha256);
 }
 
+std::string sqlParam(int index) { return "?" + std::to_string(index); }
+
+std::string storedMusicTrackRowPredicate(int firstIndex) {
+  const std::string keyTypeParam = sqlParam(firstIndex);
+  const std::string musicKeyParam = sqlParam(firstIndex + 1);
+  const std::string chartPathParam = sqlParam(firstIndex + 2);
+  const std::string md5Param = sqlParam(firstIndex + 3);
+  const std::string sha256Param = sqlParam(firstIndex + 4);
+  return "((music_key_type = " + keyTypeParam + " AND music_key = " +
+         musicKeyParam + ") OR (" + sha256Param +
+         " != '' AND lower(trim(chart_sha256)) = " + sha256Param + ") OR (" +
+         md5Param + " != '' AND lower(trim(chart_md5)) = " + md5Param +
+         ") OR (" + chartPathParam + " != '' AND chart_path = " +
+         chartPathParam + "))";
+}
+
+std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
+  const std::string keyTypeParam = sqlParam(firstIndex);
+  const std::string musicKeyParam = sqlParam(firstIndex + 1);
+  const std::string chartPathParam = sqlParam(firstIndex + 2);
+  const std::string md5Param = sqlParam(firstIndex + 3);
+  const std::string sha256Param = sqlParam(firstIndex + 4);
+  return "CASE WHEN music_key_type = " + keyTypeParam + " AND music_key = " +
+         musicKeyParam + " THEN 0 WHEN " + sha256Param +
+         " != '' AND lower(trim(chart_sha256)) = " + sha256Param +
+         " THEN 1 WHEN " + md5Param +
+         " != '' AND lower(trim(chart_md5)) = " + md5Param + " THEN 2 WHEN " +
+         chartPathParam + " != '' AND chart_path = " + chartPathParam +
+         " THEN 3 ELSE 4 END";
+}
+
 std::string joinedTextExpr(const std::string &alias,
                            std::initializer_list<const char *> columns) {
   std::string expr;
@@ -643,9 +674,9 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
     return false;
   }
 
-  const char *query =
-      "DELETE FROM music_playlist_items "
-      "WHERE playlist_id = ?1 AND music_key_type = ?2 AND music_key = ?3";
+  std::string query =
+      "DELETE FROM music_playlist_items WHERE playlist_id = ?1 AND ";
+  query += storedMusicTrackRowPredicate(2);
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "preparing music playlist track delete",
@@ -653,7 +684,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindStoredMusicTrackKey(stmt, 2, identity);
+  bindStoredMusicTrackIdentity(stmt, 2, identity);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("deleting music playlist track", db);
@@ -681,9 +712,13 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
 
-  const char *selectCurrentQuery =
-      "SELECT id, position FROM music_playlist_items "
-      "WHERE playlist_id = ?1 AND music_key_type = ?2 AND music_key = ?3";
+  std::string selectCurrentQuery =
+      "SELECT id, position FROM music_playlist_items WHERE playlist_id = ?1 "
+      "AND ";
+  selectCurrentQuery += storedMusicTrackRowPredicate(2);
+  selectCurrentQuery += " ORDER BY ";
+  selectCurrentQuery += storedMusicTrackRowPreferenceOrderBy(2);
+  selectCurrentQuery += ", position, id LIMIT 1";
   SqliteStatementHandle currentStmt;
   if (!prepareSqliteStatementLogged(
           db, selectCurrentQuery, currentStmt,
@@ -691,7 +726,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
-  bindStoredMusicTrackKey(currentStmt, 2, identity);
+  bindStoredMusicTrackIdentity(currentStmt, 2, identity);
   if (sqlite3_step(currentStmt) != SQLITE_ROW) {
     return false;
   }
