@@ -68,6 +68,18 @@ std::string normalizeSettingToken(std::string value) {
   return value;
 }
 
+std::string normalizeUpperOptionToken(std::string value) {
+  value = trim(value);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   if (ch == '_' || ch == ' ') {
+                     return '-';
+                   }
+                   return static_cast<char>(std::toupper(ch));
+                 });
+  return value;
+}
+
 const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
@@ -314,14 +326,7 @@ std::string parseGaugeTypeId(const std::string &value,
 }
 
 std::string normalizePlayOptionId(std::string value) {
-  value = trim(value);
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
+  value = normalizeUpperOptionToken(std::move(value));
   if (value == "OFF") {
     return AppSettings::kDefaultPlayOption;
   }
@@ -342,14 +347,7 @@ std::string parsePlayOptionId(const std::string &value,
 }
 
 std::string normalizeAssistOptionId(std::string value) {
-  value = trim(value);
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
+  value = normalizeUpperOptionToken(std::move(value));
   if (value == "DRAG" || value == "DRAG-MODE") {
     return "DRAG";
   }
