@@ -458,10 +458,6 @@ bool downloadAndExtractArchive(
     }
 
     std::error_code error;
-    if (!std::filesystem::exists(archivePath, error) || error) {
-      return;
-    }
-    error.clear();
     std::filesystem::remove(archivePath, error);
     if (error) {
       SDL_Log("Could not delete downloaded archive %s: %s",
