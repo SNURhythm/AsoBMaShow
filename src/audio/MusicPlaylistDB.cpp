@@ -1,6 +1,7 @@
 #include "MusicPlaylistDB.h"
 
 #include "../BmsMetadataText.h"
+#include "../ChartSqlExpressions.h"
 #include "../SqliteRAII.h"
 #include "../Utils.h"
 #include "../path.h"
@@ -45,7 +46,6 @@ constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.total_scratch_notes,"
                                                 "cm.total_backspin_notes";
 constexpr int kChartMetaColumnCount = 27;
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 constexpr const char *kPlaylistDatabaseFileName = "music_playlist.db";
 constexpr const char *kChartDatabaseFileName = "chart.db";
 constexpr const char *kChartDatabaseSchema = "chart_library";
@@ -53,6 +53,9 @@ constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::kMaxSqlIntegerText;
 
 int parseIntOr(const std::string &value, int fallback) {
   if (value.empty()) {
@@ -225,26 +228,6 @@ storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   return identity;
 }
 
-std::string chartSourcePriorityExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_priority, 3)";
-}
-
-std::string chartSourceArchiveSizeExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_archive_size, " +
-         kMaxSqlIntegerText + ")";
-}
-
-std::string chartSourceOrderBy(const std::string &alias) {
-  return chartSourcePriorityExpr(alias) + ", " +
-         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
-}
-
-std::string chartArtworkOrderBy(const std::string &alias) {
-  return "CASE WHEN NULLIF(TRIM(" + alias +
-         ".stage_file), '') IS NOT NULL THEN 0 WHEN NULLIF(TRIM(" + alias +
-         ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
-}
-
 std::string joinedTextExpr(const std::string &alias,
                            std::initializer_list<const char *> columns) {
   std::string expr;
@@ -313,29 +296,6 @@ std::string musicRepresentativeOrderBy(const std::string &alias) {
          " THEN 0 ELSE 1 END, " +
          textLengthOrderExpr(alias, {"artist", "sub_artist"}) + ", " +
          textLengthOrderExpr(alias, {"title", "subtitle"});
-}
-
-std::string preferredChartPredicate(const std::string &alias) {
-  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
-  const std::string currentPriority = chartSourcePriorityExpr(alias);
-  const std::string betterArchiveSize =
-      chartSourceArchiveSizeExpr("cm_better");
-  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
-
-  return std::string("NOT EXISTS (SELECT 1 FROM ") + kChartMetaTable +
-         " cm_better WHERE "
-         "cm_better.path != " +
-         alias + ".path AND ((" + alias +
-         ".sha256 != '' AND cm_better.sha256 = " + alias +
-         ".sha256) OR (" + alias +
-         ".sha256 = '' AND " + alias +
-         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
-         betterPriority + " < " + currentPriority + " OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " = " + currentArchiveSize +
-         " AND cm_better.path < " + alias + ".path)))";
 }
 
 bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
@@ -992,7 +952,8 @@ void MusicPlaylistDB::SelectLibraryTracks(
   query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
   query += kChartMetaTable;
   query += " cm WHERE ";
-  query += preferredChartPredicate("cm");
+  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+                                                         kChartMetaTable);
   query += ") cm WHERE cm.music_rank = 1 "
            "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
@@ -1036,7 +997,8 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   query += kChartMetaTable;
   query += " cm WHERE ";
   query += useFolder ? "cm.folder = ?1 AND " : "cm.path = ?1 AND ";
-  query += preferredChartPredicate("cm");
+  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+                                                         kChartMetaTable);
   query += " ORDER BY ";
   query += musicRepresentativeOrderBy("cm");
   query += ", cm.title COLLATE NOCASE, cm.subtitle COLLATE NOCASE, "
@@ -1086,7 +1048,8 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
   query += kChartMetaTable;
   query += " cm ON mnp.music_key_type = 'path' AND cm.path = mnp.music_key "
            "WHERE ";
-  query += preferredChartPredicate("cm");
+  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+                                                         kChartMetaTable);
   query += ") cm WHERE cm.music_rank = 1 "
            "ORDER BY cm.queue_position, cm.title COLLATE NOCASE, cm.path";
 
@@ -1134,7 +1097,8 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
   query += kChartMetaTable;
   query += " cm ON mpi.music_key_type = 'path' AND cm.path = mpi.music_key "
            "WHERE mpi.playlist_id = ?1 AND ";
-  query += preferredChartPredicate("cm");
+  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+                                                         kChartMetaTable);
   query += ") cm WHERE cm.music_rank = 1 "
            "ORDER BY cm.playlist_position, cm.title COLLATE NOCASE, cm.path";
 

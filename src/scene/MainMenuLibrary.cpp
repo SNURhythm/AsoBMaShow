@@ -1,5 +1,6 @@
 #include "MainMenuLibrary.h"
 
+#include "../ChartSqlExpressions.h"
 #include "../LongNoteModeUtils.h"
 #include "../SqliteRAII.h"
 #include "../view/ClearLampColors.h"
@@ -31,6 +32,9 @@ std::string folderKeyForCourse(int courseId) {
 }
 
 namespace {
+using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::preferredChartPredicate;
+
 std::string_view columnText(sqlite3_stmt *stmt, int column) {
   return sqliteColumnTextView(stmt, column);
 }
@@ -57,44 +61,6 @@ struct FolderClearAggregate {
     return minimumClearRank;
   }
 };
-
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
-
-std::string chartSourcePriorityExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_priority, 3)";
-}
-
-std::string chartSourceArchiveSizeExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_archive_size, " +
-         kMaxSqlIntegerText + ")";
-}
-
-std::string preferredChartPredicate(const std::string &alias) {
-  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
-  const std::string currentPriority = chartSourcePriorityExpr(alias);
-  const std::string betterArchiveSize =
-      chartSourceArchiveSizeExpr("cm_better");
-  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
-
-  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
-         "cm_better.path != " +
-         alias + ".path AND ((" + alias +
-         ".sha256 != '' AND cm_better.sha256 = " + alias +
-         ".sha256) OR (" + alias +
-         ".sha256 = '' AND " + alias +
-         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
-         betterPriority + " < " + currentPriority + " OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " = " + currentArchiveSize +
-         " AND cm_better.path < " + alias + ".path)))";
-}
-
-std::string chartSourceOrderBy(const std::string &alias) {
-  return chartSourcePriorityExpr(alias) + ", " +
-         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
-}
 
 void addClearMarkCount(FolderClearMarkCounts &counts,
                        const std::string &folderKey, int clearRank) {

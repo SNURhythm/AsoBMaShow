@@ -4,6 +4,7 @@
 #include "ArchiveFile.h"
 #include "BmsChartFile.h"
 #include "BmsMetadataText.h"
+#include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -43,6 +44,9 @@
 
 namespace {
 using json = nlohmann::json;
+using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::preferredChartPredicate;
 
 constexpr const char *kChartMetaSelectColumns = "cm.path,"
                                                 "cm.md5,"
@@ -168,7 +172,6 @@ constexpr const char *kDifficultyCourseEntrySearchText =
 constexpr const char *kSolidArchiveSelectColumns =
     "sa.path, sa.name, sa.archive_size, sa.uncompressed_size, sa.file_count";
 constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
@@ -1272,48 +1275,6 @@ sqlite3_int64 clampSqlInteger(std::uint64_t value) {
                      std::numeric_limits<sqlite3_int64>::max())
              ? std::numeric_limits<sqlite3_int64>::max()
              : static_cast<sqlite3_int64>(value);
-}
-
-std::string chartSourcePriorityExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_priority, 3)";
-}
-
-std::string chartSourceArchiveSizeExpr(const std::string &alias) {
-  return "COALESCE(" + alias + ".source_archive_size, " +
-         kMaxSqlIntegerText + ")";
-}
-
-std::string chartSourceOrderBy(const std::string &alias) {
-  return chartSourcePriorityExpr(alias) + ", " +
-         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
-}
-
-std::string chartArtworkOrderBy(const std::string &alias) {
-  return "CASE WHEN NULLIF(TRIM(" + alias +
-         ".stage_file), '') IS NOT NULL THEN 0 WHEN NULLIF(TRIM(" + alias +
-         ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
-}
-
-std::string preferredChartPredicate(const std::string &alias) {
-  const std::string betterPriority = chartSourcePriorityExpr("cm_better");
-  const std::string currentPriority = chartSourcePriorityExpr(alias);
-  const std::string betterArchiveSize =
-      chartSourceArchiveSizeExpr("cm_better");
-  const std::string currentArchiveSize = chartSourceArchiveSizeExpr(alias);
-
-  return "NOT EXISTS (SELECT 1 FROM chart_meta cm_better WHERE "
-         "cm_better.path != " +
-         alias + ".path AND ((" + alias +
-         ".sha256 != '' AND cm_better.sha256 = " + alias +
-         ".sha256) OR (" + alias +
-         ".sha256 = '' AND " + alias +
-         ".md5 != '' AND cm_better.md5 = " + alias + ".md5)) AND (" +
-         betterPriority + " < " + currentPriority + " OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " < " + currentArchiveSize + ") OR (" +
-         betterPriority + " = " + currentPriority + " AND " +
-         betterArchiveSize + " = " + currentArchiveSize +
-         " AND cm_better.path < " + alias + ".path)))";
 }
 
 std::string scoreLongNoteModeExpr(const std::string &alias,

@@ -2,6 +2,7 @@
 
 #include "BmsMetadataText.h"
 #include "ChartDBHelper.h"
+#include "ChartSqlExpressions.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
@@ -24,10 +25,11 @@ namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
 constexpr int kScoreDatabaseSchemaVersion = 2;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
-constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
+using asobmshow::chart_sql::chartSourcePriorityExpr;
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
@@ -313,21 +315,15 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
            "AND " +
            alias + ".path = scores.chart_path THEN 2 ELSE 3 END)";
   };
-  const auto sourcePriorityExprFor = [](const std::string &alias) {
-    return "COALESCE(" + alias + ".source_priority, 3)";
-  };
-  const auto sourceArchiveSizeExprFor = [](const std::string &alias) {
-    return "COALESCE(" + alias + ".source_archive_size, " +
-           std::string(kMaxSqlIntegerText) + ")";
-  };
   const std::string matchPredicate = matchPredicateFor("cm");
   const std::string matchRank = matchRankExprFor("cm");
   const std::string betterMatchRank = matchRankExprFor("cm_better");
-  const std::string sourcePriority = sourcePriorityExprFor("cm");
-  const std::string betterSourcePriority = sourcePriorityExprFor("cm_better");
-  const std::string sourceArchiveSize = sourceArchiveSizeExprFor("cm");
+  const std::string sourcePriority = chartSourcePriorityExpr("cm");
+  const std::string betterSourcePriority =
+      chartSourcePriorityExpr("cm_better");
+  const std::string sourceArchiveSize = chartSourceArchiveSizeExpr("cm");
   const std::string betterSourceArchiveSize =
-      sourceArchiveSizeExprFor("cm_better");
+      chartSourceArchiveSizeExpr("cm_better");
   const std::string betterMatchPredicate =
       "NOT EXISTS (SELECT 1 FROM " + chartTable + " cm_better WHERE " +
       matchPredicateFor("cm_better") + " AND (" + betterMatchRank + " < " +
