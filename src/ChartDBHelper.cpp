@@ -2,6 +2,7 @@
 
 #include "ChartDBHelper.h"
 #include "ArchiveFile.h"
+#include "BmsChartFile.h"
 #include "BmsMetadataText.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
@@ -344,14 +345,6 @@ bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
 
-bool isBmsChartFile(const std::filesystem::path &path) {
-  std::string ext = path.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return ext == ".bms" || ext == ".bme" || ext == ".bml";
-}
-
 bool hashLooksComplete(const std::string &value, size_t expectedLength) {
   if (value.size() != expectedLength) {
     return false;
@@ -431,7 +424,8 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
         result.readable = false;
         return result;
       }
-      if (entry.directory || !isBmsChartFile(entry.path)) {
+      if (entry.directory ||
+          !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
         continue;
       }
       const std::filesystem::path chartPath =
@@ -4275,7 +4269,7 @@ int ChartDBHelper::ScanChartRoots(
         if (shouldStop()) {
           return 0;
         }
-        if (isBmsChartFile(path)) {
+        if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
           const path_t key = fspath_to_path_t(path);
           if (knownChartPaths.find(key) == knownChartPaths.end()) {
             diffs.push_back({.path = path, .deleted = false});
@@ -4309,7 +4303,7 @@ int ChartDBHelper::ScanChartRoots(
     std::error_code rootTypeError;
     if (std::filesystem::is_regular_file(root, rootTypeError) &&
         !rootTypeError) {
-      if (isBmsChartFile(root)) {
+      if (asobmshow::bms_chart_file::isBmsChartPath(root)) {
         const path_t key = fspath_to_path_t(root);
         if (knownChartPaths.find(key) == knownChartPaths.end()) {
           diffs.push_back({.path = root, .deleted = false});
@@ -4335,7 +4329,7 @@ int ChartDBHelper::ScanChartRoots(
         continue;
       }
       const std::filesystem::path path = iterator->path();
-      if (isBmsChartFile(path)) {
+      if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
         const path_t key = fspath_to_path_t(path);
         if (knownChartPaths.find(key) == knownChartPaths.end()) {
           diffs.push_back({.path = path, .deleted = false});

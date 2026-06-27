@@ -1,5 +1,7 @@
 #include "Internal.h"
 
+#include "../BmsChartFile.h"
+
 #if ASOBMSHOW_HAS_LIBARCHIVE
 #include "../ArchiveRAII.h"
 #endif
@@ -597,11 +599,6 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
 }
 #endif
 
-bool isBmsChartPath(const std::filesystem::path &path) {
-  const std::string ext = lowerCopy(path.extension().string());
-  return ext == ".bms" || ext == ".bme" || ext == ".bml";
-}
-
 bool containsBmsFile(const std::filesystem::path &root) {
   std::error_code error;
   std::filesystem::recursive_directory_iterator iterator(
@@ -612,7 +609,7 @@ bool containsBmsFile(const std::filesystem::path &root) {
       error.clear();
       continue;
     }
-    if (isBmsChartPath(iterator->path())) {
+    if (asobmshow::bms_chart_file::isBmsChartPath(iterator->path())) {
       return true;
     }
   }
@@ -682,7 +679,7 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
       error.clear();
       continue;
     }
-    if (!isBmsChartPath(iterator->path())) {
+    if (!asobmshow::bms_chart_file::isBmsChartPath(iterator->path())) {
       continue;
     }
     sawBmsFile = true;
