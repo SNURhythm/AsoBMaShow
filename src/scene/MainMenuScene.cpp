@@ -2441,7 +2441,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       replayStatusText->setText("");
     }
     if (item.courseStart) {
-      refreshReplayAvailability(nullptr);
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
@@ -2973,8 +2972,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
     const auto &selectedMeta = recyclerView->get(selected);
+    const bool courseStartReplay =
+        selectedMeta.courseStart &&
+        activeFolder.type == LibraryFolderItem::Type::Course &&
+        activeFolder.courseId > 0;
     if (selectedMeta.solidArchive || selectedMeta.unavailable ||
-        selectedMeta.meta.BmsPath.empty()) {
+        (!courseStartReplay && selectedMeta.meta.BmsPath.empty())) {
       return;
     }
 
@@ -4050,6 +4053,7 @@ void MainMenuScene::startSelectedCourse() {
   session->gaugeType = selectedGaugeType;
   session->gaugeProfile = constraintSettings.gaugeProfile;
   session->gaugeAutoShift = selectedGaugeAutoShift;
+  session->longNoteMode = longNoteModeMetaValue(selectedLnMode);
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption =
       coursePlayOptionForConstraints(selectedPlayOption, constraintSettings);
@@ -4073,6 +4077,7 @@ void MainMenuScene::startCourseDirect(
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   const int selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  session->longNoteMode = selectedLongNoteMode;
 
   defer(
       [this, session, selectedLongNoteMode]() {
@@ -4396,6 +4401,15 @@ void MainMenuScene::reselectCurrentChart() {
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   replaySummaries.clear();
   selectedReplayIndex = -1;
+  if (record != nullptr && record->courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0) {
+    replaySummaries =
+        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId);
+    setReplayButtonVisible(!replaySummaries.empty());
+    return;
+  }
+
   if (record == nullptr || record->solidArchive || record->unavailable ||
       record->meta.BmsPath.empty()) {
     setReplayButtonVisible(false);
@@ -7027,9 +7041,18 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   }
 
   replayModalChart = record;
-  replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta);
-  replaySummaries.insert(replaySummaries.begin(),
-                         autoPlayReplaySummary(record));
+  const bool courseReplayList =
+      record.courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0;
+  if (courseReplayList) {
+    replaySummaries =
+        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId);
+  } else {
+    replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta);
+    replaySummaries.insert(replaySummaries.begin(),
+                           autoPlayReplaySummary(record));
+  }
   setReplayButtonVisible(true);
 
   selectedReplayIndex = -1;
@@ -7116,13 +7139,16 @@ void MainMenuScene::refreshReplayModalActions() {
                             replayExportProgressContent->getVisible();
   const bool exportInProgress = replayExportInProgress.load();
   const bool autoPlaySelection = selectedReplayIsAutoPlay();
+  const bool courseReplaySelection = selectedReplayIsCourseReplay();
 
   if (replayModalCloseButtonText != nullptr) {
     replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
   }
   if (replayModalPhotoButtonText != nullptr) {
-    replayModalPhotoButtonText->setText(autoPlaySelection ? "No Photo"
-                                                          : "Export Photo");
+    replayModalPhotoButtonText->setText(
+        autoPlaySelection ? "No Photo"
+                          : (courseReplaySelection ? "Export Photos"
+                                                   : "Export Photo"));
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText(exportInProgress ? "Exporting"
@@ -7265,6 +7291,12 @@ bool MainMenuScene::selectedReplayIsAutoPlay() const {
          replaySummaries[selectedReplayIndex].autoPlay;
 }
 
+bool MainMenuScene::selectedReplayIsCourseReplay() const {
+  return selectedReplayIndex >= 0 &&
+         selectedReplayIndex < static_cast<int>(replaySummaries.size()) &&
+         replaySummaries[selectedReplayIndex].courseReplay;
+}
+
 bms_parser::ChartMeta
 MainMenuScene::replayLoadMetaForRecord(const ChartMetaRecord &record) const {
   bms_parser::ChartMeta meta = record.meta;
@@ -7322,6 +7354,11 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
 
 void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                         int replayId) {
+  if (record.courseStart) {
+    startCourseReplayPlayback(record, replayId);
+    return;
+  }
+
   if (willStart.load()) {
     return;
   }
@@ -7430,6 +7467,126 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         return true;
       },
       0, true);
+}
+
+void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
+                                              int replayId) {
+  (void)record;
+  if (willStart.load()) {
+    return;
+  }
+
+  willStart.store(true);
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Loading...");
+  }
+
+  defer(
+      [this, replayId]() {
+        auto failReplayLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          return true;
+        };
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+
+        auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
+        if (!replay.has_value() || replay->stages.empty()) {
+          return failReplayLoad();
+        }
+
+        auto replayData =
+            std::make_shared<CourseReplayData>(std::move(*replay));
+        auto session = std::make_shared<CoursePlaySession>();
+        session->courseId = replayData->courseId;
+        session->courseName = replayData->courseName;
+        session->courseGroupName = replayData->courseGroupName;
+        session->constraintJson = replayData->constraintJson;
+        session->entries.reserve(replayData->stages.size());
+        for (const auto &stage : replayData->stages) {
+          session->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
+        }
+        const CourseConstraintSettings constraintSettings =
+            courseConstraintSettingsFromJson(replayData->constraintJson);
+        session->currentIndex = 0;
+        session->gaugeType = replayData->initialGaugeType;
+        session->gaugeProfile = replayData->gaugeProfile;
+        session->gaugeAutoShift = replayData->gaugeAutoShift;
+        session->longNoteMode = replayData->longNoteMode;
+        session->constraints = constraintSettings.rules;
+        session->requestedPlayOption = replayData->requestedPlayOption;
+        session->assistOption = replayData->assistOption;
+        session->autoKeySound = false;
+        session->courseReplayPlayback = true;
+        session->courseReplayData = std::move(replayData);
+        session->replayTouchVisualizationEnabled =
+            selectedReplayRenderTouchPoints;
+        session->replayGhostRenderingEnabled = selectedReplayRenderGhosts;
+
+        hideReplayModal();
+        startCourseReplayDirect(std::move(session));
+        return true;
+      },
+      0, true);
+}
+
+void MainMenuScene::startCourseReplayDirect(
+    std::shared_ptr<CoursePlaySession> session) {
+  if (session == nullptr || !session->validCurrentIndex() ||
+      !session->hasCourseReplayStage(session->currentIndex)) {
+    resetReplayWatchLoadingUi();
+    return;
+  }
+
+  auto stageReplay =
+      std::make_shared<ReplayData>(
+          session->courseReplayStage(session->currentIndex)->replay);
+  session->playOption = stageReplay->playOption;
+  session->playOptionSeed = stageReplay->playOptionSeed;
+  session->playOption2 = stageReplay->playOption2;
+  session->playOption2Seed = stageReplay->playOption2Seed;
+  std::atomic_bool parseCancelled = false;
+  auto replayChart = play_options::prepareReplayChart(
+      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
+  if (replayChart == nullptr || parseCancelled) {
+    resetReplayWatchLoadingUi();
+    return;
+  }
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*replayChart, true, parseCancelled);
+  if (parseCancelled) {
+    resetReplayWatchLoadingUi();
+    return;
+  }
+
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoKeySound = false;
+  options.autoPlay = false;
+  options.gaugeType = session->gaugeType;
+  options.gaugeProfile = session->gaugeProfile;
+  options.gaugeAutoShift = session->gaugeAutoShift;
+  options.replayData = stageReplay;
+  options.playOption = stageReplay->playOption;
+  options.playOptionSeed = stageReplay->playOptionSeed;
+  options.playOption2 = stageReplay->playOption2;
+  options.playOption2Seed = stageReplay->playOption2Seed;
+  options.longNoteMode =
+      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
+  options.assistOption = stageReplay->assistOption;
+  options.courseSession = session;
+  options.courseConstraints = session->constraints;
+  options.ownsChart = true;
+  options.touchVisualizationEnabled = session->replayTouchVisualizationEnabled;
+  options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;
+
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                      std::move(options)),
+      true);
+  willStart.store(false);
 }
 
 bms_parser::Chart *
@@ -7589,6 +7746,23 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
+      if (record.courseStart) {
+        auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
+        if (!replay.has_value()) {
+          complete({.success = false, .message = "No Replay"});
+          return;
+        }
+        if (stopToken != nullptr && stopToken->stop_requested()) {
+          complete({.success = false, .message = "Replay export cancelled"});
+          return;
+        }
+
+        complete(ReplayVideoExporter::ExportCourseReplay(context,
+                                                         replay.value(),
+                                                         options));
+        return;
+      }
+
       if (replay_autoplay::isAutoPlayReplayId(replayId)) {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> chart;
@@ -7709,6 +7883,22 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
       loadThread.join();
     }
     context.jukebox.stop();
+
+    if (record.courseStart) {
+      updateReplayExportProgressUi(0.20, "Loading course replay");
+      auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
+      if (!replay.has_value()) {
+        complete({.success = false, .message = "No Replay"});
+        applyReplayVideoExportResult();
+        return;
+      }
+
+      updateReplayExportProgressUi(0.65, "Rendering photos");
+      complete(ResultImageExporter::ExportCourseReplay(context,
+                                                       replay.value()));
+      applyReplayVideoExportResult();
+      return;
+    }
 
     auto replay = ReplayDBHelper::GetInstance().LoadReplay(
         replayId, replayLoadMetaForRecord(record));

@@ -608,6 +608,7 @@ private:
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
   bool selectedReplayIsAutoPlay() const;
+  bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
   replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
@@ -617,6 +618,8 @@ private:
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayImageExport(const ChartMetaRecord &record, int replayId);

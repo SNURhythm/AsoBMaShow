@@ -3,7 +3,9 @@
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -212,10 +214,12 @@ struct CoursePlaySession {
   std::string constraintJson;
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
+  std::vector<CourseReplayStageData> replayStages;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   bool gaugeAutoShift = false;
+  int longNoteMode = 0;
   CourseConstraintRules constraints;
   std::optional<GaugeStateSnapshot> carriedGauge;
   int carriedCombo = 0;
@@ -228,6 +232,12 @@ struct CoursePlaySession {
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
   bool autoKeySound = false;
+  bool courseReplayPlayback = false;
+  bool courseReplaySaved = false;
+  int savedCourseReplayId = 0;
+  std::shared_ptr<CourseReplayData> courseReplayData = nullptr;
+  std::optional<bool> replayTouchVisualizationEnabled;
+  std::optional<bool> replayGhostRenderingEnabled;
 
   [[nodiscard]] bool validCurrentIndex() const {
     return currentIndex < entries.size();
@@ -237,8 +247,36 @@ struct CoursePlaySession {
     return currentIndex + 1 < entries.size();
   }
 
+  [[nodiscard]] bool hasNextCourseReplayStage() const {
+    return courseReplayData != nullptr &&
+           currentIndex + 1 < courseReplayData->stages.size();
+  }
+
   [[nodiscard]] const bms_parser::ChartMeta *currentMeta() const {
     return validCurrentIndex() ? &entries[currentIndex].meta : nullptr;
+  }
+
+  [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
+    return courseReplayData != nullptr &&
+           index < courseReplayData->stages.size();
+  }
+
+  [[nodiscard]] const CourseReplayStageData *
+  courseReplayStage(std::size_t index) const {
+    return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
+                                       : nullptr;
+  }
+
+  [[nodiscard]] long long restMicrosAfterCurrentStage() const {
+    if (courseReplayData != nullptr &&
+        currentIndex < courseReplayData->stages.size()) {
+      return std::max(
+          0LL, courseReplayData->stages[currentIndex].restMicrosAfterStage);
+    }
+    if (currentIndex < replayStages.size()) {
+      return std::max(0LL, replayStages[currentIndex].restMicrosAfterStage);
+    }
+    return 0;
   }
 
   void recordResult(const bms_parser::ChartMeta &meta,
@@ -255,5 +293,20 @@ struct CoursePlaySession {
       completedResults.emplace_back(entry.meta, RhythmState(nullptr, false));
     }
     completedResults.emplace_back(meta, state);
+  }
+
+  void recordReplayStage(const ReplayData &replay) {
+    while (replayStages.size() <= currentIndex) {
+      replayStages.emplace_back();
+    }
+    replayStages[currentIndex].replay = replay;
+  }
+
+  void recordRestMicrosAfterCurrentStage(long long restMicros) {
+    while (replayStages.size() <= currentIndex) {
+      replayStages.emplace_back();
+    }
+    replayStages[currentIndex].restMicrosAfterStage =
+        std::max(0LL, restMicros);
   }
 };

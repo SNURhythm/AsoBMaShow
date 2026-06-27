@@ -70,8 +70,11 @@ private:
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
+  void recordCourseStageRestTime();
   void startRetry(bool samePattern);
   void startReplay();
+  void startCourseReplay();
+  void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session);
   void continueCourse();
   void showCourseResult();
   void exportPhoto();
@@ -105,4 +108,7 @@ private:
   bool replaySaved = false;
   bool previousBestLoaded = false;
   bool resultPhotoExportInProgress = false;
+  bool courseTransitionStarted = false;
+  bool courseStageRestRecorded = false;
+  long long courseStageResultShownMicros = 0;
 };

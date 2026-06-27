@@ -39,4 +39,7 @@ public:
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay);
+  static ResultImageExportResult
+  ExportCourseReplay(ApplicationContext &context,
+                     const CourseReplayData &replay);
 };

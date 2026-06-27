@@ -103,10 +103,12 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
 
 namespace replay_result {
 RhythmState BuildResultState(bms_parser::Chart &chart,
-                             const ReplayData &replay) {
+                             const ReplayData &replay,
+                             GaugeProfile gaugeProfile) {
   const auto lookup = buildReplayNoteLookup(chart);
   RhythmState state(&chart, false);
-  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift);
+  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
+                       gaugeProfile);
   state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
 
   for (const auto &event : replay.events) {

@@ -602,14 +602,23 @@ void GamePlayScene::reset() {
   }
   ownedState = std::make_unique<RhythmState>(chart, false);
   state = ownedState.get();
-  const GaugeType initialGaugeType = isReplayPlayback()
-                                         ? options.replayData->initialGaugeType
-                                         : options.gaugeType;
+  const bool courseReplayPlayback =
+      isReplayPlayback() && isCoursePlayback() &&
+      options.courseSession != nullptr &&
+      options.courseSession->courseReplayPlayback;
+  const GaugeType initialGaugeType =
+      courseReplayPlayback
+          ? options.gaugeType
+          : (isReplayPlayback() ? options.replayData->initialGaugeType
+                                : options.gaugeType);
   const GaugeProfile gaugeProfile =
-      isReplayPlayback() ? GaugeProfile::Standard : options.gaugeProfile;
-  const bool gaugeAutoShift = isReplayPlayback()
-                                  ? options.replayData->gaugeAutoShift
-                                  : options.gaugeAutoShift;
+      isReplayPlayback() && !isCoursePlayback() ? GaugeProfile::Standard
+                                                : options.gaugeProfile;
+  const bool gaugeAutoShift =
+      courseReplayPlayback
+          ? options.gaugeAutoShift
+          : (isReplayPlayback() ? options.replayData->gaugeAutoShift
+                                : options.gaugeAutoShift);
   state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile);
   if (options.courseSession != nullptr &&
       options.courseSession->carriedGauge.has_value()) {
@@ -710,6 +719,9 @@ bool GamePlayScene::restartCourseFromBeginning() {
 
   session->currentIndex = 0;
   session->completedResults.clear();
+  if (!session->courseReplayPlayback) {
+    session->replayStages.clear();
+  }
   session->carriedGauge.reset();
   session->carriedCombo = 0;
   session->maxCombo = 0;
@@ -721,7 +733,12 @@ bool GamePlayScene::restartCourseFromBeginning() {
   context.jukebox.stop();
   defer(
       [this]() {
-        if (!startCourseChartAtCurrentIndex()) {
+        const bool started =
+            options.courseSession != nullptr &&
+                    options.courseSession->courseReplayPlayback
+                ? startCourseReplayChartAtCurrentIndex()
+                : startCourseChartAtCurrentIndex();
+        if (!started) {
           SDL_Log("Failed to restart course from the first chart.");
           context.sceneManager->changeScene("MainMenu");
         }
@@ -797,11 +814,69 @@ int GamePlayScene::effectiveNoteStartPositionPercent() const {
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
-  return !options.autoPlay && !isReplayPlayback() && !isCoursePlayback();
+  return !options.autoPlay && !isReplayPlayback();
 }
 
 bool GamePlayScene::shouldPersistRecordedReplay() const {
-  return shouldRecordReplay() && !options.practiceMode;
+  return shouldRecordReplay() && !options.practiceMode && !isCoursePlayback();
+}
+
+bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
+  auto session = options.courseSession;
+  if (session == nullptr || !session->validCurrentIndex() ||
+      !session->hasCourseReplayStage(session->currentIndex)) {
+    return false;
+  }
+
+  auto stageReplay =
+      std::make_shared<ReplayData>(
+          session->courseReplayStage(session->currentIndex)->replay);
+  session->playOption = stageReplay->playOption;
+  session->playOptionSeed = stageReplay->playOptionSeed;
+  session->playOption2 = stageReplay->playOption2;
+  session->playOption2Seed = stageReplay->playOption2Seed;
+
+  std::atomic_bool parseCancelled = false;
+  auto replayChart = play_options::prepareReplayChart(
+      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
+  if (replayChart == nullptr || parseCancelled) {
+    return false;
+  }
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*replayChart, true, parseCancelled);
+  if (parseCancelled) {
+    return false;
+  }
+
+  StartOptions nextOptions;
+  nextOptions.startPosition = 0;
+  nextOptions.autoKeySound = false;
+  nextOptions.autoPlay = false;
+  nextOptions.gaugeType = session->gaugeType;
+  nextOptions.gaugeProfile = session->gaugeProfile;
+  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.replayData = stageReplay;
+  nextOptions.playOption = stageReplay->playOption;
+  nextOptions.playOptionSeed = stageReplay->playOptionSeed;
+  nextOptions.playOption2 = stageReplay->playOption2;
+  nextOptions.playOption2Seed = stageReplay->playOption2Seed;
+  nextOptions.longNoteMode =
+      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
+  nextOptions.assistOption = stageReplay->assistOption;
+  nextOptions.courseSession = session;
+  nextOptions.courseConstraints = session->constraints;
+  nextOptions.ownsChart = true;
+  nextOptions.touchVisualizationEnabled =
+      session->replayTouchVisualizationEnabled;
+  nextOptions.replayGhostRenderingEnabled =
+      session->replayGhostRenderingEnabled;
+
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                      std::move(nextOptions)),
+      false);
+  return true;
 }
 
 bool GamePlayScene::startCourseChartAtCurrentIndex() {
@@ -1084,6 +1159,9 @@ void GamePlayScene::update(float dt) {
     options.courseSession->maxCombo =
         std::max(options.courseSession->maxCombo, state->maxCombo);
     options.courseSession->recordResult(chart->Meta, *state);
+    if (shouldRecordReplay()) {
+      options.courseSession->recordReplayStage(recordedReplay);
+    }
   }
   defer(
       [this]() {

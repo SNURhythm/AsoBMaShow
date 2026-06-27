@@ -1,5 +1,6 @@
 #include "ResultScene.h"
 #include "../ChartDBHelper.h"
+#include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
@@ -19,12 +20,19 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace {
+long long nowMicros() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 Color resultGaugeLineColor(float value) {
   if (value > 80.0f) {
     return ui_theme::withAlpha(ui_theme::cyan(), 210);
@@ -230,6 +238,42 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   }
   return aggregate;
 }
+
+CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
+                                            const RhythmState &resultState) {
+  CourseReplayData replay;
+  replay.courseId = session.courseId;
+  replay.courseName = session.courseName;
+  replay.courseGroupName = session.courseGroupName;
+  replay.constraintJson = session.constraintJson;
+  replay.requestedPlayOption = session.requestedPlayOption;
+  replay.assistOption = assist_options::normalize(session.assistOption);
+  replay.initialGaugeType = session.gaugeType;
+  replay.gaugeProfile = session.gaugeProfile;
+  replay.gaugeAutoShift = session.gaugeAutoShift;
+  replay.longNoteMode = normalizeChartLongNoteModeValue(session.longNoteMode);
+  replay.finalScore = resultState.getScore();
+  replay.finalGauge = resultState.currentGauge;
+  replay.clearType = resultState.getClearTypeRank();
+  replay.completedCharts =
+      static_cast<int>(session.completedResults.size());
+  replay.totalCharts = static_cast<int>(session.entries.size());
+
+  const size_t stageCount =
+      std::min(session.entries.size(), session.replayStages.size());
+  replay.stages.reserve(stageCount);
+  for (size_t i = 0; i < stageCount; ++i) {
+    CourseReplayStageData stage = session.replayStages[i];
+    if (stage.replay.chartMeta.BmsPath.empty() && i < session.entries.size()) {
+      stage.replay.chartMeta = session.entries[i].meta;
+    }
+    if (stage.replay.events.empty()) {
+      continue;
+    }
+    replay.stages.push_back(std::move(stage));
+  }
+  return replay;
+}
 } // namespace
 
 ResultScene::ResultScene(ApplicationContext &context,
@@ -301,6 +345,9 @@ void ResultScene::saveScore() {
   scoreSaved = true;
 
   if (isCourseFinalResult()) {
+    if (courseOptions.session->courseReplayPlayback) {
+      return;
+    }
     if (!courseOptions.session->courseScoreSaved) {
       const int completedCharts =
           static_cast<int>(courseOptions.session->completedResults.size());
@@ -366,6 +413,34 @@ void ResultScene::loadDifficultyLabel() {
 }
 
 void ResultScene::saveReplay() {
+  if (isCourseFinalResult()) {
+    auto session = courseOptions.session;
+    if (session == nullptr || session->courseReplayPlayback ||
+        session->courseReplaySaved || session->replayStages.empty()) {
+      return;
+    }
+
+    auto courseReplay =
+        std::make_shared<CourseReplayData>(
+            courseReplayDataForSession(*session, resultState));
+    if (courseReplay->stages.empty()) {
+      return;
+    }
+
+    auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
+    if (!replayId.has_value()) {
+      SDL_Log("Failed to save course replay: %s",
+              session->courseName.c_str());
+      return;
+    }
+
+    courseReplay->id = *replayId;
+    session->savedCourseReplayId = *replayId;
+    session->courseReplaySaved = true;
+    session->courseReplayData = std::move(courseReplay);
+    return;
+  }
+
   if (replaySaved || !replayToSave.has_value() ||
       replayToSave->events.empty()) {
     return;
@@ -524,6 +599,17 @@ void ResultScene::addCourseButtons() {
     actionHost->addView(nextButton);
   }
 
+  if (isCourseFinalResult() && courseOptions.session != nullptr &&
+      courseOptions.session->courseReplayData != nullptr &&
+      !courseOptions.session->courseReplayData->stages.empty()) {
+    auto [replayButton, ignoredText] = makeButton(
+        "Replay", ui_theme::infoAction(), ui_theme::infoActionHover(),
+        ui_theme::infoActionPressed(), ui_theme::cyan(),
+        [this]() { startCourseReplay(); });
+    (void)ignoredText;
+    actionHost->addView(replayButton);
+  }
+
   auto [photoButton, photoText] = makeButton(
       "Export Photo", ui_theme::violetAction(),
       ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
@@ -647,6 +733,19 @@ void ResultScene::hideCourseExitConfirmation() {
   }
 }
 
+void ResultScene::recordCourseStageRestTime() {
+  if (!isCourseStageResult() || courseStageRestRecorded ||
+      courseOptions.session == nullptr ||
+      courseOptions.session->courseReplayPlayback ||
+      courseStageResultShownMicros <= 0) {
+    return;
+  }
+
+  courseStageRestRecorded = true;
+  courseOptions.session->recordRestMicrosAfterCurrentStage(
+      nowMicros() - courseStageResultShownMicros);
+}
+
 void ResultScene::exportPhoto() {
   if (autoPlayResult || resultPhotoExportInProgress ||
       exportPhotoButtonText == nullptr) {
@@ -690,11 +789,25 @@ void ResultScene::exportPhoto() {
 }
 
 void ResultScene::continueCourse() {
-  if (!isCourseStageResult()) {
+  auto session = courseOptions.session;
+  if (!isCourseStageResult() || session == nullptr ||
+      courseTransitionStarted) {
+    return;
+  }
+  courseTransitionStarted = true;
+  recordCourseStageRestTime();
+
+  if (session->courseReplayPlayback) {
+    if (!session->hasNextCourseReplayStage()) {
+      showCourseResult();
+      return;
+    }
+
+    session->currentIndex++;
+    startCourseReplayStage(session);
     return;
   }
 
-  auto session = courseOptions.session;
   const float finalGauge = session->carriedGauge.has_value()
                                ? session->carriedGauge->currentGauge
                                : resultState.currentGauge;
@@ -734,6 +847,7 @@ void ResultScene::continueCourse() {
   play_options::PlayOptionReplayInfo playInfo =
       play_options::applySelectedPlayOptions(*nextChart,
                                              session->requestedPlayOption);
+  applyEffectiveLongNoteModeToChart(*nextChart, session->longNoteMode);
   session->playOption = playInfo.option;
   session->playOptionSeed = playInfo.seed;
   session->playOption2 = playInfo.option2;
@@ -757,6 +871,7 @@ void ResultScene::continueCourse() {
   nextOptions.playOptionSeed = playInfo.seed;
   nextOptions.playOption2 = playInfo.option2;
   nextOptions.playOption2Seed = playInfo.seed2;
+  nextOptions.longNoteMode = session->longNoteMode;
   nextOptions.assistOption = session->assistOption;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
@@ -945,7 +1060,110 @@ void ResultScene::startReplay() {
       0, true);
 }
 
+void ResultScene::startCourseReplay() {
+  if (!isCourseFinalResult() || courseOptions.session == nullptr ||
+      courseOptions.session->courseReplayData == nullptr ||
+      courseOptions.session->courseReplayData->stages.empty() ||
+      courseTransitionStarted) {
+    return;
+  }
+
+  courseTransitionStarted = true;
+  auto source = courseOptions.session->courseReplayData;
+  auto replayData = std::make_shared<CourseReplayData>(*source);
+  auto replaySession = std::make_shared<CoursePlaySession>();
+  replaySession->courseId = replayData->courseId;
+  replaySession->courseName = replayData->courseName;
+  replaySession->courseGroupName = replayData->courseGroupName;
+  replaySession->constraintJson = replayData->constraintJson;
+  replaySession->entries.reserve(replayData->stages.size());
+  for (const auto &stage : replayData->stages) {
+    replaySession->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
+  }
+  const CourseConstraintSettings constraintSettings =
+      courseConstraintSettingsFromJsonShared(replayData->constraintJson);
+  replaySession->currentIndex = 0;
+  replaySession->gaugeType = replayData->initialGaugeType;
+  replaySession->gaugeProfile = replayData->gaugeProfile;
+  replaySession->gaugeAutoShift = replayData->gaugeAutoShift;
+  replaySession->longNoteMode = replayData->longNoteMode;
+  replaySession->constraints = constraintSettings.rules;
+  replaySession->requestedPlayOption = replayData->requestedPlayOption;
+  replaySession->assistOption = replayData->assistOption;
+  replaySession->autoKeySound = false;
+  replaySession->courseReplayPlayback = true;
+  replaySession->courseReplayData = std::move(replayData);
+  replaySession->replayTouchVisualizationEnabled =
+      courseOptions.session->replayTouchVisualizationEnabled;
+  replaySession->replayGhostRenderingEnabled =
+      courseOptions.session->replayGhostRenderingEnabled;
+  startCourseReplayStage(std::move(replaySession));
+}
+
+void ResultScene::startCourseReplayStage(
+    std::shared_ptr<CoursePlaySession> session) {
+  if (session == nullptr ||
+      !session->hasCourseReplayStage(session->currentIndex)) {
+    return;
+  }
+
+  auto stageReplay =
+      std::make_shared<ReplayData>(
+          session->courseReplayStage(session->currentIndex)->replay);
+  session->playOption = stageReplay->playOption;
+  session->playOptionSeed = stageReplay->playOptionSeed;
+  session->playOption2 = stageReplay->playOption2;
+  session->playOption2Seed = stageReplay->playOption2Seed;
+  context.jukebox.stop();
+  std::atomic_bool parseCancelled = false;
+  auto replayChart = play_options::prepareReplayChart(
+      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
+  if (replayChart == nullptr || parseCancelled) {
+    context.sceneManager->changeScene("MainMenu");
+    return;
+  }
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*replayChart, true, parseCancelled);
+  if (parseCancelled) {
+    context.sceneManager->changeScene("MainMenu");
+    return;
+  }
+
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoKeySound = false;
+  options.autoPlay = false;
+  options.gaugeType = session->gaugeType;
+  options.gaugeProfile = session->gaugeProfile;
+  options.gaugeAutoShift = session->gaugeAutoShift;
+  options.replayData = stageReplay;
+  options.playOption = stageReplay->playOption;
+  options.playOptionSeed = stageReplay->playOptionSeed;
+  options.playOption2 = stageReplay->playOption2;
+  options.playOption2Seed = stageReplay->playOption2Seed;
+  options.longNoteMode =
+      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
+  options.assistOption = stageReplay->assistOption;
+  options.courseSession = session;
+  options.courseConstraints = session->constraints;
+  options.ownsChart = true;
+  options.touchVisualizationEnabled =
+      session->replayTouchVisualizationEnabled;
+  options.replayGhostRenderingEnabled =
+      session->replayGhostRenderingEnabled;
+
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                      std::move(options)),
+      false);
+}
+
 void ResultScene::init() {
+  if (isCourseStageResult()) {
+    courseStageResultShownMicros = nowMicros();
+  }
+
   loadDifficultyLabel();
   loadPreviousBest();
   saveScore();
@@ -987,6 +1205,20 @@ void ResultScene::init() {
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
   rootLayout->applyYogaLayout();
+
+  if (isCourseStageResult() && courseOptions.session != nullptr &&
+      courseOptions.session->courseReplayPlayback) {
+    const long long restMicros =
+        courseOptions.session->restMicrosAfterCurrentStage();
+    const Uint64 delayMs =
+        static_cast<Uint64>((std::max(0LL, restMicros) + 999LL) / 1000LL);
+    defer(
+        [this]() {
+          continueCourse();
+          return false;
+        },
+        delayMs, true);
+  }
 }
 
 void ResultScene::update(float dt) {}

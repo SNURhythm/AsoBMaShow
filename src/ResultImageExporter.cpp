@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -401,6 +403,141 @@ ResultPreviousBestData toResultPreviousBestData(
           .createdAt = snapshot.createdAt};
 }
 
+std::string difficultyLabelForChart(const bms_parser::ChartMeta &meta) {
+  std::string difficultyLabel;
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  sqlite3 *db = dbHelper.Connect();
+  if (db != nullptr) {
+    difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, meta);
+    dbHelper.Close(db);
+  }
+  return difficultyLabel;
+}
+
+std::optional<ResultPreviousBestData>
+previousBestForReplayChart(const bms_parser::ChartMeta &meta,
+                           const ReplayData &replay) {
+  std::optional<std::string> beforeCreatedAt;
+  if (!replay.autoPlay && !replay.createdAt.empty()) {
+    beforeCreatedAt = replay.createdAt;
+  }
+  if (const auto best =
+          ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+      best.has_value()) {
+    return toResultPreviousBestData(*best);
+  }
+  return std::nullopt;
+}
+
+std::string clearTypeLabelForRankValue(int rank) {
+  if (rank >= kClearTypeFullComboRank) {
+    return "FULL COMBO";
+  }
+  if (rank >= kClearTypeExHardClearRank) {
+    return "EX-HARD CLEAR";
+  }
+  if (rank >= kClearTypeHardClearRank) {
+    return "HARD CLEAR";
+  }
+  if (rank >= kClearTypeNormalClearRank) {
+    return "NORMAL CLEAR";
+  }
+  if (rank >= kClearTypeEasyClearRank) {
+    return "EASY CLEAR";
+  }
+  if (rank >= kClearTypeAssistedEasyClearRank) {
+    return "ASSISTED EASY CLEAR";
+  }
+  if (rank == kNoClearTypeRank) {
+    return "NO PLAY";
+  }
+  return "FAILED";
+}
+
+void addJudgeCount(RhythmState &target, const RhythmState &source,
+                   Judgement judgement) {
+  const auto count = source.judgeCount.find(judgement);
+  if (count != source.judgeCount.end()) {
+    target.judgeCount[judgement] += count->second;
+  }
+  const auto timing = source.judgementFastSlowCount.find(judgement);
+  if (timing != source.judgementFastSlowCount.end()) {
+    target.judgementFastSlowCount[judgement].fast += timing->second.fast;
+    target.judgementFastSlowCount[judgement].slow += timing->second.slow;
+  }
+}
+
+bms_parser::ChartMeta courseResultMetaForReplay(
+    const CourseReplayData &replay,
+    const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
+  bms_parser::ChartMeta meta;
+  meta.Title = replay.courseName.empty() ? "Course Result"
+                                         : replay.courseName;
+  meta.Artist = replay.courseGroupName.empty() ? "Course Mode"
+                                               : replay.courseGroupName;
+  meta.PlayLevel = static_cast<double>(replay.stages.size());
+  for (const auto &chart : charts) {
+    if (chart == nullptr) {
+      continue;
+    }
+    meta.TotalNotes += std::max(0, chart->Meta.TotalNotes);
+    meta.PlayLength += std::max(0LL, chart->Meta.PlayLength);
+  }
+  meta.TotalLength = meta.PlayLength;
+  meta.Bpm = 0.0;
+  meta.MinBpm = 0.0;
+  meta.MaxBpm = 0.0;
+  return meta;
+}
+
+RhythmState courseResultStateForReplay(
+    const CourseReplayData &replay,
+    const std::vector<RhythmState> &stageStates) {
+  RhythmState aggregate(nullptr, false);
+  aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
+                           replay.gaugeProfile);
+  aggregate.judgeCount.clear();
+  aggregate.judgementFastSlowCount.clear();
+  for (int i = 0; i < JudgementCount; ++i) {
+    aggregate.judgeCount[static_cast<Judgement>(i)] = 0;
+    aggregate.judgementFastSlowCount[static_cast<Judgement>(i)] = {};
+  }
+  aggregate.comboBreak = 0;
+  aggregate.maxCombo = 0;
+  aggregate.fastCount = 0;
+  aggregate.slowCount = 0;
+  aggregate.gaugeHistory.clear();
+
+  for (const auto &state : stageStates) {
+    for (int i = 0; i < JudgementCount; ++i) {
+      addJudgeCount(aggregate, state, static_cast<Judgement>(i));
+    }
+    aggregate.comboBreak += state.comboBreak;
+    aggregate.fastCount += state.fastCount;
+    aggregate.slowCount += state.slowCount;
+    aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);
+    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
+                                  state.gaugeHistory.begin(),
+                                  state.gaugeHistory.end());
+    aggregate.combo = state.combo;
+    aggregate.currentGauge = state.currentGauge;
+    aggregate.gaugeType = state.gaugeType;
+    aggregate.gaugeValues = state.gaugeValues;
+    aggregate.gaugeSurvivalFailed = state.gaugeSurvivalFailed;
+  }
+  aggregate.currentGauge = replay.finalGauge;
+  aggregate.gaugeType = replay.initialGaugeType;
+  if (!stageStates.empty()) {
+    aggregate.gaugeType = stageStates.back().gaugeType;
+  }
+  const int gaugeIndex = gaugeTypeIndex(aggregate.gaugeType);
+  if (gaugeIndex >= 0 &&
+      gaugeIndex < static_cast<int>(aggregate.gaugeValues.size())) {
+    aggregate.gaugeValues[gaugeIndex] = aggregate.currentGauge;
+  }
+  return aggregate;
+}
+
 ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const bms_parser::ChartMeta &meta,
                                           const RhythmState &state,
@@ -584,25 +721,120 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
                                   const ReplayData &replay) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
-  std::optional<ResultPreviousBestData> previousBest;
-  std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
-    beforeCreatedAt = replay.createdAt;
-  }
-  if (const auto best =
-          ScoreDBHelper::GetInstance().LoadBestScore(chart.Meta, beforeCreatedAt);
-      best.has_value()) {
-    previousBest = toResultPreviousBestData(*best);
-  }
-  std::string difficultyLabel;
-  auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *db = dbHelper.Connect();
-  if (db != nullptr) {
-    difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
-    dbHelper.Close(db);
-  }
+  std::optional<ResultPreviousBestData> previousBest =
+      previousBestForReplayChart(chart.Meta, replay);
+  std::string difficultyLabel = difficultyLabelForChart(chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
                 difficultyLabel, previousBest);
+}
+
+ResultImageExportResult
+ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
+                                        const CourseReplayData &replay) {
+  if (replay.stages.empty()) {
+    return {.success = false, .message = "No Course Replay"};
+  }
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
+  std::error_code ec;
+  const auto outputRoot = Utils::GetDocumentsPath("result_exports");
+  std::filesystem::create_directories(outputRoot, ec);
+  if (ec) {
+    return {.success = false,
+            .message = "Failed to create result export directory"};
+  }
+
+  const std::string timestamp = makeTimestamp();
+  const std::string courseName =
+      replay.courseName.empty() ? "Course Replay" : replay.courseName;
+  const auto outputDir =
+      outputRoot / (sanitizeFileNamePart(courseName) + "_" + timestamp);
+  std::filesystem::create_directories(outputDir, ec);
+  if (ec) {
+    return {.success = false,
+            .message = "Failed to create course result export directory"};
+  }
+
+  std::vector<std::unique_ptr<bms_parser::Chart>> charts;
+  std::vector<RhythmState> stageStates;
+  charts.reserve(replay.stages.size());
+  stageStates.reserve(replay.stages.size());
+  for (size_t i = 0; i < replay.stages.size(); ++i) {
+    const ReplayData &stageReplay = replay.stages[i].replay;
+    std::atomic_bool parseCancelled = false;
+    auto chart = play_options::prepareReplayChart(stageReplay.chartMeta.BmsPath,
+                                                  stageReplay, parseCancelled);
+    if (chart == nullptr || parseCancelled) {
+      return {.success = false,
+              .outputPath = outputDir,
+              .message = "Failed to load course replay stage"};
+    }
+
+    RhythmState state = replay_result::BuildResultState(
+        *chart, stageReplay, replay.gaugeProfile);
+    const play_options::PlayModeDisplayLabel display =
+        play_options::formatPlayModeDisplayLabel(stageReplay);
+    const std::string filename =
+        "stage_" + std::to_string(i + 1) + "_" +
+        sanitizeFileNamePart(chart->Meta.Title) + ".png";
+    const auto result = renderResultImage(
+        context, chart->Meta, state, display.mode, display.laneOrder,
+        difficultyLabelForChart(chart->Meta),
+        previousBestForReplayChart(chart->Meta, stageReplay), "NO PLAY",
+        kNoClearTypeRank, std::nullopt, outputDir / filename);
+    if (!result.success) {
+      return result;
+    }
+
+    charts.push_back(std::move(chart));
+    stageStates.push_back(std::move(state));
+  }
+
+  bms_parser::ChartMeta courseMeta = courseResultMetaForReplay(replay, charts);
+  RhythmState courseState = courseResultStateForReplay(replay, stageStates);
+  const play_options::PlayModeDisplayLabel display =
+      replay.stages.empty()
+          ? play_options::PlayModeDisplayLabel{}
+          : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
+  std::optional<std::string> clearLabelOverride;
+  std::optional<int> clearRankOverride;
+  if (replay.completedCharts == replay.totalCharts &&
+      replay.totalCharts == static_cast<int>(replay.stages.size()) &&
+      courseState.currentGauge > 0.0f && courseState.comboBreak == 0 &&
+      courseState.maxCombo >= std::max(0, courseMeta.TotalNotes)) {
+    clearLabelOverride = "FULL COMBO";
+    clearRankOverride = kClearTypeFullComboRank;
+  } else {
+    clearLabelOverride = clearTypeLabelForRankValue(replay.clearType);
+    clearRankOverride = replay.clearType;
+  }
+  const auto courseResult = renderResultImage(
+      context, courseMeta, courseState, display.mode, display.laneOrder,
+      "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
+      outputDir / "course_result.png");
+  if (!courseResult.success) {
+    return courseResult;
+  }
+
+  const int exportedCount = static_cast<int>(stageStates.size()) + 1;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  return {.success = true,
+          .outputPath = outputDir,
+          .message = "Saved to Photos"};
+#else
+  return {.success = true,
+          .outputPath = outputDir,
+          .message = "Exported " + std::to_string(exportedCount) + " photos"};
+#endif
 }

@@ -7,6 +7,29 @@
 
 namespace chart_playback_duration {
 
+inline constexpr long long kGameplayResultTransitionDelayMicros = 2000000LL;
+
+inline long long ChartLastTimelineMicros(const bms_parser::Chart &chart) {
+  long long endMicros = 0;
+  bool foundTimeline = false;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      foundTimeline = true;
+      endMicros = std::max(endMicros, timeline->Timing);
+    }
+  }
+  if (!foundTimeline) {
+    endMicros = std::max({0LL, chart.Meta.PlayLength, chart.Meta.TotalLength});
+  }
+  return std::max(0LL, endMicros);
+}
+
 inline long long ChartTimelineEndMicros(const bms_parser::Chart &chart) {
   long long endMicros =
       std::max({0LL, chart.Meta.TotalLength, chart.Meta.PlayLength});
@@ -22,6 +45,17 @@ inline long long ChartTimelineEndMicros(const bms_parser::Chart &chart) {
     }
   }
   return endMicros;
+}
+
+inline long long GameplayEndMicros(const bms_parser::Chart &chart,
+                                   long long latePoorTimingMicros) {
+  return ChartLastTimelineMicros(chart) + std::max(0LL, latePoorTimingMicros);
+}
+
+inline long long GameplayResultTransitionMicros(
+    const bms_parser::Chart &chart, long long latePoorTimingMicros) {
+  return GameplayEndMicros(chart, latePoorTimingMicros) +
+         kGameplayResultTransitionDelayMicros;
 }
 
 inline long long ReplayTimelineEndMicros(const bms_parser::Chart &chart,
