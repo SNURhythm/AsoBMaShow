@@ -1979,9 +1979,8 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
       "OR solid_archives.uncompressed_size != excluded.uncompressed_size "
       "OR solid_archives.file_count != excluded.file_count "
       "OR solid_archives.mtime_ns != excluded.mtime_ns";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing solid archive insert: "
               << sqlite3_errmsg(db) << "\n";
@@ -2007,10 +2006,9 @@ bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   std::filesystem::path storedPath = archivePath;
   ChartDBHelper::ToRelativePath(storedPath);
   const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "DELETE FROM solid_archives WHERE path = ?",
-                              -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(
+      db, "DELETE FROM solid_archives WHERE path = ?", stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing solid archive delete: "
               << sqlite3_errmsg(db) << "\n";
@@ -2032,10 +2030,9 @@ bool deleteChartMetaInArchive(sqlite3 *db,
   std::vector<bms_parser::ChartMeta> chartMetas;
   ChartDBHelper::GetInstance().SelectAllChartMeta(db, chartMetas);
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "DELETE FROM chart_meta WHERE path = ?", -1,
-                              &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc =
+      prepareSqliteStatement(db, "DELETE FROM chart_meta WHERE path = ?", stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing archive chart delete: "
               << sqlite3_errmsg(db) << "\n";
@@ -2068,10 +2065,8 @@ bool deleteChartMetaInArchive(sqlite3 *db,
 
 std::vector<std::filesystem::path> selectSolidArchivePaths(sqlite3 *db) {
   std::vector<std::filesystem::path> paths;
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "SELECT path FROM solid_archives", -1, &rawStmt,
-                              nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, "SELECT path FROM solid_archives", stmt);
   if (rc != SQLITE_OK) {
     return paths;
   }
@@ -2094,9 +2089,8 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
   auto query =
       "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
       "@symbol AND source_url = @source_url";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while looking up difficulty table: "
               << sqlite3_errmsg(db) << "\n";
@@ -2119,9 +2113,8 @@ int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
 
   auto query = "SELECT id FROM difficulty_tables WHERE source_url = "
                "@source_url ORDER BY id LIMIT 1";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while looking up difficulty table source URL: "
               << sqlite3_errmsg(db) << "\n";
@@ -2139,9 +2132,8 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
                                   std::string &sourceUrl,
                                   std::string *errorMessage) {
   auto query = "SELECT source_url FROM difficulty_tables WHERE id = @id";
-  sqlite3_stmt *rawStmt = nullptr;
-  const int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     if (errorMessage != nullptr) {
       *errorMessage = std::string("Could not read table source URL: ") +
@@ -2166,12 +2158,11 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
 }
 
 bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
-  sqlite3_stmt *rawStmt = nullptr;
   auto deleteCourseEntries =
       "DELETE FROM difficulty_course_entries WHERE course_id IN "
       "(SELECT id FROM difficulty_courses WHERE table_id = @table_id)";
-  int rc = sqlite3_prepare_v2(db, deleteCourseEntries, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, deleteCourseEntries, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2183,9 +2174,7 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
 
   auto deleteCourses =
       "DELETE FROM difficulty_courses WHERE table_id = @table_id";
-  rawStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, deleteCourses, -1, &rawStmt, nullptr);
-  stmt.reset(rawStmt);
+  rc = prepareSqliteStatement(db, deleteCourses, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2197,9 +2186,7 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
 
   auto deleteEntries =
       "DELETE FROM difficulty_table_entries WHERE table_id = @table_id";
-  rawStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, deleteEntries, -1, &rawStmt, nullptr);
-  stmt.reset(rawStmt);
+  rc = prepareSqliteStatement(db, deleteEntries, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2219,9 +2206,8 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
     auto updateQuery =
         "UPDATE difficulty_tables SET name = @name, symbol = @symbol, "
         "data_url = @data_url, updated_at = CURRENT_TIMESTAMP WHERE id = @id";
-    sqlite3_stmt *rawStmt = nullptr;
-    int rc = sqlite3_prepare_v2(db, updateQuery, -1, &rawStmt, nullptr);
-    SqliteStatementHandle stmt(rawStmt);
+    SqliteStatementHandle stmt;
+    int rc = prepareSqliteStatement(db, updateQuery, stmt);
     if (rc != SQLITE_OK) {
       return 0;
     }
@@ -2240,9 +2226,8 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
       "INSERT INTO difficulty_tables "
       "(name, symbol, data_url, source_url, updated_at) "
       "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, insertQuery, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, insertQuery, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while inserting difficulty table: "
               << sqlite3_errmsg(db) << "\n";
