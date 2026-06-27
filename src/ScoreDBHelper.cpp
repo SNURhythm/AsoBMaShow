@@ -99,10 +99,6 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return false;
 }
 
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return bindSqliteText(stmt, idx, value);
-}
-
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, query, stmt);
@@ -799,13 +795,13 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
       fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
           chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
-  bindText(stmt.get(), bindIndex++, chartPath);
-  bindText(stmt.get(), bindIndex++, chartMeta.MD5);
-  bindText(stmt.get(), bindIndex++, chartMeta.SHA256);
+  bindSqliteText(stmt.get(), bindIndex++, chartPath);
+  bindSqliteText(stmt.get(), bindIndex++, chartMeta.MD5);
+  bindSqliteText(stmt.get(), bindIndex++, chartMeta.SHA256);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    scoreLongNoteModeForClearLamp(chartMeta));
-  bindText(stmt.get(), bindIndex++, chartMeta.Title);
-  bindText(stmt.get(), bindIndex++, chartMeta.Artist);
+  bindSqliteText(stmt.get(), bindIndex++, chartMeta.Title);
+  bindSqliteText(stmt.get(), bindIndex++, chartMeta.Artist);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
   sqlite3_bind_int(stmt.get(), bindIndex++, chartMeta.TotalNotes * 2);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.maxCombo);
@@ -865,18 +861,18 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 
   int bindIndex = 1;
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
-  bindText(stmt.get(), bindIndex++, courseKeyForSession(session));
-  bindText(stmt.get(), bindIndex++, session.courseName);
-  bindText(stmt.get(), bindIndex++, session.courseGroupName);
-  bindText(stmt.get(), bindIndex++, session.constraintJson);
+  bindSqliteText(stmt.get(), bindIndex++, courseKeyForSession(session));
+  bindSqliteText(stmt.get(), bindIndex++, session.courseName);
+  bindSqliteText(stmt.get(), bindIndex++, session.courseGroupName);
+  bindSqliteText(stmt.get(), bindIndex++, session.constraintJson);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    gaugeTypeIndex(session.gaugeType));
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(session.gaugeProfile));
   sqlite3_bind_int(stmt.get(), bindIndex++, session.gaugeAutoShift ? 1 : 0);
-  bindText(stmt.get(), bindIndex++,
-           session.playOption.value_or(session.requestedPlayOption));
-  bindText(stmt.get(), bindIndex++, session.assistOption);
+  bindSqliteText(stmt.get(), bindIndex++,
+                 session.playOption.value_or(session.requestedPlayOption));
+  bindSqliteText(stmt.get(), bindIndex++, session.assistOption);
   sqlite3_bind_int(stmt.get(), bindIndex++, completedCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, totalCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
@@ -985,17 +981,17 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   }
 
   int bindIndex = 1;
-  bindText(stmt.get(), bindIndex++, sha256);
-  bindText(stmt.get(), bindIndex++, sha256);
-  bindText(stmt.get(), bindIndex++, md5);
-  bindText(stmt.get(), bindIndex++, md5);
-  bindText(stmt.get(), bindIndex++, chartPath);
-  bindText(stmt.get(), bindIndex++, chartPath);
+  bindSqliteText(stmt.get(), bindIndex++, sha256);
+  bindSqliteText(stmt.get(), bindIndex++, sha256);
+  bindSqliteText(stmt.get(), bindIndex++, md5);
+  bindSqliteText(stmt.get(), bindIndex++, md5);
+  bindSqliteText(stmt.get(), bindIndex++, chartPath);
+  bindSqliteText(stmt.get(), bindIndex++, chartPath);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    legacyLongNoteModeFallback ? 1 : 0);
-  bindText(stmt.get(), bindIndex++, cutoff);
-  bindText(stmt.get(), bindIndex++, cutoff);
+  bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  bindSqliteText(stmt.get(), bindIndex++, cutoff);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
 
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -1044,8 +1040,8 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   }
 
   int bindIndex = 1;
-  bindText(stmt.get(), bindIndex++, courseKey);
-  bindText(stmt.get(), bindIndex++, courseKey);
+  bindSqliteText(stmt.get(), bindIndex++, courseKey);
+  bindSqliteText(stmt.get(), bindIndex++, courseKey);
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
 
