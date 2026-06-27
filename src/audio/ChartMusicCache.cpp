@@ -1,5 +1,6 @@
 #include "ChartMusicCache.h"
 
+#include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
 #include "../Utils.h"
 #include "../path.h"
@@ -11,8 +12,6 @@
 #include <SDL2/SDL.h>
 #include <sndfile.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <string_view>
 #include <system_error>
@@ -44,20 +43,8 @@ std::string hex64(std::uint64_t value) {
 }
 
 std::string lowerTrimmed(std::string value) {
-  value.erase(value.begin(), std::find_if_not(value.begin(), value.end(),
-                                              [](unsigned char ch) {
-                                                return std::isspace(ch) != 0;
-                                              }));
-  value.erase(std::find_if_not(value.rbegin(), value.rend(),
-                               [](unsigned char ch) {
-                                 return std::isspace(ch) != 0;
-                               }).base(),
-              value.end());
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   return static_cast<char>(std::tolower(ch));
-                 });
-  return value;
+  return asobmshow::bms_metadata::lowerCopy(
+      asobmshow::bms_metadata::trimCopy(value));
 }
 
 std::string sanitizeFileNamePart(const std::string &value) {
