@@ -29,22 +29,10 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 
 bool tableHasColumn(sqlite3 *db, const char *tableName,
                     const char *columnName) {
-  const std::string query = std::string("PRAGMA table_info(") + tableName + ")";
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while reading replay schema: %s", sqlite3_errmsg(db));
-    return false;
-  }
-
   bool found = false;
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
-    if (text != nullptr && std::string(text) == columnName) {
-      found = true;
-      break;
-    }
+  if (const auto error =
+          querySqliteTableHasColumn(db, tableName, columnName, found)) {
+    SDL_Log("SQL error while reading replay schema: %s", error->c_str());
   }
   return found;
 }

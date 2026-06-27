@@ -143,6 +143,37 @@ querySqliteTableExists(sqlite3 *db, const char *tableName, bool &exists) {
   return sqlite3_errmsg(db);
 }
 
+inline std::optional<std::string>
+querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
+                          const char *columnName, bool &hasColumn) {
+  hasColumn = false;
+  char *query = sqlite3_mprintf("PRAGMA table_info(\"%w\")", tableName);
+  if (query == nullptr) {
+    return "could not allocate table_info statement";
+  }
+
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
+  sqlite3_free(query);
+  if (rc != SQLITE_OK) {
+    return sqlite3_errmsg(db);
+  }
+
+  int stepRc = SQLITE_OK;
+  while ((stepRc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    const auto *text =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
+    if (text != nullptr && std::string(text) == columnName) {
+      hasColumn = true;
+      return std::nullopt;
+    }
+  }
+  if (stepRc != SQLITE_DONE) {
+    return sqlite3_errmsg(db);
+  }
+  return std::nullopt;
+}
+
 inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
                                    std::string &errorMessage,
                                    int busyTimeoutMs = 1000) {
