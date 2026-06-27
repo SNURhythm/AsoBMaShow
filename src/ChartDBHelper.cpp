@@ -1377,16 +1377,14 @@ bool setChartMetadataRebuildRequired(sqlite3 *db, bool required) {
       "ON CONFLICT(id) DO UPDATE SET required = excluded.required, "
       "updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart metadata rebuild state",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, required ? 1 : 0);
   if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart metadata rebuild state: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart metadata rebuild state", db);
     return false;
   }
   return true;
@@ -1529,10 +1527,9 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
       "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
       "OR source_archive_size IS NULL OR source_archive_size != ?)";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart source preference update: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing chart source preference update",
+                                    logSqlErrorText)) {
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, priority);
@@ -1540,10 +1537,9 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
   bindSqliteText(stmt.get(), 3, storedPathText);
   sqlite3_bind_int(stmt.get(), 4, priority);
   sqlite3_bind_int64(stmt.get(), 5, archiveSize);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while updating chart source preference: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("updating chart source preference", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1685,10 +1681,9 @@ ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
       "archive_path, archive_size, archive_mtime_ns, last_inner_path "
       "FROM chart_scan_checkpoint WHERE id = 1";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting chart scan checkpoint",
+                                    logSqlErrorText)) {
     return checkpoint;
   }
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
@@ -1727,10 +1722,9 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
       "last_inner_path = excluded.last_inner_path,"
       "updated_at = CURRENT_TIMESTAMP";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing chart scan checkpoint upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing chart scan checkpoint upsert",
+          logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, checkpoint.scanSignature);
@@ -1742,10 +1736,9 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
   sqlite3_bind_int64(stmt.get(), 7, checkpoint.archiveSize);
   sqlite3_bind_int64(stmt.get(), 8, checkpoint.archiveMtimeNs);
   bindSqliteText(stmt.get(), 9, checkpoint.lastInnerPath);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting chart scan checkpoint: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting chart scan checkpoint", db);
     return false;
   }
   return true;
@@ -1807,10 +1800,9 @@ ArchiveScanCacheRecord selectArchiveScanCache(
       "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
       "chart_count FROM archive_scan_cache WHERE path = ?";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting archive scan cache",
+                                    logSqlErrorText)) {
     return record;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1886,10 +1878,9 @@ bool upsertArchiveScanCache(sqlite3 *db,
       "OR archive_scan_cache.file_count != excluded.file_count "
       "OR archive_scan_cache.chart_count != excluded.chart_count";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache upsert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing archive scan cache upsert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1899,10 +1890,9 @@ bool upsertArchiveScanCache(sqlite3 *db,
   sqlite3_bind_int64(stmt.get(), 5, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 6, std::max(0, fileCount));
   sqlite3_bind_int(stmt.get(), 7, std::max(0, chartCount));
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while upserting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("upserting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1913,18 +1903,15 @@ bool deleteArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath) {
   const std::string pathText = archivePathTextForDb(archivePath);
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(
-      db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive scan cache delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt,
+          "preparing archive scan cache delete", logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting archive scan cache: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting archive scan cache", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1964,10 +1951,9 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
       "OR solid_archives.file_count != excluded.file_count "
       "OR solid_archives.mtime_ns != excluded.mtime_ns";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive insert: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing solid archive insert",
+                                    logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
@@ -1976,10 +1962,9 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
   sqlite3_bind_int64(stmt.get(), 4, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 5, std::max(0, fileCount));
   sqlite3_bind_int64(stmt.get(), 6, mtimeNs);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("inserting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -1989,18 +1974,15 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   const std::string pathText = storedChartPathText(archivePath);
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(
-      db, "DELETE FROM solid_archives WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing solid archive delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM solid_archives WHERE path = ?", stmt,
+          "preparing solid archive delete", logSqlErrorText)) {
     return false;
   }
   bindSqliteText(stmt.get(), 1, pathText);
-  rc = sqlite3_step(stmt.get());
+  int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting solid archive: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -2013,11 +1995,9 @@ bool deleteChartMetaInArchive(sqlite3 *db,
   ChartDBHelper::GetInstance().SelectAllChartMeta(db, chartMetas);
 
   SqliteStatementHandle stmt;
-  int rc =
-      prepareSqliteStatement(db, "DELETE FROM chart_meta WHERE path = ?", stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing archive chart delete: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, "DELETE FROM chart_meta WHERE path = ?", stmt,
+          "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
 
@@ -2032,10 +2012,9 @@ bool deleteChartMetaInArchive(sqlite3 *db,
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
-    rc = sqlite3_step(stmt.get());
+    const int rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting archive chart: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting archive chart", db);
       return changed;
     }
     changed = sqlite3_changes(db) > 0 || changed;
