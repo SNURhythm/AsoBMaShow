@@ -5654,9 +5654,8 @@ bool ChartDBHelper::DeleteDifficultyTable(sqlite3 *db, int tableId) {
   }
 
   auto query = "DELETE FROM difficulty_tables WHERE id = @id";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
@@ -5779,9 +5778,8 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "GROUP BY dt.id "
                "ORDER BY dt.name COLLATE NOCASE";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty tables: "
               << sqlite3_errmsg(db) << "\n";
@@ -5813,9 +5811,8 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "WHERE dte.table_id = @table_id "
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty levels: "
               << sqlite3_errmsg(db) << "\n";
@@ -5858,9 +5855,8 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "GROUP BY dc.table_id, dc.group_name "
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty course groups: "
               << sqlite3_errmsg(db) << "\n";
@@ -5904,9 +5900,8 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "GROUP BY dc.id "
       "ORDER BY dc.sort_order";
 
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query.c_str(), -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting difficulty courses: "
               << sqlite3_errmsg(db) << "\n";
