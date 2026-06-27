@@ -202,9 +202,11 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const std::string playLevelLabel =
       "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
   const std::string difficultyLabel =
-      data != nullptr && !data->difficultyLabel.empty()
-          ? data->difficultyLabel + " / " + playLevelLabel
-          : playLevelLabel;
+      data != nullptr && data->headerDifficultyLabelOverride.has_value()
+          ? *data->headerDifficultyLabelOverride
+          : (data != nullptr && !data->difficultyLabel.empty()
+                 ? data->difficultyLabel + " / " + playLevelLabel
+                 : playLevelLabel);
 
   auto countFor = [&resultState](Judgement judgement) {
     const auto it = resultState.judgeCount.find(judgement);
@@ -282,8 +284,11 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int breakDelta =
       hasPreviousBest ? resultState.comboBreak - data->previousBest->comboBreak
                       : 0;
-  const Color currentClearAccent =
-      clearLampColorForRank(resultState.getClearTypeRank());
+  const int currentClearRank =
+      data != nullptr && data->currentClearRankOverride.has_value()
+          ? *data->currentClearRankOverride
+          : resultState.getClearTypeRank();
+  const Color currentClearAccent = clearLampColorForRank(currentClearRank);
   const Color previousClearAccent =
       hasPreviousBest ? clearLampColorForRank(previousClearRank)
                       : ui_theme::textMuted();

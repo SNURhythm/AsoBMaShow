@@ -66,9 +66,35 @@ LandmineNote::~LandmineNote() = default;
  */
 
 namespace bms_parser {
+LongNoteType LongNoteTypeFromLnMode(int LnMode) {
+  switch (LnMode) {
+  case 1:
+    return LongNoteType::LongNote;
+  case 2:
+    return LongNoteType::ChargeNote;
+  case 3:
+    return LongNoteType::HellChargeNote;
+  default:
+    return LongNoteType::Undefined;
+  }
+}
+
+LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode) {
+  if (Type != LongNoteType::Undefined) {
+    return Type;
+  }
+  return LongNoteTypeFromLnMode(LnMode);
+}
+
 bool LongNote::IsTail() const { return Tail == nullptr; }
 
-LongNote::LongNote(int Wav) : Note(Wav) { Tail = nullptr; }
+LongNote::LongNote(int Wav, LongNoteType Type) : Note(Wav), Type(Type) {
+  Tail = nullptr;
+}
+
+LongNoteType LongNote::GetType() const { return Type; }
+
+void LongNote::SetType(LongNoteType Type) { this->Type = Type; }
 
 void LongNote::Press(long long Time) {
   Play(Time);
@@ -1771,6 +1797,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   lastNote.resize(TempKey, nullptr);
   auto lnStart = std::vector<LongNote *>();
   lnStart.resize(TempKey, nullptr);
+  const auto channelLongNoteType = LongNoteTypeFromLnMode(new_chart->Meta.LnMode);
 #if BMS_PARSER_VERBOSE == 1
   midStartTime = std::chrono::high_resolution_clock::now();
 #endif
@@ -1986,9 +2013,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             }
 
             auto lastTimeline = last->Timeline;
-            auto ln = new LongNote{last->Wav};
+            auto ln = new LongNote{last->Wav, LongNoteType::LongNote};
             delete last;
-            ln->Tail = new LongNote{NoWav};
+            ln->Tail = new LongNote{NoWav, ln->Type};
             ln->Tail->Head = ln;
             lastTimeline->SetNote(laneNumber, ln);
             timeline->SetNote(laneNumber, ln->Tail);
@@ -2022,7 +2049,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                 ++totalLongNotes;
               }
 
-              auto ln = new LongNote{ToWaveId(new_chart, val, metaOnly)};
+              auto ln = new LongNote{ToWaveId(new_chart, val, metaOnly),
+                                     channelLongNoteType};
               lnStart[laneNumber] = ln;
 
               if (metaOnly) {
@@ -2033,7 +2061,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
               timeline->SetNote(laneNumber, ln);
             } else {
               if (!metaOnly) {
-                auto tail = new LongNote{NoWav};
+                auto tail = new LongNote{NoWav, lnStart[laneNumber]->Type};
                 tail->Head = lnStart[laneNumber];
                 lnStart[laneNumber]->Tail = tail;
                 timeline->SetNote(laneNumber, tail);

@@ -1,9 +1,37 @@
 #include <algorithm>
 #include "Judge.h"
 
+namespace {
+void collapseJudgementWindow(
+    std::map<Judgement, std::pair<long long, long long>> &timingWindows,
+    Judgement target, Judgement replacement) {
+  const auto replacementIt = timingWindows.find(replacement);
+  const auto targetIt = timingWindows.find(target);
+  if (replacementIt == timingWindows.end() || targetIt == timingWindows.end()) {
+    return;
+  }
+  targetIt->second = replacementIt->second;
+}
+} // namespace
+
 Judge::Judge(const int Rank) {
   const int Clamped = clampRank(Rank);
   timingWindows = TimingWindowsByRank[Clamped];
+}
+
+void Judge::applyCourseJudgementConstraint(
+    CourseJudgementConstraint constraint) {
+  switch (constraint) {
+  case CourseJudgementConstraint::NoGood:
+    collapseJudgementWindow(timingWindows, Good, Great);
+    return;
+  case CourseJudgementConstraint::NoGreat:
+    collapseJudgementWindow(timingWindows, Great, PGreat);
+    collapseJudgementWindow(timingWindows, Good, PGreat);
+    return;
+  case CourseJudgementConstraint::None:
+    return;
+  }
 }
 
 bool Judge::checkRange(const long long Diff, const long long Early,

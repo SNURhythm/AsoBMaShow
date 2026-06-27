@@ -21,10 +21,12 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
+constexpr long long kHellChargeGaugeTickMicros = 200000LL;
 
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -65,6 +67,53 @@ bool laneIsPressed(const std::unordered_map<int, bool> &lanePressed,
                    int lane) {
   const auto it = lanePressed.find(lane);
   return it != lanePressed.end() && it->second;
+}
+
+bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart *chart,
+                      int longNoteModeOverride = 0) {
+  return resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride);
+}
+
+bool isChargeLongNoteType(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::ChargeNote ||
+         type == bms_parser::LongNoteType::HellChargeNote;
+}
+
+bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
+                          const bms_parser::Chart *chart,
+                          int longNoteModeOverride = 0) {
+  return effectiveLongNoteType(longNote, chart, longNoteModeOverride) ==
+         bms_parser::LongNoteType::HellChargeNote;
+}
+
+void markLongNoteMissed(bms_parser::LongNote *longNote, long long judgedTime) {
+  if (longNote == nullptr) {
+    return;
+  }
+  longNote->IsPlayed = true;
+  longNote->IsDead = true;
+  longNote->PlayedTime = judgedTime;
+  longNote->IsHolding = false;
+}
+
+void markReplayMissedNote(bms_parser::Note *note, long long judgedTime) {
+  if (note == nullptr) {
+    return;
+  }
+  note->IsPlayed = true;
+  note->IsDead = true;
+  note->PlayedTime = judgedTime;
+  if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+      longNote != nullptr) {
+    longNote->IsHolding = false;
+    if (longNote->IsTail() && longNote->Head != nullptr) {
+      longNote->Head->IsHolding = false;
+    } else if (!longNote->IsTail() && longNote->Tail != nullptr) {
+      longNote->Tail->IsHolding = false;
+    }
+  }
 }
 
 std::string gameplayPlayOptionLabel(const StartOptions &options) {
@@ -110,6 +159,12 @@ bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
   return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
 }
 
+int noSpeedGreenNumberForChart(const bms_parser::Chart *chart) {
+  const double bpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
+  const double referenceBpm = std::isfinite(bpm) && bpm > 0.0 ? bpm : 120.0;
+  return std::max(1, static_cast<int>(std::lround(144000.0 / referenceBpm)));
+}
+
 bool prepareRetryChart(const bms_parser::ChartMeta &meta,
                        const StartOptions &sourceOptions,
                        std::unique_ptr<bms_parser::Chart> &retryChart,
@@ -118,6 +173,9 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   retryChart = play_options::parseChart(meta.BmsPath, cancelled, "retry");
   if (retryChart == nullptr || cancelled) {
     return false;
+  }
+  if (sourceOptions.courseSession != nullptr) {
+    applyCourseConstraintsToChart(*retryChart, sourceOptions.courseConstraints);
   }
 
   retryOptions = sourceOptions;
@@ -155,6 +213,8 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
     return false;
   }
 
+  applyEffectiveLongNoteModeToChart(*retryChart,
+                                    retryOptions.longNoteMode);
   return true;
 }
 
@@ -170,6 +230,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
       judge(chart->Meta.Rank), options(std::move(options)) {
+  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
@@ -180,26 +241,35 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       chart(ownedChart.get()), judge(this->chart->Meta.Rank),
       options(std::move(options)) {
   this->options.ownsChart = true;
+  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
 GamePlayScene::~GamePlayScene() = default;
 
 void GamePlayScene::init() {
+  if (chart != nullptr) {
+    const int replayLongNoteMode =
+        options.replayData != nullptr ? options.replayData->chartMeta.LnMode
+                                      : 0;
+    applyEffectiveLongNoteModeToChart(
+        *chart, replayLongNoteMode > 0 ? replayLongNoteMode
+                                       : options.longNoteMode);
+  }
   ownedRenderer = std::make_unique<BMSRenderer>(
-      chart, judge.timingWindows, context.settings.visibleTimeGreenNumber);
+      chart, judge.timingWindows, effectiveVisibleTimeGreenNumber());
   renderer = ownedRenderer.get();
   renderer->setVisibleTimeBpmStrategy(
-      context.settings.visibleTimeBpmStrategy);
+      courseNoSpeed() ? AppSettings::VisibleTimeBpmStrategy::Chart
+                      : context.settings.visibleTimeBpmStrategy);
   renderer->setVisibleTimeUseMilliseconds(
-      context.settings.visibleTimeUseMilliseconds);
+      courseNoSpeed() ? false : context.settings.visibleTimeUseMilliseconds);
   renderer->setPlayAreaWidth(
       context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
   renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
-  renderer->setNoteStartPositionPercent(
-      context.settings.noteStartPositionPercent);
+  renderer->setNoteStartPositionPercent(effectiveNoteStartPositionPercent());
   renderer->setLaneCoverFloatingEnabled(
-      context.settings.floatingLaneCoverEnabled);
+      !courseNoSpeed() && context.settings.floatingLaneCoverEnabled);
   renderer->setJudgementIndicatorConfig(
       context.settings.judgementIndicatorEnabled,
       context.settings.judgementIndicatorY,
@@ -252,7 +322,9 @@ void GamePlayScene::init() {
   }
 
   ownedLaneInputController =
-      std::make_unique<RhythmLaneInputController>(chart, renderer, lanePressed);
+      std::make_unique<RhythmLaneInputController>(
+          chart, renderer, lanePressed, options.courseConstraints.judgement,
+          options.longNoteMode);
   laneInputController = ownedLaneInputController.get();
 
   if constexpr (kShowLaneStateOverlay) {
@@ -447,15 +519,27 @@ void GamePlayScene::reset() {
   const GaugeType initialGaugeType = isReplayPlayback()
                                          ? options.replayData->initialGaugeType
                                          : options.gaugeType;
+  const GaugeProfile gaugeProfile =
+      isReplayPlayback() ? GaugeProfile::Standard : options.gaugeProfile;
   const bool gaugeAutoShift = isReplayPlayback()
                                   ? options.replayData->gaugeAutoShift
                                   : options.gaugeAutoShift;
-  state->configureGauge(initialGaugeType, gaugeAutoShift);
+  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile);
+  if (options.courseSession != nullptr &&
+      options.courseSession->carriedGauge.has_value()) {
+    state->restoreGaugeState(*options.courseSession->carriedGauge);
+  }
+  if (isCoursePlayback()) {
+    state->combo = options.courseSession->carriedCombo;
+    state->maxCombo = options.courseSession->maxCombo;
+  }
   const std::string assistOption =
       isReplayPlayback() ? options.replayData->assistOption
                          : options.assistOption;
   state->setAssistClearMark(assist_options::isEnabled(assistOption));
   initializeStartPositionState();
+  resetHellChargeGaugeTracking(
+      getGameplayTimeMicros(context.jukebox.getTimeMicros()));
   state->isPlaying = true;
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   renderer->setAutoPlayMarkVisible(
@@ -537,12 +621,101 @@ bool GamePlayScene::isReplayPlayback() const {
   return options.replayData != nullptr;
 }
 
+bool GamePlayScene::isCoursePlayback() const {
+  return options.courseSession != nullptr &&
+         options.courseSession->validCurrentIndex();
+}
+
+bool GamePlayScene::courseNoSpeed() const {
+  return isCoursePlayback() && options.courseConstraints.noSpeed;
+}
+
+int GamePlayScene::effectiveVisibleTimeGreenNumber() const {
+  return courseNoSpeed() ? noSpeedGreenNumberForChart(chart)
+                         : context.settings.visibleTimeGreenNumber;
+}
+
+int GamePlayScene::effectiveNoteStartPositionPercent() const {
+  return courseNoSpeed() ? AppSettings::kDefaultNoteStartPositionPercent
+                         : context.settings.noteStartPositionPercent;
+}
+
 bool GamePlayScene::shouldRecordReplay() const {
-  return !options.autoPlay && !isReplayPlayback();
+  return !options.autoPlay && !isReplayPlayback() && !isCoursePlayback();
 }
 
 bool GamePlayScene::shouldPersistRecordedReplay() const {
   return shouldRecordReplay() && !options.practiceMode;
+}
+
+bool GamePlayScene::startNextCourseChart() {
+  auto session = options.courseSession;
+  if (session == nullptr || !session->hasNextChart()) {
+    return false;
+  }
+
+  session->currentIndex++;
+  const bms_parser::ChartMeta *nextMeta = session->currentMeta();
+  if (nextMeta == nullptr || nextMeta->BmsPath.empty()) {
+    return false;
+  }
+
+  std::atomic_bool parseCancelled = false;
+  std::unique_ptr<bms_parser::Chart> nextChart;
+  try {
+    nextChart = play_options::parseChart(nextMeta->BmsPath, parseCancelled,
+                                         "course");
+  } catch (const std::exception &e) {
+    SDL_Log("Course parse failed %s: %s",
+            path_t_to_utf8(nextMeta->BmsPath).c_str(), e.what());
+    archive_file::appendDebugLogLine(
+        "Course parse exception: " +
+        path_t_to_utf8(fspath_to_path_t(nextMeta->BmsPath)) + ": " +
+        e.what());
+    return false;
+  }
+  if (nextChart == nullptr || parseCancelled) {
+    return false;
+  }
+  applyCourseConstraintsToChart(*nextChart, session->constraints);
+
+  play_options::PlayOptionReplayInfo playInfo =
+      play_options::applySelectedPlayOptions(*nextChart,
+                                             session->requestedPlayOption);
+  applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
+  session->playOption = playInfo.option;
+  session->playOptionSeed = playInfo.seed;
+  session->playOption2 = playInfo.option2;
+  session->playOption2Seed = playInfo.seed2;
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*nextChart, true, parseCancelled);
+  if (parseCancelled) {
+    return false;
+  }
+
+  StartOptions nextOptions;
+  nextOptions.startPosition = 0;
+  nextOptions.autoKeySound = session->autoKeySound;
+  nextOptions.autoPlay = false;
+  nextOptions.gaugeType = session->gaugeType;
+  nextOptions.gaugeProfile = session->gaugeProfile;
+  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.playOption = playInfo.option;
+  nextOptions.playOptionSeed = playInfo.seed;
+  nextOptions.playOption2 = playInfo.option2;
+  nextOptions.playOption2Seed = playInfo.seed2;
+  nextOptions.longNoteMode = options.longNoteMode;
+  nextOptions.assistOption = session->assistOption;
+  nextOptions.courseSession = session;
+  nextOptions.courseConstraints = session->constraints;
+  nextOptions.ownsChart = true;
+
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(nextChart),
+                                      std::move(nextOptions)),
+      false);
+  return true;
 }
 
 void GamePlayScene::beginReplayRecording() {
@@ -572,7 +745,7 @@ void GamePlayScene::beginReplayRecording() {
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   recordedReplay.touchSamples.reserve(1024);
   recordedReplay.laneCoverEvents.reserve(128);
-  appendReplayLaneCoverEvent(context.settings.noteStartPositionPercent, 0,
+  appendReplayLaneCoverEvent(effectiveNoteStartPositionPercent(), 0,
                              false);
 }
 
@@ -726,6 +899,7 @@ void GamePlayScene::update(float dt) {
     processReplayKeySounds(rawSongTimeMicros);
     processReplayEvents(gameplayTimeMicros);
   }
+  updateHellChargeGauge(gameplayTimeMicros);
   checkPassedTimeline(gameplayTimeMicros);
   if (isReplayPlayback()) {
     processReplayLaneCoverEvents(gameplayTimeMicros);
@@ -738,6 +912,13 @@ void GamePlayScene::update(float dt) {
   state->isEnding = true;
   finishReplayRecording();
   publishPracticeGhost();
+  if (isCoursePlayback()) {
+    options.courseSession->carriedGauge = state->gaugeSnapshot();
+    options.courseSession->carriedCombo = state->combo;
+    options.courseSession->maxCombo =
+        std::max(options.courseSession->maxCombo, state->maxCombo);
+    options.courseSession->recordResult(chart->Meta, *state);
+  }
   defer(
       [this]() {
         const ReplayData *replayToSave =
@@ -760,21 +941,28 @@ void GamePlayScene::update(float dt) {
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
           practiceResultOptions.playOption2 = options.playOption2;
           practiceResultOptions.playOption2Seed = options.playOption2Seed;
+          practiceResultOptions.longNoteMode = options.longNoteMode;
           practiceResultOptions.assistOption = options.assistOption;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
           practiceResultOptions.returnScene = options.returnScene;
           practiceResultOptions.practiceGhostCallback =
               options.practiceGhostCallback;
         }
+        ResultCourseOptions courseResultOptions;
+        if (isCoursePlayback()) {
+          courseResultOptions.mode = ResultCourseMode::Stage;
+          courseResultOptions.session = options.courseSession;
+        }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, chart->Meta, *state, replayToSave,
                 !options.autoPlay && !options.practiceMode &&
-                    !isReplayPlayback(),
+                    !isReplayPlayback() && !isCoursePlayback(),
                 retrySource, practiceResultOptions,
                 options.autoPlay ||
                     (options.replayData != nullptr &&
-                     options.replayData->autoPlay)),
+                     options.replayData->autoPlay),
+                courseResultOptions),
             false);
         return false;
       },
@@ -811,6 +999,7 @@ void GamePlayScene::cleanupScene() {
   inputHandler = nullptr;
   ownedLaneInputController.reset();
   laneInputController = nullptr;
+  hellChargeGaugeBalanceMicros.clear();
   ownedRenderer.reset();
   renderer = nullptr;
   ownedState.reset();
@@ -938,7 +1127,35 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           if (note->IsLongNote()) {
             const auto &longNote = static_cast<bms_parser::LongNote *>(note);
-            if (!longNote->IsTail()) {
+            if (isChargeLongNoteType(
+                    effectiveLongNoteType(longNote, chart,
+                                          options.longNoteMode))) {
+              const auto poorResult =
+                  JudgeResult(Poor, judgedTime - timeline->Timing);
+              if (!longNote->IsTail()) {
+                markLongNoteMissed(longNote, judgedTime);
+                onJudge(poorResult, false);
+                appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
+                                  time, judgedTime, poorResult);
+                if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
+                  markLongNoteMissed(longNote->Tail, judgedTime);
+                  onJudge(poorResult, false);
+                  appendReplayEvent(ReplayEventAction::Miss,
+                                    longNote->Tail->Lane, longNote->Tail, time,
+                                    judgedTime, poorResult);
+                }
+                continue;
+              }
+
+              markLongNoteMissed(longNote, judgedTime);
+              if (longNote->Head != nullptr) {
+                longNote->Head->IsHolding = false;
+              }
+              onJudge(poorResult, false);
+              appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
+                                judgedTime, poorResult);
+              continue;
+            } else if (!longNote->IsTail()) {
               longNote->MissPress(judgedTime);
             }
           }
@@ -978,9 +1195,18 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (!longNote->IsHolding) {
                 continue;
               }
+              const bool chargeLongNote = isChargeLongNoteType(
+                  effectiveLongNoteType(longNote, chart,
+                                        options.longNoteMode));
+              if (chargeLongNote && !options.autoPlay) {
+                continue;
+              }
               longNote->Release(judgedTime);
               const auto judgeResult =
-                  judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
+                  chargeLongNote
+                      ? judge.judgeNow(longNote, judgedTime)
+                      : judge.judgeNow(longNote->Head,
+                                       longNote->Head->PlayedTime);
               onJudge(judgeResult, false);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
@@ -1161,6 +1387,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
   }
   case ReplayEventAction::Miss:
     if (event.judgement != None) {
+      markReplayMissedNote(findReplayNote(event), event.judgeTimeMicros);
       onJudge(recordedJudge, false);
       applyReplayGauge(event);
     }
@@ -1191,6 +1418,92 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
     state->gaugeHistory.back() = event.gauge;
   }
   updateGaugeStatusText();
+}
+
+void GamePlayScene::resetHellChargeGaugeTracking(long long gameplayTimeMicros) {
+  hellChargeGaugeBalanceMicros.clear();
+  lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
+}
+
+void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
+  if (state == nullptr || chart == nullptr || isReplayPlayback()) {
+    lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
+    return;
+  }
+
+  const long long previousTime = lastHellChargeGaugeUpdateMicros;
+  lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
+  if (gameplayTimeMicros <= previousTime) {
+    return;
+  }
+
+  bool gaugeUpdated = false;
+  std::vector<bms_parser::LongNote *> activeHellChargeNotes;
+  for (const auto *measure : chart->Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (auto *note : timeline->Notes) {
+        if (note == nullptr || !note->IsLongNote()) {
+          continue;
+        }
+        auto *longNote = static_cast<bms_parser::LongNote *>(note);
+        if (longNote->IsTail() || longNote->Tail == nullptr ||
+            longNote->Timeline == nullptr || longNote->Tail->Timeline == nullptr ||
+            !isHellChargeLongNote(longNote, chart, options.longNoteMode)) {
+          continue;
+        }
+
+        const long long headTime = longNote->Timeline->Timing;
+        const long long tailTime = longNote->Tail->Timeline->Timing;
+        if (tailTime <= headTime || gameplayTimeMicros <= headTime ||
+            previousTime >= tailTime || longNote->Tail->IsPlayed ||
+            longNote->Tail->IsDead) {
+          continue;
+        }
+
+        const long long activeStart = std::max(previousTime, headTime);
+        const long long activeEnd = std::min(gameplayTimeMicros, tailTime);
+        const long long activeDelta = activeEnd - activeStart;
+        if (activeDelta <= 0) {
+          continue;
+        }
+
+        activeHellChargeNotes.push_back(longNote);
+        long long &balance = hellChargeGaugeBalanceMicros[longNote];
+        const bool gaining = longNote->IsHolding || options.autoPlay;
+        balance += gaining ? activeDelta : -activeDelta;
+        while (balance > kHellChargeGaugeTickMicros) {
+          state->applyGaugeJudgementRate(Great, 0.5f);
+          balance -= kHellChargeGaugeTickMicros;
+          gaugeUpdated = true;
+        }
+        while (balance < -kHellChargeGaugeTickMicros) {
+          state->applyGaugeJudgementRate(Bad, 0.5f);
+          balance += kHellChargeGaugeTickMicros;
+          gaugeUpdated = true;
+        }
+      }
+    }
+  }
+
+  for (auto it = hellChargeGaugeBalanceMicros.begin();
+       it != hellChargeGaugeBalanceMicros.end();) {
+    if (std::find(activeHellChargeNotes.begin(), activeHellChargeNotes.end(),
+                  it->first) == activeHellChargeNotes.end()) {
+      it = hellChargeGaugeBalanceMicros.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  if (gaugeUpdated) {
+    updateGaugeStatusText();
+  }
 }
 
 void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
@@ -1331,6 +1644,9 @@ bool GamePlayScene::handleFloatingLaneCoverInput(
   if (renderer == nullptr || !context.settings.floatingLaneCoverEnabled) {
     return false;
   }
+  if (courseNoSpeed()) {
+    return false;
+  }
 
   const float renderX = normalizedLocation.x * rendering::render_width;
   const float renderY = normalizedLocation.y * rendering::render_height;
@@ -1390,6 +1706,10 @@ bool GamePlayScene::handleFloatingLaneCoverInput(
 }
 
 void GamePlayScene::persistFloatingLaneCoverSettings() {
+  if (courseNoSpeed()) {
+    floatingLaneCoverSettingsDirty = false;
+    return;
+  }
   if (!floatingLaneCoverSettingsDirty) {
     return;
   }
@@ -1459,6 +1779,12 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
+          const bool chargeLongNote =
+              isChargeLongNoteType(effectiveLongNoteType(
+                  longNote, chart, options.longNoteMode));
+          if (chargeLongNote) {
+            onJudge(judgeResult, !options.autoPlay || isReplayPlayback());
+          }
           if (recordEvent) {
             appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
                               songTimeMicros >= 0 ? songTimeMicros
@@ -1507,8 +1833,13 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
   } else if (precomputedJudge != nullptr) {
     appliedJudge = *precomputedJudge;
   } else {
-    // otherwise, follow the head's judgement
-    appliedJudge = judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
+    const bool chargeLongNote =
+        isChargeLongNoteType(
+            effectiveLongNoteType(LongNote, chart, options.longNoteMode));
+    appliedJudge =
+        chargeLongNote
+            ? judgeResult
+            : judge.judgeNow(LongNote->Head, LongNote->Head->PlayedTime);
   }
   onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
   if (recordEvent) {
@@ -1560,5 +1891,5 @@ void GamePlayScene::updateGaugeStatusText() {
   }
 
   renderer->setGaugeStatus(state->gaugeType, state->gaugeAutoShift,
-                           state->currentGauge);
+                           state->currentGauge, state->gaugeProfile);
 }

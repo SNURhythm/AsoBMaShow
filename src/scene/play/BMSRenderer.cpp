@@ -361,18 +361,21 @@ float gameplayHudMetricsWidth() {
                     430.0f, 540.0f);
 }
 
-std::string formatGaugeBarLabel(GaugeType gaugeType, bool gaugeAutoShift,
-                                float currentGauge) {
+std::string formatGaugeBarLabel(GaugeType gaugeType,
+                                GaugeProfile gaugeProfile,
+                                bool gaugeAutoShift, float currentGauge) {
   char text[64];
   std::snprintf(text, sizeof(text), "%s%s %.1f%%",
-                gaugeAutoShift ? "GAS " : "", gaugeTypeToShortLabel(gaugeType),
+                gaugeAutoShift ? "GAS " : "",
+                gaugeDisplayShortLabel(gaugeType, gaugeProfile),
                 currentGauge);
   return text;
 }
 
-Color gaugeAccentColor(GaugeType gaugeType, float currentGauge) {
-  const float border = gaugeBorderValue(gaugeType);
-  if (!gaugeIsSurvival(gaugeType) && border > 0.0f &&
+Color gaugeAccentColor(GaugeType gaugeType, GaugeProfile gaugeProfile,
+                       float currentGauge) {
+  const float border = gaugeBorderValue(gaugeType, gaugeProfile);
+  if (!gaugeIsSurvival(gaugeType, gaugeProfile) && border > 0.0f &&
       currentGauge < border) {
     return ui_theme::coral();
   }
@@ -970,7 +973,9 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float width = rect[2];
   const float height = rect[3];
   const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
   const float radius = height * 0.5f;
   const float borderWidth = std::max(0.008f, height * 0.12f);
 
@@ -991,7 +996,8 @@ void BMSRenderer::drawWorldGaugeBar() {
                                        gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue = gaugeBorderValue(currentGaugeType);
+  const float borderValue =
+      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
                                                 1.0f);
@@ -1009,7 +1015,9 @@ void BMSRenderer::drawHudGaugeBar() {
   const float width = rect[2];
   const float height = rect[3];
   const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
   const float radius = width * 0.5f;
 
   simpleBatchRenderer.addRoundedRect(x + 3.0f, y + 5.0f, width, height, radius,
@@ -1025,7 +1033,8 @@ void BMSRenderer::drawHudGaugeBar() {
         gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue = gaugeBorderValue(currentGaugeType);
+  const float borderValue =
+      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerY =
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
@@ -2765,18 +2774,22 @@ void BMSRenderer::setJudgementCounters(
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
-                                 float currentGauge) {
+                                 float currentGauge,
+                                 GaugeProfile gaugeProfile) {
   currentGaugeType = gaugeType;
+  currentGaugeProfile = gaugeProfile;
   currentGaugeAutoShift = gaugeAutoShift;
   currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
   if (gaugeText == nullptr) {
     return;
   }
 
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
-  gaugeText->setText(formatGaugeBarLabel(currentGaugeType,
-                                         currentGaugeAutoShift,
-                                         currentGaugeValue));
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
+  gaugeText->setText(formatGaugeBarLabel(
+      currentGaugeType, currentGaugeProfile, currentGaugeAutoShift,
+      currentGaugeValue));
   gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
 }
 

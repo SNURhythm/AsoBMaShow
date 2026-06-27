@@ -10,6 +10,27 @@ inline constexpr const char *kLabel = "AUTO PLAY";
 
 inline bool isAutoPlayReplayId(int replayId) { return replayId == kReplayId; }
 
+inline bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart &chart) {
+  if (longNote == nullptr) {
+    return bms_parser::LongNoteType::LongNote;
+  }
+  const bms_parser::LongNote *head =
+      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                      : longNote;
+  bms_parser::LongNoteType type =
+      bms_parser::ResolveLongNoteType(head->Type, chart.Meta.LnMode);
+  return type == bms_parser::LongNoteType::Undefined
+             ? bms_parser::LongNoteType::LongNote
+             : type;
+}
+
+inline bool isChargeLongNoteType(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::ChargeNote ||
+         type == bms_parser::LongNoteType::HellChargeNote;
+}
+
 inline void applyAutoPlayJudge(RhythmState &state,
                                const JudgeResult &judgeResult) {
   state.judgeCount[judgeResult.judgement]++;
@@ -118,6 +139,9 @@ inline ReplayData BuildReplayData(
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
           if (!longNote->IsTail()) {
+            if (isChargeLongNoteType(effectiveLongNoteType(longNote, chart))) {
+              applyAutoPlayJudge(state, perfect);
+            }
             replay.events.push_back(makeAutoPlayEvent(
                 ReplayEventAction::Press, note, timeline->Timing, perfect,
                 state));

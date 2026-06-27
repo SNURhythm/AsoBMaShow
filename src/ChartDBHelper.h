@@ -32,6 +32,7 @@ struct ChartMetaQuery {
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
   std::string difficultyTableLabels;
+  bool courseStart = false;
   bool unavailable = false;
   bool solidArchive = false;
   std::uint64_t archiveSize = 0;
@@ -72,6 +73,7 @@ struct DifficultyCourseGroupInfo {
   int tableId = 0;
   std::string tableName;
   std::string groupName;
+  int chartCount = 0;
   int matchedChartCount = 0;
 };
 
@@ -82,6 +84,8 @@ struct DifficultyCourseInfo {
   std::string groupName;
   std::string level;
   std::string name;
+  std::string constraintJson;
+  int chartCount = 0;
   int matchedChartCount = 0;
 };
 

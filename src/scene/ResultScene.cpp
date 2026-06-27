@@ -1,5 +1,6 @@
 #include "ResultScene.h"
 #include "../ChartDBHelper.h"
+#include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ResultImageExporter.h"
@@ -118,6 +119,117 @@ ResultPreviousBestData toResultPreviousBestData(
           .clearType = snapshot.clearType,
           .createdAt = snapshot.createdAt};
 }
+
+int totalNotesForCourse(const CoursePlaySession &session) {
+  int total = 0;
+  const size_t count =
+      std::max(session.entries.size(), session.completedResults.size());
+  for (size_t i = 0; i < count; ++i) {
+    if (i < session.completedResults.size()) {
+      total += std::max(0, session.completedResults[i].meta.TotalNotes);
+    } else {
+      total += std::max(0, session.entries[i].meta.TotalNotes);
+    }
+  }
+  return total;
+}
+
+long long totalPlayLengthForCourse(const CoursePlaySession &session) {
+  long long total = 0;
+  for (const auto &entry : session.entries) {
+    total += std::max(0LL, entry.meta.PlayLength);
+  }
+  return total;
+}
+
+bms_parser::ChartMeta courseResultMetaForSession(
+    const CoursePlaySession &session) {
+  bms_parser::ChartMeta meta;
+  meta.Title = session.courseName.empty() ? "Course Result"
+                                          : session.courseName;
+  meta.Artist = session.courseGroupName.empty() ? "Course Mode"
+                                                : session.courseGroupName;
+  meta.TotalNotes = totalNotesForCourse(session);
+  meta.PlayLevel = static_cast<double>(session.entries.size());
+  meta.PlayLength = totalPlayLengthForCourse(session);
+  meta.TotalLength = meta.PlayLength;
+  meta.Bpm = 0.0;
+  meta.MinBpm = 0.0;
+  meta.MaxBpm = 0.0;
+  return meta;
+}
+
+void addJudgeCount(RhythmState &target, const RhythmState &source,
+                   Judgement judgement) {
+  const auto count = source.judgeCount.find(judgement);
+  if (count != source.judgeCount.end()) {
+    target.judgeCount[judgement] += count->second;
+  }
+  const auto timing = source.judgementFastSlowCount.find(judgement);
+  if (timing != source.judgementFastSlowCount.end()) {
+    target.judgementFastSlowCount[judgement].fast += timing->second.fast;
+    target.judgementFastSlowCount[judgement].slow += timing->second.slow;
+  }
+}
+
+void appendMissingCourseGaugeHistory(RhythmState &state,
+                                     const CoursePlaySession &session,
+                                     std::size_t startIndex) {
+  for (std::size_t i = startIndex; i < session.entries.size(); ++i) {
+    const long long playLength =
+        std::max(0LL, session.entries[i].meta.PlayLength);
+    const int samples =
+        std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
+    for (int sample = 0; sample < samples; ++sample) {
+      state.gaugeHistory.push_back(0.0f);
+    }
+  }
+}
+
+RhythmState courseResultStateForSession(const CoursePlaySession &session) {
+  RhythmState aggregate(nullptr, false);
+  aggregate.configureGauge(session.gaugeType, session.gaugeAutoShift,
+                           session.gaugeProfile);
+  if (session.carriedGauge.has_value()) {
+    aggregate.restoreGaugeState(*session.carriedGauge);
+  }
+
+  aggregate.judgeCount.clear();
+  aggregate.judgementFastSlowCount.clear();
+  for (int i = 0; i < JudgementCount; ++i) {
+    aggregate.judgeCount[static_cast<Judgement>(i)] = 0;
+    aggregate.judgementFastSlowCount[static_cast<Judgement>(i)] = {};
+  }
+  aggregate.comboBreak = 0;
+  aggregate.maxCombo = session.maxCombo;
+  aggregate.fastCount = 0;
+  aggregate.slowCount = 0;
+  aggregate.gaugeHistory.clear();
+
+  for (const auto &result : session.completedResults) {
+    for (int i = 0; i < JudgementCount; ++i) {
+      addJudgeCount(aggregate, result.state, static_cast<Judgement>(i));
+    }
+    aggregate.comboBreak += result.state.comboBreak;
+    aggregate.fastCount += result.state.fastCount;
+    aggregate.slowCount += result.state.slowCount;
+    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
+                                  result.state.gaugeHistory.begin(),
+                                  result.state.gaugeHistory.end());
+  }
+  appendMissingCourseGaugeHistory(aggregate, session,
+                                  session.completedResults.size());
+
+  if (!session.completedResults.empty()) {
+    aggregate.combo = session.carriedCombo;
+  }
+  if (session.completedResults.size() < session.entries.size()) {
+    aggregate.currentGauge = 0.0f;
+    aggregate.gaugeValues[gaugeTypeIndex(aggregate.gaugeType)] = 0.0f;
+    aggregate.gaugeSurvivalFailed[gaugeTypeIndex(aggregate.gaugeType)] = true;
+  }
+  return aggregate;
+}
 } // namespace
 
 ResultScene::ResultScene(ApplicationContext &context,
@@ -125,7 +237,8 @@ ResultScene::ResultScene(ApplicationContext &context,
                          const RhythmState &state, const ReplayData *replay,
                          bool shouldSaveScore, const ReplayData *retrySource,
                          ResultPracticeOptions practiceOptions,
-                         bool autoPlayResult)
+                         bool autoPlayResult,
+                         ResultCourseOptions courseOptions)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -134,6 +247,7 @@ ResultScene::ResultScene(ApplicationContext &context,
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
                                          : std::nullopt)),
       practiceOptions(std::move(practiceOptions)),
+      courseOptions(std::move(courseOptions)),
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled),
@@ -144,14 +258,69 @@ ResultScene::ResultScene(ApplicationContext &context,
                                  this->practiceOptions);
   playModeLabel = display.mode;
   laneOrderLabel = display.laneOrder;
+  if (this->courseOptions.session != nullptr) {
+    const auto courseDisplay = play_options::formatPlayModeDisplayLabel(
+        this->meta, this->courseOptions.session->playOption,
+        this->courseOptions.session->playOptionSeed,
+        this->courseOptions.session->playOption2,
+        this->courseOptions.session->playOption2Seed);
+    playModeLabel = courseDisplay.mode.empty() ? "COURSE" : courseDisplay.mode;
+    laneOrderLabel = courseDisplay.laneOrder;
+  }
+  if (isCourseStageResult()) {
+    currentClearLabelOverride = "NO PLAY";
+    currentClearRankOverride = kNoClearTypeRank;
+  } else if (isCourseFinalResult()) {
+    headerDifficultyLabelOverride = "COURSE";
+    if (this->courseOptions.session->completedResults.size() ==
+            this->courseOptions.session->entries.size() &&
+        resultState.currentGauge > 0.0f && resultState.comboBreak == 0 &&
+        resultState.maxCombo >=
+            totalNotesForCourse(*this->courseOptions.session)) {
+      currentClearLabelOverride = "FULL COMBO";
+      currentClearRankOverride = kClearTypeFullComboRank;
+    }
+  }
   skin = std::make_unique<DefaultSkin>();
 }
 
+bool ResultScene::isCourseStageResult() const {
+  return courseOptions.mode == ResultCourseMode::Stage &&
+         courseOptions.session != nullptr;
+}
+
+bool ResultScene::isCourseFinalResult() const {
+  return courseOptions.mode == ResultCourseMode::CourseResult &&
+         courseOptions.session != nullptr;
+}
+
 void ResultScene::saveScore() {
-  if (scoreSaved || !shouldSaveScore) {
+  if (scoreSaved) {
     return;
   }
   scoreSaved = true;
+
+  if (isCourseFinalResult()) {
+    if (!courseOptions.session->courseScoreSaved) {
+      const int completedCharts =
+          static_cast<int>(courseOptions.session->completedResults.size());
+      const int totalCharts =
+          static_cast<int>(courseOptions.session->entries.size());
+      if (ScoreDBHelper::GetInstance().SaveCourseScore(
+              *courseOptions.session, resultState, completedCharts,
+              totalCharts)) {
+        courseOptions.session->courseScoreSaved = true;
+      } else {
+        SDL_Log("Failed to save course score: %s",
+                courseOptions.session->courseName.c_str());
+      }
+    }
+    return;
+  }
+
+  if (!shouldSaveScore) {
+    return;
+  }
 
   if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
     SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
@@ -170,14 +339,21 @@ void ResultScene::loadPreviousBest() {
     beforeCreatedAt = retryData->createdAt;
   }
 
-  const auto best =
-      ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+  const auto best = isCourseFinalResult()
+                        ? ScoreDBHelper::GetInstance().LoadBestCourseScore(
+                              *courseOptions.session)
+                        : ScoreDBHelper::GetInstance().LoadBestScore(
+                              meta, beforeCreatedAt);
   if (best.has_value()) {
     previousBest = toResultPreviousBestData(*best);
   }
 }
 
 void ResultScene::loadDifficultyLabel() {
+  if (isCourseFinalResult()) {
+    difficultyLabel = "Course";
+    return;
+  }
   auto &dbHelper = ChartDBHelper::GetInstance();
   sqlite3 *db = dbHelper.Connect();
   if (db == nullptr) {
@@ -308,6 +484,169 @@ void ResultScene::addRetryButtons() {
   actionHost->addView(retryRow);
 }
 
+void ResultScene::addCourseButtons() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  View *actionHost = rootLayout->findViewByName("resultActions");
+  if (actionHost == nullptr) {
+    actionHost = rootLayout;
+  }
+
+  auto makeButton = [](const std::string &label, Color normal, Color hover,
+                       Color pressed, Color border,
+                       std::function<void()> onClick) {
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    button->setContentView(text);
+    button->setOnClickListener(std::move(onClick));
+    button->setSize(232, 64);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
+    button->setStyledBorderWidth(1);
+    return std::pair<Button *, TextView *>(button, text);
+  };
+
+  if (isCourseStageResult()) {
+    auto [nextButton, ignoredText] = makeButton(
+        "Next", ui_theme::successAction(), ui_theme::successActionHover(),
+        ui_theme::successActionPressed(), ui_theme::lime(),
+        [this]() { continueCourse(); });
+    (void)ignoredText;
+    actionHost->addView(nextButton);
+  }
+
+  auto [photoButton, photoText] = makeButton(
+      "Export Photo", ui_theme::violetAction(),
+      ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
+      ui_theme::violetActionHover(), [this]() { exportPhoto(); });
+  exportPhotoButton = photoButton;
+  exportPhotoButtonText = photoText;
+  actionHost->addView(exportPhotoButton);
+
+  if (auto *backButton =
+          dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
+      backButton != nullptr) {
+    backButton->setOnClickListener([this]() {
+      if (isCourseStageResult()) {
+        showCourseExitConfirmation();
+      } else {
+        exitResult();
+      }
+    });
+  }
+}
+
+void ResultScene::buildCourseExitConfirmation() {
+  if (!isCourseStageResult() || rootLayout == nullptr) {
+    return;
+  }
+
+  auto *overlay = new Button();
+  overlay->setName("courseExitConfirmation");
+  overlay->setPositionType(YGPositionTypeAbsolute);
+  overlay->setPosition(Edge::Left, 0);
+  overlay->setPosition(Edge::Top, 0);
+  overlay->setWidth(static_cast<float>(rendering::window_width));
+  overlay->setHeight(static_cast<float>(rendering::window_height));
+  overlay->setFlexDirection(FlexDirection::Column);
+  overlay->setAlignItems(YGAlignCenter);
+  overlay->setJustifyContent(YGJustifyCenter);
+  overlay->setBackgroundColors(Color(0, 0, 0, 174), Color(0, 0, 0, 174),
+                               Color(0, 0, 0, 174));
+  overlay->setOnClickListener([]() {});
+  overlay->setZIndex(100);
+
+  auto *panel = new View();
+  panel->setWidth(560);
+  panel->setPadding(Edge::All, 26);
+  panel->setFlexDirection(FlexDirection::Column);
+  panel->setAlignItems(YGAlignStretch);
+  panel->setGap(18);
+  panel->setBackgroundColor(ui_theme::resultPanelStrong());
+  panel->setCornerRadius(ui_theme::panelRadius());
+  panel->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 180));
+  panel->setBorderWidth(1);
+  panel->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title->setText("Leave Course?");
+  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setAlign(TextView::CENTER);
+  title->setHeight(42);
+  panel->addView(title);
+
+  auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  message->setText("Current course progress will be discarded.");
+  message->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  message->setAlign(TextView::CENTER);
+  message->setHeight(32);
+  panel->addView(message);
+
+  auto *row = new View();
+  row->setFlexDirection(FlexDirection::Row);
+  row->setAlignItems(YGAlignCenter);
+  row->setJustifyContent(YGJustifyCenter);
+  row->setGap(14);
+
+  auto makeModalButton = [](const std::string &label, Color normal,
+                            Color hover, Color pressed, Color border,
+                            std::function<void()> onClick) {
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    button->setContentView(text);
+    button->setOnClickListener(std::move(onClick));
+    button->setSize(208, 58);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
+    button->setStyledBorderWidth(1);
+    return button;
+  };
+
+  row->addView(makeModalButton(
+      "Cancel", ui_theme::control(), ui_theme::controlHover(),
+      ui_theme::controlPressed(), ui_theme::hairlineSubtle(),
+      [this]() { hideCourseExitConfirmation(); }));
+  row->addView(makeModalButton(
+      "Back to Menu", ui_theme::warningAction(),
+      ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
+      ui_theme::coral(), [this]() { exitResult(); }));
+  panel->addView(row);
+  overlay->addView(panel);
+  overlay->setVisible(false);
+  courseExitConfirmation = overlay;
+  rootLayout->addView(overlay);
+}
+
+void ResultScene::showCourseExitConfirmation() {
+  if (courseExitConfirmation != nullptr) {
+    courseExitConfirmation->setVisible(true);
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ResultScene::hideCourseExitConfirmation() {
+  if (courseExitConfirmation != nullptr) {
+    courseExitConfirmation->setVisible(false);
+    rootLayout->applyYogaLayout();
+  }
+}
+
 void ResultScene::exportPhoto() {
   if (autoPlayResult || resultPhotoExportInProgress ||
       exportPhotoButtonText == nullptr) {
@@ -318,7 +657,8 @@ void ResultScene::exportPhoto() {
   exportPhotoButtonText->setText("Saving...");
   const auto result = ResultImageExporter::Export(
       context, meta, resultState, playModeLabel, laneOrderLabel,
-      difficultyLabel, previousBest);
+      difficultyLabel, previousBest, currentClearLabelOverride,
+      currentClearRankOverride, headerDifficultyLabelOverride);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -347,6 +687,103 @@ void ResultScene::exportPhoto() {
         return true;
       },
       result.success ? 1800 : 1400, true);
+}
+
+void ResultScene::continueCourse() {
+  if (!isCourseStageResult()) {
+    return;
+  }
+
+  auto session = courseOptions.session;
+  const float finalGauge = session->carriedGauge.has_value()
+                               ? session->carriedGauge->currentGauge
+                               : resultState.currentGauge;
+  if (!session->hasNextChart() || finalGauge <= 0.0f) {
+    showCourseResult();
+    return;
+  }
+
+  session->currentIndex++;
+  const bms_parser::ChartMeta *nextMeta = session->currentMeta();
+  if (nextMeta == nullptr || nextMeta->BmsPath.empty()) {
+    showCourseResult();
+    return;
+  }
+
+  std::atomic_bool parseCancelled = false;
+  std::unique_ptr<bms_parser::Chart> nextChart;
+  try {
+    nextChart =
+        play_options::parseChart(nextMeta->BmsPath, parseCancelled, "course");
+  } catch (const std::exception &e) {
+    SDL_Log("Course parse failed %s: %s",
+            path_t_to_utf8(nextMeta->BmsPath).c_str(), e.what());
+    archive_file::appendDebugLogLine(
+        "Course parse exception: " +
+        path_t_to_utf8(fspath_to_path_t(nextMeta->BmsPath)) + ": " +
+        e.what());
+    showCourseResult();
+    return;
+  }
+  if (nextChart == nullptr || parseCancelled) {
+    showCourseResult();
+    return;
+  }
+  applyCourseConstraintsToChart(*nextChart, session->constraints);
+
+  play_options::PlayOptionReplayInfo playInfo =
+      play_options::applySelectedPlayOptions(*nextChart,
+                                             session->requestedPlayOption);
+  session->playOption = playInfo.option;
+  session->playOptionSeed = playInfo.seed;
+  session->playOption2 = playInfo.option2;
+  session->playOption2Seed = playInfo.seed2;
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*nextChart, true, parseCancelled);
+  if (parseCancelled) {
+    showCourseResult();
+    return;
+  }
+
+  StartOptions nextOptions;
+  nextOptions.startPosition = 0;
+  nextOptions.autoKeySound = session->autoKeySound;
+  nextOptions.autoPlay = false;
+  nextOptions.gaugeType = session->gaugeType;
+  nextOptions.gaugeProfile = session->gaugeProfile;
+  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.playOption = playInfo.option;
+  nextOptions.playOptionSeed = playInfo.seed;
+  nextOptions.playOption2 = playInfo.option2;
+  nextOptions.playOption2Seed = playInfo.seed2;
+  nextOptions.assistOption = session->assistOption;
+  nextOptions.courseSession = session;
+  nextOptions.courseConstraints = session->constraints;
+  nextOptions.ownsChart = true;
+
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(nextChart),
+                                      std::move(nextOptions)),
+      false);
+}
+
+void ResultScene::showCourseResult() {
+  auto session = courseOptions.session;
+  if (session == nullptr) {
+    exitResult();
+    return;
+  }
+
+  bms_parser::ChartMeta courseMeta = courseResultMetaForSession(*session);
+  RhythmState courseState = courseResultStateForSession(*session);
+  context.sceneManager->changeScene(
+      std::make_unique<ResultScene>(
+          context, courseMeta, courseState, nullptr, false, nullptr,
+          ResultPracticeOptions{}, false,
+          ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
+                              .session = session}),
+      false);
 }
 
 void ResultScene::startRetry(bool samePattern) {
@@ -390,11 +827,14 @@ void ResultScene::startRetry(bool samePattern) {
             practiceOptions.enabled ? practiceOptions.autoPlay : false;
         options.gaugeType = retrySource.initialGaugeType;
         options.gaugeAutoShift = retrySource.gaugeAutoShift;
+        options.longNoteMode = normalizeChartLongNoteModeValue(
+            retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;
         options.ownsChart = true;
         if (practiceOptions.enabled) {
           options.practiceMode = true;
           options.practiceLeadInMicros = practiceOptions.leadInMicros;
+          options.longNoteMode = practiceOptions.longNoteMode;
           options.returnScene = practiceOptions.returnScene;
           if (!options.autoPlay) {
             options.practiceGhostCallback =
@@ -519,17 +959,29 @@ void ResultScene::init() {
   data.playModeLabel = playModeLabel;
   data.laneOrderLabel = laneOrderLabel;
   data.difficultyLabel = difficultyLabel;
+  data.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
   if (autoPlayResult) {
     data.currentClearLabelOverride = "AUTO PLAY";
   }
+  if (currentClearLabelOverride.has_value()) {
+    data.currentClearLabelOverride = currentClearLabelOverride;
+  }
+  data.currentClearRankOverride = currentClearRankOverride;
   data.previousBest = previousBest;
   skin->buildLayout("Result", rootLayout, &data);
-  addRetryButtons();
+  if (isCourseStageResult() || isCourseFinalResult()) {
+    addCourseButtons();
+    buildCourseExitConfirmation();
+  } else {
+    addRetryButtons();
+  }
 
-  if (auto *backButton =
-          dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
-      backButton != nullptr) {
-    backButton->setOnClickListener([this]() { exitResult(); });
+  if (!isCourseStageResult() && !isCourseFinalResult()) {
+    if (auto *backButton =
+            dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
+        backButton != nullptr) {
+      backButton->setOnClickListener([this]() { exitResult(); });
+    }
   }
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
@@ -558,6 +1010,7 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;
   exportPhotoButtonText = nullptr;
   resultPhotoExportInProgress = false;

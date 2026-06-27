@@ -7,6 +7,16 @@
 
 enum class GaugeType { AssistedEasy, Easy, Normal, Hard, ExHard };
 
+enum class GaugeProfile {
+  Standard,
+  CourseDefault,
+  Course5Keys,
+  Course7Keys,
+  Course9Keys,
+  Course24Keys,
+  CourseLR2,
+};
+
 enum class ClearType {
   Failed,
   AssistedEasyClear,
@@ -116,7 +126,35 @@ inline int gaugeTypeToClearRank(GaugeType gaugeType) {
   }
 }
 
-inline float gaugeInitialValue(GaugeType gaugeType) {
+inline bool gaugeProfileIsCourse(GaugeProfile profile) {
+  return profile != GaugeProfile::Standard;
+}
+
+inline const char *courseGaugeTypeToShortLabel(GaugeType gaugeType) {
+  switch (gaugeType) {
+  case GaugeType::Hard:
+    return "EX-CLASS";
+  case GaugeType::ExHard:
+    return "EXH-CLASS";
+  case GaugeType::AssistedEasy:
+  case GaugeType::Easy:
+  case GaugeType::Normal:
+  default:
+    return "CLASS";
+  }
+}
+
+inline const char *gaugeDisplayShortLabel(GaugeType gaugeType,
+                                          GaugeProfile profile) {
+  return gaugeProfileIsCourse(profile) ? courseGaugeTypeToShortLabel(gaugeType)
+                                       : gaugeTypeToShortLabel(gaugeType);
+}
+
+inline float gaugeInitialValue(GaugeType gaugeType,
+                               GaugeProfile profile = GaugeProfile::Standard) {
+  if (gaugeProfileIsCourse(profile)) {
+    return 100.0f;
+  }
   switch (gaugeType) {
   case GaugeType::Hard:
   case GaugeType::ExHard:
@@ -129,7 +167,11 @@ inline float gaugeInitialValue(GaugeType gaugeType) {
   }
 }
 
-inline float gaugeMinimumValue(GaugeType gaugeType) {
+inline float gaugeMinimumValue(GaugeType gaugeType,
+                               GaugeProfile profile = GaugeProfile::Standard) {
+  if (gaugeProfileIsCourse(profile)) {
+    return 0.0f;
+  }
   switch (gaugeType) {
   case GaugeType::Hard:
   case GaugeType::ExHard:
@@ -142,7 +184,11 @@ inline float gaugeMinimumValue(GaugeType gaugeType) {
   }
 }
 
-inline float gaugeBorderValue(GaugeType gaugeType) {
+inline float gaugeBorderValue(GaugeType gaugeType,
+                              GaugeProfile profile = GaugeProfile::Standard) {
+  if (gaugeProfileIsCourse(profile)) {
+    return 0.0f;
+  }
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
     return 60.0f;
@@ -156,7 +202,11 @@ inline float gaugeBorderValue(GaugeType gaugeType) {
   }
 }
 
-inline bool gaugeIsSurvival(GaugeType gaugeType) {
+inline bool gaugeIsSurvival(GaugeType gaugeType,
+                            GaugeProfile profile = GaugeProfile::Standard) {
+  if (gaugeProfileIsCourse(profile)) {
+    return true;
+  }
   return gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard;
 }
 
@@ -216,6 +266,80 @@ inline float gaugeBaseDeltaForJudgement(GaugeType gaugeType,
   }
 }
 
+inline int courseGaugeClassIndexForType(GaugeType gaugeType) {
+  switch (gaugeType) {
+  case GaugeType::Hard:
+    return 1;
+  case GaugeType::ExHard:
+    return 2;
+  case GaugeType::AssistedEasy:
+  case GaugeType::Easy:
+  case GaugeType::Normal:
+  default:
+    return 0;
+  }
+}
+
+inline float courseGaugeBaseDeltaForJudgement(GaugeProfile profile,
+                                              GaugeType gaugeType,
+                                              Judgement judgement) {
+  const int judgementIndex = gaugeJudgementIndex(judgement);
+  if (judgementIndex < 0) {
+    return 0.0f;
+  }
+  const int classIndex = courseGaugeClassIndexForType(gaugeType);
+  using CourseGaugeTable = std::array<std::array<float, 6>, 3>;
+
+  constexpr CourseGaugeTable defaultTable = {
+      std::array<float, 6>{0.15f, 0.12f, 0.06f, -1.5f, -3.0f, -1.5f},
+      std::array<float, 6>{0.15f, 0.12f, 0.03f, -3.0f, -6.0f, -3.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -5.0f, -10.0f, -5.0f},
+  };
+  constexpr CourseGaugeTable fiveKeysTable = {
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -0.5f, -1.0f, -0.5f},
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -1.0f, -2.0f, -1.0f},
+      std::array<float, 6>{0.01f, 0.01f, 0.0f, -2.5f, -5.0f, -2.5f},
+  };
+  constexpr CourseGaugeTable pmsTable = {
+      std::array<float, 6>{0.15f, 0.12f, 0.06f, -1.5f, -3.0f, -3.0f},
+      std::array<float, 6>{0.15f, 0.12f, 0.03f, -3.0f, -6.0f, -6.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -5.0f, -10.0f, -10.0f},
+  };
+  constexpr CourseGaugeTable keyboardTable = {
+      std::array<float, 6>{0.2f, 0.2f, 0.1f, -1.5f, -3.0f, -1.5f},
+      std::array<float, 6>{0.2f, 0.2f, 0.1f, -3.0f, -6.0f, -3.0f},
+      std::array<float, 6>{0.2f, 0.1f, 0.0f, -5.0f, -10.0f, -5.0f},
+  };
+  constexpr CourseGaugeTable lr2Table = {
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -2.0f, -3.0f, -2.0f},
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -6.0f, -10.0f, -2.0f},
+      std::array<float, 6>{0.10f, 0.10f, 0.05f, -12.0f, -20.0f, -2.0f},
+  };
+
+  const CourseGaugeTable *table = &defaultTable;
+  switch (profile) {
+  case GaugeProfile::Course5Keys:
+    table = &fiveKeysTable;
+    break;
+  case GaugeProfile::Course9Keys:
+    table = &pmsTable;
+    break;
+  case GaugeProfile::Course24Keys:
+    table = &keyboardTable;
+    break;
+  case GaugeProfile::CourseLR2:
+    table = &lr2Table;
+    break;
+  case GaugeProfile::Course7Keys:
+  case GaugeProfile::CourseDefault:
+  case GaugeProfile::Standard:
+  default:
+    table = &defaultTable;
+    break;
+  }
+  return (*table)[classIndex][judgementIndex];
+}
+
 inline float beatorajaHardRecoveryMultiplier(double total, int totalNotes) {
   const float noteCount = static_cast<float>(std::max(1, totalNotes));
   const float pg = std::max(
@@ -240,9 +364,44 @@ inline float applyHardGaugeGuts(float currentGauge, float delta) {
   return delta;
 }
 
+inline float applyCourseGaugeGuts(GaugeProfile profile, GaugeType gaugeType,
+                                  float currentGauge, float delta) {
+  if (delta >= 0.0f) {
+    return delta;
+  }
+  const int classIndex = courseGaugeClassIndexForType(gaugeType);
+  if ((profile == GaugeProfile::CourseLR2 && classIndex <= 1) ||
+      (profile != GaugeProfile::Course5Keys && profile != GaugeProfile::CourseLR2 &&
+       classIndex == 0)) {
+    const std::array<float, 5> thresholds =
+        profile == GaugeProfile::CourseLR2
+            ? std::array<float, 5>{30.0f, 0.0f, 0.0f, 0.0f, 0.0f}
+            : std::array<float, 5>{5.0f, 10.0f, 15.0f, 20.0f, 25.0f};
+    const std::array<float, 5> multipliers =
+        profile == GaugeProfile::CourseLR2
+            ? std::array<float, 5>{0.6f, 1.0f, 1.0f, 1.0f, 1.0f}
+            : std::array<float, 5>{0.4f, 0.5f, 0.6f, 0.7f, 0.8f};
+    const size_t count = profile == GaugeProfile::CourseLR2 ? 1 : 5;
+    for (size_t i = 0; i < count; i++) {
+      if (currentGauge < thresholds[i]) {
+        return delta * multipliers[i];
+      }
+    }
+  }
+  return delta;
+}
+
 inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
                                     int totalNotes, double total,
-                                    float currentGauge) {
+                                    float currentGauge,
+                                    GaugeProfile profile =
+                                        GaugeProfile::Standard) {
+  if (gaugeProfileIsCourse(profile)) {
+    const float delta =
+        courseGaugeBaseDeltaForJudgement(profile, gaugeType, judgement);
+    return applyCourseGaugeGuts(profile, gaugeType, currentGauge, delta);
+  }
+
   float delta = gaugeBaseDeltaForJudgement(gaugeType, judgement);
   if (delta > 0.0f) {
     if (gaugeIsSurvival(gaugeType)) {
@@ -259,9 +418,11 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
 }
 
 inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
-                                   bool survivalFailed) {
+                                   bool survivalFailed,
+                                   GaugeProfile profile =
+                                       GaugeProfile::Standard) {
   if (survivalFailed || gaugeValue <= 0.0f ||
-      gaugeValue < gaugeBorderValue(gaugeType)) {
+      gaugeValue < gaugeBorderValue(gaugeType, profile)) {
     return ClearType::Failed;
   }
   switch (gaugeType) {
@@ -315,6 +476,15 @@ inline const char *clearTypeToLabel(ClearType clearType) {
   }
 }
 
+struct GaugeStateSnapshot {
+  GaugeType gaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  bool gaugeAutoShift = false;
+  float currentGauge = 0.0f;
+  std::array<float, kGaugeTypeCount> gaugeValues{};
+  std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
+};
+
 class RhythmState {
 public:
   bool isPlaying = false;
@@ -348,6 +518,7 @@ public:
   std::vector<float> gaugeHistory;
   float currentGauge = 100.0f;
   GaugeType gaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
   bool gaugeAutoShift = false;
   bool assistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
@@ -368,11 +539,14 @@ public:
     }
   }
 
-  void configureGauge(GaugeType selectedGaugeType, bool autoShift) {
+  void configureGauge(GaugeType selectedGaugeType, bool autoShift,
+                      GaugeProfile selectedGaugeProfile =
+                          GaugeProfile::Standard) {
     gaugeAutoShift = autoShift;
     gaugeType = selectedGaugeType;
+    gaugeProfile = selectedGaugeProfile;
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
-      gaugeValues[i] = gaugeInitialValue(gaugeTypeAtIndex(i));
+      gaugeValues[i] = gaugeInitialValue(gaugeTypeAtIndex(i), gaugeProfile);
       gaugeSurvivalFailed[i] = false;
     }
     if (gaugeAutoShift) {
@@ -382,26 +556,58 @@ public:
     gaugeHistory.clear();
   }
 
+  void restoreGaugeState(const GaugeStateSnapshot &snapshot) {
+    gaugeAutoShift = snapshot.gaugeAutoShift;
+    gaugeType = snapshot.gaugeType;
+    gaugeProfile = snapshot.gaugeProfile;
+    gaugeValues = snapshot.gaugeValues;
+    gaugeSurvivalFailed = snapshot.gaugeSurvivalFailed;
+    const int index = gaugeTypeIndex(gaugeType);
+    currentGauge = std::clamp(snapshot.currentGauge, 0.0f, 100.0f);
+    if (index >= 0 && index < static_cast<int>(gaugeValues.size())) {
+      gaugeValues[index] = currentGauge;
+    }
+    gaugeHistory.clear();
+  }
+
+  [[nodiscard]] GaugeStateSnapshot gaugeSnapshot() const {
+    return GaugeStateSnapshot{
+        .gaugeType = gaugeType,
+        .gaugeProfile = gaugeProfile,
+        .gaugeAutoShift = gaugeAutoShift,
+        .currentGauge = currentGauge,
+        .gaugeValues = gaugeValues,
+        .gaugeSurvivalFailed = gaugeSurvivalFailed,
+    };
+  }
+
   void setAssistClearMark(bool enabled) { assistClearMark = enabled; }
 
   void applyGaugeJudgement(Judgement judgement) {
+    applyGaugeJudgementRate(judgement, 1.0f);
+  }
+
+  void applyGaugeJudgementRate(Judgement judgement, float rate) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type) && gaugeSurvivalFailed[i]) {
+      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
 
       const float delta = gaugeDeltaForJudgement(
-          type, judgement, gaugeTotalNotes, gaugeTotal, gaugeValues[i]);
+          type, judgement, gaugeTotalNotes, gaugeTotal, gaugeValues[i],
+          gaugeProfile) *
+                          rate;
       if (gaugeValues[i] > 0.0f) {
-        gaugeValues[i] =
-            std::clamp(gaugeValues[i] + delta, gaugeMinimumValue(type), 100.0f);
+        gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
+                                    gaugeMinimumValue(type, gaugeProfile),
+                                    100.0f);
       }
-      if (gaugeIsSurvival(type) && gaugeValues[i] <= 0.0f) {
+      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }
@@ -420,16 +626,17 @@ public:
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type) && gaugeSurvivalFailed[i]) {
+      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
 
       if (gaugeValues[i] > 0.0f) {
-        gaugeValues[i] =
-            std::clamp(gaugeValues[i] + delta, gaugeMinimumValue(type), 100.0f);
+        gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
+                                    gaugeMinimumValue(type, gaugeProfile),
+                                    100.0f);
       }
-      if (gaugeIsSurvival(type) && gaugeValues[i] <= 0.0f) {
+      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }
@@ -466,14 +673,15 @@ private:
   [[nodiscard]] ClearType getGaugeClearType() const {
     if (!gaugeAutoShift) {
       return clearTypeForGauge(gaugeType, currentGauge,
-                               gaugeSurvivalFailed[gaugeTypeIndex(gaugeType)]);
+                               gaugeSurvivalFailed[gaugeTypeIndex(gaugeType)],
+                               gaugeProfile);
     }
 
     ClearType best = ClearType::Failed;
     for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
       const ClearType clearType =
           clearTypeForGauge(gaugeTypeAtIndex(i), gaugeValues[i],
-                            gaugeSurvivalFailed[i]);
+                            gaugeSurvivalFailed[i], gaugeProfile);
       if (clearType != ClearType::Failed) {
         return clearType;
       }
@@ -484,7 +692,8 @@ private:
   [[nodiscard]] GaugeType bestAdmittedGaugeType() const {
     for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (clearTypeForGauge(type, gaugeValues[i], gaugeSurvivalFailed[i]) !=
+      if (clearTypeForGauge(type, gaugeValues[i], gaugeSurvivalFailed[i],
+                            gaugeProfile) !=
           ClearType::Failed) {
         return type;
       }
@@ -495,7 +704,7 @@ private:
   [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
     for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (!gaugeIsSurvival(type) || !gaugeSurvivalFailed[i]) {
+      if (!gaugeIsSurvival(type, gaugeProfile) || !gaugeSurvivalFailed[i]) {
         return type;
       }
     }

@@ -1,5 +1,6 @@
 #include "RhythmLaneInputController.h"
 #include "BMSRenderer.h"
+#include "../../CoursePlaySession.h"
 
 #include <array>
 
@@ -9,6 +10,18 @@ struct PressLaneCandidate {
   bms_parser::Note *note = nullptr;
   JudgeResult judge = JudgeResult(None, 0);
 };
+
+bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart *chart,
+                      int longNoteModeOverride) {
+  return resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride);
+}
+
+bool isChargeLongNoteType(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::ChargeNote ||
+         type == bms_parser::LongNoteType::HellChargeNote;
+}
 
 long long noteTimingMicros(const bms_parser::Note *note) {
   return note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
@@ -82,9 +95,12 @@ void setReplayEvent(RhythmLaneInputController::Result &result,
 
 RhythmLaneInputController::RhythmLaneInputController(
     bms_parser::Chart *chart, BMSRenderer *renderer,
-    std::unordered_map<int, bool> &lanePressed)
+    std::unordered_map<int, bool> &lanePressed,
+    CourseJudgementConstraint judgementConstraint, int longNoteModeOverride)
     : chart(chart), renderer(renderer), lanePressed(lanePressed),
+      longNoteModeOverride(longNoteModeOverride),
       judge(chart != nullptr ? chart->Meta.Rank : 3) {
+  judge.applyCourseJudgementConstraint(judgementConstraint);
   if (const auto it = judge.timingWindows.find(Bad);
       it != judge.timingWindows.end()) {
     latePoorTiming = it->second.second;
@@ -282,6 +298,9 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
       auto *longNote = static_cast<bms_parser::LongNote *>(note);
       if (!longNote->IsTail()) {
         longNote->Press(pressedTime);
+        result.hasJudge =
+            isChargeLongNoteType(effectiveLongNoteType(
+                longNote, chart, longNoteModeOverride));
         setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
                        songTimeMicros, pressedTime, judgeResult);
       }
@@ -316,7 +335,13 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
       judgeResult.judgement == Poor) {
     appliedJudge = JudgeResult(Bad, judgeResult.Diff);
   } else {
-    appliedJudge = judge.judgeNow(longNote->Head, longNote->Head->PlayedTime);
+    const bool chargeLongNote =
+        isChargeLongNoteType(
+            effectiveLongNoteType(longNote, chart, longNoteModeOverride));
+    appliedJudge = chargeLongNote
+                       ? judgeResult
+                       : judge.judgeNow(longNote->Head,
+                                        longNote->Head->PlayedTime);
   }
   result.judge = appliedJudge;
   result.hasJudge = true;

@@ -409,6 +409,12 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const std::string &difficultyLabel,
                                           const std::optional<ResultPreviousBestData>
                                               &previousBest,
+                                          const std::optional<std::string>
+                                              &currentClearLabelOverride,
+                                          const std::optional<int>
+                                              &currentClearRankOverride,
+                                          const std::optional<std::string>
+                                              &headerDifficultyLabelOverride,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const int height = rendering::render_height;
@@ -478,6 +484,9 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.playModeLabel = playModeLabel;
   resultSkinData.laneOrderLabel = laneOrderLabel;
   resultSkinData.difficultyLabel = difficultyLabel;
+  resultSkinData.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
+  resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
+  resultSkinData.currentClearRankOverride = currentClearRankOverride;
   resultSkinData.previousBest = previousBest;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
@@ -536,7 +545,13 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::string &laneOrderLabel,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
-                                &previousBest) {
+                                &previousBest,
+                            const std::optional<std::string>
+                                &currentClearLabelOverride,
+                            const std::optional<int>
+                                &currentClearRankOverride,
+                            const std::optional<std::string>
+                                &headerDifficultyLabelOverride) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -559,7 +574,9 @@ ResultImageExporter::Export(ApplicationContext &context,
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
   return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
-                           difficultyLabel, previousBest, outputPath);
+                           difficultyLabel, previousBest,
+                           currentClearLabelOverride, currentClearRankOverride,
+                           headerDifficultyLabelOverride, outputPath);
 }
 
 ResultImageExportResult

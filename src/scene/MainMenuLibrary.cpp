@@ -5,6 +5,7 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <string_view>
 
@@ -174,14 +175,10 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
   std::string currentCourseGroupKey;
   std::string currentCourseKey;
   runQuery(
-      "SELECT dc.id, dc.table_id, dc.group_name, cm.sha256, cm.md5, cm.path "
+      "SELECT dc.id, dc.table_id, dc.group_name, dce.sha256, dce.md5, '' "
       "FROM difficulty_courses dc "
       "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "JOIN chart_meta cm ON "
-      "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm.md5 = dce.md5)) "
-      "WHERE " +
-          preferredChartPredicate("cm"),
+      "ORDER BY dc.table_id, dc.group_name, dc.id, dce.sort_order",
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
@@ -213,6 +210,16 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
     const int clearRank = aggregate.clearRank();
     if (clearRank >= kClearTypeAssistedEasyClearRank) {
       folderClearRanks[key] = clearRank;
+    }
+  }
+  for (const auto &[courseIdText, clearRank] : scoreRanks.rankByCourseId) {
+    if (clearRank < kClearTypeAssistedEasyClearRank) {
+      continue;
+    }
+    try {
+      folderClearRanks[folderKeyForCourse(std::stoi(courseIdText))] =
+          clearRank;
+    } catch (const std::exception &) {
     }
   }
   return folderClearRanks;

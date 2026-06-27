@@ -93,6 +93,7 @@ public:
   static constexpr float kDefaultJudgementTextY = 0.55f;
   static constexpr const char *kDefaultGaugeType = "normal";
   static constexpr const char *kDefaultPlayOption = "NORMAL";
+  static constexpr const char *kDefaultLnMode = "LN";
   static constexpr const char *kDefaultAssistOption = "OFF";
 
   int audioOffsetMs = 0;
@@ -142,6 +143,7 @@ public:
   bool systemPlaybackShowArtist = true;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
+  std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   bool defaultDifficultyTablesSeeded = false;
 

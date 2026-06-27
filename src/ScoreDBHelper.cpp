@@ -1,5 +1,6 @@
 #include "ScoreDBHelper.h"
 
+#include "CoursePlaySession.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -81,6 +83,29 @@ int judgeCount(const RhythmState &state, Judgement judgement) {
   return it == state.judgeCount.end() ? 0 : it->second;
 }
 
+std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
+  const std::string sha256 = normalizedHash(chartMeta.SHA256);
+  if (!sha256.empty()) {
+    return "sha256:" + sha256;
+  }
+  const std::string md5 = normalizedHash(chartMeta.MD5);
+  if (!md5.empty()) {
+    return "md5:" + md5;
+  }
+  return "path:" +
+         path_t_to_utf8(fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+}
+
+std::string courseKeyForSession(const CoursePlaySession &session) {
+  std::ostringstream key;
+  key << "course:" << session.courseName << "\n";
+  key << "constraint:" << session.constraintJson << "\n";
+  for (const auto &entry : session.entries) {
+    key << stableChartKey(entry.meta) << "\n";
+  }
+  return key.str();
+}
+
 void storeBestRank(ScoreRankMap &ranks, const std::string &key, int rank) {
   if (key.empty()) {
     return;
@@ -118,6 +143,31 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
     const std::string key =
         hashColumn ? normalizedHash(text) : normalizedPath(text);
     storeBestRank(ranks, key, sqlite3_column_int(stmt.get(), 1));
+  }
+}
+
+void loadBestCourseRanks(sqlite3 *db, ScoreRankMap &ranks) {
+  const std::string clearMarkExpr =
+      "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
+      std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
+      std::to_string(kClearTypeFullComboRank) +
+      " ELSE clear_type END)";
+  const std::string query =
+      "SELECT course_id, " + clearMarkExpr +
+      " FROM course_scores WHERE course_id IS NOT NULL AND course_id > 0 "
+      "GROUP BY course_id";
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while loading course score clear ranks: %s",
+            sqlite3_errmsg(db));
+    return;
+  }
+
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    const int courseId = sqlite3_column_int(stmt.get(), 0);
+    const int rank = sqlite3_column_int(stmt.get(), 1);
+    storeBestRank(ranks, std::to_string(courseId), rank);
   }
 }
 } // namespace
@@ -177,6 +227,14 @@ int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
   }
 
   return kNoClearTypeRank;
+}
+
+int ScoreClearRankCache::bestCourseRankForId(int courseId) const {
+  if (courseId <= 0) {
+    return kNoClearTypeRank;
+  }
+  const auto it = rankByCourseId.find(std::to_string(courseId));
+  return it == rankByCourseId.end() ? kNoClearTypeRank : it->second;
 }
 
 ScoreDBHelper &ScoreDBHelper::GetInstance() {
@@ -264,6 +322,60 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   return true;
 }
 
+bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS course_scores ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "course_id INTEGER,"
+      "course_key TEXT,"
+      "course_name TEXT,"
+      "course_group_name TEXT,"
+      "constraint_json TEXT,"
+      "gauge_type INTEGER NOT NULL,"
+      "gauge_profile INTEGER NOT NULL,"
+      "gauge_auto_shift INTEGER NOT NULL,"
+      "play_option TEXT,"
+      "assist_option TEXT,"
+      "completed_charts INTEGER NOT NULL,"
+      "total_charts INTEGER NOT NULL,"
+      "score INTEGER NOT NULL,"
+      "max_score INTEGER NOT NULL,"
+      "max_combo INTEGER NOT NULL,"
+      "combo_break INTEGER NOT NULL,"
+      "pgreat INTEGER NOT NULL,"
+      "great INTEGER NOT NULL,"
+      "good INTEGER NOT NULL,"
+      "bad INTEGER NOT NULL,"
+      "poor INTEGER NOT NULL,"
+      "kpoor INTEGER NOT NULL,"
+      "fast INTEGER NOT NULL,"
+      "slow INTEGER NOT NULL,"
+      "final_gauge REAL NOT NULL,"
+      "clear_type INTEGER NOT NULL,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+      ")";
+  if (!execSql(db, query, "creating course score table")) {
+    return false;
+  }
+
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id ON "
+      "course_scores(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_key ON "
+      "course_scores(course_key)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_clear_type ON "
+      "course_scores(clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_created_at ON "
+      "course_scores(created_at)",
+  };
+  for (const auto *indexQuery : indexes) {
+    if (!execSql(db, indexQuery, "creating course score index")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 const RhythmState &state) {
@@ -318,6 +430,85 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   return true;
 }
 
+bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
+                                      const CoursePlaySession &session,
+                                      const RhythmState &state,
+                                      int completedCharts, int totalCharts) {
+  const char *query =
+      "INSERT INTO course_scores ("
+      "course_id, course_key, course_name, course_group_name, constraint_json,"
+      "gauge_type, gauge_profile, gauge_auto_shift, play_option, assist_option,"
+      "completed_charts, total_charts,"
+      "score, max_score, max_combo, combo_break,"
+      "pgreat, great, good, bad, poor, kpoor, fast, slow, final_gauge,"
+      "clear_type"
+      ") VALUES ("
+      "@course_id, @course_key, @course_name, @course_group_name,"
+      "@constraint_json, @gauge_type, @gauge_profile, @gauge_auto_shift,"
+      "@play_option, @assist_option, @completed_charts, @total_charts,"
+      "@score, @max_score, @max_combo, @combo_break,"
+      "@pgreat, @great, @good, @bad, @poor, @kpoor, @fast, @slow,"
+      "@final_gauge, @clear_type"
+      ")";
+
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing course score insert: %s",
+            sqlite3_errmsg(db));
+    return false;
+  }
+
+  int courseTotalNotes = 0;
+  for (const auto &entry : session.entries) {
+    courseTotalNotes += std::max(0, entry.meta.TotalNotes);
+  }
+
+  int bindIndex = 1;
+  sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
+  bindText(stmt.get(), bindIndex++, courseKeyForSession(session));
+  bindText(stmt.get(), bindIndex++, session.courseName);
+  bindText(stmt.get(), bindIndex++, session.courseGroupName);
+  bindText(stmt.get(), bindIndex++, session.constraintJson);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   gaugeTypeIndex(session.gaugeType));
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   static_cast<int>(session.gaugeProfile));
+  sqlite3_bind_int(stmt.get(), bindIndex++, session.gaugeAutoShift ? 1 : 0);
+  bindText(stmt.get(), bindIndex++,
+           session.playOption.value_or(session.requestedPlayOption));
+  bindText(stmt.get(), bindIndex++, session.assistOption);
+  sqlite3_bind_int(stmt.get(), bindIndex++, completedCharts);
+  sqlite3_bind_int(stmt.get(), bindIndex++, totalCharts);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
+  sqlite3_bind_int(stmt.get(), bindIndex++, courseTotalNotes * 2);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.maxCombo);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.comboBreak);
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, PGreat));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Great));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Good));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Bad));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Poor));
+  sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, Kpoor));
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.fastCount);
+  sqlite3_bind_int(stmt.get(), bindIndex++, state.slowCount);
+  sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
+  int clearRank = state.getClearTypeRank();
+  if (completedCharts == totalCharts && totalCharts > 0 &&
+      state.currentGauge > 0.0f && state.comboBreak == 0 &&
+      state.maxCombo >= courseTotalNotes) {
+    clearRank = kClearTypeFullComboRank;
+  }
+  sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
+
+  rc = sqlite3_step(stmt.get());
+  if (rc != SQLITE_DONE) {
+    SDL_Log("SQL error while saving course score: %s", sqlite3_errmsg(db));
+    return false;
+  }
+  return true;
+}
+
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state) {
   sqlite3 *db = Connect();
@@ -329,6 +520,25 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
   const bool result =
       CreateScoreTable(connection.get()) &&
       InsertScore(connection.get(), chartMeta, state);
+  if (result) {
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+  return result;
+}
+
+bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
+                                    const RhythmState &state,
+                                    int completedCharts, int totalCharts) {
+  sqlite3 *db = Connect();
+  if (db == nullptr) {
+    return false;
+  }
+  SqliteConnectionHandle connection(db);
+
+  const bool result =
+      CreateCourseScoreTable(connection.get()) &&
+      InsertCourseScore(connection.get(), session, state, completedCharts,
+                        totalCharts);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -400,6 +610,58 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   return snapshot;
 }
 
+std::optional<ScoreBestSnapshot>
+ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
+  sqlite3 *db = Connect();
+  if (db == nullptr) {
+    return std::nullopt;
+  }
+  SqliteConnectionHandle connection(db);
+
+  if (!CreateCourseScoreTable(connection.get())) {
+    return std::nullopt;
+  }
+
+  const std::string courseKey = courseKeyForSession(session);
+  const char *query =
+      "SELECT score, max_score, max_combo, combo_break, final_gauge,"
+      "clear_type, created_at "
+      "FROM course_scores "
+      "WHERE ((? != '' AND course_key = ?) OR (? > 0 AND course_id = ?)) "
+      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
+      "LIMIT 1";
+
+  SqliteStatementHandle stmt;
+  const int rc = prepareSqliteStatement(connection.get(), query, stmt);
+  if (rc != SQLITE_OK) {
+    SDL_Log("SQL error while loading best course score: %s",
+            sqlite3_errmsg(connection.get()));
+    return std::nullopt;
+  }
+
+  int bindIndex = 1;
+  bindText(stmt.get(), bindIndex++, courseKey);
+  bindText(stmt.get(), bindIndex++, courseKey);
+  sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
+  sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
+
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return std::nullopt;
+  }
+
+  ScoreBestSnapshot snapshot;
+  snapshot.score = sqlite3_column_int(stmt.get(), 0);
+  snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
+  snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
+  snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+  snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
+  const auto *createdAt =
+      reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 6));
+  snapshot.createdAt = createdAt != nullptr ? std::string(createdAt) : "";
+  return snapshot;
+}
+
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   ScoreClearRankCache cache;
   sqlite3 *db = Connect();
@@ -415,6 +677,9 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
                            true);
     loadBestRanksForColumn(connection.get(), "chart_path", cache.rankByPath,
                            false);
+  }
+  if (CreateCourseScoreTable(connection.get())) {
+    loadBestCourseRanks(connection.get(), cache.rankByCourseId);
   }
   return cache;
 }

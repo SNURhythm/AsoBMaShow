@@ -10,6 +10,8 @@
 #include <optional>
 #include <string>
 
+struct CoursePlaySession;
+
 struct ResultPracticeOptions {
   bool enabled = false;
   unsigned long long startPosition = 0;
@@ -21,10 +23,22 @@ struct ResultPracticeOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   unsigned long long leadInMicros = 0;
   Scene *returnScene = nullptr;
   std::function<void(const ReplayData &)> practiceGhostCallback;
+};
+
+enum class ResultCourseMode {
+  None,
+  Stage,
+  CourseResult,
+};
+
+struct ResultCourseOptions {
+  ResultCourseMode mode = ResultCourseMode::None;
+  std::shared_ptr<CoursePlaySession> session = nullptr;
 };
 
 class TextView;
@@ -37,7 +51,8 @@ public:
               bool shouldSaveScore = true,
               const ReplayData *retrySource = nullptr,
               ResultPracticeOptions practiceOptions = {},
-              bool autoPlayResult = false);
+              bool autoPlayResult = false,
+              ResultCourseOptions courseOptions = {});
   ~ResultScene() override = default;
 
   void init() override;
@@ -51,10 +66,18 @@ private:
   void saveScore();
   void saveReplay();
   void addRetryButtons();
+  void addCourseButtons();
+  void buildCourseExitConfirmation();
+  void showCourseExitConfirmation();
+  void hideCourseExitConfirmation();
   void startRetry(bool samePattern);
   void startReplay();
+  void continueCourse();
+  void showCourseResult();
   void exportPhoto();
   void exitResult();
+  [[nodiscard]] bool isCourseStageResult() const;
+  [[nodiscard]] bool isCourseFinalResult() const;
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
@@ -62,11 +85,16 @@ private:
   std::optional<ReplayData> retryData;
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
+  ResultCourseOptions courseOptions;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
+  std::optional<std::string> headerDifficultyLabelOverride;
+  std::optional<std::string> currentClearLabelOverride;
+  std::optional<int> currentClearRankOverride;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
   TextView *exportPhotoButtonText = nullptr;
   std::unique_ptr<ISkin> skin;

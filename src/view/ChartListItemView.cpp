@@ -159,7 +159,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   favoriteIconView->setOverflow(TextView::TextOverflow::Hidden);
   favoriteButton->setContentView(favoriteIconView);
   favoriteButton->setOnClickListener([this]() {
-    if (solidArchive || unavailable || currentRecord.meta.BmsPath.empty()) {
+    if (currentRecord.courseStart || solidArchive || unavailable ||
+        currentRecord.meta.BmsPath.empty()) {
       return;
     }
     const bool nextFavorite = !favorite;
@@ -189,7 +190,12 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   }
   titleView->setText(title);
   artistView->setText(meta.Artist);
-  if (solidArchive) {
+  if (record.courseStart) {
+    levelView->setText(record.difficultyTableLabels.empty()
+                           ? "Course"
+                           : record.difficultyTableLabels);
+    keyModeView->setText("COURSE");
+  } else if (solidArchive) {
     levelView->setText(record.difficultyTableLabels.empty()
                            ? "Unzip required"
                            : record.difficultyTableLabels);
@@ -206,7 +212,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   } else {
     jacketImage->freeImage();
   }
-  favoriteButton->setVisible(!unavailable && !solidArchive &&
+  favoriteButton->setVisible(!record.courseStart && !unavailable &&
+                             !solidArchive &&
                              !meta.BmsPath.empty());
   refreshFavoriteButton();
 }
@@ -267,6 +274,17 @@ void ChartListItemView::onUnselected() {
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
+  if (currentRecord.courseStart) {
+    titleView->setThemedColor(selected ? ui_theme::lime
+                                       : ui_theme::textPrimary);
+    artistView->setThemedColor(selected ? ui_theme::textSecondary
+                                        : ui_theme::textMuted);
+    levelView->setThemedColor(ui_theme::lime);
+    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
+                                         : ui_theme::textMuted);
+    return;
+  }
+
   if (solidArchive) {
     if (selected) {
       titleView->setThemedColor(ui_theme::amber);

@@ -41,7 +41,29 @@ bms_parser::Note *findReplayNote(
   return it == lookup.end() ? nullptr : it->second;
 }
 
+inline bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart &chart) {
+  if (longNote == nullptr) {
+    return bms_parser::LongNoteType::LongNote;
+  }
+  const bms_parser::LongNote *head =
+      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                      : longNote;
+  bms_parser::LongNoteType type =
+      bms_parser::ResolveLongNoteType(head->Type, chart.Meta.LnMode);
+  return type == bms_parser::LongNoteType::Undefined
+             ? bms_parser::LongNoteType::LongNote
+             : type;
+}
+
+inline bool isChargeLongNoteType(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::ChargeNote ||
+         type == bms_parser::LongNoteType::HellChargeNote;
+}
+
 bool replayEventCountsInResult(
+    bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event) {
   if (event.judgement == None) {
@@ -58,7 +80,8 @@ bool replayEventCountsInResult(
   }
 
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
-  return longNote->IsTail() || !recordedJudge.isNotePlayed();
+  return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
+         isChargeLongNoteType(effectiveLongNoteType(longNote, chart));
 }
 
 void syncReplayResultGaugeSnapshot(RhythmState &state,
@@ -97,7 +120,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       continue;
     }
 
-    if (!replayEventCountsInResult(lookup, event)) {
+    if (!replayEventCountsInResult(chart, lookup, event)) {
       continue;
     }
 

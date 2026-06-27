@@ -24,6 +24,7 @@ struct ScoreClearRankCache {
   ScoreRankMap rankBySha256;
   ScoreRankMap rankByMd5;
   ScoreRankMap rankByPath;
+  ScoreRankMap rankByCourseId;
 
   [[nodiscard]] int bestRankFor(const bms_parser::ChartMeta &chartMeta) const;
   [[nodiscard]] int bestRankForHashes(const std::string &sha256,
@@ -32,6 +33,7 @@ struct ScoreClearRankCache {
   [[nodiscard]] int bestRankForStoredKeys(std::string_view sha256,
                                           std::string_view md5,
                                           std::string_view path = "") const;
+  [[nodiscard]] int bestCourseRankForId(int courseId) const;
 };
 
 struct ScoreBestSnapshot {
@@ -43,6 +45,8 @@ struct ScoreBestSnapshot {
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
 };
+
+struct CoursePlaySession;
 
 class ScoreDBHelper {
 public:
@@ -59,10 +63,19 @@ public:
                    const RhythmState &state);
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state);
+  bool CreateCourseScoreTable(sqlite3 *db);
+  bool InsertCourseScore(sqlite3 *db, const CoursePlaySession &session,
+                         const RhythmState &state, int completedCharts,
+                         int totalCharts);
+  bool SaveCourseScore(const CoursePlaySession &session,
+                       const RhythmState &state, int completedCharts,
+                       int totalCharts);
   std::optional<ScoreBestSnapshot>
   LoadBestScore(const bms_parser::ChartMeta &chartMeta,
                 const std::optional<std::string> &beforeCreatedAt =
                     std::nullopt);
+  std::optional<ScoreBestSnapshot>
+  LoadBestCourseScore(const CoursePlaySession &session);
   ScoreClearRankCache LoadBestClearRanks();
   [[nodiscard]] std::uint64_t GetRevision() const;
 };

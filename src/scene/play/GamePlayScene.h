@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "RhythmState.h"
@@ -23,13 +24,17 @@ struct StartOptions {
   bool autoKeySound = false;
   bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
   bool gaugeAutoShift = false;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
+  std::shared_ptr<CoursePlaySession> courseSession = nullptr;
+  CourseConstraintRules courseConstraints;
   bool ownsChart = false;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
@@ -75,8 +80,13 @@ private:
   void restartCurrentPattern();
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
+  [[nodiscard]] bool isCoursePlayback() const;
+  [[nodiscard]] bool courseNoSpeed() const;
+  [[nodiscard]] int effectiveVisibleTimeGreenNumber() const;
+  [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  bool startNextCourseChart();
   void beginReplayRecording();
   void finishReplayRecording();
   void publishPracticeGhost();
@@ -88,6 +98,8 @@ private:
   void applyReplayLaneCoverEvent(const ReplayLaneCoverEvent &event);
   void applyReplayGauge(const ReplayEvent &event);
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
+  void resetHellChargeGaugeTracking(long long gameplayTimeMicros);
+  void updateHellChargeGauge(long long gameplayTimeMicros);
   [[nodiscard]] long long getAudioOffsetMicros() const;
   [[nodiscard]] long long getStartPositionMicros() const;
   [[nodiscard]] long long getAudioSeekPositionMicros() const;
@@ -146,6 +158,9 @@ private:
   ReplayData recordedReplay;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
+  std::unordered_map<bms_parser::LongNote *, long long>
+      hellChargeGaugeBalanceMicros;
+  long long lastHellChargeGaugeUpdateMicros = 0;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;

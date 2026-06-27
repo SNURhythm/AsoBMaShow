@@ -634,7 +634,11 @@ collectReplayAutoReleaseTails(bms_parser::Chart &chart) {
   return tails;
 }
 
+bool isClassicLongNote(const bms_parser::LongNote *longNote,
+                       const bms_parser::Chart &chart);
+
 void releaseDueReplayLongNoteTails(
+    const bms_parser::Chart &chart,
     const std::vector<bms_parser::LongNote *> &tails, size_t &cursor,
     long long songTimeMicros) {
   while (cursor < tails.size()) {
@@ -646,7 +650,8 @@ void releaseDueReplayLongNoteTails(
     if (tail->Timeline->Timing > songTimeMicros) {
       break;
     }
-    if (!tail->IsPlayed && tail->IsHolding) {
+    if (!tail->IsPlayed && tail->IsHolding &&
+        isClassicLongNote(tail, chart)) {
       tail->Release(tail->Timeline->Timing);
     }
     ++cursor;
@@ -675,8 +680,49 @@ bms_parser::Note *findReplayNote(
   return it == lookup.end() ? nullptr : it->second;
 }
 
+bms_parser::LongNoteType
+effectiveLongNoteType(const bms_parser::LongNote *longNote,
+                      const bms_parser::Chart &chart) {
+  if (longNote == nullptr) {
+    return bms_parser::LongNoteType::LongNote;
+  }
+  const bms_parser::LongNote *head =
+      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                      : longNote;
+  bms_parser::LongNoteType type =
+      bms_parser::ResolveLongNoteType(head->Type, chart.Meta.LnMode);
+  return type == bms_parser::LongNoteType::Undefined
+             ? bms_parser::LongNoteType::LongNote
+             : type;
+}
+
+bool isClassicLongNote(const bms_parser::LongNote *longNote,
+                       const bms_parser::Chart &chart) {
+  return effectiveLongNoteType(longNote, chart) ==
+         bms_parser::LongNoteType::LongNote;
+}
+
+void markReplayMissedNote(bms_parser::Note *note, long long judgedTimeMicros) {
+  if (note == nullptr) {
+    return;
+  }
+  note->IsPlayed = true;
+  note->IsDead = true;
+  note->PlayedTime = judgedTimeMicros;
+  if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+      longNote != nullptr) {
+    longNote->IsHolding = false;
+    if (longNote->IsTail() && longNote->Head != nullptr) {
+      longNote->Head->IsHolding = false;
+    } else if (!longNote->IsTail() && longNote->Tail != nullptr) {
+      longNote->Tail->IsHolding = false;
+    }
+  }
+}
+
 bool applyReplayEventForVideo(
     BMSRenderer &renderer,
+    const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event, long long visualTimeMicros, bool gaugeAutoShift) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
@@ -698,7 +744,8 @@ bool applyReplayEventForVideo(
       if (note->IsLongNote()) {
         auto *longNote = static_cast<bms_parser::LongNote *>(note);
         suppressHudForLongNoteHead =
-            !longNote->IsTail() && recordedJudge.isNotePlayed();
+            !longNote->IsTail() && recordedJudge.isNotePlayed() &&
+            isClassicLongNote(longNote, chart);
         if (recordedJudge.isNotePlayed() && !longNote->IsTail()) {
           longNote->Press(event.judgeTimeMicros);
         }
@@ -727,6 +774,8 @@ bool applyReplayEventForVideo(
     return appliedHud;
   }
   case ReplayEventAction::Miss:
+    markReplayMissedNote(findReplayNote(lookup, event),
+                         event.judgeTimeMicros);
     return applyHud();
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(lookup, event); note != nullptr) {
@@ -2275,7 +2324,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
            replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
-          applyReplayEventForVideo(renderer, replayNotes, event,
+          applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                    visualTimeMicros, replay.gaugeAutoShift);
       if (appliedHud && event.judgement != None) {
         replayJudgeCounts[event.judgement]++;
@@ -2286,7 +2335,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       }
       ++replayCursor;
     }
-    releaseDueReplayLongNoteTails(replayAutoReleaseTails,
+    releaseDueReplayLongNoteTails(chart, replayAutoReleaseTails,
                                   replayAutoReleaseTailCursor, songTimeMicros);
     applyExportBpm(songTimeMicros);
     applyReplayLaneCoverEvents(songTimeMicros);
