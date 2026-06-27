@@ -2846,41 +2846,6 @@ void ChartDBHelper::SelectAllChartMeta(
   }
 }
 
-void ChartDBHelper::SelectMusicTracks(sqlite3 *db,
-                                      std::vector<MusicTrackRecord> &tracks) {
-  const char *musicKey = "COALESCE(NULLIF(cm.folder, ''), cm.path)";
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "COUNT(*) OVER (PARTITION BY ";
-  query += musicKey;
-  query += ") AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY ";
-  query += musicKey;
-  query += " ORDER BY total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM chart_meta cm "
-           "WHERE ";
-  query += preferredChartPredicate("cm");
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.title COLLATE NOCASE, cm.path";
-
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "selecting music tracks",
-                                    logSqlErrorText)) {
-    return;
-  }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    MusicTrackRecord record;
-    record.representativeChart = ReadChartMeta(stmt);
-    record.chartCount =
-        std::max(1, sqlite3_column_int(stmt, kChartMetaColumnCount));
-    tracks.push_back(std::move(record));
-  }
-}
-
 void ChartDBHelper::SelectFavoriteMusicTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateFavoritesTable(db)) {
@@ -3016,38 +2981,6 @@ int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
     count = sqlite3_column_int(stmt, 0);
   }
   return count;
-}
-
-void ChartDBHelper::SearchChartMeta(
-    sqlite3 *db, const std::string &text,
-    std::vector<ChartMetaRecord> &chartMetas) {
-  if (!CreateFavoritesTable(db)) {
-    return;
-  }
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", '', 0, ";
-  query += kChartFavoriteColumn;
-  query += " FROM chart_meta cm WHERE rtrim(cm.title || ' ' || cm.subtitle || "
-           "' ' || cm.artist || ' ' || cm.sub_artist || ' ' || cm.genre) LIKE "
-           "@text AND ";
-  query += preferredChartPredicate("cm");
-  query += " ORDER BY cm.title";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt, "searching for charts",
-                                    logSqlErrorText)) {
-    return;
-  }
-  // %text%
-  bindSqliteText(stmt, 1, "%" + text + "%");
-
-  // reserve space for the result
-  chartMetas.reserve(sqlite3_column_count(stmt));
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    chartMetas.push_back(std::move(ReadChartMetaRecord(stmt)));
-  }
-  populateDifficultyTableLabels(db, chartMetas);
 }
 
 void ChartDBHelper::QueryChartMeta(
