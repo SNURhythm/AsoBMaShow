@@ -122,12 +122,15 @@ inline std::string matchedChartPathSubquery(
     std::string_view matchAlias = "cm_match") {
   const std::string sourceText(sourceAlias);
   const std::string matchText(matchAlias);
+  const std::string sourceSha256 = sourceText + ".sha256";
+  const std::string sourceMd5 = sourceText + ".md5";
   std::string query = "(SELECT " + matchText + ".path FROM " +
                       kChartMetaTable + " " + matchText + " WHERE ((" +
-                      sourceText + ".sha256 != '' AND " + matchText +
-                      ".sha256 = " + sourceText + ".sha256) OR (" +
-                      sourceText + ".md5 != '' AND " + matchText +
-                      ".md5 = " + sourceText + ".md5)) ORDER BY " +
+                      sqlTextHasValue(sourceSha256) + " AND " + matchText +
+                      ".sha256 = " + normalizedSqlHash(sourceSha256) + ") OR (" +
+                      sqlTextHasValue(sourceMd5) + " AND " + matchText +
+                      ".md5 = " + normalizedSqlHash(sourceMd5) +
+                      ")) ORDER BY " +
                       chartSourceOrderBy(matchText);
   if (includeTitleTieBreaker) {
     query += ", " + matchText + ".title COLLATE NOCASE";
