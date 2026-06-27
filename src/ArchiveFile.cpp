@@ -582,6 +582,14 @@ std::uintmax_t maxBufferedReadSize() {
           std::numeric_limits<std::streamsize>::max()));
 }
 
+void reserveBufferedBytes(std::vector<unsigned char> &bytes,
+                          std::uintmax_t size) {
+  if (size <=
+      static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
+    bytes.reserve(static_cast<std::size_t>(size));
+  }
+}
+
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
@@ -2180,8 +2188,9 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
       continue;
     }
 
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(bytes, static_cast<std::uintmax_t>(entrySize));
     }
     std::array<unsigned char, 64 * 1024> buffer{};
     for (;;) {
@@ -2297,8 +2306,10 @@ bool readArchiveEntriesUncached(
 
     FileData file;
     file.path = info.relativePath;
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(file.bytes,
+                           static_cast<std::uintmax_t>(entrySize));
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -2782,8 +2793,10 @@ bool readArchiveEntriesByCachedOrder(
 
     FileData file;
     file.path = target.entryPath;
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(file.bytes,
+                           static_cast<std::uintmax_t>(entrySize));
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -3603,10 +3616,8 @@ bool readSevenZipEntriesByIndex(
 
     FileData file;
     file.path = target.entryPath;
-    if (target.size > 0 &&
-        target.size <=
-            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-      file.bytes.reserve(static_cast<std::size_t>(target.size));
+    if (target.size > 0) {
+      reserveBufferedBytes(file.bytes, target.size);
     }
     files.push_back(std::move(file));
     itemIndices.push_back(itemIndex);
