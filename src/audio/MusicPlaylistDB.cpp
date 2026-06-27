@@ -33,6 +33,7 @@ using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::kMaxSqlIntegerText;
+using asobmshow::chart_sql::normalizedSqlHash;
 
 int parseIntOr(const std::string &value, int fallback) {
   if (value.empty()) {
@@ -103,6 +104,24 @@ void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
+}
+
+bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
+                               const char *column) {
+  std::string query = "UPDATE ";
+  query += table;
+  query += " SET ";
+  query += column;
+  query += " = ";
+  query += normalizedSqlHash(column);
+  query += " WHERE ";
+  query += column;
+  query += " != ";
+  query += normalizedSqlHash(column);
+  if (!execSql(db, query.c_str(), "normalizing stored playlist hash column")) {
+    return false;
+  }
+  return true;
 }
 
 bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
@@ -571,6 +590,13 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating music playlist index")) {
       return false;
     }
+  }
+  if (!normalizeStoredHashColumn(db, "music_playlist_items", "chart_md5") ||
+      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_sha256") ||
+      !normalizeStoredHashColumn(db, "music_now_playing_items", "chart_md5") ||
+      !normalizeStoredHashColumn(db, "music_now_playing_items",
+                                 "chart_sha256")) {
+    return false;
   }
   return true;
 }
