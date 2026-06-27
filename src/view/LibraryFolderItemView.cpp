@@ -9,6 +9,8 @@ constexpr int kBottomGap = 6;
 constexpr int kDepthIndent = 18;
 constexpr int kCardLeftPadding = 8;
 constexpr int kLeafCardLeftPadding = 2;
+constexpr int kItemGap = 8;
+constexpr int kExpandableItemGap = 0;
 constexpr int kDisclosureWidth = 14;
 constexpr int kLeafDisclosureWidth = 4;
 constexpr int kCountWidth = 48;
@@ -30,7 +32,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   contentCard->setFlexShrink(0);
   contentCard->setPadding(Edge::All, 8);
   contentCard->setPadding(Edge::End, 24);
-  contentCard->setGap(8);
+  contentCard->setGap(kItemGap);
   addView(contentCard);
 
   disclosureView = new TextView(ui_icons::kFontAwesomeSolidPath, 15);
@@ -76,6 +78,7 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
                                             kDepthIndent));
   contentCard->setPadding(Edge::Left,
                           leaf ? kLeafCardLeftPadding : kCardLeftPadding);
+  contentCard->setGap(expandable ? kExpandableItemGap : kItemGap);
   disclosureView->setWidth(expandable ? kDisclosureWidth
                                       : kLeafDisclosureWidth);
   disclosureView->setText(
