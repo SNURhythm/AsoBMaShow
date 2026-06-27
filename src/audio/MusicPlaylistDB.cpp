@@ -966,7 +966,11 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     return false;
   }
 
-  if (!execSql(db, "BEGIN IMMEDIATE", "beginning now playing save")) {
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  if (!transaction.active()) {
+    std::cerr << "SQL error while beginning now playing save: "
+              << transactionError << "\n";
     return false;
   }
 
@@ -1011,12 +1015,16 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     }
   }
 
-  const char *finishQuery = ok ? "COMMIT" : "ROLLBACK";
-  if (!execSql(db, finishQuery, ok ? "committing now playing save"
-                                   : "rolling back now playing save")) {
+  if (!ok) {
     return false;
   }
-  return ok;
+
+  if (!transaction.commit(transactionError)) {
+    std::cerr << "SQL error while committing now playing save: "
+              << transactionError << "\n";
+    return false;
+  }
+  return true;
 }
 
 void MusicPlaylistDB::SelectLibraryTracks(
