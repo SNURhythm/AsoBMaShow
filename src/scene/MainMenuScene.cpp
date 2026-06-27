@@ -3505,7 +3505,7 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
         sqlite3_reset(stmt.get());
         sqlite3_clear_bindings(stmt.get());
         sqlite3_bind_int(stmt.get(), 1, kind);
-        sqlite3_bind_text(stmt.get(), 2, key.c_str(), -1, SQLITE_TRANSIENT);
+        bindSqliteText(stmt.get(), 2, key);
         sqlite3_bind_int(stmt.get(), 3, lnMode);
         sqlite3_bind_int(stmt.get(), 4, rank);
         if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
