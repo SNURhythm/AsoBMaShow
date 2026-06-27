@@ -2145,9 +2145,7 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
 
   const int step = sqlite3_step(stmt.get());
   if (step == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 0));
-    sourceUrl = text != nullptr ? text : "";
+    sourceUrl = sqliteColumnString(stmt.get(), 0);
     return true;
   }
 
@@ -3987,9 +3985,7 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
       ToAbsolutePath(path);
     }
     entry.path = fspath_to_path_t(path);
-    const char *bookmark =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    entry.iosBookmark = bookmark != nullptr ? bookmark : "";
+    entry.iosBookmark = sqliteColumnString(stmt, 1);
 #if TARGET_OS_ANDROID
     RegisterAndroidChartFolder(path, entry.iosBookmark);
 #endif

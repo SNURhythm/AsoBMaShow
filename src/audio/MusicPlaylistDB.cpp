@@ -90,14 +90,6 @@ std::string columnString(sqlite3_stmt *stmt, int idx) {
   return sqliteColumnString(stmt, idx);
 }
 
-std::string sqliteValueString(sqlite3_value *value) {
-  if (value == nullptr || sqlite3_value_type(value) == SQLITE_NULL) {
-    return "";
-  }
-  const unsigned char *text = sqlite3_value_text(value);
-  return text != nullptr ? reinterpret_cast<const char *>(text) : "";
-}
-
 void sqliteArtistHasObjectNotation(sqlite3_context *context, int argc,
                                    sqlite3_value **argv) {
   const std::string artist = argc > 0 ? sqliteValueString(argv[0]) : "";

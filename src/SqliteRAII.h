@@ -84,6 +84,14 @@ inline std::string sqliteColumnString(sqlite3_stmt *stmt, int idx) {
   return std::string(text);
 }
 
+inline std::string sqliteValueString(sqlite3_value *value) {
+  if (value == nullptr || sqlite3_value_type(value) == SQLITE_NULL) {
+    return "";
+  }
+  const unsigned char *text = sqlite3_value_text(value);
+  return text != nullptr ? reinterpret_cast<const char *>(text) : "";
+}
+
 inline bool sqliteMessageContains(const char *message, const char *needle) {
   if (message == nullptr || needle == nullptr) {
     return false;
@@ -176,9 +184,7 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
 
   int stepRc = SQLITE_OK;
   while ((stepRc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
-    if (text != nullptr && std::string(text) == columnName) {
+    if (sqliteColumnString(stmt.get(), 1) == columnName) {
       hasColumn = true;
       return std::nullopt;
     }
