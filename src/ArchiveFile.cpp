@@ -577,6 +577,28 @@ void reserveBufferedBytes(std::vector<unsigned char> &bytes,
   }
 }
 
+#ifdef _WIN32
+std::string windowsErrorMessage(DWORD error) {
+  LPWSTR buffer = nullptr;
+  const DWORD length = ::FormatMessageW(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+          FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr, error, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+  if (length == 0 || buffer == nullptr) {
+    return "Windows error " + std::to_string(error);
+  }
+
+  std::wstring message(buffer, length);
+  ::LocalFree(buffer);
+  while (!message.empty() &&
+         (message.back() == L'\r' || message.back() == L'\n' ||
+          message.back() == L' ' || message.back() == L'\t')) {
+    message.pop_back();
+  }
+  return path_t_to_utf8(message) + " (" + std::to_string(error) + ")";
+}
+#endif
+
 class RandomAccessFile {
 public:
   RandomAccessFile() = default;
@@ -587,6 +609,10 @@ public:
 #ifndef _WIN32
     if (fd_ >= 0) {
       ::close(fd_);
+    }
+#else
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      ::CloseHandle(handle_);
     }
 #endif
   }
@@ -608,13 +634,21 @@ public:
     }
     return true;
 #else
-    file_.close();
-    file_.clear();
-    file_.open(path, std::ios::binary);
-    if (!file_) {
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      ::CloseHandle(handle_);
+      handle_ = INVALID_HANDLE_VALUE;
+    }
+    handle_ = ::CreateFileW(
+        fspath_to_path_t(path).c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS | FILE_FLAG_OVERLAPPED,
+        nullptr);
+    if (handle_ == INVALID_HANDLE_VALUE) {
       if (errorMessage != nullptr) {
+        const DWORD error = ::GetLastError();
         *errorMessage = "Could not open file for random access: " +
-                        pathForLog(path);
+                        pathForLog(path) + ": " + windowsErrorMessage(error);
       }
       return false;
     }
@@ -678,32 +712,51 @@ public:
     }
     return true;
 #else
-    if (!file_) {
+    if (handle_ == INVALID_HANDLE_VALUE) {
       if (errorMessage != nullptr) {
         *errorMessage = "Random access file is not open.";
       }
       return false;
     }
-    if (offset >
-        static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max())) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Random access read offset is out of range.";
+
+    auto *cursor = static_cast<unsigned char *>(data);
+    std::size_t readTotal = 0;
+    while (readTotal < size) {
+      const std::size_t remaining = size - readTotal;
+      const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+          remaining, static_cast<std::size_t>(
+                         std::numeric_limits<DWORD>::max())));
+      const std::uint64_t readOffset = offset + readTotal;
+      OVERLAPPED overlapped{};
+      overlapped.Offset = static_cast<DWORD>(readOffset & 0xffffffffull);
+      overlapped.OffsetHigh = static_cast<DWORD>(readOffset >> 32);
+
+      DWORD read = 0;
+      BOOL ok = ::ReadFile(handle_, cursor + readTotal, chunk, &read,
+                           &overlapped);
+      if (!ok) {
+        const DWORD error = ::GetLastError();
+        if (error == ERROR_IO_PENDING) {
+          ok = ::GetOverlappedResult(handle_, &overlapped, &read, TRUE);
+        }
+        if (!ok) {
+          if (errorMessage != nullptr) {
+            const DWORD finalError = ::GetLastError();
+            *errorMessage =
+                "Random access read failed: " +
+                windowsErrorMessage(finalError == ERROR_SUCCESS ? error
+                                                                : finalError);
+          }
+          return false;
+        }
       }
-      return false;
-    }
-    file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!file_) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Random access seek failed.";
+      if (read == 0) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Random access read reached end of file.";
+        }
+        return false;
       }
-      return false;
-    }
-    file_.read(static_cast<char *>(data), static_cast<std::streamsize>(size));
-    if (file_.gcount() != static_cast<std::streamsize>(size)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Random access read failed.";
-      }
-      return false;
+      readTotal += static_cast<std::size_t>(read);
     }
     return true;
 #endif
@@ -713,7 +766,7 @@ private:
 #ifndef _WIN32
   int fd_ = -1;
 #else
-  std::ifstream file_;
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
 #endif
 };
 
