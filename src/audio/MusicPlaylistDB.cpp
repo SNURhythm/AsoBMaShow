@@ -525,7 +525,9 @@ std::string storedMusicTrackPathParamPredicate(const std::string &pathParam) {
   const std::string prefix(kStoredDocumentsBmsPrefix);
   return pathParam + " != '' AND (chart_path = " + pathParam +
          " OR chart_path = '" + prefix + "' || " + pathParam + " OR " +
-         pathParam + " = '" + prefix + "' || chart_path)";
+         "(" + pathParam + " LIKE '" + prefix +
+         "%' AND chart_path = substr(" + pathParam + ", length('" + prefix +
+         "') + 1)))";
 }
 
 std::string storedMusicTrackRowPredicate(int firstIndex) {
@@ -536,9 +538,9 @@ std::string storedMusicTrackRowPredicate(int firstIndex) {
   const std::string sha256Param = sqlParam(firstIndex + 4);
   return "((music_key_type = " + keyTypeParam + " AND music_key = " +
          musicKeyParam + ") OR (" + sha256Param +
-         " != '' AND lower(trim(chart_sha256)) = " + sha256Param + ") OR (" +
-         md5Param + " != '' AND lower(trim(chart_md5)) = " + md5Param +
-         ") OR (" + storedMusicTrackPathParamPredicate(chartPathParam) + "))";
+         " != '' AND chart_sha256 = " + sha256Param + ") OR (" + md5Param +
+         " != '' AND chart_md5 = " + md5Param + ") OR (" +
+         storedMusicTrackPathParamPredicate(chartPathParam) + "))";
 }
 
 std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
@@ -549,9 +551,8 @@ std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
   const std::string sha256Param = sqlParam(firstIndex + 4);
   return "CASE WHEN music_key_type = " + keyTypeParam + " AND music_key = " +
          musicKeyParam + " THEN 0 WHEN " + sha256Param +
-         " != '' AND lower(trim(chart_sha256)) = " + sha256Param +
-         " THEN 1 WHEN " + md5Param +
-         " != '' AND lower(trim(chart_md5)) = " + md5Param + " THEN 2 WHEN " +
+         " != '' AND chart_sha256 = " + sha256Param + " THEN 1 WHEN " +
+         md5Param + " != '' AND chart_md5 = " + md5Param + " THEN 2 WHEN " +
          storedMusicTrackPathParamPredicate(chartPathParam) +
          " THEN 3 ELSE 4 END";
 }
