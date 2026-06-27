@@ -74,6 +74,18 @@ constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kResultSceneTailMicros = 10000000;
 
+std::optional<std::string>
+ensureReplayExportDirectoryError(const std::filesystem::path &path,
+                                 const char *failureMessage) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return std::nullopt;
+  }
+
+  return std::string(failureMessage) + " (" +
+         path_t_to_utf8(fspath_to_path_t(path)) + "): " + error.message();
+}
+
 int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
 
 int replayVideoSourceWidth() {
@@ -3408,10 +3420,9 @@ ReplayVideoExporter::Export(ApplicationContext &context,
 
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          outputDir, "Failed to create replay export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const std::string baseName =
@@ -3446,13 +3457,11 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
   const auto totalStart = std::chrono::steady_clock::now();
 
-  std::filesystem::create_directories(tempDir, ec);
-  if (ec) {
-    replayExportLog(exportLog,
-                    "Replay export failed to create work directory: %s",
-                    tempDir.string().c_str());
-    return {.success = false,
-            .message = "Failed to create replay export work directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          tempDir, "Failed to create replay export work directory")) {
+    replayExportLog(exportLog, "Replay export failed to create work directory: %s",
+                    error->c_str());
+    return {.success = false, .message = *error};
   }
 
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
@@ -3541,10 +3550,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
 
   std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          outputDir, "Failed to create replay export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const std::string baseName =
@@ -3557,10 +3565,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   ReplayVideoExportLog *exportLog = nullptr;
   const auto totalStart = std::chrono::steady_clock::now();
 
-  std::filesystem::create_directories(tempDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export work directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          tempDir, "Failed to create replay export work directory")) {
+    return {.success = false, .message = *error};
   }
 
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
