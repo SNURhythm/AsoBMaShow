@@ -8521,7 +8521,10 @@ void MainMenuScene::FindFilesUnix(
         std::string filename = entry->d_name;
         if (filename.size() > 4) {
           std::string ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+          std::transform(ext.begin(), ext.end(), ext.begin(),
+                         [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                         });
           if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
             std::filesystem::path fullPath = directoryPath / filename;
             if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {
