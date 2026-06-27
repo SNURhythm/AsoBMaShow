@@ -1303,6 +1303,31 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   return changed;
 }
 
+bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
+                               const char *column) {
+  std::string query = "UPDATE ";
+  query += table;
+  query += " SET ";
+  query += column;
+  query += " = ";
+  query += normalizedSqlHash(column);
+  query += " WHERE ";
+  query += column;
+  query += " != ";
+  query += normalizedSqlHash(column);
+
+  if (!execSql(db, query.c_str(), "normalizing stored chart hash column")) {
+    return false;
+  }
+
+  const int changedCount = sqlite3_changes(db);
+  if (changedCount > 0) {
+    SDL_Log("Normalized %d stored chart hashes in %s.%s", changedCount, table,
+            column);
+  }
+  return changedCount > 0;
+}
+
 sqlite3_int64 clampSqlInteger(std::uint64_t value) {
   return value > static_cast<std::uint64_t>(
                      std::numeric_limits<sqlite3_int64>::max())
@@ -2726,7 +2751,10 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   const bool normalizedPaths =
       normalizeStoredPathColumn(db, "chart_meta", "path", true) |
       normalizeStoredPathColumn(db, "chart_meta", "folder", false);
-  if (normalizedPaths) {
+  const bool normalizedHashes =
+      normalizeStoredHashColumn(db, "chart_meta", "md5") |
+      normalizeStoredHashColumn(db, "chart_meta", "sha256");
+  if (normalizedPaths || normalizedHashes) {
     bumpLibraryRevision();
   }
   return CreateFavoritesTable(db);
@@ -2758,7 +2786,12 @@ bool ChartDBHelper::CreateFavoritesTable(sqlite3 *db) {
     }
   }
 
-  if (normalizeStoredPathColumn(db, "chart_favorites", "chart_path", true)) {
+  const bool normalizedPaths =
+      normalizeStoredPathColumn(db, "chart_favorites", "chart_path", true);
+  const bool normalizedHashes =
+      normalizeStoredHashColumn(db, "chart_favorites", "chart_md5") |
+      normalizeStoredHashColumn(db, "chart_favorites", "chart_sha256");
+  if (normalizedPaths || normalizedHashes) {
     bumpLibraryRevision();
   }
   return true;
