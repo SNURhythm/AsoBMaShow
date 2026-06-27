@@ -1936,10 +1936,10 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
 
   std::string errorMessage;
   std::error_code fsError;
-  std::filesystem::create_directories(outputRoot, fsError);
-  if (fsError) {
+  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
     throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder.");
+                             "folder: " +
+                             fsError.message());
   }
 
   std::filesystem::path outputFolder;
