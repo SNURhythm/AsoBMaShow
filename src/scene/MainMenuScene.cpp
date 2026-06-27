@@ -105,6 +105,19 @@ void ensureLibraryFolderExists(const std::filesystem::path &path) {
                            "': " + error.message());
 }
 
+bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
+                                 const char *description) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return true;
+  }
+
+  SDL_Log("Failed to create %s %s: %s", description,
+          path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+          error.message().c_str());
+  return false;
+}
+
 struct SafeAreaInsets {
   int top = 0;
   int left = 0;
@@ -5005,10 +5018,12 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   auto entries = dbHelper.SelectEffectiveEntries(db);
   if (entries.empty()) {
     const auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::error_code errorCode;
-    std::filesystem::create_directories(path, errorCode);
+    const bool pathReady =
+        ensureDirectoryExistsLogged(path, "BMS download root");
 #if !(TARGET_OS_ANDROID)
-    dbHelper.InsertEntry(db, path);
+    if (pathReady) {
+      dbHelper.InsertEntry(db, path);
+    }
 #endif
     return path;
   }
@@ -5017,8 +5032,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   return ResolveIOSFolderEntryPath(entries.front());
 #elif TARGET_OS_ANDROID
   const auto path = ChartDBHelper::DefaultBmsFolderPath();
-  std::error_code errorCode;
-  std::filesystem::create_directories(path, errorCode);
+  ensureDirectoryExistsLogged(path, "BMS download root");
   return path;
 #else
   return std::filesystem::path(entries.front().path);
