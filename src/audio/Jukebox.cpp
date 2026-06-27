@@ -15,6 +15,7 @@
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
+#include "ChartAssetExtensions.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
 #include <algorithm>
@@ -169,6 +170,12 @@ std::vector<std::string_view> toExtensionViews(const std::string *extensions,
     views.emplace_back(extensions[i]);
   }
   return views;
+}
+
+std::vector<std::string_view> makeAudioExtensionViews() {
+  return std::vector<std::string_view>(
+      asobmshow::chart_assets::kAudioExtensions.begin(),
+      asobmshow::chart_assets::kAudioExtensions.end());
 }
 
 std::optional<std::filesystem::path>
@@ -948,8 +955,7 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
   std::atomic_size_t loadedCount{0};
   std::atomic_size_t duplicateCount{0};
   std::atomic_size_t failedCount{0};
-  const auto audioExtensionViews =
-      toExtensionViews(audioExtensions, std::size(audioExtensions));
+  const auto audioExtensionViews = makeAudioExtensionViews();
 
   wavTableAbs.clear();
 
@@ -1029,8 +1035,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     return false;
   }
 
-  const auto audioExtensionViews =
-      toExtensionViews(audioExtensions, std::size(audioExtensions));
+  const auto audioExtensionViews = makeAudioExtensionViews();
   std::unordered_map<path_t, ArchiveAssetBatch> archiveBatches;
   std::vector<path_t> archiveBatchOrder;
   std::vector<std::pair<int, path_t>> regularLoads;
@@ -1182,8 +1187,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
     return false;
   }
 
-  const auto audioExtensionViews =
-      toExtensionViews(audioExtensions, std::size(audioExtensions));
+  const auto audioExtensionViews = makeAudioExtensionViews();
   const auto imageExtensionViews =
       toExtensionViews(imageExtensions, std::size(imageExtensions));
   const std::vector<std::string_view> noExtensions;

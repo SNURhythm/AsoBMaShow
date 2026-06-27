@@ -153,7 +153,6 @@ private:
   std::atomic<int> bgaOffsetMs{0};
   std::atomic<int> bgaDisplayMode{
       static_cast<int>(AppSettings::BgaDisplayMode::Fit)};
-  const std::string audioExtensions[4] = {"flac", "wav", "ogg", "mp3"};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};
   const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
