@@ -46,6 +46,7 @@
 namespace {
 using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartIdentityMatchPredicate;
 using asobmshow::chart_sql::chartIdentityPreferenceOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
@@ -153,9 +154,6 @@ constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
 constexpr int kChartDatabaseSchemaVersion = 1;
-constexpr const char *kChartFavoriteColumn =
-    "CASE WHEN EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-    "cf.chart_path = cm.path) THEN 1 ELSE 0 END";
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -184,6 +182,21 @@ std::string storedChartPathText(std::filesystem::path path) {
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
   return fspath_to_utf8(path);
+}
+
+std::string chartFavoritePredicate(const char *chartAlias) {
+  return chartIdentityMatchPredicate("cf", chartAlias);
+}
+
+std::string chartFavoriteColumnExpr(const char *chartAlias) {
+  return "CASE WHEN EXISTS (SELECT 1 FROM chart_favorites cf WHERE " +
+         chartFavoritePredicate(chartAlias) + ") THEN 1 ELSE 0 END";
+}
+
+std::string chartFavoriteIdentityKey(const char *favoriteAlias) {
+  const std::string alias(favoriteAlias);
+  return "COALESCE(NULLIF(" + alias + ".chart_sha256, ''), NULLIF(" + alias +
+         ".chart_md5, ''), " + alias + ".chart_path)";
 }
 
 std::string normalizedDifficultyText(const std::string &difficultyText) {
@@ -1405,8 +1418,9 @@ void appendChartMetaFilters(std::string &query,
     query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
   }
   if (chartQuery.favoritesOnly) {
-    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE "
-             "cf.chart_path = cm.path)";
+    query += " AND EXISTS (SELECT 1 FROM chart_favorites cf WHERE ";
+    query += chartFavoritePredicate("cm");
+    query += ")";
   }
 
   query += " AND ";
@@ -2852,12 +2866,15 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
     return;
   }
 
+  const std::string favoriteKey = chartFavoriteIdentityKey("cf");
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
   query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "cf.added_at AS favorite_added_at, "
-           "COUNT(*) OVER (PARTITION BY cf.chart_path) AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY cf.chart_path ORDER BY ";
+           "cf.added_at AS favorite_added_at, COUNT(*) OVER (PARTITION BY ";
+  query += favoriteKey;
+  query += ") AS music_chart_count, ROW_NUMBER() OVER (PARTITION BY ";
+  query += favoriteKey;
+  query += " ORDER BY cf.added_at DESC, ";
   query += chartArtworkOrderBy("cm");
   query += ", ";
   query += chartIdentityPreferenceOrderBy("cf", "cm");
@@ -2865,8 +2882,9 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
   query += "total_notes DESC, length DESC, ";
   query += chartSourceOrderBy("cm");
   query += ", title COLLATE NOCASE, path) AS music_rank "
-           "FROM chart_favorites cf JOIN chart_meta cm ON "
-           "cm.path = cf.chart_path WHERE ";
+           "FROM chart_favorites cf JOIN chart_meta cm ON ";
+  query += chartFavoritePredicate("cm");
+  query += " WHERE ";
   query += preferredChartPredicate("cm");
   query += ") cm WHERE cm.music_rank = 1 "
            "ORDER BY cm.favorite_added_at DESC, cm.title COLLATE NOCASE, "
@@ -2911,7 +2929,10 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
   }
 
   if (!favorite) {
-    const char *query = "DELETE FROM chart_favorites WHERE chart_path = ?1";
+    const char *query =
+        "DELETE FROM chart_favorites WHERE chart_path = ?1 OR "
+        "(?2 != '' AND chart_sha256 = ?2) OR "
+        "(?3 != '' AND chart_md5 = ?3)";
     SqliteStatementHandle stmt;
     if (!prepareSqliteStatementLogged(db, query, stmt,
                                       "preparing chart favorite delete",
@@ -2919,6 +2940,8 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
       return false;
     }
     bindSqliteText(stmt, 1, chartPath);
+    bindSqliteText(stmt, 2, normalizedHash(chartMeta.SHA256));
+    bindSqliteText(stmt, 3, normalizedHash(chartMeta.MD5));
     const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
       logSqlError("deleting chart favorite", db);
@@ -3048,7 +3071,7 @@ void ChartDBHelper::QueryChartMeta(
     std::string query = "SELECT ";
     query += kDifficultyEntrySelectColumns;
     query += ", ";
-    query += kChartFavoriteColumn;
+    query += chartFavoriteColumnExpr("cm");
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
              "LEFT JOIN chart_meta cm ON cm.path = ";
@@ -3087,7 +3110,7 @@ void ChartDBHelper::QueryChartMeta(
     std::string query = "SELECT ";
     query += kDifficultyCourseEntrySelectColumns;
     query += ", ";
-    query += kChartFavoriteColumn;
+    query += chartFavoriteColumnExpr("cm");
     query += " FROM difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
              "JOIN difficulty_tables dt ON dt.id = dc.table_id "
@@ -3128,7 +3151,7 @@ void ChartDBHelper::QueryChartMeta(
   std::string query = "SELECT ";
   query += kChartMetaSelectColumns;
   query += ", '', 0, ";
-  query += kChartFavoriteColumn;
+  query += chartFavoriteColumnExpr("cm");
   query += " FROM chart_meta cm WHERE 1 = 1";
   appendChartMetaFilters(query, chartQuery);
   query += " ORDER BY cm.title, cm.path";
