@@ -2970,7 +2970,9 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
       logSqlError("deleting chart favorite", db);
       return false;
     }
-    bumpLibraryRevision();
+    if (sqlite3_changes(db) > 0) {
+      bumpLibraryRevision();
+    }
     return true;
   }
 
