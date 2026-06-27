@@ -280,13 +280,14 @@ std::string bestClearMarkRankExpr() {
          " ELSE clear_type END)";
 }
 
-void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
-                            ScoreRankMap &ranks, bool hashColumn) {
+void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
   const std::string query =
-      std::string("SELECT ") + columnName + ", ln_mode, " +
-      bestClearMarkRankExpr() + " FROM scores WHERE " + columnName +
-      " IS NOT NULL AND " + columnName + " != '' GROUP BY " + columnName +
-      ", ln_mode";
+      "SELECT chart_sha256, chart_md5, chart_path, ln_mode, " +
+      bestClearMarkRankExpr() +
+      " FROM scores WHERE (chart_sha256 IS NOT NULL AND chart_sha256 != '') "
+      "OR (chart_md5 IS NOT NULL AND chart_md5 != '') "
+      "OR (chart_path IS NOT NULL AND chart_path != '') "
+      "GROUP BY chart_sha256, chart_md5, chart_path, ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading score clear ranks",
@@ -295,14 +296,14 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
   }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const std::string text = sqliteColumnString(stmt.get(), 0);
-    if (text.empty()) {
-      continue;
-    }
-    const std::string key =
-        hashColumn ? normalizedHash(text) : normalizedPath(text);
-    storeBestRank(ranks, key, sqlite3_column_int(stmt.get(), 1),
-                  sqlite3_column_int(stmt.get(), 2));
+    const std::string sha256 = normalizedHash(sqliteColumnString(stmt.get(), 0));
+    const std::string md5 = normalizedHash(sqliteColumnString(stmt.get(), 1));
+    const std::string path = normalizedPath(sqliteColumnString(stmt.get(), 2));
+    const int lnMode = sqlite3_column_int(stmt.get(), 3);
+    const int rank = sqlite3_column_int(stmt.get(), 4);
+    storeBestRank(cache.rankBySha256, sha256, lnMode, rank);
+    storeBestRank(cache.rankByMd5, md5, lnMode, rank);
+    storeBestRank(cache.rankByPath, path, lnMode, rank);
   }
 }
 
@@ -795,6 +796,8 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
       "scores(chart_md5, ln_mode)",
       "CREATE INDEX IF NOT EXISTS idx_scores_chart_path_ln_mode ON "
       "scores(chart_path, ln_mode)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_identity_ln_mode ON "
+      "scores(chart_sha256, chart_md5, chart_path, ln_mode)",
       "CREATE INDEX IF NOT EXISTS idx_scores_created_at ON scores(created_at)",
   };
   for (const auto *indexQuery : indexes) {
@@ -844,6 +847,8 @@ bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id ON "
       "course_scores(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id_clear_type ON "
+      "course_scores(course_id, clear_type)",
       "CREATE INDEX IF NOT EXISTS idx_course_scores_course_key ON "
       "course_scores(course_key)",
       "CREATE INDEX IF NOT EXISTS idx_course_scores_clear_type ON "
@@ -1143,12 +1148,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   }
 
   if (CreateScoreTable(connection.get())) {
-    loadBestRanksForColumn(connection.get(), "chart_sha256",
-                           cache.rankBySha256, true);
-    loadBestRanksForColumn(connection.get(), "chart_md5", cache.rankByMd5,
-                           true);
-    loadBestRanksForColumn(connection.get(), "chart_path", cache.rankByPath,
-                           false);
+    loadBestChartRanks(connection.get(), cache);
   }
   if (CreateCourseScoreTable(connection.get())) {
     loadBestCourseRanks(connection.get(), cache.rankByCourseId);

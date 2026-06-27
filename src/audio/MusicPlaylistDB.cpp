@@ -173,6 +173,10 @@ bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
       "ON chart_meta(path)",
       "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder "
       "ON chart_meta(folder)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder_source "
+      "ON chart_meta(folder, source_priority, source_archive_size, path)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_title_path "
+      "ON chart_meta(title, path)",
       "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_sha256 "
       "ON chart_meta(sha256)",
       "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_md5 "
@@ -792,23 +796,32 @@ std::string storedMusicTrackCandidateQuery(
 
 std::string
 storedMusicTrackSelectQuery(const StoredMusicTrackSelectQuery &config) {
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count, cm.";
-  query += config.keyTypeAlias;
-  query += " FROM (SELECT cm.*, COUNT(*) OVER (PARTITION BY cm.item_id) "
-           "AS music_chart_count, ROW_NUMBER() OVER (PARTITION BY cm.item_id "
-           "ORDER BY ";
-  query += chartArtworkOrderBy("cm");
-  query += ", cm.identity_rank, total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM (";
+  std::string representativeOrder = chartArtworkOrderBy("choice");
+  representativeOrder +=
+      ", choice.identity_rank, choice.total_notes DESC, choice.length DESC, ";
+  representativeOrder += chartSourceOrderBy("choice");
+  representativeOrder += ", choice.title COLLATE NOCASE, choice.path";
+
+  std::string query =
+      "WITH candidates AS (";
   query += storedMusicTrackCandidateQuery(config);
-  query += ") cm";
-  query += " WHERE ";
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
+  query += "), preferred_candidates AS (SELECT * FROM candidates pc WHERE ";
+  query += asobmshow::chart_sql::preferredChartPredicate("pc",
                                                          kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 ORDER BY cm.";
+  query +=
+      "), item_choices AS (SELECT pc.item_id, COUNT(*) AS music_chart_count, "
+      "(SELECT choice.path FROM preferred_candidates choice WHERE "
+      "choice.item_id = pc.item_id ORDER BY ";
+  query += representativeOrder;
+  query += " LIMIT 1) AS representative_path FROM preferred_candidates pc "
+           "GROUP BY pc.item_id) SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", item_choices.music_chart_count, cm.";
+  query += config.keyTypeAlias;
+  query +=
+      " FROM preferred_candidates cm JOIN item_choices ON "
+      "item_choices.item_id = cm.item_id AND "
+      "item_choices.representative_path = cm.path ORDER BY cm.";
   query += config.positionAlias;
   query += ", cm.title COLLATE NOCASE, cm.path";
   return query;
@@ -1437,28 +1450,48 @@ void MusicPlaylistDB::SelectLibraryTracks(
     return;
   }
 
-  const char *musicKey = "COALESCE(NULLIF(cm.folder, ''), cm.path)";
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, "
-           "COUNT(*) OVER (PARTITION BY ";
-  query += musicKey;
-  query += ") AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY ";
-  query += musicKey;
-  query += " ORDER BY ";
-  query += musicRepresentativeOrderBy("cm");
-  query += ", ";
-  query += chartArtworkOrderBy("cm");
-  query += ", total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM ";
+  const std::string preferredChart =
+      asobmshow::chart_sql::preferredChartPredicate("cm", kChartMetaTable);
+  const std::string preferredRepresentative =
+      asobmshow::chart_sql::preferredChartPredicate("rep", kChartMetaTable);
+  std::string representativeOrder = musicRepresentativeOrderBy("rep");
+  representativeOrder += ", ";
+  representativeOrder += chartArtworkOrderBy("rep");
+  representativeOrder +=
+      ", rep.total_notes DESC, rep.length DESC, ";
+  representativeOrder += chartSourceOrderBy("rep");
+  representativeOrder += ", rep.title COLLATE NOCASE, rep.path";
+
+  std::string query =
+      "WITH folder_groups AS ("
+      "SELECT cm.folder AS music_key, COUNT(*) AS music_chart_count, "
+      "(SELECT rep.path FROM ";
   query += kChartMetaTable;
-  query += " cm WHERE ";
-  query += asobmshow::chart_sql::preferredChartPredicate("cm",
-                                                         kChartMetaTable);
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.title COLLATE NOCASE, cm.path";
+  query += " rep WHERE rep.folder = cm.folder AND ";
+  query += preferredRepresentative;
+  query += " ORDER BY ";
+  query += representativeOrder;
+  query += " LIMIT 1) AS representative_path FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE cm.folder IS NOT NULL AND cm.folder != '' AND ";
+  query += preferredChart;
+  query += " GROUP BY cm.folder), path_groups AS ("
+           "SELECT cm.path AS music_key, 1 AS music_chart_count, "
+           "cm.path AS representative_path FROM ";
+  query += kChartMetaTable;
+  query += " cm WHERE (cm.folder IS NULL OR cm.folder = '') AND ";
+  query += preferredChart;
+  query += "), music_groups AS ("
+           "SELECT music_key, music_chart_count, representative_path "
+           "FROM folder_groups UNION ALL "
+           "SELECT music_key, music_chart_count, representative_path "
+           "FROM path_groups) SELECT ";
+  query += kChartMetaSelectColumns;
+  query += ", mg.music_chart_count FROM music_groups mg JOIN ";
+  query += kChartMetaTable;
+  query +=
+      " cm ON cm.path = mg.representative_path "
+      "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,

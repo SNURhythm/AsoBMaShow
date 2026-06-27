@@ -414,6 +414,15 @@ private:
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
   main_menu_library::FolderClearDataByLongNoteMode folderClearData;
+  struct CourseValidationCache {
+    bool valid = false;
+    std::uint64_t libraryRevision = 0;
+    int courseId = 0;
+    bool empty = true;
+    int firstMissingIndex = -1;
+    std::vector<ChartMetaRecord> records;
+  };
+  CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
@@ -562,6 +571,7 @@ private:
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
+  const CourseValidationCache &courseValidationForActiveFolder();
   void refreshStartButtonForActiveFolder();
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);

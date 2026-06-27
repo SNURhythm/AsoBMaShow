@@ -2897,7 +2897,11 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_path ON chart_meta(path)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_folder ON chart_meta(folder)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_folder_source "
+      "ON chart_meta(folder, source_priority, source_archive_size, path)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_title ON chart_meta(title)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_title_path "
+      "ON chart_meta(title, path)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256 ON chart_meta(sha256)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_md5 ON chart_meta(md5)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256_source "
@@ -2960,6 +2964,8 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
   const char *indexes[] = {
       "CREATE INDEX IF NOT EXISTS idx_solid_archives_name "
       "ON solid_archives(name)",
+      "CREATE INDEX IF NOT EXISTS idx_solid_archives_name_path "
+      "ON solid_archives(name COLLATE NOCASE, path)",
       "CREATE INDEX IF NOT EXISTS idx_solid_archives_size "
       "ON solid_archives(uncompressed_size)",
   };
@@ -3116,23 +3122,34 @@ void ChartDBHelper::SelectFavoriteMusicTracks(
     return;
   }
 
-  std::string query = "SELECT ";
-  query += kChartMetaSelectColumns;
-  query += ", cm.music_chart_count FROM (SELECT cm.*, COUNT(*) OVER "
-           "(PARTITION BY cm.favorite_identity_key) AS music_chart_count, "
-           "ROW_NUMBER() OVER (PARTITION BY cm.favorite_identity_key "
-           "ORDER BY cm.favorite_added_at DESC, ";
-  query += chartArtworkOrderBy("cm");
-  query += ", cm.identity_rank, total_notes DESC, length DESC, ";
-  query += chartSourceOrderBy("cm");
-  query += ", title COLLATE NOCASE, path) AS music_rank FROM (";
+  std::string representativeOrder =
+      "choice.favorite_added_at DESC, ";
+  representativeOrder += chartArtworkOrderBy("choice");
+  representativeOrder +=
+      ", choice.identity_rank, choice.total_notes DESC, choice.length DESC, ";
+  representativeOrder += chartSourceOrderBy("choice");
+  representativeOrder += ", choice.title COLLATE NOCASE, choice.path";
+
+  std::string query = "WITH candidates AS (";
   query += chartFavoriteChartCandidateQuery();
-  query += ") cm";
-  query += " WHERE ";
-  query += preferredChartPredicate("cm");
-  query += ") cm WHERE cm.music_rank = 1 "
-           "ORDER BY cm.favorite_added_at DESC, cm.title COLLATE NOCASE, "
-           "cm.path";
+  query += "), preferred_candidates AS (SELECT * FROM candidates pc WHERE ";
+  query += preferredChartPredicate("pc");
+  query +=
+      "), favorite_choices AS (SELECT pc.favorite_identity_key, "
+      "COUNT(*) AS music_chart_count, "
+      "(SELECT choice.path FROM preferred_candidates choice WHERE "
+      "choice.favorite_identity_key = pc.favorite_identity_key ORDER BY ";
+  query += representativeOrder;
+  query +=
+      " LIMIT 1) AS representative_path FROM preferred_candidates pc "
+      "GROUP BY pc.favorite_identity_key) SELECT ";
+  query += kChartMetaSelectColumns;
+  query +=
+      ", favorite_choices.music_chart_count FROM preferred_candidates cm "
+      "JOIN favorite_choices ON favorite_choices.favorite_identity_key = "
+      "cm.favorite_identity_key AND favorite_choices.representative_path = "
+      "cm.path ORDER BY cm.favorite_added_at DESC, "
+      "cm.title COLLATE NOCASE, cm.path";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -3559,47 +3576,144 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
   std::string query;
   if (chartQuery.solidArchivesOnly) {
     query =
-        "SELECT ranked.row_index FROM (SELECT sa.path AS chart_path, "
-        "ROW_NUMBER() OVER (ORDER BY sa.name COLLATE NOCASE, sa.path) - 1 "
-        "AS row_index FROM solid_archives sa WHERE 1 = 1";
+        "WITH target AS (SELECT sa.name AS target_name, "
+        "sa.path AS target_path FROM solid_archives sa WHERE 1 = 1";
     if (!chartQuery.keyword.empty()) {
       query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
     }
-    query += ") ranked WHERE ranked.chart_path = @target_path LIMIT 1";
+    query +=
+        " AND sa.path = @target_path) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*) FROM solid_archives sa, target WHERE 1 = 1";
+    if (!chartQuery.keyword.empty()) {
+      query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
+    }
+    query +=
+        " AND (sa.name COLLATE NOCASE < target.target_name COLLATE NOCASE "
+        "OR (sa.name COLLATE NOCASE = target.target_name COLLATE NOCASE "
+        "AND sa.path < target.target_path))) END";
   } else if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
+    const std::string missingExpr =
+        "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
+    const std::string titleExpr =
+        "COALESCE(NULLIF(cm.title, ''), dte.title, '')";
+    auto appendDifficultyEntrySource = [&](std::string &targetQuery,
+                                           bool includeTarget = false) {
+      targetQuery += " FROM difficulty_table_entries dte "
+                     "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+                     "LEFT JOIN chart_meta cm ON cm.path = ";
+      targetQuery += matchedChartPathSubquery("dte", true);
+      targetQuery += " ";
+      if (includeTarget) {
+        targetQuery += "CROSS JOIN target ";
+      }
+      appendDifficultyEntryFilters(targetQuery, chartQuery);
+    };
+    auto appendDifficultyEntryBeforeTarget = [&](std::string &targetQuery) {
+      targetQuery += " AND ((";
+      targetQuery += missingExpr;
+      targetQuery += ") < target.target_missing OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order < "
+                     "target.target_sort) OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order = "
+                     "target.target_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE < target.target_title COLLATE NOCASE) "
+                     "OR ((";
+      targetQuery += missingExpr;
+      targetQuery += ") = target.target_missing AND dte.sort_order = "
+                     "target.target_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE = target.target_title COLLATE NOCASE "
+                     "AND dte.id < target.target_id))";
+    };
+
     query =
-        "SELECT ranked.row_index FROM (SELECT COALESCE(cm.path, '') AS "
-        "chart_path, ROW_NUMBER() OVER (ORDER BY CASE WHEN cm.path IS NULL "
-        "THEN 1 ELSE 0 END, dte.sort_order, COALESCE(NULLIF(cm.title, ''), "
-        "dte.title, '') COLLATE NOCASE, dte.id) - 1 AS row_index FROM "
-        "difficulty_table_entries dte JOIN difficulty_tables dt ON dt.id = "
-        "dte.table_id LEFT JOIN chart_meta cm ON cm.path = ";
-    query += matchedChartPathSubquery("dte", true);
-    query += " ";
-    appendDifficultyEntryFilters(query, chartQuery);
-    query += ") ranked WHERE ranked.chart_path = @target_path LIMIT 1";
+        "WITH target AS (SELECT ";
+    query += missingExpr;
+    query += " AS target_missing, dte.sort_order AS target_sort, ";
+    query += titleExpr;
+    query += " AS target_title, dte.id AS target_id";
+    appendDifficultyEntrySource(query);
+    query += " AND cm.path = @target_path ORDER BY ";
+    query += missingExpr;
+    query += ", dte.sort_order, ";
+    query += titleExpr;
+    query +=
+        " COLLATE NOCASE, dte.id LIMIT 1) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*)";
+    appendDifficultyEntrySource(query, true);
+    appendDifficultyEntryBeforeTarget(query);
+    query += ") END";
   } else if (chartMetaQueryUsesCourseEntries(chartQuery)) {
+    const std::string titleExpr =
+        "COALESCE(NULLIF(cm.title, ''), dce.title, '')";
+    auto appendCourseEntrySource = [&](std::string &targetQuery,
+                                       bool includeTarget = false) {
+      targetQuery +=
+          " FROM difficulty_course_entries dce JOIN difficulty_courses dc "
+          "ON dc.id = dce.course_id JOIN difficulty_tables dt ON dt.id = "
+          "dc.table_id LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+      targetQuery += matchedDifficultyEntryIdSubquery();
+      targetQuery += " LEFT JOIN chart_meta cm ON cm.path = ";
+      targetQuery += matchedChartPathSubquery("dce", true);
+      targetQuery += " ";
+      if (includeTarget) {
+        targetQuery += "CROSS JOIN target ";
+      }
+      appendDifficultyCourseEntryFilters(targetQuery, chartQuery);
+    };
+    auto appendCourseEntryBeforeTarget = [&](std::string &targetQuery) {
+      targetQuery += " AND (dc.sort_order < target.target_course_sort OR "
+                     "(dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order < target.target_entry_sort) OR "
+                     "(dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order = target.target_entry_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE < target.target_title COLLATE NOCASE) "
+                     "OR (dc.sort_order = target.target_course_sort AND "
+                     "dce.sort_order = target.target_entry_sort AND ";
+      targetQuery += titleExpr;
+      targetQuery += " COLLATE NOCASE = target.target_title COLLATE NOCASE "
+                     "AND dce.id < target.target_id))";
+    };
+
     query =
-        "SELECT ranked.row_index FROM (SELECT COALESCE(cm.path, '') AS "
-        "chart_path, ROW_NUMBER() OVER (ORDER BY dc.sort_order, "
-        "dce.sort_order, COALESCE(NULLIF(cm.title, ''), dce.title, '') "
-        "COLLATE NOCASE, dce.id) - 1 AS row_index FROM "
-        "difficulty_course_entries dce JOIN difficulty_courses dc ON dc.id = "
-        "dce.course_id JOIN difficulty_tables dt ON dt.id = dc.table_id "
-        "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
-    query += matchedDifficultyEntryIdSubquery();
-    query += " LEFT JOIN chart_meta cm ON cm.path = ";
-    query += matchedChartPathSubquery("dce", true);
-    query += " ";
-    appendDifficultyCourseEntryFilters(query, chartQuery);
-    query += ") ranked WHERE ranked.chart_path = @target_path LIMIT 1";
+        "WITH target AS (SELECT dc.sort_order AS target_course_sort, "
+        "dce.sort_order AS target_entry_sort, ";
+    query += titleExpr;
+    query += " AS target_title, dce.id AS target_id";
+    appendCourseEntrySource(query);
+    query += " AND cm.path = @target_path ORDER BY dc.sort_order, "
+             "dce.sort_order, ";
+    query += titleExpr;
+    query +=
+        " COLLATE NOCASE, dce.id LIMIT 1) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*)";
+    appendCourseEntrySource(query, true);
+    appendCourseEntryBeforeTarget(query);
+    query += ") END";
   } else {
     query =
-        "SELECT ranked.row_index FROM (SELECT cm.path AS chart_path, "
-        "ROW_NUMBER() OVER (ORDER BY cm.title, cm.path) - 1 AS row_index "
-        "FROM chart_meta cm WHERE 1 = 1";
+        "WITH target AS (SELECT cm.title AS target_title, "
+        "cm.path AS target_path FROM chart_meta cm WHERE 1 = 1";
     appendChartMetaFilters(query, chartQuery);
-    query += ") ranked WHERE ranked.chart_path = @target_path LIMIT 1";
+    query +=
+        " AND cm.path = @target_path) "
+        "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
+        "(SELECT COUNT(*) FROM chart_meta cm, target WHERE 1 = 1";
+    appendChartMetaFilters(query, chartQuery);
+    query +=
+        " AND ((target.target_title IS NOT NULL AND cm.title IS NULL) "
+        "OR (target.target_title IS NOT NULL AND cm.title IS NOT NULL "
+        "AND cm.title < target.target_title) "
+        "OR ((cm.title = target.target_title "
+        "OR (cm.title IS NULL AND target.target_title IS NULL)) "
+        "AND cm.path < target.target_path))) END";
   }
 
   SqliteStatementHandle stmt;

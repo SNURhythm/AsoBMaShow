@@ -4079,6 +4079,44 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
 }
 
+const MainMenuScene::CourseValidationCache &
+MainMenuScene::courseValidationForActiveFolder() {
+  const std::uint64_t currentLibraryRevision =
+      ChartDBHelper::GetInstance().GetLibraryRevision();
+  if (courseValidationCache.valid &&
+      courseValidationCache.libraryRevision == currentLibraryRevision &&
+      courseValidationCache.courseId == activeFolder.courseId) {
+    return courseValidationCache;
+  }
+
+  courseValidationCache = CourseValidationCache{};
+  courseValidationCache.valid = true;
+  courseValidationCache.libraryRevision = currentLibraryRevision;
+  courseValidationCache.courseId = activeFolder.courseId;
+
+  if (activeFolder.type != LibraryFolderItem::Type::Course ||
+      activeFolder.courseId <= 0) {
+    return courseValidationCache;
+  }
+
+  ChartMetaQuery query;
+  query.courseId = activeFolder.courseId;
+  ChartDBHelper::GetInstance().QueryChartMeta(db, query,
+                                              courseValidationCache.records);
+  courseValidationCache.empty = courseValidationCache.records.empty();
+  for (int i = 0;
+       i < static_cast<int>(courseValidationCache.records.size()); ++i) {
+    const auto &record =
+        courseValidationCache.records[static_cast<std::size_t>(i)];
+    if (record.solidArchive || record.unavailable ||
+        record.meta.BmsPath.empty()) {
+      courseValidationCache.firstMissingIndex = i;
+      break;
+    }
+  }
+  return courseValidationCache;
+}
+
 void MainMenuScene::refreshStartButtonForActiveFolder() {
   if (startButtonText == nullptr || willStart.load()) {
     return;
@@ -4097,21 +4135,14 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
     }
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     startButtonText->setText("No Course");
     return;
   }
 
-  const bool hasMissing = std::any_of(
-      records.begin(), records.end(), [](const ChartMetaRecord &record) {
-        return record.solidArchive || record.unavailable ||
-               record.meta.BmsPath.empty();
-      });
-  startButtonText->setText(hasMissing ? "Missing" : "Start Course");
+  startButtonText->setText(validation.firstMissingIndex >= 0 ? "Missing"
+                                                             : "Start Course");
 }
 
 void MainMenuScene::startSelectedCourse() {
@@ -4123,11 +4154,8 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  ChartMetaQuery query;
-  query.courseId = activeFolder.courseId;
-  std::vector<ChartMetaRecord> records;
-  ChartDBHelper::GetInstance().QueryChartMeta(db, query, records);
-  if (records.empty()) {
+  const CourseValidationCache &validation = courseValidationForActiveFolder();
+  if (validation.empty) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("No course charts");
     }
@@ -4135,34 +4163,23 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  int firstMissingIndex = -1;
-  for (int i = 0; i < static_cast<int>(records.size()); ++i) {
-    const auto &record = records[i];
-    if (record.solidArchive || record.unavailable ||
-        record.meta.BmsPath.empty()) {
-      firstMissingIndex = i;
-      break;
-    }
-  }
+  const auto &records = validation.records;
+  const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText("Course has missing charts");
     }
     int visibleMissingIndex = -1;
-    ChartMetaQuery visibleQuery = chartQueryForActiveFolder();
-    std::vector<ChartMetaRecord> visibleRecords;
-    ChartDBHelper::GetInstance().QueryChartMeta(db, visibleQuery,
-                                                visibleRecords);
-    for (int i = 0; i < static_cast<int>(visibleRecords.size()); ++i) {
-      const auto &visibleRecord = visibleRecords[static_cast<std::size_t>(i)];
-      if (visibleRecord.courseStart) {
-        continue;
+    const auto &missingRecord =
+        records[static_cast<std::size_t>(firstMissingIndex)];
+    if (!missingRecord.meta.BmsPath.empty()) {
+      const int dbIndex = ChartDBHelper::GetInstance().FindChartMetaIndex(
+          db, chartQueryForActiveFolder(), missingRecord.meta.BmsPath);
+      if (dbIndex >= 0) {
+        visibleMissingIndex = dbIndex + 1;
       }
-      if (visibleRecord.solidArchive || visibleRecord.unavailable ||
-          visibleRecord.meta.BmsPath.empty()) {
-        visibleMissingIndex = i + 1;
-        break;
-      }
+    } else if (searchText.empty() && difficultyText.empty()) {
+      visibleMissingIndex = firstMissingIndex + 1;
     }
     if (visibleMissingIndex >= 0) {
       const int previous = recyclerView->selectedIndex;
