@@ -4,6 +4,7 @@
 
 #include "ImageView.h"
 #include "../ArchiveFile.h"
+#include "../path.h"
 #include "../targets.h"
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
@@ -184,8 +185,7 @@ void writeCachedArchivedThumbnail(const std::filesystem::path &path,
                                           bytes, &errorMessage) &&
       !errorMessage.empty()) {
     SDL_Log("Failed to cache archived image thumbnail %s: %s",
-            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-            errorMessage.c_str());
+            fspath_to_utf8(path).c_str(), errorMessage.c_str());
   }
 }
 
@@ -203,14 +203,14 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
     const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
     if (!fd.has_value()) {
       SDL_Log("Failed to open Android image descriptor %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(), fdError.c_str());
+              fspath_to_utf8(path).c_str(), fdError.c_str());
       return std::nullopt;
     }
     FILE *file = fdopen(*fd, "rb");
     if (file == nullptr) {
       close(*fd);
       SDL_Log("Failed to create FILE for Android image descriptor: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+              fspath_to_utf8(path).c_str());
       return std::nullopt;
     }
     data.reset(stbi_load_from_file(file, &width, &height, &channels, 4));
@@ -220,15 +220,14 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
 #else
   if (!archive_file::isVirtualPath(path)) {
 #endif
-    const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
+    const std::string utf8Path = fspath_to_utf8(path);
     data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
   } else {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
     if (!archive_file::readFile(path, bytes, &errorMessage)) {
       SDL_Log("Failed to read archived image %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-              errorMessage.c_str());
+              fspath_to_utf8(path).c_str(), errorMessage.c_str());
       return std::nullopt;
     }
     data.reset(stbi_load_from_memory(bytes.data(),
