@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <optional>
 #include <string>
+#include <string_view>
 
 using SqliteConnectionHandle = UniqueResource<sqlite3, sqlite3_close>;
 
@@ -67,6 +68,20 @@ inline bool bindSqliteText(sqlite3_stmt *stmt, int idx,
                            const std::string &value) {
   return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
          SQLITE_OK;
+}
+
+inline std::string_view sqliteColumnTextView(sqlite3_stmt *stmt, int idx) {
+  const auto *text =
+      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+  if (text == nullptr) {
+    return {};
+  }
+  return {text, static_cast<std::size_t>(sqlite3_column_bytes(stmt, idx))};
+}
+
+inline std::string sqliteColumnString(sqlite3_stmt *stmt, int idx) {
+  const std::string_view text = sqliteColumnTextView(stmt, idx);
+  return std::string(text);
 }
 
 inline bool sqliteMessageContains(const char *message, const char *needle) {

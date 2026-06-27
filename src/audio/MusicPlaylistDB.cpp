@@ -87,10 +87,7 @@ std::string stateString(
 }
 
 std::string columnString(sqlite3_stmt *stmt, int idx) {
-  if (sqlite3_column_type(stmt, idx) == SQLITE_NULL) {
-    return "";
-  }
-  return reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
+  return sqliteColumnString(stmt, idx);
 }
 
 std::string sqliteValueString(sqlite3_value *value) {

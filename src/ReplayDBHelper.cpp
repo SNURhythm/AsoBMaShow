@@ -90,9 +90,7 @@ int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
 }
 
 std::string readText(sqlite3_stmt *stmt, int idx) {
-  const auto *text =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
-  return text == nullptr ? "" : std::string(text);
+  return sqliteColumnString(stmt, idx);
 }
 
 std::optional<std::string> serializeRandomValues(
