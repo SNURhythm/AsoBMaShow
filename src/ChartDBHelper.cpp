@@ -1533,9 +1533,8 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
       "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
       "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
       "OR source_archive_size IS NULL OR source_archive_size != ?)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing chart source preference update: "
               << sqlite3_errmsg(db) << "\n";
@@ -1739,9 +1738,8 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
       "archive_mtime_ns = excluded.archive_mtime_ns,"
       "last_inner_path = excluded.last_inner_path,"
       "updated_at = CURRENT_TIMESTAMP";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing chart scan checkpoint upsert: "
               << sqlite3_errmsg(db) << "\n";
@@ -1844,10 +1842,9 @@ ArchiveScanCacheRecord selectArchiveScanCache(
 
 std::vector<std::filesystem::path> selectArchiveScanCachePaths(sqlite3 *db) {
   std::vector<std::filesystem::path> paths;
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, "SELECT path FROM archive_scan_cache", -1,
-                              &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc =
+      prepareSqliteStatement(db, "SELECT path FROM archive_scan_cache", stmt);
   if (rc != SQLITE_OK) {
     return paths;
   }
@@ -1929,11 +1926,9 @@ bool upsertArchiveScanCache(sqlite3 *db,
 bool deleteArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath) {
   const std::string pathText = archivePathTextForDb(archivePath);
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(
-      db, "DELETE FROM archive_scan_cache WHERE path = ?", -1, &rawStmt,
-      nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(
+      db, "DELETE FROM archive_scan_cache WHERE path = ?", stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing archive scan cache delete: "
               << sqlite3_errmsg(db) << "\n";
