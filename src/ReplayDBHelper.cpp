@@ -97,8 +97,8 @@ int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
 std::string replayChartMatchPredicate(const char *alias) {
   const std::string prefix =
       alias != nullptr && alias[0] != '\0' ? std::string(alias) + "." : "";
-  return "((? != '' AND " + prefix + "chart_sha256 = ?) OR " +
-         "(? != '' AND " + prefix + "chart_md5 = ?) OR " +
+  return "((? != '' AND lower(trim(" + prefix + "chart_sha256)) = ?) OR " +
+         "(? != '' AND lower(trim(" + prefix + "chart_md5)) = ?) OR " +
          "(? != '' AND " + prefix + "chart_path = ?))";
 }
 
@@ -320,8 +320,10 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
                                                    "BMS/");
   int bindIndex = 1;
   bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 normalizedHash(replay.chartMeta.MD5));
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 normalizedHash(replay.chartMeta.SHA256));
   bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
   bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
