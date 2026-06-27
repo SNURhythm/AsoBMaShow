@@ -673,156 +673,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const char *replayInsert =
-      "INSERT INTO replays ("
-      "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
-      "gauge_type, gauge_auto_shift, final_score, final_gauge, clear_type,"
-      "random_seed, random_prng, random_values, play_option, play_option_seed,"
-      "play_option2, play_option2_seed, assist_option, ln_mode"
-      ") VALUES ("
-      "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
-      "@gauge_type, @gauge_auto_shift, @final_score, @final_gauge,"
-      "@clear_type, @random_seed, @random_prng, @random_values,"
-      "@play_option, @play_option_seed, @play_option2, @play_option2_seed,"
-      "@assist_option, @ln_mode"
-      ")";
-
-  SqliteStatementHandle replayStmt;
-  if (!prepareSqliteStatementLogged(db, replayInsert, replayStmt,
-                                    "preparing replay insert",
-                                    logSqlErrorText)) {
-    return std::nullopt;
-  }
-
-  const auto chartPath =
-      Utils::GetStoragePathUtf8RelativeToDocuments(replay.chartMeta.BmsPath,
-                                                   "BMS/");
-  int bindIndex = 1;
-  bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
-  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
-  sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   gaugeTypeIndex(replay.initialGaugeType));
-  sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   replay.gaugeAutoShift ? 1 : 0);
-  sqlite3_bind_int(replayStmt.get(), bindIndex++, replay.finalScore);
-  sqlite3_bind_double(replayStmt.get(), bindIndex++, replay.finalGauge);
-  sqlite3_bind_int(replayStmt.get(), bindIndex++, replay.clearType);
-  if (replay.randomSeed.has_value()) {
-    sqlite3_bind_int64(replayStmt.get(), bindIndex++,
-                       static_cast<sqlite3_int64>(*replay.randomSeed));
-  } else {
-    sqlite3_bind_null(replayStmt.get(), bindIndex++);
-  }
-  if (replay.randomPrng.has_value()) {
-    bindSqliteText(replayStmt.get(), bindIndex++, *replay.randomPrng);
-  } else if (replay.randomSeed.has_value()) {
-    bindSqliteText(replayStmt.get(), bindIndex++,
-                   bms_parser::Parser::RandomPrngId);
-  } else {
-    sqlite3_bind_null(replayStmt.get(), bindIndex++);
-  }
-  bindOptionalText(replayStmt.get(), bindIndex++,
-                   serializeRandomValues(replay.randomValues));
-  bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption);
-  bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
-  bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
-  bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
-  bindSqliteText(replayStmt.get(), bindIndex++,
-                 assist_options::normalize(replay.assistOption));
-  sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   long_note_mode::normalizeValue(replay.chartMeta.LnMode));
-
-  int rc = sqlite3_step(replayStmt.get());
-  replayStmt.reset();
-  if (rc != SQLITE_DONE) {
-    logSqlError("saving replay", db);
-    return std::nullopt;
-  }
-
-  const int replayId = static_cast<int>(sqlite3_last_insert_rowid(db));
-  const char *eventInsert =
-      "INSERT INTO replay_events ("
-      "replay_id, event_index, action, lane, note_time_micros,"
-      "song_time_micros, judge_time_micros, judgement, diff_micros,"
-      "gauge, gauge_type, combo, score"
-      ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-  SqliteStatementHandle eventStmt;
-  if (!prepareSqliteStatementLogged(db, eventInsert, eventStmt,
-                                    "preparing replay event insert",
-                                    logSqlErrorText)) {
-    return std::nullopt;
-  }
-
-  bool eventOk = true;
-  for (size_t i = 0; i < replay.events.size(); ++i) {
-    if (!insertReplayEvent(eventStmt.get(), replayId, static_cast<int>(i),
-                           replay.events[i])) {
-      logSqlError("saving replay event", db);
-      eventOk = false;
-      break;
-    }
-  }
-  eventStmt.reset();
-  if (!eventOk) {
-    return std::nullopt;
-  }
-
-  const char *touchSampleInsert =
-      "INSERT INTO replay_touch_samples ("
-      "replay_id, sample_index, action, finger_id, song_time_micros, x, y"
-      ") VALUES (?, ?, ?, ?, ?, ?, ?)";
-
-  SqliteStatementHandle touchSampleStmt;
-  if (!prepareSqliteStatementLogged(
-          db, touchSampleInsert, touchSampleStmt,
-          "preparing replay touch sample insert", logSqlErrorText)) {
-    return std::nullopt;
-  }
-
-  bool touchSampleOk = true;
-  for (size_t i = 0; i < replay.touchSamples.size(); ++i) {
-    if (!insertReplayTouchSample(touchSampleStmt.get(), replayId,
-                                 static_cast<int>(i),
-                                 replay.touchSamples[i])) {
-      logSqlError("saving replay touch sample", db);
-      touchSampleOk = false;
-      break;
-    }
-  }
-  touchSampleStmt.reset();
-  if (!touchSampleOk) {
-    return std::nullopt;
-  }
-
-  const char *laneCoverEventInsert =
-      "INSERT INTO replay_lane_cover_events ("
-      "replay_id, event_index, song_time_micros,"
-      "note_start_position_percent, reset_visible_time_reference"
-      ") VALUES (?, ?, ?, ?, ?)";
-
-  SqliteStatementHandle laneCoverEventStmt;
-  if (!prepareSqliteStatementLogged(
-          db, laneCoverEventInsert, laneCoverEventStmt,
-          "preparing replay lane cover event insert", logSqlErrorText)) {
-    return std::nullopt;
-  }
-
-  bool laneCoverEventOk = true;
-  for (size_t i = 0; i < replay.laneCoverEvents.size(); ++i) {
-    if (!insertReplayLaneCoverEvent(laneCoverEventStmt.get(), replayId,
-                                    static_cast<int>(i),
-                                    replay.laneCoverEvents[i])) {
-      logSqlError("saving replay lane cover event", db);
-      laneCoverEventOk = false;
-      break;
-    }
-  }
-  laneCoverEventStmt.reset();
-  if (!laneCoverEventOk) {
+  const auto replayId = insertReplayRows(db, replay);
+  if (!replayId.has_value()) {
     return std::nullopt;
   }
 
@@ -831,7 +683,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  return replayId;
+  return *replayId;
 }
 
 std::optional<int>
