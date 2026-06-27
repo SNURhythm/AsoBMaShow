@@ -76,6 +76,11 @@ struct DifficultyCourseGroupInfo {
   std::string groupName;
   int chartCount = 0;
   int matchedChartCount = 0;
+  int courseCount = 0;
+  int singletonCourseId = 0;
+  std::string singletonCourseLevel;
+  std::string singletonCourseName;
+  std::string singletonCourseConstraintJson;
 };
 
 struct DifficultyCourseTableInfo {

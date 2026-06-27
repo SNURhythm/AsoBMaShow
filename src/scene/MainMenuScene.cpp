@@ -3177,21 +3177,28 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     };
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
-      const auto makeCourseItem = [&](const DifficultyCourseInfo &course,
-                                      int depth) {
-        const std::string courseLabel =
-            course.level.empty() ? course.name : course.level;
+      const auto makeCourseItem =
+          [](int courseId, int tableId, const std::string &groupName,
+             const std::string &level, const std::string &name,
+             const std::string &constraintJson, int depth) {
+        const std::string courseLabel = level.empty() ? name : level;
         return LibraryFolderItem{
-            .key = folderKeyForCourse(course.id),
+            .key = folderKeyForCourse(courseId),
             .label = courseLabel,
             .type = LibraryFolderItem::Type::Course,
             .depth = depth,
             .count = -1,
-            .courseId = course.id,
-            .courseTableId = course.tableId,
-            .courseGroupName = course.groupName,
-            .courseConstraintJson = course.constraintJson,
+            .courseId = courseId,
+            .courseTableId = tableId,
+            .courseGroupName = groupName,
+            .courseConstraintJson = constraintJson,
         };
+      };
+      const auto makeCourseInfoItem = [&](const DifficultyCourseInfo &course,
+                                          int depth) {
+        return makeCourseItem(course.id, course.tableId, course.groupName,
+                              course.level, course.name, course.constraintJson,
+                              depth);
       };
 
       for (const auto &table : courseTables) {
@@ -3225,6 +3232,18 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
               group.groupName.empty() ? "Ungrouped" : group.groupName;
           const std::string groupKey =
               folderKeyForCourseGroup(group.tableId, group.groupName);
+          const bool duplicateSingletonGroup =
+              group.courseCount == 1 && group.singletonCourseId > 0 &&
+              (group.groupName.empty() || group.singletonCourseName == label ||
+               group.singletonCourseLevel == label);
+          if (duplicateSingletonGroup) {
+            folders.push_back(makeCourseItem(
+                group.singletonCourseId, group.tableId, group.groupName,
+                group.singletonCourseLevel, group.singletonCourseName,
+                group.singletonCourseConstraintJson, 2));
+            continue;
+          }
+
           const LibraryFolderItem groupItem{
               .key = groupKey,
               .label = label,
@@ -3250,7 +3269,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
                             .first;
           }
           for (const auto &course : coursesIt->second) {
-            folders.push_back(makeCourseItem(course, 3));
+            folders.push_back(makeCourseInfoItem(course, 3));
           }
         }
       }
