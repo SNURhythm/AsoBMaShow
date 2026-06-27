@@ -1,6 +1,6 @@
 #include "Utils.h"
-#include <codecvt>
 #include <cstdlib>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include "targets.h"
@@ -10,6 +10,38 @@
 #elif TARGET_OS_ANDROID
 #include "AndroidNatives.h"
 #endif
+
+namespace {
+constexpr char32_t kUnicodeReplacementChar = 0xFFFD;
+
+bool isUnicodeScalarValue(char32_t codePoint) {
+  return codePoint <= 0x10FFFF &&
+         (codePoint < 0xD800 || codePoint > 0xDFFF);
+}
+
+void appendUtf8CodePoint(std::string &output, char32_t codePoint) {
+  if (!isUnicodeScalarValue(codePoint)) {
+    codePoint = kUnicodeReplacementChar;
+  }
+
+  if (codePoint <= 0x7F) {
+    output.push_back(static_cast<char>(codePoint));
+  } else if (codePoint <= 0x7FF) {
+    output.push_back(static_cast<char>(0xC0 | (codePoint >> 6)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  } else if (codePoint <= 0xFFFF) {
+    output.push_back(static_cast<char>(0xE0 | (codePoint >> 12)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  } else {
+    output.push_back(static_cast<char>(0xF0 | (codePoint >> 18)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
+  }
+}
+} // namespace
+
 unsigned int parallel_worker_count(size_t n) {
   if (n == 0) {
     return 0;
@@ -69,10 +101,31 @@ std::string ws2s(const std::wstring &wstr) {
 }
 
 std::string ws2s_utf8(const std::wstring &wstr) {
-  using convert_typeX = std::codecvt_utf8<wchar_t>;
-  std::wstring_convert<convert_typeX, wchar_t> converterX;
-
-  return converterX.to_bytes(wstr);
+  std::string output;
+  output.reserve(wstr.size());
+  for (std::size_t i = 0; i < wstr.size(); ++i) {
+    char32_t codePoint = static_cast<char32_t>(wstr[i]);
+    if constexpr (sizeof(wchar_t) == 2) {
+      if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+        if (i + 1 < wstr.size()) {
+          const char32_t low = static_cast<char32_t>(wstr[i + 1]);
+          if (low >= 0xDC00 && low <= 0xDFFF) {
+            codePoint =
+                0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+            ++i;
+          } else {
+            codePoint = kUnicodeReplacementChar;
+          }
+        } else {
+          codePoint = kUnicodeReplacementChar;
+        }
+      } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+        codePoint = kUnicodeReplacementChar;
+      }
+    }
+    appendUtf8CodePoint(output, codePoint);
+  }
+  return output;
 }
 
 std::filesystem::path
