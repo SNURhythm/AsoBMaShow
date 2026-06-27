@@ -32,6 +32,7 @@ public:
   std::atomic<std::uint32_t> bgfxResetFlags{0};
   std::function<void()> restoreGameplayRenderViews;
   std::function<void()> requestAddChartFolderFromFiles;
+  std::function<void()> requestRebuildChartLibrary;
 
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;

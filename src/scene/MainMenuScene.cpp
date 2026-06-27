@@ -1024,6 +1024,9 @@ void MainMenuScene::init() {
     };
   }
 #endif
+  context.requestRebuildChartLibrary = [this]() {
+    startLibraryRebuild();
+  };
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
   startLibraryTaskWorker();
@@ -1193,7 +1196,7 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark) {
+    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
   startLibraryTaskWorker();
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
@@ -1204,6 +1207,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .title = title,
         .folderToAdd = folderToAdd,
         .iosBookmark = iosBookmark,
+        .rebuildLibraryMetadata = rebuildLibraryMetadata,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
@@ -1730,6 +1734,19 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   RefreshIOSFolderAccess(entries);
 #endif
+  if (task.rebuildLibraryMetadata) {
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.08, 0, 0,
+                        "Clearing library caches");
+    if (!pauseTask()) {
+      return;
+    }
+    archive_file::appendDebugLogLine(
+        "Manual library rebuild requested; clearing chart metadata caches.");
+    if (!dbHelper.ClearChartMeta(taskDb)) {
+      throw std::runtime_error("Failed to clear chart metadata cache");
+    }
+    requestLibraryReload(true);
+  }
   LoadCharts(
       dbHelper, taskDb, entries, *this, stopToken,
       [this, taskId = task.id](const ChartScanProgress &progress) {
@@ -5174,6 +5191,15 @@ void MainMenuScene::startLibraryRefresh() {
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
+void MainMenuScene::startLibraryRebuild() {
+  if (willStart.load() || replayExportInProgress.load()) {
+    return;
+  }
+  enqueueLibraryRefreshTask("Rebuild Library", std::filesystem::path(), "",
+                            true);
+  tasksModalOpenRequested.store(true);
+}
+
 void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   if (findBmsButtonSlot == nullptr) {
     return;
@@ -8311,6 +8337,7 @@ void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
   context.requestAddChartFolderFromFiles = nullptr;
+  context.requestRebuildChartLibrary = nullptr;
   libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");

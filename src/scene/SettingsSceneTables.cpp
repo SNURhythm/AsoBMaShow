@@ -563,10 +563,21 @@ void SettingsScene::refreshChartLibrary() {
     difficultyTableJobThread.join();
   }
 
-  difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  chartFolderStatusMessage = "Refreshing chart list...";
+  if (context.requestRebuildChartLibrary) {
+    context.requestRebuildChartLibrary();
+    chartFolderStatusMessage = "Chart list rebuild queued in Tasks.";
+    chartFolderStatusColor = {181, 228, 165, 255};
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
+    }
+    return;
+  }
+
+  difficultyTableJobRunning = true;
+  chartFolderStatusMessage = "Rebuilding chart list...";
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
     chartFolderStatusText->setText(chartFolderStatusMessage);
@@ -632,7 +643,9 @@ void SettingsScene::refreshChartLibrary() {
         const int changedCount =
             token.stop_requested()
                 ? -1
-                : dbHelper.ScanChartRoots(settingsDb, roots, &token);
+                : (dbHelper.ClearChartMeta(settingsDb)
+                       ? dbHelper.ScanChartRoots(settingsDb, roots, &token)
+                       : -1);
 
         if (token.stop_requested()) {
           difficultyTableJobRunning = false;

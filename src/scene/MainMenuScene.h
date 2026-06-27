@@ -93,6 +93,7 @@ private:
     std::string iosBookmark;
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
+    bool rebuildLibraryMetadata = false;
   };
   struct LibraryTaskInfo {
     std::uint64_t id = 0;
@@ -498,6 +499,7 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
+  void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
   void pauseLibraryTaskWorker();
@@ -507,7 +509,8 @@ private:
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
-      const std::string &iosBookmark = "");
+      const std::string &iosBookmark = "",
+      bool rebuildLibraryMetadata = false);
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,
