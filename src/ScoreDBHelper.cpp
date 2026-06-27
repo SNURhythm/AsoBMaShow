@@ -246,20 +246,10 @@ bool ensureChartDatabaseReadyForScoreMigration() {
 bool attachChartDatabaseForScoreMigration(sqlite3 *db) {
   const std::filesystem::path chartPath =
       Utils::GetDocumentsPath("db") / "chart.db";
-  char *query = sqlite3_mprintf("ATTACH DATABASE %Q AS %s",
-                                chartPath.string().c_str(),
-                                kScoreMigrationChartSchema);
-  if (query == nullptr) {
-    SDL_Log("SQL error while preparing chart database attachment for score "
-            "migration");
-    return false;
-  }
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  sqlite3_free(query);
-  if (rc != SQLITE_OK) {
+  if (const auto error =
+          attachSqliteDatabase(db, chartPath, kScoreMigrationChartSchema)) {
     SDL_Log("SQL error while attaching chart database for score migration: %s",
-            errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db));
+            error->c_str());
     return false;
   }
   return true;

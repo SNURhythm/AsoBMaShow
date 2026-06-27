@@ -99,6 +99,26 @@ executeSqlite(sqlite3 *db, const char *query,
                                  : std::string(sqlite3_errmsg(db));
 }
 
+inline std::optional<std::string>
+attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
+                     const char *schemaName) {
+  const std::string pathText = path.string();
+  char *query = sqlite3_mprintf("ATTACH DATABASE %Q AS \"%w\"",
+                                pathText.c_str(), schemaName);
+  if (query == nullptr) {
+    return "could not allocate attach statement";
+  }
+
+  SqliteErrorMessageHandle errMsg;
+  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
+  sqlite3_free(query);
+  if (rc == SQLITE_OK) {
+    return std::nullopt;
+  }
+  return errMsg.get() != nullptr ? std::string(errMsg.get())
+                                 : std::string(sqlite3_errmsg(db));
+}
+
 inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
                                    std::string &errorMessage,
                                    int busyTimeoutMs = 1000) {

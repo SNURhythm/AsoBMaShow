@@ -134,18 +134,8 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 }
 
 bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
-  char *query = sqlite3_mprintf("ATTACH DATABASE %Q AS %s",
-                                path.string().c_str(), kChartDatabaseSchema);
-  if (query == nullptr) {
-    std::cerr << "SQL error while preparing chart database attachment.\n";
-    return false;
-  }
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  sqlite3_free(query);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while attaching chart database: "
-              << (errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db))
+  if (const auto error = attachSqliteDatabase(db, path, kChartDatabaseSchema)) {
+    std::cerr << "SQL error while attaching chart database: " << *error
               << "\n";
     return false;
   }
