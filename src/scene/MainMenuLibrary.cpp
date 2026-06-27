@@ -32,7 +32,7 @@ std::string folderKeyForCourse(int courseId) {
 }
 
 namespace {
-using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::matchedChartPathSubquery;
 using asobmshow::chart_sql::preferredChartPredicate;
 
 std::string_view columnText(sqlite3_stmt *stmt, int column) {
@@ -160,13 +160,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_table_entries dte "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-      "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) "
-      "ORDER BY " +
-          chartSourceOrderBy("cm_match") +
-          " LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = " +
+          matchedChartPathSubquery("dte") + " "
       "ORDER BY dte.table_id, dte.level",
       [&](sqlite3_stmt *row) {
         const int tableId = sqlite3_column_int(row, 0);
@@ -215,13 +210,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) "
-      "ORDER BY " +
-          chartSourceOrderBy("cm_match") +
-          " LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = " +
+          matchedChartPathSubquery("dce") + " "
       "ORDER BY dc.table_id, dc.group_name, dc.id, dce.sort_order",
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);

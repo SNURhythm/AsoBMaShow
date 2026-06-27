@@ -49,6 +49,7 @@ using asobmshow::chart_sql::chartArtworkOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
+using asobmshow::chart_sql::matchedChartPathSubquery;
 using asobmshow::chart_sql::preferredChartPredicate;
 
 constexpr int kNoPlayClearMarkRank = -1;
@@ -3103,13 +3104,9 @@ void ChartDBHelper::QueryChartMeta(
     query += kChartFavoriteColumn;
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
-             "LEFT JOIN chart_meta cm ON cm.path = ("
-             "SELECT cm_match.path FROM chart_meta cm_match "
-             "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-             "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) ";
-    query += "ORDER BY ";
-    query += chartSourceOrderBy("cm_match");
-    query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
+             "LEFT JOIN chart_meta cm ON cm.path = ";
+    query += matchedChartPathSubquery("dte", true);
+    query += " ";
     appendDifficultyEntryFilters(query, chartQuery);
 
     query += " ORDER BY CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END, "
@@ -3154,13 +3151,9 @@ void ChartDBHelper::QueryChartMeta(
              "OR (dce.md5 != '' AND dte_match.md5 = dce.md5)) "
              "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
              "LIMIT 1) "
-             "LEFT JOIN chart_meta cm ON cm.path = ("
-             "SELECT cm_match.path FROM chart_meta cm_match "
-             "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-             "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-    query += "ORDER BY ";
-    query += chartSourceOrderBy("cm_match");
-    query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
+             "LEFT JOIN chart_meta cm ON cm.path = ";
+    query += matchedChartPathSubquery("dce", true);
+    query += " ";
     appendDifficultyCourseEntryFilters(query, chartQuery);
 
     query += " ORDER BY dc.sort_order, dce.sort_order, "
@@ -3254,14 +3247,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     std::string query = "SELECT COUNT(*) FROM difficulty_table_entries dte "
                         "JOIN difficulty_tables dt ON dt.id = dte.table_id ";
     if (!chartQuery.keyword.empty() || chartQuery.clearMarkFilter) {
-      query +=
-          "LEFT JOIN chart_meta cm ON cm.path = ("
-          "SELECT cm_match.path FROM chart_meta cm_match "
-          "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
-          "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) ";
-      query += "ORDER BY ";
-      query += chartSourceOrderBy("cm_match");
-      query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
+      query += "LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dte", true);
+      query += " ";
     }
     appendDifficultyEntryFilters(query, chartQuery);
 
@@ -3295,14 +3283,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
         "ORDER BY dte_match.sort_order, dte_match.title COLLATE NOCASE "
         "LIMIT 1) ";
     if (!chartQuery.keyword.empty()) {
-      query +=
-          "LEFT JOIN chart_meta cm ON cm.path = ("
-          "SELECT cm_match.path FROM chart_meta cm_match "
-          "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-          "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-      query += "ORDER BY ";
-      query += chartSourceOrderBy("cm_match");
-      query += ", cm_match.title COLLATE NOCASE LIMIT 1) ";
+      query += "LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dce", true);
+      query += " ";
     }
     appendDifficultyCourseEntryFilters(query, chartQuery);
 
@@ -5500,13 +5483,9 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-  query += "ORDER BY ";
-  query += chartSourceOrderBy("cm_match");
-  query += ", cm_match.title COLLATE NOCASE LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = ";
+  query += matchedChartPathSubquery("dce", true);
+  query += " "
       "GROUP BY dc.table_id, dc.group_name "
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
@@ -5543,13 +5522,9 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = ("
-      "SELECT cm_match.path FROM chart_meta cm_match "
-      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) ";
-  query += "ORDER BY ";
-  query += chartSourceOrderBy("cm_match");
-  query += ", cm_match.title COLLATE NOCASE LIMIT 1) "
+      "LEFT JOIN chart_meta cm ON cm.path = ";
+  query += matchedChartPathSubquery("dce", true);
+  query += " "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
       "GROUP BY dc.id "
       "ORDER BY dc.sort_order";

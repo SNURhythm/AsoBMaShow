@@ -62,6 +62,25 @@ inline std::string chartArtworkOrderBy(std::string_view alias) {
          aliasText + ".banner), '') IS NOT NULL THEN 1 ELSE 2 END";
 }
 
+inline std::string matchedChartPathSubquery(
+    std::string_view sourceAlias, bool includeTitleTieBreaker = false,
+    std::string_view matchAlias = "cm_match") {
+  const std::string sourceText(sourceAlias);
+  const std::string matchText(matchAlias);
+  std::string query = "(SELECT " + matchText + ".path FROM " +
+                      kChartMetaTable + " " + matchText + " WHERE ((" +
+                      sourceText + ".sha256 != '' AND " + matchText +
+                      ".sha256 = " + sourceText + ".sha256) OR (" +
+                      sourceText + ".md5 != '' AND " + matchText +
+                      ".md5 = " + sourceText + ".md5)) ORDER BY " +
+                      chartSourceOrderBy(matchText);
+  if (includeTitleTieBreaker) {
+    query += ", " + matchText + ".title COLLATE NOCASE";
+  }
+  query += " LIMIT 1)";
+  return query;
+}
+
 inline std::string preferredChartPredicate(
     std::string_view alias, std::string_view chartMetaTable = kChartMetaTable) {
   const std::string aliasText(alias);
