@@ -100,6 +100,15 @@ void sqliteArtistHasObjectNotation(sqlite3_context *context, int argc,
                                                                           : 0);
 }
 
+void logSqlError(const char *context, const std::string &error) {
+  std::cerr << "SQL error while " << context << ": " << error << "\n";
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlError(context, db != nullptr ? sqlite3_errmsg(db)
+                                     : "database is not open");
+}
+
 void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
   if (db == nullptr) {
     return;
@@ -109,14 +118,13 @@ void registerMusicPlaylistSqliteFunctions(sqlite3 *db) {
       SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr,
       sqliteArtistHasObjectNotation, nullptr, nullptr, nullptr);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while registering music playlist functions: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("registering music playlist functions", db);
   }
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   if (const auto error = executeSqlite(db, query)) {
-    std::cerr << "SQL error while " << context << ": " << *error << "\n";
+    logSqlError(context, *error);
     return false;
   }
   return true;
@@ -124,8 +132,7 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 
 bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
   if (const auto error = attachSqliteDatabase(db, path, kChartDatabaseSchema)) {
-    std::cerr << "SQL error while attaching chart database: " << *error
-              << "\n";
+    logSqlError("attaching chart database", *error);
     return false;
   }
   return true;
@@ -138,8 +145,7 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
   SqliteStatementHandle selectStmt;
   int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist compact select: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist compact select", db);
     return false;
   }
   sqlite3_bind_int(selectStmt, 1, playlistId);
@@ -149,8 +155,7 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
     ids.push_back(sqlite3_column_int(selectStmt, 0));
   }
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while selecting music playlist positions: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music playlist positions", db);
     return false;
   }
 
@@ -159,8 +164,7 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
   SqliteStatementHandle updateStmt;
   rc = prepareSqliteStatement(db, updateQuery, updateStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist compact update: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist compact update", db);
     return false;
   }
 
@@ -171,8 +175,7 @@ bool compactPlaylistPositions(sqlite3 *db, int playlistId) {
     sqlite3_bind_int(updateStmt, 2, ids[i]);
     rc = sqlite3_step(updateStmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while compacting music playlist positions: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("compacting music playlist positions", db);
       return false;
     }
   }
@@ -494,15 +497,13 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   SqliteStatementHandle insertStmt;
   int rc = prepareSqliteStatement(db, insertQuery, insertStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist insert: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist insert", db);
     return 0;
   }
   bindSqliteText(insertStmt, 1, playlistName);
   rc = sqlite3_step(insertStmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting music playlist: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("inserting music playlist", db);
     return 0;
   }
 
@@ -510,8 +511,7 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   SqliteStatementHandle selectStmt;
   rc = prepareSqliteStatement(db, selectQuery, selectStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist select: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist select", db);
     return 0;
   }
   bindSqliteText(selectStmt, 1, playlistName);
@@ -536,8 +536,7 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
   SqliteStatementHandle selectStmt;
   int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist rename select: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist rename select", db);
     return false;
   }
   sqlite3_bind_int(selectStmt, 1, playlistId);
@@ -554,16 +553,14 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
   SqliteStatementHandle updateStmt;
   rc = prepareSqliteStatement(db, updateQuery, updateStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist rename: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist rename", db);
     return false;
   }
   bindSqliteText(updateStmt, 1, playlistName);
   sqlite3_bind_int(updateStmt, 2, playlistId);
   rc = sqlite3_step(updateStmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while renaming music playlist: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("renaming music playlist", db);
     return false;
   }
   return sqlite3_changes(db) > 0;
@@ -584,8 +581,7 @@ std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music playlists: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music playlists", db);
     return playlists;
   }
 
@@ -625,8 +621,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist track insert: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist track insert", db);
     return false;
   }
 
@@ -638,8 +633,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   bindSqliteText(stmt, 6, identity.sha256);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting music playlist track: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("inserting music playlist track", db);
     return false;
   }
 
@@ -671,8 +665,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist track delete: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist track delete", db);
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
@@ -680,8 +673,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
   bindSqliteText(stmt, 3, identity.musicKey);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting music playlist track: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting music playlist track", db);
     return false;
   }
 
@@ -719,8 +711,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   SqliteStatementHandle currentStmt;
   int rc = prepareSqliteStatement(db, selectCurrentQuery, currentStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist move select: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist move select", db);
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
@@ -743,9 +734,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   SqliteStatementHandle neighborStmt;
   rc = prepareSqliteStatement(db, selectNeighborQuery, neighborStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist move neighbor "
-                 "select: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist move neighbor select", db);
     return false;
   }
   sqlite3_bind_int(neighborStmt, 1, playlistId);
@@ -763,8 +752,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   SqliteStatementHandle swapStmt;
   rc = prepareSqliteStatement(db, swapQuery, swapStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist move swap: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist move swap", db);
     return false;
   }
   sqlite3_bind_int(swapStmt, 1, currentId);
@@ -773,8 +761,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   sqlite3_bind_int(swapStmt, 4, currentPosition);
   rc = sqlite3_step(swapStmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while moving music playlist track: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("moving music playlist track", db);
     return false;
   }
 
@@ -797,15 +784,13 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist clear: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist clear", db);
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while clearing music playlist: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing music playlist", db);
     return false;
   }
 
@@ -829,15 +814,13 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   SqliteStatementHandle deleteItemsStmt;
   int rc = prepareSqliteStatement(db, deleteItemsQuery, deleteItemsStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist item delete: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist item delete", db);
     return false;
   }
   sqlite3_bind_int(deleteItemsStmt, 1, playlistId);
   rc = sqlite3_step(deleteItemsStmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting music playlist items: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting music playlist items", db);
     return false;
   }
 
@@ -846,15 +829,13 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   SqliteStatementHandle deletePlaylistStmt;
   rc = prepareSqliteStatement(db, deletePlaylistQuery, deletePlaylistStmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music playlist delete: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music playlist delete", db);
     return false;
   }
   sqlite3_bind_int(deletePlaylistStmt, 1, playlistId);
   rc = sqlite3_step(deletePlaylistStmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting music playlist: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("deleting music playlist", db);
     return false;
   }
   return sqlite3_changes(db) > 0;
@@ -870,8 +851,7 @@ MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music player state: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music player state", db);
     return state;
   }
 
@@ -902,8 +882,7 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing music player state save: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("preparing music player state save", db);
     return false;
   }
 
@@ -914,8 +893,7 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
     bindSqliteText(stmt, 2, value);
     const int stepRc = sqlite3_step(stmt);
     if (stepRc != SQLITE_DONE) {
-      std::cerr << "SQL error while saving music player state: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("saving music player state", db);
       return false;
     }
     return true;
@@ -940,8 +918,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
   if (!transaction.active()) {
-    std::cerr << "SQL error while beginning now playing save: "
-              << transactionError << "\n";
+    logSqlError("beginning now playing save", transactionError);
     return false;
   }
 
@@ -956,8 +933,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   if (ok) {
     const int rc = prepareSqliteStatement(db, insertQuery, insertStmt);
     if (rc != SQLITE_OK) {
-      std::cerr << "SQL error while preparing now playing insert: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("preparing now playing insert", db);
       ok = false;
     }
   }
@@ -980,8 +956,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     bindSqliteText(insertStmt, 6, identity.sha256);
     const int rc = sqlite3_step(insertStmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while saving now playing track: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("saving now playing track", db);
       ok = false;
     }
   }
@@ -991,8 +966,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   }
 
   if (!transaction.commit(transactionError)) {
-    std::cerr << "SQL error while committing now playing save: "
-              << transactionError << "\n";
+    logSqlError("committing now playing save", transactionError);
     return false;
   }
   return true;
@@ -1029,8 +1003,7 @@ void MusicPlaylistDB::SelectLibraryTracks(
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music library tracks: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music library tracks", db);
     return;
   }
 
@@ -1077,8 +1050,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music library group tracks: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music library group tracks", db);
     return;
   }
   bindSqliteText(stmt, 1, groupKey);
@@ -1125,8 +1097,7 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting now playing tracks: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting now playing tracks", db);
     return;
   }
 
@@ -1174,8 +1145,7 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting music playlist tracks: "
-              << sqlite3_errmsg(db) << "\n";
+    logSqlError("selecting music playlist tracks", db);
     return;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
