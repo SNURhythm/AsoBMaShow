@@ -1,6 +1,7 @@
 #include "ReplayDBHelper.h"
 
 #include "BmsMetadataText.h"
+#include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -19,6 +20,8 @@
 namespace {
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
+using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
@@ -82,15 +85,18 @@ int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
   bindSqliteText(stmt, bindIndex++, match.md5);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;
 }
 
 std::string replayChartMatchPredicate(const char *alias) {
   const std::string prefix =
       alias != nullptr && alias[0] != '\0' ? std::string(alias) + "." : "";
-  return "((? != '' AND lower(trim(" + prefix + "chart_sha256)) = ?) OR " +
-         "(? != '' AND lower(trim(" + prefix + "chart_md5)) = ?) OR " +
-         "(? != '' AND " + prefix + "chart_path = ?))";
+  return "((" + boundNormalizedHashMatchCondition(prefix + "chart_sha256") +
+         ") OR (" + boundNormalizedHashMatchCondition(prefix + "chart_md5") +
+         ") OR (" +
+         boundStoredOrLegacyBmsPathMatchCondition(prefix + "chart_path") +
+         "))";
 }
 
 std::string readText(sqlite3_stmt *stmt, int idx) {

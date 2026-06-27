@@ -28,6 +28,8 @@ constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
+using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
+using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
 using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
@@ -158,9 +160,9 @@ ScoreChartMatch scoreChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
 }
 
 std::string scoreChartMatchPredicate() {
-  return "((? != '' AND lower(trim(chart_sha256)) = ?) OR "
-         "(? != '' AND lower(trim(chart_md5)) = ?) OR "
-         "(? != '' AND chart_path = ?))";
+  return "((" + boundNormalizedHashMatchCondition("chart_sha256") + ") OR (" +
+         boundNormalizedHashMatchCondition("chart_md5") + ") OR (" +
+         boundStoredOrLegacyBmsPathMatchCondition("chart_path") + "))";
 }
 
 int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
@@ -169,6 +171,7 @@ int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
   bindSqliteText(stmt, bindIndex++, match.sha256);
   bindSqliteText(stmt, bindIndex++, match.md5);
   bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;

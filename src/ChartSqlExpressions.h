@@ -85,6 +85,19 @@ inline std::string storedOrLegacyBmsPathMatchCondition(
          " OR " + chartPath + " = 'Documents/BMS/' || " + storedPath + ")";
 }
 
+inline std::string boundNormalizedHashMatchCondition(
+    std::string_view storedHashExpression) {
+  const std::string storedHash(storedHashExpression);
+  return "? != '' AND " + normalizedSqlHash(storedHash) + " = ?";
+}
+
+inline std::string boundStoredOrLegacyBmsPathMatchCondition(
+    std::string_view storedPathExpression) {
+  const std::string storedPath(storedPathExpression);
+  return "? != '' AND (" + storedPath + " = ? OR " + storedPath +
+         " = 'Documents/BMS/' || ?)";
+}
+
 inline std::string chartIdentityHashCondition(std::string_view itemAlias,
                                               std::string_view itemColumn,
                                               std::string_view chartAlias,
