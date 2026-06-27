@@ -61,14 +61,10 @@ bool ensureTableColumn(sqlite3 *db, const char *tableName,
          execSql(db, alterQuery, context);
 }
 
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return bindSqliteText(stmt, idx, value);
-}
-
 void bindOptionalText(sqlite3_stmt *stmt, int idx,
                       const std::optional<std::string> &value) {
   if (value.has_value() && !value->empty()) {
-    bindText(stmt, idx, *value);
+    bindSqliteText(stmt, idx, *value);
   } else {
     sqlite3_bind_null(stmt, idx);
   }
@@ -101,12 +97,12 @@ ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
 
 int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
                          const ReplayChartMatch &match) {
-  bindText(stmt, bindIndex++, match.sha256);
-  bindText(stmt, bindIndex++, match.sha256);
-  bindText(stmt, bindIndex++, match.md5);
-  bindText(stmt, bindIndex++, match.md5);
-  bindText(stmt, bindIndex++, match.chartPath);
-  bindText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;
 }
 
@@ -329,11 +325,11 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
       fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
           replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
-  bindText(replayStmt.get(), bindIndex++, chartPath);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
+  bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
@@ -348,10 +344,10 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
   if (replay.randomPrng.has_value()) {
-    bindText(replayStmt.get(), bindIndex++, *replay.randomPrng);
+    bindSqliteText(replayStmt.get(), bindIndex++, *replay.randomPrng);
   } else if (replay.randomSeed.has_value()) {
-    bindText(replayStmt.get(), bindIndex++,
-             bms_parser::Parser::RandomPrngId);
+    bindSqliteText(replayStmt.get(), bindIndex++,
+                   bms_parser::Parser::RandomPrngId);
   } else {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
@@ -361,8 +357,8 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
-  bindText(replayStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
@@ -715,11 +711,11 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
       fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
           replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
-  bindText(replayStmt.get(), bindIndex++, chartPath);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
+  bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
@@ -734,10 +730,10 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
   if (replay.randomPrng.has_value()) {
-    bindText(replayStmt.get(), bindIndex++, *replay.randomPrng);
+    bindSqliteText(replayStmt.get(), bindIndex++, *replay.randomPrng);
   } else if (replay.randomSeed.has_value()) {
-    bindText(replayStmt.get(), bindIndex++,
-             bms_parser::Parser::RandomPrngId);
+    bindSqliteText(replayStmt.get(), bindIndex++,
+                   bms_parser::Parser::RandomPrngId);
   } else {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
@@ -747,8 +743,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
-  bindText(replayStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
@@ -900,9 +896,9 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
 
   int bindIndex = 1;
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.courseId);
-  bindText(courseStmt.get(), bindIndex++, replay.courseName);
-  bindText(courseStmt.get(), bindIndex++, replay.courseGroupName);
-  bindText(courseStmt.get(), bindIndex++, replay.constraintJson);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.courseName);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.courseGroupName);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.constraintJson);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
@@ -911,9 +907,9 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
                    replay.gaugeAutoShift ? 1 : 0);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.longNoteMode));
-  bindText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
-  bindText(courseStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
+  bindSqliteText(courseStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.finalScore);
   sqlite3_bind_double(courseStmt.get(), bindIndex++, replay.finalGauge);
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.clearType);
