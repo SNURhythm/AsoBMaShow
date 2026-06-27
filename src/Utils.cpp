@@ -150,7 +150,13 @@ Utils::GetDocumentsPath(const std::filesystem::path &SubPath) {
       home != nullptr && home[0] != '\0') {
     return std::filesystem::path(home) / GameName / SubPath;
   }
-  return std::filesystem::current_path() / GameName / SubPath;
+  std::error_code currentPathError;
+  const std::filesystem::path currentPath =
+      std::filesystem::current_path(currentPathError);
+  if (!currentPathError && !currentPath.empty()) {
+    return currentPath / GameName / SubPath;
+  }
+  return std::filesystem::path(GameName) / SubPath;
 #endif
 #endif
 }
