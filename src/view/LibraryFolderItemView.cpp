@@ -1,5 +1,6 @@
 #include "LibraryFolderItemView.h"
 #include "ClearLampColors.h"
+#include "IconText.h"
 #include "UiTheme.h"
 #include <algorithm>
 
@@ -11,6 +12,8 @@ constexpr int kLeafCardLeftPadding = 2;
 constexpr int kDisclosureWidth = 14;
 constexpr int kLeafDisclosureWidth = 4;
 constexpr int kCountWidth = 48;
+constexpr int kChevronRightIcon = 0xf054;
+constexpr int kChevronDownIcon = 0xf078;
 } // namespace
 
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
@@ -30,7 +33,7 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   contentCard->setGap(8);
   addView(contentCard);
 
-  disclosureView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  disclosureView = new TextView(ui_icons::kFontAwesomeSolidPath, 15);
   disclosureView->setWidth(kDisclosureWidth);
   disclosureView->setHeight(26);
   disclosureView->setAlign(TextView::CENTER);
@@ -75,7 +78,10 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
                           leaf ? kLeafCardLeftPadding : kCardLeftPadding);
   disclosureView->setWidth(expandable ? kDisclosureWidth
                                       : kLeafDisclosureWidth);
-  disclosureView->setText(expandable ? (expanded ? "v" : ">") : "");
+  disclosureView->setText(
+      expandable ? ui_icons::textForCodepoint(expanded ? kChevronDownIcon
+                                                       : kChevronRightIcon)
+                 : "");
   labelView->setText(label);
   const bool showCount = count >= 0;
   countView->setWidth(showCount ? kCountWidth : 0);
