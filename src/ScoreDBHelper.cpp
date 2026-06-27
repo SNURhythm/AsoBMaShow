@@ -246,11 +246,10 @@ void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks) {
 
 bool ensureChartDatabaseReadyForScoreMigration() {
   ChartDBHelper &chartDbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *chartDb = chartDbHelper.Connect();
-  if (chartDb == nullptr) {
+  SqliteConnectionHandle chartConnection(chartDbHelper.Connect());
+  if (chartConnection.get() == nullptr) {
     return false;
   }
-  SqliteConnectionHandle chartConnection(chartDb);
   return chartDbHelper.CreateChartMetaTable(chartConnection.get());
 }
 
@@ -911,11 +910,10 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return false;
   }
-  SqliteConnectionHandle connection(db);
 
   const bool result =
       CreateScoreTable(connection.get()) &&
@@ -929,11 +927,10 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
 bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
                                     int completedCharts, int totalCharts) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return false;
   }
-  SqliteConnectionHandle connection(db);
 
   const bool result =
       CreateCourseScoreTable(connection.get()) &&
@@ -948,11 +945,10 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
 std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return std::nullopt;
   }
-  SqliteConnectionHandle connection(db);
 
   if (!CreateScoreTable(connection.get())) {
     return std::nullopt;
@@ -1021,11 +1017,10 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
 
 std::optional<ScoreBestSnapshot>
 ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return std::nullopt;
   }
-  SqliteConnectionHandle connection(db);
 
   if (!CreateCourseScoreTable(connection.get())) {
     return std::nullopt;
@@ -1073,11 +1068,10 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
 
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   ScoreClearRankCache cache;
-  sqlite3 *db = Connect();
-  if (db == nullptr) {
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
     return cache;
   }
-  SqliteConnectionHandle connection(db);
 
   if (CreateScoreTable(connection.get())) {
     loadBestRanksForColumn(connection.get(), "chart_sha256",
