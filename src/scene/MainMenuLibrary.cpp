@@ -1,10 +1,13 @@
 #include "MainMenuLibrary.h"
 
+#include "../LongNoteModeUtils.h"
 #include "../SqliteRAII.h"
 #include "../view/ClearLampColors.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <array>
+#include <exception>
 #include <limits>
 #include <string_view>
 
@@ -93,15 +96,9 @@ std::string preferredChartPredicate(const std::string &alias) {
          " AND cm_better.path < " + alias + ".path)))";
 }
 
-void addFolderChart(
-    std::unordered_map<std::string, FolderClearAggregate> &aggregates,
-    const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
-    std::string_view sha256, std::string_view md5, std::string_view path) {
-  auto &aggregate = aggregates[folderKey];
-  if (aggregate.hasUnclearedChart) {
-    return;
-  }
-  aggregate.addChart(scoreRanks.bestRankForStoredKeys(sha256, md5, path));
+std::string chartSourceOrderBy(const std::string &alias) {
+  return chartSourcePriorityExpr(alias) + ", " +
+         chartSourceArchiveSizeExpr(alias) + ", " + alias + ".path";
 }
 
 void addClearMarkCount(FolderClearMarkCounts &counts,
@@ -111,17 +108,63 @@ void addClearMarkCount(FolderClearMarkCounts &counts,
   }
   counts[folderKey][clearRank]++;
 }
+
+using FolderClearAggregateByLongNoteMode =
+    std::array<FolderClearAggregate, 4>;
+
+void addFolderChartForAllLongNoteModes(
+    std::unordered_map<std::string, FolderClearAggregateByLongNoteMode>
+        &aggregates,
+    const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
+    std::string_view sha256, std::string_view md5, std::string_view path,
+    int chartLongNoteMode, int totalLongNotes, int totalBackSpinNotes) {
+  auto &aggregateByMode = aggregates[folderKey];
+  for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+    auto &aggregate =
+        aggregateByMode[static_cast<size_t>(selectedLongNoteMode)];
+    if (aggregate.hasUnclearedChart) {
+      continue;
+    }
+    const int longNoteMode =
+        scoreLongNoteModeForClearLamp(chartLongNoteMode, totalLongNotes,
+                                      totalBackSpinNotes,
+                                      selectedLongNoteMode);
+    aggregate.addChart(
+        scoreRanks.bestRankForStoredKeys(sha256, md5, path, longNoteMode));
+  }
+}
+
+void addClearMarkCountsForAllLongNoteModes(
+    std::array<FolderClearMarkCounts, 4> &countsByMode,
+    const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
+    std::string_view sha256, std::string_view md5, std::string_view path,
+    int chartLongNoteMode, int totalLongNotes, int totalBackSpinNotes) {
+  for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+    const int longNoteMode =
+        scoreLongNoteModeForClearLamp(chartLongNoteMode, totalLongNotes,
+                                      totalBackSpinNotes,
+                                      selectedLongNoteMode);
+    const int clearRank =
+        scoreRanks.bestRankForStoredKeys(sha256, md5, path, longNoteMode);
+    addClearMarkCount(
+        countsByMode[static_cast<size_t>(selectedLongNoteMode)], folderKey,
+        clearRank);
+  }
+}
 } // namespace
 
-std::unordered_map<std::string, int>
-LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
-  std::unordered_map<std::string, FolderClearAggregate> aggregates;
+FolderClearDataByLongNoteMode
+LoadFolderClearDataByLongNoteMode(sqlite3 *db,
+                                  const ScoreClearRankCache &scoreRanks) {
+  FolderClearDataByLongNoteMode data;
+  std::unordered_map<std::string, FolderClearAggregateByLongNoteMode>
+      aggregates;
 
   auto runQuery = [&](const std::string &query, const auto &handleRow) {
     SqliteStatementHandle stmt;
     const int rc = prepareSqliteStatement(db, query, stmt);
     if (rc != SQLITE_OK) {
-      SDL_Log("SQL error while loading folder clear ranks: %s",
+      SDL_Log("SQL error while loading folder clear data: %s",
               sqlite3_errmsg(db));
       return;
     }
@@ -130,11 +173,21 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
     }
   };
 
-  runQuery("SELECT cm.sha256, cm.md5, cm.path FROM chart_meta cm WHERE " +
+  runQuery("SELECT cm.sha256, cm.md5, cm.path, cm.ln_mode, "
+           "cm.total_long_notes, cm.total_backspin_notes "
+           "FROM chart_meta cm WHERE " +
                preferredChartPredicate("cm"),
            [&](sqlite3_stmt *row) {
-             addFolderChart(aggregates, scoreRanks, "all", columnText(row, 0),
-                            columnText(row, 1), columnText(row, 2));
+             addFolderChartForAllLongNoteModes(
+                 aggregates, scoreRanks, "all", columnText(row, 0),
+                 columnText(row, 1), columnText(row, 2),
+                 sqlite3_column_int(row, 3), sqlite3_column_int(row, 4),
+                 sqlite3_column_int(row, 5));
+             addClearMarkCountsForAllLongNoteModes(
+                 data.clearMarkCounts, scoreRanks, "all", columnText(row, 0),
+                 columnText(row, 1), columnText(row, 2),
+                 sqlite3_column_int(row, 3), sqlite3_column_int(row, 4),
+                 sqlite3_column_int(row, 5));
            });
 
   int currentTableId = 0;
@@ -142,8 +195,17 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
   std::string currentLevel;
   std::string currentLevelKey;
   runQuery(
-      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5, '' "
+      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5, '', "
+      "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
+      "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_table_entries dte "
+      "LEFT JOIN chart_meta cm ON cm.path = ("
+      "SELECT cm_match.path FROM chart_meta cm_match "
+      "WHERE ((dte.sha256 != '' AND cm_match.sha256 = dte.sha256) "
+      "OR (dte.md5 != '' AND cm_match.md5 = dte.md5)) "
+      "ORDER BY " +
+          chartSourceOrderBy("cm_match") +
+          " LIMIT 1) "
       "ORDER BY dte.table_id, dte.level",
       [&](sqlite3_stmt *row) {
         const int tableId = sqlite3_column_int(row, 0);
@@ -159,13 +221,26 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
           currentLevelKey = folderKeyForLevel(tableId, currentLevel);
         }
 
-        const std::string_view sha256 = columnText(row, 2);
-        const std::string_view md5 = columnText(row, 3);
-        const std::string_view path = columnText(row, 4);
-        addFolderChart(aggregates, scoreRanks, currentTableKey, sha256, md5,
-                       path);
-        addFolderChart(aggregates, scoreRanks, currentLevelKey, sha256, md5,
-                       path);
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentTableKey, columnText(row, 2),
+            columnText(row, 3), columnText(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6),
+            sqlite3_column_int(row, 7));
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentLevelKey, columnText(row, 2),
+            columnText(row, 3), columnText(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6),
+            sqlite3_column_int(row, 7));
+        addClearMarkCountsForAllLongNoteModes(
+            data.clearMarkCounts, scoreRanks, currentTableKey,
+            columnText(row, 2), columnText(row, 3), columnText(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6),
+            sqlite3_column_int(row, 7));
+        addClearMarkCountsForAllLongNoteModes(
+            data.clearMarkCounts, scoreRanks, currentLevelKey,
+            columnText(row, 2), columnText(row, 3), columnText(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6),
+            sqlite3_column_int(row, 7));
       });
 
   int currentCourseId = 0;
@@ -174,14 +249,19 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
   std::string currentCourseGroupKey;
   std::string currentCourseKey;
   runQuery(
-      "SELECT dc.id, dc.table_id, dc.group_name, cm.sha256, cm.md5, cm.path "
+      "SELECT dc.id, dc.table_id, dc.group_name, dce.sha256, dce.md5, '', "
+      "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
+      "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "JOIN chart_meta cm ON "
-      "((dce.sha256 != '' AND cm.sha256 = dce.sha256) "
-      "OR (dce.md5 != '' AND cm.md5 = dce.md5)) "
-      "WHERE " +
-          preferredChartPredicate("cm"),
+      "LEFT JOIN chart_meta cm ON cm.path = ("
+      "SELECT cm_match.path FROM chart_meta cm_match "
+      "WHERE ((dce.sha256 != '' AND cm_match.sha256 = dce.sha256) "
+      "OR (dce.md5 != '' AND cm_match.md5 = dce.md5)) "
+      "ORDER BY " +
+          chartSourceOrderBy("cm_match") +
+          " LIMIT 1) "
+      "ORDER BY dc.table_id, dc.group_name, dc.id, dce.sort_order",
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
@@ -198,87 +278,49 @@ LoadFolderClearRanks(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
           currentCourseKey = folderKeyForCourse(courseId);
         }
 
-        const std::string_view sha256 = columnText(row, 3);
-        const std::string_view md5 = columnText(row, 4);
-        const std::string_view path = columnText(row, 5);
-        addFolderChart(aggregates, scoreRanks, "courses", sha256, md5, path);
-        addFolderChart(aggregates, scoreRanks, currentCourseGroupKey, sha256,
-                       md5, path);
-        addFolderChart(aggregates, scoreRanks, currentCourseKey, sha256, md5,
-                       path);
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, "courses", columnText(row, 3),
+            columnText(row, 4), columnText(row, 5),
+            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
+            sqlite3_column_int(row, 8));
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentCourseGroupKey, columnText(row, 3),
+            columnText(row, 4), columnText(row, 5),
+            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
+            sqlite3_column_int(row, 8));
+        addFolderChartForAllLongNoteModes(
+            aggregates, scoreRanks, currentCourseKey, columnText(row, 3),
+            columnText(row, 4), columnText(row, 5),
+            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7),
+            sqlite3_column_int(row, 8));
       });
 
-  std::unordered_map<std::string, int> folderClearRanks;
-  for (const auto &[key, aggregate] : aggregates) {
-    const int clearRank = aggregate.clearRank();
-    if (clearRank >= kClearTypeAssistedEasyClearRank) {
-      folderClearRanks[key] = clearRank;
-    }
-  }
-  return folderClearRanks;
-}
-
-FolderClearMarkCounts
-LoadFolderClearMarkCounts(sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
-  FolderClearMarkCounts counts;
-
-  {
-    const std::string query =
-        "SELECT cm.sha256, cm.md5, cm.path FROM chart_meta cm WHERE " +
-        preferredChartPredicate("cm");
-    SqliteStatementHandle stmt;
-    const int rc = prepareSqliteStatement(db, query, stmt);
-    if (rc != SQLITE_OK) {
-      SDL_Log("SQL error while loading all-song clear mark counts: %s",
-              sqlite3_errmsg(db));
-    } else {
-      while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-        const int clearRank = scoreRanks.bestRankForStoredKeys(
-            columnText(stmt.get(), 0), columnText(stmt.get(), 1),
-            columnText(stmt.get(), 2));
-        addClearMarkCount(counts, "all", clearRank);
+  for (const auto &[key, aggregateByMode] : aggregates) {
+    for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+      const int clearRank =
+          aggregateByMode[static_cast<size_t>(selectedLongNoteMode)]
+              .clearRank();
+      if (clearRank >= kClearTypeAssistedEasyClearRank) {
+        data.clearRanks[static_cast<size_t>(selectedLongNoteMode)][key] =
+            clearRank;
       }
     }
   }
-
-  const char *query =
-      "SELECT dte.table_id, dte.level, dte.sha256, dte.md5 "
-      "FROM difficulty_table_entries dte "
-      "ORDER BY dte.table_id, dte.level";
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while loading folder clear mark counts: %s",
-            sqlite3_errmsg(db));
-    return counts;
+  for (const auto &[courseIdText, clearRank] : scoreRanks.rankByCourseId) {
+    if (clearRank < kClearTypeAssistedEasyClearRank) {
+      continue;
+    }
+    try {
+      const std::string folderKey = folderKeyForCourse(std::stoi(courseIdText));
+      for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+        data.clearRanks[static_cast<size_t>(selectedLongNoteMode)]
+                       [folderKey] = clearRank;
+      }
+    } catch (const std::exception &) {
+    }
   }
 
-  int currentTableId = 0;
-  std::string currentTableKey;
-  std::string currentLevel;
-  std::string currentLevelKey;
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const int tableId = sqlite3_column_int(stmt.get(), 0);
-    const std::string_view level = columnText(stmt.get(), 1);
-    if (tableId != currentTableId) {
-      currentTableId = tableId;
-      currentTableKey = folderKeyForTable(tableId);
-      currentLevel.clear();
-      currentLevelKey.clear();
-    }
-    if (level != std::string_view(currentLevel)) {
-      currentLevel = std::string(level);
-      currentLevelKey = folderKeyForLevel(tableId, currentLevel);
-    }
-
-    const std::string sha256(columnText(stmt.get(), 2));
-    const std::string md5(columnText(stmt.get(), 3));
-    const int clearRank = scoreRanks.bestRankForHashes(sha256, md5);
-    addClearMarkCount(counts, currentTableKey, clearRank);
-    addClearMarkCount(counts, currentLevelKey, clearRank);
-  }
-
-  return counts;
+  return data;
 }
 
 } // namespace main_menu_library

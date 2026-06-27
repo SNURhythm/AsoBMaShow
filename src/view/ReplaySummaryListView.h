@@ -84,6 +84,10 @@ public:
                          "  Gauge " +
                          replay_summary_ui::formatGauge(summary.finalGauge) +
                          "  Events " + std::to_string(summary.eventCount);
+    if (summary.courseReplay) {
+      detail += "  Course " + std::to_string(summary.completedCharts) + "/" +
+                std::to_string(summary.totalCharts);
+    }
     if (summary.autoPlay) {
       detail += "  Automated";
     } else if (summary.touchSampleCount > 0) {

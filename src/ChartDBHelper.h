@@ -24,6 +24,7 @@ struct ChartMetaQuery {
   std::string difficultyText;
   bool clearMarkFilter = false;
   int clearMarkRank = -1;
+  int selectedLongNoteMode = 1;
   bool favoritesOnly = false;
   int limit = 0;
   int offset = 0;
@@ -32,6 +33,7 @@ struct ChartMetaQuery {
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
   std::string difficultyTableLabels;
+  bool courseStart = false;
   bool unavailable = false;
   bool solidArchive = false;
   std::uint64_t archiveSize = 0;
@@ -72,6 +74,7 @@ struct DifficultyCourseGroupInfo {
   int tableId = 0;
   std::string tableName;
   std::string groupName;
+  int chartCount = 0;
   int matchedChartCount = 0;
 };
 
@@ -82,6 +85,8 @@ struct DifficultyCourseInfo {
   std::string groupName;
   std::string level;
   std::string name;
+  std::string constraintJson;
+  int chartCount = 0;
   int matchedChartCount = 0;
 };
 
@@ -208,6 +213,8 @@ public:
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
+  std::string DifficultyTableLabelsForChart(
+      const bms_parser::ChartMeta &meta);
   std::string DifficultyTableLabelsForChart(
       sqlite3 *db, const bms_parser::ChartMeta &meta);
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;

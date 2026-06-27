@@ -6,5 +6,6 @@
 
 namespace replay_result {
 RhythmState BuildResultState(bms_parser::Chart &chart,
-                             const ReplayData &replay);
+                             const ReplayData &replay,
+                             GaugeProfile gaugeProfile = GaugeProfile::Standard);
 }

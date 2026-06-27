@@ -108,31 +108,6 @@ std::string formatGauge(float gauge) {
   return formatNumber(static_cast<double>(gauge), 1) + "%";
 }
 
-std::string clearTypeLabelForRank(int rank) {
-  if (rank >= kClearTypeFullComboRank) {
-    return "FULL COMBO";
-  }
-  if (rank >= kClearTypeExHardClearRank) {
-    return "EX-HARD CLEAR";
-  }
-  if (rank >= kClearTypeHardClearRank) {
-    return "HARD CLEAR";
-  }
-  if (rank >= kClearTypeNormalClearRank) {
-    return "NORMAL CLEAR";
-  }
-  if (rank >= kClearTypeEasyClearRank) {
-    return "EASY CLEAR";
-  }
-  if (rank >= kClearTypeAssistedEasyClearRank) {
-    return "ASSISTED EASY CLEAR";
-  }
-  if (rank == kNoClearTypeRank) {
-    return "NO PLAY";
-  }
-  return "FAILED";
-}
-
 std::pair<std::string, int> nextRankTarget(int score, int maxScore) {
   if (maxScore <= 0) {
     return {"-", 0};
@@ -202,9 +177,11 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const std::string playLevelLabel =
       "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
   const std::string difficultyLabel =
-      data != nullptr && !data->difficultyLabel.empty()
-          ? data->difficultyLabel + " / " + playLevelLabel
-          : playLevelLabel;
+      data != nullptr && data->headerDifficultyLabelOverride.has_value()
+          ? *data->headerDifficultyLabelOverride
+          : (data != nullptr && !data->difficultyLabel.empty()
+                 ? data->difficultyLabel + " / " + playLevelLabel
+                 : playLevelLabel);
 
   auto countFor = [&resultState](Judgement judgement) {
     const auto it = resultState.judgeCount.find(judgement);
@@ -282,8 +259,11 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int breakDelta =
       hasPreviousBest ? resultState.comboBreak - data->previousBest->comboBreak
                       : 0;
-  const Color currentClearAccent =
-      clearLampColorForRank(resultState.getClearTypeRank());
+  const int currentClearRank =
+      data != nullptr && data->currentClearRankOverride.has_value()
+          ? *data->currentClearRankOverride
+          : resultState.getClearTypeRank();
+  const Color currentClearAccent = clearLampColorForRank(currentClearRank);
   const Color previousClearAccent =
       hasPreviousBest ? clearLampColorForRank(previousClearRank)
                       : ui_theme::textMuted();
@@ -477,7 +457,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   lampCompareRow->setGap(10);
   lampCompareRow->setFlexGrow(1);
   lampCompareRow->addView(makeLampColumn(
-      "BEST", clearTypeLabelForRank(previousClearRank),
+      "BEST", clearTypeRankToLabel(previousClearRank),
       hasPreviousBest ? "GAUGE " + formatGauge(data->previousBest->finalGauge)
                       : "",
       previousClearAccent));

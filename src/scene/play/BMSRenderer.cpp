@@ -4,6 +4,7 @@
 
 #include "BMSRenderer.h"
 
+#include "../../CoursePlaySession.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "../../RAII.h"
@@ -100,6 +101,26 @@ bool wasLongNoteTailReleasedEarly(const bms_parser::LongNote *head) {
     return false;
   }
   return head->Tail->PlayedTime < head->Tail->Timeline->Timing;
+}
+
+bool wasLongNoteTailMissedWithHead(const bms_parser::LongNote *head) {
+  return head != nullptr && head->IsDead && head->Tail != nullptr &&
+         !head->Tail->IsDead && wasLongNoteTailReleasedEarly(head);
+}
+
+bool wasLongNoteTailResolvedAtOrAfterTiming(const bms_parser::LongNote *head) {
+  if (head == nullptr || head->Tail == nullptr || !head->Tail->IsPlayed ||
+      head->Tail->Timeline == nullptr) {
+    return false;
+  }
+  return head->Tail->PlayedTime >= head->Tail->Timeline->Timing;
+}
+
+bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
+  return head != nullptr && !head->IsTail() && head->IsDead &&
+         head->Tail != nullptr && head->Tail->Timeline != nullptr &&
+         !head->Tail->IsDead &&
+         !wasLongNoteTailResolvedAtOrAfterTiming(head);
 }
 
 void destroyTextureHandle(bgfx::TextureHandle &texture) {
@@ -361,18 +382,21 @@ float gameplayHudMetricsWidth() {
                     430.0f, 540.0f);
 }
 
-std::string formatGaugeBarLabel(GaugeType gaugeType, bool gaugeAutoShift,
-                                float currentGauge) {
+std::string formatGaugeBarLabel(GaugeType gaugeType,
+                                GaugeProfile gaugeProfile,
+                                bool gaugeAutoShift, float currentGauge) {
   char text[64];
   std::snprintf(text, sizeof(text), "%s%s %.1f%%",
-                gaugeAutoShift ? "GAS " : "", gaugeTypeToShortLabel(gaugeType),
+                gaugeAutoShift ? "GAS " : "",
+                gaugeDisplayShortLabel(gaugeType, gaugeProfile),
                 currentGauge);
   return text;
 }
 
-Color gaugeAccentColor(GaugeType gaugeType, float currentGauge) {
-  const float border = gaugeBorderValue(gaugeType);
-  if (!gaugeIsSurvival(gaugeType) && border > 0.0f &&
+Color gaugeAccentColor(GaugeType gaugeType, GaugeProfile gaugeProfile,
+                       float currentGauge) {
+  const float border = gaugeBorderValue(gaugeType, gaugeProfile);
+  if (!gaugeIsSurvival(gaugeType, gaugeProfile) && border > 0.0f &&
       currentGauge < border) {
     return ui_theme::coral();
   }
@@ -970,7 +994,9 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float width = rect[2];
   const float height = rect[3];
   const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
   const float radius = height * 0.5f;
   const float borderWidth = std::max(0.008f, height * 0.12f);
 
@@ -991,7 +1017,8 @@ void BMSRenderer::drawWorldGaugeBar() {
                                        gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue = gaugeBorderValue(currentGaugeType);
+  const float borderValue =
+      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
                                                 1.0f);
@@ -1009,7 +1036,9 @@ void BMSRenderer::drawHudGaugeBar() {
   const float width = rect[2];
   const float height = rect[3];
   const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
   const float radius = width * 0.5f;
 
   simpleBatchRenderer.addRoundedRect(x + 3.0f, y + 5.0f, width, height, radius,
@@ -1025,7 +1054,8 @@ void BMSRenderer::drawHudGaugeBar() {
         gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue = gaugeBorderValue(currentGaugeType);
+  const float borderValue =
+      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerY =
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
@@ -1406,24 +1436,34 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                bms_parser::LongNote *const &head) {
   // assert head
   assert(!head->IsTail() && "head is tail");
-  const bool tailReleasedEarly = wasLongNoteTailReleasedEarly(head);
-  if (head->Tail->IsPlayed && !tailReleasedEarly)
+  const bool tailMissedWithHead = wasLongNoteTailMissedWithHead(head);
+  const bool tailReleasedEarly =
+      wasLongNoteTailReleasedEarly(head) && !tailMissedWithHead;
+  const bool tailResolvedForRendering =
+      head->Tail->IsPlayed && !tailMissedWithHead;
+  if (tailResolvedForRendering && !tailReleasedEarly)
     return;
-  float startY = head->IsPlayed ? judgeY : headY;
+  float startY = head->IsPlayed && !head->IsDead ? judgeY : headY;
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
   const NoteUvRegion &headUv = sheet.longHead;
   const NoteUvRegion &tailUv = sheet.longTail;
+  const bool headHasReachedJudge = head->IsPlayed || head->IsDead ||
+                                   headY <= judgeY;
+  const bool hcnBodyRegrabbed =
+      headHasReachedJudge && effectiveLongNoteIsHellCharge(head, chart) &&
+      laneIsCurrentlyPressed(head->Lane);
+  const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
   const auto bodyTexture =
-      head->IsHolding ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
+      bodyActive ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
 
   // Body
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
-    float tileV = bodyHeight / (head->IsHolding ? longBodyRenderHeightOn
-                                                : longBodyRenderHeightOff);
-    longBodyBatchFor(sheet, head->IsHolding)
+    float tileV = bodyHeight / (bodyActive ? longBodyRenderHeightOn
+                                           : longBodyRenderHeightOff);
+    longBodyBatchFor(sheet, bodyActive)
         .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
                  tileV, bodyTexture);
   }
@@ -2022,9 +2062,24 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       if (note == nullptr) {
         return;
       }
+      auto keepDeadLongNoteBody = [&]() {
+        if (!note->IsLongNote()) {
+          return false;
+        }
+        auto *longNote = static_cast<bms_parser::LongNote *>(note);
+        if (!shouldKeepDeadLongNoteBody(longNote)) {
+          return false;
+        }
+        state.orphanLongNotes.insert(longNote);
+        longNoteLookahead[longNote] = lowerBound;
+        return true;
+      };
       if (timeLine->Timing >= micro - latePoorTiming) {
         // note is in the hittable timing
         if (note->IsDead) {
+          if (keepDeadLongNoteBody()) {
+            return;
+          }
           return;
         }
         if (note->IsLandmineNote()) {
@@ -2059,6 +2114,9 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       } else {
         // note has passed the last hittable timing
         if (note->IsDead) {
+          if (keepDeadLongNoteBody()) {
+            return;
+          }
           return;
         }
         if (note->IsLandmineNote()) {
@@ -2765,18 +2823,22 @@ void BMSRenderer::setJudgementCounters(
 }
 
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
-                                 float currentGauge) {
+                                 float currentGauge,
+                                 GaugeProfile gaugeProfile) {
   currentGaugeType = gaugeType;
+  currentGaugeProfile = gaugeProfile;
   currentGaugeAutoShift = gaugeAutoShift;
   currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
   if (gaugeText == nullptr) {
     return;
   }
 
-  const Color accent = gaugeAccentColor(currentGaugeType, currentGaugeValue);
-  gaugeText->setText(formatGaugeBarLabel(currentGaugeType,
-                                         currentGaugeAutoShift,
-                                         currentGaugeValue));
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
+  gaugeText->setText(formatGaugeBarLabel(
+      currentGaugeType, currentGaugeProfile, currentGaugeAutoShift,
+      currentGaugeValue));
   gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
 }
 
@@ -3039,6 +3101,15 @@ inline float BMSRenderer::laneToX(int lane) const {
   }
   return computeLaneX(lane);
 }
+
+bool BMSRenderer::laneIsCurrentlyPressed(int lane) const {
+  const auto it = laneToOrderIndex.find(lane);
+  if (it == laneToOrderIndex.end()) {
+    return false;
+  }
+  return laneStatesByOrder[it->second].isPressed.load(std::memory_order_relaxed);
+}
+
 inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
   if (lane >= 0 && static_cast<size_t>(lane) < laneSheetLookup.size()) {
     if (const auto *sheet = laneSheetLookup[static_cast<size_t>(lane)];

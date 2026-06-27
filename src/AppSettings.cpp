@@ -1,4 +1,5 @@
 #include "AppSettings.h"
+#include "LongNoteModeUtils.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -493,6 +494,7 @@ void AppSettings::sanitize() {
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
+  selectedLnMode = long_note_mode::parseId(selectedLnMode, kDefaultLnMode);
   selectedAssistOption =
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
 }
@@ -642,6 +644,7 @@ bool AppSettings::save() const {
        << (sanitized.systemPlaybackShowArtist ? 1 : 0) << "\n";
   file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
+  file << "selected_ln_mode=" << sanitized.selectedLnMode << "\n";
   file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
   file << "default_difficulty_tables_seeded="
        << (sanitized.defaultDifficultyTablesSeeded ? 1 : 0) << "\n";
@@ -808,6 +811,9 @@ AppSettings AppSettings::load() {
       } else if (key == "selected_play_option") {
         settings.selectedPlayOption =
             parsePlayOptionId(value, settings.selectedPlayOption);
+      } else if (key == "selected_ln_mode") {
+        settings.selectedLnMode =
+            long_note_mode::parseId(value, settings.selectedLnMode);
       } else if (key == "selected_assist_option") {
         settings.selectedAssistOption =
             parseAssistOptionId(value, settings.selectedAssistOption);

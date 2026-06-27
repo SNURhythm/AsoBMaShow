@@ -6,6 +6,8 @@
 #include "../../bms_parser.hpp"
 enum Judgement { PGreat, Great, Good, Bad, Kpoor, Poor, None, JudgementCount };
 
+enum class CourseJudgementConstraint { None, NoGood, NoGreat };
+
 class JudgeResult {
 public:
   JudgeResult(Judgement Judgement, long long Diff)
@@ -77,6 +79,7 @@ private:
 public:
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
   explicit Judge(int Rank);
+  void applyCourseJudgementConstraint(CourseJudgementConstraint constraint);
   static bool checkRange(long long Diff, long long Early, long long Late);
   JudgeResult judgeNow(const bms_parser::Note *Note, long long InputTime);
   static int clampRank(int rank);

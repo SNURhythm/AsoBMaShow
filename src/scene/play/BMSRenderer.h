@@ -194,6 +194,7 @@ private:
   AppSettings::GaugeBarPosition gaugeBarPosition =
       AppSettings::GaugeBarPosition::World;
   GaugeType currentGaugeType = GaugeType::Normal;
+  GaugeProfile currentGaugeProfile = GaugeProfile::Standard;
   bool currentGaugeAutoShift = false;
   float currentGaugeValue = 0.0f;
   bool renderLaneBeams = true;
@@ -327,6 +328,7 @@ private:
   NoteSheet blueSheet;
   NoteSheet scratchSheet;
   bms_parser::Chart *chart;
+  bool laneIsCurrentlyPressed(int lane) const;
 
 public:
   static std::unique_ptr<TextView> createAutoPlayMarkText();
@@ -381,7 +383,8 @@ public:
                             int comboBreak);
   void setGaugeBarPosition(AppSettings::GaugeBarPosition position);
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
-                      float currentGauge);
+                      float currentGauge,
+                      GaugeProfile gaugeProfile = GaugeProfile::Standard);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
   void setAutoPlayMarkVisible(bool visible);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CoursePlaySession.h"
 #include "ReplayDBHelper.h"
 
 #include <algorithm>
@@ -118,6 +119,9 @@ inline ReplayData BuildReplayData(
         if (note->IsLongNote()) {
           auto *longNote = static_cast<bms_parser::LongNote *>(note);
           if (!longNote->IsTail()) {
+            if (effectiveLongNoteIsCharge(longNote, chart)) {
+              applyAutoPlayJudge(state, perfect);
+            }
             replay.events.push_back(makeAutoPlayEvent(
                 ReplayEventAction::Press, note, timeline->Timing, perfect,
                 state));

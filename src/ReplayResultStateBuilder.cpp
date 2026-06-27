@@ -1,5 +1,7 @@
 #include "ReplayResultStateBuilder.h"
 
+#include "CoursePlaySession.h"
+
 #include <algorithm>
 #include <string>
 #include <unordered_map>
@@ -42,6 +44,7 @@ bms_parser::Note *findReplayNote(
 }
 
 bool replayEventCountsInResult(
+    bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event) {
   if (event.judgement == None) {
@@ -58,7 +61,8 @@ bool replayEventCountsInResult(
   }
 
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
-  return longNote->IsTail() || !recordedJudge.isNotePlayed();
+  return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
+         effectiveLongNoteIsCharge(longNote, chart);
 }
 
 void syncReplayResultGaugeSnapshot(RhythmState &state,
@@ -80,10 +84,12 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
 
 namespace replay_result {
 RhythmState BuildResultState(bms_parser::Chart &chart,
-                             const ReplayData &replay) {
+                             const ReplayData &replay,
+                             GaugeProfile gaugeProfile) {
   const auto lookup = buildReplayNoteLookup(chart);
   RhythmState state(&chart, false);
-  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift);
+  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
+                       gaugeProfile);
   state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
 
   for (const auto &event : replay.events) {
@@ -97,7 +103,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       continue;
     }
 
-    if (!replayEventCountsInResult(lookup, event)) {
+    if (!replayEventCountsInResult(chart, lookup, event)) {
       continue;
     }
 

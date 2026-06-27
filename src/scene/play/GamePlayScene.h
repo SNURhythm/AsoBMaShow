@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "RhythmState.h"
@@ -23,13 +24,17 @@ struct StartOptions {
   bool autoKeySound = false;
   bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
   bool gaugeAutoShift = false;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
+  std::shared_ptr<CoursePlaySession> courseSession = nullptr;
+  CourseConstraintRules courseConstraints;
   bool ownsChart = false;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
@@ -38,6 +43,37 @@ struct StartOptions {
   std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
 };
+
+inline StartOptions makeCourseReplayStageStartOptions(
+    const std::shared_ptr<CoursePlaySession> &session,
+    const std::shared_ptr<ReplayData> &stageReplay) {
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoKeySound = false;
+  options.autoPlay = false;
+  options.ownsChart = true;
+  if (session != nullptr) {
+    options.gaugeType = session->gaugeType;
+    options.gaugeProfile = session->gaugeProfile;
+    options.gaugeAutoShift = session->gaugeAutoShift;
+    options.courseSession = session;
+    options.courseConstraints = session->constraints;
+    options.touchVisualizationEnabled = session->replayTouchVisualizationEnabled;
+    options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;
+  }
+  if (stageReplay != nullptr) {
+    options.replayData = stageReplay;
+    options.playOption = stageReplay->playOption;
+    options.playOptionSeed = stageReplay->playOptionSeed;
+    options.playOption2 = stageReplay->playOption2;
+    options.playOption2Seed = stageReplay->playOption2Seed;
+    options.longNoteMode =
+        normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
+    options.assistOption = stageReplay->assistOption;
+  }
+  return options;
+}
+
 class RhythmInputHandler;
 class BMSRenderer;
 class GamePlayScene : public Scene, public IRhythmControl {
@@ -72,11 +108,27 @@ private:
   void reset();
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
+  void showPauseMenu(bool pausePlayback);
+  void closePauseMenu();
   void restartCurrentPattern();
+  bool restartCourseFromBeginning();
   void retryWithNewPattern();
   [[nodiscard]] bool isReplayPlayback() const;
+  [[nodiscard]] bool isCoursePlayback() const;
+  [[nodiscard]] bool courseNoSpeed() const;
+  [[nodiscard]] int effectiveVisibleTimeGreenNumber() const;
+  [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  bool startCourseReplayChartAtCurrentIndex();
+  bool startCourseChartAtCurrentIndex();
+  bool startNextCourseChart();
+  bool handleCoursePauseButtonEvent(SDL_Event &event);
+  void beginCoursePauseHold(bool touch, SDL_FingerID fingerId);
+  void cancelCoursePauseHold();
+  void resetCoursePauseHold();
+  void updateCoursePauseHoldProgress(long long currentMicros);
+  void renderCoursePauseHoldRing();
   void beginReplayRecording();
   void finishReplayRecording();
   void publishPracticeGhost();
@@ -88,6 +140,8 @@ private:
   void applyReplayLaneCoverEvent(const ReplayLaneCoverEvent &event);
   void applyReplayGauge(const ReplayEvent &event);
   bms_parser::Note *findReplayNote(const ReplayEvent &event) const;
+  void resetHellChargeGaugeTracking(long long gameplayTimeMicros);
+  void updateHellChargeGauge(long long gameplayTimeMicros);
   [[nodiscard]] long long getAudioOffsetMicros() const;
   [[nodiscard]] long long getStartPositionMicros() const;
   [[nodiscard]] long long getAudioSeekPositionMicros() const;
@@ -101,6 +155,14 @@ private:
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   View *pauseLayout = nullptr;
   Button *pauseButton = nullptr;
+  bool coursePauseHoldActive = false;
+  bool coursePauseHoldRewinding = false;
+  bool coursePauseHoldTouch = false;
+  SDL_FingerID coursePauseHoldFinger = -1;
+  long long coursePauseHoldStartMicros = 0;
+  long long coursePauseHoldRewindStartMicros = 0;
+  float coursePauseHoldProgress = 0.0f;
+  float coursePauseHoldRewindStartProgress = 0.0f;
   Judge judge;
   StartOptions options;
   void checkPassedTimeline(long long time);
@@ -146,6 +208,9 @@ private:
   ReplayData recordedReplay;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
+  std::unordered_map<bms_parser::LongNote *, long long>
+      hellChargeGaugeBalanceMicros;
+  long long lastHellChargeGaugeUpdateMicros = 0;
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;

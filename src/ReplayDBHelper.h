@@ -10,6 +10,7 @@
 
 struct ReplaySummary {
   int id = 0;
+  bool courseReplay = false;
   bool autoPlay = false;
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
@@ -24,6 +25,9 @@ struct ReplaySummary {
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
+  int completedCharts = 0;
+  int totalCharts = 0;
+  int stageCount = 0;
 };
 
 class ReplayDBHelper {
@@ -38,10 +42,14 @@ public:
   void Close(sqlite3 *db);
   bool CreateReplayTables(sqlite3 *db);
   std::optional<int> SaveReplay(const ReplayData &replay);
+  std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);
+  std::vector<ReplaySummary> ListCourseReplays(int courseId,
+                                               int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
+  std::optional<CourseReplayData> LoadCourseReplay(int replayId);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 };

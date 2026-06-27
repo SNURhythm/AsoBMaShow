@@ -1,10 +1,9 @@
 #include "ResultImageExporter.h"
 
-#include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
-#include "ScoreDBHelper.h"
+#include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "path.h"
 #include "rendering/Color.h"
@@ -28,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +38,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -390,15 +391,64 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
   batch.end();
 }
 
-ResultPreviousBestData toResultPreviousBestData(
-    const ScoreBestSnapshot &snapshot) {
-  return {.score = snapshot.score,
-          .maxScore = snapshot.maxScore,
-          .maxCombo = snapshot.maxCombo,
-          .comboBreak = snapshot.comboBreak,
-          .finalGauge = snapshot.finalGauge,
-          .clearType = snapshot.clearType,
-          .createdAt = snapshot.createdAt};
+bms_parser::ChartMeta courseResultMetaForReplay(
+    const CourseReplayData &replay,
+    const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
+  int totalNotes = 0;
+  long long playLength = 0;
+  for (const auto &chart : charts) {
+    if (chart == nullptr) {
+      continue;
+    }
+    totalNotes += std::max(0, chart->Meta.TotalNotes);
+    playLength += std::max(0LL, chart->Meta.PlayLength);
+  }
+  return result_presentation::courseResultMeta(
+      replay.courseName, replay.courseGroupName, replay.stages.size(),
+      totalNotes, playLength);
+}
+
+RhythmState courseResultStateForReplay(
+    const CourseReplayData &replay,
+    const std::vector<RhythmState> &stageStates) {
+  RhythmState aggregate(nullptr, false);
+  aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
+                           replay.gaugeProfile);
+  aggregate.resetJudgeCounts();
+  aggregate.comboBreak = 0;
+  aggregate.maxCombo = 0;
+  aggregate.fastCount = 0;
+  aggregate.slowCount = 0;
+  aggregate.gaugeHistory.clear();
+
+  for (const auto &state : stageStates) {
+    for (int i = 0; i < JudgementCount; ++i) {
+      aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
+    }
+    aggregate.comboBreak += state.comboBreak;
+    aggregate.fastCount += state.fastCount;
+    aggregate.slowCount += state.slowCount;
+    aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);
+    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
+                                  state.gaugeHistory.begin(),
+                                  state.gaugeHistory.end());
+    aggregate.combo = state.combo;
+    aggregate.currentGauge = state.currentGauge;
+    aggregate.gaugeType = state.gaugeType;
+    aggregate.gaugeValues = state.gaugeValues;
+    aggregate.gaugeSurvivalFailed = state.gaugeSurvivalFailed;
+  }
+  aggregate.currentGauge = replay.finalGauge;
+  aggregate.gaugeType = replay.initialGaugeType;
+  if (!stageStates.empty()) {
+    aggregate.gaugeType = stageStates.back().gaugeType;
+  }
+  const int gaugeIndex = gaugeTypeIndex(aggregate.gaugeType);
+  if (gaugeIndex >= 0 &&
+      gaugeIndex < static_cast<int>(aggregate.gaugeValues.size())) {
+    aggregate.gaugeValues[gaugeIndex] = aggregate.currentGauge;
+  }
+  return aggregate;
 }
 
 ResultImageExportResult renderResultImage(ApplicationContext &context,
@@ -409,6 +459,12 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                           const std::string &difficultyLabel,
                                           const std::optional<ResultPreviousBestData>
                                               &previousBest,
+                                          const std::optional<std::string>
+                                              &currentClearLabelOverride,
+                                          const std::optional<int>
+                                              &currentClearRankOverride,
+                                          const std::optional<std::string>
+                                              &headerDifficultyLabelOverride,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const int height = rendering::render_height;
@@ -478,6 +534,9 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.playModeLabel = playModeLabel;
   resultSkinData.laneOrderLabel = laneOrderLabel;
   resultSkinData.difficultyLabel = difficultyLabel;
+  resultSkinData.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
+  resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
+  resultSkinData.currentClearRankOverride = currentClearRankOverride;
   resultSkinData.previousBest = previousBest;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
@@ -536,7 +595,13 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::string &laneOrderLabel,
                             const std::string &difficultyLabel,
                             const std::optional<ResultPreviousBestData>
-                                &previousBest) {
+                                &previousBest,
+                            const std::optional<std::string>
+                                &currentClearLabelOverride,
+                            const std::optional<int>
+                                &currentClearRankOverride,
+                            const std::optional<std::string>
+                                &headerDifficultyLabelOverride) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -559,7 +624,9 @@ ResultImageExporter::Export(ApplicationContext &context,
       outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
                    ".png");
   return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
-                           difficultyLabel, previousBest, outputPath);
+                           difficultyLabel, previousBest,
+                           currentClearLabelOverride, currentClearRankOverride,
+                           headerDifficultyLabelOverride, outputPath);
 }
 
 ResultImageExportResult
@@ -567,25 +634,121 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
                                   const ReplayData &replay) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
-  std::optional<ResultPreviousBestData> previousBest;
-  std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
-    beforeCreatedAt = replay.createdAt;
-  }
-  if (const auto best =
-          ScoreDBHelper::GetInstance().LoadBestScore(chart.Meta, beforeCreatedAt);
-      best.has_value()) {
-    previousBest = toResultPreviousBestData(*best);
-  }
-  std::string difficultyLabel;
-  auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *db = dbHelper.Connect();
-  if (db != nullptr) {
-    difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, chart.Meta);
-    dbHelper.Close(db);
-  }
+  std::optional<ResultPreviousBestData> previousBest =
+      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+  std::string difficultyLabel =
+      result_presentation::difficultyLabelForChart(chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
                 difficultyLabel, previousBest);
+}
+
+ResultImageExportResult
+ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
+                                        const CourseReplayData &replay) {
+  if (replay.stages.empty()) {
+    return {.success = false, .message = "No Course Replay"};
+  }
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
+  std::error_code ec;
+  const auto outputRoot = Utils::GetDocumentsPath("result_exports");
+  std::filesystem::create_directories(outputRoot, ec);
+  if (ec) {
+    return {.success = false,
+            .message = "Failed to create result export directory"};
+  }
+
+  const std::string timestamp = makeTimestamp();
+  const std::string courseName =
+      replay.courseName.empty() ? "Course Replay" : replay.courseName;
+  const auto outputDir =
+      outputRoot / (sanitizeFileNamePart(courseName) + "_" + timestamp);
+  std::filesystem::create_directories(outputDir, ec);
+  if (ec) {
+    return {.success = false,
+            .message = "Failed to create course result export directory"};
+  }
+
+  std::vector<std::unique_ptr<bms_parser::Chart>> charts;
+  std::vector<RhythmState> stageStates;
+  charts.reserve(replay.stages.size());
+  stageStates.reserve(replay.stages.size());
+  for (size_t i = 0; i < replay.stages.size(); ++i) {
+    const ReplayData &stageReplay = replay.stages[i].replay;
+    std::atomic_bool parseCancelled = false;
+    auto chart = play_options::prepareReplayChart(stageReplay.chartMeta.BmsPath,
+                                                  stageReplay, parseCancelled);
+    if (chart == nullptr || parseCancelled) {
+      return {.success = false,
+              .outputPath = outputDir,
+              .message = "Failed to load course replay stage"};
+    }
+
+    RhythmState state = replay_result::BuildResultState(
+        *chart, stageReplay, replay.gaugeProfile);
+    const play_options::PlayModeDisplayLabel display =
+        play_options::formatPlayModeDisplayLabel(stageReplay);
+    const std::string filename =
+        "stage_" + std::to_string(i + 1) + "_" +
+        sanitizeFileNamePart(chart->Meta.Title) + ".png";
+    const auto result = renderResultImage(
+        context, chart->Meta, state, display.mode, display.laneOrder,
+        result_presentation::difficultyLabelForChart(chart->Meta),
+        result_presentation::previousBestForReplayChart(chart->Meta,
+                                                        stageReplay),
+        "NO PLAY", kNoClearTypeRank, std::nullopt, outputDir / filename);
+    if (!result.success) {
+      return result;
+    }
+
+    charts.push_back(std::move(chart));
+    stageStates.push_back(std::move(state));
+  }
+
+  bms_parser::ChartMeta courseMeta = courseResultMetaForReplay(replay, charts);
+  RhythmState courseState = courseResultStateForReplay(replay, stageStates);
+  const play_options::PlayModeDisplayLabel display =
+      replay.stages.empty()
+          ? play_options::PlayModeDisplayLabel{}
+          : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
+  std::optional<std::string> clearLabelOverride;
+  std::optional<int> clearRankOverride;
+  if (result_presentation::isFullComboCourseResult(
+          replay.completedCharts, replay.totalCharts, replay.stages.size(),
+          courseState, courseMeta)) {
+    clearLabelOverride = "FULL COMBO";
+    clearRankOverride = kClearTypeFullComboRank;
+  } else {
+    clearLabelOverride = clearTypeRankToLabel(replay.clearType);
+    clearRankOverride = replay.clearType;
+  }
+  const auto courseResult = renderResultImage(
+      context, courseMeta, courseState, display.mode, display.laneOrder,
+      "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
+      outputDir / "course_result.png");
+  if (!courseResult.success) {
+    return courseResult;
+  }
+
+  const int exportedCount = static_cast<int>(stageStates.size()) + 1;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  return {.success = true,
+          .outputPath = outputDir,
+          .message = "Saved to Photos"};
+#else
+  return {.success = true,
+          .outputPath = outputDir,
+          .message = "Exported " + std::to_string(exportedCount) + " photos"};
+#endif
 }

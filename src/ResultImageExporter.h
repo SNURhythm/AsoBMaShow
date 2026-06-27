@@ -26,8 +26,20 @@ public:
                                         const std::string &difficultyLabel = {},
                                         const std::optional<
                                             ResultPreviousBestData>
-                                            &previousBest = std::nullopt);
+                                            &previousBest = std::nullopt,
+                                        const std::optional<std::string>
+                                            &currentClearLabelOverride =
+                                                std::nullopt,
+                                        const std::optional<int>
+                                            &currentClearRankOverride =
+                                                std::nullopt,
+                                        const std::optional<std::string>
+                                            &headerDifficultyLabelOverride =
+                                                std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay);
+  static ResultImageExportResult
+  ExportCourseReplay(ApplicationContext &context,
+                     const CourseReplayData &replay);
 };

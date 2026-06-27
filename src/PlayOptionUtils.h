@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ArchiveFile.h"
+#include "CoursePlaySession.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 
@@ -623,6 +624,7 @@ prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
   if (chart == nullptr || cancelled || !applyReplayPlayOptions(*chart, replay)) {
     return nullptr;
   }
+  applyEffectiveLongNoteModeToChart(*chart, replay.chartMeta.LnMode);
   return chart;
 }
 
@@ -645,8 +647,13 @@ parseChartForRetry(const ReplayData &retrySource,
                        ? randomValuesOrNull(retrySource.randomValues)
                        : randomValuesOrNull(chartMeta.RandomValues);
   }
-  return parseChart(chartMeta.BmsPath, randomSeed, randomPrng, randomValues,
-                    cancelled, "retry");
+  auto chart = parseChart(chartMeta.BmsPath, randomSeed, randomPrng,
+                          randomValues, cancelled, "retry");
+  if (chart != nullptr && !cancelled && chart->Meta.LnMode == 0 &&
+      normalizeChartLongNoteModeValue(chartMeta.LnMode) > 0) {
+    chart->Meta.LnMode = chartMeta.LnMode;
+  }
+  return chart;
 }
 
 } // namespace play_options

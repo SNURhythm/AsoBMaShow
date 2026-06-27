@@ -22,6 +22,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -33,6 +34,7 @@
 
 class Button;
 class ScrollView;
+struct CoursePlaySession;
 struct StartOptions;
 class View;
 
@@ -159,6 +161,7 @@ private:
     int courseId = 0;
     int courseTableId = 0;
     std::string courseGroupName;
+    std::string courseConstraintJson;
     int clearRank = kNoClearTypeRank;
     int clearMarkRank = kNoClearTypeRank;
     bool clearMarkFolder = false;
@@ -177,8 +180,10 @@ private:
     mutable std::unordered_map<int, std::vector<ChartMetaRecord>> pages;
     mutable std::deque<int> pageOrder;
     mutable ChartMetaRecord fallbackRecord;
+    std::optional<ChartMetaRecord> leadingRecord;
 
-    void reset(sqlite3 *database, const ChartMetaQuery &chartQuery, int count);
+    void reset(sqlite3 *database, const ChartMetaQuery &chartQuery, int count,
+               std::optional<ChartMetaRecord> leading = std::nullopt);
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
 
@@ -394,8 +399,7 @@ private:
   ScoreClearRankCache scoreClearRanks;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
-  std::unordered_map<std::string, int> folderClearRanks;
-  main_menu_library::FolderClearMarkCounts folderClearMarkCounts;
+  main_menu_library::FolderClearDataByLongNoteMode folderClearData;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
@@ -424,6 +428,13 @@ private:
   };
   std::vector<PlayOptionButton> playOptionButtons;
   std::string selectedPlayOption = "NORMAL";
+  struct LongNoteModeButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::string mode;
+  };
+  std::vector<LongNoteModeButton> longNoteModeButtons;
+  std::string selectedLnMode = AppSettings::kDefaultLnMode;
   struct AssistOptionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
@@ -431,6 +442,13 @@ private:
   };
   std::vector<AssistOptionButton> assistOptionButtons;
   std::string selectedAssistOption = assist_options::kOff;
+  struct EffectivePlayOptionSelection {
+    std::string playOption = "NORMAL";
+    std::string longNoteMode = AppSettings::kDefaultLnMode;
+    std::string assistOption = assist_options::kOff;
+    bool longNoteModeLocked = false;
+    bool assistOptionLocked = false;
+  };
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
   int lastSafeTop = -1;
@@ -448,6 +466,7 @@ private:
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();
   void refreshScoreClearRankViews();
+  void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
@@ -502,8 +521,15 @@ private:
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();
+  void setLongNoteModeSelection(const std::string &mode);
+  void refreshLongNoteModeButtons();
   void setAssistOptionSelection(const std::string &option);
   void refreshAssistOptionButtons();
+  bool currentAssistOptionSelectionAllowed(const std::string &option) const;
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
+  EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;
+  bool currentPlayOptionSelectionAllowed(const std::string &option) const;
+  bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
   void refreshReadySettingsSummary();
   bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,
@@ -520,12 +546,16 @@ private:
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
+  void refreshStartButtonForActiveFolder();
+  void startSelectedCourse();
+  void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
   void openChartViewerForSelection();
   void openChartViewerDirect(const ChartMetaRecord &record);
   void revealSelectedChartInFileManager();
   void startUnzipSelectedArchiveFolder();
   void startUnzipArchiveFolder(const ChartMetaRecord &record);
   void setPlayableChartActionsVisible(bool visible);
+  void setPlayableChartActionsVisible(bool visible, bool chartActionsVisible);
   void setUnzipButtonVisible(bool visible);
   void refreshUnzipButtonForSelection(const ChartMetaRecord *record);
   void buildUnzipProgressModal();
@@ -590,6 +620,9 @@ private:
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
   bool selectedReplayIsAutoPlay() const;
+  bool selectedReplayIsCourseReplay() const;
+  bms_parser::ChartMeta
+  replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
   bool prepareAutoPlayChartForRecord(
       const ChartMetaRecord &record,
@@ -597,6 +630,8 @@ private:
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayImageExport(const ChartMetaRecord &record, int replayId);

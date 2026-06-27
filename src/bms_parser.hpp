@@ -328,16 +328,31 @@ public:
  *
  */
 namespace bms_parser {
+enum class LongNoteType {
+  Undefined = 0,
+  LongNote = 1,
+  ChargeNote = 2,
+  HellChargeNote = 3,
+};
+
+LongNoteType LongNoteTypeFromLnMode(int LnMode);
+LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode);
+
 class LongNote : public Note {
 public:
   ~LongNote() override;
   LongNote *Tail;
   LongNote *Head = nullptr;
   bool IsHolding = false;
+  LongNoteType Type = LongNoteType::Undefined;
   [[nodiscard]] bool IsTail() const;
   long long ReleaseTime{};
 
-  explicit LongNote(int Wav);
+  explicit LongNote(int Wav,
+                    LongNoteType Type = LongNoteType::Undefined);
+
+  [[nodiscard]] LongNoteType GetType() const;
+  void SetType(LongNoteType Type);
 
   void Press(long long Time) override;
 

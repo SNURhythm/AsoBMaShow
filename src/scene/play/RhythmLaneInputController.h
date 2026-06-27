@@ -37,8 +37,12 @@ public:
     ReplayEventResult replayEvent;
   };
 
-  RhythmLaneInputController(bms_parser::Chart *chart, BMSRenderer *renderer,
-                            std::unordered_map<int, bool> &lanePressed);
+  RhythmLaneInputController(
+      bms_parser::Chart *chart, BMSRenderer *renderer,
+      std::unordered_map<int, bool> &lanePressed,
+      CourseJudgementConstraint judgementConstraint =
+          CourseJudgementConstraint::None,
+      int longNoteModeOverride = 0);
 
   Result pressLane(int lane, const InputContext &context);
   Result pressLane(int mainLane, int compensateLane,
@@ -50,6 +54,7 @@ private:
   bms_parser::Chart *chart = nullptr;
   BMSRenderer *renderer = nullptr;
   std::unordered_map<int, bool> &lanePressed;
+  int longNoteModeOverride = 0;
   Judge judge;
   long long latePoorTiming = 0;
 

@@ -111,3 +111,29 @@ struct ReplayData {
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
 };
+
+struct CourseReplayStageData {
+  ReplayData replay;
+  long long restMicrosAfterStage = 0;
+};
+
+struct CourseReplayData {
+  int id = 0;
+  int courseId = 0;
+  std::string courseName;
+  std::string courseGroupName;
+  std::string constraintJson;
+  std::string requestedPlayOption = "NORMAL";
+  std::string assistOption = assist_options::kOff;
+  GaugeType initialGaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  bool gaugeAutoShift = false;
+  int longNoteMode = 0;
+  int finalScore = 0;
+  float finalGauge = 0.0f;
+  int clearType = kClearTypeFailedRank;
+  int completedCharts = 0;
+  int totalCharts = 0;
+  std::string createdAt;
+  std::vector<CourseReplayStageData> stages;
+};

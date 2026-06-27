@@ -40,4 +40,7 @@ public:
   Export(ApplicationContext &context, bms_parser::Chart *chart,
          const ReplayData &replay,
          const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult
+  ExportCourseReplay(ApplicationContext &context, const CourseReplayData &replay,
+                     const ReplayVideoExportOptions &options = {});
 };
