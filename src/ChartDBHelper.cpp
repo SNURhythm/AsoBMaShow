@@ -3568,19 +3568,17 @@ bool ChartDBHelper::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cout << "SQL error while preparing statement to delete a chart: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete a chart",
+                                    logSqlErrorText)) {
     return false;
   }
   const auto target = fspath_to_utf8(path);
   SDL_Log("Deleting chart: %s", target.c_str());
   bindSqliteText(stmt, 1, target);
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cout << "SQL error while deleting a chart: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting a chart", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
