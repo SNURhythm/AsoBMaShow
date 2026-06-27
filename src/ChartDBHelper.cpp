@@ -4134,7 +4134,11 @@ std::vector<ChartEntry> ChartDBHelper::SelectEffectiveEntries(sqlite3 *db) {
 #if TARGET_OS_ANDROID
   const auto defaultPath = DefaultBmsFolderPath();
   std::error_code errorCode;
-  std::filesystem::create_directories(defaultPath, errorCode);
+  if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
+    SDL_Log("Failed to create default BMS folder %s: %s",
+            path_t_to_utf8(fspath_to_path_t(defaultPath)).c_str(),
+            errorCode.message().c_str());
+  }
 
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
