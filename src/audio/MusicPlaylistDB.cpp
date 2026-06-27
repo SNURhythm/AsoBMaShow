@@ -260,6 +260,73 @@ std::string storedMusicTrackRowPreferenceOrderBy(int firstIndex) {
          " THEN 3 ELSE 4 END";
 }
 
+int selectStoredMusicTrackRowId(sqlite3 *db, int playlistId,
+                                const StoredMusicTrackIdentity &identity) {
+  std::string query = "SELECT id FROM music_playlist_items "
+                      "WHERE playlist_id = ?1 AND ";
+  query += storedMusicTrackRowPredicate(2);
+  query += " ORDER BY ";
+  query += storedMusicTrackRowPreferenceOrderBy(2);
+  query += ", position, id LIMIT 1";
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "selecting music playlist track identity",
+          logSqlErrorText)) {
+    return 0;
+  }
+  sqlite3_bind_int(stmt, 1, playlistId);
+  bindStoredMusicTrackIdentity(stmt, 2, identity);
+  if (sqlite3_step(stmt) != SQLITE_ROW) {
+    return 0;
+  }
+  return sqlite3_column_int(stmt, 0);
+}
+
+bool updateStoredMusicTrackRowIdentity(
+    sqlite3 *db, int rowId, const StoredMusicTrackIdentity &identity) {
+  const char *query =
+      "UPDATE music_playlist_items SET music_key_type = ?1, music_key = ?2, "
+      "chart_path = ?3, chart_md5 = ?4, chart_sha256 = ?5, "
+      "added_at = CURRENT_TIMESTAMP WHERE id = ?6";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "updating music playlist track identity",
+          logSqlErrorText)) {
+    return false;
+  }
+  bindStoredMusicTrackIdentity(stmt, 1, identity);
+  sqlite3_bind_int(stmt, 6, rowId);
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    logSqlError("updating music playlist track identity", db);
+    return false;
+  }
+  return true;
+}
+
+bool deleteDuplicateStoredMusicTrackRows(
+    sqlite3 *db, int playlistId, int keepRowId,
+    const StoredMusicTrackIdentity &identity) {
+  std::string query = "DELETE FROM music_playlist_items "
+                      "WHERE playlist_id = ?1 AND id != ?7 AND ";
+  query += storedMusicTrackRowPredicate(2);
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "deleting duplicate music playlist tracks",
+          logSqlErrorText)) {
+    return false;
+  }
+  sqlite3_bind_int(stmt, 1, playlistId);
+  bindStoredMusicTrackIdentity(stmt, 2, identity);
+  sqlite3_bind_int(stmt, 7, keepRowId);
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    logSqlError("deleting duplicate music playlist tracks", db);
+    return false;
+  }
+  return true;
+}
+
 std::string joinedTextExpr(const std::string &alias,
                            std::initializer_list<const char *> columns) {
   std::string expr;
@@ -630,6 +697,19 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   if (identity.musicKey.empty()) {
     std::cerr << "Cannot insert music playlist track without a music key.\n";
     return false;
+  }
+
+  const int existingRowId =
+      selectStoredMusicTrackRowId(db, playlistId, identity);
+  if (existingRowId > 0) {
+    if (!updateStoredMusicTrackRowIdentity(db, existingRowId, identity) ||
+        !deleteDuplicateStoredMusicTrackRows(db, playlistId, existingRowId,
+                                             identity)) {
+      return false;
+    }
+    compactPlaylistPositions(db, playlistId);
+    touchPlaylistUpdatedAt(db, playlistId);
+    return true;
   }
 
   const char *query =
