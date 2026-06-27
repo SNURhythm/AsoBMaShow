@@ -3335,7 +3335,8 @@ bool listZipEntries(const std::filesystem::path &archivePath,
 bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
                              const std::filesystem::path &entryPath,
                              FileData &file, std::string *errorMessage,
-                             const PauseCallback &pauseCallback) {
+                             const PauseCallback &pauseCallback,
+                             std::vector<unsigned char> *readScratch = nullptr) {
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -3365,8 +3366,19 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
-  if (!mz_zip_reader_extract_to_mem(archive, fileIndex, file.bytes.data(),
-                                    file.bytes.size(), 0)) {
+  bool extracted = false;
+  if (readScratch != nullptr) {
+    if (readScratch->empty()) {
+      readScratch->resize(MZ_ZIP_MAX_IO_BUF_SIZE);
+    }
+    extracted = mz_zip_reader_extract_to_mem_no_alloc(
+        archive, fileIndex, file.bytes.data(), file.bytes.size(), 0,
+        readScratch->data(), readScratch->size());
+  } else {
+    extracted = mz_zip_reader_extract_to_mem(
+        archive, fileIndex, file.bytes.data(), file.bytes.size(), 0);
+  }
+  if (!extracted) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not extract ZIP entry by index.";
     }
@@ -3378,7 +3390,8 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
 bool readZipTargetByFileIndex(mz_zip_archive *archive,
                               const ZipReadTarget &target, FileData &file,
                               std::string *errorMessage,
-                              const PauseCallback &pauseCallback) {
+                              const PauseCallback &pauseCallback,
+                              std::vector<unsigned char> *readScratch = nullptr) {
   if (target.order > std::numeric_limits<mz_uint>::max()) {
     if (errorMessage != nullptr) {
       *errorMessage = "ZIP index is out of range.";
@@ -3428,7 +3441,7 @@ bool readZipTargetByFileIndex(mz_zip_archive *archive,
     return false;
   }
   return readZipEntryByFileIndex(archive, fileIndex, target.entryPath, file,
-                                 errorMessage, pauseCallback);
+                                 errorMessage, pauseCallback, readScratch);
 }
 
 bool readZipEntriesByName(
@@ -3936,6 +3949,7 @@ bool readZipEntriesByIndexConcurrent(
       setFailure("Could not open ZIP central directory.");
       return;
     }
+    std::vector<unsigned char> readScratch(MZ_ZIP_MAX_IO_BUF_SIZE);
 
     for (;;) {
       ZipReadTarget target;
@@ -3961,7 +3975,7 @@ bool readZipEntriesByIndexConcurrent(
       FileData file;
       std::string readError;
       bool ok = readZipTargetByFileIndex(&archive, target, file, &readError,
-                                         pauseCallback);
+                                         pauseCallback, &readScratch);
       if (ok) {
         {
           std::lock_guard lock(stateMutex);
