@@ -3802,15 +3802,29 @@ void MainMenuScene::selectChartByPathAfterReload(
 }
 
 void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
-  const bool chartQueryUnchanged = activeFolder.key == item.key;
-  activeFolder = item;
-  if (item.expandable) {
-    const auto it = expandedLibraryFolders.find(item.key);
+  auto toggleExpandedFolder = [this](const std::string &key) {
+    const auto it = expandedLibraryFolders.find(key);
     if (it == expandedLibraryFolders.end()) {
-      expandedLibraryFolders.insert(item.key);
+      expandedLibraryFolders.insert(key);
     } else {
       expandedLibraryFolders.erase(it);
     }
+  };
+
+  if (item.type == LibraryFolderItem::Type::CoursesRoot) {
+    const std::string previousActiveKey = activeFolder.key;
+    toggleExpandedFolder(item.key);
+    reloadFolderItems(true);
+    if (activeFolder.key != previousActiveKey) {
+      reloadChartList();
+    }
+    return;
+  }
+
+  const bool chartQueryUnchanged = activeFolder.key == item.key;
+  activeFolder = item;
+  if (item.expandable) {
+    toggleExpandedFolder(item.key);
     reloadFolderItems(true);
   }
   if (item.expandable && chartQueryUnchanged) {
