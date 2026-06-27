@@ -81,6 +81,30 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return true;
 }
 
+bool ensureTableColumn(sqlite3 *db, const char *tableName,
+                       const char *columnName, const char *alterQuery,
+                       const char *context) {
+  bool hasColumn = false;
+  if (const auto error =
+          querySqliteTableHasColumn(db, tableName, columnName, hasColumn)) {
+    logSqlErrorText("reading score schema", *error);
+    return false;
+  }
+  return hasColumn || execSql(db, alterQuery, context);
+}
+
+bool ensureScoreChartIdentityColumns(sqlite3 *db) {
+  return ensureTableColumn(db, "scores", "chart_path",
+                           "ALTER TABLE scores ADD COLUMN chart_path TEXT",
+                           "adding score chart path column") &&
+         ensureTableColumn(db, "scores", "chart_md5",
+                           "ALTER TABLE scores ADD COLUMN chart_md5 TEXT",
+                           "adding score chart md5 column") &&
+         ensureTableColumn(db, "scores", "chart_sha256",
+                           "ALTER TABLE scores ADD COLUMN chart_sha256 TEXT",
+                           "adding score chart sha256 column");
+}
+
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -685,6 +709,10 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
       "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating score table")) {
+    return false;
+  }
+
+  if (!ensureScoreChartIdentityColumns(db)) {
     return false;
   }
 

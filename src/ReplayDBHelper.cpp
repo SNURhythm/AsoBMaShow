@@ -506,6 +506,12 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
     const char *context;
   };
   const ColumnMigration replayColumnMigrations[] = {
+      {"chart_path", "ALTER TABLE replays ADD COLUMN chart_path TEXT",
+       "adding replay chart path column"},
+      {"chart_md5", "ALTER TABLE replays ADD COLUMN chart_md5 TEXT",
+       "adding replay chart md5 column"},
+      {"chart_sha256", "ALTER TABLE replays ADD COLUMN chart_sha256 TEXT",
+       "adding replay chart sha256 column"},
       {"random_seed", "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
        "adding replay random seed column"},
       {"random_prng", "ALTER TABLE replays ADD COLUMN random_prng TEXT",
