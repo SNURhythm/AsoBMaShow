@@ -4,7 +4,6 @@
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
-#include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -17,19 +16,12 @@
 #include <vector>
 
 namespace {
-using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 
-std::string normalizedHash(const std::string &value) {
-  return lowerCopy(trimCopy(value));
-}
-
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  SqliteErrorMessageHandle errMsg;
-  const int rc = sqlite3_exec(db, query, nullptr, nullptr, errMsg.out());
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while %s: %s", context,
-            errMsg.get() != nullptr ? errMsg.get() : sqlite3_errmsg(db));
+  if (const auto error = executeSqlite(db, query)) {
+    SDL_Log("SQL error while %s: %s", context, error->c_str());
     return false;
   }
   return true;
@@ -37,35 +29,25 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 
 bool tableHasColumn(sqlite3 *db, const char *tableName,
                     const char *columnName) {
-  const std::string query = std::string("PRAGMA table_info(") + tableName + ")";
-  SqliteStatementHandle stmt;
-  const int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while reading replay schema: %s", sqlite3_errmsg(db));
-    return false;
-  }
-
   bool found = false;
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const auto *text =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 1));
-    if (text != nullptr && std::string(text) == columnName) {
-      found = true;
-      break;
-    }
+  if (const auto error =
+          querySqliteTableHasColumn(db, tableName, columnName, found)) {
+    SDL_Log("SQL error while reading replay schema: %s", error->c_str());
   }
   return found;
 }
 
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return sqlite3_bind_text(stmt, idx, value.c_str(), -1, SQLITE_TRANSIENT) ==
-         SQLITE_OK;
+bool ensureTableColumn(sqlite3 *db, const char *tableName,
+                       const char *columnName, const char *alterQuery,
+                       const char *context) {
+  return tableHasColumn(db, tableName, columnName) ||
+         execSql(db, alterQuery, context);
 }
 
 void bindOptionalText(sqlite3_stmt *stmt, int idx,
                       const std::optional<std::string> &value) {
   if (value.has_value() && !value->empty()) {
-    bindText(stmt, idx, *value);
+    bindSqliteText(stmt, idx, *value);
   } else {
     sqlite3_bind_null(stmt, idx);
   }
@@ -88,9 +70,9 @@ struct ReplayChartMatch {
 
 ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   return {
-      .chartPath = path_t_to_utf8(
-          fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-              chartMeta.BmsPath, "BMS/"))),
+      .chartPath =
+          Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath,
+                                                       "BMS/"),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -98,19 +80,17 @@ ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
 
 int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
                          const ReplayChartMatch &match) {
-  bindText(stmt, bindIndex++, match.sha256);
-  bindText(stmt, bindIndex++, match.sha256);
-  bindText(stmt, bindIndex++, match.md5);
-  bindText(stmt, bindIndex++, match.md5);
-  bindText(stmt, bindIndex++, match.chartPath);
-  bindText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.sha256);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.md5);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
+  bindSqliteText(stmt, bindIndex++, match.chartPath);
   return bindIndex;
 }
 
 std::string readText(sqlite3_stmt *stmt, int idx) {
-  const auto *text =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, idx));
-  return text == nullptr ? "" : std::string(text);
+  return sqliteColumnString(stmt, idx);
 }
 
 std::optional<std::string> serializeRandomValues(
@@ -322,15 +302,15 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(replay.chartMeta.BmsPath,
+                                                   "BMS/");
   int bindIndex = 1;
-  bindText(replayStmt.get(), bindIndex++, chartPath);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
+  bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
@@ -345,10 +325,10 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
   if (replay.randomPrng.has_value()) {
-    bindText(replayStmt.get(), bindIndex++, *replay.randomPrng);
+    bindSqliteText(replayStmt.get(), bindIndex++, *replay.randomPrng);
   } else if (replay.randomSeed.has_value()) {
-    bindText(replayStmt.get(), bindIndex++,
-             bms_parser::Parser::RandomPrngId);
+    bindSqliteText(replayStmt.get(), bindIndex++,
+                   bms_parser::Parser::RandomPrngId);
   } else {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
@@ -358,8 +338,8 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
-  bindText(replayStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
@@ -462,30 +442,24 @@ sqlite3 *ReplayDBHelper::Connect() {
   }
   const std::filesystem::path path = directory / "replay.db";
 
-  sqlite3 *db = nullptr;
-  const int rc = sqlite3_open(path.string().c_str(), &db);
-  if (db != nullptr) {
-    sqlite3_busy_timeout(db, 1000);
-  }
-  if (rc != SQLITE_OK) {
-    SDL_Log("Can't open replay database: %s",
-            db != nullptr ? sqlite3_errmsg(db) : "unknown error");
-    if (db != nullptr) {
-      sqlite3_close(db);
-    }
+  std::string openError;
+  sqlite3 *db = openSqliteDatabase(path, openError);
+  if (db == nullptr) {
+    SDL_Log("Can't open replay database: %s", openError.c_str());
     return nullptr;
   }
 
-  sqlite3_exec(db, "PRAGMA foreign_keys=ON", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL", nullptr, nullptr, nullptr);
-  sqlite3_exec(db, "PRAGMA synchronous=NORMAL", nullptr, nullptr, nullptr);
+  if (const auto pragmaError =
+          applySqlitePragmas(db, {"PRAGMA foreign_keys=ON",
+                                  "PRAGMA journal_mode=WAL",
+                                  "PRAGMA synchronous=NORMAL"})) {
+    SDL_Log("Could not configure replay database: %s", pragmaError->c_str());
+  }
   return db;
 }
 
 void ReplayDBHelper::Close(sqlite3 *db) {
-  if (db != nullptr) {
-    sqlite3_close(db);
-  }
+  closeSqliteDatabase(db);
 }
 
 bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
@@ -515,52 +489,39 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   if (!execSql(db, replayQuery, "creating replay table")) {
     return false;
   }
-  if (!tableHasColumn(db, "replays", "random_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
-               "adding replay random seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "random_prng") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_prng TEXT",
-               "adding replay random PRNG column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "random_values") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN random_values TEXT",
-               "adding replay random values column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option TEXT",
-               "adding replay play option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
-               "adding replay play option seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option2") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
-               "adding replay 2P play option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "play_option2_seed") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
-               "adding replay 2P play option seed column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "assist_option") &&
-      !execSql(db, "ALTER TABLE replays ADD COLUMN assist_option TEXT",
-               "adding replay assist option column")) {
-    return false;
-  }
-  if (!tableHasColumn(db, "replays", "ln_mode") &&
-      !execSql(db,
-               "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL "
-               "DEFAULT 0",
-               "adding replay long note mode column")) {
-    return false;
+  struct ColumnMigration {
+    const char *columnName;
+    const char *alterQuery;
+    const char *context;
+  };
+  const ColumnMigration replayColumnMigrations[] = {
+      {"random_seed", "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
+       "adding replay random seed column"},
+      {"random_prng", "ALTER TABLE replays ADD COLUMN random_prng TEXT",
+       "adding replay random PRNG column"},
+      {"random_values", "ALTER TABLE replays ADD COLUMN random_values TEXT",
+       "adding replay random values column"},
+      {"play_option", "ALTER TABLE replays ADD COLUMN play_option TEXT",
+       "adding replay play option column"},
+      {"play_option_seed",
+       "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
+       "adding replay play option seed column"},
+      {"play_option2", "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
+       "adding replay 2P play option column"},
+      {"play_option2_seed",
+       "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
+       "adding replay 2P play option seed column"},
+      {"assist_option", "ALTER TABLE replays ADD COLUMN assist_option TEXT",
+       "adding replay assist option column"},
+      {"ln_mode",
+       "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+       "adding replay long note mode column"},
+  };
+  for (const ColumnMigration &migration : replayColumnMigrations) {
+    if (!ensureTableColumn(db, "replays", migration.columnName,
+                           migration.alterQuery, migration.context)) {
+      return false;
+    }
   }
 
   const char *eventQuery =
@@ -691,8 +652,16 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  if (!CreateReplayTables(db) ||
-      !execSql(db, "BEGIN IMMEDIATE TRANSACTION", "starting replay save")) {
+  if (!CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    SDL_Log("SQL error while starting replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -714,19 +683,18 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   int rc = prepareSqliteStatement(db, replayInsert, replayStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
-  const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/")));
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(replay.chartMeta.BmsPath,
+                                                   "BMS/");
   int bindIndex = 1;
-  bindText(replayStmt.get(), bindIndex++, chartPath);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
-  bindText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
+  bindSqliteText(replayStmt.get(), bindIndex++, chartPath);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.SHA256);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Title);
+  bindSqliteText(replayStmt.get(), bindIndex++, replay.chartMeta.Artist);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
@@ -741,10 +709,10 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
   if (replay.randomPrng.has_value()) {
-    bindText(replayStmt.get(), bindIndex++, *replay.randomPrng);
+    bindSqliteText(replayStmt.get(), bindIndex++, *replay.randomPrng);
   } else if (replay.randomSeed.has_value()) {
-    bindText(replayStmt.get(), bindIndex++,
-             bms_parser::Parser::RandomPrngId);
+    bindSqliteText(replayStmt.get(), bindIndex++,
+                   bms_parser::Parser::RandomPrngId);
   } else {
     sqlite3_bind_null(replayStmt.get(), bindIndex++);
   }
@@ -754,8 +722,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOptionSeed);
   bindOptionalText(replayStmt.get(), bindIndex++, replay.playOption2);
   bindOptionalInt64(replayStmt.get(), bindIndex++, replay.playOption2Seed);
-  bindText(replayStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(replayStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
@@ -763,7 +731,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   replayStmt.reset();
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving replay: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -780,7 +747,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay event insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -794,6 +760,9 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   eventStmt.reset();
+  if (!eventOk) {
+    return std::nullopt;
+  }
 
   const char *touchSampleInsert =
       "INSERT INTO replay_touch_samples ("
@@ -805,7 +774,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay touch sample insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -821,6 +789,9 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   touchSampleStmt.reset();
+  if (!touchSampleOk) {
+    return std::nullopt;
+  }
 
   const char *laneCoverEventInsert =
       "INSERT INTO replay_lane_cover_events ("
@@ -833,7 +804,6 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing replay lane cover event insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back replay save");
     return std::nullopt;
   }
 
@@ -849,10 +819,13 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     }
   }
   laneCoverEventStmt.reset();
+  if (!laneCoverEventOk) {
+    return std::nullopt;
+  }
 
-  if (!eventOk || !touchSampleOk || !laneCoverEventOk ||
-      !execSql(db, "COMMIT", "committing replay save")) {
-    execSql(db, "ROLLBACK", "rolling back replay save");
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("SQL error while committing replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -871,9 +844,16 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     return std::nullopt;
   }
 
-  if (!CreateReplayTables(db) ||
-      !execSql(db, "BEGIN IMMEDIATE TRANSACTION",
-               "starting course replay save")) {
+  if (!CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    SDL_Log("SQL error while starting course replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
 
@@ -890,15 +870,14 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing course replay insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
   int bindIndex = 1;
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.courseId);
-  bindText(courseStmt.get(), bindIndex++, replay.courseName);
-  bindText(courseStmt.get(), bindIndex++, replay.courseGroupName);
-  bindText(courseStmt.get(), bindIndex++, replay.constraintJson);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.courseName);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.courseGroupName);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.constraintJson);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
@@ -907,9 +886,9 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
                    replay.gaugeAutoShift ? 1 : 0);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.longNoteMode));
-  bindText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
-  bindText(courseStmt.get(), bindIndex++,
-           assist_options::normalize(replay.assistOption));
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
+  bindSqliteText(courseStmt.get(), bindIndex++,
+                 assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.finalScore);
   sqlite3_bind_double(courseStmt.get(), bindIndex++, replay.finalGauge);
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.clearType);
@@ -920,7 +899,6 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   courseStmt.reset();
   if (rc != SQLITE_DONE) {
     SDL_Log("SQL error while saving course replay: %s", sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
@@ -935,14 +913,12 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing course replay stage insert: %s",
             sqlite3_errmsg(db));
-    execSql(db, "ROLLBACK", "rolling back course replay save");
     return std::nullopt;
   }
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     auto stageReplayId = insertReplayRows(db, replay.stages[i].replay);
     if (!stageReplayId.has_value()) {
-      execSql(db, "ROLLBACK", "rolling back course replay save");
       return std::nullopt;
     }
 
@@ -956,13 +932,13 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     if (sqlite3_step(stageStmt.get()) != SQLITE_DONE) {
       SDL_Log("SQL error while saving course replay stage: %s",
               sqlite3_errmsg(db));
-      execSql(db, "ROLLBACK", "rolling back course replay save");
       return std::nullopt;
     }
   }
 
-  if (!execSql(db, "COMMIT", "committing course replay save")) {
-    execSql(db, "ROLLBACK", "rolling back course replay save");
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("SQL error while committing course replay save: %s",
+            transactionError.c_str());
     return std::nullopt;
   }
   return courseReplayId;

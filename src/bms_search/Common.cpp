@@ -12,6 +12,10 @@ std::string lowerCopy(std::string value) {
   return asobmshow::bms_metadata::lowerCopy(std::move(value));
 }
 
+std::string normalizedHash(const std::string &value) {
+  return asobmshow::bms_metadata::normalizedHash(value);
+}
+
 bool endsWith(std::string_view value, std::string_view suffix) {
   return value.size() >= suffix.size() &&
          value.substr(value.size() - suffix.size()) == suffix;

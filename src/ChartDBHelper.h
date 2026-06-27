@@ -171,8 +171,6 @@ public:
                             const std::filesystem::path &archivePath);
   bool ClearChartMeta(sqlite3 *db);
   void Close(sqlite3 *db);
-  void BeginTransaction(sqlite3 *db);
-  void CommitTransaction(sqlite3 *db);
   bool CreateEntriesTable(sqlite3 *db);
   bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
                    const std::string &iosBookmark = "");

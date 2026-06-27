@@ -32,12 +32,7 @@ std::string folderKeyForCourse(int courseId) {
 
 namespace {
 std::string_view columnText(sqlite3_stmt *stmt, int column) {
-  const auto *text =
-      reinterpret_cast<const char *>(sqlite3_column_text(stmt, column));
-  if (text == nullptr) {
-    return {};
-  }
-  return {text, static_cast<size_t>(sqlite3_column_bytes(stmt, column))};
+  return sqliteColumnTextView(stmt, column);
 }
 
 struct FolderClearAggregate {
