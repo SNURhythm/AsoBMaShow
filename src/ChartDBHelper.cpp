@@ -5695,10 +5695,9 @@ ChartDBHelper::SelectDifficultyTables(sqlite3 *db) {
                "ORDER BY dt.name COLLATE NOCASE";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty tables: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty tables",
+                                    logSqlErrorText)) {
     return {};
   }
 
@@ -5728,10 +5727,9 @@ ChartDBHelper::SelectDifficultyLevels(sqlite3 *db, int tableId) {
                "GROUP BY dte.table_id, dte.level "
                "ORDER BY MIN(dte.sort_order), dte.level";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty levels: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty levels",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
@@ -5772,10 +5770,9 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db) {
       "ORDER BY dt.name COLLATE NOCASE, MIN(dc.sort_order)";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty course groups: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty course groups",
+                                    logSqlErrorText)) {
     return {};
   }
 
@@ -5817,10 +5814,9 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
       "ORDER BY dc.sort_order";
 
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while selecting difficulty courses: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty courses",
+                                    logSqlErrorText)) {
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
