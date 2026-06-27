@@ -1045,6 +1045,14 @@ void logSqlError(const char *context, sqlite3 *db) {
   logSqlErrorText(context, sqliteDatabaseError(db));
 }
 
+void logSdlSqlErrorText(const char *context, const std::string &error) {
+  SDL_Log("SQL error while %s: %s", context, error.c_str());
+}
+
+void logSdlSqlError(const char *context, sqlite3 *db) {
+  logSdlSqlErrorText(context, sqliteDatabaseError(db));
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
@@ -2094,7 +2102,7 @@ bool readDifficultyTableSourceUrl(sqlite3 *db, int tableId,
   if (rc != SQLITE_OK) {
     if (errorMessage != nullptr) {
       *errorMessage = std::string("Could not read table source URL: ") +
-                      sqlite3_errmsg(db);
+                      sqliteDatabaseError(db);
     }
     return false;
   }
@@ -2592,10 +2600,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
                "@source_archive_size"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing statement to insert a chart: %s",
-            sqlite3_errmsg(db));
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert a chart",
+                                    logSdlSqlErrorText)) {
     return false;
   }
   const archive_file::SourcePreference sourcePreference =
@@ -2638,9 +2645,9 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   sqlite3_bind_int(stmt, 28, chartMeta.LnMode);
   sqlite3_bind_int(stmt, 29, sourcePreference.priority);
   sqlite3_bind_int64(stmt, 30, clampSqlInteger(sourcePreference.archiveSize));
-  rc = sqlite3_step(stmt);
+  const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while inserting a chart: %s", sqlite3_errmsg(db));
+    logSdlSqlError("inserting a chart", db);
     return false;
   }
   bumpLibraryRevision();
