@@ -197,17 +197,13 @@ using asobmshow::bms_metadata::lowerCopy;
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 
-std::string pathUtf8Text(const std::filesystem::path &path) {
-  return path_t_to_utf8(fspath_to_path_t(path));
-}
-
 std::string storedChartPathText(std::filesystem::path path) {
   if (path.empty()) {
     return "";
   }
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
-  return pathUtf8Text(path);
+  return fspath_to_utf8(path);
 }
 
 std::string normalizedDifficultyText(const std::string &difficultyText) {
@@ -5697,7 +5693,7 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
   std::filesystem::create_directories(directory, ec);
   if (ec) {
     SDL_Log("Failed to create difficulty table directory %s: %s",
-            pathUtf8Text(directory).c_str(), ec.message().c_str());
+            fspath_to_utf8(directory).c_str(), ec.message().c_str());
     return 0;
   }
 
@@ -5709,7 +5705,7 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
     if (!it->is_regular_file(typeEc)) {
       if (typeEc) {
         SDL_Log("Failed to read difficulty table path type %s: %s",
-                pathUtf8Text(it->path()).c_str(), typeEc.message().c_str());
+                fspath_to_utf8(it->path()).c_str(), typeEc.message().c_str());
       }
       continue;
     }
@@ -5737,7 +5733,7 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
                       ? document["data"]
                       : json{{"charts", document["charts"]}};
       if (ImportDifficultyTable(db, header.dump(), data.dump(),
-                                pathUtf8Text(path))) {
+                                fspath_to_utf8(path))) {
         imported++;
       }
       continue;
@@ -5753,10 +5749,10 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
         std::filesystem::weakly_canonical(path, canonicalEc);
     const std::filesystem::path headerPath =
         canonicalEc ? path.lexically_normal() : canonicalPath;
-    const std::string headerKey = pathUtf8Text(headerPath);
+    const std::string headerKey = fspath_to_utf8(headerPath);
     if (canonicalEc) {
       SDL_Log("Failed to canonicalize difficulty table header %s: %s",
-              pathUtf8Text(path).c_str(), canonicalEc.message().c_str());
+              fspath_to_utf8(path).c_str(), canonicalEc.message().c_str());
     }
     if (importedHeaders.find(headerKey) != importedHeaders.end()) {
       continue;
@@ -5773,14 +5769,14 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
     if (!dataRaw) {
       continue;
     }
-    if (ImportDifficultyTable(db, *raw, *dataRaw, pathUtf8Text(path))) {
+    if (ImportDifficultyTable(db, *raw, *dataRaw, fspath_to_utf8(path))) {
       imported++;
     }
   }
 
   if (ec) {
     SDL_Log("Failed while scanning difficulty table directory %s: %s",
-            pathUtf8Text(directory).c_str(), ec.message().c_str());
+            fspath_to_utf8(directory).c_str(), ec.message().c_str());
   }
   return imported;
 }

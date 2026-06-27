@@ -73,11 +73,8 @@ std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
   const std::string identity =
       !sha256.empty() ? "sha256:" + sha256
                       : (!md5.empty() ? "md5:" + md5
-                                      : "path:" + path_t_to_utf8(
-                                                     fspath_to_path_t(
-                                                         meta.BmsPath)));
-  const std::string folder =
-      path_t_to_utf8(fspath_to_path_t(meta.Folder.lexically_normal()));
+                                      : "path:" + fspath_to_utf8(meta.BmsPath));
+  const std::string folder = fspath_to_utf8(meta.Folder.lexically_normal());
   std::uint64_t hash = 14695981039346656037ull;
   hash = fnv1a64Append(hash, folder);
   hash = fnv1a64Append(hash, identity);
@@ -141,8 +138,7 @@ bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
   const bool cached = std::filesystem::is_regular_file(path, error);
   if (error) {
     SDL_Log("Could not check cached music file %s: %s",
-            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-            error.message().c_str());
+            fspath_to_utf8(path).c_str(), error.message().c_str());
     return false;
   }
   return cached;
@@ -175,8 +171,7 @@ void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
       std::filesystem::is_directory(directory, error);
   if (error) {
     SDL_Log("Could not check music cache directory %s: %s",
-            path_t_to_utf8(fspath_to_path_t(directory)).c_str(),
-            error.message().c_str());
+            fspath_to_utf8(directory).c_str(), error.message().c_str());
     return;
   }
   if (!cacheDirectoryExists) {

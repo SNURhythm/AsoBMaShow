@@ -132,7 +132,7 @@ executeSqlite(sqlite3 *db, const char *query,
 inline std::optional<std::string>
 attachSqliteDatabase(sqlite3 *db, const std::filesystem::path &path,
                      const char *schemaName) {
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string pathText = fspath_to_utf8(path);
   char *query = sqlite3_mprintf("ATTACH DATABASE %Q AS \"%w\"",
                                 pathText.c_str(), schemaName);
   if (query == nullptr) {
@@ -206,7 +206,7 @@ inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
                                    std::string &errorMessage,
                                    int busyTimeoutMs = 1000) {
   sqlite3 *db = nullptr;
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string pathText = fspath_to_utf8(path);
   const int rc = sqlite3_open(pathText.c_str(), &db);
   if (db != nullptr) {
     sqlite3_busy_timeout(db, busyTimeoutMs);

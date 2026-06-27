@@ -21,7 +21,7 @@ std::string normalizedPathString(std::filesystem::path path) {
     return {};
   }
   path = path.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(path));
+  return fspath_to_utf8(path);
 }
 
 std::string fallbackTitle(const bms_parser::ChartMeta &meta) {
@@ -29,7 +29,7 @@ std::string fallbackTitle(const bms_parser::ChartMeta &meta) {
     return meta.Title;
   }
   if (!meta.BmsPath.empty()) {
-    return path_t_to_utf8(fspath_to_path_t(meta.BmsPath.stem()));
+    return fspath_to_utf8(meta.BmsPath.stem());
   }
   return "Untitled";
 }
