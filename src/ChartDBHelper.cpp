@@ -1172,10 +1172,8 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   selectQuery += column;
   selectQuery += " != ''";
 
-  sqlite3_stmt *rawSelectStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, selectQuery.c_str(), -1, &rawSelectStmt,
-                              nullptr);
-  SqliteStatementHandle selectStmt(rawSelectStmt);
+  SqliteStatementHandle selectStmt;
+  int rc = prepareSqliteStatement(db, selectQuery, selectStmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -1201,25 +1199,21 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   std::string updateQuery =
       std::string(primaryKey ? "UPDATE OR IGNORE " : "UPDATE ") + table +
       " SET " + column + " = ? WHERE rowid = ?";
-  sqlite3_stmt *rawUpdateStmt = nullptr;
-  rc = sqlite3_prepare_v2(db, updateQuery.c_str(), -1, &rawUpdateStmt, nullptr);
-  SqliteStatementHandle updateStmt(rawUpdateStmt);
+  SqliteStatementHandle updateStmt;
+  rc = prepareSqliteStatement(db, updateQuery, updateStmt);
   if (rc != SQLITE_OK) {
     return false;
   }
 
-  SqliteStatementHandle existsStmt(nullptr);
-  SqliteStatementHandle deleteStmt(nullptr);
+  SqliteStatementHandle existsStmt;
+  SqliteStatementHandle deleteStmt;
   if (primaryKey) {
     std::string existsQuery = "SELECT 1 FROM ";
     existsQuery += table;
     existsQuery += " WHERE ";
     existsQuery += column;
     existsQuery += " = ? LIMIT 1";
-    sqlite3_stmt *rawExistsStmt = nullptr;
-    rc = sqlite3_prepare_v2(db, existsQuery.c_str(), -1, &rawExistsStmt,
-                            nullptr);
-    existsStmt.reset(rawExistsStmt);
+    rc = prepareSqliteStatement(db, existsQuery, existsStmt);
     if (rc != SQLITE_OK) {
       return false;
     }
@@ -1227,10 +1221,7 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
     std::string deleteQuery = "DELETE FROM ";
     deleteQuery += table;
     deleteQuery += " WHERE rowid = ?";
-    sqlite3_stmt *rawDeleteStmt = nullptr;
-    rc = sqlite3_prepare_v2(db, deleteQuery.c_str(), -1, &rawDeleteStmt,
-                            nullptr);
-    deleteStmt.reset(rawDeleteStmt);
+    rc = prepareSqliteStatement(db, deleteQuery, deleteStmt);
     if (rc != SQLITE_OK) {
       return false;
     }
@@ -1691,13 +1682,12 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
 
 ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
   ChartScanCheckpoint checkpoint;
-  sqlite3_stmt *rawStmt = nullptr;
   const char *query =
       "SELECT scan_signature, phase, next_index, sub_index, last_path, "
       "archive_path, archive_size, archive_mtime_ns, last_inner_path "
       "FROM chart_scan_checkpoint WHERE id = 1";
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting chart scan checkpoint: "
               << sqlite3_errmsg(db) << "\n";
@@ -1818,9 +1808,8 @@ ArchiveScanCacheRecord selectArchiveScanCache(
   const char *query =
       "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
       "chart_count FROM archive_scan_cache WHERE path = ?";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while selecting archive scan cache: "
               << sqlite3_errmsg(db) << "\n";
@@ -1898,9 +1887,8 @@ bool upsertArchiveScanCache(sqlite3 *db,
       "OR archive_scan_cache.uncompressed_size != excluded.uncompressed_size "
       "OR archive_scan_cache.file_count != excluded.file_count "
       "OR archive_scan_cache.chart_count != excluded.chart_count";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while preparing archive scan cache upsert: "
               << sqlite3_errmsg(db) << "\n";
