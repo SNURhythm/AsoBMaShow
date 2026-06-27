@@ -544,6 +544,9 @@ private:
   std::uint64_t pendingLibraryScanFlushRequest() const;
   void completeLibraryScanFlush(std::uint64_t request);
   void refreshTasksButton();
+  bool insertChartFolderEntryImmediately(
+      const std::filesystem::path &folderPath,
+      const std::string &iosBookmark);
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;

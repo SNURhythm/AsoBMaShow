@@ -1783,6 +1783,32 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
       });
 }
 
+bool MainMenuScene::insertChartFolderEntryImmediately(
+    const std::filesystem::path &folderPath, const std::string &iosBookmark) {
+  if (folderPath.empty()) {
+    return false;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  SqliteConnectionHandle entryDbHandle(dbHelper.Connect());
+  sqlite3 *entryDb = entryDbHandle.get();
+  if (entryDb == nullptr) {
+    SDL_Log("Failed to open chart database while adding folder %s",
+            fspath_to_utf8(folderPath).c_str());
+    return false;
+  }
+
+  dbHelper.CreateEntriesTable(entryDb);
+  if (!dbHelper.InsertEntry(entryDb, folderPath, iosBookmark)) {
+    SDL_Log("Failed to add chart folder entry %s",
+            fspath_to_utf8(folderPath).c_str());
+    return false;
+  }
+
+  requestLibraryReload(true);
+  return true;
+}
+
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 void MainMenuScene::addIOSFolderEntryFromFiles() {
   if (willStart.load() || replayExportInProgress.load() ||
@@ -1825,6 +1851,7 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         if (folderName.empty()) {
           folderName = "Folder";
         }
+        insertChartFolderEntryImmediately(folderPath, bookmark);
         enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
                                   bookmark);
       });
@@ -1873,6 +1900,7 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         if (folderName.empty()) {
           folderName = "Folder";
         }
+        insertChartFolderEntryImmediately(folderPath, treeUri);
         enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
                                   treeUri);
       });
