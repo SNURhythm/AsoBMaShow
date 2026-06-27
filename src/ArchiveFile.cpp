@@ -4923,6 +4923,310 @@ bool readUnarrRarEntriesByOffsetStreaming(
                          " extractMs=" + std::to_string(readMs));
   return true;
 }
+
+bool readUnarrRarTargetByOffset(ar_archive *archive,
+                                const UnarrRarReadTarget &target,
+                                FileData &file, std::string *errorMessage,
+                                const PauseCallback &pauseCallback) {
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (!ar_parse_entry_at(archive, static_cast<off64_t>(target.offset))) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "unarr could not seek to RAR entry offset.";
+    }
+    return false;
+  }
+
+  const char *actualName = ar_entry_get_name(archive);
+  std::filesystem::path actualPath;
+  if (actualName == nullptr || !safeEntryPath(actualName, actualPath) ||
+      normalizeEntryName(actualPath.generic_string()) !=
+          normalizeEntryName(target.entryPath.generic_string())) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "unarr RAR offset did not match cached entry path.";
+    }
+    return false;
+  }
+
+  const size_t entrySize = ar_entry_get_size(archive);
+  if (static_cast<std::uint64_t>(entrySize) != target.size) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "unarr RAR entry size did not match cached index.";
+    }
+    return false;
+  }
+
+  file.path = target.entryPath;
+  file.bytes.resize(entrySize);
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (entrySize > 0 &&
+      !ar_entry_uncompress(archive, file.bytes.data(), entrySize)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "unarr could not extract RAR entry.";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool readUnarrRarEntriesByOffsetConcurrent(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::optional<EntryRange> &range, const FileDataCallback &onFile,
+    std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
+  if (innerPaths.empty()) {
+    return true;
+  }
+  if (!onFile) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive file consumer is unavailable.";
+    }
+    return false;
+  }
+
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (index == nullptr || index->backend != ArchiveIndexBackend::UnarrRar) {
+    return false;
+  }
+
+  std::vector<UnarrRarReadTarget> readTargets;
+  readTargets.reserve(innerPaths.size());
+  for (const auto &innerPath : innerPaths) {
+    const Entry *entry = findIndexedEntry(*index, innerPath);
+    if (entry == nullptr || entry->directory || entry->offset < 0) {
+      continue;
+    }
+    if (range.has_value() &&
+        (entry->order < range->start || entry->order > range->end)) {
+      continue;
+    }
+    if (entry->solid) {
+      if (errorMessage != nullptr) {
+        *errorMessage =
+            "RAR entry is solid; random-access extraction is impossible.";
+      }
+      return false;
+    }
+    if (entry->size >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "RAR entry is too large to read into memory.";
+      }
+      return false;
+    }
+    readTargets.push_back({
+        .entryPath = entry->path,
+        .order = entry->order,
+        .offset = entry->offset,
+        .size = entry->size,
+    });
+  }
+  if (readTargets.empty()) {
+    return true;
+  }
+
+  std::sort(readTargets.begin(), readTargets.end(),
+            [](const UnarrRarReadTarget &a, const UnarrRarReadTarget &b) {
+              return a.offset < b.offset;
+            });
+  readTargets.erase(std::unique(readTargets.begin(), readTargets.end(),
+                                [](const UnarrRarReadTarget &a,
+                                   const UnarrRarReadTarget &b) {
+                                  return a.offset == b.offset;
+                                }),
+                    readTargets.end());
+
+  maxWorkers =
+      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
+  if (maxInFlightBytes == 0) {
+    maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
+  }
+
+  std::mutex stateMutex;
+  std::condition_variable spaceCv;
+  std::size_t nextTarget = 0;
+  std::size_t emittedFiles = 0;
+  std::uint64_t inFlightBytes = 0;
+  bool failed = false;
+  std::string failureMessage;
+  long long acquireMicros = 0;
+  long long extractMicros = 0;
+  long long callbackMicros = 0;
+
+  auto setFailure = [&](std::string message) {
+    {
+      std::lock_guard lock(stateMutex);
+      if (!failed) {
+        failed = true;
+        failureMessage = std::move(message);
+      }
+    }
+    spaceCv.notify_all();
+  };
+
+  auto acquireBytes = [&](std::uint64_t bytes) {
+    std::unique_lock lock(stateMutex);
+    for (;;) {
+      if (failed) {
+        return false;
+      }
+      if (inFlightBytes == 0 || inFlightBytes + bytes <= maxInFlightBytes) {
+        inFlightBytes += bytes;
+        return true;
+      }
+      lock.unlock();
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        return false;
+      }
+      lock.lock();
+      spaceCv.wait_for(lock, std::chrono::milliseconds(20));
+    }
+  };
+
+  auto releaseBytes = [&](std::uint64_t bytes) {
+    {
+      std::lock_guard lock(stateMutex);
+      inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
+    }
+    spaceCv.notify_all();
+  };
+
+  auto worker = [&]() {
+    UnarrStreamHandle stream;
+    UnarrArchiveHandle archive;
+    std::string openError;
+    if (!openUnarrRarArchive(archivePath, stream, archive, &openError)) {
+      setFailure(openError.empty()
+                     ? "Could not open RAR archive for random access."
+                     : openError);
+      return;
+    }
+
+    long long localAcquireMicros = 0;
+    long long localExtractMicros = 0;
+    long long localCallbackMicros = 0;
+
+    for (;;) {
+      UnarrRarReadTarget target;
+      {
+        std::lock_guard lock(stateMutex);
+        if (failed || nextTarget >= readTargets.size()) {
+          break;
+        }
+        target = readTargets[nextTarget++];
+      }
+
+      std::string pauseError;
+      if (!pauseIfNeeded(pauseCallback, &pauseError)) {
+        setFailure(pauseError.empty() ? "Operation cancelled" : pauseError);
+        break;
+      }
+
+      const auto acquireStart = std::chrono::steady_clock::now();
+      if (!acquireBytes(target.size)) {
+        break;
+      }
+      localAcquireMicros += elapsedMicrosSince(acquireStart);
+
+      FileData file;
+      std::string readError;
+      const auto extractStart = std::chrono::steady_clock::now();
+      bool ok = readUnarrRarTargetByOffset(archive.get(), target, file,
+                                           &readError, pauseCallback);
+      localExtractMicros += elapsedMicrosSince(extractStart);
+      if (ok) {
+        {
+          std::lock_guard lock(stateMutex);
+          ok = !failed;
+        }
+      }
+      if (ok) {
+        const auto callbackStart = std::chrono::steady_clock::now();
+        ok = emitFileData(std::move(file), onFile, &readError);
+        localCallbackMicros += elapsedMicrosSince(callbackStart);
+      }
+      releaseBytes(target.size);
+
+      if (!ok) {
+        setFailure(readError.empty()
+                       ? "Could not extract RAR entry by offset."
+                       : readError);
+        break;
+      }
+      {
+        std::lock_guard lock(stateMutex);
+        ++emittedFiles;
+      }
+    }
+
+    {
+      std::lock_guard lock(stateMutex);
+      acquireMicros += localAcquireMicros;
+      extractMicros += localExtractMicros;
+      callbackMicros += localCallbackMicros;
+    }
+  };
+
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  appendDebugLogLineImpl("Starting concurrent unarr RAR random extraction: " +
+                         pathForLog(archivePath) +
+                         " targets=" + std::to_string(readTargets.size()) +
+                         " workers=" + std::to_string(maxWorkers) +
+                         " firstOffset=" +
+                         std::to_string(readTargets.front().offset) +
+                         " lastOffset=" +
+                         std::to_string(readTargets.back().offset) +
+                         " maxInFlightBytes=" +
+                         std::to_string(maxInFlightBytes));
+
+  std::vector<std::thread> workers;
+  workers.reserve(maxWorkers);
+  for (std::size_t i = 0; i < maxWorkers; ++i) {
+    workers.emplace_back(worker);
+  }
+  for (auto &thread : workers) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+
+  if (failed) {
+    if (errorMessage != nullptr) {
+      *errorMessage = failureMessage.empty()
+                          ? "Parallel RAR extraction failed."
+                          : failureMessage;
+    }
+    return false;
+  }
+
+  const auto extractMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                            start)
+          .count();
+  appendDebugLogLineImpl("Finished concurrent unarr RAR random extraction: " +
+                         pathForLog(archivePath) +
+                         " targets=" + std::to_string(readTargets.size()) +
+                         " files=" + std::to_string(emittedFiles) +
+                         " workers=" + std::to_string(maxWorkers) +
+                         " maxInFlightBytes=" +
+                         std::to_string(maxInFlightBytes) +
+                         " extractMs=" + std::to_string(extractMs) +
+                         " workerExtractMs=" +
+                         std::to_string(extractMicros / 1000) +
+                         " callbackMs=" +
+                         std::to_string(callbackMicros / 1000) +
+                         " acquireMs=" +
+                         std::to_string(acquireMicros / 1000));
+  return true;
+}
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
@@ -6073,6 +6377,33 @@ bool readArchiveEntriesConcurrently(
       *errorMessage = zipError.empty()
                           ? "Archive is not a random-access ZIP archive."
                           : zipError;
+    }
+    return false;
+  }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
+  std::string unarrError;
+  if (hasRarArchiveExtension(archivePath) &&
+      readUnarrRarEntriesByOffsetConcurrent(
+          archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
+          maxInFlightBytes, &unarrError, pauseCallback)) {
+    appendDebugLogLineImpl(
+        "Read archive batch via concurrent unarr RAR random access: " +
+        pathForLog(archivePath) +
+        " targets=" + std::to_string(innerPaths.size()) +
+        " workers=" + std::to_string(maxWorkers));
+    return true;
+  }
+  if (hasRarArchiveExtension(archivePath)) {
+    if (!unarrError.empty()) {
+      appendDebugLogLineImpl("Concurrent unarr RAR read failed: " +
+                             pathForLog(archivePath) + ": " + unarrError);
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          unarrError.empty()
+              ? "Archive is not a non-solid random-access RAR4 archive."
+              : unarrError;
     }
     return false;
   }

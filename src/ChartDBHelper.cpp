@@ -5225,7 +5225,8 @@ int ChartDBHelper::ScanChartRoots(
             sequenceByInnerPath.find(checkpointInnerPathText(file.path));
         if (sequenceIt == sequenceByInnerPath.end()) {
           std::lock_guard lock(resultMutex);
-          callbackError = "Parallel ZIP entry was not in the requested batch.";
+          callbackError =
+              "Parallel archive entry was not in the requested batch.";
           return false;
         }
 
