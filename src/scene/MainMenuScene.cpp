@@ -14,6 +14,7 @@
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
 #include "../SqliteRAII.h"
+#include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
@@ -102,8 +103,7 @@ void ensureLibraryFolderExists(const std::filesystem::path &path) {
   }
 
   throw std::runtime_error("Could not create library folder '" +
-                           path_t_to_utf8(fspath_to_path_t(path)) +
-                           "': " + error.message());
+                           fspath_to_utf8(path) + "': " + error.message());
 }
 
 bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
@@ -114,8 +114,7 @@ bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
   }
 
   SDL_Log("Failed to create %s %s: %s", description,
-          path_t_to_utf8(fspath_to_path_t(path)).c_str(),
-          error.message().c_str());
+          fspath_to_utf8(path).c_str(), error.message().c_str());
   return false;
 }
 
@@ -475,8 +474,7 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     targetPath = archivePath;
   }
 
-  const std::string targetPathText =
-      path_t_to_utf8(fspath_to_path_t(targetPath));
+  const std::string targetPathText = fspath_to_utf8(targetPath);
   const bool targetExists = std::filesystem::exists(targetPath, errorCode);
   if (errorCode) {
     errorMessage =
@@ -491,14 +489,12 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return RevealIOSFileInFiles(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                              errorMessage);
+  return RevealIOSFileInFiles(targetPathText, errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
 #elif TARGET_OS_OSX
-  return RevealPathInFinder(path_t_to_utf8(fspath_to_path_t(targetPath)),
-                            errorMessage);
+  return RevealPathInFinder(targetPathText, errorMessage);
 #elif defined(_WIN32)
   const std::wstring nativePath = targetPath.wstring();
   const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
@@ -554,7 +550,7 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     return false;
   }
 
-  const std::string directoryText = directoryPath.string();
+  const std::string directoryText = fspath_to_utf8(directoryPath);
   pid_t pid = 0;
   char *argv[] = {const_cast<char *>(openerPath.c_str()),
                   const_cast<char *>(directoryText.c_str()), nullptr};
@@ -1785,8 +1781,8 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1833,8 +1829,8 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1980,9 +1976,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
                       "Preparing import");
   archive_file::appendDebugLogLine(
-      "Android import task requested: " +
-      path_t_to_utf8(fspath_to_path_t(importPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)));
+      "Android import task requested: " + fspath_to_utf8(importPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot));
 
   auto postImportProgress = [this, &task,
                              importingFolder](double fraction,
@@ -2388,7 +2383,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Solid archive selected without chart probing: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) +
+          fspath_to_utf8(meta.BmsPath) +
           " files=" + std::to_string(item.archiveFileCount) +
           " estimatedUnpacked=" + std::to_string(item.archiveUncompressedSize));
       return;
@@ -2406,7 +2401,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     bool suppressPreview = false;
@@ -2429,14 +2424,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
     previewLoadCancelled = false;
     loadThread = std::thread([this, meta, &context]() {
-      SDL_Log("Previewing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
 
       // Debounce selection changes before doing expensive chart/media loading.
       for (int i = 0; i < 50; i++) {
@@ -2448,25 +2443,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       context.jukebox.stop();
-      SDL_Log("Parsing %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
       std::unique_ptr<bms_parser::Chart> chart;
       try {
         chart = play_options::parseChart(meta.BmsPath, previewLoadCancelled,
                                          "preview");
       } catch (const std::exception &e) {
         SDL_Log("Preview parse failed %s: %s",
-                path_t_to_utf8(meta.BmsPath).c_str(), e.what());
+                fspath_to_utf8(meta.BmsPath).c_str(), e.what());
         archive_file::appendDebugLogLine(
-            "Preview parse exception: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + ": " + e.what());
+            "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
+            e.what());
         return;
       }
-      SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
+      SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         archive_file::appendDebugLogLine(
-            "Preview chart is null: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+            "Preview chart is null: " + fspath_to_utf8(meta.BmsPath));
         return;
       }
 
@@ -3666,8 +3660,7 @@ void MainMenuScene::selectChartByPathAfterReload(
       recyclerView->onSelected(record, i);
     }
     archive_file::appendDebugLogLine(
-        "Selected unzipped chart: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+        "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
     return;
   }
 
@@ -4172,11 +4165,10 @@ void MainMenuScene::startCourseDirect(
                                                    parseCancelled, "course");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for course start: %s",
-                  path_t_to_utf8(firstMeta->BmsPath).c_str(), e.what());
+                  fspath_to_utf8(firstMeta->BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Course start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(firstMeta->BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
         }
         if (preparedChart == nullptr || parseCancelled) {
           if (replayStatusText != nullptr) {
@@ -4302,7 +4294,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+              fspath_to_utf8(record.meta.BmsPath));
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
@@ -4329,11 +4321,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
               chartRandomInfo.values, parseCancelled);
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for start: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Start parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (preparedChart != nullptr && !parseCancelled) {
           play_options::PlayOptionReplayInfo playInfo =
@@ -4424,8 +4415,7 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
 
   cancelPreviewLoading(false);
   archive_file::appendDebugLogLine(
-      "Open chart viewer: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+      "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
   context.jukebox.stop();
   context.sceneManager->changeScene(
       std::make_unique<ChartViewerScene>(context, record, chartRandomInfo.seed,
@@ -4453,8 +4443,7 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   std::string errorMessage;
   if (!revealPathInFileManager(record.meta.BmsPath, errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
-            path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)).c_str(),
-            errorMessage.c_str());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), errorMessage.c_str());
   }
 }
 
@@ -4619,9 +4608,8 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     outputRoot = ".";
   }
   archive_file::appendDebugLogLine(
-      "Unzip requested: " +
-      path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)) + " mode=full-archive");
+      "Unzip requested: " + fspath_to_utf8(record.meta.BmsPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot) + " mode=full-archive");
 
   unzipThread = std::jthread([this, record, outputRoot, fullArchiveUnzip,
                               sourceArchivePath](
@@ -4893,8 +4881,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
                           "Could not check archive: " + error.message(), 0, 0);
     archive_file::appendDebugLogLine(
         "Failed to check source archive before delete: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
-        error.message());
+        fspath_to_utf8(archivePath) + ": " + error.message());
     return;
   }
   if (!archiveExists) {
@@ -4912,8 +4899,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
             (error ? std::string(": ") + error.message() : std::string()),
         0, 0);
     archive_file::appendDebugLogLine(
-        "Failed to delete source archive: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)) +
+        "Failed to delete source archive: " + fspath_to_utf8(archivePath) +
         (error ? ": " + error.message() : ""));
     return;
   }
@@ -4935,8 +4921,7 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
   }
   updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
   archive_file::appendDebugLogLine(
-      "Deleted source archive after unzip: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)));
+      "Deleted source archive after unzip: " + fspath_to_utf8(archivePath));
 }
 
 void MainMenuScene::applyUnzipProgress() {
@@ -5008,9 +4993,8 @@ void MainMenuScene::applyUnzipResult() {
   }
   archive_file::appendDebugLogLine(
       result->message +
-      (result->chartPath.empty()
-           ? ""
-           : ": " + path_t_to_utf8(fspath_to_path_t(result->chartPath))));
+      (result->chartPath.empty() ? ""
+                                 : ": " + fspath_to_utf8(result->chartPath)));
 
   defer(
       [this, hideModal = result->success && !canDeleteArchive]() {
@@ -6281,12 +6265,10 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) + "\n";
   }
   if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Saved to " +
-              path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath)) +
+    detail += "Saved to " + fspath_to_utf8(findBmsResult.outputPath) +
               "\nRefreshing the library will make newly found charts playable.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
@@ -6315,20 +6297,17 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "The archive was extracted, but it does not contain the selected "
               "BMS chart hash.";
     if (!findBmsResult.outputPath.empty()) {
-      detail += "\nKept at " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath));
+      detail += "\nKept at " + fspath_to_utf8(findBmsResult.outputPath);
     }
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
     detail += "Automatic download failed. Open the source page or refresh "
               "after downloading.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else {
     detail +=
@@ -7420,11 +7399,10 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
         chartRandomInfo.values, parseCancelled, "autoplay");
   } catch (const std::exception &e) {
     SDL_Log("Error parsing %s for autoplay: %s",
-            path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+            fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
-        "Autoplay parse exception: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-        e.what());
+        "Autoplay parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+        ": " + e.what());
   }
   if (preparedChart == nullptr || parseCancelled) {
     return false;
@@ -7865,11 +7843,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
               parseCancelled, "autoplay export");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for autoplay export: %s",
-                  path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Autoplay export parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (chart == nullptr || parseCancelled) {
           complete({.success = false, .message = "No Chart"});
@@ -8071,11 +8048,12 @@ void MainMenuScene::applyReplayExportResult() {
   if (result->success) {
     SDL_Log("Replay %s exported: %s (%s)",
             result->photo ? "image" : "video",
-            result->outputPath.string().c_str(), result->message.c_str());
+            fspath_to_utf8(result->outputPath).c_str(),
+            result->message.c_str());
   } else {
     SDL_Log("Replay %s export failed: %s (%s)",
             result->photo ? "image" : "video", result->message.c_str(),
-            result->outputPath.string().c_str());
+            fspath_to_utf8(result->outputPath).c_str());
   }
 
   defer(
@@ -8581,7 +8559,7 @@ void MainMenuScene::FindFilesIOS(
       error);
   if (error) {
     SDL_Log("Failed to open iOS directory: %s (%s)",
-            directoryPath.string().c_str(), error.message().c_str());
+            fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
     return;
   }
 
@@ -8592,7 +8570,7 @@ void MainMenuScene::FindFilesIOS(
     }
     if (error) {
       SDL_Log("Failed while reading iOS directory: %s (%s)",
-              directoryPath.string().c_str(), error.message().c_str());
+              fspath_to_utf8(directoryPath).c_str(), error.message().c_str());
       error.clear();
       continue;
     }
@@ -8614,7 +8592,8 @@ void MainMenuScene::FindFilesIOS(
       directoriesToVisit.push_back(entry.path());
     } else if (typeError) {
       SDL_Log("Failed to inspect iOS path: %s (%s)",
-              entry.path().string().c_str(), typeError.message().c_str());
+              fspath_to_utf8(entry.path()).c_str(),
+              typeError.message().c_str());
     }
   }
 }

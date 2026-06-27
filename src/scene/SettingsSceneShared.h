@@ -786,7 +786,7 @@ static std::string formatChartEntryName(const ChartEntry &entry) {
   if (name.empty()) {
     return formatChartEntryPath(entry);
   }
-  return path_t_to_utf8(fspath_to_path_t(name));
+  return fspath_to_utf8(name);
 }
 
 static std::string formatChartEntrySource(const ChartEntry &entry) {

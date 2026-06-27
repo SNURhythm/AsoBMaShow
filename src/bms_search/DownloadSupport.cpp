@@ -77,10 +77,8 @@ std::optional<std::filesystem::path> saveIosDebugArtifacts(
   }
   metadata << "download_url=" << downloadUrl << '\n';
   metadata << "display_url=" << displayUrl << '\n';
-  metadata << "archive_path="
-           << path_t_to_utf8(fspath_to_path_t(archivePath)) << '\n';
-  metadata << "extract_path="
-           << path_t_to_utf8(fspath_to_path_t(extractDirectory)) << '\n';
+  metadata << "archive_path=" << fspath_to_utf8(archivePath) << '\n';
+  metadata << "extract_path=" << fspath_to_utf8(extractDirectory) << '\n';
   metadata.close();
   if (!metadata) {
     errorMessage = "Could not write debug metadata.";
@@ -473,8 +471,7 @@ bool downloadAndExtractArchive(
     std::filesystem::remove(archivePath, error);
     if (error) {
       SDL_Log("Could not delete downloaded archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
-              error.message().c_str());
+              fspath_to_utf8(archivePath).c_str(), error.message().c_str());
     }
   });
   if (progressCallback) {

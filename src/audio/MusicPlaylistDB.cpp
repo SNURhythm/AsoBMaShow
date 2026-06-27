@@ -201,7 +201,7 @@ std::string storedPathText(std::filesystem::path path) {
   }
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(path));
+  return fspath_to_utf8(path);
 }
 
 struct StoredMusicTrackIdentity {
@@ -381,7 +381,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
   std::error_code directoryError;
   if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
     std::cerr << "Can't create music playlist database directory "
-              << directory.string() << ": " << directoryError.message()
+              << fspath_to_utf8(directory) << ": " << directoryError.message()
               << "\n";
     return nullptr;
   }

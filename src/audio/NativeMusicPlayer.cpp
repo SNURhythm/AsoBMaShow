@@ -25,10 +25,6 @@ MetadataVisibility gMetadataVisibility;
 std::optional<TrackMetadata> gLastRawMetadata;
 std::optional<QueueMetadata> gLastRawQueue;
 
-std::string pathToUtf8(const std::filesystem::path &path) {
-  return path_t_to_utf8(fspath_to_path_t(path));
-}
-
 TrackMetadata normalizedMetadata(TrackMetadata metadata,
                                  const std::filesystem::path &audioPath) {
   if (metadata.title.empty()) {
@@ -102,7 +98,7 @@ bool updatePlatformMetadata(const TrackMetadata &metadata,
                                      .artist = metadata.artist,
                                      .album = metadata.album,
                                      .artworkPath =
-                                         pathToUtf8(metadata.artworkPath),
+                                         fspath_to_utf8(metadata.artworkPath),
                                      .durationMicros =
                                          metadata.durationMicros};
   return UpdateIOSNativeMusicMetadata(iosMetadata, errorMessage);
@@ -111,7 +107,7 @@ bool updatePlatformMetadata(const TrackMetadata &metadata,
                                              .artist = metadata.artist,
                                              .album = metadata.album,
                                              .artworkPath =
-                                                 pathToUtf8(
+                                                 fspath_to_utf8(
                                                      metadata.artworkPath),
                                              .durationMicros =
                                                  metadata.durationMicros};
@@ -135,7 +131,7 @@ bool updatePlatformQueue(const QueueMetadata &queue,
     iosItem.metadata.title = item.metadata.title;
     iosItem.metadata.artist = item.metadata.artist;
     iosItem.metadata.album = item.metadata.album;
-    iosItem.metadata.artworkPath = pathToUtf8(item.metadata.artworkPath);
+    iosItem.metadata.artworkPath = fspath_to_utf8(item.metadata.artworkPath);
     iosItem.metadata.durationMicros = item.metadata.durationMicros;
     iosItem.itemId = item.itemId;
     iosQueue.items.push_back(std::move(iosItem));
@@ -151,7 +147,7 @@ bool updatePlatformQueue(const QueueMetadata &queue,
     androidItem.metadata.title = item.metadata.title;
     androidItem.metadata.artist = item.metadata.artist;
     androidItem.metadata.album = item.metadata.album;
-    androidItem.metadata.artworkPath = pathToUtf8(item.metadata.artworkPath);
+    androidItem.metadata.artworkPath = fspath_to_utf8(item.metadata.artworkPath);
     androidItem.metadata.durationMicros = item.metadata.durationMicros;
     androidItem.itemId = item.itemId;
     androidQueue.items.push_back(std::move(androidItem));
@@ -234,7 +230,7 @@ bool Load(const std::filesystem::path &audioPath,
     visibleMetadata =
         applyMetadataVisibility(normalized, gMetadataVisibility);
   }
-  const std::string audioPathUtf8 = pathToUtf8(audioPath);
+  const std::string audioPathUtf8 = fspath_to_utf8(audioPath);
   bool loaded = false;
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -242,7 +238,7 @@ bool Load(const std::filesystem::path &audioPath,
                                      .artist = visibleMetadata.artist,
                                      .album = visibleMetadata.album,
                                      .artworkPath =
-                                         pathToUtf8(
+                                         fspath_to_utf8(
                                              visibleMetadata.artworkPath),
                                      .durationMicros =
                                          visibleMetadata.durationMicros};
@@ -252,7 +248,7 @@ bool Load(const std::filesystem::path &audioPath,
                                              .artist = visibleMetadata.artist,
                                              .album = visibleMetadata.album,
                                              .artworkPath =
-                                                 pathToUtf8(
+                                                 fspath_to_utf8(
                                                      visibleMetadata.artworkPath),
                                              .durationMicros =
                                                  visibleMetadata.durationMicros};

@@ -4,6 +4,7 @@
 #include "CoursePlaySession.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
+#include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -517,7 +518,7 @@ inline std::unique_ptr<bms_parser::Chart> parseChartBytes(
   }
 
   bms_parser::Chart *parsedChart = nullptr;
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string pathText = fspath_to_utf8(path);
   archive_file::appendDebugLogLine("Parse " + std::string(logContext) +
                                    " from bytes: " + pathText);
   parser.Parse(bytes, &parsedChart, false, false, cancelled);
@@ -559,7 +560,7 @@ parseChart(const std::filesystem::path &path,
   }
 
   bms_parser::Chart *parsedChart = nullptr;
-  const std::string pathText = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string pathText = fspath_to_utf8(path);
   archive_file::appendDebugLogLine("Parse " + std::string(logContext) + ": " +
                                    pathText);
   archive_file::parseChart(parser, path, &parsedChart, false, false,

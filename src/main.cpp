@@ -14,6 +14,7 @@
 #include <SDL2/SDL_metal.h>
 #endif
 #include "main.h"
+#include "path.h"
 #include "scene/MainMenuScene.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
@@ -141,7 +142,7 @@ void changeWorkingDirectoryToExecutableDir(
   if (error || !dirExists) {
     if (error) {
       APP_DEBUG_LOG("Could not inspect executable directory %s: %s",
-                    exeDir.string().c_str(), error.message().c_str());
+                    fspath_to_utf8(exeDir).c_str(), error.message().c_str());
     }
     return;
   }
@@ -149,11 +150,12 @@ void changeWorkingDirectoryToExecutableDir(
   std::filesystem::current_path(exeDir, error);
   if (error) {
     APP_DEBUG_LOG("Could not change working directory to %s: %s",
-                  exeDir.string().c_str(), error.message().c_str());
+                  fspath_to_utf8(exeDir).c_str(), error.message().c_str());
     return;
   }
 
-  APP_DEBUG_LOG("Changed working directory to: %s", exeDir.string().c_str());
+  APP_DEBUG_LOG("Changed working directory to: %s",
+                fspath_to_utf8(exeDir).c_str());
 }
 
 uint32_t resolveResetFlags() {

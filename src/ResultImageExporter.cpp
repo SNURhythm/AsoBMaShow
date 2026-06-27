@@ -88,7 +88,7 @@ ensureExportDirectoryError(const std::filesystem::path &path,
   }
 
   return std::string(failureMessage) + " (" +
-         path_t_to_utf8(fspath_to_path_t(path)) + "): " + error.message();
+         fspath_to_utf8(path) + "): " + error.message();
 }
 
 class ScopedResultImageBgfxAccess {
@@ -589,7 +589,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  if (!SaveImageToIOSPhotos(path.string(), errorMessage)) {
+  if (!SaveImageToIOSPhotos(fspath_to_utf8(path), errorMessage)) {
     return {.success = false, .outputPath = path, .message = errorMessage};
   }
   return {.success = true, .outputPath = path, .message = "Saved to Photos"};

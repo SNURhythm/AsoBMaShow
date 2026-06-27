@@ -261,9 +261,8 @@ bool trackMatchesSearch(const music_playlist::MusicTrack &track,
       track.subArtist + " " + track.genre + " " + track.trackId + " " +
       track.chartId + " " + meta.Title + " " + meta.SubTitle + " " +
       meta.Artist + " " + meta.SubArtist + " " + meta.Genre + " " +
-      meta.MD5 + " " + meta.SHA256 + " " +
-      path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + " " +
-      path_t_to_utf8(fspath_to_path_t(meta.Folder));
+      meta.MD5 + " " + meta.SHA256 + " " + fspath_to_utf8(meta.BmsPath) +
+      " " + fspath_to_utf8(meta.Folder);
   return containsText(searchable, query);
 }
 

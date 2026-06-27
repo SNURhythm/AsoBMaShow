@@ -2,9 +2,9 @@
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
-#include "../RAII.h"
 #include "../Utils.h"
 #include "../path.h"
+#include "SoundFileIO.h"
 #include "decoder.h"
 
 #include <SDL2/SDL.h>
@@ -246,14 +246,12 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     const auto readStart = std::chrono::steady_clock::now();
     if (!readArchiveAudioBatch(batch, range, files, &errorMessage)) {
       logMessage(options, "Chart audio archived preload failed: " +
-                              path_t_to_utf8(fspath_to_path_t(
-                                  batch.archivePath)) +
+                              fspath_to_utf8(batch.archivePath) +
                               ": " + errorMessage);
       continue;
     }
     logMessage(options, "Chart audio archive batch read: " +
-                            path_t_to_utf8(fspath_to_path_t(
-                                batch.archivePath)) +
+                            fspath_to_utf8(batch.archivePath) +
                             " files=" + std::to_string(files.size()) +
                             " time=" + secondsString(elapsedMicros(readStart)) +
                             "s");
@@ -299,15 +297,13 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     decodedCount += decodedInBatch.load(std::memory_order_relaxed);
     if (failedInBatch.load(std::memory_order_relaxed) > 0) {
       logMessage(options, "Chart audio archive decode failures: " +
-                              path_t_to_utf8(fspath_to_path_t(
-                                  batch.archivePath)) +
+                              fspath_to_utf8(batch.archivePath) +
                               " count=" +
                               std::to_string(failedInBatch.load(
                                   std::memory_order_relaxed)));
     }
     logMessage(options, "Chart audio archive batch decode: " +
-                            path_t_to_utf8(fspath_to_path_t(
-                                batch.archivePath)) +
+                            fspath_to_utf8(batch.archivePath) +
                             " time=" +
                             secondsString(elapsedMicros(decodeStart)) + "s");
   }
@@ -336,7 +332,7 @@ DecodedSound *loadDecodedSound(const bms_parser::Chart &chart, int wav,
   if (!decodeAudioToPCM(fspath_to_path_t(resolvedPath), decoded->pcm,
                         decoded->info, isCancelled)) {
     SDL_Log("Chart audio failed to decode sound %d: %s", wav,
-            resolvedPath.string().c_str());
+            fspath_to_utf8(resolvedPath).c_str());
     if (!isCancelled) {
       decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     }
@@ -344,7 +340,7 @@ DecodedSound *loadDecodedSound(const bms_parser::Chart &chart, int wav,
   }
   if (!decodedSoundIsValid(*decoded)) {
     SDL_Log("Chart audio decoded invalid sound %d: %s", wav,
-            resolvedPath.string().c_str());
+            fspath_to_utf8(resolvedPath).c_str());
     decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     return nullptr;
   }
@@ -433,13 +429,8 @@ bool writeWavFile(const std::filesystem::path &path,
   outputInfo.channels = kOutputChannels;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
-#ifdef _WIN32
-  SNDFILE *rawFile =
-      sf_wchar_open(path.wstring().c_str(), SFM_WRITE, &outputInfo);
-#else
-  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
-#endif
-  UniqueResource<SNDFILE, sf_close> file(rawFile);
+  auto file =
+      asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, outputInfo);
   if (file == nullptr) {
     errorMessage =
         std::string("Failed to open chart audio output: ") + sf_strerror(nullptr);

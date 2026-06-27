@@ -209,8 +209,7 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
 
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   if (!mz_zip_reader_init_file(&archive, archiveText.c_str(), 0)) {
     errorMessage = "Could not open ZIP archive.";
     return false;
@@ -249,17 +248,16 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
     }
 
     if (progressCallback) {
-      progressCallback({.message = "Extracting " + relativePath.string(),
+      progressCallback({.message = "Extracting " + fspath_to_utf8(relativePath),
                         .downloadedBytes = i,
                         .totalBytes = fileCount});
     }
 
-    const std::string destinationText =
-        path_t_to_utf8(fspath_to_path_t(destination));
+    const std::string destinationText = fspath_to_utf8(destination);
     if (!mz_zip_reader_extract_to_file(&archive, i, destinationText.c_str(),
                                        0)) {
       ok = false;
-      errorMessage = "Could not extract " + relativePath.string();
+      errorMessage = "Could not extract " + fspath_to_utf8(relativePath);
       break;
     }
     ++extractedFiles;
@@ -378,8 +376,7 @@ bool extractArchiveWithLibarchive(
   archive_read_support_format_raw(archiveHandle.get());
   preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   int status = archive_read_open_filename(archiveHandle.get(),
                                           archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
@@ -460,7 +457,7 @@ bool extractArchiveWithLibarchive(
     }
 
     if (progressCallback) {
-      progressCallback({.message = "Extracting " + relativePath.string(),
+      progressCallback({.message = "Extracting " + fspath_to_utf8(relativePath),
                         .downloadedBytes = entryIndex,
                         .totalBytes = 0});
     }
@@ -468,7 +465,7 @@ bool extractArchiveWithLibarchive(
     std::ofstream output(destination, std::ios::binary);
     if (!output) {
       ok = false;
-      errorMessage = "Could not create " + relativePath.string();
+      errorMessage = "Could not create " + fspath_to_utf8(relativePath);
       break;
     }
 
@@ -482,14 +479,14 @@ bool extractArchiveWithLibarchive(
       }
       if (bytes < 0) {
         ok = false;
-        errorMessage = "Could not extract " + relativePath.string() + ": " +
-                       archiveErrorString(archiveHandle.get(), "");
+        errorMessage = "Could not extract " + fspath_to_utf8(relativePath) +
+                       ": " + archiveErrorString(archiveHandle.get(), "");
         break;
       }
       output.write(buffer.data(), static_cast<std::streamsize>(bytes));
       if (!output) {
         ok = false;
-        errorMessage = "Could not write " + relativePath.string();
+        errorMessage = "Could not write " + fspath_to_utf8(relativePath);
         break;
       }
     }
@@ -555,8 +552,7 @@ void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
   archive_read_support_format_raw(archiveHandle.get());
   preferJapaneseArchiveHeaderCharset(archiveHandle.get());
 
-  const std::string archiveText =
-      path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   int status = archive_read_open_filename(archiveHandle.get(),
                                           archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
@@ -696,7 +692,7 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
     if (!bytes) {
       if (!readError.empty()) {
         SDL_Log("Skipping BMS hash verification for %s: %s",
-                iterator->path().string().c_str(), readError.c_str());
+                fspath_to_utf8(iterator->path()).c_str(), readError.c_str());
       }
       continue;
     }

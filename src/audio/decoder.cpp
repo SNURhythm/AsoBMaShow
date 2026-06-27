@@ -1,14 +1,12 @@
 #include "decoder.h"
 #include "../ArchiveFile.h"
 #include "../RAII.h"
+#include "SoundFileIO.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <iostream>
-#ifdef _WIN32
-#define sf_open sf_wchar_open
-#endif
 namespace {
 struct MemoryAudioFile {
   const unsigned char *data = nullptr;
@@ -157,6 +155,6 @@ bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,
                                  isCancelled);
   }
 
-  SNDFILE *file = sf_open(filePath.c_str(), SFM_READ, &fileInfo);
+  SNDFILE *file = asobmashow::audio::openSoundFile(fsPath, SFM_READ, fileInfo);
   return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled);
 }

@@ -20,3 +20,7 @@ inline path_t fspath_to_path_t(const std::filesystem::path &path) {
 
 std::string path_t_to_utf8(const path_t &input);
 path_t utf8_to_path_t(const std::string &input);
+
+inline std::string fspath_to_utf8(const std::filesystem::path &path) {
+  return path_t_to_utf8(fspath_to_path_t(path));
+}

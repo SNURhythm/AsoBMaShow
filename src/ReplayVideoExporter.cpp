@@ -8,6 +8,7 @@
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
+#include "audio/SoundFileIO.h"
 #include "main.h"
 #include "path.h"
 #include "rendering/BlurPass.h"
@@ -86,7 +87,7 @@ ensureReplayExportDirectoryError(const std::filesystem::path &path,
   }
 
   return std::string(failureMessage) + " (" +
-         path_t_to_utf8(fspath_to_path_t(path)) + "): " + error.message();
+         fspath_to_utf8(path) + "): " + error.message();
 }
 
 void removeReplayExportOutputFile(const std::filesystem::path &outputPath) {
@@ -100,7 +101,7 @@ void removeReplayExportWorkDirectory(const std::filesystem::path &tempDir,
   std::filesystem::remove_all(tempDir, error);
   if (error && log != nullptr) {
     replayExportLog(log, "Replay export could not clean work directory: %s",
-                    tempDir.string().c_str());
+                    fspath_to_utf8(tempDir).c_str());
   }
 }
 
@@ -275,7 +276,7 @@ public:
     file.open(path, std::ios::out | std::ios::trunc);
     if (!file.is_open()) {
       SDL_Log("Replay export could not open log file: %s",
-              path.string().c_str());
+              fspath_to_utf8(path).c_str());
     }
   }
 
@@ -692,13 +693,13 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
   }
 
   SF_INFO inputInfo{};
-  SNDFILE *input = sf_open(path.string().c_str(), SFM_READ, &inputInfo);
-  if (input == nullptr) {
+  auto inputHandle =
+      asobmashow::audio::openSoundFileHandle(path, SFM_READ, inputInfo);
+  if (inputHandle == nullptr) {
     errorMessage = std::string("Failed to open course replay stage audio: ") +
                    sf_strerror(nullptr);
     return false;
   }
-  UniqueResource<SNDFILE, sf_close> inputHandle(input);
   if (inputInfo.channels != kExportChannels ||
       inputInfo.samplerate != kExportSampleRate) {
     errorMessage = "Course replay stage audio format is invalid";
@@ -742,13 +743,13 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = sf_open(outputPath.string().c_str(), SFM_WRITE, &outputInfo);
-  if (output == nullptr) {
+  auto outputHandle =
+      asobmashow::audio::openSoundFileHandle(outputPath, SFM_WRITE, outputInfo);
+  if (outputHandle == nullptr) {
     errorMessage = std::string("Failed to create aligned replay audio: ") +
                    sf_strerror(nullptr);
     return false;
   }
-  UniqueResource<SNDFILE, sf_close> outputHandle(output);
 
   sf_count_t writtenFrames = 0;
   if (targetFrames > 0 &&
@@ -776,14 +777,14 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
-  if (output == nullptr) {
+  auto outputHandle =
+      asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, outputInfo);
+  if (outputHandle == nullptr) {
     return {.success = false,
             .outputPath = path,
             .message = std::string("Failed to create course replay audio: ") +
                        sf_strerror(nullptr)};
   }
-  UniqueResource<SNDFILE, sf_close> outputHandle(output);
 
   sf_count_t writtenFrames = 0;
   for (const auto &segment : segments) {
@@ -1493,7 +1494,7 @@ public:
       return false;
     };
 
-    const std::string outputPathString = outputPath.string();
+    const std::string outputPathString = fspath_to_utf8(outputPath);
     int ret = avformat_alloc_output_context2(&formatContext, nullptr, "mp4",
                                              outputPathString.c_str());
     if (ret < 0 || formatContext == nullptr) {
@@ -1649,11 +1650,7 @@ public:
     audioStream->time_base = audioContext->time_base;
 
     SF_INFO audioInfo{};
-#ifdef _WIN32
-    audioFile = sf_wchar_open(wavPath.wstring().c_str(), SFM_READ, &audioInfo);
-#else
-    audioFile = sf_open(wavPath.string().c_str(), SFM_READ, &audioInfo);
-#endif
+    audioFile = asobmashow::audio::openSoundFile(wavPath, SFM_READ, audioInfo);
     if (audioFile == nullptr) {
       return failOpen(std::string("Failed to open replay audio track: ") +
                       sf_strerror(nullptr));
@@ -1923,9 +1920,9 @@ public:
                     "%dfps, bitrate %lld",
                     width, height, fps, static_cast<long long>(bitRate));
     std::string nativeErrorMessage;
-    writer =
-        CreateIOSReplayVideoWriter(wavPath.string(), outputPath.string(), width,
-                                   height, fps, bitRate, nativeErrorMessage);
+    writer = CreateIOSReplayVideoWriter(
+        fspath_to_utf8(wavPath), fspath_to_utf8(outputPath), width, height, fps,
+        bitRate, nativeErrorMessage);
     if (writer != nullptr) {
       replayExportLog(log,
                       "Replay video export encoder: avassetwriter_hevc, pixel "
@@ -2463,8 +2460,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::filesystem::path videoAudioPath = wavPath;
   std::filesystem::path alignedAudioPath;
   if (totalDurationMicros > 0) {
-    alignedAudioPath =
-        wavPath.parent_path() / (wavPath.stem().string() + "_video.wav");
+    std::filesystem::path alignedAudioName = wavPath.stem();
+    alignedAudioName += PATH("_video.wav");
+    alignedAudioPath = wavPath.parent_path() / alignedAudioName;
     if (!writeReplayAudioFileAtDuration(wavPath, alignedAudioPath,
                                         totalDurationMicros, errorMessage)) {
       bgfxCleanup.runNow();
@@ -3402,7 +3400,8 @@ ReplayVideoExportResult
 saveReplayVideoToPlatformLibrary(const ReplayVideoExportResult &muxResult) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string errorMessage;
-  if (!SaveVideoToIOSPhotos(muxResult.outputPath.string(), errorMessage)) {
+  if (!SaveVideoToIOSPhotos(fspath_to_utf8(muxResult.outputPath),
+                            errorMessage)) {
     return {.success = false,
             .outputPath = muxResult.outputPath,
             .message = errorMessage.empty() ? "Failed to save video to Photos"
@@ -3488,7 +3487,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto outputPath = outputDir / (baseName + ".mp4");
 
   replayExportLog(exportLog, "Replay export audio: %s",
-                  wavPath.string().c_str());
+                  fspath_to_utf8(wavPath).c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult = writeReplayAudioTrack(*chart, replay, wavPath, exportLog);
@@ -3505,7 +3504,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   reportReplayExportProgress(resolvedOptions, 0.05, "Audio track ready");
 
   replayExportLog(exportLog, "Replay export MP4: %s (%dx%d @ %dfps)",
-                  outputPath.string().c_str(), resolvedOptions.width,
+                  fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
   const long long gameplayDurationMicros =
@@ -3655,7 +3654,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
                   static_cast<double>(elapsedMicros(audioStart)) / 1000000.0);
 
   replayExportLog(exportLog, "Course replay export MP4: %s (%dx%d @ %dfps)",
-                  outputPath.string().c_str(), resolvedOptions.width,
+                  fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
   auto muxResult = renderCourseReplayVideoToMp4(
