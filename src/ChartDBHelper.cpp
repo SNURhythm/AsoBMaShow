@@ -1098,10 +1098,6 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return false;
 }
 
-bool bindText(sqlite3_stmt *stmt, int idx, const std::string &value) {
-  return bindSqliteText(stmt, idx, value);
-}
-
 bool createChartMetaTableSchema(sqlite3 *db) {
   const char *query =
       "CREATE TABLE IF NOT EXISTS chart_meta ("
@@ -1164,7 +1160,7 @@ bool normalizedPathValueExists(sqlite3_stmt *stmt,
                                const std::string &normalized) {
   sqlite3_reset(stmt);
   sqlite3_clear_bindings(stmt);
-  bindText(stmt, 1, normalized);
+  bindSqliteText(stmt, 1, normalized);
   const bool exists = sqlite3_step(stmt) == SQLITE_ROW;
   return exists;
 }
@@ -1254,7 +1250,7 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   for (const auto &item : pending) {
     sqlite3_reset(updateStmt.get());
     sqlite3_clear_bindings(updateStmt.get());
-    bindText(updateStmt.get(), 1, item.normalized);
+    bindSqliteText(updateStmt.get(), 1, item.normalized);
     sqlite3_bind_int64(updateStmt.get(), 2, item.rowid);
     rc = sqlite3_step(updateStmt.get());
     if (rc == SQLITE_DONE && sqlite3_changes(db) > 0) {
@@ -1762,15 +1758,15 @@ bool upsertChartScanCheckpoint(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt.get(), 1, checkpoint.scanSignature);
-  bindText(stmt.get(), 2, checkpoint.phase);
+  bindSqliteText(stmt.get(), 1, checkpoint.scanSignature);
+  bindSqliteText(stmt.get(), 2, checkpoint.phase);
   sqlite3_bind_int(stmt.get(), 3, std::max(0, checkpoint.nextIndex));
   sqlite3_bind_int(stmt.get(), 4, std::max(0, checkpoint.subIndex));
-  bindText(stmt.get(), 5, checkpointPathTextForDb(checkpoint.lastPath));
-  bindText(stmt.get(), 6, checkpointPathTextForDb(checkpoint.archivePath));
+  bindSqliteText(stmt.get(), 5, checkpointPathTextForDb(checkpoint.lastPath));
+  bindSqliteText(stmt.get(), 6, checkpointPathTextForDb(checkpoint.archivePath));
   sqlite3_bind_int64(stmt.get(), 7, checkpoint.archiveSize);
   sqlite3_bind_int64(stmt.get(), 8, checkpoint.archiveMtimeNs);
-  bindText(stmt.get(), 9, checkpoint.lastInnerPath);
+  bindSqliteText(stmt.get(), 9, checkpoint.lastInnerPath);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while upserting chart scan checkpoint: "
@@ -1843,7 +1839,7 @@ ArchiveScanCacheRecord selectArchiveScanCache(
               << sqlite3_errmsg(db) << "\n";
     return record;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     record.found = true;
     record.archiveSize = sqlite3_column_int64(stmt.get(), 0);
@@ -1924,7 +1920,7 @@ bool upsertArchiveScanCache(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   sqlite3_bind_int64(stmt.get(), 2, archiveSize);
   sqlite3_bind_int64(stmt.get(), 3, mtimeNs);
   sqlite3_bind_int(stmt.get(), 4, solid ? 1 : 0);
@@ -1954,7 +1950,7 @@ bool deleteArchiveScanCache(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while deleting archive scan cache: "
@@ -2007,8 +2003,8 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
-  bindText(stmt.get(), 2, name);
+  bindSqliteText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 2, name);
   sqlite3_bind_int64(stmt.get(), 3, archiveSize);
   sqlite3_bind_int64(stmt.get(), 4, clampSqlInteger(uncompressedSize));
   sqlite3_bind_int(stmt.get(), 5, std::max(0, fileCount));
@@ -2036,7 +2032,7 @@ bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt.get(), 1, pathText);
+  bindSqliteText(stmt.get(), 1, pathText);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while deleting solid archive: "
@@ -2074,7 +2070,7 @@ bool deleteChartMetaInArchive(sqlite3 *db,
     const std::string pathText = path_t_to_utf8(fspath_to_path_t(storedPath));
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
-    bindText(stmt.get(), 1, pathText);
+    bindSqliteText(stmt.get(), 1, pathText);
     rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE) {
       std::cerr << "SQL error while deleting archive chart: "
@@ -2122,9 +2118,9 @@ int findDifficultyTable(sqlite3 *db, const std::string &name,
               << sqlite3_errmsg(db) << "\n";
     return 0;
   }
-  bindText(stmt.get(), 1, name);
-  bindText(stmt.get(), 2, symbol);
-  bindText(stmt.get(), 3, sourceUrl);
+  bindSqliteText(stmt.get(), 1, name);
+  bindSqliteText(stmt.get(), 2, symbol);
+  bindSqliteText(stmt.get(), 3, sourceUrl);
   int id = 0;
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     id = sqlite3_column_int(stmt.get(), 0);
@@ -2147,7 +2143,7 @@ int findDifficultyTableBySourceUrl(sqlite3 *db, const std::string &sourceUrl) {
               << sqlite3_errmsg(db) << "\n";
     return 0;
   }
-  bindText(stmt.get(), 1, sourceUrl);
+  bindSqliteText(stmt.get(), 1, sourceUrl);
   int id = 0;
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     id = sqlite3_column_int(stmt.get(), 0);
@@ -2245,9 +2241,9 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
     if (rc != SQLITE_OK) {
       return 0;
     }
-    bindText(stmt.get(), 1, name);
-    bindText(stmt.get(), 2, symbol);
-    bindText(stmt.get(), 3, dataUrl);
+    bindSqliteText(stmt.get(), 1, name);
+    bindSqliteText(stmt.get(), 2, symbol);
+    bindSqliteText(stmt.get(), 3, dataUrl);
     sqlite3_bind_int(stmt.get(), 4, tableId);
     rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE || !clearDifficultyTableContent(db, tableId)) {
@@ -2268,10 +2264,10 @@ int upsertDifficultyTable(sqlite3 *db, const std::string &name,
               << sqlite3_errmsg(db) << "\n";
     return 0;
   }
-  bindText(stmt.get(), 1, name);
-  bindText(stmt.get(), 2, symbol);
-  bindText(stmt.get(), 3, dataUrl);
-  bindText(stmt.get(), 4, sourceUrl);
+  bindSqliteText(stmt.get(), 1, name);
+  bindSqliteText(stmt.get(), 2, symbol);
+  bindSqliteText(stmt.get(), 3, dataUrl);
+  bindSqliteText(stmt.get(), 4, sourceUrl);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return 0;
@@ -2294,15 +2290,15 @@ bool insertDifficultyTableEntry(sqlite3 *db, int tableId,
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, chart.level);
-  bindText(stmt.get(), 3, chart.md5);
-  bindText(stmt.get(), 4, chart.sha256);
-  bindText(stmt.get(), 5, chart.title);
-  bindText(stmt.get(), 6, chart.subtitle);
-  bindText(stmt.get(), 7, chart.artist);
-  bindText(stmt.get(), 8, chart.subartist);
-  bindText(stmt.get(), 9, chart.url);
-  bindText(stmt.get(), 10, chart.urlDiff);
+  bindSqliteText(stmt.get(), 2, chart.level);
+  bindSqliteText(stmt.get(), 3, chart.md5);
+  bindSqliteText(stmt.get(), 4, chart.sha256);
+  bindSqliteText(stmt.get(), 5, chart.title);
+  bindSqliteText(stmt.get(), 6, chart.subtitle);
+  bindSqliteText(stmt.get(), 7, chart.artist);
+  bindSqliteText(stmt.get(), 8, chart.subartist);
+  bindSqliteText(stmt.get(), 9, chart.url);
+  bindSqliteText(stmt.get(), 10, chart.urlDiff);
   sqlite3_bind_int(stmt.get(), 11, sortOrder);
   rc = sqlite3_step(stmt.get());
   return rc == SQLITE_DONE;
@@ -2324,10 +2320,10 @@ int insertDifficultyCourse(sqlite3 *db, int tableId, const std::string &name,
     return 0;
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, name);
-  bindText(stmt.get(), 3, groupName);
-  bindText(stmt.get(), 4, level);
-  bindText(stmt.get(), 5, constraintJson);
+  bindSqliteText(stmt.get(), 2, name);
+  bindSqliteText(stmt.get(), 3, groupName);
+  bindSqliteText(stmt.get(), 4, level);
+  bindSqliteText(stmt.get(), 5, constraintJson);
   sqlite3_bind_int(stmt.get(), 6, sortOrder);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -2351,15 +2347,15 @@ bool insertDifficultyCourseEntry(sqlite3 *db, int courseId,
     return false;
   }
   sqlite3_bind_int(stmt.get(), 1, courseId);
-  bindText(stmt.get(), 2, chart.level);
-  bindText(stmt.get(), 3, chart.md5);
-  bindText(stmt.get(), 4, chart.sha256);
-  bindText(stmt.get(), 5, chart.title);
-  bindText(stmt.get(), 6, chart.subtitle);
-  bindText(stmt.get(), 7, chart.artist);
-  bindText(stmt.get(), 8, chart.subartist);
-  bindText(stmt.get(), 9, chart.url);
-  bindText(stmt.get(), 10, chart.urlDiff);
+  bindSqliteText(stmt.get(), 2, chart.level);
+  bindSqliteText(stmt.get(), 3, chart.md5);
+  bindSqliteText(stmt.get(), 4, chart.sha256);
+  bindSqliteText(stmt.get(), 5, chart.title);
+  bindSqliteText(stmt.get(), 6, chart.subtitle);
+  bindSqliteText(stmt.get(), 7, chart.artist);
+  bindSqliteText(stmt.get(), 8, chart.subartist);
+  bindSqliteText(stmt.get(), 9, chart.url);
+  bindSqliteText(stmt.get(), 10, chart.urlDiff);
   sqlite3_bind_int(stmt.get(), 11, sortOrder);
   rc = sqlite3_step(stmt.get());
   return rc == SQLITE_DONE;
@@ -2889,7 +2885,7 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
                 << sqlite3_errmsg(db) << "\n";
       return false;
     }
-    bindText(stmt, 1, chartPath);
+    bindSqliteText(stmt, 1, chartPath);
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
       std::cerr << "SQL error while deleting chart favorite: "
@@ -2915,9 +2911,9 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
               << sqlite3_errmsg(db) << "\n";
     return false;
   }
-  bindText(stmt, 1, chartPath);
-  bindText(stmt, 2, normalizedHash(chartMeta.MD5));
-  bindText(stmt, 3, normalizedHash(chartMeta.SHA256));
+  bindSqliteText(stmt, 1, chartPath);
+  bindSqliteText(stmt, 2, normalizedHash(chartMeta.MD5));
+  bindSqliteText(stmt, 3, normalizedHash(chartMeta.SHA256));
   rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     std::cerr << "SQL error while saving chart favorite: " << sqlite3_errmsg(db)
@@ -3026,7 +3022,7 @@ void ChartDBHelper::QueryChartMeta(
 
     int bindIndex = 1;
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (chartQuery.limit > 0) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
@@ -3116,16 +3112,16 @@ void ChartDBHelper::QueryChartMeta(
     int bindIndex = 1;
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
     if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (!chartQuery.difficultyText.empty()) {
       const std::string difficulty =
           lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
+      bindSqliteText(stmt, bindIndex++, difficulty);
+      bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
     }
     if (chartQuery.clearMarkFilter) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
@@ -3218,16 +3214,16 @@ void ChartDBHelper::QueryChartMeta(
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
     }
     if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (!chartQuery.difficultyText.empty()) {
       const std::string difficulty =
           lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
+      bindSqliteText(stmt, bindIndex++, difficulty);
+      bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
     }
     if (chartQuery.limit > 0) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.limit);
@@ -3345,12 +3341,12 @@ void ChartDBHelper::QueryChartMeta(
 
   int bindIndex = 1;
   if (!chartQuery.keyword.empty()) {
-    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
   }
   if (chartQuery.tableId > 0) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
     if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
     }
   }
   if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
@@ -3362,14 +3358,14 @@ void ChartDBHelper::QueryChartMeta(
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
     }
     if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
     }
   }
   if (!chartQuery.difficultyText.empty()) {
     const std::string difficulty =
         lowerCopy(trimCopy(chartQuery.difficultyText));
-    bindText(stmt, bindIndex++, difficulty);
-    bindText(stmt, bindIndex++, "%" + difficulty + "%");
+    bindSqliteText(stmt, bindIndex++, difficulty);
+    bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
   }
   if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
@@ -3407,7 +3403,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       return 0;
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, 1, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, 1, "%" + chartQuery.keyword + "%");
     }
     int count = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3468,16 +3464,16 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
     int bindIndex = 1;
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
     if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (!chartQuery.difficultyText.empty()) {
       const std::string difficulty =
           lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
+      bindSqliteText(stmt, bindIndex++, difficulty);
+      bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
     }
     if (chartQuery.clearMarkFilter) {
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
@@ -3561,16 +3557,16 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
     }
     if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
     }
     if (!chartQuery.keyword.empty()) {
-      bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+      bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
     }
     if (!chartQuery.difficultyText.empty()) {
       const std::string difficulty =
           lowerCopy(trimCopy(chartQuery.difficultyText));
-      bindText(stmt, bindIndex++, difficulty);
-      bindText(stmt, bindIndex++, "%" + difficulty + "%");
+      bindSqliteText(stmt, bindIndex++, difficulty);
+      bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
     }
 
     int count = 0;
@@ -3677,12 +3673,12 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
 
   int bindIndex = 1;
   if (!chartQuery.keyword.empty()) {
-    bindText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+    bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
   }
   if (chartQuery.tableId > 0) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.tableId);
     if (!chartQuery.tableLevel.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.tableLevel);
+      bindSqliteText(stmt, bindIndex++, chartQuery.tableLevel);
     }
   }
   if (chartQuery.coursesOnly || chartQuery.courseId > 0 ||
@@ -3694,14 +3690,14 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       sqlite3_bind_int(stmt, bindIndex++, chartQuery.courseTableId);
     }
     if (!chartQuery.courseGroupName.empty()) {
-      bindText(stmt, bindIndex++, chartQuery.courseGroupName);
+      bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
     }
   }
   if (!chartQuery.difficultyText.empty()) {
     const std::string difficulty =
         lowerCopy(trimCopy(chartQuery.difficultyText));
-    bindText(stmt, bindIndex++, difficulty);
-    bindText(stmt, bindIndex++, "%" + difficulty + "%");
+    bindSqliteText(stmt, bindIndex++, difficulty);
+    bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
   }
   if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
@@ -5990,7 +5986,7 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
     return {};
   }
   sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindText(stmt.get(), 2, groupName);
+  bindSqliteText(stmt.get(), 2, groupName);
 
   std::vector<DifficultyCourseInfo> courses;
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
