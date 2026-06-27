@@ -239,6 +239,23 @@ querySqliteTableHasColumn(sqlite3 *db, const char *tableName,
   return std::nullopt;
 }
 
+template <typename LogSqlError>
+inline bool ensureSqliteTableColumnLogged(sqlite3 *db, const char *tableName,
+                                          const char *columnName,
+                                          const char *alterQuery,
+                                          const char *schemaContext,
+                                          const char *alterContext,
+                                          const LogSqlError &logSqlError) {
+  bool hasColumn = false;
+  if (const auto error =
+          querySqliteTableHasColumn(db, tableName, columnName, hasColumn)) {
+    logSqlError(schemaContext, *error);
+    return false;
+  }
+  return hasColumn ||
+         executeSqliteLogged(db, alterQuery, alterContext, logSqlError);
+}
+
 inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
                                    std::string &errorMessage,
                                    int busyTimeoutMs = 1000) {

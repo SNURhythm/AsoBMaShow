@@ -32,21 +32,12 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
-bool tableHasColumn(sqlite3 *db, const char *tableName,
-                    const char *columnName) {
-  bool found = false;
-  if (const auto error =
-          querySqliteTableHasColumn(db, tableName, columnName, found)) {
-    logSqlErrorText("reading replay schema", *error);
-  }
-  return found;
-}
-
 bool ensureTableColumn(sqlite3 *db, const char *tableName,
                        const char *columnName, const char *alterQuery,
                        const char *context) {
-  return tableHasColumn(db, tableName, columnName) ||
-         execSql(db, alterQuery, context);
+  return ensureSqliteTableColumnLogged(db, tableName, columnName, alterQuery,
+                                       "reading replay schema", context,
+                                       logSqlErrorText);
 }
 
 void bindOptionalText(sqlite3_stmt *stmt, int idx,

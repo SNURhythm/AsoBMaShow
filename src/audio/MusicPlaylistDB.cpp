@@ -108,21 +108,13 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
 
 bool addMissingColumn(sqlite3 *db, const char *table, const char *column,
                       const char *definition) {
-  bool hasColumn = false;
-  if (const auto error = querySqliteTableHasColumn(db, table, column,
-                                                   hasColumn)) {
-    logSqlErrorText("checking music playlist schema", *error);
-    return false;
-  }
-  if (hasColumn) {
-    return true;
-  }
-
   std::string query = "ALTER TABLE ";
   query += table;
   query += " ADD COLUMN ";
   query += definition;
-  return execSql(db, query.c_str(), "adding music playlist identity column");
+  return ensureSqliteTableColumnLogged(
+      db, table, column, query.c_str(), "checking music playlist schema",
+      "adding music playlist identity column", logSqlErrorText);
 }
 
 bool ensureStoredMusicTrackIdentityColumns(sqlite3 *db, const char *table) {

@@ -81,28 +81,22 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return true;
 }
 
-bool ensureTableColumn(sqlite3 *db, const char *tableName,
-                       const char *columnName, const char *alterQuery,
-                       const char *context) {
-  bool hasColumn = false;
-  if (const auto error =
-          querySqliteTableHasColumn(db, tableName, columnName, hasColumn)) {
-    logSqlErrorText("reading score schema", *error);
-    return false;
-  }
-  return hasColumn || execSql(db, alterQuery, context);
-}
-
 bool ensureScoreChartIdentityColumns(sqlite3 *db) {
-  return ensureTableColumn(db, "scores", "chart_path",
-                           "ALTER TABLE scores ADD COLUMN chart_path TEXT",
-                           "adding score chart path column") &&
-         ensureTableColumn(db, "scores", "chart_md5",
-                           "ALTER TABLE scores ADD COLUMN chart_md5 TEXT",
-                           "adding score chart md5 column") &&
-         ensureTableColumn(db, "scores", "chart_sha256",
-                           "ALTER TABLE scores ADD COLUMN chart_sha256 TEXT",
-                           "adding score chart sha256 column");
+  return ensureSqliteTableColumnLogged(
+             db, "scores", "chart_path",
+             "ALTER TABLE scores ADD COLUMN chart_path TEXT",
+             "reading score schema", "adding score chart path column",
+             logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "chart_md5",
+             "ALTER TABLE scores ADD COLUMN chart_md5 TEXT",
+             "reading score schema", "adding score chart md5 column",
+             logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "chart_sha256",
+             "ALTER TABLE scores ADD COLUMN chart_sha256 TEXT",
+             "reading score schema", "adding score chart sha256 column",
+             logSqlErrorText);
 }
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
