@@ -1,10 +1,9 @@
 #include "ResultImageExporter.h"
 
-#include "ChartDBHelper.h"
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
-#include "ScoreDBHelper.h"
+#include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "path.h"
 #include "rendering/Color.h"
@@ -392,102 +391,21 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
   batch.end();
 }
 
-ResultPreviousBestData toResultPreviousBestData(
-    const ScoreBestSnapshot &snapshot) {
-  return {.score = snapshot.score,
-          .maxScore = snapshot.maxScore,
-          .maxCombo = snapshot.maxCombo,
-          .comboBreak = snapshot.comboBreak,
-          .finalGauge = snapshot.finalGauge,
-          .clearType = snapshot.clearType,
-          .createdAt = snapshot.createdAt};
-}
-
-std::string difficultyLabelForChart(const bms_parser::ChartMeta &meta) {
-  std::string difficultyLabel;
-  auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *db = dbHelper.Connect();
-  if (db != nullptr) {
-    difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, meta);
-    dbHelper.Close(db);
-  }
-  return difficultyLabel;
-}
-
-std::optional<ResultPreviousBestData>
-previousBestForReplayChart(const bms_parser::ChartMeta &meta,
-                           const ReplayData &replay) {
-  std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
-    beforeCreatedAt = replay.createdAt;
-  }
-  if (const auto best =
-          ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
-      best.has_value()) {
-    return toResultPreviousBestData(*best);
-  }
-  return std::nullopt;
-}
-
-std::string clearTypeLabelForRankValue(int rank) {
-  if (rank >= kClearTypeFullComboRank) {
-    return "FULL COMBO";
-  }
-  if (rank >= kClearTypeExHardClearRank) {
-    return "EX-HARD CLEAR";
-  }
-  if (rank >= kClearTypeHardClearRank) {
-    return "HARD CLEAR";
-  }
-  if (rank >= kClearTypeNormalClearRank) {
-    return "NORMAL CLEAR";
-  }
-  if (rank >= kClearTypeEasyClearRank) {
-    return "EASY CLEAR";
-  }
-  if (rank >= kClearTypeAssistedEasyClearRank) {
-    return "ASSISTED EASY CLEAR";
-  }
-  if (rank == kNoClearTypeRank) {
-    return "NO PLAY";
-  }
-  return "FAILED";
-}
-
-void addJudgeCount(RhythmState &target, const RhythmState &source,
-                   Judgement judgement) {
-  const auto count = source.judgeCount.find(judgement);
-  if (count != source.judgeCount.end()) {
-    target.judgeCount[judgement] += count->second;
-  }
-  const auto timing = source.judgementFastSlowCount.find(judgement);
-  if (timing != source.judgementFastSlowCount.end()) {
-    target.judgementFastSlowCount[judgement].fast += timing->second.fast;
-    target.judgementFastSlowCount[judgement].slow += timing->second.slow;
-  }
-}
-
 bms_parser::ChartMeta courseResultMetaForReplay(
     const CourseReplayData &replay,
     const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
-  bms_parser::ChartMeta meta;
-  meta.Title = replay.courseName.empty() ? "Course Result"
-                                         : replay.courseName;
-  meta.Artist = replay.courseGroupName.empty() ? "Course Mode"
-                                               : replay.courseGroupName;
-  meta.PlayLevel = static_cast<double>(replay.stages.size());
+  int totalNotes = 0;
+  long long playLength = 0;
   for (const auto &chart : charts) {
     if (chart == nullptr) {
       continue;
     }
-    meta.TotalNotes += std::max(0, chart->Meta.TotalNotes);
-    meta.PlayLength += std::max(0LL, chart->Meta.PlayLength);
+    totalNotes += std::max(0, chart->Meta.TotalNotes);
+    playLength += std::max(0LL, chart->Meta.PlayLength);
   }
-  meta.TotalLength = meta.PlayLength;
-  meta.Bpm = 0.0;
-  meta.MinBpm = 0.0;
-  meta.MaxBpm = 0.0;
-  return meta;
+  return result_presentation::courseResultMeta(
+      replay.courseName, replay.courseGroupName, replay.stages.size(),
+      totalNotes, playLength);
 }
 
 RhythmState courseResultStateForReplay(
@@ -496,12 +414,7 @@ RhythmState courseResultStateForReplay(
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                            replay.gaugeProfile);
-  aggregate.judgeCount.clear();
-  aggregate.judgementFastSlowCount.clear();
-  for (int i = 0; i < JudgementCount; ++i) {
-    aggregate.judgeCount[static_cast<Judgement>(i)] = 0;
-    aggregate.judgementFastSlowCount[static_cast<Judgement>(i)] = {};
-  }
+  aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
   aggregate.maxCombo = 0;
   aggregate.fastCount = 0;
@@ -510,7 +423,7 @@ RhythmState courseResultStateForReplay(
 
   for (const auto &state : stageStates) {
     for (int i = 0; i < JudgementCount; ++i) {
-      addJudgeCount(aggregate, state, static_cast<Judgement>(i));
+      aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += state.comboBreak;
     aggregate.fastCount += state.fastCount;
@@ -722,8 +635,9 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   const ReplayData &replay) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
-      previousBestForReplayChart(chart.Meta, replay);
-  std::string difficultyLabel = difficultyLabelForChart(chart.Meta);
+      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+  std::string difficultyLabel =
+      result_presentation::difficultyLabelForChart(chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
@@ -790,9 +704,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
         sanitizeFileNamePart(chart->Meta.Title) + ".png";
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
-        difficultyLabelForChart(chart->Meta),
-        previousBestForReplayChart(chart->Meta, stageReplay), "NO PLAY",
-        kNoClearTypeRank, std::nullopt, outputDir / filename);
+        result_presentation::difficultyLabelForChart(chart->Meta),
+        result_presentation::previousBestForReplayChart(chart->Meta,
+                                                        stageReplay),
+        "NO PLAY", kNoClearTypeRank, std::nullopt, outputDir / filename);
     if (!result.success) {
       return result;
     }
@@ -809,14 +724,13 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
           : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
   std::optional<std::string> clearLabelOverride;
   std::optional<int> clearRankOverride;
-  if (replay.completedCharts == replay.totalCharts &&
-      replay.totalCharts == static_cast<int>(replay.stages.size()) &&
-      courseState.currentGauge > 0.0f && courseState.comboBreak == 0 &&
-      courseState.maxCombo >= std::max(0, courseMeta.TotalNotes)) {
+  if (result_presentation::isFullComboCourseResult(
+          replay.completedCharts, replay.totalCharts, replay.stages.size(),
+          courseState, courseMeta)) {
     clearLabelOverride = "FULL COMBO";
     clearRankOverride = kClearTypeFullComboRank;
   } else {
-    clearLabelOverride = clearTypeLabelForRankValue(replay.clearType);
+    clearLabelOverride = clearTypeRankToLabel(replay.clearType);
     clearRankOverride = replay.clearType;
   }
   const auto courseResult = renderResultImage(

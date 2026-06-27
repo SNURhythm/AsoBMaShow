@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
+#include "PlayOptionUtils.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
@@ -70,7 +71,7 @@ inline int courseConstraintType(const std::string &constraint) {
 }
 
 inline CourseConstraintSettings
-courseConstraintSettingsFromJsonShared(const std::string &constraintJson) {
+courseConstraintSettingsFromJson(const std::string &constraintJson) {
   CourseConstraintSettings settings;
   if (constraintJson.empty()) {
     return settings;
@@ -135,4 +136,46 @@ courseConstraintSettingsFromJsonShared(const std::string &constraintJson) {
     settings.gaugeProfile = GaugeProfile::CourseDefault;
   }
   return settings;
+}
+
+inline std::string coursePlayOptionForConstraints(
+    const std::string &selectedPlayOption,
+    const CourseConstraintSettings &constraintSettings) {
+  const std::string normalized =
+      play_options::normalizePlayOption(selectedPlayOption);
+  if (!constraintSettings.gradeConstraint.has_value()) {
+    return normalized;
+  }
+  if (*constraintSettings.gradeConstraint == "grade") {
+    return "NORMAL";
+  }
+  if (*constraintSettings.gradeConstraint == "grade_mirror" &&
+      normalized != "MIRROR") {
+    return "NORMAL";
+  }
+  return normalized;
+}
+
+inline bool coursePlayOptionLocksSelection(
+    const CourseConstraintSettings &constraintSettings) {
+  return constraintSettings.gradeConstraint.has_value() &&
+         (*constraintSettings.gradeConstraint == "grade" ||
+          *constraintSettings.gradeConstraint == "grade_mirror");
+}
+
+inline bool coursePlayOptionAllowedByConstraints(
+    const std::string &option,
+    const CourseConstraintSettings &constraintSettings) {
+  if (!coursePlayOptionLocksSelection(constraintSettings)) {
+    return true;
+  }
+
+  const std::string normalized = play_options::normalizePlayOption(option);
+  if (*constraintSettings.gradeConstraint == "grade") {
+    return normalized == "NORMAL";
+  }
+  if (*constraintSettings.gradeConstraint == "grade_mirror") {
+    return normalized == "NORMAL" || normalized == "MIRROR";
+  }
+  return true;
 }

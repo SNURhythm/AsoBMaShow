@@ -108,31 +108,6 @@ std::string formatGauge(float gauge) {
   return formatNumber(static_cast<double>(gauge), 1) + "%";
 }
 
-std::string clearTypeLabelForRank(int rank) {
-  if (rank >= kClearTypeFullComboRank) {
-    return "FULL COMBO";
-  }
-  if (rank >= kClearTypeExHardClearRank) {
-    return "EX-HARD CLEAR";
-  }
-  if (rank >= kClearTypeHardClearRank) {
-    return "HARD CLEAR";
-  }
-  if (rank >= kClearTypeNormalClearRank) {
-    return "NORMAL CLEAR";
-  }
-  if (rank >= kClearTypeEasyClearRank) {
-    return "EASY CLEAR";
-  }
-  if (rank >= kClearTypeAssistedEasyClearRank) {
-    return "ASSISTED EASY CLEAR";
-  }
-  if (rank == kNoClearTypeRank) {
-    return "NO PLAY";
-  }
-  return "FAILED";
-}
-
 std::pair<std::string, int> nextRankTarget(int score, int maxScore) {
   if (maxScore <= 0) {
     return {"-", 0};
@@ -482,7 +457,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   lampCompareRow->setGap(10);
   lampCompareRow->setFlexGrow(1);
   lampCompareRow->addView(makeLampColumn(
-      "BEST", clearTypeLabelForRank(previousClearRank),
+      "BEST", clearTypeRankToLabel(previousClearRank),
       hasPreviousBest ? "GAUGE " + formatGauge(data->previousBest->finalGauge)
                       : "",
       previousClearAccent));

@@ -3,6 +3,7 @@
 #include "ChartDBHelper.h"
 #include "ArchiveFile.h"
 #include "BmsMetadataText.h"
+#include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
@@ -1349,19 +1350,17 @@ std::string preferredChartPredicate(const std::string &alias) {
          " AND cm_better.path < " + alias + ".path)))";
 }
 
-int normalizeScoreQueryLongNoteMode(int lnMode) {
-  return lnMode >= 1 && lnMode <= 3 ? lnMode : 1;
-}
-
 std::string scoreLongNoteModeExpr(const std::string &alias,
                                   int selectedLongNoteMode) {
   const std::string selected =
-      std::to_string(normalizeScoreQueryLongNoteMode(selectedLongNoteMode));
+      std::to_string(
+          long_note_mode::normalizeSelectedValue(selectedLongNoteMode));
+  const std::string lnModeExpr = "COALESCE(" + alias + ".ln_mode, 0)";
   return "(CASE WHEN COALESCE(" + alias + ".total_long_notes, 0) + COALESCE(" +
          alias + ".total_backspin_notes, 0) <= 0 THEN 0 "
-         "WHEN COALESCE(" +
-         alias + ".ln_mode, 0) BETWEEN 1 AND 3 THEN " + alias +
-         ".ln_mode ELSE " + selected + " END)";
+         "WHEN " +
+         long_note_mode::sqlValidValuePredicate(lnModeExpr) + " THEN " +
+         alias + ".ln_mode ELSE " + selected + " END)";
 }
 
 std::string scoreRankLookupExpr(const std::string &kind,
@@ -3977,6 +3976,17 @@ ChartMetaRecord ChartDBHelper::ReadChartMetaRecord(sqlite3_stmt *stmt) {
     record.favorite = sqlite3_column_int(stmt, idx++) != 0;
   }
   return record;
+}
+
+std::string ChartDBHelper::DifficultyTableLabelsForChart(
+    const bms_parser::ChartMeta &meta) {
+  sqlite3 *db = Connect();
+  if (db == nullptr) {
+    return {};
+  }
+  std::string labels = DifficultyTableLabelsForChart(db, meta);
+  Close(db);
+  return labels;
 }
 
 std::string ChartDBHelper::DifficultyTableLabelsForChart(

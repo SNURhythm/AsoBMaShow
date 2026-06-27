@@ -1,10 +1,10 @@
 #include "ResultScene.h"
-#include "../ChartDBHelper.h"
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ResultImageExporter.h"
+#include "../ResultPresentationUtils.h"
 #include "../ScoreDBHelper.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -117,17 +117,6 @@ play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
   return play_options::formatPlayModeDisplayLabel(meta, std::nullopt);
 }
 
-ResultPreviousBestData toResultPreviousBestData(
-    const ScoreBestSnapshot &snapshot) {
-  return {.score = snapshot.score,
-          .maxScore = snapshot.maxScore,
-          .maxCombo = snapshot.maxCombo,
-          .comboBreak = snapshot.comboBreak,
-          .finalGauge = snapshot.finalGauge,
-          .clearType = snapshot.clearType,
-          .createdAt = snapshot.createdAt};
-}
-
 int totalNotesForCourse(const CoursePlaySession &session) {
   int total = 0;
   const size_t count =
@@ -152,32 +141,9 @@ long long totalPlayLengthForCourse(const CoursePlaySession &session) {
 
 bms_parser::ChartMeta courseResultMetaForSession(
     const CoursePlaySession &session) {
-  bms_parser::ChartMeta meta;
-  meta.Title = session.courseName.empty() ? "Course Result"
-                                          : session.courseName;
-  meta.Artist = session.courseGroupName.empty() ? "Course Mode"
-                                                : session.courseGroupName;
-  meta.TotalNotes = totalNotesForCourse(session);
-  meta.PlayLevel = static_cast<double>(session.entries.size());
-  meta.PlayLength = totalPlayLengthForCourse(session);
-  meta.TotalLength = meta.PlayLength;
-  meta.Bpm = 0.0;
-  meta.MinBpm = 0.0;
-  meta.MaxBpm = 0.0;
-  return meta;
-}
-
-void addJudgeCount(RhythmState &target, const RhythmState &source,
-                   Judgement judgement) {
-  const auto count = source.judgeCount.find(judgement);
-  if (count != source.judgeCount.end()) {
-    target.judgeCount[judgement] += count->second;
-  }
-  const auto timing = source.judgementFastSlowCount.find(judgement);
-  if (timing != source.judgementFastSlowCount.end()) {
-    target.judgementFastSlowCount[judgement].fast += timing->second.fast;
-    target.judgementFastSlowCount[judgement].slow += timing->second.slow;
-  }
+  return result_presentation::courseResultMeta(
+      session.courseName, session.courseGroupName, session.entries.size(),
+      totalNotesForCourse(session), totalPlayLengthForCourse(session));
 }
 
 void appendMissingCourseGaugeHistory(RhythmState &state,
@@ -202,12 +168,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
     aggregate.restoreGaugeState(*session.carriedGauge);
   }
 
-  aggregate.judgeCount.clear();
-  aggregate.judgementFastSlowCount.clear();
-  for (int i = 0; i < JudgementCount; ++i) {
-    aggregate.judgeCount[static_cast<Judgement>(i)] = 0;
-    aggregate.judgementFastSlowCount[static_cast<Judgement>(i)] = {};
-  }
+  aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
   aggregate.maxCombo = session.maxCombo;
   aggregate.fastCount = 0;
@@ -216,7 +177,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
 
   for (const auto &result : session.completedResults) {
     for (int i = 0; i < JudgementCount; ++i) {
-      addJudgeCount(aggregate, result.state, static_cast<Judgement>(i));
+      aggregate.addJudgeCountFrom(result.state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += result.state.comboBreak;
     aggregate.fastCount += result.state.fastCount;
@@ -316,11 +277,12 @@ ResultScene::ResultScene(ApplicationContext &context,
     currentClearRankOverride = kNoClearTypeRank;
   } else if (isCourseFinalResult()) {
     headerDifficultyLabelOverride = "COURSE";
-    if (this->courseOptions.session->completedResults.size() ==
-            this->courseOptions.session->entries.size() &&
-        resultState.currentGauge > 0.0f && resultState.comboBreak == 0 &&
-        resultState.maxCombo >=
-            totalNotesForCourse(*this->courseOptions.session)) {
+    const auto &session = *this->courseOptions.session;
+    const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
+    if (result_presentation::isFullComboCourseResult(
+            static_cast<int>(session.completedResults.size()),
+            static_cast<int>(session.entries.size()), session.entries.size(),
+            resultState, courseMeta)) {
       currentClearLabelOverride = "FULL COMBO";
       currentClearRankOverride = kClearTypeFullComboRank;
     }
@@ -392,7 +354,7 @@ void ResultScene::loadPreviousBest() {
                         : ScoreDBHelper::GetInstance().LoadBestScore(
                               meta, beforeCreatedAt);
   if (best.has_value()) {
-    previousBest = toResultPreviousBestData(*best);
+    previousBest = result_presentation::previousBestDataFromSnapshot(*best);
   }
 }
 
@@ -401,15 +363,7 @@ void ResultScene::loadDifficultyLabel() {
     difficultyLabel = "Course";
     return;
   }
-  auto &dbHelper = ChartDBHelper::GetInstance();
-  sqlite3 *db = dbHelper.Connect();
-  if (db == nullptr) {
-    difficultyLabel.clear();
-    return;
-  }
-
-  difficultyLabel = dbHelper.DifficultyTableLabelsForChart(db, meta);
-  dbHelper.Close(db);
+  difficultyLabel = result_presentation::difficultyLabelForChart(meta);
 }
 
 void ResultScene::saveReplay() {
@@ -1081,7 +1035,7 @@ void ResultScene::startCourseReplay() {
     replaySession->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
   }
   const CourseConstraintSettings constraintSettings =
-      courseConstraintSettingsFromJsonShared(replayData->constraintJson);
+      courseConstraintSettingsFromJson(replayData->constraintJson);
   replaySession->currentIndex = 0;
   replaySession->gaugeType = replayData->initialGaugeType;
   replaySession->gaugeProfile = replayData->gaugeProfile;
@@ -1107,13 +1061,11 @@ void ResultScene::startCourseReplayStage(
     return;
   }
 
-  auto stageReplay =
-      std::make_shared<ReplayData>(
-          session->courseReplayStage(session->currentIndex)->replay);
-  session->playOption = stageReplay->playOption;
-  session->playOptionSeed = stageReplay->playOptionSeed;
-  session->playOption2 = stageReplay->playOption2;
-  session->playOption2Seed = stageReplay->playOption2Seed;
+  auto stageReplay = session->currentCourseReplayStageReplay();
+  if (stageReplay == nullptr) {
+    return;
+  }
+  session->applyReplayStagePlayOptions(*stageReplay);
   context.jukebox.stop();
   std::atomic_bool parseCancelled = false;
   auto replayChart = play_options::prepareReplayChart(
@@ -1130,28 +1082,7 @@ void ResultScene::startCourseReplayStage(
     return;
   }
 
-  StartOptions options;
-  options.startPosition = 0;
-  options.autoKeySound = false;
-  options.autoPlay = false;
-  options.gaugeType = session->gaugeType;
-  options.gaugeProfile = session->gaugeProfile;
-  options.gaugeAutoShift = session->gaugeAutoShift;
-  options.replayData = stageReplay;
-  options.playOption = stageReplay->playOption;
-  options.playOptionSeed = stageReplay->playOptionSeed;
-  options.playOption2 = stageReplay->playOption2;
-  options.playOption2Seed = stageReplay->playOption2Seed;
-  options.longNoteMode =
-      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
-  options.assistOption = stageReplay->assistOption;
-  options.courseSession = session;
-  options.courseConstraints = session->constraints;
-  options.ownsChart = true;
-  options.touchVisualizationEnabled =
-      session->replayTouchVisualizationEnabled;
-  options.replayGhostRenderingEnabled =
-      session->replayGhostRenderingEnabled;
+  StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(replayChart),

@@ -4,6 +4,7 @@
 
 #include "BMSRenderer.h"
 
+#include "../../CoursePlaySession.h"
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "../../RAII.h"
@@ -120,27 +121,6 @@ bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
          head->Tail != nullptr && head->Tail->Timeline != nullptr &&
          !head->Tail->IsDead &&
          !wasLongNoteTailResolvedAtOrAfterTiming(head);
-}
-
-bms_parser::LongNoteType
-effectiveLongNoteType(const bms_parser::LongNote *longNote,
-                      const bms_parser::Chart *chart) {
-  if (longNote == nullptr || chart == nullptr) {
-    return bms_parser::LongNoteType::LongNote;
-  }
-  const auto *head =
-      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
-                                                      : longNote;
-  auto type = bms_parser::ResolveLongNoteType(head->Type, chart->Meta.LnMode);
-  return type == bms_parser::LongNoteType::Undefined
-             ? bms_parser::LongNoteType::LongNote
-             : type;
-}
-
-bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
-                          const bms_parser::Chart *chart) {
-  return effectiveLongNoteType(longNote, chart) ==
-         bms_parser::LongNoteType::HellChargeNote;
 }
 
 void destroyTextureHandle(bgfx::TextureHandle &texture) {
@@ -1473,7 +1453,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   const bool headHasReachedJudge = head->IsPlayed || head->IsDead ||
                                    headY <= judgeY;
   const bool hcnBodyRegrabbed =
-      headHasReachedJudge && isHellChargeLongNote(head, chart) &&
+      headHasReachedJudge && effectiveLongNoteIsHellCharge(head, chart) &&
       laneIsCurrentlyPressed(head->Lane);
   const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
   const auto bodyTexture =

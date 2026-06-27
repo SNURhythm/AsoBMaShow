@@ -43,6 +43,37 @@ struct StartOptions {
   std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
 };
+
+inline StartOptions makeCourseReplayStageStartOptions(
+    const std::shared_ptr<CoursePlaySession> &session,
+    const std::shared_ptr<ReplayData> &stageReplay) {
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoKeySound = false;
+  options.autoPlay = false;
+  options.ownsChart = true;
+  if (session != nullptr) {
+    options.gaugeType = session->gaugeType;
+    options.gaugeProfile = session->gaugeProfile;
+    options.gaugeAutoShift = session->gaugeAutoShift;
+    options.courseSession = session;
+    options.courseConstraints = session->constraints;
+    options.touchVisualizationEnabled = session->replayTouchVisualizationEnabled;
+    options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;
+  }
+  if (stageReplay != nullptr) {
+    options.replayData = stageReplay;
+    options.playOption = stageReplay->playOption;
+    options.playOptionSeed = stageReplay->playOptionSeed;
+    options.playOption2 = stageReplay->playOption2;
+    options.playOption2Seed = stageReplay->playOption2Seed;
+    options.longNoteMode =
+        normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
+    options.assistOption = stageReplay->assistOption;
+  }
+  return options;
+}
+
 class RhythmInputHandler;
 class BMSRenderer;
 class GamePlayScene : public Scene, public IRhythmControl {

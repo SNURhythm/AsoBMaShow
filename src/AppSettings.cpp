@@ -1,4 +1,5 @@
 #include "AppSettings.h"
+#include "LongNoteModeUtils.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -340,39 +341,6 @@ std::string parsePlayOptionId(const std::string &value,
   return fallback;
 }
 
-std::string normalizeLnModeId(std::string value) {
-  value = trim(value);
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
-  if (value == "1" || value == "LN" || value == "LONGNOTE" ||
-      value == "LONG-NOTE") {
-    return "LN";
-  }
-  if (value == "2" || value == "CN" || value == "CHARGENOTE" ||
-      value == "CHARGE-NOTE") {
-    return "CN";
-  }
-  if (value == "3" || value == "HCN" || value == "HELLCHARGENOTE" ||
-      value == "HELL-CHARGE-NOTE" || value == "HELL-CHARGE") {
-    return "HCN";
-  }
-  return value;
-}
-
-std::string parseLnModeId(const std::string &value,
-                          const std::string &fallback) {
-  const std::string normalized = normalizeLnModeId(value);
-  if (normalized == "LN" || normalized == "CN" || normalized == "HCN") {
-    return normalized;
-  }
-  return fallback;
-}
-
 std::string normalizeAssistOptionId(std::string value) {
   value = trim(value);
   std::transform(value.begin(), value.end(), value.begin(),
@@ -526,7 +494,7 @@ void AppSettings::sanitize() {
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
-  selectedLnMode = parseLnModeId(selectedLnMode, kDefaultLnMode);
+  selectedLnMode = long_note_mode::parseId(selectedLnMode, kDefaultLnMode);
   selectedAssistOption =
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
 }
@@ -845,7 +813,7 @@ AppSettings AppSettings::load() {
             parsePlayOptionId(value, settings.selectedPlayOption);
       } else if (key == "selected_ln_mode") {
         settings.selectedLnMode =
-            parseLnModeId(value, settings.selectedLnMode);
+            long_note_mode::parseId(value, settings.selectedLnMode);
       } else if (key == "selected_assist_option") {
         settings.selectedAssistOption =
             parseAssistOptionId(value, settings.selectedAssistOption);

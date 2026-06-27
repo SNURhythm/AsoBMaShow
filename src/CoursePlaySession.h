@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LongNoteModeUtils.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 
@@ -21,19 +22,19 @@ struct CourseConstraintRules {
 inline int courseLongNoteModeToChartMetaValue(CourseLongNoteMode mode) {
   switch (mode) {
   case CourseLongNoteMode::LN:
-    return 1;
+    return long_note_mode::kLnValue;
   case CourseLongNoteMode::CN:
-    return 2;
+    return long_note_mode::kCnValue;
   case CourseLongNoteMode::HCN:
-    return 3;
+    return long_note_mode::kHcnValue;
   case CourseLongNoteMode::Unspecified:
-    return 0;
+    return long_note_mode::kUnknownValue;
   }
-  return 0;
+  return long_note_mode::kUnknownValue;
 }
 
 inline int normalizeChartLongNoteModeValue(int lnMode) {
-  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
+  return long_note_mode::normalizeValue(lnMode);
 }
 
 inline bms_parser::LongNoteType resolveEffectiveLongNoteType(
@@ -56,6 +57,58 @@ inline bms_parser::LongNoteType resolveEffectiveLongNoteType(
   return type == bms_parser::LongNoteType::Undefined
              ? bms_parser::LongNoteType::LongNote
              : type;
+}
+
+inline bool longNoteTypeIsClassic(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::LongNote;
+}
+
+inline bool longNoteTypeIsCharge(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::ChargeNote ||
+         type == bms_parser::LongNoteType::HellChargeNote;
+}
+
+inline bool longNoteTypeIsHellCharge(bms_parser::LongNoteType type) {
+  return type == bms_parser::LongNoteType::HellChargeNote;
+}
+
+inline bool effectiveLongNoteIsClassic(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+    int longNoteModeOverride = 0) {
+  return longNoteTypeIsClassic(
+      resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
+}
+
+inline bool effectiveLongNoteIsClassic(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+    int longNoteModeOverride = 0) {
+  return effectiveLongNoteIsClassic(longNote, &chart, longNoteModeOverride);
+}
+
+inline bool effectiveLongNoteIsCharge(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+    int longNoteModeOverride = 0) {
+  return longNoteTypeIsCharge(
+      resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
+}
+
+inline bool effectiveLongNoteIsCharge(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+    int longNoteModeOverride = 0) {
+  return effectiveLongNoteIsCharge(longNote, &chart, longNoteModeOverride);
+}
+
+inline bool effectiveLongNoteIsHellCharge(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+    int longNoteModeOverride = 0) {
+  return longNoteTypeIsHellCharge(
+      resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
+}
+
+inline bool effectiveLongNoteIsHellCharge(
+    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+    int longNoteModeOverride = 0) {
+  return effectiveLongNoteIsHellCharge(longNote, &chart, longNoteModeOverride);
 }
 
 inline bool effectiveLongNoteIsCounted(
@@ -265,6 +318,20 @@ struct CoursePlaySession {
   courseReplayStage(std::size_t index) const {
     return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
                                        : nullptr;
+  }
+
+  [[nodiscard]] std::shared_ptr<ReplayData>
+  currentCourseReplayStageReplay() const {
+    const auto *stage = courseReplayStage(currentIndex);
+    return stage == nullptr ? nullptr
+                            : std::make_shared<ReplayData>(stage->replay);
+  }
+
+  void applyReplayStagePlayOptions(const ReplayData &replay) {
+    playOption = replay.playOption;
+    playOptionSeed = replay.playOptionSeed;
+    playOption2 = replay.playOption2;
+    playOption2Seed = replay.playOption2Seed;
   }
 
   [[nodiscard]] long long restMicrosAfterCurrentStage() const {

@@ -11,18 +11,6 @@ struct PressLaneCandidate {
   JudgeResult judge = JudgeResult(None, 0);
 };
 
-bms_parser::LongNoteType
-effectiveLongNoteType(const bms_parser::LongNote *longNote,
-                      const bms_parser::Chart *chart,
-                      int longNoteModeOverride) {
-  return resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride);
-}
-
-bool isChargeLongNoteType(bms_parser::LongNoteType type) {
-  return type == bms_parser::LongNoteType::ChargeNote ||
-         type == bms_parser::LongNoteType::HellChargeNote;
-}
-
 JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
       judgeResult.judgement == Poor) {
@@ -325,8 +313,7 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
       if (!longNote->IsTail()) {
         longNote->Press(pressedTime);
         result.hasJudge =
-            isChargeLongNoteType(effectiveLongNoteType(
-                longNote, chart, longNoteModeOverride));
+            effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
         setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
                        songTimeMicros, pressedTime, judgeResult);
       }
@@ -358,8 +345,7 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   const auto judgeResult = judge.judgeNow(longNote, releasedTime);
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
-      isChargeLongNoteType(
-          effectiveLongNoteType(longNote, chart, longNoteModeOverride));
+      effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
   appliedJudge =
       chargeLongNote ? normalizeLongNoteReleaseJudge(judgeResult)
                      : judgeClassicLongNoteRelease(judge, longNote, releasedTime);

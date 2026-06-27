@@ -1,5 +1,6 @@
 #include "ReplayDBHelper.h"
 
+#include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
@@ -233,10 +234,6 @@ GaugeProfile gaugeProfileFromInt(int value) {
   }
 }
 
-int normalizeReplayLongNoteModeValue(int lnMode) {
-  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
-}
-
 Judgement judgementFromInt(int value) {
   if (value < 0 || value >= JudgementCount) {
     return None;
@@ -392,7 +389,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   bindText(replayStmt.get(), bindIndex++,
            assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   normalizeReplayLongNoteModeValue(replay.chartMeta.LnMode));
+                   long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -782,7 +779,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   bindText(replayStmt.get(), bindIndex++,
            assist_options::normalize(replay.assistOption));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   normalizeReplayLongNoteModeValue(replay.chartMeta.LnMode));
+                   long_note_mode::normalizeValue(replay.chartMeta.LnMode));
 
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -931,7 +928,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    replay.gaugeAutoShift ? 1 : 0);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
-                   normalizeReplayLongNoteModeValue(replay.longNoteMode));
+                   long_note_mode::normalizeValue(replay.longNoteMode));
   bindText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
   bindText(courseStmt.get(), bindIndex++,
            assist_options::normalize(replay.assistOption));
@@ -1194,7 +1191,7 @@ ReplayDBHelper::LoadReplay(int replayId,
       loaded.assistOption = assist_options::normalize(readText(stmt.get(), 19));
     }
     const int replayLongNoteMode =
-        normalizeReplayLongNoteModeValue(sqlite3_column_int(stmt.get(), 20));
+        long_note_mode::normalizeValue(sqlite3_column_int(stmt.get(), 20));
     if (replayLongNoteMode > 0) {
       loaded.chartMeta.LnMode = replayLongNoteMode;
     }
@@ -1332,7 +1329,7 @@ ReplayDBHelper::LoadCourseReplay(int replayId) {
   courseReplay.gaugeProfile = gaugeProfileFromInt(sqlite3_column_int(stmt.get(), 6));
   courseReplay.gaugeAutoShift = sqlite3_column_int(stmt.get(), 7) != 0;
   courseReplay.longNoteMode =
-      normalizeReplayLongNoteModeValue(sqlite3_column_int(stmt.get(), 8));
+      long_note_mode::normalizeValue(sqlite3_column_int(stmt.get(), 8));
   courseReplay.requestedPlayOption = readText(stmt.get(), 9);
   courseReplay.assistOption = assist_options::normalize(readText(stmt.get(), 10));
   courseReplay.finalScore = sqlite3_column_int(stmt.get(), 11);

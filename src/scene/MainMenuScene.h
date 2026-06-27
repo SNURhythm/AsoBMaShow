@@ -445,10 +445,7 @@ private:
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
     std::string longNoteMode = AppSettings::kDefaultLnMode;
-    bool playOptionLocked = false;
     bool longNoteModeLocked = false;
-    std::string playOptionLockSource;
-    std::string longNoteModeLockSource;
   };
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;

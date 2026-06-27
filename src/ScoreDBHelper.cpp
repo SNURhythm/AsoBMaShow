@@ -2,6 +2,7 @@
 
 #include "ChartDBHelper.h"
 #include "CoursePlaySession.h"
+#include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
@@ -191,10 +192,6 @@ std::string courseKeyForSession(const CoursePlaySession &session) {
   return key.str();
 }
 
-int normalizedScoreLongNoteMode(int lnMode) {
-  return lnMode >= 1 && lnMode <= 3 ? lnMode : 0;
-}
-
 int scoreLongNoteModeForClearLampValues(int chartLongNoteMode,
                                         int totalLongNotes,
                                         int totalBackSpinNotes,
@@ -202,11 +199,12 @@ int scoreLongNoteModeForClearLampValues(int chartLongNoteMode,
   if (std::max(0, totalLongNotes) + std::max(0, totalBackSpinNotes) <= 0) {
     return 0;
   }
-  const int forcedLongNoteMode = normalizedScoreLongNoteMode(chartLongNoteMode);
+  const int forcedLongNoteMode =
+      long_note_mode::normalizeValue(chartLongNoteMode);
   if (forcedLongNoteMode > 0) {
     return forcedLongNoteMode;
   }
-  return normalizedScoreLongNoteMode(selectedLongNoteMode);
+  return long_note_mode::normalizeValue(selectedLongNoteMode);
 }
 
 void storeBestRank(ScoreRankMap &ranks, const std::string &key, int lnMode,
@@ -218,7 +216,7 @@ void storeBestRank(ScoreRankMap &ranks, const std::string &key, int lnMode,
   if (it == ranks.end()) {
     it = ranks.emplace(key, ScoreRankByLongNoteMode{}).first;
   }
-  const int mode = normalizedScoreLongNoteMode(lnMode);
+  const int mode = long_note_mode::normalizeValue(lnMode);
   if (rank > it->second.ranks[static_cast<size_t>(mode)]) {
     it->second.ranks[static_cast<size_t>(mode)] = rank;
   }
@@ -426,16 +424,19 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
       " AND cm_better.path < cm.path)))))))";
   const std::string bestMatchPredicate =
       matchPredicate + " AND " + betterMatchPredicate;
+  const std::string matchedLnModeExpr = "COALESCE(cm.ln_mode, 0)";
   const std::string matchedForcedModeExpr =
       "(SELECT CASE WHEN COALESCE(cm.total_long_notes, 0) + "
       "COALESCE(cm.total_backspin_notes, 0) > 0 "
-      "AND COALESCE(cm.ln_mode, 0) BETWEEN 1 AND 3 THEN cm.ln_mode "
-      "ELSE 0 END FROM " +
+      "AND " +
+      long_note_mode::sqlValidValuePredicate(matchedLnModeExpr) +
+      " THEN cm.ln_mode ELSE 0 END FROM " +
       chartTable + " cm WHERE " + bestMatchPredicate +
       " ORDER BY cm.path LIMIT 1)";
   const std::string effectiveModeExpr =
       "CASE WHEN COALESCE(cm.total_long_notes, 0) + "
-      "COALESCE(cm.total_backspin_notes, 0) <= 0 THEN 0 ELSE 1 END";
+      "COALESCE(cm.total_backspin_notes, 0) <= 0 THEN 0 ELSE " +
+      std::to_string(long_note_mode::kLnValue) + " END";
   const std::string purgeQuery =
       "DELETE FROM scores WHERE COALESCE(" + matchedForcedModeExpr +
       ", 0) IN (2, 3)";
@@ -567,7 +568,7 @@ std::size_t TransparentStringHash::operator()(std::string_view value) const
 }
 
 int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
-  const int mode = normalizedScoreLongNoteMode(lnMode);
+  const int mode = long_note_mode::normalizeValue(lnMode);
   const int rank = ranks[static_cast<size_t>(mode)];
   if (rank != kNoClearTypeRank || mode != 1) {
     return rank;

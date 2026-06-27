@@ -214,6 +214,8 @@ public:
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
   std::string DifficultyTableLabelsForChart(
+      const bms_parser::ChartMeta &meta);
+  std::string DifficultyTableLabelsForChart(
       sqlite3 *db, const bms_parser::ChartMeta &meta);
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
 

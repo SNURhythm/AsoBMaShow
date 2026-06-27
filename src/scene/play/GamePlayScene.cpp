@@ -119,25 +119,6 @@ void addRingArc(rendering::SimpleBatchRenderer &batch, float cx, float cy,
   }
 }
 
-bms_parser::LongNoteType
-effectiveLongNoteType(const bms_parser::LongNote *longNote,
-                      const bms_parser::Chart *chart,
-                      int longNoteModeOverride = 0) {
-  return resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride);
-}
-
-bool isChargeLongNoteType(bms_parser::LongNoteType type) {
-  return type == bms_parser::LongNoteType::ChargeNote ||
-         type == bms_parser::LongNoteType::HellChargeNote;
-}
-
-bool isHellChargeLongNote(const bms_parser::LongNote *longNote,
-                          const bms_parser::Chart *chart,
-                          int longNoteModeOverride = 0) {
-  return effectiveLongNoteType(longNote, chart, longNoteModeOverride) ==
-         bms_parser::LongNoteType::HellChargeNote;
-}
-
 JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
       judgeResult.judgement == Poor) {
@@ -823,18 +804,16 @@ bool GamePlayScene::shouldPersistRecordedReplay() const {
 
 bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
   auto session = options.courseSession;
-  if (session == nullptr || !session->validCurrentIndex() ||
+  if (session == nullptr ||
       !session->hasCourseReplayStage(session->currentIndex)) {
     return false;
   }
 
-  auto stageReplay =
-      std::make_shared<ReplayData>(
-          session->courseReplayStage(session->currentIndex)->replay);
-  session->playOption = stageReplay->playOption;
-  session->playOptionSeed = stageReplay->playOptionSeed;
-  session->playOption2 = stageReplay->playOption2;
-  session->playOption2Seed = stageReplay->playOption2Seed;
+  auto stageReplay = session->currentCourseReplayStageReplay();
+  if (stageReplay == nullptr) {
+    return false;
+  }
+  session->applyReplayStagePlayOptions(*stageReplay);
 
   std::atomic_bool parseCancelled = false;
   auto replayChart = play_options::prepareReplayChart(
@@ -849,28 +828,8 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
     return false;
   }
 
-  StartOptions nextOptions;
-  nextOptions.startPosition = 0;
-  nextOptions.autoKeySound = false;
-  nextOptions.autoPlay = false;
-  nextOptions.gaugeType = session->gaugeType;
-  nextOptions.gaugeProfile = session->gaugeProfile;
-  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
-  nextOptions.replayData = stageReplay;
-  nextOptions.playOption = stageReplay->playOption;
-  nextOptions.playOptionSeed = stageReplay->playOptionSeed;
-  nextOptions.playOption2 = stageReplay->playOption2;
-  nextOptions.playOption2Seed = stageReplay->playOption2Seed;
-  nextOptions.longNoteMode =
-      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
-  nextOptions.assistOption = stageReplay->assistOption;
-  nextOptions.courseSession = session;
-  nextOptions.courseConstraints = session->constraints;
-  nextOptions.ownsChart = true;
-  nextOptions.touchVisualizationEnabled =
-      session->replayTouchVisualizationEnabled;
-  nextOptions.replayGhostRenderingEnabled =
-      session->replayGhostRenderingEnabled;
+  StartOptions nextOptions =
+      makeCourseReplayStageStartOptions(session, stageReplay);
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(replayChart),
@@ -1572,9 +1531,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           if (note->IsLongNote()) {
             const auto &longNote = static_cast<bms_parser::LongNote *>(note);
-            if (isChargeLongNoteType(
-                    effectiveLongNoteType(longNote, chart,
-                                          options.longNoteMode))) {
+            if (effectiveLongNoteIsCharge(longNote, chart,
+                                          options.longNoteMode)) {
               const auto poorResult =
                   JudgeResult(Poor, judgedTime - timeline->Timing);
               if (!longNote->IsTail()) {
@@ -1646,9 +1604,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (!longNote->IsHolding) {
                 continue;
               }
-              const bool chargeLongNote = isChargeLongNoteType(
-                  effectiveLongNoteType(longNote, chart,
-                                        options.longNoteMode));
+              const bool chargeLongNote = effectiveLongNoteIsCharge(
+                  longNote, chart, options.longNoteMode);
               if (chargeLongNote && !options.autoPlay) {
                 continue;
               }
@@ -1906,7 +1863,8 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
         auto *longNote = static_cast<bms_parser::LongNote *>(note);
         if (longNote->IsTail() || longNote->Tail == nullptr ||
             longNote->Timeline == nullptr || longNote->Tail->Timeline == nullptr ||
-            !isHellChargeLongNote(longNote, chart, options.longNoteMode)) {
+            !effectiveLongNoteIsHellCharge(longNote, chart,
+                                           options.longNoteMode)) {
           continue;
         }
 
@@ -2235,9 +2193,8 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
-          const bool chargeLongNote =
-              isChargeLongNoteType(effectiveLongNoteType(
-                  longNote, chart, options.longNoteMode));
+          const bool chargeLongNote = effectiveLongNoteIsCharge(
+              longNote, chart, options.longNoteMode);
           if (chargeLongNote) {
             onJudge(judgeResult, !options.autoPlay || isReplayPlayback());
           }
@@ -2283,8 +2240,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                                : judge.judgeNow(LongNote, ReleasedTime);
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
-      isChargeLongNoteType(
-          effectiveLongNoteType(LongNote, chart, options.longNoteMode));
+      effectiveLongNoteIsCharge(LongNote, chart, options.longNoteMode);
   if (precomputedJudge != nullptr) {
     appliedJudge = *precomputedJudge;
   } else {

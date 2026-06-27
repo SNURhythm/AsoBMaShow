@@ -1,5 +1,6 @@
 #include "MainMenuLibrary.h"
 
+#include "../LongNoteModeUtils.h"
 #include "../SqliteRAII.h"
 #include "../view/ClearLampColors.h"
 
@@ -118,8 +119,7 @@ void addFolderChartForAllLongNoteModes(
     std::string_view sha256, std::string_view md5, std::string_view path,
     int chartLongNoteMode, int totalLongNotes, int totalBackSpinNotes) {
   auto &aggregateByMode = aggregates[folderKey];
-  for (int selectedLongNoteMode = 1; selectedLongNoteMode <= 3;
-       ++selectedLongNoteMode) {
+  for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
     auto &aggregate =
         aggregateByMode[static_cast<size_t>(selectedLongNoteMode)];
     if (aggregate.hasUnclearedChart) {
@@ -139,8 +139,7 @@ void addClearMarkCountsForAllLongNoteModes(
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
     std::string_view sha256, std::string_view md5, std::string_view path,
     int chartLongNoteMode, int totalLongNotes, int totalBackSpinNotes) {
-  for (int selectedLongNoteMode = 1; selectedLongNoteMode <= 3;
-       ++selectedLongNoteMode) {
+  for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
     const int longNoteMode =
         scoreLongNoteModeForClearLamp(chartLongNoteMode, totalLongNotes,
                                       totalBackSpinNotes,
@@ -297,8 +296,7 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       });
 
   for (const auto &[key, aggregateByMode] : aggregates) {
-    for (int selectedLongNoteMode = 1; selectedLongNoteMode <= 3;
-         ++selectedLongNoteMode) {
+    for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
       const int clearRank =
           aggregateByMode[static_cast<size_t>(selectedLongNoteMode)]
               .clearRank();
@@ -314,8 +312,7 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
     }
     try {
       const std::string folderKey = folderKeyForCourse(std::stoi(courseIdText));
-      for (int selectedLongNoteMode = 1; selectedLongNoteMode <= 3;
-           ++selectedLongNoteMode) {
+      for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
         data.clearRanks[static_cast<size_t>(selectedLongNoteMode)]
                        [folderKey] = clearRank;
       }

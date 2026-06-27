@@ -476,6 +476,31 @@ inline const char *clearTypeToLabel(ClearType clearType) {
   }
 }
 
+inline const char *clearTypeRankToLabel(int rank) {
+  if (rank >= kClearTypeFullComboRank) {
+    return "FULL COMBO";
+  }
+  if (rank >= kClearTypeExHardClearRank) {
+    return "EX-HARD CLEAR";
+  }
+  if (rank >= kClearTypeHardClearRank) {
+    return "HARD CLEAR";
+  }
+  if (rank >= kClearTypeNormalClearRank) {
+    return "NORMAL CLEAR";
+  }
+  if (rank >= kClearTypeEasyClearRank) {
+    return "EASY CLEAR";
+  }
+  if (rank >= kClearTypeAssistedEasyClearRank) {
+    return "ASSISTED EASY CLEAR";
+  }
+  if (rank == kNoClearTypeRank) {
+    return "NO PLAY";
+  }
+  return "FAILED";
+}
+
 struct GaugeStateSnapshot {
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
@@ -503,10 +528,7 @@ public:
   explicit RhythmState(const bms_parser::Chart *Chart, bool addReadyMeasure) {
     gaugeTotalNotes = Chart != nullptr ? Chart->Meta.TotalNotes : 0;
     gaugeTotal = Chart != nullptr ? Chart->Meta.Total : 100.0;
-    for (int i = 0; i < JudgementCount; i++) {
-      judgeCount[static_cast<Judgement>(i)] = 0;
-      judgementFastSlowCount[static_cast<Judgement>(i)] = {};
-    }
+    resetJudgeCounts();
     configureGauge(GaugeType::Normal, false);
   }
 
@@ -525,6 +547,27 @@ public:
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
   int slowCount = 0;
+
+  void resetJudgeCounts() {
+    judgeCount.clear();
+    judgementFastSlowCount.clear();
+    for (int i = 0; i < JudgementCount; i++) {
+      judgeCount[static_cast<Judgement>(i)] = 0;
+      judgementFastSlowCount[static_cast<Judgement>(i)] = {};
+    }
+  }
+
+  void addJudgeCountFrom(const RhythmState &source, Judgement judgement) {
+    const auto count = source.judgeCount.find(judgement);
+    if (count != source.judgeCount.end()) {
+      judgeCount[judgement] += count->second;
+    }
+    const auto timing = source.judgementFastSlowCount.find(judgement);
+    if (timing != source.judgementFastSlowCount.end()) {
+      judgementFastSlowCount[judgement].fast += timing->second.fast;
+      judgementFastSlowCount[judgement].slow += timing->second.slow;
+    }
+  }
 
   void recordFastSlow(const JudgeResult &judgeResult) {
     if (judgeResult.judgement == None || judgeResult.judgement == Kpoor) {

@@ -1,6 +1,8 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../CourseConstraintUtils.h"
+#include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
@@ -27,7 +29,6 @@
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
-#include "../yoga/lib/nlohmann/json.hpp"
 #include <array>
 #include <cctype>
 #include <cstring>
@@ -78,7 +79,6 @@ extern char **environ;
 #endif
 
 namespace {
-using json = nlohmann::json;
 
 constexpr int kRootPadding = 28;
 constexpr int kLibraryPanelWidth = 360;
@@ -117,234 +117,9 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"NO PLAY", kNoClearTypeRank},
 };
 
-struct CourseConstraintSettings {
-  GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  CourseConstraintRules rules;
-  std::optional<std::string> gradeConstraint;
-};
-
-std::string normalizeCourseConstraintName(std::string name) {
-  name.erase(name.begin(),
-             std::find_if(name.begin(), name.end(), [](unsigned char c) {
-               return std::isspace(c) == 0;
-             }));
-  name.erase(std::find_if(name.rbegin(), name.rend(), [](unsigned char c) {
-               return std::isspace(c) == 0;
-             }).base(),
-             name.end());
-  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
-    if (c == '-') {
-      return '_';
-    }
-    return static_cast<char>(std::tolower(c));
-  });
-  return name;
-}
-
-void collectCourseConstraintNames(const json &value,
-                                  std::vector<std::string> &names) {
-  if (value.is_string()) {
-    names.push_back(normalizeCourseConstraintName(value.get<std::string>()));
-    return;
-  }
-  if (value.is_array()) {
-    for (const auto &item : value) {
-      collectCourseConstraintNames(item, names);
-    }
-  }
-}
-
-int courseConstraintType(const std::string &constraint) {
-  if (constraint == "grade" || constraint == "grade_mirror" ||
-      constraint == "grade_random") {
-    return 0;
-  }
-  if (constraint == "no_speed") {
-    return 1;
-  }
-  if (constraint == "no_good" || constraint == "no_great") {
-    return 2;
-  }
-  if (constraint == "gauge_lr2" || constraint == "gauge_5k" ||
-      constraint == "gauge_7k" || constraint == "gauge_9k" ||
-      constraint == "gauge_24k") {
-    return 3;
-  }
-  if (constraint == "ln" || constraint == "cn" || constraint == "hcn") {
-    return 4;
-  }
-  return -1;
-}
-
-CourseConstraintSettings
-courseConstraintSettingsFromJson(const std::string &constraintJson) {
-  CourseConstraintSettings settings;
-  if (constraintJson.empty()) {
-    return settings;
-  }
-  const auto parsed = json::parse(constraintJson, nullptr, false);
-  if (parsed.is_discarded()) {
-    return settings;
-  }
-
-  std::vector<std::string> constraints;
-  collectCourseConstraintNames(parsed, constraints);
-  std::array<bool, 5> seenTypes{};
-  for (const auto &constraint : constraints) {
-    const int type = courseConstraintType(constraint);
-    if (type < 0 || seenTypes[static_cast<size_t>(type)]) {
-      continue;
-    }
-    seenTypes[static_cast<size_t>(type)] = true;
-
-    if (type == 0) {
-      settings.gradeConstraint = constraint;
-      continue;
-    }
-    if (type == 1) {
-      settings.rules.noSpeed = true;
-      continue;
-    }
-    if (type == 2) {
-      if (constraint == "no_good") {
-        settings.rules.judgement = CourseJudgementConstraint::NoGood;
-      } else if (constraint == "no_great") {
-        settings.rules.judgement = CourseJudgementConstraint::NoGreat;
-      }
-      continue;
-    }
-    if (type == 3) {
-      if (constraint == "gauge_5k") {
-        settings.gaugeProfile = GaugeProfile::Course5Keys;
-      } else if (constraint == "gauge_7k") {
-        settings.gaugeProfile = GaugeProfile::Course7Keys;
-      } else if (constraint == "gauge_9k") {
-        settings.gaugeProfile = GaugeProfile::Course9Keys;
-      } else if (constraint == "gauge_24k") {
-        settings.gaugeProfile = GaugeProfile::Course24Keys;
-      } else if (constraint == "gauge_lr2") {
-        settings.gaugeProfile = GaugeProfile::CourseLR2;
-      }
-      continue;
-    }
-    if (type == 4) {
-      if (constraint == "ln") {
-        settings.rules.longNoteMode = CourseLongNoteMode::LN;
-      } else if (constraint == "cn") {
-        settings.rules.longNoteMode = CourseLongNoteMode::CN;
-      } else if (constraint == "hcn") {
-        settings.rules.longNoteMode = CourseLongNoteMode::HCN;
-      }
-    }
-  }
-
-  if (settings.gaugeProfile == GaugeProfile::Standard) {
-    settings.gaugeProfile = GaugeProfile::CourseDefault;
-  }
-  return settings;
-}
-
-std::string coursePlayOptionForConstraints(
-    const std::string &selectedPlayOption,
-    const CourseConstraintSettings &constraintSettings) {
-  const std::string normalized =
-      play_options::normalizePlayOption(selectedPlayOption);
-  if (!constraintSettings.gradeConstraint.has_value()) {
-    return normalized;
-  }
-  if (*constraintSettings.gradeConstraint == "grade") {
-    return "NORMAL";
-  }
-  if (*constraintSettings.gradeConstraint == "grade_mirror" &&
-      normalized != "MIRROR") {
-    return "NORMAL";
-  }
-  return normalized;
-}
-
-bool coursePlayOptionLocksSelection(
-    const CourseConstraintSettings &constraintSettings) {
-  return constraintSettings.gradeConstraint.has_value() &&
-         (*constraintSettings.gradeConstraint == "grade" ||
-          *constraintSettings.gradeConstraint == "grade_mirror");
-}
-
-bool coursePlayOptionAllowedByConstraints(
-    const std::string &option,
-    const CourseConstraintSettings &constraintSettings) {
-  if (!coursePlayOptionLocksSelection(constraintSettings)) {
-    return true;
-  }
-
-  const std::string normalized = play_options::normalizePlayOption(option);
-  if (*constraintSettings.gradeConstraint == "grade") {
-    return normalized == "NORMAL";
-  }
-  if (*constraintSettings.gradeConstraint == "grade_mirror") {
-    return normalized == "NORMAL" || normalized == "MIRROR";
-  }
-  return true;
-}
-
-std::string normalizeLongNoteModeOption(std::string value) {
-  value.erase(value.begin(),
-              std::find_if(value.begin(), value.end(),
-                           [](unsigned char c) {
-                             return std::isspace(c) == 0;
-                           }));
-  value.erase(std::find_if(value.rbegin(), value.rend(),
-                           [](unsigned char c) {
-                             return std::isspace(c) == 0;
-                           }).base(),
-              value.end());
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) {
-                   if (c == '_' || c == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(c));
-                 });
-  if (value == "1" || value == "LN" || value == "LONGNOTE" ||
-      value == "LONG-NOTE") {
-    return "LN";
-  }
-  if (value == "2" || value == "CN" || value == "CHARGENOTE" ||
-      value == "CHARGE-NOTE") {
-    return "CN";
-  }
-  if (value == "3" || value == "HCN" || value == "HELLCHARGENOTE" ||
-      value == "HELL-CHARGE-NOTE" || value == "HELL-CHARGE") {
-    return "HCN";
-  }
-  return AppSettings::kDefaultLnMode;
-}
-
-std::string longNoteModeOptionFromMetaValue(int lnMode) {
-  switch (normalizeChartLongNoteModeValue(lnMode)) {
-  case 2:
-    return "CN";
-  case 3:
-    return "HCN";
-  case 1:
-    return "LN";
-  default:
-    return AppSettings::kDefaultLnMode;
-  }
-}
-
 std::string longNoteModeOptionFromCourseConstraint(CourseLongNoteMode mode) {
-  return longNoteModeOptionFromMetaValue(courseLongNoteModeToChartMetaValue(mode));
-}
-
-int longNoteModeMetaValue(const std::string &mode) {
-  const std::string normalized = normalizeLongNoteModeOption(mode);
-  if (normalized == "CN") {
-    return 2;
-  }
-  if (normalized == "HCN") {
-    return 3;
-  }
-  return 1;
+  return long_note_mode::idFromValue(courseLongNoteModeToChartMetaValue(mode),
+                                     AppSettings::kDefaultLnMode);
 }
 
 std::string clearMarkFolderKey(const std::string &parentKey, int clearRank) {
@@ -2926,7 +2701,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedGaugeAutoShift = savedGaugeSelection.autoShift;
   selectedPlayOption =
       play_options::normalizePlayOption(context.settings.selectedPlayOption);
-  selectedLnMode = normalizeLongNoteModeOption(context.settings.selectedLnMode);
+  selectedLnMode =
+      long_note_mode::parseId(context.settings.selectedLnMode,
+                              AppSettings::kDefaultLnMode);
   selectedAssistOption =
       assist_options::normalize(context.settings.selectedAssistOption);
 
@@ -3453,7 +3230,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   ChartMetaQuery query;
   query.keyword = searchText;
   query.difficultyText = difficultyText;
-  query.selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  query.selectedLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
 
   switch (activeFolder.type) {
   case LibraryFolderItem::Type::SolidArchives:
@@ -3728,12 +3505,12 @@ int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
   if (record.solidArchive) {
     return kNoClearTypeRank;
   }
-  return scoreClearRanks.bestRankFor(record.meta,
-                                     longNoteModeMetaValue(selectedLnMode));
+  return scoreClearRanks.bestRankFor(
+      record.meta, long_note_mode::valueFromId(selectedLnMode));
 }
 
 int MainMenuScene::clearRankForFolder(const std::string &key) const {
-  const int mode = longNoteModeMetaValue(selectedLnMode);
+  const int mode = long_note_mode::valueFromId(selectedLnMode);
   const auto &clearRanks = folderClearData.clearRanks[static_cast<size_t>(mode)];
   const auto it = clearRanks.find(key);
   return it == clearRanks.end() ? kNoClearTypeRank : it->second;
@@ -3741,7 +3518,7 @@ int MainMenuScene::clearRankForFolder(const std::string &key) const {
 
 int MainMenuScene::clearMarkCountForFolder(const std::string &key,
                                            int clearMarkRank) const {
-  const int mode = longNoteModeMetaValue(selectedLnMode);
+  const int mode = long_note_mode::valueFromId(selectedLnMode);
   const auto &clearMarkCounts =
       folderClearData.clearMarkCounts[static_cast<size_t>(mode)];
   const auto folderIt = clearMarkCounts.find(key);
@@ -3881,7 +3658,8 @@ MainMenuScene::EffectivePlayOptionSelection
 MainMenuScene::currentEffectivePlayOptionSelection() const {
   EffectivePlayOptionSelection selection;
   selection.playOption = play_options::normalizePlayOption(selectedPlayOption);
-  selection.longNoteMode = normalizeLongNoteModeOption(selectedLnMode);
+  selection.longNoteMode =
+      long_note_mode::parseId(selectedLnMode, AppSettings::kDefaultLnMode);
 
   const auto record = selectedRecordSnapshot();
   const bool selectedCourseStart =
@@ -3894,15 +3672,12 @@ MainMenuScene::currentEffectivePlayOptionSelection() const {
     if (coursePlayOptionLocksSelection(constraintSettings)) {
       selection.playOption =
           coursePlayOptionForConstraints(selectedPlayOption, constraintSettings);
-      selection.playOptionLocked = true;
-      selection.playOptionLockSource = "Course";
     }
     if (constraintSettings.rules.longNoteMode !=
         CourseLongNoteMode::Unspecified) {
       selection.longNoteMode = longNoteModeOptionFromCourseConstraint(
           constraintSettings.rules.longNoteMode);
       selection.longNoteModeLocked = true;
-      selection.longNoteModeLockSource = "Course";
     }
     return selection;
   }
@@ -3911,9 +3686,9 @@ MainMenuScene::currentEffectivePlayOptionSelection() const {
     const int chartLnMode =
         normalizeChartLongNoteModeValue(record->meta.LnMode);
     if (chartLnMode > 0) {
-      selection.longNoteMode = longNoteModeOptionFromMetaValue(chartLnMode);
+      selection.longNoteMode =
+          long_note_mode::idFromValue(chartLnMode, AppSettings::kDefaultLnMode);
       selection.longNoteModeLocked = true;
-      selection.longNoteModeLockSource = "Chart";
     }
   }
 
@@ -3943,7 +3718,8 @@ bool MainMenuScene::currentLongNoteModeSelectionAllowed(
   if (!selection.longNoteModeLocked) {
     return true;
   }
-  return normalizeLongNoteModeOption(mode) == selection.longNoteMode;
+  return long_note_mode::parseId(mode, AppSettings::kDefaultLnMode) ==
+         selection.longNoteMode;
 }
 
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
@@ -4034,7 +3810,7 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
     return;
   }
   const std::string previousMode = selectedLnMode;
-  selectedLnMode = normalizeLongNoteModeOption(mode);
+  selectedLnMode = long_note_mode::parseId(mode, AppSettings::kDefaultLnMode);
   context.settings.selectedLnMode = selectedLnMode;
   context.settings.sanitize();
   if (!context.settings.save()) {
@@ -4054,7 +3830,8 @@ void MainMenuScene::refreshLongNoteModeButtons() {
       continue;
     }
 
-    const std::string normalized = normalizeLongNoteModeOption(item.mode);
+    const std::string normalized =
+        long_note_mode::parseId(item.mode, AppSettings::kDefaultLnMode);
     const bool allowed = currentLongNoteModeSelectionAllowed(item.mode);
     item.text->setText(item.mode);
     if (allowed && !effective.longNoteModeLocked) {
@@ -4227,7 +4004,7 @@ void MainMenuScene::startSelectedCourse() {
   }
   const CourseConstraintSettings constraintSettings =
       courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
-  int courseLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  int courseLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
   if (constraintSettings.rules.longNoteMode !=
       CourseLongNoteMode::Unspecified) {
     courseLongNoteMode = courseLongNoteModeToChartMetaValue(
@@ -4263,7 +4040,7 @@ void MainMenuScene::startCourseDirect(
   const int selectedLongNoteMode =
       normalizeChartLongNoteModeValue(session->longNoteMode) > 0
           ? normalizeChartLongNoteModeValue(session->longNoteMode)
-          : longNoteModeMetaValue(selectedLnMode);
+          : long_note_mode::valueFromId(selectedLnMode);
   session->longNoteMode = selectedLongNoteMode;
 
   defer(
@@ -4387,7 +4164,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const std::string playOption = selectedPlayOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
   if (selectedLongNoteMode == 0) {
-    selectedLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+    selectedLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
   }
   const std::string assistOption = selectedAssistOption;
   const std::string normalizedPlayOption =
@@ -6729,9 +6506,9 @@ void MainMenuScene::buildPlayOptionsModal() {
   };
 
   auto *longNoteModeRow = makeModalOptionRow(58);
-  longNoteModeRow->addView(makeLongNoteModeButton("LN"));
-  longNoteModeRow->addView(makeLongNoteModeButton("CN"));
-  longNoteModeRow->addView(makeLongNoteModeButton("HCN"));
+  for (const char *mode : long_note_mode::kPlayableIds) {
+    longNoteModeRow->addView(makeLongNoteModeButton(mode));
+  }
   panel->addView(longNoteModeRow);
 
   panel->addView(makeModalLabel("Assist Option"));
@@ -7491,7 +7268,7 @@ bms_parser::ChartMeta
 MainMenuScene::replayLoadMetaForRecord(const ChartMetaRecord &record) const {
   bms_parser::ChartMeta meta = record.meta;
   if (normalizeChartLongNoteModeValue(meta.LnMode) == 0) {
-    meta.LnMode = longNoteModeMetaValue(selectedLnMode);
+    meta.LnMode = long_note_mode::valueFromId(selectedLnMode);
   }
   return meta;
 }
@@ -7538,7 +7315,7 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
   playInfo =
       play_options::applySelectedPlayOptions(*preparedChart, selectedPlayOption);
   applyEffectiveLongNoteModeToChart(
-      *preparedChart, longNoteModeMetaValue(selectedLnMode));
+      *preparedChart, long_note_mode::valueFromId(selectedLnMode));
   return true;
 }
 
@@ -7601,7 +7378,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                     .playOption2 = playInfo.option2,
                                     .playOption2Seed = playInfo.seed2,
                                     .longNoteMode =
-                                        longNoteModeMetaValue(selectedLnMode),
+                                        long_note_mode::valueFromId(selectedLnMode),
                                     .assistOption = selectedAssistOption,
                                     .touchVisualizationEnabled = false,
                                     .replayGhostRenderingEnabled = false,
@@ -7723,19 +7500,18 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
 
 void MainMenuScene::startCourseReplayDirect(
     std::shared_ptr<CoursePlaySession> session) {
-  if (session == nullptr || !session->validCurrentIndex() ||
+  if (session == nullptr ||
       !session->hasCourseReplayStage(session->currentIndex)) {
     resetReplayWatchLoadingUi();
     return;
   }
 
-  auto stageReplay =
-      std::make_shared<ReplayData>(
-          session->courseReplayStage(session->currentIndex)->replay);
-  session->playOption = stageReplay->playOption;
-  session->playOptionSeed = stageReplay->playOptionSeed;
-  session->playOption2 = stageReplay->playOption2;
-  session->playOption2Seed = stageReplay->playOption2Seed;
+  auto stageReplay = session->currentCourseReplayStageReplay();
+  if (stageReplay == nullptr) {
+    resetReplayWatchLoadingUi();
+    return;
+  }
+  session->applyReplayStagePlayOptions(*stageReplay);
   std::atomic_bool parseCancelled = false;
   auto replayChart = play_options::prepareReplayChart(
       stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
@@ -7751,26 +7527,7 @@ void MainMenuScene::startCourseReplayDirect(
     return;
   }
 
-  StartOptions options;
-  options.startPosition = 0;
-  options.autoKeySound = false;
-  options.autoPlay = false;
-  options.gaugeType = session->gaugeType;
-  options.gaugeProfile = session->gaugeProfile;
-  options.gaugeAutoShift = session->gaugeAutoShift;
-  options.replayData = stageReplay;
-  options.playOption = stageReplay->playOption;
-  options.playOptionSeed = stageReplay->playOptionSeed;
-  options.playOption2 = stageReplay->playOption2;
-  options.playOption2Seed = stageReplay->playOption2Seed;
-  options.longNoteMode =
-      normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
-  options.assistOption = stageReplay->assistOption;
-  options.courseSession = session;
-  options.courseConstraints = session->constraints;
-  options.ownsChart = true;
-  options.touchVisualizationEnabled = session->replayTouchVisualizationEnabled;
-  options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;
+  StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(replayChart),
@@ -7917,7 +7674,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   const bool autoPlayGaugeAutoShift = selectedGaugeAutoShift;
   const std::string autoPlayAssistOption = selectedAssistOption;
   const std::string autoPlayOption = selectedPlayOption;
-  const int autoPlayLongNoteMode = longNoteModeMetaValue(selectedLnMode);
+  const int autoPlayLongNoteMode =
+      long_note_mode::valueFromId(selectedLnMode);
   const SelectedChartRandomInfo autoPlayRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
