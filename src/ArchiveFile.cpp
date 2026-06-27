@@ -32,6 +32,11 @@
 #include <unordered_set>
 #include <utility>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #if __has_include(<archive.h>) && __has_include(<archive_entry.h>)
 #include <archive.h>
 #include <archive_entry.h>
@@ -571,6 +576,146 @@ void reserveBufferedBytes(std::vector<unsigned char> &bytes,
     bytes.reserve(static_cast<std::size_t>(size));
   }
 }
+
+class RandomAccessFile {
+public:
+  RandomAccessFile() = default;
+  RandomAccessFile(const RandomAccessFile &) = delete;
+  RandomAccessFile &operator=(const RandomAccessFile &) = delete;
+
+  ~RandomAccessFile() {
+#ifndef _WIN32
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
+#endif
+  }
+
+  bool open(const std::filesystem::path &path, std::string *errorMessage) {
+#ifndef _WIN32
+    if (fd_ >= 0) {
+      ::close(fd_);
+      fd_ = -1;
+    }
+    const std::string pathText = fspath_to_utf8(path);
+    fd_ = ::open(pathText.c_str(), O_RDONLY);
+    if (fd_ < 0) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not open file for random access: " +
+                        pathForLog(path) + ": " + std::strerror(errno);
+      }
+      return false;
+    }
+    return true;
+#else
+    file_.close();
+    file_.clear();
+    file_.open(path, std::ios::binary);
+    if (!file_) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not open file for random access: " +
+                        pathForLog(path);
+      }
+      return false;
+    }
+    return true;
+#endif
+  }
+
+  bool readAt(std::uint64_t offset, void *data, std::size_t size,
+              std::string *errorMessage) {
+    if (size == 0) {
+      return true;
+    }
+    if (data == nullptr) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access read buffer is unavailable.";
+      }
+      return false;
+    }
+
+#ifndef _WIN32
+    if (fd_ < 0) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access file is not open.";
+      }
+      return false;
+    }
+    if (offset >
+        static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access read offset is out of range.";
+      }
+      return false;
+    }
+
+    auto *cursor = static_cast<unsigned char *>(data);
+    std::size_t readTotal = 0;
+    while (readTotal < size) {
+      const std::size_t remaining = size - readTotal;
+      const std::size_t chunk = std::min<std::size_t>(
+          remaining, static_cast<std::size_t>(
+                         std::numeric_limits<ssize_t>::max()));
+      const auto readOffset = static_cast<off_t>(offset + readTotal);
+      const ssize_t count = ::pread(fd_, cursor + readTotal, chunk, readOffset);
+      if (count < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        if (errorMessage != nullptr) {
+          *errorMessage =
+              std::string("Random access read failed: ") + std::strerror(errno);
+        }
+        return false;
+      }
+      if (count == 0) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Random access read reached end of file.";
+        }
+        return false;
+      }
+      readTotal += static_cast<std::size_t>(count);
+    }
+    return true;
+#else
+    if (!file_) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access file is not open.";
+      }
+      return false;
+    }
+    if (offset >
+        static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max())) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access read offset is out of range.";
+      }
+      return false;
+    }
+    file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file_) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access seek failed.";
+      }
+      return false;
+    }
+    file_.read(static_cast<char *>(data), static_cast<std::streamsize>(size));
+    if (file_.gcount() != static_cast<std::streamsize>(size)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Random access read failed.";
+      }
+      return false;
+    }
+    return true;
+#endif
+  }
+
+private:
+#ifndef _WIN32
+  int fd_ = -1;
+#else
+  std::ifstream file_;
+#endif
+};
 
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
@@ -3196,6 +3341,34 @@ struct ZipReadTarget {
   std::uint64_t size = 0;
 };
 
+struct ZipDirectReadTarget {
+  std::string normalized;
+  std::filesystem::path entryPath;
+  std::size_t order = 0;
+  std::uint64_t size = 0;
+  std::uint64_t compressedSize = 0;
+  std::uint64_t dataOffset = 0;
+  mz_uint16 method = 0;
+  mz_uint32 crc32 = 0;
+};
+
+constexpr std::uint32_t kZipLocalHeaderSignature = 0x04034b50u;
+constexpr std::size_t kZipLocalHeaderSize = 30;
+constexpr std::size_t kZipLocalHeaderFilenameLengthOffset = 26;
+constexpr std::size_t kZipLocalHeaderExtraLengthOffset = 28;
+
+std::uint16_t readZipLe16(const unsigned char *data) {
+  return static_cast<std::uint16_t>(data[0]) |
+         (static_cast<std::uint16_t>(data[1]) << 8);
+}
+
+std::uint32_t readZipLe32(const unsigned char *data) {
+  return static_cast<std::uint32_t>(data[0]) |
+         (static_cast<std::uint32_t>(data[1]) << 8) |
+         (static_cast<std::uint32_t>(data[2]) << 16) |
+         (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
 std::optional<std::string> minizFilename(mz_zip_archive *archive,
                                          mz_uint fileIndex) {
   const mz_uint size = mz_zip_reader_get_filename(archive, fileIndex, nullptr, 0);
@@ -3265,6 +3438,207 @@ ZipNameMatch compareZipEntryName(const std::string &filename,
     return ZipNameMatch::Matches;
   }
   return knownMismatch ? ZipNameMatch::Mismatches : ZipNameMatch::Unknown;
+}
+
+bool zipCompressedDataOffset(RandomAccessFile &file,
+                             const mz_zip_archive_file_stat &stat,
+                             std::uint64_t archiveSize,
+                             std::uint64_t &dataOffset,
+                             std::string *errorMessage) {
+  std::array<unsigned char, kZipLocalHeaderSize> header{};
+  if (!file.readAt(stat.m_local_header_ofs, header.data(), header.size(),
+                   errorMessage)) {
+    return false;
+  }
+  if (readZipLe32(header.data()) != kZipLocalHeaderSignature) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP local header signature did not match.";
+    }
+    return false;
+  }
+
+  const std::uint64_t filenameLength =
+      readZipLe16(header.data() + kZipLocalHeaderFilenameLengthOffset);
+  const std::uint64_t extraLength =
+      readZipLe16(header.data() + kZipLocalHeaderExtraLengthOffset);
+  dataOffset = stat.m_local_header_ofs + kZipLocalHeaderSize + filenameLength +
+               extraLength;
+  if (dataOffset < stat.m_local_header_ofs || dataOffset > archiveSize ||
+      stat.m_comp_size > archiveSize - dataOffset) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP local header data range is out of bounds.";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool prepareZipDirectReadTarget(mz_zip_archive *archive,
+                                RandomAccessFile &archiveFile,
+                                const ZipReadTarget &target,
+                                std::uint64_t archiveSize,
+                                ZipDirectReadTarget &directTarget,
+                                std::string *errorMessage,
+                                const PauseCallback &pauseCallback) {
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (target.order > std::numeric_limits<mz_uint>::max()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP index is out of range.";
+    }
+    return false;
+  }
+  const auto fileIndex = static_cast<mz_uint>(target.order);
+  const mz_uint fileCount = mz_zip_reader_get_num_files(archive);
+  if (fileIndex >= fileCount) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP index is out of range.";
+    }
+    return false;
+  }
+
+  mz_zip_archive_file_stat stat{};
+  if (!mz_zip_reader_file_stat(archive, fileIndex, &stat)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not read ZIP central directory entry.";
+    }
+    return false;
+  }
+  if (stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry is not supported by direct reader.";
+    }
+    return false;
+  }
+  if (stat.m_method != 0 && stat.m_method != MZ_DEFLATED) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry compression method is not supported.";
+    }
+    return false;
+  }
+  if (stat.m_uncomp_size != target.size) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP central directory size did not match archive index.";
+    }
+    return false;
+  }
+  if (stat.m_uncomp_size >
+          static_cast<mz_uint64>(std::numeric_limits<std::size_t>::max()) ||
+      stat.m_comp_size >
+          static_cast<mz_uint64>(std::numeric_limits<std::size_t>::max())) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry is too large to read into memory.";
+    }
+    return false;
+  }
+  const auto filename = minizFilename(archive, fileIndex);
+  if (!filename.has_value()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not read ZIP central directory filename.";
+    }
+    return false;
+  }
+  if (compareZipEntryName(*filename, target.normalized) ==
+      ZipNameMatch::Mismatches) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP central directory order did not match archive index.";
+    }
+    return false;
+  }
+
+  std::uint64_t dataOffset = 0;
+  if (!zipCompressedDataOffset(archiveFile, stat, archiveSize, dataOffset,
+                               errorMessage)) {
+    return false;
+  }
+
+  directTarget = {
+      .normalized = target.normalized,
+      .entryPath = target.entryPath,
+      .order = target.order,
+      .size = stat.m_uncomp_size,
+      .compressedSize = stat.m_comp_size,
+      .dataOffset = dataOffset,
+      .method = stat.m_method,
+      .crc32 = stat.m_crc32,
+  };
+  return true;
+}
+
+bool readZipDirectTarget(RandomAccessFile &archiveFile,
+                         const ZipDirectReadTarget &target, FileData &file,
+                         std::vector<unsigned char> &compressedScratch,
+                         std::string *errorMessage,
+                         const PauseCallback &pauseCallback) {
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (target.size >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+      target.compressedSize >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry is too large to read into memory.";
+    }
+    return false;
+  }
+
+  file.path = target.entryPath;
+  file.bytes.resize(static_cast<std::size_t>(target.size));
+  if (target.size == 0 && target.compressedSize == 0) {
+    if (target.crc32 != MZ_CRC32_INIT) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "ZIP CRC check failed.";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  if (target.method == 0) {
+    if (target.compressedSize != target.size) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Stored ZIP entry size mismatch.";
+      }
+      return false;
+    }
+    if (!archiveFile.readAt(target.dataOffset, file.bytes.data(),
+                            file.bytes.size(), errorMessage)) {
+      return false;
+    }
+  } else if (target.method == MZ_DEFLATED) {
+    compressedScratch.resize(static_cast<std::size_t>(target.compressedSize));
+    if (!archiveFile.readAt(target.dataOffset, compressedScratch.data(),
+                            compressedScratch.size(), errorMessage)) {
+      return false;
+    }
+    const size_t decompressed = tinfl_decompress_mem_to_mem(
+        file.bytes.data(), file.bytes.size(), compressedScratch.data(),
+        compressedScratch.size(), 0);
+    if (decompressed == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ||
+        decompressed != file.bytes.size()) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not inflate ZIP entry by direct reader.";
+      }
+      return false;
+    }
+  } else {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP entry compression method is not supported.";
+    }
+    return false;
+  }
+
+  const mz_ulong crc =
+      mz_crc32(MZ_CRC32_INIT, file.bytes.data(), file.bytes.size());
+  if (crc != target.crc32) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP CRC check failed.";
+    }
+    return false;
+  }
+  return true;
 }
 
 bool listZipEntries(const std::filesystem::path &archivePath,
@@ -3885,8 +4259,63 @@ bool readZipEntriesByIndexConcurrent(
                                 }),
                     readTargets.end());
 
+  using Clock = std::chrono::steady_clock;
+  const auto prepareStart = Clock::now();
+  std::uint64_t archiveSize = 0;
+  if (index->size >
+      static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max())) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "ZIP archive is too large for direct reader.";
+    }
+    return false;
+  }
+  archiveSize = static_cast<std::uint64_t>(index->size);
+
+  RandomAccessFile headerFile;
+  if (!headerFile.open(archivePath, errorMessage)) {
+    return false;
+  }
+  mz_zip_archive prepareArchive{};
+  mz_zip_zero_struct(&prepareArchive);
+  const std::string archiveText = fspath_to_utf8(archivePath);
+  if (!mz_zip_reader_init_file_v2(&prepareArchive, archiveText.c_str(),
+                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
+                                  0)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not open ZIP central directory.";
+    }
+    return false;
+  }
+  auto failPrepare = [&](const std::string &message) {
+    if (errorMessage != nullptr) {
+      *errorMessage = message;
+    }
+    mz_zip_reader_end(&prepareArchive);
+    return false;
+  };
+
+  std::vector<ZipDirectReadTarget> directTargets;
+  directTargets.reserve(readTargets.size());
+  for (const ZipReadTarget &target : readTargets) {
+    ZipDirectReadTarget directTarget;
+    std::string prepareError;
+    if (!prepareZipDirectReadTarget(&prepareArchive, headerFile, target,
+                                    archiveSize, directTarget, &prepareError,
+                                    pauseCallback)) {
+      return failPrepare(prepareError.empty()
+                             ? "Could not prepare ZIP direct read target."
+                             : prepareError);
+    }
+    directTargets.push_back(std::move(directTarget));
+  }
+  mz_zip_reader_end(&prepareArchive);
+
+  if (directTargets.empty()) {
+    return true;
+  }
+
   maxWorkers =
-      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
+      std::max<std::size_t>(1, std::min(maxWorkers, directTargets.size()));
   if (maxInFlightBytes == 0) {
     maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
   }
@@ -3940,25 +4369,24 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   auto worker = [&]() {
-    mz_zip_archive archive{};
-    mz_zip_zero_struct(&archive);
-    const std::string archiveText = fspath_to_utf8(archivePath);
-    if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY,
-                                    0, 0)) {
-      setFailure("Could not open ZIP central directory.");
+    RandomAccessFile archiveFile;
+    std::string openError;
+    if (!archiveFile.open(archivePath, &openError)) {
+      setFailure(openError.empty()
+                     ? "Could not open ZIP archive for direct reading."
+                     : openError);
       return;
     }
-    std::vector<unsigned char> readScratch(MZ_ZIP_MAX_IO_BUF_SIZE);
+    std::vector<unsigned char> compressedScratch;
 
     for (;;) {
-      ZipReadTarget target;
+      ZipDirectReadTarget target;
       {
         std::lock_guard lock(stateMutex);
-        if (failed || nextTarget >= readTargets.size()) {
+        if (failed || nextTarget >= directTargets.size()) {
           break;
         }
-        target = readTargets[nextTarget++];
+        target = directTargets[nextTarget++];
       }
 
       std::string pauseError;
@@ -3967,15 +4395,20 @@ bool readZipEntriesByIndexConcurrent(
         break;
       }
 
-      const std::uint64_t targetBytes = target.size;
+      const std::uint64_t targetBytes =
+          target.size > std::numeric_limits<std::uint64_t>::max() -
+                            target.compressedSize
+              ? std::numeric_limits<std::uint64_t>::max()
+              : target.size + target.compressedSize;
       if (!acquireBytes(targetBytes)) {
         break;
       }
 
       FileData file;
       std::string readError;
-      bool ok = readZipTargetByFileIndex(&archive, target, file, &readError,
-                                         pauseCallback, &readScratch);
+      bool ok = readZipDirectTarget(archiveFile, target, file,
+                                    compressedScratch, &readError,
+                                    pauseCallback);
       if (ok) {
         {
           std::lock_guard lock(stateMutex);
@@ -3998,11 +4431,8 @@ bool readZipEntriesByIndexConcurrent(
         ++emittedFiles;
       }
     }
-
-    mz_zip_reader_end(&archive);
   };
 
-  using Clock = std::chrono::steady_clock;
   const auto start = Clock::now();
   std::vector<std::thread> workers;
   workers.reserve(maxWorkers);
@@ -4028,13 +4458,18 @@ bool readZipEntriesByIndexConcurrent(
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
                                                             start)
           .count();
-  appendDebugLogLineImpl("Finished concurrent miniz ZIP extraction: " +
+  const auto prepareMs =
+      std::chrono::duration_cast<std::chrono::milliseconds>(start -
+                                                            prepareStart)
+          .count();
+  appendDebugLogLineImpl("Finished concurrent direct miniz ZIP extraction: " +
                          pathForLog(archivePath) +
-                         " targets=" + std::to_string(readTargets.size()) +
+                         " targets=" + std::to_string(directTargets.size()) +
                          " files=" + std::to_string(emittedFiles) +
                          " workers=" + std::to_string(maxWorkers) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes) +
+                         " prepareMs=" + std::to_string(prepareMs) +
                          " extractMs=" + std::to_string(extractMs));
   return true;
 }
