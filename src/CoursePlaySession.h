@@ -37,15 +37,22 @@ inline int normalizeChartLongNoteModeValue(int lnMode) {
   return long_note_mode::normalizeValue(lnMode);
 }
 
+inline const bms_parser::LongNote *
+longNoteHeadOrSelf(const bms_parser::LongNote *longNote) {
+  if (longNote == nullptr) {
+    return nullptr;
+  }
+  return longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
+                                                         : longNote;
+}
+
 inline bms_parser::LongNoteType resolveEffectiveLongNoteType(
     const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
     int longNoteModeOverride = 0) {
   if (longNote == nullptr) {
     return bms_parser::LongNoteType::LongNote;
   }
-  const bms_parser::LongNote *head =
-      longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
-                                                      : longNote;
+  const bms_parser::LongNote *head = longNoteHeadOrSelf(longNote);
   int lnMode = chart != nullptr ? normalizeChartLongNoteModeValue(
                                       chart->Meta.LnMode)
                                 : 0;
@@ -144,9 +151,7 @@ inline bool chartContainsUndefinedLongNote(const bms_parser::Chart &chart) {
           continue;
         }
         auto *longNote = static_cast<bms_parser::LongNote *>(note);
-        auto *head =
-            longNote->IsTail() && longNote->Head != nullptr ? longNote->Head
-                                                            : longNote;
+        const auto *head = longNoteHeadOrSelf(longNote);
         if (head->Type == bms_parser::LongNoteType::Undefined) {
           return true;
         }
@@ -334,6 +339,13 @@ struct CoursePlaySession {
     playOption2Seed = replay.playOption2Seed;
   }
 
+  CourseReplayStageData &ensureReplayStage(std::size_t index) {
+    while (replayStages.size() <= index) {
+      replayStages.emplace_back();
+    }
+    return replayStages[index];
+  }
+
   [[nodiscard]] long long restMicrosAfterCurrentStage() const {
     if (courseReplayData != nullptr &&
         currentIndex < courseReplayData->stages.size()) {
@@ -363,17 +375,11 @@ struct CoursePlaySession {
   }
 
   void recordReplayStage(const ReplayData &replay) {
-    while (replayStages.size() <= currentIndex) {
-      replayStages.emplace_back();
-    }
-    replayStages[currentIndex].replay = replay;
+    ensureReplayStage(currentIndex).replay = replay;
   }
 
   void recordRestMicrosAfterCurrentStage(long long restMicros) {
-    while (replayStages.size() <= currentIndex) {
-      replayStages.emplace_back();
-    }
-    replayStages[currentIndex].restMicrosAfterStage =
+    ensureReplayStage(currentIndex).restMicrosAfterStage =
         std::max(0LL, restMicros);
   }
 };
