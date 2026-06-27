@@ -11,6 +11,7 @@
 #include <thread>
 #include "../Utils.h"
 #include "../game/GameState.h"
+#include "../path.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -142,7 +143,7 @@ void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
     errorMessage.clear();
     if (!CacheAndroidTreeDirectory(directory, errorMessage)) {
       SDL_Log("Failed to cache Android SAF directory %s: %s",
-              path_t_to_utf8(fspath_to_path_t(directory)).c_str(),
+              fspath_to_utf8(directory).c_str(),
               errorMessage.c_str());
       continue;
     }
@@ -203,14 +204,14 @@ unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
     const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
     if (!fd.has_value()) {
       SDL_Log("Failed to open Android image descriptor %s: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str(), fdError.c_str());
+              fspath_to_utf8(path).c_str(), fdError.c_str());
       return nullptr;
     }
     FILE *file = fdopen(*fd, "rb");
     if (file == nullptr) {
       close(*fd);
       SDL_Log("Failed to create FILE for Android image descriptor: %s",
-              path_t_to_utf8(fspath_to_path_t(path)).c_str());
+              fspath_to_utf8(path).c_str());
       return nullptr;
     }
     unsigned char *data =
@@ -220,7 +221,7 @@ unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
   }
 #endif
   if (!archive_file::isVirtualPath(path)) {
-    const std::string utf8Path = path_t_to_utf8(fspath_to_path_t(path));
+    const std::string utf8Path = fspath_to_utf8(path);
     return stbi_load(utf8Path.c_str(), width, height, channels,
                      requestedChannels);
   }
@@ -229,7 +230,7 @@ unsigned char *loadImageFile(const std::filesystem::path &path, int *width,
   std::string errorMessage;
   if (!archive_file::readFile(path, bytes, &errorMessage)) {
     SDL_Log("Failed to read archived image %s: %s",
-            path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+            fspath_to_utf8(path).c_str(),
             errorMessage.c_str());
     return nullptr;
   }
@@ -791,7 +792,7 @@ bool Jukebox::loadMaterializedVideoPath(
   }
 
   SDL_Log("Failed to load video: %s",
-          path_t_to_utf8(fspath_to_path_t(displayPath)).c_str());
+          fspath_to_utf8(displayPath).c_str());
   return false;
 }
 
@@ -1059,7 +1060,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     }
     if (!resolvedPath.has_value()) {
       SDL_Log("Failed to load sound for all extensions: %s",
-              path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+              fspath_to_utf8(basePath).c_str());
       continue;
     }
 
@@ -1097,11 +1098,11 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
     if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
       SDL_Log("Failed to read sounds from archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+              fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
       archive_file::appendDebugLogLine(
           "Failed to read sound batch from archive: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          fspath_to_utf8(batch.archivePath) + ": " +
           errorMessage);
       continue;
     }
@@ -1220,7 +1221,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
     if (!resolvedPath.has_value()) {
       SDL_Log("Failed to load sound for all extensions: %s",
-              path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+              fspath_to_utf8(basePath).c_str());
       continue;
     }
 
@@ -1306,7 +1307,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
       }
       if (!found) {
         SDL_Log("Failed to load image or video for all extensions: %s",
-                path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+                fspath_to_utf8(basePath).c_str());
       }
     }
   }
@@ -1374,11 +1375,11 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
     const auto readStart = Clock::now();
     if (!readArchiveBatchEntries(readBatch, entryRange, files, &errorMessage)) {
       SDL_Log("Failed to read chart assets from archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+              fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
       archive_file::appendDebugLogLine(
           "Failed to read combined chart asset batch from archive: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          fspath_to_utf8(batch.archivePath) + ": " +
           errorMessage);
       continue;
     }
@@ -1387,7 +1388,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
                             .count();
     archive_file::appendDebugLogLine(
         "Read combined chart asset batch: " +
-        path_t_to_utf8(fspath_to_path_t(batch.archivePath)) +
+        fspath_to_utf8(batch.archivePath) +
         " targets=" + std::to_string(batch.innerPaths.size()) +
         " files=" + std::to_string(files.size()) +
         " ms=" + std::to_string(readMs));
@@ -1611,7 +1612,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     }
     if (!found) {
       SDL_Log("Failed to load image or video for all extensions: %s",
-              path_t_to_utf8(fspath_to_path_t(basePath)).c_str());
+              fspath_to_utf8(basePath).c_str());
     }
   }
 
@@ -1643,11 +1644,11 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
     if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
       SDL_Log("Failed to read videos from archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+              fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
       archive_file::appendDebugLogLine(
           "Failed to read video batch from archive: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          fspath_to_utf8(batch.archivePath) + ": " +
           errorMessage);
       continue;
     }
@@ -1694,11 +1695,11 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
     if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
       SDL_Log("Failed to read images from archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(batch.archivePath)).c_str(),
+              fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
       archive_file::appendDebugLogLine(
           "Failed to read image batch from archive: " +
-          path_t_to_utf8(fspath_to_path_t(batch.archivePath)) + ": " +
+          fspath_to_utf8(batch.archivePath) + ": " +
           errorMessage);
       continue;
     }
