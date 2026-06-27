@@ -1,6 +1,7 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
 #include "Utils.h"
+#include "path.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -562,7 +563,7 @@ bool AppSettings::save() const {
   std::ofstream file(path, std::ios::trunc);
   if (!file.is_open()) {
     SDL_Log("Failed to open settings file for writing: %s",
-            path.string().c_str());
+            fspath_to_utf8(path).c_str());
     return false;
   }
 

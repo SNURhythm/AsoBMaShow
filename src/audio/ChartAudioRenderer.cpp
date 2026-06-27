@@ -332,7 +332,7 @@ DecodedSound *loadDecodedSound(const bms_parser::Chart &chart, int wav,
   if (!decodeAudioToPCM(fspath_to_path_t(resolvedPath), decoded->pcm,
                         decoded->info, isCancelled)) {
     SDL_Log("Chart audio failed to decode sound %d: %s", wav,
-            resolvedPath.string().c_str());
+            fspath_to_utf8(resolvedPath).c_str());
     if (!isCancelled) {
       decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     }
@@ -340,7 +340,7 @@ DecodedSound *loadDecodedSound(const bms_parser::Chart &chart, int wav,
   }
   if (!decodedSoundIsValid(*decoded)) {
     SDL_Log("Chart audio decoded invalid sound %d: %s", wav,
-            resolvedPath.string().c_str());
+            fspath_to_utf8(resolvedPath).c_str());
     decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
     return nullptr;
   }
