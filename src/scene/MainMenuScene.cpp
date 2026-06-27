@@ -1781,8 +1781,8 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1829,8 +1829,8 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         std::filesystem::path folderPath(folder);
         std::string folderName =
             !folderPath.filename().empty()
-                ? path_t_to_utf8(fspath_to_path_t(folderPath.filename()))
-                : path_t_to_utf8(fspath_to_path_t(folderPath));
+                ? fspath_to_utf8(folderPath.filename())
+                : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -1976,9 +1976,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
                       "Preparing import");
   archive_file::appendDebugLogLine(
-      "Android import task requested: " +
-      path_t_to_utf8(fspath_to_path_t(importPath)) + " outputRoot=" +
-      path_t_to_utf8(fspath_to_path_t(outputRoot)));
+      "Android import task requested: " + fspath_to_utf8(importPath) +
+      " outputRoot=" + fspath_to_utf8(outputRoot));
 
   auto postImportProgress = [this, &task,
                              importingFolder](double fraction,
