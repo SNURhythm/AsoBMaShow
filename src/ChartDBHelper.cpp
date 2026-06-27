@@ -391,9 +391,9 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   ArchiveScanResult result;
   std::vector<archive_file::Entry> entries;
   std::string errorMessage;
+  const std::string archiveText = fspath_to_utf8(archivePath);
   archive_file::appendDebugLogLine(
-      "Scanning archive for BMS charts: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)));
+      "Scanning archive for BMS charts: " + archiveText);
   if (!pauseIfNeeded()) {
     return result;
   }
@@ -401,12 +401,9 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
                                  pauseCallback)) {
     if (!errorMessage.empty()) {
       SDL_Log("Failed to scan archive %s: %s",
-              path_t_to_utf8(fspath_to_path_t(archivePath)).c_str(),
-              errorMessage.c_str());
+              archiveText.c_str(), errorMessage.c_str());
       archive_file::appendDebugLogLine(
-          "Failed to scan archive: " +
-          path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
-          errorMessage);
+          "Failed to scan archive: " + archiveText + ": " + errorMessage);
     }
     return result;
   }
@@ -449,8 +446,7 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   }
 
   archive_file::appendDebugLogLine(
-      "Archive chart scan complete: " +
-      path_t_to_utf8(fspath_to_path_t(archivePath)) +
+      "Archive chart scan complete: " + archiveText +
       " charts=" + std::to_string(result.chartPaths.size()) +
       " entries=" + std::to_string(entries.size()) +
       " files=" + std::to_string(result.fileCount) +
@@ -458,8 +454,7 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
       " estimatedUnpacked=" + std::to_string(result.uncompressedSize));
   if (result.solid) {
     archive_file::appendDebugLogLine(
-        "Skipped chart probing for solid archive: " +
-        path_t_to_utf8(fspath_to_path_t(archivePath)));
+        "Skipped chart probing for solid archive: " + archiveText);
   }
   return result;
 }
@@ -1151,7 +1146,7 @@ std::optional<std::string> normalizedPathTextForStorage(
   ChartDBHelper::ToRelativePath(path);
   path = path.lexically_normal();
 
-  const std::string normalized = path_t_to_utf8(fspath_to_path_t(path));
+  const std::string normalized = fspath_to_utf8(path);
   if (normalized == original) {
     return std::nullopt;
   }
@@ -1527,10 +1522,7 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
                                        const std::filesystem::path &chartPath,
                                        int priority,
                                        sqlite3_int64 archiveSize) {
-  std::filesystem::path storedPath = chartPath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  const std::string storedPathText =
-      path_t_to_utf8(fspath_to_path_t(storedPath));
+  const std::string storedPathText = storedChartPathText(chartPath);
 
   const char *query =
       "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
@@ -1607,17 +1599,11 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
 }
 
 std::string archivePathTextForDb(const std::filesystem::path &archivePath) {
-  std::filesystem::path storedPath = archivePath;
-  ChartDBHelper::ToRelativePath(storedPath);
-  storedPath = storedPath.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(storedPath));
+  return storedChartPathText(archivePath);
 }
 
 std::string checkpointPathTextForDb(const std::filesystem::path &path) {
-  std::filesystem::path storedPath = path;
-  ChartDBHelper::ToRelativePath(storedPath);
-  storedPath = storedPath.lexically_normal();
-  return path_t_to_utf8(fspath_to_path_t(storedPath));
+  return storedChartPathText(path);
 }
 
 std::filesystem::path checkpointPathFromDbText(const std::string &text) {
