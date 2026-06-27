@@ -214,6 +214,20 @@ storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   return identity;
 }
 
+void bindStoredMusicTrackKey(sqlite3_stmt *stmt, int firstIndex,
+                             const StoredMusicTrackIdentity &identity) {
+  bindSqliteText(stmt, firstIndex, identity.keyType);
+  bindSqliteText(stmt, firstIndex + 1, identity.musicKey);
+}
+
+void bindStoredMusicTrackIdentity(sqlite3_stmt *stmt, int firstIndex,
+                                  const StoredMusicTrackIdentity &identity) {
+  bindStoredMusicTrackKey(stmt, firstIndex, identity);
+  bindSqliteText(stmt, firstIndex + 2, identity.chartPath);
+  bindSqliteText(stmt, firstIndex + 3, identity.md5);
+  bindSqliteText(stmt, firstIndex + 4, identity.sha256);
+}
+
 std::string joinedTextExpr(const std::string &alias,
                            std::initializer_list<const char *> columns) {
   std::string expr;
@@ -538,11 +552,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   }
 
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindSqliteText(stmt, 2, identity.keyType);
-  bindSqliteText(stmt, 3, identity.musicKey);
-  bindSqliteText(stmt, 4, identity.chartPath);
-  bindSqliteText(stmt, 5, identity.md5);
-  bindSqliteText(stmt, 6, identity.sha256);
+  bindStoredMusicTrackIdentity(stmt, 2, identity);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("inserting music playlist track", db);
@@ -575,8 +585,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(stmt, 1, playlistId);
-  bindSqliteText(stmt, 2, identity.keyType);
-  bindSqliteText(stmt, 3, identity.musicKey);
+  bindStoredMusicTrackKey(stmt, 2, identity);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("deleting music playlist track", db);
@@ -614,8 +623,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
     return false;
   }
   sqlite3_bind_int(currentStmt, 1, playlistId);
-  bindSqliteText(currentStmt, 2, identity.keyType);
-  bindSqliteText(currentStmt, 3, identity.musicKey);
+  bindStoredMusicTrackKey(currentStmt, 2, identity);
   if (sqlite3_step(currentStmt) != SQLITE_ROW) {
     return false;
   }
@@ -839,11 +847,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     sqlite3_reset(insertStmt);
     sqlite3_clear_bindings(insertStmt);
     sqlite3_bind_int(insertStmt, 1, static_cast<int>(i));
-    bindSqliteText(insertStmt, 2, identity.keyType);
-    bindSqliteText(insertStmt, 3, identity.musicKey);
-    bindSqliteText(insertStmt, 4, identity.chartPath);
-    bindSqliteText(insertStmt, 5, identity.md5);
-    bindSqliteText(insertStmt, 6, identity.sha256);
+    bindStoredMusicTrackIdentity(insertStmt, 2, identity);
     const int rc = sqlite3_step(insertStmt);
     if (rc != SQLITE_DONE) {
       logSqlError("saving now playing track", db);
