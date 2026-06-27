@@ -19,7 +19,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <utility>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
@@ -27,13 +26,8 @@ constexpr int kScoreDatabaseSchemaVersion = 2;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
-}
-
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
