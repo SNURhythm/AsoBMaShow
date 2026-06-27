@@ -381,7 +381,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
   std::error_code directoryError;
   if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
     std::cerr << "Can't create music playlist database directory "
-              << directory.string() << ": " << directoryError.message()
+              << fspath_to_utf8(directory) << ": " << directoryError.message()
               << "\n";
     return nullptr;
   }

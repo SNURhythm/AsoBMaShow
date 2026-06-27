@@ -4,6 +4,7 @@
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
+#include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -437,7 +438,8 @@ sqlite3 *ReplayDBHelper::Connect() {
   std::error_code directoryError;
   if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
     SDL_Log("Can't create replay database directory %s: %s",
-            directory.string().c_str(), directoryError.message().c_str());
+            fspath_to_utf8(directory).c_str(),
+            directoryError.message().c_str());
     return nullptr;
   }
   const std::filesystem::path path = directory / "replay.db";
