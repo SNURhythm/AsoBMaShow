@@ -5839,7 +5839,8 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
 
     const std::string dataUrl = jsonStringAt(document, "data_url");
     std::filesystem::path dataPath = path.parent_path() / dataUrl;
-    if (!std::filesystem::exists(dataPath)) {
+    std::error_code dataPathError;
+    if (!std::filesystem::exists(dataPath, dataPathError) || dataPathError) {
       continue;
     }
     const auto dataRaw = readTextFile(dataPath);
