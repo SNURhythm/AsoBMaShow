@@ -31,6 +31,7 @@
 #include "../view/UiTheme.h"
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -116,6 +117,36 @@ bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
           path_t_to_utf8(fspath_to_path_t(path)).c_str(),
           error.message().c_str());
   return false;
+}
+
+const char *homeDirectoryEnvValue() {
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return home;
+  }
+#ifdef _WIN32
+  if (const char *profile = std::getenv("USERPROFILE");
+      profile != nullptr && profile[0] != '\0') {
+    return profile;
+  }
+#endif
+  return nullptr;
+}
+
+bool expandCurrentUserHomeShortcut(std::string &path) {
+  if (path.empty() || path.front() != '~') {
+    return true;
+  }
+  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+    return true;
+  }
+
+  const char *home = homeDirectoryEnvValue();
+  if (home == nullptr) {
+    return false;
+  }
+  path.replace(0, 1, home);
+  return true;
 }
 
 struct SafeAreaInsets {
@@ -1658,8 +1689,10 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
           continue;
         }
 
-        if (folder[0] == '~') {
-          folder.replace(0, 1, getenv("HOME"));
+        if (!expandCurrentUserHomeShortcut(folder)) {
+          std::cout << "Could not expand ~ because no home directory is set.\n";
+          folder.clear();
+          continue;
         }
         std::ifstream test(folder);
         if (!test)
