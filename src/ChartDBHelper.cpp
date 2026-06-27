@@ -2252,9 +2252,8 @@ bool insertDifficultyTableEntry(sqlite3 *db, int tableId,
       "url, url_diff, sort_order) "
       "VALUES (@table_id, @level, @md5, @sha256, @title, @subtitle, "
       "@artist, @subartist, @url, @url_diff, @sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2282,9 +2281,8 @@ int insertDifficultyCourse(sqlite3 *db, int tableId, const std::string &name,
       "(table_id, name, group_name, level, constraint_json, sort_order) "
       "VALUES (@table_id, @name, @group_name, @level, @constraint_json, "
       "@sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return 0;
   }
@@ -2309,9 +2307,8 @@ bool insertDifficultyCourseEntry(sqlite3 *db, int courseId,
                "VALUES (@course_id, @level, @md5, @sha256, @title, "
                "@subtitle, @artist, @subartist, @url, @url_diff, "
                "@sort_order)";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return false;
   }
@@ -2385,9 +2382,8 @@ void loadDifficultyLabelCache(sqlite3 *db, DifficultyLabelCache &cache) {
                "JOIN difficulty_tables dt ON dt.id = dte.table_id "
                "WHERE dte.sha256 != '' OR dte.md5 != '' "
                "ORDER BY dt.id, dte.sort_order, label";
-  sqlite3_stmt *rawStmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, query, -1, &rawStmt, nullptr);
-  SqliteStatementHandle stmt(rawStmt);
+  SqliteStatementHandle stmt;
+  int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     std::cerr << "SQL error while loading difficulty labels: "
               << sqlite3_errmsg(db) << "\n";
