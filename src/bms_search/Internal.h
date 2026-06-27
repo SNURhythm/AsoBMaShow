@@ -111,6 +111,7 @@ struct PackageSourceLookupResult {
 
 std::string trimCopy(const std::string &value);
 std::string lowerCopy(std::string value);
+std::string normalizedHash(const std::string &value);
 bool endsWith(std::string_view value, std::string_view suffix);
 bool hostMatches(const std::string &host, std::string_view domain);
 std::string replaceAll(std::string value, std::string_view needle,
