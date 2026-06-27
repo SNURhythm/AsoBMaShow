@@ -17,13 +17,8 @@
 #include <vector>
 
 namespace {
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
-}
-
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
