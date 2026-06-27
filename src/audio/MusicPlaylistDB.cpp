@@ -23,6 +23,7 @@ constexpr const char *kPlaylistDatabaseFileName = "music_playlist.db";
 constexpr const char *kChartDatabaseFileName = "chart.db";
 constexpr const char *kChartDatabaseSchema = "chart_library";
 constexpr const char *kChartMetaTable = "chart_library.chart_meta";
+constexpr int kMusicPlaylistDatabaseSchemaVersion = 1;
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
@@ -107,6 +108,26 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
+int databaseUserVersion(sqlite3 *db) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
+                                    "reading music playlist database version",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return 0;
+  }
+  return sqlite3_column_int(stmt.get(), 0);
+}
+
+bool setDatabaseUserVersion(sqlite3 *db, int version) {
+  const std::string query =
+      "PRAGMA user_version = " + std::to_string(std::max(0, version));
+  return execSql(db, query.c_str(),
+                 "updating music playlist database version");
+}
+
 bool addMissingColumn(sqlite3 *db, const char *table, const char *column,
                       const char *definition) {
   std::string query = "ALTER TABLE ";
@@ -138,6 +159,27 @@ bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
   if (const auto error = attachSqliteDatabase(db, path, kChartDatabaseSchema)) {
     logSqlErrorText("attaching chart database", *error);
     return false;
+  }
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(
+          db,
+          "SELECT 1 FROM chart_library.sqlite_master WHERE type = 'table' "
+          "AND name = 'chart_meta' LIMIT 1",
+          stmt) != SQLITE_OK ||
+      sqlite3_step(stmt) != SQLITE_ROW) {
+    return true;
+  }
+
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_path "
+      "ON chart_meta(path)",
+      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder "
+      "ON chart_meta(folder)",
+  };
+  for (const char *query : indexes) {
+    if (!execSql(db, query, "creating attached chart index")) {
+      return false;
+    }
   }
   return true;
 }
@@ -416,6 +458,29 @@ bool normalizePlaylistItemMusicKeys(sqlite3 *db) {
     }
   }
   return true;
+}
+
+bool migrateMusicPlaylistDatabaseSchema(sqlite3 *db) {
+  if (databaseUserVersion(db) >= kMusicPlaylistDatabaseSchemaVersion) {
+    return true;
+  }
+
+  if (!backfillStoredChartPathFromMusicKey(db, "music_playlist_items") ||
+      !backfillStoredChartPathFromMusicKey(db, "music_now_playing_items") ||
+      !normalizeStoredPathColumn(db, "music_playlist_items", "chart_path") ||
+      !normalizePlaylistItemMusicKeys(db) ||
+      !normalizeStoredPathColumn(db, "music_now_playing_items", "chart_path") ||
+      !normalizeStoredPathColumn(db, "music_now_playing_items", "music_key",
+                                 "music_key_type = 'path'") ||
+      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_md5") ||
+      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_sha256") ||
+      !normalizeStoredHashColumn(db, "music_now_playing_items", "chart_md5") ||
+      !normalizeStoredHashColumn(db, "music_now_playing_items",
+                                 "chart_sha256")) {
+    return false;
+  }
+
+  return setDatabaseUserVersion(db, kMusicPlaylistDatabaseSchemaVersion);
 }
 
 struct StoredMusicTrackIdentity {
@@ -797,28 +862,29 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
       "ON music_playlist_items(playlist_id, position)",
       "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_music_key "
       "ON music_playlist_items(music_key_type, music_key)",
+      "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_chart_path "
+      "ON music_playlist_items(playlist_id, chart_path)",
+      "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_chart_md5 "
+      "ON music_playlist_items(playlist_id, chart_md5)",
+      "CREATE INDEX IF NOT EXISTS idx_music_playlist_items_chart_sha256 "
+      "ON music_playlist_items(playlist_id, chart_sha256)",
       "CREATE INDEX IF NOT EXISTS idx_music_now_playing_position "
       "ON music_now_playing_items(position, id)",
       "CREATE INDEX IF NOT EXISTS idx_music_now_playing_music_key "
       "ON music_now_playing_items(music_key_type, music_key)",
+      "CREATE INDEX IF NOT EXISTS idx_music_now_playing_chart_path "
+      "ON music_now_playing_items(chart_path)",
+      "CREATE INDEX IF NOT EXISTS idx_music_now_playing_chart_md5 "
+      "ON music_now_playing_items(chart_md5)",
+      "CREATE INDEX IF NOT EXISTS idx_music_now_playing_chart_sha256 "
+      "ON music_now_playing_items(chart_sha256)",
   };
   for (const auto *indexQuery : indexes) {
     if (!execSql(db, indexQuery, "creating music playlist index")) {
       return false;
     }
   }
-  if (!backfillStoredChartPathFromMusicKey(db, "music_playlist_items") ||
-      !backfillStoredChartPathFromMusicKey(db, "music_now_playing_items") ||
-      !normalizeStoredPathColumn(db, "music_playlist_items", "chart_path") ||
-      !normalizePlaylistItemMusicKeys(db) ||
-      !normalizeStoredPathColumn(db, "music_now_playing_items", "chart_path") ||
-      !normalizeStoredPathColumn(db, "music_now_playing_items", "music_key",
-                                 "music_key_type = 'path'") ||
-      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_md5") ||
-      !normalizeStoredHashColumn(db, "music_playlist_items", "chart_sha256") ||
-      !normalizeStoredHashColumn(db, "music_now_playing_items", "chart_md5") ||
-      !normalizeStoredHashColumn(db, "music_now_playing_items",
-                                 "chart_sha256")) {
+  if (!migrateMusicPlaylistDatabaseSchema(db)) {
     return false;
   }
   return true;

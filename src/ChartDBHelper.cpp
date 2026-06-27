@@ -155,7 +155,7 @@ constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
-constexpr int kChartDatabaseSchemaVersion = 1;
+constexpr int kChartDatabaseSchemaVersion = 2;
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -168,6 +168,7 @@ DifficultyLabelCache gDifficultyLabelCache;
 std::atomic<std::uint64_t> gLibraryRevision{1};
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
+void invalidateDifficultyLabelCache();
 
 void bumpLibraryRevision() {
   gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
@@ -1295,8 +1296,8 @@ bool normalizeStoredPathColumn(sqlite3 *db, const char *table,
   return changed;
 }
 
-bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
-                               const char *column) {
+bool normalizeStoredHashColumnChecked(sqlite3 *db, const char *table,
+                                      const char *column, bool &changed) {
   int changedCount = 0;
   if (!updateSqliteColumnWithExpressionLogged(
           db, table, column, normalizedSqlHash(column),
@@ -1308,8 +1309,9 @@ bool normalizeStoredHashColumn(sqlite3 *db, const char *table,
   if (changedCount > 0) {
     SDL_Log("Normalized %d stored chart hashes in %s.%s", changedCount, table,
             column);
+    changed = true;
   }
-  return changedCount > 0;
+  return true;
 }
 
 sqlite3_int64 clampSqlInteger(std::uint64_t value) {
@@ -1751,6 +1753,73 @@ bool migrateChartDatabaseToVersion1(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool normalizeExistingChartTablePaths(sqlite3 *db, const char *table,
+                                      const char *column, bool primaryKey,
+                                      bool &changed) {
+  bool exists = false;
+  if (!sqliteTableExists(db, table, exists,
+                         "checking chart path normalization table")) {
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+  changed = normalizeStoredPathColumn(db, table, column, primaryKey) || changed;
+  return true;
+}
+
+bool normalizeExistingChartTableHashes(sqlite3 *db, const char *table,
+                                       const char *md5Column,
+                                       const char *sha256Column,
+                                       bool &changed) {
+  bool exists = false;
+  if (!sqliteTableExists(db, table, exists,
+                         "checking chart hash normalization table")) {
+    return false;
+  }
+  if (!exists) {
+    return true;
+  }
+  return normalizeStoredHashColumnChecked(db, table, md5Column, changed) &&
+         normalizeStoredHashColumnChecked(db, table, sha256Column, changed);
+}
+
+bool migrateChartDatabaseToVersion2(sqlite3 *db, bool &completed) {
+  bool changed = false;
+  if (!normalizeExistingChartTablePaths(db, "chart_meta", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_meta", "folder", false,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_favorites", "chart_path",
+                                        true, changed) ||
+      !normalizeExistingChartTablePaths(db, "solid_archives", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "entries", "path", true,
+                                        changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_scan_checkpoint",
+                                        "last_path", false, changed) ||
+      !normalizeExistingChartTablePaths(db, "chart_scan_checkpoint",
+                                        "archive_path", false, changed) ||
+      !normalizeExistingChartTablePaths(db, "archive_scan_cache", "path",
+                                        true, changed) ||
+      !normalizeExistingChartTableHashes(db, "chart_meta", "md5", "sha256",
+                                         changed) ||
+      !normalizeExistingChartTableHashes(db, "chart_favorites", "chart_md5",
+                                         "chart_sha256", changed) ||
+      !normalizeExistingChartTableHashes(db, "difficulty_table_entries", "md5",
+                                         "sha256", changed) ||
+      !normalizeExistingChartTableHashes(db, "difficulty_course_entries",
+                                         "md5", "sha256", changed)) {
+    return false;
+  }
+  if (changed) {
+    invalidateDifficultyLabelCache();
+    bumpLibraryRevision();
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -1791,6 +1860,7 @@ bool runChartDatabaseMigrationPasses(
 bool migrateChartDatabaseSchema(sqlite3 *db) {
   static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
       {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
+      {2, "normalize chart identity storage", migrateChartDatabaseToVersion2},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -1948,12 +2018,6 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
   if (!execSql(db, query, "creating chart scan checkpoint table")) {
     return false;
   }
-  if (normalizeStoredPathColumn(db, "chart_scan_checkpoint", "last_path",
-                                false) |
-      normalizeStoredPathColumn(db, "chart_scan_checkpoint", "archive_path",
-                                false)) {
-    bumpLibraryRevision();
-  }
   return true;
 }
 
@@ -2068,9 +2132,6 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating archive scan cache index")) {
       return false;
     }
-  }
-  if (normalizeStoredPathColumn(db, "archive_scan_cache", "path", true)) {
-    bumpLibraryRevision();
   }
   return true;
 }
@@ -2726,6 +2787,8 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
   }
 
   const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_path ON chart_meta(path)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_folder ON chart_meta(folder)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_title ON chart_meta(title)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256 ON chart_meta(sha256)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_md5 ON chart_meta(md5)",
@@ -2738,15 +2801,6 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating chart meta index")) {
       return false;
     }
-  }
-  const bool normalizedPaths =
-      normalizeStoredPathColumn(db, "chart_meta", "path", true) |
-      normalizeStoredPathColumn(db, "chart_meta", "folder", false);
-  const bool normalizedHashes =
-      normalizeStoredHashColumn(db, "chart_meta", "md5") |
-      normalizeStoredHashColumn(db, "chart_meta", "sha256");
-  if (normalizedPaths || normalizedHashes) {
-    bumpLibraryRevision();
   }
   return CreateFavoritesTable(db);
 }
@@ -2777,15 +2831,7 @@ bool ChartDBHelper::CreateFavoritesTable(sqlite3 *db) {
     }
   }
 
-  const bool normalizedPaths =
-      normalizeStoredPathColumn(db, "chart_favorites", "chart_path", true);
-  const bool normalizedHashes =
-      normalizeStoredHashColumn(db, "chart_favorites", "chart_md5") |
-      normalizeStoredHashColumn(db, "chart_favorites", "chart_sha256");
-  if (normalizedPaths || normalizedHashes) {
-    bumpLibraryRevision();
-  }
-  return true;
+  return migrateChartDatabaseSchema(db);
 }
 
 bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
@@ -2813,9 +2859,6 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating solid archive index")) {
       return false;
     }
-  }
-  if (normalizeStoredPathColumn(db, "solid_archives", "path", true)) {
-    bumpLibraryRevision();
   }
   return true;
 }
@@ -3628,9 +3671,6 @@ bool ChartDBHelper::CreateEntriesTable(sqlite3 *db) {
           db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
           "migrating entries table")) {
     return false;
-  }
-  if (normalizeStoredPathColumn(db, "entries", "path", true)) {
-    bumpLibraryRevision();
   }
   return true;
 }
@@ -4932,15 +4972,6 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
             db, query, "migrating difficulty course entry schema")) {
       return false;
     }
-  }
-  const bool normalizedHashes =
-      normalizeStoredHashColumn(db, "difficulty_table_entries", "md5") |
-      normalizeStoredHashColumn(db, "difficulty_table_entries", "sha256") |
-      normalizeStoredHashColumn(db, "difficulty_course_entries", "md5") |
-      normalizeStoredHashColumn(db, "difficulty_course_entries", "sha256");
-  if (normalizedHashes) {
-    invalidateDifficultyLabelCache();
-    bumpLibraryRevision();
   }
   return true;
 }

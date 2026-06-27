@@ -23,7 +23,7 @@
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-constexpr int kScoreDatabaseSchemaVersion = 2;
+constexpr int kScoreDatabaseSchemaVersion = 3;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 
 using asobmshow::bms_metadata::normalizedHash;
@@ -546,6 +546,11 @@ bool migrateScoreDatabaseToVersion2(sqlite3 *db, bool &completed) {
   return migrateLegacyScoreLongNoteModes(db, completed);
 }
 
+bool migrateScoreDatabaseToVersion3(sqlite3 *db, bool &completed) {
+  completed = normalizeScoreChartIdentityHashes(db);
+  return completed;
+}
+
 bool runScoreDatabaseMigrationPasses(
     sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -588,6 +593,7 @@ bool migrateScoreDatabaseSchema(sqlite3 *db) {
       {1, "score long note modes", migrateScoreDatabaseToVersion1},
       {2, "repair legacy score long note modes",
        migrateScoreDatabaseToVersion2},
+      {3, "normalize score chart hashes", migrateScoreDatabaseToVersion3},
   };
   return runScoreDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -762,9 +768,6 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   }
 
   if (!ensureScoreChartIdentityColumns(db)) {
-    return false;
-  }
-  if (!normalizeScoreChartIdentityHashes(db)) {
     return false;
   }
 

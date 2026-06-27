@@ -18,6 +18,8 @@
 #include <vector>
 
 namespace {
+constexpr int kReplayDatabaseSchemaVersion = 1;
+
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
@@ -36,6 +38,25 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
+int databaseUserVersion(sqlite3 *db) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
+                                    "reading replay database version",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    return 0;
+  }
+  return sqlite3_column_int(stmt.get(), 0);
+}
+
+bool setDatabaseUserVersion(sqlite3 *db, int version) {
+  const std::string query =
+      "PRAGMA user_version = " + std::to_string(std::max(0, version));
+  return execSql(db, query.c_str(), "updating replay database version");
+}
+
 bool ensureTableColumn(sqlite3 *db, const char *tableName,
                        const char *columnName, const char *alterQuery,
                        const char *context) {
@@ -51,6 +72,14 @@ bool normalizeReplayChartIdentityHashes(sqlite3 *db) {
          updateSqliteColumnWithExpressionLogged(
              db, "replays", "chart_sha256", normalizedSqlHash("chart_sha256"),
              "normalizing stored replay sha256 hashes", logSqlErrorText);
+}
+
+bool migrateReplayDatabaseSchema(sqlite3 *db) {
+  if (databaseUserVersion(db) >= kReplayDatabaseSchemaVersion) {
+    return true;
+  }
+  return normalizeReplayChartIdentityHashes(db) &&
+         setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion);
 }
 
 void bindOptionalText(sqlite3_stmt *stmt, int idx,
@@ -548,7 +577,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
       return false;
     }
   }
-  if (!normalizeReplayChartIdentityHashes(db)) {
+  if (!migrateReplayDatabaseSchema(db)) {
     return false;
   }
 
