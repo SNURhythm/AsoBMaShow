@@ -4941,6 +4941,15 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       return false;
     }
   }
+  const bool normalizedHashes =
+      normalizeStoredHashColumn(db, "difficulty_table_entries", "md5") |
+      normalizeStoredHashColumn(db, "difficulty_table_entries", "sha256") |
+      normalizeStoredHashColumn(db, "difficulty_course_entries", "md5") |
+      normalizeStoredHashColumn(db, "difficulty_course_entries", "sha256");
+  if (normalizedHashes) {
+    invalidateDifficultyLabelCache();
+    bumpLibraryRevision();
+  }
   return true;
 }
 
