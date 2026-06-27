@@ -8,6 +8,7 @@
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
+#include "audio/SoundFileIO.h"
 #include "main.h"
 #include "path.h"
 #include "rendering/BlurPass.h"
@@ -266,15 +267,6 @@ std::string formatString(const char *format, va_list args) {
   std::vector<char> buffer(static_cast<size_t>(length) + 1);
   std::vsnprintf(buffer.data(), buffer.size(), format, args);
   return std::string(buffer.data(), static_cast<size_t>(length));
-}
-
-SNDFILE *openSoundFile(const std::filesystem::path &path, int mode,
-                       SF_INFO &info) {
-#ifdef _WIN32
-  return sf_wchar_open(path.wstring().c_str(), mode, &info);
-#else
-  return sf_open(path.string().c_str(), mode, &info);
-#endif
 }
 
 class ReplayVideoExportLog {
@@ -701,13 +693,13 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
   }
 
   SF_INFO inputInfo{};
-  SNDFILE *input = openSoundFile(path, SFM_READ, inputInfo);
-  if (input == nullptr) {
+  auto inputHandle =
+      asobmashow::audio::openSoundFileHandle(path, SFM_READ, inputInfo);
+  if (inputHandle == nullptr) {
     errorMessage = std::string("Failed to open course replay stage audio: ") +
                    sf_strerror(nullptr);
     return false;
   }
-  UniqueResource<SNDFILE, sf_close> inputHandle(input);
   if (inputInfo.channels != kExportChannels ||
       inputInfo.samplerate != kExportSampleRate) {
     errorMessage = "Course replay stage audio format is invalid";
@@ -751,13 +743,13 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = openSoundFile(outputPath, SFM_WRITE, outputInfo);
-  if (output == nullptr) {
+  auto outputHandle =
+      asobmashow::audio::openSoundFileHandle(outputPath, SFM_WRITE, outputInfo);
+  if (outputHandle == nullptr) {
     errorMessage = std::string("Failed to create aligned replay audio: ") +
                    sf_strerror(nullptr);
     return false;
   }
-  UniqueResource<SNDFILE, sf_close> outputHandle(output);
 
   sf_count_t writtenFrames = 0;
   if (targetFrames > 0 &&
@@ -785,14 +777,14 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-  SNDFILE *output = openSoundFile(path, SFM_WRITE, outputInfo);
-  if (output == nullptr) {
+  auto outputHandle =
+      asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, outputInfo);
+  if (outputHandle == nullptr) {
     return {.success = false,
             .outputPath = path,
             .message = std::string("Failed to create course replay audio: ") +
                        sf_strerror(nullptr)};
   }
-  UniqueResource<SNDFILE, sf_close> outputHandle(output);
 
   sf_count_t writtenFrames = 0;
   for (const auto &segment : segments) {
@@ -1658,7 +1650,7 @@ public:
     audioStream->time_base = audioContext->time_base;
 
     SF_INFO audioInfo{};
-    audioFile = openSoundFile(wavPath, SFM_READ, audioInfo);
+    audioFile = asobmashow::audio::openSoundFile(wavPath, SFM_READ, audioInfo);
     if (audioFile == nullptr) {
       return failOpen(std::string("Failed to open replay audio track: ") +
                       sf_strerror(nullptr));

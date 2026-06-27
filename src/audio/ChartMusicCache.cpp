@@ -2,16 +2,15 @@
 
 #include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
-#include "../RAII.h"
 #include "../Utils.h"
 #include "../path.h"
 #include "../targets.h"
+#include "SoundFileIO.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
 
 #include <SDL2/SDL.h>
-#include <sndfile.h>
 
 #include <cstdint>
 #include <string_view>
@@ -118,14 +117,6 @@ std::string normalizedPathKey(const std::filesystem::path &path) {
   return path.lexically_normal().string();
 }
 
-SNDFILE *openSoundFileRead(const std::filesystem::path &path, SF_INFO &info) {
-#ifdef _WIN32
-  return sf_wchar_open(path.wstring().c_str(), SFM_READ, &info);
-#else
-  return sf_open(path.string().c_str(), SFM_READ, &info);
-#endif
-}
-
 } // namespace
 
 std::filesystem::path CacheDirectory() {
@@ -160,7 +151,7 @@ ReadAudioFileDurationMicros(const std::filesystem::path &path) {
   }
 
   SF_INFO info{};
-  UniqueResource<SNDFILE, sf_close> file(openSoundFileRead(path, info));
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
   if (file == nullptr) {
     return std::nullopt;
   }

@@ -2,9 +2,9 @@
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
-#include "../RAII.h"
 #include "../Utils.h"
 #include "../path.h"
+#include "SoundFileIO.h"
 #include "decoder.h"
 
 #include <SDL2/SDL.h>
@@ -433,13 +433,8 @@ bool writeWavFile(const std::filesystem::path &path,
   outputInfo.channels = kOutputChannels;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
-#ifdef _WIN32
-  SNDFILE *rawFile =
-      sf_wchar_open(path.wstring().c_str(), SFM_WRITE, &outputInfo);
-#else
-  SNDFILE *rawFile = sf_open(path.string().c_str(), SFM_WRITE, &outputInfo);
-#endif
-  UniqueResource<SNDFILE, sf_close> file(rawFile);
+  auto file =
+      asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, outputInfo);
   if (file == nullptr) {
     errorMessage =
         std::string("Failed to open chart audio output: ") + sf_strerror(nullptr);
