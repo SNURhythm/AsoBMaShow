@@ -199,6 +199,33 @@ std::string chartFavoriteIdentityKey(const char *favoriteAlias) {
          ".chart_md5, ''), " + alias + ".chart_path)";
 }
 
+struct ChartFavoriteIdentity {
+  std::string chartPath;
+  std::string sha256;
+  std::string md5;
+};
+
+ChartFavoriteIdentity chartFavoriteIdentityFor(
+    const bms_parser::ChartMeta &chartMeta) {
+  return {
+      .chartPath = storedChartPathText(chartMeta.BmsPath),
+      .sha256 = normalizedHash(chartMeta.SHA256),
+      .md5 = normalizedHash(chartMeta.MD5),
+  };
+}
+
+std::string chartFavoriteDeletePredicate() {
+  return "chart_path = ?1 OR (?2 != '' AND chart_sha256 = ?2) OR "
+         "(?3 != '' AND chart_md5 = ?3)";
+}
+
+void bindChartFavoriteDeleteIdentity(sqlite3_stmt *stmt,
+                                     const ChartFavoriteIdentity &identity) {
+  bindSqliteText(stmt, 1, identity.chartPath);
+  bindSqliteText(stmt, 2, identity.sha256);
+  bindSqliteText(stmt, 3, identity.md5);
+}
+
 std::string normalizedDifficultyText(const std::string &difficultyText) {
   return lowerCopy(trimCopy(difficultyText));
 }
@@ -2923,25 +2950,21 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
     return false;
   }
 
-  const std::string chartPath = storedChartPathText(chartMeta.BmsPath);
-  if (chartPath.empty()) {
+  const ChartFavoriteIdentity identity = chartFavoriteIdentityFor(chartMeta);
+  if (identity.chartPath.empty()) {
     return false;
   }
 
   if (!favorite) {
-    const char *query =
-        "DELETE FROM chart_favorites WHERE chart_path = ?1 OR "
-        "(?2 != '' AND chart_sha256 = ?2) OR "
-        "(?3 != '' AND chart_md5 = ?3)";
+    const std::string query =
+        "DELETE FROM chart_favorites WHERE " + chartFavoriteDeletePredicate();
     SqliteStatementHandle stmt;
     if (!prepareSqliteStatementLogged(db, query, stmt,
                                       "preparing chart favorite delete",
                                       logSqlErrorText)) {
       return false;
     }
-    bindSqliteText(stmt, 1, chartPath);
-    bindSqliteText(stmt, 2, normalizedHash(chartMeta.SHA256));
-    bindSqliteText(stmt, 3, normalizedHash(chartMeta.MD5));
+    bindChartFavoriteDeleteIdentity(stmt.get(), identity);
     const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
       logSqlError("deleting chart favorite", db);
@@ -2965,9 +2988,9 @@ bool ChartDBHelper::SetFavorite(sqlite3 *db,
                                     logSqlErrorText)) {
     return false;
   }
-  bindSqliteText(stmt, 1, chartPath);
-  bindSqliteText(stmt, 2, normalizedHash(chartMeta.MD5));
-  bindSqliteText(stmt, 3, normalizedHash(chartMeta.SHA256));
+  bindSqliteText(stmt, 1, identity.chartPath);
+  bindSqliteText(stmt, 2, identity.md5);
+  bindSqliteText(stmt, 3, identity.sha256);
   const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSqlError("saving chart favorite", db);
