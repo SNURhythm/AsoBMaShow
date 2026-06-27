@@ -2383,7 +2383,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Solid archive selected without chart probing: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) +
+          fspath_to_utf8(meta.BmsPath) +
           " files=" + std::to_string(item.archiveFileCount) +
           " estimatedUnpacked=" + std::to_string(item.archiveUncompressedSize));
       return;
@@ -2401,7 +2401,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     bool suppressPreview = false;
@@ -2424,7 +2424,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
-          path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+          fspath_to_utf8(meta.BmsPath));
       return;
     }
     std::string musicStopError;
@@ -2452,16 +2452,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
         SDL_Log("Preview parse failed %s: %s",
                 path_t_to_utf8(meta.BmsPath).c_str(), e.what());
         archive_file::appendDebugLogLine(
-            "Preview parse exception: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)) + ": " + e.what());
+            "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
+            e.what());
         return;
       }
       SDL_Log("Parsed %s", path_t_to_utf8(meta.BmsPath).c_str());
       if (chart == nullptr) {
         SDL_Log("Chart is null");
         archive_file::appendDebugLogLine(
-            "Preview chart is null: " +
-            path_t_to_utf8(fspath_to_path_t(meta.BmsPath)));
+            "Preview chart is null: " + fspath_to_utf8(meta.BmsPath));
         return;
       }
 
@@ -3661,8 +3660,7 @@ void MainMenuScene::selectChartByPathAfterReload(
       recyclerView->onSelected(record, i);
     }
     archive_file::appendDebugLogLine(
-        "Selected unzipped chart: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)));
+        "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
     return;
   }
 
