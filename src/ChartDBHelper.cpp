@@ -2445,6 +2445,31 @@ bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   return changed;
 }
 
+int countChartMetaInArchive(sqlite3 *db,
+                            const std::filesystem::path &archivePath) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, "SELECT path FROM chart_meta", stmt,
+                                    "counting archive chart rows",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+
+  int count = 0;
+  const std::filesystem::path targetArchive = archivePath.lexically_normal();
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    const std::string pathText = sqliteColumnString(stmt.get(), 0);
+    if (pathText.empty()) {
+      continue;
+    }
+    std::filesystem::path path(utf8_to_path_t(pathText));
+    ChartDBHelper::ToAbsolutePath(path);
+    if (pathIsInsideDirectory(path, targetArchive)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 bool deleteChartMetaInArchive(sqlite3 *db,
                               const std::filesystem::path &archivePath) {
   std::vector<bms_parser::ChartMeta> chartMetas;
@@ -5144,9 +5169,17 @@ int ChartDBHelper::ScanChartRoots(
       return;
     }
     const ArchiveCacheDiff &diff = cacheIt->second;
+    const int parsedChartCount = countChartMetaInArchive(db, diff.path);
+    if (parsedChartCount != diff.chartCount) {
+      archive_file::appendDebugLogLine(
+          "Writing archive scan cache with parsed chart count: " +
+          fspath_to_utf8(diff.path) +
+          " candidates=" + std::to_string(diff.chartCount) +
+          " dbCharts=" + std::to_string(parsedChartCount));
+    }
     if (upsertArchiveScanCache(db, diff.path, diff.solid,
                                diff.uncompressedSize, diff.fileCount,
-                               diff.chartCount)) {
+                               parsedChartCount)) {
       ++changedCount;
     }
   };
