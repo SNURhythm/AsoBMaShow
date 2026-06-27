@@ -33,29 +33,30 @@ std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
 }
 
+void logSqlErrorText(const char *context, const std::string &error) {
+  SDL_Log("SQL error while %s: %s", context, error.c_str());
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlErrorText(context, db != nullptr ? sqlite3_errmsg(db)
+                                         : "database is not open");
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  if (const auto error = executeSqlite(db, query)) {
-    SDL_Log("SQL error while %s: %s", context, error->c_str());
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                                  const char *context) {
-  if (const auto error = executeSqlite(db, query, "duplicate column name")) {
-    SDL_Log("SQL error while %s: %s", context, error->c_str());
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText,
+                             "duplicate column name");
 }
 
 int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while reading score database version: %s",
-            sqlite3_errmsg(db));
+    logSqlError("reading score database version", db);
     return 0;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -73,7 +74,7 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
-    SDL_Log("SQL error while %s: %s", context, error->c_str());
+    logSqlErrorText(context, *error);
     return false;
   }
   return true;
@@ -83,8 +84,7 @@ int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while reading score migration value: %s",
-            sqlite3_errmsg(db));
+    logSqlError("reading score migration value", db);
     return fallback;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -177,7 +177,7 @@ void loadBestRanksForColumn(sqlite3 *db, const char *columnName,
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while loading score clear ranks: %s", sqlite3_errmsg(db));
+    logSqlError("loading score clear ranks", db);
     return;
   }
 
@@ -206,8 +206,7 @@ void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while loading course score clear ranks: %s",
-            sqlite3_errmsg(db));
+    logSqlError("loading course score clear ranks", db);
     return;
   }
 
@@ -232,8 +231,7 @@ bool attachChartDatabaseForScoreMigration(sqlite3 *db) {
       Utils::GetDocumentsPath("db") / "chart.db";
   if (const auto error =
           attachSqliteDatabase(db, chartPath, kScoreMigrationChartSchema)) {
-    SDL_Log("SQL error while attaching chart database for score migration: %s",
-            error->c_str());
+    logSqlErrorText("attaching chart database for score migration", *error);
     return false;
   }
   return true;
@@ -753,7 +751,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing score insert: %s", sqlite3_errmsg(db));
+    logSqlError("preparing score insert", db);
     return false;
   }
 
@@ -784,7 +782,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
 
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while saving score: %s", sqlite3_errmsg(db));
+    logSqlError("saving score", db);
     return false;
   }
   return true;
@@ -814,8 +812,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course score insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course score insert", db);
     return false;
   }
 
@@ -863,7 +860,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while saving course score: %s", sqlite3_errmsg(db));
+    logSqlError("saving course score", db);
     return false;
   }
   return true;
@@ -939,8 +936,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(connection.get(), query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while loading best score: %s",
-            sqlite3_errmsg(connection.get()));
+    logSqlError("loading best score", connection.get());
     return std::nullopt;
   }
 
@@ -996,8 +992,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(connection.get(), query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while loading best course score: %s",
-            sqlite3_errmsg(connection.get()));
+    logSqlError("loading best course score", connection.get());
     return std::nullopt;
   }
 
