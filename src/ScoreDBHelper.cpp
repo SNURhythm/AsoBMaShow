@@ -1,17 +1,16 @@
 #include "ScoreDBHelper.h"
 
+#include "BmsMetadataText.h"
 #include "ChartDBHelper.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
-#include "targets.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
@@ -26,38 +26,8 @@ constexpr int kScoreDatabaseSchemaVersion = 2;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
 
-std::filesystem::path toStoredChartPath(std::filesystem::path path) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static const std::filesystem::path documents = Utils::GetDocumentsPath("BMS/");
-  const std::string documentString = documents.string();
-  const std::string pathString = path.string();
-  if (pathString.find(documentString) == 0) {
-    path = pathString.substr(documentString.length());
-  }
-#endif
-  return path;
-}
-
-std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
-}
-
-std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
@@ -65,15 +35,6 @@ std::string normalizedHash(const std::string &value) {
 
 std::string normalizedPath(const std::string &value) {
   return trimCopy(value);
-}
-
-bool sqliteMessageContains(const char *message, const char *needle) {
-  if (message == nullptr || needle == nullptr) {
-    return false;
-  }
-  std::string lowerMessage = lowerCopy(message);
-  std::string lowerNeedle = lowerCopy(needle);
-  return lowerMessage.find(lowerNeedle) != std::string::npos;
 }
 
 bool execSql(sqlite3 *db, const char *query, const char *context) {
@@ -178,8 +139,10 @@ std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
   if (!md5.empty()) {
     return "md5:" + md5;
   }
-  return "path:" +
-         path_t_to_utf8(fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+  const std::string chartPath =
+      path_t_to_utf8(fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          chartMeta.BmsPath, "BMS/")));
+  return "path:" + chartPath;
 }
 
 std::string courseKeyForSession(const CoursePlaySession &session) {
@@ -594,7 +557,8 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 int ScoreClearRankCache::bestRankFor(
     const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode) const {
   const auto chartPath =
-      path_t_to_utf8(fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+      path_t_to_utf8(fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          chartMeta.BmsPath, "BMS/")));
   return bestRankForHashes(
       chartMeta.SHA256, chartMeta.MD5, chartPath,
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
@@ -663,7 +627,12 @@ ScoreDBHelper &ScoreDBHelper::GetInstance() {
 
 sqlite3 *ScoreDBHelper::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    SDL_Log("Can't create score database directory %s: %s",
+            directory.string().c_str(), directoryError.message().c_str());
+    return nullptr;
+  }
   const std::filesystem::path path = directory / "score.db";
 
   sqlite3 *db = nullptr;
@@ -841,7 +810,8 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
   bindText(stmt.get(), bindIndex++, chartPath);
   bindText(stmt.get(), bindIndex++, chartMeta.MD5);
@@ -1002,7 +972,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          chartMeta.BmsPath, "BMS/")));
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string cutoff = beforeCreatedAt.value_or("");

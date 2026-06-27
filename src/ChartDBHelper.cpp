@@ -13,7 +13,6 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
-#include <codecvt>
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -26,6 +25,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -193,13 +193,8 @@ void bumpLibraryRevision() {
   gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
-}
-
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
@@ -256,11 +251,6 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   std::ostringstream stream;
   stream << file.rdbuf();
   return stream.str();
-}
-
-bool sqliteMessageContains(const char *message, const char *needle) {
-  return message != nullptr && std::string(message).find(needle) !=
-                                   std::string::npos;
 }
 
 bool pathIsInsideDirectory(const std::filesystem::path &path,
@@ -1617,7 +1607,8 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
                            sqlite3_int64 &archiveSize,
                            sqlite3_int64 &mtimeNs) {
   std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error) || error) {
+  const bool regularFile = std::filesystem::is_regular_file(path, error);
+  if (error || !regularFile) {
     return false;
   }
   error.clear();
@@ -2499,18 +2490,28 @@ void populateDifficultyTableLabels(
 } // namespace
 
 sqlite3 *ChartDBHelper::Connect() {
-  std::filesystem::path Directory = Utils::GetDocumentsPath("db");
-  std::cout << "DB Directory: " << Directory.string() << "\n";
-  std::filesystem::create_directories(Directory);
-  std::filesystem::path path = Directory / "chart.db";
+  const std::filesystem::path directory = Utils::GetDocumentsPath("db");
+  std::cout << "DB Directory: " << directory.string() << "\n";
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create chart database directory " << directory.string()
+              << ": " << directoryError.message() << "\n";
+    return nullptr;
+  }
+  const std::filesystem::path path = directory / "chart.db";
   std::cout << "DB Path: " << path.string() << "\n";
-  sqlite3 *db;
-  int rc;
-  rc = sqlite3_open(path.string().c_str(), &db);
-  sqlite3_busy_timeout(db, 1000);
-  if (rc) {
-    std::cerr << "Can't open database: " << sqlite3_errmsg(db) << "\n";
-    sqlite3_close(db);
+  sqlite3 *db = nullptr;
+  const int rc = sqlite3_open(path.string().c_str(), &db);
+  if (db != nullptr) {
+    sqlite3_busy_timeout(db, 1000);
+  }
+  if (rc != SQLITE_OK) {
+    std::cerr << "Can't open chart database: "
+              << (db != nullptr ? sqlite3_errmsg(db) : "unknown error")
+              << "\n";
+    if (db != nullptr) {
+      sqlite3_close(db);
+    }
     return nullptr;
   }
   // wal
@@ -4120,7 +4121,11 @@ std::vector<ChartEntry> ChartDBHelper::SelectEffectiveEntries(sqlite3 *db) {
 #if TARGET_OS_ANDROID
   const auto defaultPath = DefaultBmsFolderPath();
   std::error_code errorCode;
-  std::filesystem::create_directories(defaultPath, errorCode);
+  if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
+    SDL_Log("Failed to create default BMS folder %s: %s",
+            path_t_to_utf8(fspath_to_path_t(defaultPath)).c_str(),
+            errorCode.message().c_str());
+  }
 
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
@@ -4483,8 +4488,15 @@ int ChartDBHelper::ScanChartRoots(
     }
 #endif
     std::error_code error;
-    if (!std::filesystem::exists(root, error) || error) {
-      error.clear();
+    const bool rootExists = std::filesystem::exists(root, error);
+    if (error) {
+      SDL_Log("Failed to check chart folder %s: %s",
+              path_t_to_utf8(fspath_to_path_t(root)).c_str(),
+              error.message().c_str());
+      ++scannedRootCount;
+      continue;
+    }
+    if (!rootExists) {
       ++scannedRootCount;
       continue;
     }
@@ -4616,9 +4628,12 @@ int ChartDBHelper::ScanChartRoots(
         rootKey += std::to_string(mtimeNs);
       } else {
         std::error_code error;
-        const bool directory =
-            std::filesystem::is_directory(root, error) && !error;
-        rootKey += directory ? "|dir" : "|missing";
+        const bool directory = std::filesystem::is_directory(root, error);
+        if (error) {
+          rootKey += "|unknown";
+        } else {
+          rootKey += directory ? "|dir" : "|missing";
+        }
       }
       rootKeys.push_back(std::move(rootKey));
     }
@@ -5777,7 +5792,12 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
   std::unordered_set<std::string> importedHeaders;
   for (std::filesystem::recursive_directory_iterator it(directory, ec), end;
        !ec && it != end; it.increment(ec)) {
-    if (ec || !it->is_regular_file()) {
+    std::error_code typeEc;
+    if (!it->is_regular_file(typeEc)) {
+      if (typeEc) {
+        SDL_Log("Failed to read difficulty table path type %s: %s",
+                it->path().string().c_str(), typeEc.message().c_str());
+      }
       continue;
     }
     const auto &path = it->path();
@@ -5816,16 +5836,23 @@ int ChartDBHelper::ImportDifficultyTablesFromDirectory(
     }
 
     std::error_code canonicalEc;
-    const auto canonical =
-        std::filesystem::weakly_canonical(path, canonicalEc).string();
-    if (importedHeaders.find(canonical) != importedHeaders.end()) {
+    const auto canonicalPath =
+        std::filesystem::weakly_canonical(path, canonicalEc);
+    const std::string headerKey =
+        canonicalEc ? path.lexically_normal().string() : canonicalPath.string();
+    if (canonicalEc) {
+      SDL_Log("Failed to canonicalize difficulty table header %s: %s",
+              path.string().c_str(), canonicalEc.message().c_str());
+    }
+    if (importedHeaders.find(headerKey) != importedHeaders.end()) {
       continue;
     }
-    importedHeaders.insert(canonical);
+    importedHeaders.insert(headerKey);
 
     const std::string dataUrl = jsonStringAt(document, "data_url");
     std::filesystem::path dataPath = path.parent_path() / dataUrl;
-    if (!std::filesystem::exists(dataPath)) {
+    std::error_code dataPathError;
+    if (!std::filesystem::exists(dataPath, dataPathError) || dataPathError) {
       continue;
     }
     const auto dataRaw = readTextFile(dataPath);

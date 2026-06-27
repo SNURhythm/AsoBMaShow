@@ -36,17 +36,20 @@ inline constexpr std::array<const char *, 10> kPlayOptions = {
     "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
     "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
 
+inline void trimOptionWhitespace(std::string &value) {
+  value.erase(value.begin(),
+              std::find_if(value.begin(), value.end(), [](unsigned char c) {
+                return std::isspace(c) == 0;
+              }));
+  value.erase(
+      std::find_if(value.rbegin(), value.rend(),
+                   [](unsigned char c) { return std::isspace(c) == 0; })
+          .base(),
+      value.end());
+}
+
 inline std::string normalizeLaneAssignNotation(std::string notation) {
-  notation.erase(notation.begin(),
-                 std::find_if(notation.begin(), notation.end(),
-                              [](unsigned char c) {
-                                return std::isspace(c) == 0;
-                              }));
-  notation.erase(
-      std::find_if(notation.rbegin(), notation.rend(), [](unsigned char c) {
-        return std::isspace(c) == 0;
-      }).base(),
-      notation.end());
+  trimOptionWhitespace(notation);
 
   std::transform(notation.begin(), notation.end(), notation.begin(),
                  [](unsigned char c) {
@@ -110,15 +113,7 @@ inline bool validateLaneAssignOption(const bms_parser::ChartMeta &meta,
 }
 
 inline std::string normalizePlayOption(std::string option) {
-  option.erase(option.begin(),
-               std::find_if(option.begin(), option.end(), [](unsigned char c) {
-                 return std::isspace(c) == 0;
-               }));
-  option.erase(
-      std::find_if(option.rbegin(), option.rend(),
-                   [](unsigned char c) { return std::isspace(c) == 0; })
-          .base(),
-      option.end());
+  trimOptionWhitespace(option);
   std::transform(option.begin(), option.end(), option.begin(),
                  [](unsigned char c) {
                    if (c == '_' || c == ' ') {

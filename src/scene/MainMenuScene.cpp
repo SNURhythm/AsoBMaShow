@@ -31,6 +31,7 @@
 #include "../view/UiTheme.h"
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -93,6 +94,60 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://stellabms.xyz/sl/table.html",
     "https://stellabms.xyz/st/table.html",
 };
+
+void ensureLibraryFolderExists(const std::filesystem::path &path) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return;
+  }
+
+  throw std::runtime_error("Could not create library folder '" +
+                           path_t_to_utf8(fspath_to_path_t(path)) +
+                           "': " + error.message());
+}
+
+bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
+                                 const char *description) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return true;
+  }
+
+  SDL_Log("Failed to create %s %s: %s", description,
+          path_t_to_utf8(fspath_to_path_t(path)).c_str(),
+          error.message().c_str());
+  return false;
+}
+
+const char *homeDirectoryEnvValue() {
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return home;
+  }
+#ifdef _WIN32
+  if (const char *profile = std::getenv("USERPROFILE");
+      profile != nullptr && profile[0] != '\0') {
+    return profile;
+  }
+#endif
+  return nullptr;
+}
+
+bool expandCurrentUserHomeShortcut(std::string &path) {
+  if (path.empty() || path.front() != '~') {
+    return true;
+  }
+  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+    return true;
+  }
+
+  const char *home = homeDirectoryEnvValue();
+  if (home == nullptr) {
+    return false;
+  }
+  path.replace(0, 1, home);
+  return true;
+}
 
 struct SafeAreaInsets {
   int top = 0;
@@ -420,9 +475,18 @@ bool revealPathInFileManager(const std::filesystem::path &path,
     targetPath = archivePath;
   }
 
-  if (!std::filesystem::exists(targetPath, errorCode) || errorCode) {
+  const std::string targetPathText =
+      path_t_to_utf8(fspath_to_path_t(targetPath));
+  const bool targetExists = std::filesystem::exists(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
+  if (!targetExists) {
     errorMessage = "Chart file does not exist: " +
-                   path_t_to_utf8(fspath_to_path_t(targetPath));
+                   targetPathText;
     return false;
   }
 
@@ -464,6 +528,12 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   return true;
 #elif TARGET_OS_LINUX
   const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
+  if (errorCode) {
+    errorMessage =
+        "Could not check chart file type: " + targetPathText + " (" +
+        errorCode.message() + ")";
+    return false;
+  }
   std::filesystem::path directoryPath =
       isDirectory ? targetPath : targetPath.parent_path();
   if (directoryPath.empty()) {
@@ -1601,7 +1671,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
       }
       auto path = ChartDBHelper::DefaultBmsFolderPath();
-      std::filesystem::create_directories(path);
+      ensureLibraryFolderExists(path);
       entries.push_back({
           .path = fspath_to_path_t(path),
           .iosBookmark = "",
@@ -1609,7 +1679,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
 #elif TARGET_OS_ANDROID
     auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::filesystem::create_directories(path);
+    ensureLibraryFolderExists(path);
     dbHelper.InsertEntry(taskDb, path);
     entries = dbHelper.SelectEffectiveEntries(taskDb);
 #else
@@ -1634,8 +1704,10 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
           continue;
         }
 
-        if (folder[0] == '~') {
-          folder.replace(0, 1, getenv("HOME"));
+        if (!expandCurrentUserHomeShortcut(folder)) {
+          std::cout << "Could not expand ~ because no home directory is set.\n";
+          folder.clear();
+          continue;
         }
         std::ifstream test(folder);
         if (!test)
@@ -1925,10 +1997,10 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
 
   std::string errorMessage;
   std::error_code fsError;
-  std::filesystem::create_directories(outputRoot, fsError);
-  if (fsError) {
+  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
     throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder.");
+                             "folder: " +
+                             fsError.message());
   }
 
   std::filesystem::path outputFolder;
@@ -4817,7 +4889,18 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
 
   const std::filesystem::path archivePath = *unzipDeleteCandidatePath;
   std::error_code error;
-  if (!std::filesystem::is_regular_file(archivePath, error) || error) {
+  const bool archiveExists =
+      std::filesystem::is_regular_file(archivePath, error);
+  if (error) {
+    updateUnzipProgressUi(1.0,
+                          "Could not check archive: " + error.message(), 0, 0);
+    archive_file::appendDebugLogLine(
+        "Failed to check source archive before delete: " +
+        path_t_to_utf8(fspath_to_path_t(archivePath)) + ": " +
+        error.message());
+    return;
+  }
+  if (!archiveExists) {
     updateUnzipProgressUi(1.0, "Archive is already unavailable", 0, 0);
     setUnzipDeleteArchiveButtonVisible(false);
     unzipDeleteCandidatePath.reset();
@@ -4994,10 +5077,12 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   auto entries = dbHelper.SelectEffectiveEntries(db);
   if (entries.empty()) {
     const auto path = ChartDBHelper::DefaultBmsFolderPath();
-    std::error_code errorCode;
-    std::filesystem::create_directories(path, errorCode);
+    const bool pathReady =
+        ensureDirectoryExistsLogged(path, "BMS download root");
 #if !(TARGET_OS_ANDROID)
-    dbHelper.InsertEntry(db, path);
+    if (pathReady) {
+      dbHelper.InsertEntry(db, path);
+    }
 #endif
     return path;
   }
@@ -5006,8 +5091,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
   return ResolveIOSFolderEntryPath(entries.front());
 #elif TARGET_OS_ANDROID
   const auto path = ChartDBHelper::DefaultBmsFolderPath();
-  std::error_code errorCode;
-  std::filesystem::create_directories(path, errorCode);
+  ensureDirectoryExistsLogged(path, "BMS download root");
   return path;
 #else
   return std::filesystem::path(entries.front().path);
@@ -8463,7 +8547,10 @@ void MainMenuScene::FindFilesUnix(
         std::string filename = entry->d_name;
         if (filename.size() > 4) {
           std::string ext = filename.substr(filename.size() - 4);
-          std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+          std::transform(ext.begin(), ext.end(), ext.begin(),
+                         [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                         });
           if (ext == ".bms" || ext == ".bme" || ext == ".bml") {
             std::filesystem::path fullPath = directoryPath / filename;
             if (oldFiles.find(fspath_to_path_t(fullPath)) == oldFiles.end()) {

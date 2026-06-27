@@ -1,5 +1,6 @@
 #include "ArchiveFile.h"
 
+#include "BmsMetadataText.h"
 #include "targets.h"
 #include "RAII.h"
 #if TARGET_OS_ANDROID
@@ -12,7 +13,6 @@
 #endif
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <clocale>
@@ -85,14 +85,39 @@ bool stopRequested(const std::stop_token *stopToken);
 bool pauseIfNeeded(const PauseCallback &pauseCallback,
                    std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
-                         double fraction, std::uint64_t current,
-                         std::uint64_t total, std::string message);
+                          double fraction, std::uint64_t current,
+                          std::uint64_t total, std::string message);
 
-std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+using asobmshow::bms_metadata::lowerCopy;
+
+bool createDirectoriesForUnzip(const std::filesystem::path &path,
+                               std::string_view failurePrefix,
+                               std::string *errorMessage,
+                               std::error_code &error) {
+  error.clear();
+  std::filesystem::create_directories(path, error);
+  if (!error) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = std::string(failurePrefix) + ": " + error.message();
+  }
+  return false;
+}
+
+bool pathExistsForUnzip(const std::filesystem::path &path,
+                        std::string_view failurePrefix, bool &exists,
+                        std::string *errorMessage,
+                        std::error_code &error) {
+  error.clear();
+  exists = std::filesystem::exists(path, error);
+  if (!error) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = std::string(failurePrefix) + ": " + error.message();
+  }
+  return false;
 }
 
 std::string replaceAll(std::string value, std::string_view needle,
@@ -429,7 +454,11 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
   bytes = 0;
   entries = 0;
   std::error_code error;
-  if (std::filesystem::is_regular_file(root, error) && !error) {
+  const bool rootIsFile = std::filesystem::is_regular_file(root, error);
+  if (error) {
+    return false;
+  }
+  if (rootIsFile) {
     const std::uintmax_t size = std::filesystem::file_size(root, error);
     if (error) {
       return false;
@@ -438,7 +467,8 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
     entries = 1;
     return true;
   }
-  if (error || !std::filesystem::is_directory(root, error) || error) {
+  const bool rootIsDirectory = std::filesystem::is_directory(root, error);
+  if (error || !rootIsDirectory) {
     return false;
   }
 
@@ -545,6 +575,21 @@ std::string backendName(ArchiveIndexBackend backend) {
   }
 }
 
+std::uintmax_t maxBufferedReadSize() {
+  return std::min<std::uintmax_t>(
+      static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max()),
+      static_cast<std::uintmax_t>(
+          std::numeric_limits<std::streamsize>::max()));
+}
+
+void reserveBufferedBytes(std::vector<unsigned char> &bytes,
+                          std::uintmax_t size) {
+  if (size <=
+      static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
+    bytes.reserve(static_cast<std::size_t>(size));
+  }
+}
+
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::string *errorMessage) {
@@ -558,6 +603,12 @@ bool readRegularFile(const std::filesystem::path &path,
       bytes.clear();
       const Sint64 size = SDL_RWsize(rw.get());
       if (size > 0) {
+        if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
+          if (errorMessage != nullptr) {
+            *errorMessage = "Android asset is too large to read: " + assetPath;
+          }
+          return false;
+        }
         bytes.resize(static_cast<size_t>(size));
         const size_t read =
             SDL_RWread(rw.get(), bytes.data(), 1, bytes.size());
@@ -592,10 +643,16 @@ bool readRegularFile(const std::filesystem::path &path,
     return false;
   }
   file.seekg(0, std::ios::end);
-  const auto size = file.tellg();
+  const std::streamoff size = file.tellg();
   if (size < 0) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not read file size: " + path.string();
+    }
+    return false;
+  }
+  if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "File is too large to read: " + path.string();
     }
     return false;
   }
@@ -2131,8 +2188,9 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
       continue;
     }
 
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(bytes, static_cast<std::uintmax_t>(entrySize));
     }
     std::array<unsigned char, 64 * 1024> buffer{};
     for (;;) {
@@ -2248,8 +2306,10 @@ bool readArchiveEntriesUncached(
 
     FileData file;
     file.path = info.relativePath;
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(file.bytes,
+                           static_cast<std::uintmax_t>(entrySize));
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -2733,8 +2793,10 @@ bool readArchiveEntriesByCachedOrder(
 
     FileData file;
     file.path = target.entryPath;
-    if (archive_entry_size_is_set(entry) && archive_entry_size(entry) > 0) {
-      file.bytes.reserve(static_cast<size_t>(archive_entry_size(entry)));
+    const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0) {
+      reserveBufferedBytes(file.bytes,
+                           static_cast<std::uintmax_t>(entrySize));
     }
     for (;;) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -3554,10 +3616,8 @@ bool readSevenZipEntriesByIndex(
 
     FileData file;
     file.path = target.entryPath;
-    if (target.size > 0 &&
-        target.size <=
-            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-      file.bytes.reserve(static_cast<std::size_t>(target.size));
+    if (target.size > 0) {
+      reserveBufferedBytes(file.bytes, target.size);
     }
     files.push_back(std::move(file));
     itemIndices.push_back(itemIndex);
@@ -3677,11 +3737,9 @@ bool extractSevenZipArchiveFully(
     }
     if (entry.directory) {
       std::error_code error;
-      std::filesystem::create_directories(outputFolder / entry.path, error);
-      if (error) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Could not create unzip folder: " + error.message();
-        }
+      if (!createDirectoriesForUnzip(outputFolder / entry.path,
+                                     "Could not create unzip folder",
+                                     errorMessage, error)) {
         return false;
       }
     } else {
@@ -4541,11 +4599,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
                       "Preparing output folder");
 
   std::error_code error;
-  std::filesystem::create_directories(destinationRoot, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip folder: " + error.message();
-    }
+  if (!createDirectoriesForUnzip(destinationRoot,
+                                 "Could not create unzip folder", errorMessage,
+                                 error)) {
     return std::nullopt;
   }
 
@@ -4595,9 +4651,12 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
         candidate / ".asobmashow_unzip_complete";
     const std::filesystem::path candidateChart = candidate / *chartRelative;
 
-    error.clear();
-    const bool candidateExists = std::filesystem::exists(candidate, error);
-    if (!candidateExists || error) {
+    bool candidateExists = false;
+    if (!pathExistsForUnzip(candidate, "Could not check unzip output folder",
+                            candidateExists, errorMessage, error)) {
+      return std::nullopt;
+    }
+    if (!candidateExists) {
       outputFolder = candidate;
       outputChartPath = candidateChart;
       markerPath = candidateMarker;
@@ -4620,22 +4679,17 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
   error.clear();
-  if (std::filesystem::exists(outputFolder, error) && !error) {
-    std::filesystem::remove_all(outputFolder, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not replace incomplete unzip folder: " +
-                        error.message();
-      }
-      return std::nullopt;
-    }
-  }
-  std::filesystem::create_directories(outputFolder, error);
+  std::filesystem::remove_all(outputFolder, error);
   if (error) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip output folder: " +
+      *errorMessage = "Could not replace incomplete unzip folder: " +
                       error.message();
     }
+    return std::nullopt;
+  }
+  if (!createDirectoriesForUnzip(outputFolder,
+                                 "Could not create unzip output folder",
+                                 errorMessage, error)) {
     return std::nullopt;
   }
 
@@ -4680,12 +4734,9 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
       continue;
     }
     const std::filesystem::path outputPath = outputFolder / *relative;
-    std::filesystem::create_directories(outputPath.parent_path(), error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not create unzip subfolder: " +
-                        error.message();
-      }
+    if (!createDirectoriesForUnzip(outputPath.parent_path(),
+                                   "Could not create unzip subfolder",
+                                   errorMessage, error)) {
       return std::nullopt;
     }
     std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
@@ -4826,12 +4877,9 @@ bool extractArchiveFullyWithBatchReader(
 
       std::error_code error;
       const std::filesystem::path outputPath = outputFolder / relativePath;
-      std::filesystem::create_directories(outputPath.parent_path(), error);
-      if (error) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Could not create unzip subfolder: " +
-                          error.message();
-        }
+      if (!createDirectoriesForUnzip(outputPath.parent_path(),
+                                     "Could not create unzip subfolder",
+                                     errorMessage, error)) {
         return false;
       }
 
@@ -4925,11 +4973,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 
   reportUnzipProgress(progressCallback, 0.06, 0, fileCount,
                       "Preparing output folder");
-  std::filesystem::create_directories(destinationRoot, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip folder: " + error.message();
-    }
+  if (!createDirectoriesForUnzip(destinationRoot,
+                                 "Could not create unzip folder", errorMessage,
+                                 error)) {
     return std::nullopt;
   }
 
@@ -4944,9 +4990,12 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
 
-    error.clear();
-    const bool candidateExists = std::filesystem::exists(candidate, error);
-    if (!candidateExists || error) {
+    bool candidateExists = false;
+    if (!pathExistsForUnzip(candidate, "Could not check unzip output folder",
+                            candidateExists, errorMessage, error)) {
+      return std::nullopt;
+    }
+    if (!candidateExists) {
       outputFolder = candidate;
       markerPath = candidateMarker;
       break;
@@ -4967,22 +5016,17 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
   error.clear();
-  if (std::filesystem::exists(outputFolder, error) && !error) {
-    std::filesystem::remove_all(outputFolder, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not replace incomplete unzip folder: " +
-                        error.message();
-      }
-      return std::nullopt;
-    }
-  }
-  std::filesystem::create_directories(outputFolder, error);
+  std::filesystem::remove_all(outputFolder, error);
   if (error) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not create unzip output folder: " +
+      *errorMessage = "Could not replace incomplete unzip folder: " +
                       error.message();
     }
+    return std::nullopt;
+  }
+  if (!createDirectoriesForUnzip(outputFolder,
+                                 "Could not create unzip output folder",
+                                 errorMessage, error)) {
     return std::nullopt;
   }
   if (stopRequested(stopToken)) {
@@ -5124,9 +5168,24 @@ materializeFileBytes(const std::filesystem::path &path,
 
   std::filesystem::path output = materializedFileCachePath(path);
   bool needsWrite = true;
-  if (std::filesystem::exists(output, error) && !error) {
-    std::uintmax_t size = std::filesystem::file_size(output, error);
-    needsWrite = error || size != bytes.size();
+  const bool outputExists = std::filesystem::exists(output, error);
+  if (error) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not check cached archive entry: " +
+                      error.message();
+    }
+    return std::nullopt;
+  }
+  if (outputExists) {
+    const std::uintmax_t size = std::filesystem::file_size(output, error);
+    if (error) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not read cached archive entry size: " +
+                        error.message();
+      }
+      return std::nullopt;
+    }
+    needsWrite = size != bytes.size();
   }
   if (needsWrite) {
     std::ofstream file(output, std::ios::binary | std::ios::trunc);
@@ -5140,6 +5199,13 @@ materializeFileBytes(const std::filesystem::path &path,
     if (!bytes.empty()) {
       file.write(reinterpret_cast<const char *>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
+    }
+    if (!file) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Could not write cached archive entry: " +
+                        output.string();
+      }
+      return std::nullopt;
     }
   }
   return output;

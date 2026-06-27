@@ -593,7 +593,15 @@ void SettingsScene::refreshChartLibrary() {
         if (entries.empty()) {
           const auto defaultPath = ChartDBHelper::DefaultBmsFolderPath();
           std::error_code errorCode;
-          std::filesystem::create_directories(defaultPath, errorCode);
+          if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
+            if (!token.stop_requested()) {
+              requestChartFolderStatus("Could not create default BMS folder: " +
+                                           errorCode.message(),
+                                       {255, 177, 170, 255});
+              difficultyTableJobRunning = false;
+            }
+            return;
+          }
           dbHelper.InsertEntry(settingsDb, defaultPath);
           entries = dbHelper.SelectEffectiveEntries(settingsDb);
         }

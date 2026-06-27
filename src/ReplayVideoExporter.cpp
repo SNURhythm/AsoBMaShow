@@ -74,6 +74,36 @@ constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kResultSceneTailMicros = 10000000;
 
+class ReplayVideoExportLog;
+void replayExportLog(ReplayVideoExportLog *log, const char *format, ...);
+
+std::optional<std::string>
+ensureReplayExportDirectoryError(const std::filesystem::path &path,
+                                 const char *failureMessage) {
+  std::error_code error;
+  if (Utils::EnsureDirectoryExists(path, error)) {
+    return std::nullopt;
+  }
+
+  return std::string(failureMessage) + " (" +
+         path_t_to_utf8(fspath_to_path_t(path)) + "): " + error.message();
+}
+
+void removeReplayExportOutputFile(const std::filesystem::path &outputPath) {
+  std::error_code error;
+  std::filesystem::remove(outputPath, error);
+}
+
+void removeReplayExportWorkDirectory(const std::filesystem::path &tempDir,
+                                     ReplayVideoExportLog *log = nullptr) {
+  std::error_code error;
+  std::filesystem::remove_all(tempDir, error);
+  if (error && log != nullptr) {
+    replayExportLog(log, "Replay export could not clean work directory: %s",
+                    tempDir.string().c_str());
+  }
+}
+
 int makeEvenExportDimension(int value) { return std::max(2, value & ~1); }
 
 int replayVideoSourceWidth() {
@@ -173,10 +203,13 @@ std::string replayVideoH264LevelString(int level) {
   return std::to_string(level / 10) + "." + std::to_string(level % 10);
 }
 
+size_t replayVideoFrameBytes(int width, int height) {
+  return static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+}
+
 size_t replayVideoFrameBufferCount(int width, int height) {
   constexpr size_t kMaxFrameBufferMemoryBytes = 128ULL * 1024ULL * 1024ULL;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4ULL;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t memoryLimitedBuffers =
       frameBytes == 0 ? 3 : kMaxFrameBufferMemoryBytes / frameBytes;
   const auto hardwareThreads = std::thread::hardware_concurrency();
@@ -2235,8 +2268,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
@@ -2799,8 +2831,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   }
 
   bgfx::FrameBufferHandle outputFrameBuffer = BGFX_INVALID_HANDLE;
-  const size_t frameBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+  const size_t frameBytes = replayVideoFrameBytes(width, height);
   const size_t frameBufferCount = replayVideoFrameBufferCount(width, height);
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
@@ -3406,12 +3437,10 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
 #endif
 
-  std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          outputDir, "Failed to create replay export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const std::string baseName =
@@ -3446,13 +3475,11 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   }
   const auto totalStart = std::chrono::steady_clock::now();
 
-  std::filesystem::create_directories(tempDir, ec);
-  if (ec) {
-    replayExportLog(exportLog,
-                    "Replay export failed to create work directory: %s",
-                    tempDir.string().c_str());
-    return {.success = false,
-            .message = "Failed to create replay export work directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          tempDir, "Failed to create replay export work directory")) {
+    replayExportLog(exportLog, "Replay export failed to create work directory: %s",
+                    error->c_str());
+    return {.success = false, .message = *error};
   }
 
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
@@ -3468,7 +3495,7 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   if (!audioResult.success) {
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
-    std::filesystem::remove_all(tempDir, ec);
+    removeReplayExportWorkDirectory(tempDir);
     return {.success = false,
             .outputPath = audioResult.outputPath,
             .message = audioResult.message};
@@ -3491,19 +3518,14 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
-    std::filesystem::remove(outputPath, ec);
-    std::filesystem::remove_all(tempDir, ec);
+    removeReplayExportOutputFile(outputPath);
+    removeReplayExportWorkDirectory(tempDir);
     return muxResult;
   }
   replayExportLog(exportLog, "Replay export MP4 finished in %.2fs",
                   static_cast<double>(elapsedMicros(videoStart)) / 1000000.0);
 
-  std::filesystem::remove_all(tempDir, ec);
-  if (ec) {
-    replayExportLog(exportLog,
-                    "Replay export could not clean work directory: %s",
-                    tempDir.string().c_str());
-  }
+  removeReplayExportWorkDirectory(tempDir, exportLog);
 
   reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);
@@ -3539,12 +3561,10 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   }
 #endif
 
-  std::error_code ec;
   const auto outputDir = Utils::GetDocumentsPath("video_exports");
-  std::filesystem::create_directories(outputDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          outputDir, "Failed to create replay export directory")) {
+    return {.success = false, .message = *error};
   }
 
   const std::string baseName =
@@ -3557,10 +3577,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   ReplayVideoExportLog *exportLog = nullptr;
   const auto totalStart = std::chrono::steady_clock::now();
 
-  std::filesystem::create_directories(tempDir, ec);
-  if (ec) {
-    return {.success = false,
-            .message = "Failed to create replay export work directory"};
+  if (const auto error = ensureReplayExportDirectoryError(
+          tempDir, "Failed to create replay export work directory")) {
+    return {.success = false, .message = *error};
   }
 
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
@@ -3580,7 +3599,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     auto chart = play_options::prepareReplayChart(stageReplay.chartMeta.BmsPath,
                                                   stageReplay, parseCancelled);
     if (chart == nullptr || parseCancelled) {
-      std::filesystem::remove_all(tempDir, ec);
+      removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
               .outputPath = outputPath,
               .message = "Failed to load course replay stage"};
@@ -3591,7 +3610,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     const auto audioResult =
         writeReplayAudioTrack(*chart, stageReplay, stageWavPath, exportLog);
     if (!audioResult.success) {
-      std::filesystem::remove_all(tempDir, ec);
+      removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
               .outputPath = audioResult.outputPath,
               .message = audioResult.message};
@@ -3627,7 +3646,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   const auto courseAudioResult =
       writeCourseReplayAudioTrack(audioSegments, wavPath, exportLog);
   if (!courseAudioResult.success) {
-    std::filesystem::remove_all(tempDir, ec);
+    removeReplayExportWorkDirectory(tempDir);
     return {.success = false,
             .outputPath = courseAudioResult.outputPath,
             .message = courseAudioResult.message};
@@ -3645,19 +3664,14 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   if (!muxResult.success) {
     replayExportLog(exportLog, "Course replay export MP4 failed: %s",
                     muxResult.message.c_str());
-    std::filesystem::remove(outputPath, ec);
-    std::filesystem::remove_all(tempDir, ec);
+    removeReplayExportOutputFile(outputPath);
+    removeReplayExportWorkDirectory(tempDir);
     return muxResult;
   }
   replayExportLog(exportLog, "Course replay export MP4 finished in %.2fs",
                   static_cast<double>(elapsedMicros(videoStart)) / 1000000.0);
 
-  std::filesystem::remove_all(tempDir, ec);
-  if (ec) {
-    replayExportLog(exportLog,
-                    "Replay export could not clean work directory: %s",
-                    tempDir.string().c_str());
-  }
+  removeReplayExportWorkDirectory(tempDir, exportLog);
 
   reportReplayExportProgress(resolvedOptions, 0.99, "Saving video");
   auto platformSaveResult = saveReplayVideoToPlatformLibrary(muxResult);

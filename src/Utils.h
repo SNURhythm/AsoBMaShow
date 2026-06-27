@@ -8,13 +8,12 @@
 #include <filesystem>
 #include <algorithm>
 #include <functional>
+#include <system_error>
 #include <thread>
 #include <vector>
 
 unsigned int parallel_worker_count(size_t n);
 void parallel_for(size_t n, std::function<void(int start, int end)> f);
-
-std::string ws2s(const std::wstring &wstr);
 
 std::string ws2s_utf8(const std::wstring &wstr);
 
@@ -24,6 +23,10 @@ public:
   inline static std::string TeamName = "SNURhythm";
   static std::filesystem::path
   GetDocumentsPath(const std::filesystem::path &SubPath = "");
+  static std::filesystem::path GetStoragePathRelativeToDocuments(
+      const std::filesystem::path &Path, const std::filesystem::path &SubPath);
+  static bool EnsureDirectoryExists(const std::filesystem::path &Path,
+                                    std::error_code &Error);
 };
 
 class threadRAII {

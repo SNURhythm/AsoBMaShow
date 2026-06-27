@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
@@ -50,13 +51,8 @@ constexpr const char *kChartDatabaseFileName = "chart.db";
 constexpr const char *kChartDatabaseSchema = "chart_library";
 constexpr const char *kChartMetaTable = "chart_library.chart_meta";
 
-std::string trimCopy(const std::string &value) {
-  return asobmshow::bms_metadata::trimCopy(value);
-}
-
-std::string lowerCopy(std::string value) {
-  return asobmshow::bms_metadata::lowerCopy(std::move(value));
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
@@ -416,7 +412,13 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
 
 sqlite3 *MusicPlaylistDB::Connect() {
   std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create music playlist database directory "
+              << directory.string() << ": " << directoryError.message()
+              << "\n";
+    return nullptr;
+  }
   const std::filesystem::path playlistPath =
       directory / kPlaylistDatabaseFileName;
   const std::filesystem::path chartPath = directory / kChartDatabaseFileName;

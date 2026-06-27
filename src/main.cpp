@@ -66,6 +66,7 @@
 #include "rendering/Camera.h"
 #include <filesystem>
 #include <mutex>
+#include <system_error>
 #include <vector>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -114,6 +115,45 @@ uint32_t parseMsaaFlag(int samples) {
   default:
     return BGFX_RESET_NONE;
   }
+}
+
+std::filesystem::path
+absolutePathOrOriginal(const std::filesystem::path &path) {
+  std::error_code error;
+  const std::filesystem::path absolutePath =
+      std::filesystem::absolute(path, error);
+  return error ? path : absolutePath;
+}
+
+void changeWorkingDirectoryToExecutableDir(
+    const std::filesystem::path &exePath) {
+  if (exePath.empty()) {
+    return;
+  }
+
+  const std::filesystem::path exeDir = exePath.parent_path();
+  if (exeDir.empty()) {
+    return;
+  }
+
+  std::error_code error;
+  const bool dirExists = std::filesystem::exists(exeDir, error);
+  if (error || !dirExists) {
+    if (error) {
+      APP_DEBUG_LOG("Could not inspect executable directory %s: %s",
+                    exeDir.string().c_str(), error.message().c_str());
+    }
+    return;
+  }
+
+  std::filesystem::current_path(exeDir, error);
+  if (error) {
+    APP_DEBUG_LOG("Could not change working directory to %s: %s",
+                  exeDir.string().c_str(), error.message().c_str());
+    return;
+  }
+
+  APP_DEBUG_LOG("Changed working directory to: %s", exeDir.string().c_str());
 }
 
 uint32_t resolveResetFlags() {
@@ -403,7 +443,7 @@ int main(int argv, char **args) {
     if (argv > 0 && args[0] != nullptr) {
       exePath = std::filesystem::path(args[0]);
       if (!exePath.is_absolute()) {
-        exePath = std::filesystem::absolute(exePath);
+        exePath = absolutePathOrOriginal(exePath);
       }
     }
   }
@@ -427,7 +467,7 @@ int main(int argv, char **args) {
       } else {
         exePath = std::filesystem::path(args[0]);
         if (!exePath.is_absolute()) {
-          exePath = std::filesystem::absolute(exePath);
+          exePath = absolutePathOrOriginal(exePath);
         }
       }
     }
@@ -451,21 +491,14 @@ int main(int argv, char **args) {
       } else {
         exePath = std::filesystem::path(args[0]);
         if (!exePath.is_absolute()) {
-          exePath = std::filesystem::absolute(exePath);
+          exePath = absolutePathOrOriginal(exePath);
         }
       }
     }
   }
 #endif
 
-  if (!exePath.empty()) {
-    std::filesystem::path exeDir = exePath.parent_path();
-    if (!exeDir.empty() && std::filesystem::exists(exeDir)) {
-      std::filesystem::current_path(exeDir);
-      APP_DEBUG_LOG("Changed working directory to: %s",
-                    exeDir.string().c_str());
-    }
-  }
+  changeWorkingDirectoryToExecutableDir(exePath);
 
 #ifdef _WIN32
   // search dll in ./lib

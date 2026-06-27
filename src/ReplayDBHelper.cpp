@@ -1,54 +1,24 @@
 #include "ReplayDBHelper.h"
 
+#include "BmsMetadataText.h"
 #include "LongNoteModeUtils.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
-#include "targets.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
-std::filesystem::path toStoredChartPath(std::filesystem::path path) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  static const std::filesystem::path documents =
-      Utils::GetDocumentsPath("BMS/");
-  const std::string documentString = documents.string();
-  const std::string pathString = path.string();
-  if (pathString.find(documentString) == 0) {
-    path = pathString.substr(documentString.length());
-  }
-#endif
-  return path;
-}
-
-std::string trimCopy(const std::string &value) {
-  const auto begin =
-      std::find_if_not(value.begin(), value.end(),
-                       [](unsigned char c) { return std::isspace(c) != 0; });
-  const auto end =
-      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-      }).base();
-  if (begin >= end) {
-    return "";
-  }
-  return std::string(begin, end);
-}
-
-std::string lowerCopy(std::string value) {
-  std::transform(
-      value.begin(), value.end(), value.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
+using asobmshow::bms_metadata::lowerCopy;
+using asobmshow::bms_metadata::trimCopy;
 
 std::string normalizedHash(const std::string &value) {
   return lowerCopy(trimCopy(value));
@@ -119,7 +89,8 @@ struct ReplayChartMatch {
 ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   return {
       .chartPath = path_t_to_utf8(
-          fspath_to_path_t(toStoredChartPath(chartMeta.BmsPath))),
+          fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+              chartMeta.BmsPath, "BMS/"))),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -352,7 +323,8 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(replay.chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
   bindText(replayStmt.get(), bindIndex++, chartPath);
   bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
@@ -482,7 +454,12 @@ ReplayDBHelper &ReplayDBHelper::GetInstance() {
 
 sqlite3 *ReplayDBHelper::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::filesystem::create_directories(directory);
+  std::error_code directoryError;
+  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+    SDL_Log("Can't create replay database directory %s: %s",
+            directory.string().c_str(), directoryError.message().c_str());
+    return nullptr;
+  }
   const std::filesystem::path path = directory / "replay.db";
 
   sqlite3 *db = nullptr;
@@ -742,7 +719,8 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   }
 
   const auto chartPath = path_t_to_utf8(
-      fspath_to_path_t(toStoredChartPath(replay.chartMeta.BmsPath)));
+      fspath_to_path_t(Utils::GetStoragePathRelativeToDocuments(
+          replay.chartMeta.BmsPath, "BMS/")));
   int bindIndex = 1;
   bindText(replayStmt.get(), bindIndex++, chartPath);
   bindText(replayStmt.get(), bindIndex++, replay.chartMeta.MD5);
