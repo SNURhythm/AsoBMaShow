@@ -469,9 +469,9 @@ bool parsedChartMetaHasStableIdentity(const bms_parser::ChartMeta &meta) {
          hashLooksComplete(sha256, 64);
 }
 
-bool parsedChartLooksInsertable(const bms_parser::Chart &chart) {
-  return parsedChartMetaHasStableIdentity(chart.Meta) &&
-         !chart.Measures.empty();
+bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {
+  return parsedChartMetaHasStableIdentity(meta) &&
+         (meta.TotalNotes > 0 || meta.TotalLandmineNotes > 0);
 }
 
 struct ArchiveScanResult {
@@ -4923,7 +4923,7 @@ int ChartDBHelper::ScanChartRoots(
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &rawChart, false, false, cancelled);
+        parser.Parse(*bytes, &rawChart, false, true, cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
         if (chart != nullptr) {
@@ -4937,7 +4937,7 @@ int ChartDBHelper::ScanChartRoots(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &rawChart, false, false,
+        archive_file::parseChart(parser, path, &rawChart, false, true,
                                  cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
@@ -4958,12 +4958,13 @@ int ChartDBHelper::ScanChartRoots(
           "DB parse returned null: " + chartText);
       return std::nullopt;
     }
-    if (!parsedChartLooksInsertable(*chart)) {
-      SDL_Log("Skipping chart without measures or stable identity: %s",
+    if (!parsedChartMetaLooksInsertable(chart->Meta)) {
+      SDL_Log("Skipping chart without notes or stable identity: %s",
               chartText.c_str());
       archive_file::appendDebugLogLine(
           "DB skipped chart: " + chartText +
-          " measures=" + std::to_string(chart->Measures.size()) +
+          " notes=" + std::to_string(chart->Meta.TotalNotes) +
+          " landmines=" + std::to_string(chart->Meta.TotalLandmineNotes) +
           " md5=" + chart->Meta.MD5 +
           " sha256=" + chart->Meta.SHA256);
       return std::nullopt;
