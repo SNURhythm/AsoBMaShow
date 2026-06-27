@@ -7,9 +7,21 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
+
+enum class CourseConstraintType {
+  Unknown = -1,
+  Grade = 0,
+  NoSpeed,
+  Judgement,
+  Gauge,
+  LongNote,
+};
+
+inline constexpr std::size_t kCourseConstraintTypeCount = 5;
 
 struct CourseConstraintSettings {
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
@@ -48,26 +60,26 @@ inline void collectCourseConstraintNames(const nlohmann::json &value,
   }
 }
 
-inline int courseConstraintType(const std::string &constraint) {
+inline CourseConstraintType courseConstraintType(const std::string &constraint) {
   if (constraint == "grade" || constraint == "grade_mirror" ||
       constraint == "grade_random") {
-    return 0;
+    return CourseConstraintType::Grade;
   }
   if (constraint == "no_speed") {
-    return 1;
+    return CourseConstraintType::NoSpeed;
   }
   if (constraint == "no_good" || constraint == "no_great") {
-    return 2;
+    return CourseConstraintType::Judgement;
   }
   if (constraint == "gauge_lr2" || constraint == "gauge_5k" ||
       constraint == "gauge_7k" || constraint == "gauge_9k" ||
       constraint == "gauge_24k") {
-    return 3;
+    return CourseConstraintType::Gauge;
   }
   if (constraint == "ln" || constraint == "cn" || constraint == "hcn") {
-    return 4;
+    return CourseConstraintType::LongNote;
   }
-  return -1;
+  return CourseConstraintType::Unknown;
 }
 
 inline CourseConstraintSettings
@@ -83,23 +95,27 @@ courseConstraintSettingsFromJson(const std::string &constraintJson) {
 
   std::vector<std::string> constraints;
   collectCourseConstraintNames(parsed, constraints);
-  std::array<bool, 5> seenTypes{};
+  std::array<bool, kCourseConstraintTypeCount> seenTypes{};
   for (const auto &constraint : constraints) {
-    const int type = courseConstraintType(constraint);
-    if (type < 0 || seenTypes[static_cast<size_t>(type)]) {
+    const CourseConstraintType type = courseConstraintType(constraint);
+    if (type == CourseConstraintType::Unknown) {
       continue;
     }
-    seenTypes[static_cast<size_t>(type)] = true;
+    const auto typeIndex = static_cast<std::size_t>(type);
+    if (seenTypes[typeIndex]) {
+      continue;
+    }
+    seenTypes[typeIndex] = true;
 
-    if (type == 0) {
+    if (type == CourseConstraintType::Grade) {
       settings.gradeConstraint = constraint;
       continue;
     }
-    if (type == 1) {
+    if (type == CourseConstraintType::NoSpeed) {
       settings.rules.noSpeed = true;
       continue;
     }
-    if (type == 2) {
+    if (type == CourseConstraintType::Judgement) {
       if (constraint == "no_good") {
         settings.rules.judgement = CourseJudgementConstraint::NoGood;
       } else if (constraint == "no_great") {
@@ -107,7 +123,7 @@ courseConstraintSettingsFromJson(const std::string &constraintJson) {
       }
       continue;
     }
-    if (type == 3) {
+    if (type == CourseConstraintType::Gauge) {
       if (constraint == "gauge_5k") {
         settings.gaugeProfile = GaugeProfile::Course5Keys;
       } else if (constraint == "gauge_7k") {
@@ -121,7 +137,7 @@ courseConstraintSettingsFromJson(const std::string &constraintJson) {
       }
       continue;
     }
-    if (type == 4) {
+    if (type == CourseConstraintType::LongNote) {
       if (constraint == "ln") {
         settings.rules.longNoteMode = CourseLongNoteMode::LN;
       } else if (constraint == "cn") {
