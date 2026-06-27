@@ -20,12 +20,17 @@ namespace {
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 
+void logSqlErrorText(const char *context, const std::string &error) {
+  SDL_Log("SQL error while %s: %s", context, error.c_str());
+}
+
+void logSqlError(const char *context, sqlite3 *db) {
+  logSqlErrorText(context, db != nullptr ? sqlite3_errmsg(db)
+                                         : "database is not open");
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
-  if (const auto error = executeSqlite(db, query)) {
-    SDL_Log("SQL error while %s: %s", context, error->c_str());
-    return false;
-  }
-  return true;
+  return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
 bool tableHasColumn(sqlite3 *db, const char *tableName,
@@ -33,7 +38,7 @@ bool tableHasColumn(sqlite3 *db, const char *tableName,
   bool found = false;
   if (const auto error =
           querySqliteTableHasColumn(db, tableName, columnName, found)) {
-    SDL_Log("SQL error while reading replay schema: %s", error->c_str());
+    logSqlErrorText("reading replay schema", *error);
   }
   return found;
 }
@@ -299,7 +304,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   SqliteStatementHandle replayStmt;
   int rc = prepareSqliteStatement(db, replayInsert, replayStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
+    logSqlError("preparing replay insert", db);
     return std::nullopt;
   }
 
@@ -347,7 +352,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while saving replay: %s", sqlite3_errmsg(db));
+    logSqlError("saving replay", db);
     return std::nullopt;
   }
 
@@ -362,15 +367,14 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   SqliteStatementHandle eventStmt;
   rc = prepareSqliteStatement(db, eventInsert, eventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay event insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay event insert", db);
     return std::nullopt;
   }
 
   for (size_t i = 0; i < replay.events.size(); ++i) {
     if (!insertReplayEvent(eventStmt.get(), replayId, static_cast<int>(i),
                            replay.events[i])) {
-      SDL_Log("SQL error while saving replay event: %s", sqlite3_errmsg(db));
+      logSqlError("saving replay event", db);
       return std::nullopt;
     }
   }
@@ -384,8 +388,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   SqliteStatementHandle touchSampleStmt;
   rc = prepareSqliteStatement(db, touchSampleInsert, touchSampleStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay touch sample insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay touch sample insert", db);
     return std::nullopt;
   }
 
@@ -393,8 +396,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     if (!insertReplayTouchSample(touchSampleStmt.get(), replayId,
                                  static_cast<int>(i),
                                  replay.touchSamples[i])) {
-      SDL_Log("SQL error while saving replay touch sample: %s",
-              sqlite3_errmsg(db));
+      logSqlError("saving replay touch sample", db);
       return std::nullopt;
     }
   }
@@ -409,8 +411,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
   SqliteStatementHandle laneCoverEventStmt;
   rc = prepareSqliteStatement(db, laneCoverEventInsert, laneCoverEventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay lane cover event insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay lane cover event insert", db);
     return std::nullopt;
   }
 
@@ -418,8 +419,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
     if (!insertReplayLaneCoverEvent(laneCoverEventStmt.get(), replayId,
                                     static_cast<int>(i),
                                     replay.laneCoverEvents[i])) {
-      SDL_Log("SQL error while saving replay lane cover event: %s",
-              sqlite3_errmsg(db));
+      logSqlError("saving replay lane cover event", db);
       return std::nullopt;
     }
   }
@@ -662,8 +662,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
                                       transactionError);
   if (!transaction.active()) {
-    SDL_Log("SQL error while starting replay save: %s",
-            transactionError.c_str());
+    logSqlErrorText("starting replay save", transactionError);
     return std::nullopt;
   }
 
@@ -684,7 +683,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   SqliteStatementHandle replayStmt;
   int rc = prepareSqliteStatement(db, replayInsert, replayStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay insert: %s", sqlite3_errmsg(db));
+    logSqlError("preparing replay insert", db);
     return std::nullopt;
   }
 
@@ -732,7 +731,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while saving replay: %s", sqlite3_errmsg(db));
+    logSqlError("saving replay", db);
     return std::nullopt;
   }
 
@@ -747,8 +746,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   SqliteStatementHandle eventStmt;
   rc = prepareSqliteStatement(db, eventInsert, eventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay event insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay event insert", db);
     return std::nullopt;
   }
 
@@ -756,7 +754,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   for (size_t i = 0; i < replay.events.size(); ++i) {
     if (!insertReplayEvent(eventStmt.get(), replayId, static_cast<int>(i),
                            replay.events[i])) {
-      SDL_Log("SQL error while saving replay event: %s", sqlite3_errmsg(db));
+      logSqlError("saving replay event", db);
       eventOk = false;
       break;
     }
@@ -774,8 +772,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   SqliteStatementHandle touchSampleStmt;
   rc = prepareSqliteStatement(db, touchSampleInsert, touchSampleStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay touch sample insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay touch sample insert", db);
     return std::nullopt;
   }
 
@@ -784,8 +781,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     if (!insertReplayTouchSample(touchSampleStmt.get(), replayId,
                                  static_cast<int>(i),
                                  replay.touchSamples[i])) {
-      SDL_Log("SQL error while saving replay touch sample: %s",
-              sqlite3_errmsg(db));
+      logSqlError("saving replay touch sample", db);
       touchSampleOk = false;
       break;
     }
@@ -804,8 +800,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   SqliteStatementHandle laneCoverEventStmt;
   rc = prepareSqliteStatement(db, laneCoverEventInsert, laneCoverEventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay lane cover event insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay lane cover event insert", db);
     return std::nullopt;
   }
 
@@ -814,8 +809,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     if (!insertReplayLaneCoverEvent(laneCoverEventStmt.get(), replayId,
                                     static_cast<int>(i),
                                     replay.laneCoverEvents[i])) {
-      SDL_Log("SQL error while saving replay lane cover event: %s",
-              sqlite3_errmsg(db));
+      logSqlError("saving replay lane cover event", db);
       laneCoverEventOk = false;
       break;
     }
@@ -826,8 +820,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   }
 
   if (!transaction.commit(transactionError)) {
-    SDL_Log("SQL error while committing replay save: %s",
-            transactionError.c_str());
+    logSqlErrorText("committing replay save", transactionError);
     return std::nullopt;
   }
 
@@ -854,8 +847,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
                                       transactionError);
   if (!transaction.active()) {
-    SDL_Log("SQL error while starting course replay save: %s",
-            transactionError.c_str());
+    logSqlErrorText("starting course replay save", transactionError);
     return std::nullopt;
   }
 
@@ -870,8 +862,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   SqliteStatementHandle courseStmt;
   int rc = prepareSqliteStatement(db, courseInsert, courseStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course replay insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course replay insert", db);
     return std::nullopt;
   }
 
@@ -900,7 +891,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   rc = sqlite3_step(courseStmt.get());
   courseStmt.reset();
   if (rc != SQLITE_DONE) {
-    SDL_Log("SQL error while saving course replay: %s", sqlite3_errmsg(db));
+    logSqlError("saving course replay", db);
     return std::nullopt;
   }
 
@@ -913,8 +904,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   SqliteStatementHandle stageStmt;
   rc = prepareSqliteStatement(db, stageInsert, stageStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course replay stage insert: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course replay stage insert", db);
     return std::nullopt;
   }
 
@@ -932,15 +922,13 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     sqlite3_bind_int64(stageStmt.get(), 4,
                        std::max(0LL, replay.stages[i].restMicrosAfterStage));
     if (sqlite3_step(stageStmt.get()) != SQLITE_DONE) {
-      SDL_Log("SQL error while saving course replay stage: %s",
-              sqlite3_errmsg(db));
+      logSqlError("saving course replay stage", db);
       return std::nullopt;
     }
   }
 
   if (!transaction.commit(transactionError)) {
-    SDL_Log("SQL error while committing course replay save: %s",
-            transactionError.c_str());
+    logSqlErrorText("committing course replay save", transactionError);
     return std::nullopt;
   }
   return courseReplayId;
@@ -982,7 +970,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay list: %s", sqlite3_errmsg(db));
+    logSqlError("preparing replay list", db);
     return replays;
   }
 
@@ -1029,8 +1017,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course replay list: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course replay list", db);
     return replays;
   }
 
@@ -1092,7 +1079,7 @@ ReplayDBHelper::LoadReplay(int replayId,
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay load: %s", sqlite3_errmsg(db));
+    logSqlError("preparing replay load", db);
     return std::nullopt;
   }
 
@@ -1166,8 +1153,7 @@ ReplayDBHelper::LoadReplay(int replayId,
   SqliteStatementHandle eventStmt;
   rc = prepareSqliteStatement(db, eventQuery, eventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay event load: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay event load", db);
     return std::nullopt;
   }
   sqlite3_bind_int(eventStmt.get(), 1, replay->id);
@@ -1196,8 +1182,7 @@ ReplayDBHelper::LoadReplay(int replayId,
   SqliteStatementHandle touchSampleStmt;
   rc = prepareSqliteStatement(db, touchSampleQuery, touchSampleStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay touch sample load: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay touch sample load", db);
     return std::nullopt;
   }
   sqlite3_bind_int(touchSampleStmt.get(), 1, replay->id);
@@ -1224,8 +1209,7 @@ ReplayDBHelper::LoadReplay(int replayId,
   SqliteStatementHandle laneCoverEventStmt;
   rc = prepareSqliteStatement(db, laneCoverEventQuery, laneCoverEventStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing replay lane cover event load: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing replay lane cover event load", db);
     return std::nullopt;
   }
   sqlite3_bind_int(laneCoverEventStmt.get(), 1, replay->id);
@@ -1265,8 +1249,7 @@ ReplayDBHelper::LoadCourseReplay(int replayId) {
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course replay load: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course replay load", db);
     return std::nullopt;
   }
 
@@ -1309,8 +1292,7 @@ ReplayDBHelper::LoadCourseReplay(int replayId) {
   SqliteStatementHandle stageStmt;
   rc = prepareSqliteStatement(db, stageQuery, stageStmt);
   if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing course replay stage load: %s",
-            sqlite3_errmsg(db));
+    logSqlError("preparing course replay stage load", db);
     return std::nullopt;
   }
 
