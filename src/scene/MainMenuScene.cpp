@@ -3453,11 +3453,8 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
   }
 
   auto exec = [this](const char *query, const char *context) {
-    SqliteErrorMessageHandle error;
-    const int rc = sqlite3_exec(db, query, nullptr, nullptr, error.out());
-    if (rc != SQLITE_OK) {
-      SDL_Log("SQL error while %s: %s", context,
-              error.get() != nullptr ? error.get() : sqlite3_errmsg(db));
+    if (const auto error = executeSqlite(db, query)) {
+      SDL_Log("SQL error while %s: %s", context, error->c_str());
       return false;
     }
     return true;
