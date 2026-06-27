@@ -296,6 +296,51 @@ bool chartDatabaseRebuildRequiredForScoreMigration(sqlite3 *db) {
   return selectScalarInt(db, requiredQuery, 0) > 0;
 }
 
+std::string scoreMigrationHashHasValue(std::string_view columnName) {
+  const std::string column(columnName);
+  return "scores." + column + " IS NOT NULL AND trim(scores." + column +
+         ") != ''";
+}
+
+std::string scoreMigrationPathHasValue() {
+  return "scores.chart_path IS NOT NULL AND scores.chart_path != ''";
+}
+
+std::string scoreMigrationHashMatchCondition(std::string_view scoreColumn,
+                                             std::string_view chartAlias,
+                                             std::string_view chartColumn) {
+  const std::string score(scoreColumn);
+  const std::string alias(chartAlias);
+  const std::string chart(chartColumn);
+  return scoreMigrationHashHasValue(score) + " AND lower(trim(" + alias + "." +
+         chart + ")) = lower(trim(scores." + score + "))";
+}
+
+std::string scoreMigrationPathMatchCondition(std::string_view chartAlias) {
+  const std::string alias(chartAlias);
+  return scoreMigrationPathHasValue() + " AND " + alias +
+         ".path = scores.chart_path";
+}
+
+std::string scoreMigrationChartMatchPredicate(std::string_view chartAlias) {
+  return "((" +
+         scoreMigrationHashMatchCondition("chart_sha256", chartAlias,
+                                          "sha256") +
+         ") OR (" +
+         scoreMigrationHashMatchCondition("chart_md5", chartAlias, "md5") +
+         ") OR (" + scoreMigrationPathMatchCondition(chartAlias) + "))";
+}
+
+std::string scoreMigrationChartMatchRankExpr(std::string_view chartAlias) {
+  return "(CASE WHEN " +
+         scoreMigrationHashMatchCondition("chart_sha256", chartAlias,
+                                          "sha256") +
+         " THEN 0 WHEN " +
+         scoreMigrationHashMatchCondition("chart_md5", chartAlias, "md5") +
+         " THEN 1 WHEN " + scoreMigrationPathMatchCondition(chartAlias) +
+         " THEN 2 ELSE 3 END)";
+}
+
 bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   completed = false;
   if (!ensureChartDatabaseReadyForScoreMigration()) {
@@ -320,35 +365,10 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
 
   const std::string chartTable =
       std::string(kScoreMigrationChartSchema) + ".chart_meta";
-  const auto matchPredicateFor = [](const std::string &alias) {
-    return "((scores.chart_sha256 IS NOT NULL AND "
-           "trim(scores.chart_sha256) != '' AND lower(trim(" +
-           alias +
-           ".sha256)) = lower(trim(scores.chart_sha256))) OR "
-           "(scores.chart_md5 IS NOT NULL AND trim(scores.chart_md5) != '' "
-           "AND lower(trim(" +
-           alias +
-           ".md5)) = lower(trim(scores.chart_md5))) OR "
-           "(scores.chart_path IS NOT NULL AND scores.chart_path != '' "
-           "AND " +
-           alias + ".path = scores.chart_path))";
-  };
-  const auto matchRankExprFor = [](const std::string &alias) {
-    return "(CASE WHEN scores.chart_sha256 IS NOT NULL AND "
-           "trim(scores.chart_sha256) != '' AND lower(trim(" +
-           alias +
-           ".sha256)) = lower(trim(scores.chart_sha256)) THEN 0 "
-           "WHEN scores.chart_md5 IS NOT NULL AND "
-           "trim(scores.chart_md5) != '' AND lower(trim(" +
-           alias +
-           ".md5)) = lower(trim(scores.chart_md5)) THEN 1 "
-           "WHEN scores.chart_path IS NOT NULL AND scores.chart_path != '' "
-           "AND " +
-           alias + ".path = scores.chart_path THEN 2 ELSE 3 END)";
-  };
-  const std::string matchPredicate = matchPredicateFor("cm");
-  const std::string matchRank = matchRankExprFor("cm");
-  const std::string betterMatchRank = matchRankExprFor("cm_better");
+  const std::string matchPredicate = scoreMigrationChartMatchPredicate("cm");
+  const std::string matchRank = scoreMigrationChartMatchRankExpr("cm");
+  const std::string betterMatchRank =
+      scoreMigrationChartMatchRankExpr("cm_better");
   const std::string sourcePriority = chartSourcePriorityExpr("cm");
   const std::string betterSourcePriority =
       chartSourcePriorityExpr("cm_better");
@@ -357,13 +377,13 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
       chartSourceArchiveSizeExpr("cm_better");
   const std::string betterMatchPredicate =
       "NOT EXISTS (SELECT 1 FROM " + chartTable + " cm_better WHERE " +
-      matchPredicateFor("cm_better") + " AND (" + betterMatchRank + " < " +
-      matchRank + " OR (" + betterMatchRank + " = " + matchRank + " AND (" +
-      betterSourcePriority + " < " + sourcePriority + " OR (" +
-      betterSourcePriority + " = " + sourcePriority + " AND (" +
-      betterSourceArchiveSize + " < " + sourceArchiveSize + " OR (" +
-      betterSourceArchiveSize + " = " + sourceArchiveSize +
-      " AND cm_better.path < cm.path)))))))";
+      scoreMigrationChartMatchPredicate("cm_better") + " AND (" +
+      betterMatchRank + " < " + matchRank + " OR (" + betterMatchRank +
+      " = " + matchRank + " AND (" + betterSourcePriority + " < " +
+      sourcePriority + " OR (" + betterSourcePriority + " = " +
+      sourcePriority + " AND (" + betterSourceArchiveSize + " < " +
+      sourceArchiveSize + " OR (" + betterSourceArchiveSize + " = " +
+      sourceArchiveSize + " AND cm_better.path < cm.path)))))))";
   const std::string bestMatchPredicate =
       matchPredicate + " AND " + betterMatchPredicate;
   const std::string matchedLnModeExpr = "COALESCE(cm.ln_mode, 0)";
