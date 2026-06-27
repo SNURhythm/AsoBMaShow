@@ -3626,11 +3626,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
 
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete charts in "
-                 "directory: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing statement to delete charts in directory",
+          logSqlErrorText)) {
     return -1;
   }
 
@@ -3644,10 +3642,9 @@ int ChartDBHelper::DeleteChartMetaInDirectory(
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     bindSqliteText(stmt, 1, target);
-    rc = sqlite3_step(stmt);
+    const int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-      std::cerr << "SQL error while deleting a chart in directory: "
-                << sqlite3_errmsg(db) << "\n";
+      logSqlError("deleting a chart in directory", db);
       return -1;
     }
     if (sqlite3_changes(db) > 0) {
@@ -3726,15 +3723,14 @@ bool ChartDBHelper::ClearChartMeta(sqlite3 *db) {
 
   auto query = "DELETE FROM chart_meta";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
 
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   const int chartChanges = sqlite3_changes(db);
@@ -3881,19 +3877,17 @@ bool ChartDBHelper::InsertEntry(sqlite3 *db,
                "@ios_bookmark"
                ")";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to insert an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to insert an entry",
+                                    logSqlErrorText)) {
     return false;
   }
   const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while inserting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("inserting an entry", db);
     return false;
   }
   clearChartScanCheckpoint(db);
@@ -3907,10 +3901,8 @@ std::vector<ChartEntry> ChartDBHelper::SelectAllEntries(sqlite3 *db) {
                "COALESCE(ios_bookmark, '')"
                " FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while getting all entries: " << sqlite3_errmsg(db)
-              << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "getting all entries",
+                                    logSqlErrorText)) {
     return std::vector<ChartEntry>();
   }
   std::vector<ChartEntry> entries;
@@ -3983,18 +3975,16 @@ bool ChartDBHelper::DeleteEntry(sqlite3 *db,
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries WHERE path = @path";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-    std::cerr << "SQL error while preparing statement to delete an entry: "
-              << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing statement to delete an entry",
+                                    logSqlErrorText)) {
     return false;
   }
   const std::string pathText = storedChartPathText(path);
   bindSqliteText(stmt, 1, pathText);
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while deleting an entry: " << sqlite3_errmsg(db)
-              << "\n";
+    logSqlError("deleting an entry", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
@@ -4008,15 +3998,13 @@ bool ChartDBHelper::ClearEntries(sqlite3 *db) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
   SqliteStatementHandle stmt;
-  int rc = prepareSqliteStatement(db, query, stmt);
-  if (rc != SQLITE_OK) {
-
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+  if (!prepareSqliteStatementLogged(db, query, stmt, "clearing",
+                                    logSqlErrorText)) {
     return false;
   }
-  rc = sqlite3_step(stmt);
+  int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
-    std::cerr << "SQL error while clearing: " << sqlite3_errmsg(db) << "\n";
+    logSqlError("clearing", db);
     return false;
   }
   if (sqlite3_changes(db) > 0) {
