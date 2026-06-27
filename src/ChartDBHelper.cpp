@@ -2946,81 +2946,86 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
   return true;
 }
 
-bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
-                                    bms_parser::ChartMeta &chartMeta) {
-  auto query = "REPLACE INTO chart_meta ("
-               "path,"
-               "md5,"
-               "sha256,"
-               "title,"
-               "subtitle,"
-               "genre,"
-               "artist,"
-               "sub_artist,"
-               "folder,"
-               "stage_file,"
-               "banner,"
-               "back_bmp,"
-               "preview,"
-               "level,"
-               "difficulty,"
-               "total,"
-               "bpm,"
-               "max_bpm,"
-               "min_bpm,"
-               "length,"
-               "rank,"
-               "player,"
-               "keys,"
-               "total_notes,"
-               "total_long_notes,"
-               "total_scratch_notes,"
-               "total_backspin_notes,"
-               "ln_mode,"
-               "source_priority,"
-               "source_archive_size"
-               ") VALUES("
-               "@path,"
-               "@md5,"
-               "@sha256,"
-               "@title,"
-               "@subtitle,"
-               "@genre,"
-               "@artist,"
-               "@sub_artist,"
-               "@folder,"
-               "@stage_file,"
-               "@banner,"
-               "@back_bmp,"
-               "@preview,"
-               "@level,"
-               "@difficulty,"
-               "@total,"
-               "@bpm,"
-               "@max_bpm,"
-               "@min_bpm,"
-               "@length,"
-               "@rank,"
-               "@player,"
-               "@keys,"
-               "@total_notes,"
-               "@total_long_notes,"
-               "@total_scratch_notes,"
-               "@total_backspin_notes,"
-               "@ln_mode,"
-               "@source_priority,"
-               "@source_archive_size"
-               ")";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing statement to insert a chart",
-                                    logSdlSqlErrorText)) {
+const char *insertChartMetaSql() {
+  return "REPLACE INTO chart_meta ("
+         "path,"
+         "md5,"
+         "sha256,"
+         "title,"
+         "subtitle,"
+         "genre,"
+         "artist,"
+         "sub_artist,"
+         "folder,"
+         "stage_file,"
+         "banner,"
+         "back_bmp,"
+         "preview,"
+         "level,"
+         "difficulty,"
+         "total,"
+         "bpm,"
+         "max_bpm,"
+         "min_bpm,"
+         "length,"
+         "rank,"
+         "player,"
+         "keys,"
+         "total_notes,"
+         "total_long_notes,"
+         "total_scratch_notes,"
+         "total_backspin_notes,"
+         "ln_mode,"
+         "source_priority,"
+         "source_archive_size"
+         ") VALUES("
+         "@path,"
+         "@md5,"
+         "@sha256,"
+         "@title,"
+         "@subtitle,"
+         "@genre,"
+         "@artist,"
+         "@sub_artist,"
+         "@folder,"
+         "@stage_file,"
+         "@banner,"
+         "@back_bmp,"
+         "@preview,"
+         "@level,"
+         "@difficulty,"
+         "@total,"
+         "@bpm,"
+         "@max_bpm,"
+         "@min_bpm,"
+         "@length,"
+         "@rank,"
+         "@player,"
+         "@keys,"
+         "@total_notes,"
+         "@total_long_notes,"
+         "@total_scratch_notes,"
+         "@total_backspin_notes,"
+         "@ln_mode,"
+         "@source_priority,"
+         "@source_archive_size"
+         ")";
+}
+
+bool insertChartMetaPrepared(
+    sqlite3 *db, sqlite3_stmt *stmt, const bms_parser::ChartMeta &chartMeta,
+    const std::optional<archive_file::SourcePreference> &sourcePreferenceHint =
+        std::nullopt) {
+  if (stmt == nullptr) {
+    logSdlSqlErrorText("inserting a chart", "statement is not prepared");
     return false;
   }
   const archive_file::SourcePreference sourcePreference =
-      archive_file::sourcePreferenceForPath(chartMeta.BmsPath);
+      sourcePreferenceHint.has_value()
+          ? *sourcePreferenceHint
+          : archive_file::sourcePreferenceForPath(chartMeta.BmsPath);
   std::filesystem::path path = chartMeta.BmsPath;
-  ToRelativePath(path);
+  ChartDBHelper::ToRelativePath(path);
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
 
@@ -3034,7 +3039,7 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   bindSqliteText(stmt, 8, chartMeta.SubArtist);
 
   std::filesystem::path folder = chartMeta.Folder;
-  ToRelativePath(folder);
+  ChartDBHelper::ToRelativePath(folder);
   bindSqliteText(stmt, 9, fspath_to_utf8(folder));
   bindSqliteText(stmt, 10, fspath_to_utf8(chartMeta.StageFile));
   bindSqliteText(stmt, 11, fspath_to_utf8(chartMeta.Banner));
@@ -3060,6 +3065,39 @@ bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
   const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", db);
+    return false;
+  }
+  return true;
+}
+
+std::optional<archive_file::SourcePreference>
+zipArchiveBatchSourcePreference(const std::filesystem::path &archivePath) {
+  const std::string extension = archive_file::archiveExtensionFromPath(archivePath);
+  if (extension != ".zip" && extension != ".zipx" && extension != ".cbz") {
+    return std::nullopt;
+  }
+  std::error_code error;
+  const std::uintmax_t size = std::filesystem::file_size(archivePath, error);
+  if (error) {
+    return archive_file::SourcePreference{.priority = 3, .archiveSize = 0};
+  }
+  return archive_file::SourcePreference{
+      .priority = 1,
+      .archiveSize = static_cast<std::uint64_t>(
+          std::min<std::uintmax_t>(
+              size, std::numeric_limits<std::uint64_t>::max())),
+  };
+}
+
+bool ChartDBHelper::InsertChartMeta(sqlite3 *db,
+                                    bms_parser::ChartMeta &chartMeta) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, insertChartMetaSql(), stmt,
+                                    "preparing statement to insert a chart",
+                                    logSdlSqlErrorText)) {
+    return false;
+  }
+  if (!insertChartMetaPrepared(db, stmt.get(), chartMeta)) {
     return false;
   }
   bumpLibraryRevision();
@@ -5378,6 +5416,15 @@ int ChartDBHelper::ScanChartRoots(
         "Inserting streamed DB chart batch: " + archiveText +
         " requested=" + std::to_string(pendingInnerPaths.size()) +
         " files=" + std::to_string(parsedCharts->size()));
+    SqliteStatementHandle archiveInsertStmt;
+    const bool archiveInsertStmtReady = prepareSqliteStatementLogged(
+        db, insertChartMetaSql(), archiveInsertStmt,
+        "preparing statement to insert archive chart batch",
+        logSdlSqlErrorText);
+    const auto archiveSourcePreference =
+        zipArchiveBatchSourcePreference(batch.archivePath);
+    const auto insertStart = std::chrono::steady_clock::now();
+    std::size_t insertedCharts = 0;
     bool parsedFullBatch = parsedCharts->size() == pendingInnerPaths.size();
     bool checkpointOrderReliable = true;
     std::size_t parsedInBatch = innerStart;
@@ -5388,8 +5435,18 @@ int ChartDBHelper::ScanChartRoots(
       }
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::ParsingCharts);
-      if (parsed.meta.has_value() && InsertChartMeta(db, *parsed.meta)) {
-        ++changedCount;
+      if (parsed.meta.has_value()) {
+        if (!archiveInsertStmtReady) {
+          parsedFullBatch = false;
+        } else {
+          sqlite3_reset(archiveInsertStmt.get());
+          sqlite3_clear_bindings(archiveInsertStmt.get());
+          if (insertChartMetaPrepared(db, archiveInsertStmt.get(),
+                                      *parsed.meta, archiveSourcePreference)) {
+            ++changedCount;
+            ++insertedCharts;
+          }
+        }
       }
       ++parseCurrent;
       if (parsedInBatch >= batch.innerPaths.size() ||
@@ -5412,6 +5469,20 @@ int ChartDBHelper::ScanChartRoots(
         }
       }
     }
+    const auto insertMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - insertStart)
+            .count();
+    archive_file::appendDebugLogLine(
+        "Finished streamed DB chart batch insert: " + archiveText +
+        " requested=" + std::to_string(pendingInnerPaths.size()) +
+        " files=" + std::to_string(parsedCharts->size()) +
+        " inserted=" + std::to_string(insertedCharts) +
+        " insertMs=" + std::to_string(insertMs) +
+        " reusedStatement=" +
+        std::string(archiveInsertStmtReady ? "true" : "false") +
+        " sourcePreferenceHint=" +
+        std::string(archiveSourcePreference.has_value() ? "true" : "false"));
     if (parsedFullBatch && !stopRequested(stopToken)) {
       writePendingArchiveCache(batch);
       const std::filesystem::path lastPath =
