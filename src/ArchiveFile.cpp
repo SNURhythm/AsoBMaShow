@@ -105,6 +105,21 @@ bool createDirectoriesForUnzip(const std::filesystem::path &path,
   return false;
 }
 
+bool pathExistsForUnzip(const std::filesystem::path &path,
+                        std::string_view failurePrefix, bool &exists,
+                        std::string *errorMessage,
+                        std::error_code &error) {
+  error.clear();
+  exists = std::filesystem::exists(path, error);
+  if (!error) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = std::string(failurePrefix) + ": " + error.message();
+  }
+  return false;
+}
+
 std::string replaceAll(std::string value, std::string_view needle,
                        std::string_view replacement) {
   if (needle.empty()) {
@@ -4606,9 +4621,12 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
         candidate / ".asobmashow_unzip_complete";
     const std::filesystem::path candidateChart = candidate / *chartRelative;
 
-    error.clear();
-    const bool candidateExists = std::filesystem::exists(candidate, error);
-    if (!candidateExists || error) {
+    bool candidateExists = false;
+    if (!pathExistsForUnzip(candidate, "Could not check unzip output folder",
+                            candidateExists, errorMessage, error)) {
+      return std::nullopt;
+    }
+    if (!candidateExists) {
       outputFolder = candidate;
       outputChartPath = candidateChart;
       markerPath = candidateMarker;
@@ -4942,9 +4960,12 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
 
-    error.clear();
-    const bool candidateExists = std::filesystem::exists(candidate, error);
-    if (!candidateExists || error) {
+    bool candidateExists = false;
+    if (!pathExistsForUnzip(candidate, "Could not check unzip output folder",
+                            candidateExists, errorMessage, error)) {
+      return std::nullopt;
+    }
+    if (!candidateExists) {
       outputFolder = candidate;
       markerPath = candidateMarker;
       break;
