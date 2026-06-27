@@ -1607,7 +1607,8 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
                            sqlite3_int64 &archiveSize,
                            sqlite3_int64 &mtimeNs) {
   std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error) || error) {
+  const bool regularFile = std::filesystem::is_regular_file(path, error);
+  if (error || !regularFile) {
     return false;
   }
   error.clear();
@@ -4627,9 +4628,12 @@ int ChartDBHelper::ScanChartRoots(
         rootKey += std::to_string(mtimeNs);
       } else {
         std::error_code error;
-        const bool directory =
-            std::filesystem::is_directory(root, error) && !error;
-        rootKey += directory ? "|dir" : "|missing";
+        const bool directory = std::filesystem::is_directory(root, error);
+        if (error) {
+          rootKey += "|unknown";
+        } else {
+          rootKey += directory ? "|dir" : "|missing";
+        }
       }
       rootKeys.push_back(std::move(rootKey));
     }
