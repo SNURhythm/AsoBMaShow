@@ -6265,12 +6265,10 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) + "\n";
   }
   if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Saved to " +
-              path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath)) +
+    detail += "Saved to " + fspath_to_utf8(findBmsResult.outputPath) +
               "\nRefreshing the library will make newly found charts playable.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
@@ -6299,20 +6297,17 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "The archive was extracted, but it does not contain the selected "
               "BMS chart hash.";
     if (!findBmsResult.outputPath.empty()) {
-      detail += "\nKept at " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.outputPath));
+      detail += "\nKept at " + fspath_to_utf8(findBmsResult.outputPath);
     }
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
     detail += "Automatic download failed. Open the source page or refresh "
               "after downloading.";
     if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " +
-                path_t_to_utf8(fspath_to_path_t(findBmsResult.debugPath));
+      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
     }
   } else {
     detail +=
@@ -7406,9 +7401,8 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
     SDL_Log("Error parsing %s for autoplay: %s",
             path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
-        "Autoplay parse exception: " +
-        path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-        e.what());
+        "Autoplay parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+        ": " + e.what());
   }
   if (preparedChart == nullptr || parseCancelled) {
     return false;
@@ -7852,8 +7846,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
                   path_t_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
               "Autoplay export parse exception: " +
-              path_t_to_utf8(fspath_to_path_t(record.meta.BmsPath)) + ": " +
-              e.what());
+              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
         if (chart == nullptr || parseCancelled) {
           complete({.success = false, .message = "No Chart"});
