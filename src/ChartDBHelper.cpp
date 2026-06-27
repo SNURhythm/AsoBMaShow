@@ -46,37 +46,10 @@ namespace {
 using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::kChartMetaColumnCount;
+using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::preferredChartPredicate;
 
-constexpr const char *kChartMetaSelectColumns = "cm.path,"
-                                                "cm.md5,"
-                                                "cm.sha256,"
-                                                "cm.title,"
-                                                "cm.subtitle,"
-                                                "cm.genre,"
-                                                "cm.artist,"
-                                                "cm.sub_artist,"
-                                                "cm.folder,"
-                                                "cm.stage_file,"
-                                                "cm.banner,"
-                                                "cm.back_bmp,"
-                                                "cm.preview,"
-                                                "cm.level,"
-                                                "cm.difficulty,"
-                                                "cm.total,"
-                                                "cm.bpm,"
-                                                "cm.max_bpm,"
-                                                "cm.min_bpm,"
-                                                "cm.length,"
-                                                "cm.rank,"
-                                                "cm.player,"
-                                                "cm.keys,"
-                                                "cm.total_notes,"
-                                                "cm.total_long_notes,"
-                                                "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes,"
-                                                "cm.ln_mode";
-constexpr int kChartMetaColumnCount = 28;
 constexpr int kNoPlayClearMarkRank = -1;
 
 constexpr const char *kDifficultyEntrySelectColumns =

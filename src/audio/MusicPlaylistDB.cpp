@@ -18,34 +18,6 @@
 
 namespace {
 
-constexpr const char *kChartMetaSelectColumns = "cm.path,"
-                                                "cm.md5,"
-                                                "cm.sha256,"
-                                                "cm.title,"
-                                                "cm.subtitle,"
-                                                "cm.genre,"
-                                                "cm.artist,"
-                                                "cm.sub_artist,"
-                                                "cm.folder,"
-                                                "cm.stage_file,"
-                                                "cm.banner,"
-                                                "cm.back_bmp,"
-                                                "cm.preview,"
-                                                "cm.level,"
-                                                "cm.difficulty,"
-                                                "cm.total,"
-                                                "cm.bpm,"
-                                                "cm.max_bpm,"
-                                                "cm.min_bpm,"
-                                                "cm.length,"
-                                                "cm.rank,"
-                                                "cm.player,"
-                                                "cm.keys,"
-                                                "cm.total_notes,"
-                                                "cm.total_long_notes,"
-                                                "cm.total_scratch_notes,"
-                                                "cm.total_backspin_notes";
-constexpr int kChartMetaColumnCount = 27;
 constexpr const char *kPlaylistDatabaseFileName = "music_playlist.db";
 constexpr const char *kChartDatabaseFileName = "chart.db";
 constexpr const char *kChartDatabaseSchema = "chart_library";
@@ -55,6 +27,8 @@ using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::chartArtworkOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::kChartMetaColumnCount;
+using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::kMaxSqlIntegerText;
 
 int parseIntOr(const std::string &value, int fallback) {
@@ -329,6 +303,7 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
   chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
+  chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
 
   return chartMeta;
 }

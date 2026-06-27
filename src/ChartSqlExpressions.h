@@ -7,6 +7,36 @@ namespace asobmshow::chart_sql {
 
 inline constexpr const char *kChartMetaTable = "chart_meta";
 inline constexpr const char *kMaxSqlIntegerText = "9223372036854775807";
+inline constexpr const char *kChartMetaSelectColumns =
+    "cm.path,"
+    "cm.md5,"
+    "cm.sha256,"
+    "cm.title,"
+    "cm.subtitle,"
+    "cm.genre,"
+    "cm.artist,"
+    "cm.sub_artist,"
+    "cm.folder,"
+    "cm.stage_file,"
+    "cm.banner,"
+    "cm.back_bmp,"
+    "cm.preview,"
+    "cm.level,"
+    "cm.difficulty,"
+    "cm.total,"
+    "cm.bpm,"
+    "cm.max_bpm,"
+    "cm.min_bpm,"
+    "cm.length,"
+    "cm.rank,"
+    "cm.player,"
+    "cm.keys,"
+    "cm.total_notes,"
+    "cm.total_long_notes,"
+    "cm.total_scratch_notes,"
+    "cm.total_backspin_notes,"
+    "cm.ln_mode";
+inline constexpr int kChartMetaColumnCount = 28;
 
 inline std::string chartSourcePriorityExpr(std::string_view alias) {
   const std::string aliasText(alias);
