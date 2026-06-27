@@ -140,7 +140,7 @@ bool endsWith(std::string_view value, std::string_view suffix) {
 }
 
 std::string archiveExtensionFromPath(const std::filesystem::path &path) {
-  std::string name = lowerCopy(path.filename().string());
+  std::string name = lowerCopy(fspath_to_utf8(path.filename()));
   static constexpr std::array<std::string_view, 22> kArchiveExtensions = {
       ".tar.bz2", ".tar.gz", ".tar.xz", ".tar.zst", ".tbz2", ".tgz",
       ".txz",     ".tzst",   ".zip",    ".zipx",    ".cbz",  ".7z",
@@ -404,7 +404,7 @@ std::filesystem::path cacheNormalizedPath(const std::filesystem::path &path) {
 }
 
 std::string cachePathKey(const std::filesystem::path &path) {
-  return path_t_to_utf8(fspath_to_path_t(cacheNormalizedPath(path)));
+  return fspath_to_utf8(cacheNormalizedPath(path));
 }
 
 std::string archiveKey(const std::filesystem::path &path) {
@@ -520,7 +520,7 @@ std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
 
 std::string pathForLog(const std::filesystem::path &path) {
-  return path_t_to_utf8(fspath_to_path_t(path));
+  return fspath_to_utf8(path);
 }
 
 std::string byteCountForLog(std::uintmax_t bytes) {
@@ -638,7 +638,7 @@ bool readRegularFile(const std::filesystem::path &path,
 #endif
   if (!file) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not open file: " + path.string();
+      *errorMessage = "Could not open file: " + pathForLog(path);
     }
     return false;
   }
@@ -646,13 +646,13 @@ bool readRegularFile(const std::filesystem::path &path,
   const std::streamoff size = file.tellg();
   if (size < 0) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not read file size: " + path.string();
+      *errorMessage = "Could not read file size: " + pathForLog(path);
     }
     return false;
   }
   if (static_cast<std::uintmax_t>(size) > maxBufferedReadSize()) {
     if (errorMessage != nullptr) {
-      *errorMessage = "File is too large to read: " + path.string();
+      *errorMessage = "File is too large to read: " + pathForLog(path);
     }
     return false;
   }
@@ -663,7 +663,7 @@ bool readRegularFile(const std::filesystem::path &path,
               static_cast<std::streamsize>(bytes.size()));
     if (!file) {
       if (errorMessage != nullptr) {
-        *errorMessage = "Could not read file: " + path.string();
+        *errorMessage = "Could not read file: " + pathForLog(path);
       }
       return false;
     }
@@ -742,7 +742,7 @@ bool openUnarrRarArchive(const std::filesystem::path &archivePath,
                          UnarrStreamHandle &stream,
                          UnarrArchiveHandle &archive,
                          std::string *errorMessage) {
-  const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   stream.reset(ar_open_file(archiveText.c_str()));
   if (stream == nullptr) {
     if (errorMessage != nullptr) {
@@ -2063,7 +2063,7 @@ ArchiveReadHandle openArchive(const std::filesystem::path &archivePath,
   }
   configureArchiveReader(archiveHandle);
 
-  const std::string archiveText = path_t_to_utf8(fspath_to_path_t(archivePath));
+  const std::string archiveText = fspath_to_utf8(archivePath);
   const int status =
       archive_read_open_filename(archiveHandle, archiveText.c_str(), 10240);
   if (status != ARCHIVE_OK) {
