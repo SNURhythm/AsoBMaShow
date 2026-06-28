@@ -90,7 +90,7 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
-constexpr size_t kParseLogRowMaxCodepoints = 64;
+constexpr size_t kParseLogRowMaxColumns = 108;
 constexpr int kParseLogRowHeight = 48;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
@@ -307,32 +307,69 @@ private:
   TextView *label = nullptr;
 };
 
-size_t utf8CodepointLengthAt(const std::string &text, size_t offset) {
+size_t utf8CodepointLengthAt(const std::string &text, size_t offset,
+                             char32_t *codepoint = nullptr) {
   if (offset >= text.size()) {
     return 0;
   }
   const unsigned char ch = static_cast<unsigned char>(text[offset]);
   size_t length = 1;
+  char32_t decoded = ch;
   if ((ch & 0x80) == 0x00) {
     length = 1;
   } else if ((ch & 0xE0) == 0xC0) {
     length = 2;
+    decoded = static_cast<char32_t>(ch & 0x1F);
   } else if ((ch & 0xF0) == 0xE0) {
     length = 3;
+    decoded = static_cast<char32_t>(ch & 0x0F);
   } else if ((ch & 0xF8) == 0xF0) {
     length = 4;
+    decoded = static_cast<char32_t>(ch & 0x07);
   }
   if (offset + length > text.size()) {
+    if (codepoint != nullptr) {
+      *codepoint = ch;
+    }
     return 1;
   }
   for (size_t i = 1; i < length; ++i) {
     const unsigned char continuation =
         static_cast<unsigned char>(text[offset + i]);
     if ((continuation & 0xC0) != 0x80) {
+      if (codepoint != nullptr) {
+        *codepoint = ch;
+      }
       return 1;
     }
+    decoded = (decoded << 6) | static_cast<char32_t>(continuation & 0x3F);
+  }
+  if (codepoint != nullptr) {
+    *codepoint = decoded;
   }
   return length;
+}
+
+bool isWideLogCodepoint(char32_t codepoint) {
+  return (codepoint >= 0x1100 && codepoint <= 0x115F) ||
+         (codepoint >= 0x2329 && codepoint <= 0x232A) ||
+         (codepoint >= 0x2E80 && codepoint <= 0xA4CF) ||
+         (codepoint >= 0xAC00 && codepoint <= 0xD7A3) ||
+         (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||
+         (codepoint >= 0xFE10 && codepoint <= 0xFE19) ||
+         (codepoint >= 0xFE30 && codepoint <= 0xFE6F) ||
+         (codepoint >= 0xFF00 && codepoint <= 0xFF60) ||
+         (codepoint >= 0xFFE0 && codepoint <= 0xFFE6);
+}
+
+size_t parseLogCodepointColumns(char32_t codepoint) {
+  if (codepoint == '\t') {
+    return 4;
+  }
+  if (codepoint < 0x20 || (codepoint >= 0x7F && codepoint < 0xA0)) {
+    return 1;
+  }
+  return isWideLogCodepoint(codepoint) ? 2 : 1;
 }
 
 bool isLogLineBreak(char ch) { return ch == '\n' || ch == '\r'; }
@@ -359,15 +396,21 @@ void appendParseLogRowsForLine(std::vector<MainMenuParseLogRow> &rows,
     }
 
     const size_t chunkStart = offset;
-    size_t codepoints = 0;
-    while (offset < line.size() && !isLogLineBreak(line[offset]) &&
-           codepoints < kParseLogRowMaxCodepoints) {
-      const size_t length = utf8CodepointLengthAt(line, offset);
+    size_t columns = 0;
+    const size_t columnLimit =
+        std::max<size_t>(1, kParseLogRowMaxColumns - (continuation ? 2 : 0));
+    while (offset < line.size() && !isLogLineBreak(line[offset])) {
+      char32_t codepoint = 0;
+      const size_t length = utf8CodepointLengthAt(line, offset, &codepoint);
       if (length == 0) {
         break;
       }
+      const size_t codepointColumns = parseLogCodepointColumns(codepoint);
+      if (columns > 0 && columns + codepointColumns > columnLimit) {
+        break;
+      }
       offset += length;
-      ++codepoints;
+      columns += codepointColumns;
     }
 
     std::string rowText = line.substr(chunkStart, offset - chunkStart);
