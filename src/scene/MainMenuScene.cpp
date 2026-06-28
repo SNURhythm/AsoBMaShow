@@ -90,7 +90,9 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
-constexpr size_t kParseLogRowMaxColumns = 108;
+// Keep this below the modal's nominal width because row padding and the
+// scrollbar gutter reduce the usable text area.
+constexpr size_t kParseLogRowMaxColumns = 88;
 constexpr int kParseLogRowHeight = 48;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
