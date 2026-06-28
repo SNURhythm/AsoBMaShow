@@ -1629,6 +1629,177 @@ private:
   std::size_t emittedFiles_ = 0;
 };
 
+struct SevenZipStreamingTarget {
+  std::filesystem::path path;
+  std::uint64_t size = 0;
+};
+
+class SevenZipThrottledStreamingExtractCallback final
+    : public IArchiveExtractCallback {
+public:
+  SevenZipThrottledStreamingExtractCallback(
+      std::unordered_map<UInt32, SevenZipStreamingTarget> targets,
+      FileDataCallback onFile,
+      std::function<bool(std::uint64_t)> acquireBytes,
+      std::function<void(std::uint64_t)> releaseBytes,
+      PauseCallback pauseCallback)
+      : targets_(std::move(targets)), onFile_(std::move(onFile)),
+        acquireBytes_(std::move(acquireBytes)),
+        releaseBytes_(std::move(releaseBytes)),
+        pauseCallback_(std::move(pauseCallback)) {}
+
+  ~SevenZipThrottledStreamingExtractCallback() { releaseCurrentBytes(); }
+
+  STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
+    if (outObject == nullptr) {
+      return E_FAIL;
+    }
+    *outObject = nullptr;
+    if (iid == IID_IUnknown || iid == IID_IArchiveExtractCallback) {
+      *outObject = static_cast<IArchiveExtractCallback *>(this);
+    } else if (iid == IID_IProgress) {
+      *outObject = static_cast<IProgress *>(this);
+    } else {
+      return E_NOINTERFACE;
+    }
+    AddRef();
+    return S_OK;
+  }
+
+  STDMETHOD_(ULONG, AddRef)() throw() override { return ++refCount_; }
+
+  STDMETHOD_(ULONG, Release)() throw() override {
+    const ULONG refCount = --refCount_;
+    if (refCount == 0) {
+      delete this;
+    }
+    return refCount;
+  }
+
+  STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
+
+  STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
+                       Int32 askExtractMode) throw() override {
+    if (outStream == nullptr) {
+      return E_FAIL;
+    }
+    *outStream = nullptr;
+    currentFile_.reset();
+    releaseCurrentBytes();
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    if (askExtractMode != NArchive::NExtract::NAskMode::kExtract) {
+      return S_OK;
+    }
+    const auto it = targets_.find(index);
+    if (it == targets_.end()) {
+      return S_OK;
+    }
+
+    currentReservedBytes_ = it->second.size;
+    if (acquireBytes_ && !acquireBytes_(currentReservedBytes_)) {
+      currentReservedBytes_ = 0;
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    currentBytesAcquired_ = true;
+
+    currentFile_ = std::make_unique<FileData>();
+    currentFile_->path = it->second.path;
+    if (it->second.size > 0) {
+      reserveBufferedBytes(currentFile_->bytes, it->second.size);
+    }
+    auto *stream =
+        new SevenZipMemoryOutStream(currentFile_->bytes, pauseCallback_);
+    ISequentialOutStream *streamInterface = stream;
+    streamInterface->AddRef();
+    *outStream = streamInterface;
+    return S_OK;
+  }
+
+  STDMETHOD(PrepareOperation)(Int32) throw() override {
+    if (!pauseIfNeeded(pauseCallback_)) {
+      cancelled_ = true;
+      return E_ABORT;
+    }
+    return S_OK;
+  }
+
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+    if (currentFile_ != nullptr) {
+      if (opRes != NArchive::NExtract::NOperationResult::kOK) {
+        failed_ = true;
+        operationResult_ = opRes;
+      } else {
+        const auto callbackStart = std::chrono::steady_clock::now();
+        if (!emitFileData(std::move(*currentFile_), onFile_, nullptr)) {
+          callbackMicros_ +=
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - callbackStart)
+                  .count();
+          consumerCancelled_ = true;
+          cancelled_ = true;
+          currentFile_.reset();
+          releaseCurrentBytes();
+          return E_ABORT;
+        }
+        callbackMicros_ +=
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - callbackStart)
+                .count();
+        ++emittedFiles_;
+      }
+    }
+    currentFile_.reset();
+    releaseCurrentBytes();
+    return S_OK;
+  }
+
+  bool failed() const { return failed_; }
+  bool cancelled() const { return cancelled_; }
+  bool consumerCancelled() const { return consumerCancelled_; }
+  Int32 operationResult() const { return operationResult_; }
+  std::size_t emittedFiles() const { return emittedFiles_; }
+  long long callbackMicros() const { return callbackMicros_; }
+
+private:
+  void releaseCurrentBytes() {
+    if (!currentBytesAcquired_) {
+      return;
+    }
+    if (releaseBytes_) {
+      releaseBytes_(currentReservedBytes_);
+    }
+    currentReservedBytes_ = 0;
+    currentBytesAcquired_ = false;
+  }
+
+  std::unordered_map<UInt32, SevenZipStreamingTarget> targets_;
+  FileDataCallback onFile_;
+  std::function<bool(std::uint64_t)> acquireBytes_;
+  std::function<void(std::uint64_t)> releaseBytes_;
+  PauseCallback pauseCallback_;
+  std::unique_ptr<FileData> currentFile_;
+  std::uint64_t currentReservedBytes_ = 0;
+  ULONG refCount_ = 0;
+  bool currentBytesAcquired_ = false;
+  bool failed_ = false;
+  bool cancelled_ = false;
+  bool consumerCancelled_ = false;
+  Int32 operationResult_ = NArchive::NExtract::NOperationResult::kOK;
+  std::size_t emittedFiles_ = 0;
+  long long callbackMicros_ = 0;
+};
+
 class SevenZipFullExtractCallback final : public IArchiveExtractCallback {
 public:
   SevenZipFullExtractCallback(std::filesystem::path outputFolder,
@@ -5263,7 +5434,7 @@ struct SevenZipRar5BatchStats {
 
 constexpr std::uint64_t kSevenZipRar5SingleHandleMaxTargetBytes =
     512ull * 1024ull * 1024ull;
-constexpr std::size_t kSevenZipRar5MaxConcurrentArchiveHandles = 2;
+constexpr std::size_t kSevenZipRar5TargetChunksPerWorker = 4;
 
 void addSaturated(std::uint64_t &total, std::uint64_t value) {
   if (value > std::numeric_limits<std::uint64_t>::max() - total) {
@@ -5891,6 +6062,99 @@ bool readSevenZipTargetByIndex(IInArchive *archive,
   return true;
 }
 
+bool readSevenZipTargetsByIndexStreaming(
+    IInArchive *archive, const std::vector<SevenZipReadTarget> &readTargets,
+    std::size_t begin, std::size_t end, const FileDataCallback &onFile,
+    const std::function<bool(std::uint64_t)> &acquireBytes,
+    const std::function<void(std::uint64_t)> &releaseBytes,
+    std::size_t &emittedFiles, long long &callbackMicros,
+    std::string *errorMessage, const PauseCallback &pauseCallback) {
+  emittedFiles = 0;
+  callbackMicros = 0;
+  if (begin >= end) {
+    return true;
+  }
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+  if (archive == nullptr) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "7-Zip archive is unavailable.";
+    }
+    return false;
+  }
+
+  UInt32 itemCount = 0;
+  HRESULT result = archive->GetNumberOfItems(&itemCount);
+  if (result != S_OK) {
+    if (errorMessage != nullptr) {
+      *errorMessage = sevenZipResultMessage(result);
+    }
+    return false;
+  }
+
+  std::vector<UInt32> itemIndices;
+  itemIndices.reserve(end - begin);
+  std::unordered_map<UInt32, SevenZipStreamingTarget> outputTargets;
+  outputTargets.reserve(end - begin);
+  for (std::size_t i = begin; i < end; ++i) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return false;
+    }
+    const SevenZipReadTarget &target = readTargets[i];
+    if (target.order > std::numeric_limits<UInt32>::max()) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "7-Zip archive index is out of range.";
+      }
+      return false;
+    }
+    const auto itemIndex = static_cast<UInt32>(target.order);
+    if (itemIndex >= itemCount) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "7-Zip archive index is out of range.";
+      }
+      return false;
+    }
+    if (!sevenZipEntryMatchesTarget(archive, itemIndex, target,
+                                    errorMessage)) {
+      return false;
+    }
+    itemIndices.push_back(itemIndex);
+    outputTargets.emplace(
+        itemIndex,
+        SevenZipStreamingTarget{.path = target.entryPath, .size = target.size});
+  }
+
+  auto *callback = new SevenZipThrottledStreamingExtractCallback(
+      std::move(outputTargets), onFile, acquireBytes, releaseBytes,
+      pauseCallback);
+  IArchiveExtractCallback *callbackInterface = callback;
+  callbackInterface->AddRef();
+  CMyComPtr<IArchiveExtractCallback> callbackHandle;
+  callbackHandle.Attach(callbackInterface);
+
+  result =
+      archive->Extract(itemIndices.data(), static_cast<UInt32>(itemIndices.size()),
+                       0, callbackHandle);
+  emittedFiles = callback->emittedFiles();
+  callbackMicros = callback->callbackMicros();
+  if (result != S_OK || callback->failed() || callback->cancelled()) {
+    if (errorMessage != nullptr) {
+      *errorMessage =
+          callback->consumerCancelled()
+              ? "Archive file consumer cancelled."
+              : callback->cancelled()
+              ? "Operation cancelled"
+              : result != S_OK
+              ? sevenZipResultMessage(result)
+              : "7-Zip archive extraction failed with operation result: " +
+                    std::to_string(callback->operationResult());
+    }
+    return false;
+  }
+  return true;
+}
+
 bool readSevenZipEntriesByIndexConcurrent(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
@@ -5976,21 +6240,22 @@ bool readSevenZipEntriesByIndexConcurrent(
   }
 
   const std::size_t requestedWorkers = maxWorkers;
-  maxWorkers = std::max<std::size_t>(
-      1, std::min(std::min(maxWorkers, readTargets.size()),
-                  kSevenZipRar5MaxConcurrentArchiveHandles));
+  maxWorkers =
+      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
   if (maxInFlightBytes == 0) {
     maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
   }
-  if (maxWorkers < requestedWorkers) {
-    appendDebugLogLineImpl(
-        "Capped concurrent 7-Zip RAR5 workers: " + pathForLog(archivePath) +
-        " requestedWorkers=" + std::to_string(requestedWorkers) +
-        " workers=" + std::to_string(maxWorkers) +
-        " targetBytes=" + byteCountForLog(totalTargetBytes) +
-        " maxTargetBytes=" + byteCountForLog(maxTargetBytes) +
-        " reason=7zip-handle-open-cost");
-  }
+  const std::size_t targetChunkCount =
+      std::min<std::size_t>(
+          readTargets.size(),
+          maxWorkers >
+                  std::numeric_limits<std::size_t>::max() /
+                      kSevenZipRar5TargetChunksPerWorker
+              ? readTargets.size()
+              : maxWorkers * kSevenZipRar5TargetChunksPerWorker);
+  const std::size_t targetChunkSize =
+      std::max<std::size_t>(
+          1, (readTargets.size() + targetChunkCount - 1) / targetChunkCount);
 
   std::mutex stateMutex;
   std::condition_variable spaceCv;
@@ -6049,6 +6314,7 @@ bool readSevenZipEntriesByIndexConcurrent(
     long long localOpenMicros = 0;
     long long localExtractMicros = 0;
     long long localCallbackMicros = 0;
+    std::size_t localEmittedFiles = 0;
 
     CMyComPtr<IInArchive> archiveHandle;
     CMyComPtr<IInStream> streamHandle;
@@ -6068,14 +6334,33 @@ bool readSevenZipEntriesByIndexConcurrent(
       return;
     }
 
+    FileDataCallback guardedOnFile = [&](FileData &&file) {
+      {
+        std::lock_guard lock(stateMutex);
+        if (failed) {
+          return false;
+        }
+      }
+      return onFile(std::move(file));
+    };
+    auto timedAcquireBytes = [&](std::uint64_t bytes) {
+      const auto acquireStart = std::chrono::steady_clock::now();
+      const bool acquired = acquireBytes(bytes);
+      localAcquireMicros += elapsedMicrosSince(acquireStart);
+      return acquired;
+    };
+
     for (;;) {
-      SevenZipReadTarget target;
+      std::size_t chunkBegin = 0;
+      std::size_t chunkEnd = 0;
       {
         std::lock_guard lock(stateMutex);
         if (failed || nextTarget >= readTargets.size()) {
           break;
         }
-        target = readTargets[nextTarget++];
+        chunkBegin = nextTarget;
+        chunkEnd = std::min(readTargets.size(), chunkBegin + targetChunkSize);
+        nextTarget = chunkEnd;
       }
 
       std::string pauseError;
@@ -6084,18 +6369,16 @@ bool readSevenZipEntriesByIndexConcurrent(
         break;
       }
 
-      const auto acquireStart = std::chrono::steady_clock::now();
-      if (!acquireBytes(target.size)) {
-        break;
-      }
-      localAcquireMicros += elapsedMicrosSince(acquireStart);
-
-      FileData file;
       std::string readError;
+      std::size_t chunkEmittedFiles = 0;
+      long long chunkCallbackMicros = 0;
       const auto extractStart = std::chrono::steady_clock::now();
-      bool ok = readSevenZipTargetByIndex(archive, target, file, &readError,
-                                          pauseCallback);
+      bool ok = readSevenZipTargetsByIndexStreaming(
+          archive, readTargets, chunkBegin, chunkEnd, guardedOnFile,
+          timedAcquireBytes, releaseBytes, chunkEmittedFiles,
+          chunkCallbackMicros, &readError, pauseCallback);
       localExtractMicros += elapsedMicrosSince(extractStart);
+      localCallbackMicros += chunkCallbackMicros;
       if (ok) {
         {
           std::lock_guard lock(stateMutex);
@@ -6103,21 +6386,12 @@ bool readSevenZipEntriesByIndexConcurrent(
         }
       }
       if (ok) {
-        const auto callbackStart = std::chrono::steady_clock::now();
-        ok = emitFileData(std::move(file), onFile, &readError);
-        localCallbackMicros += elapsedMicrosSince(callbackStart);
-      }
-      releaseBytes(target.size);
-
-      if (!ok) {
+        localEmittedFiles += chunkEmittedFiles;
+      } else {
         setFailure(readError.empty()
-                       ? "Could not extract RAR5 entry by index."
+                       ? "Could not extract RAR5 entry batch by index."
                        : readError);
         break;
-      }
-      {
-        std::lock_guard lock(stateMutex);
-        ++emittedFiles;
       }
     }
 
@@ -6127,6 +6401,7 @@ bool readSevenZipEntriesByIndexConcurrent(
       openMicros += localOpenMicros;
       extractMicros += localExtractMicros;
       callbackMicros += localCallbackMicros;
+      emittedFiles += localEmittedFiles;
     }
   };
 
@@ -6144,6 +6419,9 @@ bool readSevenZipEntriesByIndexConcurrent(
                          std::to_string(readTargets.back().order) +
                          " targetBytes=" +
                          byteCountForLog(totalTargetBytes) +
+                         " maxTargetBytes=" +
+                         byteCountForLog(maxTargetBytes) +
+                         " chunkSize=" + std::to_string(targetChunkSize) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
@@ -6180,6 +6458,9 @@ bool readSevenZipEntriesByIndexConcurrent(
                          std::to_string(requestedWorkers) +
                          " targetBytes=" +
                          byteCountForLog(totalTargetBytes) +
+                         " maxTargetBytes=" +
+                         byteCountForLog(maxTargetBytes) +
+                         " chunkSize=" + std::to_string(targetChunkSize) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes) +
                          " extractMs=" + std::to_string(extractMs) +
