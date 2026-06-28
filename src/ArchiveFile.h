@@ -106,6 +106,7 @@ struct UnzipProgress {
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
 using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
+using FileDataCallback = std::function<bool(FileData &&)>;
 
 struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
@@ -133,6 +134,7 @@ bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
 void appendDebugLogLine(const std::string &message);
 std::uint64_t debugLogRevision();
+std::vector<std::string> debugLogLines();
 std::string debugLogText();
 bool isVirtualPath(const std::filesystem::path &path);
 bool splitVirtualPath(const std::filesystem::path &path,
@@ -150,6 +152,21 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
                         std::vector<FileData> &files,
                         std::string *errorMessage = nullptr,
                         PauseCallback pauseCallback = nullptr);
+bool readArchiveEntriesStreaming(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
+// Calls onFile from extractor worker threads. The callback must be thread-safe.
+bool readArchiveEntriesConcurrently(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile,
+    std::size_t maxWorkers,
+    std::uint64_t maxInFlightBytes,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
 bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,

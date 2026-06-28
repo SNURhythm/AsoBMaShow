@@ -13,6 +13,7 @@ private:
   ApplicationContext &context;
   bool isRegisteredScene(const Scene *scene) const;
   void cleanupSceneInstance(Scene *scene);
+  void updateBackgroundTaskPauseState();
 
 public:
   Scene* currentScene = nullptr;

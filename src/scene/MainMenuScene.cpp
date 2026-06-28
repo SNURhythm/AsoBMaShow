@@ -90,6 +90,10 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
+// Keep this below the modal's nominal width because row padding and the
+// scrollbar gutter reduce the usable text area.
+constexpr size_t kParseLogRowMaxColumns = 88;
+constexpr int kParseLogRowHeight = 48;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -277,6 +281,165 @@ public:
 private:
   TextView *label = nullptr;
 };
+
+class ParseLogRowView : public View {
+public:
+  ParseLogRowView() : View() {
+    setFlexDirection(FlexDirection::Column);
+    setJustifyContent(YGJustifyCenter);
+    setPadding(Edge::Left, 10);
+    setPadding(Edge::Right, 14);
+
+    label = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    label->setThemedColor(ui_theme::textSecondary);
+    label->setWrap(true);
+    label->setOverflow(TextView::TextOverflow::Hidden);
+    label->setVAlign(TextView::MIDDLE);
+    label->setFlex(1);
+    addView(label);
+  }
+
+  void setRow(const MainMenuParseLogRow &row) {
+    if (label != nullptr) {
+      label->setText(row.text);
+    }
+  }
+
+private:
+  TextView *label = nullptr;
+};
+
+size_t utf8CodepointLengthAt(const std::string &text, size_t offset,
+                             char32_t *codepoint = nullptr) {
+  if (offset >= text.size()) {
+    return 0;
+  }
+  const unsigned char ch = static_cast<unsigned char>(text[offset]);
+  size_t length = 1;
+  char32_t decoded = ch;
+  if ((ch & 0x80) == 0x00) {
+    length = 1;
+  } else if ((ch & 0xE0) == 0xC0) {
+    length = 2;
+    decoded = static_cast<char32_t>(ch & 0x1F);
+  } else if ((ch & 0xF0) == 0xE0) {
+    length = 3;
+    decoded = static_cast<char32_t>(ch & 0x0F);
+  } else if ((ch & 0xF8) == 0xF0) {
+    length = 4;
+    decoded = static_cast<char32_t>(ch & 0x07);
+  }
+  if (offset + length > text.size()) {
+    if (codepoint != nullptr) {
+      *codepoint = ch;
+    }
+    return 1;
+  }
+  for (size_t i = 1; i < length; ++i) {
+    const unsigned char continuation =
+        static_cast<unsigned char>(text[offset + i]);
+    if ((continuation & 0xC0) != 0x80) {
+      if (codepoint != nullptr) {
+        *codepoint = ch;
+      }
+      return 1;
+    }
+    decoded = (decoded << 6) | static_cast<char32_t>(continuation & 0x3F);
+  }
+  if (codepoint != nullptr) {
+    *codepoint = decoded;
+  }
+  return length;
+}
+
+bool isWideLogCodepoint(char32_t codepoint) {
+  return (codepoint >= 0x1100 && codepoint <= 0x115F) ||
+         (codepoint >= 0x2329 && codepoint <= 0x232A) ||
+         (codepoint >= 0x2E80 && codepoint <= 0xA4CF) ||
+         (codepoint >= 0xAC00 && codepoint <= 0xD7A3) ||
+         (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||
+         (codepoint >= 0xFE10 && codepoint <= 0xFE19) ||
+         (codepoint >= 0xFE30 && codepoint <= 0xFE6F) ||
+         (codepoint >= 0xFF00 && codepoint <= 0xFF60) ||
+         (codepoint >= 0xFFE0 && codepoint <= 0xFFE6);
+}
+
+size_t parseLogCodepointColumns(char32_t codepoint) {
+  if (codepoint == '\t') {
+    return 4;
+  }
+  if (codepoint < 0x20 || (codepoint >= 0x7F && codepoint < 0xA0)) {
+    return 1;
+  }
+  return isWideLogCodepoint(codepoint) ? 2 : 1;
+}
+
+bool isLogLineBreak(char ch) { return ch == '\n' || ch == '\r'; }
+
+void appendParseLogRowsForLine(std::vector<MainMenuParseLogRow> &rows,
+                               const std::string &line, std::uint64_t &rowId) {
+  if (line.empty()) {
+    rows.push_back({rowId++, " "});
+    return;
+  }
+
+  size_t offset = 0;
+  bool continuation = false;
+  while (offset < line.size()) {
+    if (isLogLineBreak(line[offset])) {
+      if (line[offset] == '\r' && offset + 1 < line.size() &&
+          line[offset + 1] == '\n') {
+        offset += 2;
+      } else {
+        ++offset;
+      }
+      continuation = false;
+      continue;
+    }
+
+    const size_t chunkStart = offset;
+    size_t columns = 0;
+    const size_t columnLimit =
+        std::max<size_t>(1, kParseLogRowMaxColumns - (continuation ? 2 : 0));
+    while (offset < line.size() && !isLogLineBreak(line[offset])) {
+      char32_t codepoint = 0;
+      const size_t length = utf8CodepointLengthAt(line, offset, &codepoint);
+      if (length == 0) {
+        break;
+      }
+      const size_t codepointColumns = parseLogCodepointColumns(codepoint);
+      if (columns > 0 && columns + codepointColumns > columnLimit) {
+        break;
+      }
+      offset += length;
+      columns += codepointColumns;
+    }
+
+    std::string rowText = line.substr(chunkStart, offset - chunkStart);
+    if (rowText.empty()) {
+      rowText = " ";
+    } else if (continuation) {
+      rowText.insert(0, "  ");
+    }
+    rows.push_back({rowId++, std::move(rowText)});
+    continuation = offset < line.size() && !isLogLineBreak(line[offset]);
+  }
+}
+
+std::vector<MainMenuParseLogRow>
+parseLogRowsFromLines(const std::vector<std::string> &lines) {
+  std::vector<MainMenuParseLogRow> rows;
+  if (lines.empty()) {
+    rows.push_back({0, "No parsing logs yet."});
+    return rows;
+  }
+
+  std::uint64_t rowId = 0;
+  for (const std::string &line : lines) {
+    appendParseLogRowsForLine(rows, line, rowId);
+  }
+  return rows;
+}
 
 bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
@@ -1024,17 +1187,24 @@ void MainMenuScene::init() {
     };
   }
 #endif
+  context.requestRebuildChartLibrary = [this]() {
+    startLibraryRebuild();
+  };
+  context.notifyBackgroundTaskPauseStateChanged = [this]() {
+    syncLibraryTaskPauseStateWithForegroundScene();
+  };
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
+  syncLibraryTaskPauseStateWithForegroundScene();
   startLibraryTaskWorker();
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
-void MainMenuScene::onPause() { pauseLibraryTaskWorker(); }
+void MainMenuScene::onPause() {}
 
 void MainMenuScene::onResume() {
   applyThemeChange();
-  resumeLibraryTaskWorker();
+  syncLibraryTaskPauseStateWithForegroundScene();
   startLibraryTaskWorker();
   refreshScoreClearRanksIfNeeded();
   refreshLibraryIfNeeded();
@@ -1073,13 +1243,14 @@ void MainMenuScene::applyThemeChange() {
 
 void MainMenuScene::startLibraryTaskWorker() {
   std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  if (libraryTaskWorkerPaused.load()) {
+  const bool workerPaused = libraryTaskWorkerPaused.load();
+  if (workerPaused) {
     return;
   }
   if (checkEntriesThread.joinable()) {
     return;
   }
-  {
+  if (!workerPaused) {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
     bool changed = false;
     for (auto &task : libraryTasks) {
@@ -1161,6 +1332,16 @@ void MainMenuScene::resumeLibraryTaskWorker() {
   libraryTaskCv.notify_all();
 }
 
+void MainMenuScene::syncLibraryTaskPauseStateWithForegroundScene() {
+  if (context.backgroundTasksPausedForForegroundScene.load()) {
+    pauseLibraryTaskWorker();
+    return;
+  }
+
+  resumeLibraryTaskWorker();
+  startLibraryTaskWorker();
+}
+
 bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
                                              const std::stop_token &stopToken) {
   if (!libraryTaskWorkerPaused.load()) {
@@ -1193,24 +1374,7 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark) {
-  std::filesystem::path taskFolderToAdd = folderToAdd;
-  std::string taskIOSBookmark = iosBookmark;
-  if (!taskFolderToAdd.empty()) {
-    auto &dbHelper = ChartDBHelper::GetInstance();
-    SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
-    sqlite3 *taskDb = taskDbHandle.get();
-    if (taskDb != nullptr) {
-      dbHelper.CreateEntriesTable(taskDb);
-      if (dbHelper.InsertEntry(taskDb, taskFolderToAdd, taskIOSBookmark)) {
-        taskFolderToAdd.clear();
-        taskIOSBookmark.clear();
-        requestLibraryReload(true);
-      }
-    }
-  }
-
-  startLibraryTaskWorker();
+    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
@@ -1218,8 +1382,9 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .id = id,
         .kind = LibraryTaskKind::RefreshLibrary,
         .title = title,
-        .folderToAdd = taskFolderToAdd,
-        .iosBookmark = taskIOSBookmark,
+        .folderToAdd = folderToAdd,
+        .iosBookmark = iosBookmark,
+        .rebuildLibraryMetadata = rebuildLibraryMetadata,
     });
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
@@ -1245,6 +1410,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
     }
     bumpLibraryTasksRevisionLocked();
   }
+  startLibraryTaskWorker();
   libraryTaskCv.notify_one();
 }
 
@@ -1478,14 +1644,23 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
     {
       std::unique_lock<std::mutex> lock(libraryTaskMutex);
       libraryTaskCv.wait(lock, [this, &stopToken]() {
-        return stopToken.stop_requested() ||
-               (!libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty());
+        if (stopToken.stop_requested()) {
+          return true;
+        }
+        return !libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty();
       });
       if (stopToken.stop_requested()) {
         break;
       }
-      task = libraryTaskQueue.front();
-      libraryTaskQueue.pop_front();
+      auto taskIt = libraryTaskQueue.begin();
+      if (libraryTaskWorkerPaused.load()) {
+        continue;
+      }
+      if (taskIt == libraryTaskQueue.end()) {
+        continue;
+      }
+      task = *taskIt;
+      libraryTaskQueue.erase(taskIt);
     }
 
     if (!waitForLibraryTaskResume(task.id, stopToken)) {
@@ -1625,10 +1800,18 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     return;
   }
 
+  std::vector<ChartEntry> entries;
   if (!task.folderToAdd.empty()) {
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
                         "Adding folder");
-    dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark);
+    if (!dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark)) {
+      throw std::runtime_error("Failed to add folder");
+    }
+    requestLibraryReload(true);
+    entries.push_back({
+        .path = fspath_to_path_t(task.folderToAdd),
+        .iosBookmark = task.iosBookmark,
+    });
   }
 
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
@@ -1645,7 +1828,9 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }
-  auto entries = dbHelper.SelectEffectiveEntries(taskDb);
+  if (entries.empty()) {
+    entries = dbHelper.SelectEffectiveEntries(taskDb);
+  }
 
   if (stopToken.stop_requested()) {
     return;
@@ -1736,6 +1921,19 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   RefreshIOSFolderAccess(entries);
 #endif
+  if (task.rebuildLibraryMetadata) {
+    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.08, 0, 0,
+                        "Clearing library caches");
+    if (!pauseTask()) {
+      return;
+    }
+    archive_file::appendDebugLogLine(
+        "Manual library rebuild requested; clearing chart metadata caches.");
+    if (!dbHelper.ClearChartMeta(taskDb)) {
+      throw std::runtime_error("Failed to clear chart metadata cache");
+    }
+    requestLibraryReload(true);
+  }
   LoadCharts(
       dbHelper, taskDb, entries, *this, stopToken,
       [this, taskId = task.id](const ChartScanProgress &progress) {
@@ -1744,6 +1942,32 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
       [this, taskId = task.id, &stopToken]() {
         return waitForLibraryTaskResume(taskId, stopToken);
       });
+}
+
+bool MainMenuScene::insertChartFolderEntryImmediately(
+    const std::filesystem::path &folderPath, const std::string &iosBookmark) {
+  if (folderPath.empty()) {
+    return false;
+  }
+
+  auto &dbHelper = ChartDBHelper::GetInstance();
+  SqliteConnectionHandle entryDbHandle(dbHelper.Connect());
+  sqlite3 *entryDb = entryDbHandle.get();
+  if (entryDb == nullptr) {
+    SDL_Log("Failed to open chart database while adding folder %s",
+            fspath_to_utf8(folderPath).c_str());
+    return false;
+  }
+
+  dbHelper.CreateEntriesTable(entryDb);
+  if (!dbHelper.InsertEntry(entryDb, folderPath, iosBookmark)) {
+    SDL_Log("Failed to add chart folder entry %s",
+            fspath_to_utf8(folderPath).c_str());
+    return false;
+  }
+
+  requestLibraryReload(true);
+  return true;
 }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1788,6 +2012,7 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         if (folderName.empty()) {
           folderName = "Folder";
         }
+        insertChartFolderEntryImmediately(folderPath, bookmark);
         enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
                                   bookmark);
       });
@@ -1836,6 +2061,7 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         if (folderName.empty()) {
           folderName = "Folder";
         }
+        insertChartFolderEntryImmediately(folderPath, treeUri);
         enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
                                   treeUri);
       });
@@ -2130,9 +2356,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
-  parseLogScrollView = nullptr;
-  parseLogContent = nullptr;
-  parseLogText = nullptr;
+  parseLogRecyclerView = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;
@@ -5180,6 +5404,15 @@ void MainMenuScene::startLibraryRefresh() {
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
+void MainMenuScene::startLibraryRebuild() {
+  if (willStart.load() || replayExportInProgress.load()) {
+    return;
+  }
+  enqueueLibraryRefreshTask("Rebuild Library", std::filesystem::path(), "",
+                            true);
+  tasksModalOpenRequested.store(true);
+}
+
 void MainMenuScene::setFindBmsButtonVisible(bool visible) {
   if (findBmsButtonSlot == nullptr) {
     return;
@@ -5280,28 +5513,30 @@ void MainMenuScene::buildParseLogModal() {
   title->setHeight(42);
   panel->addView(title);
 
-  parseLogScrollView =
-      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 480);
-  parseLogScrollView->setWidth(kModalContentWidth);
-  parseLogScrollView->setFlex(1);
-  parseLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
-  parseLogScrollView->setCornerRadius(ui_theme::controlRadius());
-  parseLogScrollView->setThemedBorderColor(ui_theme::hairline);
-  parseLogScrollView->setBorderWidth(1);
-
-  parseLogContent = new View();
-  parseLogContent->setFlexDirection(FlexDirection::Column);
-  parseLogContent->setAlignItems(YGAlignStretch);
-  parseLogContent->setPadding(Edge::All, 10);
-
-  parseLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  parseLogText->setText(archive_file::debugLogText());
-  parseLogText->setThemedColor(ui_theme::textSecondary);
-  parseLogText->setWrap(true);
-  parseLogText->setOverflow(TextView::TextOverflow::Visible);
-  parseLogContent->addView(parseLogText);
-  parseLogScrollView->setContentView(parseLogContent);
-  panel->addView(parseLogScrollView);
+  parseLogRecyclerView = new RecyclerView<MainMenuParseLogRow>(
+      [](const MainMenuParseLogRow &a, const MainMenuParseLogRow &b) {
+        return a.id == b.id;
+      });
+  parseLogRecyclerView->itemHeight = kParseLogRowHeight;
+  parseLogRecyclerView->reserveScrollbarGutter = true;
+  parseLogRecyclerView->setWidth(kModalContentWidth);
+  parseLogRecyclerView->setFlex(1);
+  parseLogRecyclerView->setThemedBackgroundColor(ui_theme::insetSurface);
+  parseLogRecyclerView->setCornerRadius(ui_theme::controlRadius());
+  parseLogRecyclerView->setThemedBorderColor(ui_theme::hairline);
+  parseLogRecyclerView->setBorderWidth(1);
+  parseLogRecyclerView->onCreateView = [](const MainMenuParseLogRow &) {
+    return new ParseLogRowView();
+  };
+  parseLogRecyclerView->onBind = [](View *view,
+                                    const MainMenuParseLogRow &row, int,
+                                    bool) {
+    auto *rowView = dynamic_cast<ParseLogRowView *>(view);
+    if (rowView != nullptr) {
+      rowView->setRow(row);
+    }
+  };
+  panel->addView(parseLogRecyclerView);
 
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
@@ -5323,7 +5558,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->addView(panel);
   rootLayout->addView(parseLogModalRoot);
   parseLogDisplayedRevision = 0;
-  refreshParseLogModal();
+  refreshParseLogModal(true);
 }
 
 void MainMenuScene::showParseLogModal() {
@@ -5333,10 +5568,7 @@ void MainMenuScene::showParseLogModal() {
   parseLogModalRoot->setSize(rendering::window_width, rendering::window_height);
   parseLogModalRoot->setVisible(true);
   parseLogDisplayedRevision = 0;
-  refreshParseLogModal();
-  if (parseLogScrollView != nullptr) {
-    parseLogScrollView->scrollToBottom();
-  }
+  refreshParseLogModal(true);
 }
 
 void MainMenuScene::hideParseLogModal() {
@@ -5345,20 +5577,51 @@ void MainMenuScene::hideParseLogModal() {
   }
 }
 
-void MainMenuScene::refreshParseLogModal() {
-  if (parseLogModalRoot == nullptr || parseLogText == nullptr) {
+void MainMenuScene::refreshParseLogModal(bool forceScrollToBottom) {
+  if (parseLogModalRoot == nullptr || parseLogRecyclerView == nullptr) {
     return;
   }
 
   const std::uint64_t revision = archive_file::debugLogRevision();
   if (revision == parseLogDisplayedRevision) {
+    if (forceScrollToBottom) {
+      scrollParseLogModalToBottom();
+    }
     return;
   }
+  const bool shouldScrollToBottom =
+      forceScrollToBottom || parseLogDisplayedRevision == 0 ||
+      isParseLogScrolledNearBottom();
   parseLogDisplayedRevision = revision;
-  parseLogText->setText(archive_file::debugLogText());
-  if (parseLogScrollView != nullptr) {
-    parseLogScrollView->scrollToBottom();
+  parseLogRecyclerView->setItems(
+      parseLogRowsFromLines(archive_file::debugLogLines()));
+  if (shouldScrollToBottom) {
+    scrollParseLogModalToBottom();
   }
+}
+
+bool MainMenuScene::isParseLogScrolledNearBottom() const {
+  if (parseLogRecyclerView == nullptr) {
+    return true;
+  }
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                   parseLogRecyclerView->itemHeight -
+                               parseLogRecyclerView->getHeight()));
+  return maxOffset - parseLogRecyclerView->scrollOffset <=
+         static_cast<float>(parseLogRecyclerView->itemHeight * 2);
+}
+
+void MainMenuScene::scrollParseLogModalToBottom() {
+  if (parseLogRecyclerView == nullptr) {
+    return;
+  }
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                   parseLogRecyclerView->itemHeight -
+                               parseLogRecyclerView->getHeight()));
+  parseLogRecyclerView->scrollOffset = maxOffset;
+  parseLogRecyclerView->rebindVisibleItems();
 }
 
 void MainMenuScene::buildMusicModal() {
@@ -8317,6 +8580,8 @@ void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   previewLoadCancelled = true;
   context.requestAddChartFolderFromFiles = nullptr;
+  context.requestRebuildChartLibrary = nullptr;
+  context.notifyBackgroundTaskPauseStateChanged = nullptr;
   libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
@@ -8409,9 +8674,7 @@ void MainMenuScene::cleanupScene() {
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
-  parseLogScrollView = nullptr;
-  parseLogContent = nullptr;
-  parseLogText = nullptr;
+  parseLogRecyclerView = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;

@@ -27,6 +27,18 @@ void SceneManager::cleanupSceneInstance(Scene *scene) {
   }
 }
 
+void SceneManager::updateBackgroundTaskPauseState() {
+  const bool shouldPause =
+      currentScene != nullptr &&
+      currentScene->pausesBackgroundTasksForPerformance();
+  const bool changed =
+      context.backgroundTasksPausedForForegroundScene.exchange(shouldPause) !=
+      shouldPause;
+  if (changed && context.notifyBackgroundTaskPauseStateChanged) {
+    context.notifyBackgroundTaskPauseStateChanged();
+  }
+}
+
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
   registeredScenes[name] = std::move(scene);
 }
@@ -49,12 +61,14 @@ void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
   }
 
   currentScene = newScenePtr;
+  updateBackgroundTaskPauseState();
   try {
     currentScene->prepareForUse();
     currentScene->init();
   } catch (...) {
     if (currentScene == newScenePtr) {
       currentScene = nullptr;
+      updateBackgroundTaskPauseState();
     }
     throw;
   }
@@ -79,11 +93,13 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     // Scene is in background, bring it to foreground
     currentScene = newScene;
     backgroundScenes.erase(it);
+    updateBackgroundTaskPauseState();
     currentScene->onResume();
     // Don't call init() again since the scene is already initialized
   } else {
     // Normal scene change for new or registered scenes
     currentScene = newScene;
+    updateBackgroundTaskPauseState();
     currentScene->prepareForUse();
     currentScene->init();
   }
@@ -130,6 +146,7 @@ void SceneManager::cleanup() {
   if (currentScene != nullptr) {
     cleanupSceneInstance(currentScene);
     currentScene = nullptr;
+    updateBackgroundTaskPauseState();
   }
 
   for (auto *scene : backgroundScenes) {
@@ -144,5 +161,6 @@ void SceneManager::cleanup() {
     scene->cleanup();
   }
   registeredScenes.clear();
+  updateBackgroundTaskPauseState();
 }
 SceneManager::~SceneManager() { cleanup(); }

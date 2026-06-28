@@ -39,6 +39,11 @@ struct ResultImageExportResult;
 struct StartOptions;
 class View;
 
+struct MainMenuParseLogRow {
+  std::uint64_t id = 0;
+  std::string text;
+};
+
 class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
@@ -93,6 +98,7 @@ private:
     std::string iosBookmark;
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
+    bool rebuildLibraryMetadata = false;
   };
   struct LibraryTaskInfo {
     std::uint64_t id = 0;
@@ -255,9 +261,7 @@ private:
   Button *unzipCancelButton = nullptr;
   TextView *unzipDeleteArchiveButtonText = nullptr;
   TextView *unzipCancelButtonText = nullptr;
-  ScrollView *parseLogScrollView = nullptr;
-  View *parseLogContent = nullptr;
-  TextView *parseLogText = nullptr;
+  RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
   TextView *musicTrackText = nullptr;
@@ -498,16 +502,19 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
+  void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
   void pauseLibraryTaskWorker();
   void resumeLibraryTaskWorker();
+  void syncLibraryTaskPauseStateWithForegroundScene();
   bool waitForLibraryTaskResume(std::uint64_t id,
                                 const std::stop_token &stopToken);
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
-      const std::string &iosBookmark = "");
+      const std::string &iosBookmark = "",
+      bool rebuildLibraryMetadata = false);
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,
@@ -538,6 +545,9 @@ private:
   std::uint64_t pendingLibraryScanFlushRequest() const;
   void completeLibraryScanFlush(std::uint64_t request);
   void refreshTasksButton();
+  bool insertChartFolderEntryImmediately(
+      const std::filesystem::path &folderPath,
+      const std::string &iosBookmark);
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
@@ -602,7 +612,9 @@ private:
   void buildParseLogModal();
   void showParseLogModal();
   void hideParseLogModal();
-  void refreshParseLogModal();
+  void refreshParseLogModal(bool forceScrollToBottom = false);
+  [[nodiscard]] bool isParseLogScrolledNearBottom() const;
+  void scrollParseLogModalToBottom();
   void buildMusicModal();
   void showMusicModal();
   void hideMusicModal();

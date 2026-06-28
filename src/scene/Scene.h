@@ -23,6 +23,7 @@ public:
   virtual void init() = 0; // Initialize the scene
   virtual void onPause() {}
   virtual void onResume() {}
+  virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
     for (auto view : views) {
       if (!view->handleEvents(event)) {

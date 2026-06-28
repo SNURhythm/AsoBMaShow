@@ -1272,7 +1272,6 @@ Note::~Note() { Timeline = nullptr; }
 #include <cwctype>
 #include <iterator>
 #include <random>
-#include <thread>
 
 #include <algorithm>
 #include <cctype>
@@ -1287,19 +1286,6 @@ Note::~Note() { Timeline = nullptr; }
 #endif
 
 namespace bms_parser {
-class threadRAII {
-  std::thread th;
-
-public:
-  explicit threadRAII(std::thread &&_th) { th = std::move(_th); }
-
-  ~threadRAII() {
-    if (th.joinable()) {
-      th.join();
-    }
-  }
-};
-
 enum Channel {
   LaneAutoplay = 1,
   SectionRate = 2,
@@ -1462,38 +1448,33 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   auto measures =
       std::unordered_map<int, std::vector<std::pair<int, std::string>>>();
 
-  // compute hash in separate thread
-  std::thread md5Thread([&bytes, new_chart] {
+  // Keep hashing synchronous. Library scans already parallelize at the file
+  // level; spawning two extra threads per tiny chart creates heavy thread churn.
 #if BMS_PARSER_VERBOSE == 1
-    auto startTime = std::chrono::high_resolution_clock::now();
+  auto md5StartTime = std::chrono::high_resolution_clock::now();
 #endif
-    MD5 md5;
-    md5.update(bytes.data(), bytes.size());
-    md5.finalize();
-    new_chart->Meta.MD5 = md5.hexdigest();
+  MD5 md5;
+  md5.update(bytes.data(), bytes.size());
+  md5.finalize();
+  new_chart->Meta.MD5 = md5.hexdigest();
 #if BMS_PARSER_VERBOSE == 1
-    std::cout << "Hashing MD5 took "
-              << std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::high_resolution_clock::now() - startTime)
-                     .count()
-              << "\n";
+  std::cout << "Hashing MD5 took "
+            << std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::high_resolution_clock::now() - md5StartTime)
+                   .count()
+            << "\n";
 #endif
-  });
-  threadRAII md5RAII(std::move(md5Thread));
-  std::thread sha256Thread([&bytes, new_chart] {
 #if BMS_PARSER_VERBOSE == 1
-    auto startTime = std::chrono::high_resolution_clock::now();
+  auto sha256StartTime = std::chrono::high_resolution_clock::now();
 #endif
-    new_chart->Meta.SHA256 = sha256(bytes);
+  new_chart->Meta.SHA256 = sha256(bytes);
 #if BMS_PARSER_VERBOSE == 1
-    std::cout << "Hashing SHA256 took "
-              << std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::high_resolution_clock::now() - startTime)
-                     .count()
-              << "\n";
+  std::cout << "Hashing SHA256 took "
+            << std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::high_resolution_clock::now() - sha256StartTime)
+                   .count()
+            << "\n";
 #endif
-  });
-  threadRAII sha256RAII(std::move(sha256Thread));
 
   // std::cout<<"file size: "<<size<<std::endl;
   // bytes to std::string

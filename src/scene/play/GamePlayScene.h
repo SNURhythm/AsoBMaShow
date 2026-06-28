@@ -93,6 +93,7 @@ public:
                          std::unique_ptr<bms_parser::Chart> chart,
                          StartOptions options);
   ~GamePlayScene() override;
+  bool pausesBackgroundTasksForPerformance() const override { return true; }
   void init() override;
   void update(float dt) override;
   bool renderViewBeforeScene(const View *view) const override;

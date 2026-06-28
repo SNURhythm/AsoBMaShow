@@ -38,6 +38,8 @@
 namespace {
 constexpr long long kSchedulerTickMicros = 1000000LL / 8000;
 constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
+constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
+    64ull * 1024ull * 1024ull;
 
 #if TARGET_OS_ANDROID
 struct UniqueFd {
@@ -488,18 +490,62 @@ entryRangeForChartArchive(const bms_parser::Chart &chart,
 bool readArchiveBatchEntries(
     const ArchiveAssetBatch &batch,
     const std::optional<archive_file::EntryRange> &range,
-    std::vector<archive_file::FileData> &files, std::string *errorMessage) {
+    std::vector<archive_file::FileData> &files, std::string *errorMessage,
+    std::atomic_bool &isCancelled) {
+  files.clear();
+  const std::size_t workerCount =
+      static_cast<std::size_t>(parallel_worker_count(batch.innerPaths.size()));
+  if (workerCount > 1) {
+    std::mutex filesMutex;
+    std::vector<archive_file::FileData> concurrentFiles;
+    concurrentFiles.reserve(batch.innerPaths.size());
+    std::string concurrentError;
+    auto onFile = [&](archive_file::FileData &&file) {
+      if (isCancelled.load(std::memory_order_relaxed)) {
+        return false;
+      }
+      std::lock_guard<std::mutex> lock(filesMutex);
+      concurrentFiles.push_back(std::move(file));
+      return true;
+    };
+    const bool readOk = archive_file::readArchiveEntriesConcurrently(
+        batch.archivePath, batch.innerPaths, std::move(onFile), workerCount,
+        kArchiveAssetMaxInFlightBytes, &concurrentError, [&isCancelled]() {
+          return !isCancelled.load(std::memory_order_relaxed);
+        });
+    if (readOk && concurrentFiles.size() == batch.innerPaths.size()) {
+      files = std::move(concurrentFiles);
+      return true;
+    }
+    if (readOk) {
+      concurrentError = "Concurrent archive asset read returned " +
+                        std::to_string(concurrentFiles.size()) + " of " +
+                        std::to_string(batch.innerPaths.size()) +
+                        " requested files.";
+    }
+    if (!concurrentError.empty() &&
+        !isCancelled.load(std::memory_order_relaxed)) {
+      archive_file::appendDebugLogLine(
+          "Falling back to serial archive asset batch read: " +
+          fspath_to_utf8(batch.archivePath) + ": " + concurrentError);
+    }
+  }
+
+  auto pauseCallback = [&isCancelled]() {
+    return !isCancelled.load(std::memory_order_relaxed);
+  };
   if (range.has_value()) {
     std::string rangeError;
-    if (archive_file::readArchiveEntriesInRange(
-            batch.archivePath, batch.innerPaths, *range, files, &rangeError) &&
+    if (archive_file::readArchiveEntriesInRange(batch.archivePath,
+                                                batch.innerPaths, *range, files,
+                                                &rangeError, pauseCallback) &&
         files.size() == batch.innerPaths.size()) {
       return true;
     }
     files.clear();
   }
   return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
-                                          files, errorMessage);
+                                          files, errorMessage, pauseCallback);
 }
 
 void replaceVideoPlayerLocked(
@@ -1101,7 +1147,8 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
-    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
+    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage,
+                                 isCancelled)) {
       SDL_Log("Failed to read sounds from archive %s: %s",
               fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
@@ -1377,7 +1424,8 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
 
     const auto readStart = Clock::now();
-    if (!readArchiveBatchEntries(readBatch, entryRange, files, &errorMessage)) {
+    if (!readArchiveBatchEntries(readBatch, entryRange, files, &errorMessage,
+                                 isCancelled)) {
       SDL_Log("Failed to read chart assets from archive %s: %s",
               fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
@@ -1646,7 +1694,8 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
-    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
+    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage,
+                                 isCancelled)) {
       SDL_Log("Failed to read videos from archive %s: %s",
               fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
@@ -1697,7 +1746,8 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     std::vector<archive_file::FileData> files;
     std::string errorMessage;
     const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
-    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage)) {
+    if (!readArchiveBatchEntries(batch, entryRange, files, &errorMessage,
+                                 isCancelled)) {
       SDL_Log("Failed to read images from archive %s: %s",
               fspath_to_utf8(batch.archivePath).c_str(),
               errorMessage.c_str());
