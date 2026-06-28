@@ -5254,6 +5254,55 @@ struct SevenZipReadTarget {
   bool solid = false;
 };
 
+struct SevenZipRar5BatchStats {
+  std::size_t targets = 0;
+  std::uint64_t totalBytes = 0;
+  std::uint64_t maxBytes = 0;
+  bool hasSolid = false;
+};
+
+constexpr std::uint64_t kSevenZipRar5SingleHandleMaxTargetBytes =
+    512ull * 1024ull * 1024ull;
+constexpr std::size_t kSevenZipRar5MaxConcurrentArchiveHandles = 2;
+
+void addSaturated(std::uint64_t &total, std::uint64_t value) {
+  if (value > std::numeric_limits<std::uint64_t>::max() - total) {
+    total = std::numeric_limits<std::uint64_t>::max();
+  } else {
+    total += value;
+  }
+}
+
+bool sevenZipRar5BatchStats(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    SevenZipRar5BatchStats &stats, std::string *errorMessage,
+    const PauseCallback &pauseCallback) {
+  stats = {};
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
+      index->sevenZipFormat !=
+          static_cast<unsigned char>(SevenZipFormat::Rar5)) {
+    return false;
+  }
+
+  for (const auto &innerPath : innerPaths) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return false;
+    }
+    const Entry *entry = findIndexedEntry(*index, innerPath);
+    if (entry == nullptr || entry->directory) {
+      continue;
+    }
+    ++stats.targets;
+    addSaturated(stats.totalBytes, entry->size);
+    stats.maxBytes = std::max(stats.maxBytes, entry->size);
+    stats.hasSolid = stats.hasSolid || entry->solid;
+  }
+  return true;
+}
+
 std::size_t solidReplayStartOrderForTarget(const CachedIndex &index,
                                            const SevenZipReadTarget &target) {
   if (!target.solid) {
@@ -5919,10 +5968,28 @@ bool readSevenZipEntriesByIndexConcurrent(
                                 }),
                     readTargets.end());
 
-  maxWorkers =
-      std::max<std::size_t>(1, std::min(maxWorkers, readTargets.size()));
+  std::uint64_t totalTargetBytes = 0;
+  std::uint64_t maxTargetBytes = 0;
+  for (const SevenZipReadTarget &target : readTargets) {
+    addSaturated(totalTargetBytes, target.size);
+    maxTargetBytes = std::max(maxTargetBytes, target.size);
+  }
+
+  const std::size_t requestedWorkers = maxWorkers;
+  maxWorkers = std::max<std::size_t>(
+      1, std::min(std::min(maxWorkers, readTargets.size()),
+                  kSevenZipRar5MaxConcurrentArchiveHandles));
   if (maxInFlightBytes == 0) {
     maxInFlightBytes = std::numeric_limits<std::uint64_t>::max();
+  }
+  if (maxWorkers < requestedWorkers) {
+    appendDebugLogLineImpl(
+        "Capped concurrent 7-Zip RAR5 workers: " + pathForLog(archivePath) +
+        " requestedWorkers=" + std::to_string(requestedWorkers) +
+        " workers=" + std::to_string(maxWorkers) +
+        " targetBytes=" + byteCountForLog(totalTargetBytes) +
+        " maxTargetBytes=" + byteCountForLog(maxTargetBytes) +
+        " reason=7zip-handle-open-cost");
   }
 
   std::mutex stateMutex;
@@ -6069,10 +6136,14 @@ bool readSevenZipEntriesByIndexConcurrent(
                          pathForLog(archivePath) +
                          " targets=" + std::to_string(readTargets.size()) +
                          " workers=" + std::to_string(maxWorkers) +
+                         " requestedWorkers=" +
+                         std::to_string(requestedWorkers) +
                          " firstOrder=" +
                          std::to_string(readTargets.front().order) +
                          " lastOrder=" +
                          std::to_string(readTargets.back().order) +
+                         " targetBytes=" +
+                         byteCountForLog(totalTargetBytes) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
@@ -6105,6 +6176,10 @@ bool readSevenZipEntriesByIndexConcurrent(
                          " targets=" + std::to_string(readTargets.size()) +
                          " files=" + std::to_string(emittedFiles) +
                          " workers=" + std::to_string(maxWorkers) +
+                         " requestedWorkers=" +
+                         std::to_string(requestedWorkers) +
+                         " targetBytes=" +
+                         byteCountForLog(totalTargetBytes) +
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes) +
                          " extractMs=" + std::to_string(extractMs) +
@@ -6820,19 +6895,63 @@ bool readArchiveEntriesConcurrently(
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
   std::string sevenZipError;
-  if (hasRarArchiveExtension(archivePath) &&
-      rarSignature(archivePath) == RarSignature::Rar5 &&
+  const bool isRar5Archive =
+      hasRarArchiveExtension(archivePath) &&
+      rarSignature(archivePath) == RarSignature::Rar5;
+  if (isRar5Archive) {
+    SevenZipRar5BatchStats rar5Stats;
+    std::string statsError;
+    if (sevenZipRar5BatchStats(archivePath, innerPaths, rar5Stats, &statsError,
+                               pauseCallback) &&
+        rar5Stats.targets > 0 &&
+        (rar5Stats.hasSolid ||
+         rar5Stats.totalBytes <= kSevenZipRar5SingleHandleMaxTargetBytes)) {
+      appendDebugLogLineImpl(
+          "Using single-handle 7-Zip RAR5 batch extraction: " +
+          pathForLog(archivePath) +
+          " targets=" + std::to_string(rar5Stats.targets) +
+          " workers=1" +
+          " requestedWorkers=" + std::to_string(maxWorkers) +
+          " targetBytes=" + byteCountForLog(rar5Stats.totalBytes) +
+          " maxTargetBytes=" + byteCountForLog(rar5Stats.maxBytes) +
+          " reason=" +
+          (rar5Stats.hasSolid ? "solid-archive" : "small-targets"));
+      if (readSevenZipEntriesByIndexStreaming(
+              archivePath, innerPaths, std::nullopt, onFile, &sevenZipError,
+              pauseCallback)) {
+        appendDebugLogLineImpl(
+            "Read archive batch via single-handle 7-Zip RAR5: " +
+            pathForLog(archivePath) +
+            " targets=" + std::to_string(rar5Stats.targets) +
+            " workers=1" +
+            " requestedWorkers=" + std::to_string(maxWorkers));
+        return true;
+      }
+      appendDebugLogLineImpl("Single-handle 7-Zip RAR5 read failed: " +
+                             pathForLog(archivePath) + ": " + sevenZipError);
+      if (errorMessage != nullptr) {
+        *errorMessage =
+            sevenZipError.empty() ? "7-Zip RAR5 batch read failed."
+                                  : sevenZipError;
+      }
+      return false;
+    }
+    if (!statsError.empty()) {
+      appendDebugLogLineImpl("7-Zip RAR5 batch stats failed: " +
+                             pathForLog(archivePath) + ": " + statsError);
+    }
+  }
+  if (isRar5Archive &&
       readSevenZipEntriesByIndexConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
           maxInFlightBytes, &sevenZipError, pauseCallback)) {
     appendDebugLogLineImpl("Read archive batch via concurrent 7-Zip RAR5: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
-                           " workers=" + std::to_string(maxWorkers));
+                           " requestedWorkers=" + std::to_string(maxWorkers));
     return true;
   }
-  if (hasRarArchiveExtension(archivePath) &&
-      rarSignature(archivePath) == RarSignature::Rar5) {
+  if (isRar5Archive) {
     if (!sevenZipError.empty()) {
       appendDebugLogLineImpl("Concurrent 7-Zip RAR5 read failed: " +
                              pathForLog(archivePath) + ": " + sevenZipError);
