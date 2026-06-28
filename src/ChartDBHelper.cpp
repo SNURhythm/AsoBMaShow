@@ -5117,6 +5117,8 @@ int ChartDBHelper::ScanChartRoots(
         return false;
       }
     }
+    sqlite3_reset(individualInsertStmt.get());
+    sqlite3_clear_bindings(individualInsertStmt.get());
     return insertChartMetaPrepared(db, individualInsertStmt.get(), meta);
   };
 
