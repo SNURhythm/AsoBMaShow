@@ -2278,8 +2278,8 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   folderActions->setAlignItems(YGAlignFlexStart);
 
   auto *refreshFoldersButton = makeAccentButton(
-      metrics.compact ? 150 : 170, metrics.actionButtonHeight,
-      makeText("Refresh List", metrics.bodyTextSize + 2,
+      metrics.compact ? 170 : 190, metrics.actionButtonHeight,
+      makeText("Rebuild Library", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   refreshFoldersButton->setOnClickListener([this]() { refreshChartLibrary(); });
