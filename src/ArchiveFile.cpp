@@ -147,12 +147,10 @@ bool hasZipArchiveExtension(const std::filesystem::path &path) {
   return extension == ".zip" || extension == ".cbz";
 }
 
-#if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
 bool hasRarArchiveExtension(const std::filesystem::path &path) {
   const std::string extension = archiveExtensionFromPath(path);
   return extension == ".rar" || extension == ".cbr";
 }
-#endif
 
 bool hasSevenZipArchiveExtension(const std::filesystem::path &path) {
   const std::string extension = archiveExtensionFromPath(path);
