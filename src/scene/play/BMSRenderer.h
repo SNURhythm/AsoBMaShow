@@ -67,11 +67,20 @@ struct NoteSheet {
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle longBodyOffTexture = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle longBodyOnTexture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle hellChargeBodyOffTexture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle hellChargeBodyOnTexture = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle hellChargeDamageTexture = BGFX_INVALID_HANDLE;
   NoteUvRegion note;
   NoteUvRegion longHead;
   NoteUvRegion longBodyOff;
   NoteUvRegion longBodyOn;
   NoteUvRegion longTail;
+  NoteUvRegion hellChargeHead;
+  NoteUvRegion hellChargeBodyOff;
+  NoteUvRegion hellChargeBodyOn;
+  NoteUvRegion hellChargeDamage;
+  NoteUvRegion hellChargeTail;
+  NoteUvRegion mine;
 };
 
 class BMSRendererState {
@@ -169,6 +178,7 @@ private:
 
   float longBodyRenderHeightOff = 1.0f;
   float longBodyRenderHeightOn = 1.0f;
+  long long currentRenderMicros = 0;
   float lowerBound = -1.0f;
   float upperBound = 10.0f; // Calculated from camera projection
   float noteVisibleUpperBound = 10.0f;
@@ -318,8 +328,7 @@ private:
   rendering::TexBatchRenderer &noteTextureBatch(bgfx::TextureHandle texture,
                                                 uint32_t submitDepth);
   rendering::TexBatchRenderer &sheetBatchFor(const NoteSheet &sheet);
-  rendering::TexBatchRenderer &longBodyBatchFor(const NoteSheet &sheet,
-                                                bool isHolding);
+  rendering::TexBatchRenderer &longBodyBatchFor(bgfx::TextureHandle texture);
   void beginNoteTextureBatches(uint32_t bodyDepth, uint32_t sheetDepth);
   void flushNoteTextureBatches();
   void destroyNoteSheetTextures();

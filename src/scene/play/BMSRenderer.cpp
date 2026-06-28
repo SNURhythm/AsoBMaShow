@@ -44,6 +44,9 @@ constexpr float kPauseButtonSize = 52.0f;
 constexpr float kAutoPlayMarkGap = 12.0f;
 constexpr float kAutoPlayMarkMinWidth = 150.0f;
 constexpr float kAutoPlayMarkMaxWidth = 260.0f;
+constexpr int kAnimatedLongBodyFrameCount = 24;
+constexpr int kAnimatedLongBodyCycleMs = 266;
+constexpr int kHellChargeDamageCycleMs = 100;
 
 constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
     "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
@@ -76,6 +79,16 @@ bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
   const size_t mirroredPosition =
       std::min(keyPosition, keyLaneCount - keyPosition - 1);
   return (mirroredPosition & 1U) != 0;
+}
+
+int skinAnimationFrame(long long timeMicros, int frameCount, int cycleMs) {
+  if (frameCount <= 1 || cycleMs <= 0 || timeMicros < 0) {
+    return 0;
+  }
+  const long long timeMs = timeMicros / 1000LL;
+  const long long cycle = static_cast<long long>(cycleMs);
+  const long long timeInCycle = timeMs % cycle;
+  return static_cast<int>((timeInCycle * frameCount / cycle) % frameCount);
 }
 
 uint8_t scaledAlpha(uint8_t alpha, float scale) {
@@ -134,6 +147,9 @@ void destroyNoteSheet(NoteSheet &sheet) {
   destroyTextureHandle(sheet.texture);
   destroyTextureHandle(sheet.longBodyOffTexture);
   destroyTextureHandle(sheet.longBodyOnTexture);
+  destroyTextureHandle(sheet.hellChargeBodyOffTexture);
+  destroyTextureHandle(sheet.hellChargeBodyOnTexture);
+  destroyTextureHandle(sheet.hellChargeDamageTexture);
 }
 
 Color hudPanelFill() {
@@ -661,14 +677,32 @@ BMSRenderer::BMSRenderer(
       loadCroppedTexture(spriteLoader, 0, 120, 128, 12, "gray long body off");
   graySheet.longBodyOnTexture =
       loadCroppedTexture(spriteLoader, 0, 132, 128, 24, "gray long body on");
+  graySheet.hellChargeBodyOffTexture = loadCroppedTexture(
+      spriteLoader, 0, 236, 128, 12, "gray hell charge body off");
+  graySheet.hellChargeBodyOnTexture = loadCroppedTexture(
+      spriteLoader, 0, 248, 128, 24, "gray hell charge body on");
+  graySheet.hellChargeDamageTexture = loadCroppedTexture(
+      spriteLoader, 0, 272, 128, 24, "gray hell charge body damage");
   blueSheet.longBodyOffTexture =
       loadCroppedTexture(spriteLoader2, 0, 120, 128, 12, "blue long body off");
   blueSheet.longBodyOnTexture =
       loadCroppedTexture(spriteLoader2, 0, 132, 128, 24, "blue long body on");
+  blueSheet.hellChargeBodyOffTexture = loadCroppedTexture(
+      spriteLoader2, 0, 236, 128, 12, "blue hell charge body off");
+  blueSheet.hellChargeBodyOnTexture = loadCroppedTexture(
+      spriteLoader2, 0, 248, 128, 24, "blue hell charge body on");
+  blueSheet.hellChargeDamageTexture = loadCroppedTexture(
+      spriteLoader2, 0, 272, 128, 24, "blue hell charge body damage");
   scratchSheet.longBodyOffTexture = loadCroppedTexture(
       spriteLoader3, 0, 120, 128, 12, "scratch long body off");
   scratchSheet.longBodyOnTexture = loadCroppedTexture(
       spriteLoader3, 0, 132, 128, 24, "scratch long body on");
+  scratchSheet.hellChargeBodyOffTexture = loadCroppedTexture(
+      spriteLoader3, 0, 236, 128, 12, "scratch hell charge body off");
+  scratchSheet.hellChargeBodyOnTexture = loadCroppedTexture(
+      spriteLoader3, 0, 248, 128, 24, "scratch hell charge body on");
+  scratchSheet.hellChargeDamageTexture = loadCroppedTexture(
+      spriteLoader3, 0, 272, 128, 24, "scratch hell charge body damage");
 
   auto makeUv = [](int x, int y, int w, int h, int textureW, int textureH) {
     NoteUvRegion uv{};
@@ -685,6 +719,12 @@ BMSRenderer::BMSRenderer(
     sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
     sheet.longBodyOff = makeUv(0, 120, 128, 12, textureW, textureH);
     sheet.longBodyOn = makeUv(0, 132, 128, 24, textureW, textureH);
+    sheet.hellChargeTail = makeUv(0, 156, 128, 40, textureW, textureH);
+    sheet.hellChargeHead = makeUv(0, 196, 128, 40, textureW, textureH);
+    sheet.hellChargeBodyOff = makeUv(0, 236, 128, 12, textureW, textureH);
+    sheet.hellChargeBodyOn = makeUv(0, 248, 128, 24, textureW, textureH);
+    sheet.hellChargeDamage = makeUv(0, 272, 128, 24, textureW, textureH);
+    sheet.mine = makeUv(0, 296, 128, 40, textureW, textureH);
   };
 
   configureSheet(graySheet, spriteLoader.getWidth(), spriteLoader.getHeight());
@@ -1448,27 +1488,62 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
-  const NoteUvRegion &headUv = sheet.longHead;
-  const NoteUvRegion &tailUv = sheet.longTail;
+  const bool isClassicLongNote = effectiveLongNoteIsClassic(head, chart);
+  const bool isHellCharge = effectiveLongNoteIsHellCharge(head, chart);
+  const NoteUvRegion &headUv =
+      isHellCharge ? sheet.hellChargeHead : sheet.longHead;
+  const NoteUvRegion &tailUv =
+      isHellCharge ? sheet.hellChargeTail : sheet.longTail;
   const bool headHasReachedJudge = head->IsPlayed || head->IsDead ||
                                    headY <= judgeY;
-  const bool hcnBodyRegrabbed =
-      headHasReachedJudge && effectiveLongNoteIsHellCharge(head, chart) &&
-      laneIsCurrentlyPressed(head->Lane);
+  const bool hcnBodyRegrabbed = headHasReachedJudge && isHellCharge &&
+                                laneIsCurrentlyPressed(head->Lane);
   const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
-  const auto bodyTexture =
-      bodyActive ? sheet.longBodyOnTexture : sheet.longBodyOffTexture;
+  bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
+  float bodyRenderHeight = longBodyRenderHeightOff;
+  int bodyFrameCount = 1;
+  int bodyCycleMs = 0;
+  if (isHellCharge) {
+    if (bodyActive) {
+      bodyTexture = sheet.hellChargeBodyOnTexture;
+      bodyRenderHeight = longBodyRenderHeightOn;
+      bodyFrameCount = kAnimatedLongBodyFrameCount;
+      bodyCycleMs = kAnimatedLongBodyCycleMs;
+    } else if (headHasReachedJudge) {
+      bodyTexture = sheet.hellChargeDamageTexture;
+      bodyRenderHeight = longBodyRenderHeightOn;
+      bodyFrameCount = kAnimatedLongBodyFrameCount;
+      bodyCycleMs = kHellChargeDamageCycleMs;
+    } else {
+      bodyTexture = sheet.hellChargeBodyOffTexture;
+    }
+  } else if (bodyActive) {
+    bodyTexture = sheet.longBodyOnTexture;
+    bodyRenderHeight = longBodyRenderHeightOn;
+    bodyFrameCount = kAnimatedLongBodyFrameCount;
+    bodyCycleMs = kAnimatedLongBodyCycleMs;
+  } else {
+    bodyTexture = sheet.longBodyOffTexture;
+  }
 
   // Body
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
-    float tileV = bodyHeight / (bodyActive ? longBodyRenderHeightOn
-                                           : longBodyRenderHeightOff);
-    longBodyBatchFor(sheet, bodyActive)
-        .addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight, 1.0f,
-                 tileV, bodyTexture);
+    auto &bodyBatch = longBodyBatchFor(bodyTexture);
+    if (bodyFrameCount > 1 && bodyCycleMs > 0) {
+      const int frame =
+          skinAnimationFrame(currentRenderMicros, bodyFrameCount, bodyCycleMs);
+      const float v = (static_cast<float>(frame) + 0.5f) /
+                      static_cast<float>(bodyFrameCount);
+      bodyBatch.addRectUV(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+                          0.0f, v, 1.0f, v, bodyTexture);
+    } else {
+      float tileV = bodyHeight / bodyRenderHeight;
+      bodyBatch.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+                        1.0f, tileV, bodyTexture);
+    }
   }
 
-  if (!tailReleasedEarly || tailY > judgeY) {
+  if (!isClassicLongNote && (!tailReleasedEarly || tailY > judgeY)) {
     sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
                                    noteRenderWidth, noteRenderHeight, tailUv.u0,
                                    tailUv.v0, tailUv.u1, tailUv.v1,
@@ -1511,9 +1586,11 @@ void BMSRenderer::drawLandmineNote(float y,
     return;
   }
 
-  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
-                               noteRenderHeight,
-                               Color(217, 69, 58, 232).toABGR());
+  const NoteSheet &sheet = sheetForLane(note->Lane);
+  sheetBatchFor(sheet).addRectUV(laneToX(note->Lane), y, noteRenderWidth,
+                                 noteRenderHeight, sheet.mine.u0,
+                                 sheet.mine.v0, sheet.mine.u1, sheet.mine.v1,
+                                 sheet.texture);
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {
@@ -1972,6 +2049,7 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
+  currentRenderMicros = micro;
   applyPendingHudText(micro);
   updateJudgementCounterText();
 
@@ -3144,11 +3222,9 @@ rendering::TexBatchRenderer &BMSRenderer::sheetBatchFor(
   return noteTextureBatch(sheet.texture, noteSheetSubmitDepth);
 }
 
-rendering::TexBatchRenderer &BMSRenderer::longBodyBatchFor(
-    const NoteSheet &sheet, bool isHolding) {
-  return noteTextureBatch(isHolding ? sheet.longBodyOnTexture
-                                    : sheet.longBodyOffTexture,
-                          longBodySubmitDepth);
+rendering::TexBatchRenderer &
+BMSRenderer::longBodyBatchFor(bgfx::TextureHandle texture) {
+  return noteTextureBatch(texture, longBodySubmitDepth);
 }
 
 void BMSRenderer::beginNoteTextureBatches(uint32_t bodyDepth,
