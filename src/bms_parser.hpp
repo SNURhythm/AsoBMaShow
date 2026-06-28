@@ -307,6 +307,15 @@ public:
 };
 } // namespace bms_parser
 
+
+#include <string>
+
+namespace bms_parser {
+namespace EucKrConverter {
+void BytesToUTF8(const unsigned char *input, size_t size, std::string &result);
+}
+} // namespace bms_parser
+
 /*
  * Copyright (C) 2024 VioletXF, khoeun03
  * This program is free software: you can redistribute it and/or modify
