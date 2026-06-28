@@ -3129,7 +3129,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             }
 
             auto lastTimeline = last->Timeline;
-            auto ln = new LongNote{last->Wav, LongNoteType::LongNote};
+            auto ln = new LongNote{last->Wav, channelLongNoteType};
             delete last;
             ln->Tail = new LongNote{NoWav, ln->Type};
             ln->Tail->Head = ln;

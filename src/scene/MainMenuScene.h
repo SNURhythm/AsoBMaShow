@@ -553,7 +553,7 @@ private:
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
   void requestLibraryReload(bool includeFolders);
   void applyPendingUiUpdates();
-  void selectFolder(const LibraryFolderItem &item);
+  void selectFolder(LibraryFolderItem item);
   bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
   void setGaugeSelection(GaugeType gaugeType, bool autoShift);
   void refreshGaugeSelectionButtons();

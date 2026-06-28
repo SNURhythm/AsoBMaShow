@@ -4021,7 +4021,7 @@ void MainMenuScene::selectChartByPathAfterReload(
   }
 }
 
-void MainMenuScene::selectFolder(const LibraryFolderItem &item) {
+void MainMenuScene::selectFolder(LibraryFolderItem item) {
   auto toggleExpandedFolder = [this](const std::string &key) {
     const auto it = expandedLibraryFolders.find(key);
     if (it == expandedLibraryFolders.end()) {
