@@ -1458,7 +1458,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
   return result.note;
 }
-bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
+bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
+                                             bool isBackSpin) {
   if (isGamePaused || state == nullptr || !state->isPlaying ||
       state->isEnding) {
     return nullptr;
@@ -1472,7 +1473,8 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay) {
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  auto result = laneInputController->releaseLane(lane, inputContext);
+  auto result =
+      laneInputController->releaseLane(lane, inputContext, isBackSpin);
   updateLaneStateText();
   if (result.hasJudge) {
     onJudge(result.judge, !options.autoPlay || isReplayPlayback());

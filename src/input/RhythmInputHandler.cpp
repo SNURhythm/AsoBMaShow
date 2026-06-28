@@ -117,7 +117,7 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   fingerLanePressed.erase(fingerIndex);
   flickStates.erase(fingerIndex);
   if (shouldRelease) {
-    control->releaseLane(lane);
+    control->releaseLane(lane, 0.0, false);
   }
 }
 
@@ -155,7 +155,7 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
       SDL_Log("Distance: %f, Direction: %d", distance, direction);
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
-        control->releaseLane(lane);
+        control->releaseLane(lane, 0.0, true);
         fingerLanePressed[fingerIndex] = false;
       }
       auto *note = control->pressLane(lane);

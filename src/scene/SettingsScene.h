@@ -47,7 +47,8 @@ public:
   bms_parser::Note *pressLane(int lane, double inputDelay = 0) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay = 0) override;
-  bms_parser::Note *releaseLane(int lane, double inputDelay = 0) override;
+  bms_parser::Note *releaseLane(int lane, double inputDelay = 0,
+                                bool isBackSpin = false) override;
 
 private:
   enum class SettingsTab {

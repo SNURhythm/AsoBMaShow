@@ -323,7 +323,8 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
   return result.note;
 }
 
-bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay) {
+bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
+                                             bool isBackSpin) {
   if (!previewActive || previewLaneController == nullptr) {
     return nullptr;
   }
@@ -333,7 +334,8 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay) {
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  auto result = previewLaneController->releaseLane(lane, inputContext);
+  auto result =
+      previewLaneController->releaseLane(lane, inputContext, isBackSpin);
   if (result.hasJudge && previewRenderer != nullptr) {
     publishPreviewJudgement(result.judge);
   }

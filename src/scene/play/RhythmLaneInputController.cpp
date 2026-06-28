@@ -229,7 +229,8 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
 
 RhythmLaneInputController::Result
 RhythmLaneInputController::releaseLane(int lane,
-                                       const InputContext &context) {
+                                       const InputContext &context,
+                                       bool isBackSpin) {
   Result result;
   if (chart == nullptr || renderer == nullptr) {
     return result;
@@ -260,7 +261,7 @@ RhythmLaneInputController::releaseLane(int lane,
       if (note == nullptr || note->IsPlayed) {
         continue;
       }
-      result = releaseNote(note, inputTime, inputTime);
+      result = releaseNote(note, inputTime, inputTime, isBackSpin);
       result.note = note;
       if (!result.hasReplayEvent) {
         setReplayEvent(result, ReplayEventAction::Release, lane, nullptr,
@@ -330,7 +331,8 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
 RhythmLaneInputController::Result
 RhythmLaneInputController::releaseNote(bms_parser::Note *note,
                                        long long releasedTime,
-                                       long long songTimeMicros) {
+                                       long long songTimeMicros,
+                                       bool isBackSpin) {
   Result result;
   result.note = note;
   if (note == nullptr || !note->IsLongNote()) {
@@ -346,6 +348,18 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
       effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
+  const bool scratchLongNote =
+      chart != nullptr && chartLaneIsScratch(chart->Meta, note->Lane);
+  if (chargeLongNote && scratchLongNote && !isBackSpin) {
+    longNote->Release(releasedTime);
+    const JudgeResult nonBackSpinJudge(
+        Poor, releasedTime - noteTimingMicros(longNote));
+    result.judge = nonBackSpinJudge;
+    result.hasJudge = true;
+    setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,
+                   songTimeMicros, releasedTime, nonBackSpinJudge);
+    return result;
+  }
   appliedJudge =
       chargeLongNote ? normalizeLongNoteReleaseJudge(judgeResult)
                      : judgeClassicLongNoteRelease(judge, longNote, releasedTime);

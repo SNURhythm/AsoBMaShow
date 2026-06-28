@@ -102,7 +102,8 @@ public:
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay) override;
-  bms_parser::Note *releaseLane(int lane, double inputDelay) override;
+  bms_parser::Note *releaseLane(int lane, double inputDelay,
+                                bool isBackSpin = false) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:

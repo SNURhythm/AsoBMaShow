@@ -47,7 +47,8 @@ public:
   Result pressLane(int lane, const InputContext &context);
   Result pressLane(int mainLane, int compensateLane,
                    const InputContext &context);
-  Result releaseLane(int lane, const InputContext &context);
+  Result releaseLane(int lane, const InputContext &context,
+                     bool isBackSpin = false);
   void resetLaneStates();
 
 private:
@@ -62,5 +63,5 @@ private:
   Result pressNote(bms_parser::Note *note, long long pressedTime,
                    long long songTimeMicros);
   Result releaseNote(bms_parser::Note *note, long long releasedTime,
-                     long long songTimeMicros);
+                     long long songTimeMicros, bool isBackSpin);
 };
