@@ -3129,9 +3129,9 @@ bool insertChartMetaPrepared(
 }
 
 std::optional<archive_file::SourcePreference>
-zipArchiveBatchSourcePreference(const std::filesystem::path &archivePath) {
-  const std::string extension = archive_file::archiveExtensionFromPath(archivePath);
-  if (extension != ".zip" && extension != ".zipx" && extension != ".cbz") {
+archiveBatchSourcePreference(const std::filesystem::path &archivePath,
+                             std::optional<bool> solidHint) {
+  if (!archive_file::hasSupportedArchiveExtension(archivePath)) {
     return std::nullopt;
   }
   std::error_code error;
@@ -3140,7 +3140,7 @@ zipArchiveBatchSourcePreference(const std::filesystem::path &archivePath) {
     return archive_file::SourcePreference{.priority = 3, .archiveSize = 0};
   }
   return archive_file::SourcePreference{
-      .priority = 1,
+      .priority = solidHint.value_or(false) ? 2 : 1,
       .archiveSize = static_cast<std::uint64_t>(
           std::min<std::uintmax_t>(
               size, std::numeric_limits<std::uint64_t>::max())),
@@ -5523,8 +5523,13 @@ int ChartDBHelper::ScanChartRoots(
         db, insertChartMetaSql(), archiveInsertStmt,
         "preparing statement to insert archive chart batch",
         logSdlSqlErrorText);
+    std::optional<bool> archiveSolidHint;
+    if (const auto cacheIt = pendingArchiveCacheDiffs.find(archiveKey);
+        cacheIt != pendingArchiveCacheDiffs.end()) {
+      archiveSolidHint = cacheIt->second.solid;
+    }
     const auto archiveSourcePreference =
-        zipArchiveBatchSourcePreference(batch.archivePath);
+        archiveBatchSourcePreference(batch.archivePath, archiveSolidHint);
     const auto insertStart = std::chrono::steady_clock::now();
     std::size_t insertedCharts = 0;
     bool parsedFullBatch = parsedCharts->size() == pendingInnerPaths.size();
@@ -5584,7 +5589,11 @@ int ChartDBHelper::ScanChartRoots(
         " reusedStatement=" +
         std::string(archiveInsertStmtReady ? "true" : "false") +
         " sourcePreferenceHint=" +
-        std::string(archiveSourcePreference.has_value() ? "true" : "false"));
+        std::string(archiveSourcePreference.has_value() ? "true" : "false") +
+        " solidHint=" +
+        (archiveSolidHint.has_value()
+             ? std::string(*archiveSolidHint ? "true" : "false")
+             : std::string("unknown")));
     if (parsedFullBatch && !stopRequested(stopToken)) {
       writePendingArchiveCache(batch);
       const std::filesystem::path lastPath =
