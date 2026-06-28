@@ -39,6 +39,11 @@ struct ResultImageExportResult;
 struct StartOptions;
 class View;
 
+struct MainMenuParseLogRow {
+  std::uint64_t id = 0;
+  std::string text;
+};
+
 class MainMenuScene : public Scene {
 public:
   inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
@@ -256,9 +261,7 @@ private:
   Button *unzipCancelButton = nullptr;
   TextView *unzipDeleteArchiveButtonText = nullptr;
   TextView *unzipCancelButtonText = nullptr;
-  ScrollView *parseLogScrollView = nullptr;
-  View *parseLogContent = nullptr;
-  TextView *parseLogText = nullptr;
+  RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
   TextView *musicTrackText = nullptr;
@@ -609,7 +612,9 @@ private:
   void buildParseLogModal();
   void showParseLogModal();
   void hideParseLogModal();
-  void refreshParseLogModal();
+  void refreshParseLogModal(bool forceScrollToBottom = false);
+  [[nodiscard]] bool isParseLogScrolledNearBottom() const;
+  void scrollParseLogModalToBottom();
   void buildMusicModal();
   void showMusicModal();
   void hideMusicModal();

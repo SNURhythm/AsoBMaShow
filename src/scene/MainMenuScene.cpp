@@ -90,6 +90,8 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
+constexpr size_t kParseLogRowMaxCodepoints = 64;
+constexpr int kParseLogRowHeight = 48;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -277,6 +279,122 @@ public:
 private:
   TextView *label = nullptr;
 };
+
+class ParseLogRowView : public View {
+public:
+  ParseLogRowView() : View() {
+    setFlexDirection(FlexDirection::Column);
+    setJustifyContent(YGJustifyCenter);
+    setPadding(Edge::Left, 10);
+    setPadding(Edge::Right, 14);
+
+    label = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    label->setThemedColor(ui_theme::textSecondary);
+    label->setWrap(true);
+    label->setOverflow(TextView::TextOverflow::Hidden);
+    label->setVAlign(TextView::MIDDLE);
+    label->setFlex(1);
+    addView(label);
+  }
+
+  void setRow(const MainMenuParseLogRow &row) {
+    if (label != nullptr) {
+      label->setText(row.text);
+    }
+  }
+
+private:
+  TextView *label = nullptr;
+};
+
+size_t utf8CodepointLengthAt(const std::string &text, size_t offset) {
+  if (offset >= text.size()) {
+    return 0;
+  }
+  const unsigned char ch = static_cast<unsigned char>(text[offset]);
+  size_t length = 1;
+  if ((ch & 0x80) == 0x00) {
+    length = 1;
+  } else if ((ch & 0xE0) == 0xC0) {
+    length = 2;
+  } else if ((ch & 0xF0) == 0xE0) {
+    length = 3;
+  } else if ((ch & 0xF8) == 0xF0) {
+    length = 4;
+  }
+  if (offset + length > text.size()) {
+    return 1;
+  }
+  for (size_t i = 1; i < length; ++i) {
+    const unsigned char continuation =
+        static_cast<unsigned char>(text[offset + i]);
+    if ((continuation & 0xC0) != 0x80) {
+      return 1;
+    }
+  }
+  return length;
+}
+
+bool isLogLineBreak(char ch) { return ch == '\n' || ch == '\r'; }
+
+void appendParseLogRowsForLine(std::vector<MainMenuParseLogRow> &rows,
+                               const std::string &line, std::uint64_t &rowId) {
+  if (line.empty()) {
+    rows.push_back({rowId++, " "});
+    return;
+  }
+
+  size_t offset = 0;
+  bool continuation = false;
+  while (offset < line.size()) {
+    if (isLogLineBreak(line[offset])) {
+      if (line[offset] == '\r' && offset + 1 < line.size() &&
+          line[offset + 1] == '\n') {
+        offset += 2;
+      } else {
+        ++offset;
+      }
+      continuation = false;
+      continue;
+    }
+
+    const size_t chunkStart = offset;
+    size_t codepoints = 0;
+    while (offset < line.size() && !isLogLineBreak(line[offset]) &&
+           codepoints < kParseLogRowMaxCodepoints) {
+      const size_t length = utf8CodepointLengthAt(line, offset);
+      if (length == 0) {
+        break;
+      }
+      offset += length;
+      ++codepoints;
+    }
+
+    std::string rowText = line.substr(chunkStart, offset - chunkStart);
+    if (rowText.empty()) {
+      rowText = " ";
+    } else if (continuation) {
+      rowText.insert(0, "  ");
+    }
+    rows.push_back({rowId++, std::move(rowText)});
+    continuation = offset < line.size() && !isLogLineBreak(line[offset]);
+  }
+}
+
+std::vector<MainMenuParseLogRow>
+parseLogRowsFromLines(const std::vector<std::string> &lines) {
+  std::vector<MainMenuParseLogRow> rows;
+  if (lines.empty()) {
+    rows.push_back({0, "No parsing logs yet."});
+    return rows;
+  }
+
+  std::uint64_t rowId = 0;
+  for (const std::string &line : lines) {
+    appendParseLogRowsForLine(rows, line, rowId);
+  }
+  return rows;
+}
 
 bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
@@ -2193,9 +2311,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
-  parseLogScrollView = nullptr;
-  parseLogContent = nullptr;
-  parseLogText = nullptr;
+  parseLogRecyclerView = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;
@@ -5352,28 +5468,30 @@ void MainMenuScene::buildParseLogModal() {
   title->setHeight(42);
   panel->addView(title);
 
-  parseLogScrollView =
-      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 480);
-  parseLogScrollView->setWidth(kModalContentWidth);
-  parseLogScrollView->setFlex(1);
-  parseLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
-  parseLogScrollView->setCornerRadius(ui_theme::controlRadius());
-  parseLogScrollView->setThemedBorderColor(ui_theme::hairline);
-  parseLogScrollView->setBorderWidth(1);
-
-  parseLogContent = new View();
-  parseLogContent->setFlexDirection(FlexDirection::Column);
-  parseLogContent->setAlignItems(YGAlignStretch);
-  parseLogContent->setPadding(Edge::All, 10);
-
-  parseLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  parseLogText->setText(archive_file::debugLogText());
-  parseLogText->setThemedColor(ui_theme::textSecondary);
-  parseLogText->setWrap(true);
-  parseLogText->setOverflow(TextView::TextOverflow::Visible);
-  parseLogContent->addView(parseLogText);
-  parseLogScrollView->setContentView(parseLogContent);
-  panel->addView(parseLogScrollView);
+  parseLogRecyclerView = new RecyclerView<MainMenuParseLogRow>(
+      [](const MainMenuParseLogRow &a, const MainMenuParseLogRow &b) {
+        return a.id == b.id;
+      });
+  parseLogRecyclerView->itemHeight = kParseLogRowHeight;
+  parseLogRecyclerView->reserveScrollbarGutter = true;
+  parseLogRecyclerView->setWidth(kModalContentWidth);
+  parseLogRecyclerView->setFlex(1);
+  parseLogRecyclerView->setThemedBackgroundColor(ui_theme::insetSurface);
+  parseLogRecyclerView->setCornerRadius(ui_theme::controlRadius());
+  parseLogRecyclerView->setThemedBorderColor(ui_theme::hairline);
+  parseLogRecyclerView->setBorderWidth(1);
+  parseLogRecyclerView->onCreateView = [](const MainMenuParseLogRow &) {
+    return new ParseLogRowView();
+  };
+  parseLogRecyclerView->onBind = [](View *view,
+                                    const MainMenuParseLogRow &row, int,
+                                    bool) {
+    auto *rowView = dynamic_cast<ParseLogRowView *>(view);
+    if (rowView != nullptr) {
+      rowView->setRow(row);
+    }
+  };
+  panel->addView(parseLogRecyclerView);
 
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
@@ -5395,7 +5513,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->addView(panel);
   rootLayout->addView(parseLogModalRoot);
   parseLogDisplayedRevision = 0;
-  refreshParseLogModal();
+  refreshParseLogModal(true);
 }
 
 void MainMenuScene::showParseLogModal() {
@@ -5405,10 +5523,7 @@ void MainMenuScene::showParseLogModal() {
   parseLogModalRoot->setSize(rendering::window_width, rendering::window_height);
   parseLogModalRoot->setVisible(true);
   parseLogDisplayedRevision = 0;
-  refreshParseLogModal();
-  if (parseLogScrollView != nullptr) {
-    parseLogScrollView->scrollToBottom();
-  }
+  refreshParseLogModal(true);
 }
 
 void MainMenuScene::hideParseLogModal() {
@@ -5417,20 +5532,51 @@ void MainMenuScene::hideParseLogModal() {
   }
 }
 
-void MainMenuScene::refreshParseLogModal() {
-  if (parseLogModalRoot == nullptr || parseLogText == nullptr) {
+void MainMenuScene::refreshParseLogModal(bool forceScrollToBottom) {
+  if (parseLogModalRoot == nullptr || parseLogRecyclerView == nullptr) {
     return;
   }
 
   const std::uint64_t revision = archive_file::debugLogRevision();
   if (revision == parseLogDisplayedRevision) {
+    if (forceScrollToBottom) {
+      scrollParseLogModalToBottom();
+    }
     return;
   }
+  const bool shouldScrollToBottom =
+      forceScrollToBottom || parseLogDisplayedRevision == 0 ||
+      isParseLogScrolledNearBottom();
   parseLogDisplayedRevision = revision;
-  parseLogText->setText(archive_file::debugLogText());
-  if (parseLogScrollView != nullptr) {
-    parseLogScrollView->scrollToBottom();
+  parseLogRecyclerView->setItems(
+      parseLogRowsFromLines(archive_file::debugLogLines()));
+  if (shouldScrollToBottom) {
+    scrollParseLogModalToBottom();
   }
+}
+
+bool MainMenuScene::isParseLogScrolledNearBottom() const {
+  if (parseLogRecyclerView == nullptr) {
+    return true;
+  }
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                   parseLogRecyclerView->itemHeight -
+                               parseLogRecyclerView->getHeight()));
+  return maxOffset - parseLogRecyclerView->scrollOffset <=
+         static_cast<float>(parseLogRecyclerView->itemHeight * 2);
+}
+
+void MainMenuScene::scrollParseLogModalToBottom() {
+  if (parseLogRecyclerView == nullptr) {
+    return;
+  }
+  const float maxOffset = std::max(
+      0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                   parseLogRecyclerView->itemHeight -
+                               parseLogRecyclerView->getHeight()));
+  parseLogRecyclerView->scrollOffset = maxOffset;
+  parseLogRecyclerView->rebindVisibleItems();
 }
 
 void MainMenuScene::buildMusicModal() {
@@ -8483,9 +8629,7 @@ void MainMenuScene::cleanupScene() {
   unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
-  parseLogScrollView = nullptr;
-  parseLogContent = nullptr;
-  parseLogText = nullptr;
+  parseLogRecyclerView = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;

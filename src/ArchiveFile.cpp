@@ -6737,6 +6737,11 @@ std::uint64_t debugLogRevision() {
   return gDebugLogRevision;
 }
 
+std::vector<std::string> debugLogLines() {
+  std::lock_guard<std::mutex> lock(gDebugLogMutex);
+  return {gDebugLogLines.begin(), gDebugLogLines.end()};
+}
+
 std::string debugLogText() {
   std::lock_guard<std::mutex> lock(gDebugLogMutex);
   if (gDebugLogLines.empty()) {

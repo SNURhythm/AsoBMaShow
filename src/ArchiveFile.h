@@ -134,6 +134,7 @@ bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
 void appendDebugLogLine(const std::string &message);
 std::uint64_t debugLogRevision();
+std::vector<std::string> debugLogLines();
 std::string debugLogText();
 bool isVirtualPath(const std::filesystem::path &path);
 bool splitVirtualPath(const std::filesystem::path &path,
