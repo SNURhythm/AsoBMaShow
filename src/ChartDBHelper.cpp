@@ -153,6 +153,7 @@ constexpr const char *kSolidArchiveSelectColumns =
 constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
 constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
+constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
 constexpr std::uint64_t kArchiveParseMaxInFlightBytes = 16ull * 1024ull * 1024ull;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
@@ -5103,44 +5104,163 @@ int ChartDBHelper::ScanChartRoots(
     return chart->Meta;
   };
 
-  auto parseAndInsertChart =
-      [&](const std::filesystem::path &path,
-          const std::vector<unsigned char> *bytes) -> bool {
-    auto meta = parseChartMeta(path, bytes);
-    if (!meta.has_value()) {
-      return false;
+  SqliteStatementHandle individualInsertStmt;
+  bool individualInsertStmtReady = false;
+  auto insertIndividualChartMeta =
+      [&](bms_parser::ChartMeta &meta) -> bool {
+    if (!individualInsertStmtReady) {
+      individualInsertStmtReady = prepareSqliteStatementLogged(
+          db, insertChartMetaSql(), individualInsertStmt,
+          "preparing statement to insert individual chart batch",
+          logSdlSqlErrorText);
+      if (!individualInsertStmtReady) {
+        return false;
+      }
     }
-    return InsertChartMeta(db, *meta);
+    return insertChartMetaPrepared(db, individualInsertStmt.get(), meta);
+  };
+
+  auto individualParseWorkerCount = [](std::size_t fileCount) {
+    return static_cast<std::size_t>(parallel_worker_count(fileCount));
+  };
+
+  auto parseIndividualChartBatch =
+      [&](std::size_t begin, std::size_t end)
+      -> std::vector<std::optional<bms_parser::ChartMeta>> {
+    using Clock = std::chrono::steady_clock;
+    const std::size_t count = end > begin ? end - begin : 0;
+    std::vector<std::optional<bms_parser::ChartMeta>> parsedMetas(count);
+    if (count == 0) {
+      return parsedMetas;
+    }
+
+    const std::size_t workerCount = individualParseWorkerCount(count);
+    const auto parseStart = Clock::now();
+    if (workerCount > 1) {
+      archive_file::appendDebugLogLine(
+          "Starting concurrent DB individual chart parse: files=" +
+          std::to_string(count) + " workers=" +
+          std::to_string(workerCount));
+    }
+
+    auto parseOne = [&](std::size_t offset) {
+      if (shouldStop()) {
+        return;
+      }
+      const ScanDiff &diff = individualDiffs[begin + offset];
+      parsedMetas[offset] = parseChartMeta(diff.path, nullptr);
+    };
+
+    if (workerCount <= 1) {
+      for (std::size_t offset = 0; offset < count; ++offset) {
+        parseOne(offset);
+      }
+    } else {
+      std::atomic_size_t nextOffset{0};
+      std::vector<std::thread> workers;
+      workers.reserve(workerCount);
+      for (std::size_t worker = 0; worker < workerCount; ++worker) {
+        workers.emplace_back([&]() {
+          for (;;) {
+            if (shouldStop()) {
+              return;
+            }
+            const std::size_t offset =
+                nextOffset.fetch_add(1, std::memory_order_relaxed);
+            if (offset >= count) {
+              return;
+            }
+            parseOne(offset);
+          }
+        });
+      }
+      for (auto &worker : workers) {
+        if (worker.joinable()) {
+          worker.join();
+        }
+      }
+    }
+
+    if (workerCount > 1) {
+      const auto parseMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                                parseStart)
+              .count();
+      const std::size_t parsedCount = static_cast<std::size_t>(
+          std::count_if(parsedMetas.begin(), parsedMetas.end(),
+                        [](const auto &meta) { return meta.has_value(); }));
+      archive_file::appendDebugLogLine(
+          "Finished concurrent DB individual chart parse: files=" +
+          std::to_string(count) + " parsed=" +
+          std::to_string(parsedCount) + " workers=" +
+          std::to_string(workerCount) + " parseMs=" +
+          std::to_string(parseMs));
+    }
+    return parsedMetas;
   };
 
   const std::size_t individualStartIndex =
       resumePlan.valid ? resumePlan.individualStart : 0;
   for (std::size_t diffIndex = individualStartIndex;
-       diffIndex < individualDiffs.size(); ++diffIndex) {
+       diffIndex < individualDiffs.size();) {
     const auto &diff = individualDiffs[diffIndex];
     if (shouldStop()) {
       break;
     }
-    reportProgress(parseCurrent, parseTotal,
-                   diff.deleted ? ChartScanProgressStage::RemovingDeleted
-                                : ChartScanProgressStage::ParsingCharts);
     if (diff.deleted) {
+      reportProgress(parseCurrent, parseTotal,
+                     ChartScanProgressStage::RemovingDeleted);
       if (DeleteChartMeta(db, diff.path)) {
         ++changedCount;
       }
-    } else if (parseAndInsertChart(diff.path, nullptr)) {
-      ++changedCount;
+      ++parseCurrent;
+      const std::size_t nextIndex = diffIndex + 1;
+      const auto checkpointRequest = checkpointSaveRequest(
+          nextIndex % kIndividualParseCheckpointInterval == 0);
+      if (checkpointRequest.has_value()) {
+        saveCheckpointForFlush(
+            makeCheckpoint(computeScanSignature(nextIndex, 0),
+                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
+            *checkpointRequest);
+      }
+      diffIndex = nextIndex;
+      continue;
     }
-    ++parseCurrent;
-    const std::size_t nextIndex = diffIndex + 1;
-    const auto checkpointRequest = checkpointSaveRequest(
-        nextIndex % kIndividualParseCheckpointInterval == 0);
-    if (checkpointRequest.has_value()) {
-      saveCheckpointForFlush(
-          makeCheckpoint(computeScanSignature(nextIndex, 0),
-                         kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
-          *checkpointRequest);
+
+    const std::size_t batchStart = diffIndex;
+    std::size_t batchEnd = batchStart;
+    while (batchEnd < individualDiffs.size() &&
+           !individualDiffs[batchEnd].deleted &&
+           batchEnd - batchStart < kIndividualParseBatchSize) {
+      ++batchEnd;
     }
+
+    reportProgress(parseCurrent, parseTotal,
+                   ChartScanProgressStage::ParsingCharts);
+    auto parsedMetas = parseIndividualChartBatch(batchStart, batchEnd);
+    for (std::size_t offset = 0; offset < parsedMetas.size(); ++offset) {
+      if (shouldStop()) {
+        break;
+      }
+      const std::size_t currentIndex = batchStart + offset;
+      reportProgress(parseCurrent, parseTotal,
+                     ChartScanProgressStage::ParsingCharts);
+      if (parsedMetas[offset].has_value() &&
+          insertIndividualChartMeta(*parsedMetas[offset])) {
+        ++changedCount;
+      }
+      ++parseCurrent;
+      const std::size_t nextIndex = currentIndex + 1;
+      const auto checkpointRequest = checkpointSaveRequest(
+          nextIndex % kIndividualParseCheckpointInterval == 0);
+      if (checkpointRequest.has_value()) {
+        saveCheckpointForFlush(
+            makeCheckpoint(computeScanSignature(nextIndex, 0),
+                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
+            *checkpointRequest);
+      }
+    }
+    diffIndex = batchEnd;
   }
 
   if (!shouldStop() && !archiveBatchOrder.empty() &&
