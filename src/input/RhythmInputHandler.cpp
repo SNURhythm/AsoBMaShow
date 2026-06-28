@@ -24,6 +24,17 @@
 
 namespace {
 constexpr Uint32 kCancelledTouchGraceMs = 50;
+
+bool hasActiveLongNote(FlickState &flickState) {
+  if (flickState.activeLongNote == nullptr) {
+    return false;
+  }
+  if (flickState.activeLongNote->IsHolding) {
+    return true;
+  }
+  flickState.activeLongNote = nullptr;
+  return false;
+}
 } // namespace
 
 bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
@@ -80,7 +91,7 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
                                           SDL_GetTicks(),
                                           true,
                                           0,
-                                          false};
+                                          nullptr};
     return;
   }
 
@@ -130,37 +141,29 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
   float distance = sqrtf(dx * dx + dy * dy);
   flickState.startX = normalizedLocation.x;
   flickState.startY = normalizedLocation.y;
-  float flickThreshold;
-  if (flickState.isLongNote) {
-    flickThreshold = 0.01;
-  } else {
-    if (flickState.lastFlickDirection == 0) {
-      flickThreshold = 0.001;
-    } else {
-      flickThreshold = 0.002;
-    }
-  }
+  const auto pressedIt = fingerLanePressed.find(fingerIndex);
+  const bool hasActiveScratchPress =
+      pressedIt != fingerLanePressed.end() && pressedIt->second;
+  const bool hasActiveLongScratchNote = hasActiveLongNote(flickState);
+  const float flickThreshold =
+      flickState.lastFlickDirection == 0 ? 0.001f
+                                         : (hasActiveLongScratchNote ? 0.01f
+                                                                     : 0.002f);
   if (distance > flickThreshold) {
     int direction = dy < 0 ? 1 : -1;
     if (direction != flickState.lastFlickDirection) {
       SDL_Log("Distance: %f, Direction: %d", distance, direction);
       flickState.lastFlickDirection = direction;
-      if (flickState.isLongNote) {
-        control->releaseLane(lane);
-        fingerLanePressed[fingerIndex] = false;
-        return;
-      }
-      auto note = control->pressLane(lane);
-      if (note != nullptr) {
-        flickState.isLongNote = note->IsLongNote();
-      } else {
-        flickState.isLongNote = false;
-      }
-      fingerLanePressed[fingerIndex] = flickState.isLongNote;
-      if (!flickState.isLongNote) {
+      if (hasActiveScratchPress) {
         control->releaseLane(lane);
         fingerLanePressed[fingerIndex] = false;
       }
+      auto *note = control->pressLane(lane);
+      flickState.activeLongNote =
+          note != nullptr && note->IsLongNote()
+              ? static_cast<bms_parser::LongNote *>(note)
+              : nullptr;
+      fingerLanePressed[fingerIndex] = true;
     }
   }
 }
@@ -312,6 +315,10 @@ void RhythmInputHandler::stopListen() {
     touchInputSource->stopListen();
     touchInputSource.reset();
   }
+  fingerToLane.clear();
+  fingerLanePressed.clear();
+  flickStates.clear();
+  cancelGraceExpiry.clear();
 }
 void RhythmInputHandler::discardPendingTouchEvents() {
   fingerToLane.clear();

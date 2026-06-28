@@ -47,6 +47,10 @@ constexpr float kAutoPlayMarkMaxWidth = 260.0f;
 constexpr int kAnimatedLongBodyFrameCount = 24;
 constexpr int kAnimatedLongBodyCycleMs = 266;
 constexpr int kHellChargeDamageCycleMs = 100;
+constexpr double kLaneBeamMaxAlpha = 0.2;
+constexpr double kScratchLaneBeamHeldAlpha = 0.08;
+constexpr long long kScratchLaneBeamHeldFadeMicros = 180000LL;
+constexpr long long kLaneBeamReleaseFadeMicros = 200000LL;
 
 constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
     "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
@@ -94,6 +98,28 @@ int skinAnimationFrame(long long timeMicros, int frameCount, int cycleMs) {
 uint8_t scaledAlpha(uint8_t alpha, float scale) {
   return static_cast<uint8_t>(
       std::clamp(std::lround(static_cast<float>(alpha) * scale), 0L, 255L));
+}
+
+double laneBeamFadeProgress(long long elapsedMicros, long long durationMicros) {
+  if (durationMicros <= 0) {
+    return 1.0;
+  }
+  return std::clamp(static_cast<double>(std::max(0LL, elapsedMicros)) /
+                        static_cast<double>(durationMicros),
+                    0.0, 1.0);
+}
+
+double scratchLaneBeamPressedAlpha(long long elapsedMicros) {
+  const double progress =
+      laneBeamFadeProgress(elapsedMicros, kScratchLaneBeamHeldFadeMicros);
+  return kLaneBeamMaxAlpha -
+         (kLaneBeamMaxAlpha - kScratchLaneBeamHeldAlpha) * progress;
+}
+
+double laneBeamReleaseAlpha(double startAlpha, long long elapsedMicros) {
+  return startAlpha *
+         (1.0 -
+          laneBeamFadeProgress(elapsedMicros, kLaneBeamReleaseFadeMicros));
 }
 
 float oneDrawablePixelInUi(float scale) {
@@ -534,6 +560,8 @@ AtomicLaneState &
 AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
   lastStateTime.store(other.lastStateTime.load(std::memory_order_relaxed),
                       std::memory_order_relaxed);
+  lastPressedTime.store(other.lastPressedTime.load(std::memory_order_relaxed),
+                        std::memory_order_relaxed);
   isPressed.store(other.isPressed.load(std::memory_order_relaxed),
                   std::memory_order_relaxed);
   lastPressedJudgement.store(
@@ -1439,6 +1467,7 @@ void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
   laneState.lastPressedJudgement.store(static_cast<int>(judge.judgement),
                                        std::memory_order_relaxed);
   laneState.lastPressedDiff.store(judge.Diff, std::memory_order_relaxed);
+  laneState.lastPressedTime.store(time, std::memory_order_relaxed);
   laneState.isPressed.store(true, std::memory_order_relaxed);
   laneState.lastStateTime.store(time, std::memory_order_release);
 }
@@ -2279,6 +2308,8 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       LaneState snapshot;
       snapshot.lastStateTime =
           source.lastStateTime.load(std::memory_order_acquire);
+      snapshot.lastPressedTime =
+          source.lastPressedTime.load(std::memory_order_relaxed);
       snapshot.isPressed = source.isPressed.load(std::memory_order_relaxed);
       snapshot.lastPressedJudge = JudgeResult(
           static_cast<Judgement>(
@@ -2553,6 +2584,7 @@ void BMSRenderer::reset() {
   for (auto &laneState : laneStatesByOrder) {
     laneState.lastPressedJudgement.store(None, std::memory_order_relaxed);
     laneState.lastPressedDiff.store(0, std::memory_order_relaxed);
+    laneState.lastPressedTime.store(-1, std::memory_order_relaxed);
     laneState.isPressed.store(false, std::memory_order_relaxed);
     laneState.lastStateTime.store(-1, std::memory_order_release);
   }
@@ -3001,12 +3033,24 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     return;
   }
   // alpha
+  const bool scratchLane = isScratch(lane);
+  const long long lastPressedTime = laneState.lastPressedTime != -1
+                                        ? laneState.lastPressedTime
+                                        : laneState.lastStateTime;
+  const auto pressedAlphaAt = [scratchLane, lastPressedTime](
+                                  long long referenceTime) {
+    if (scratchLane) {
+      return scratchLaneBeamPressedAlpha(referenceTime - lastPressedTime);
+    }
+    return kLaneBeamMaxAlpha;
+  };
   double alpha;
   if (laneState.isPressed) {
-    alpha = 0.2;
+    alpha = pressedAlphaAt(time);
   } else {
     // fade out
-    alpha = 0.2 - (time - laneState.lastStateTime) / 1000000.0 / 1.0;
+    alpha = laneBeamReleaseAlpha(pressedAlphaAt(laneState.lastStateTime),
+                                 time - laneState.lastStateTime);
   }
   if (alpha <= 0.0) {
     return;

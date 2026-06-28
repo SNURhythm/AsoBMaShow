@@ -37,12 +37,14 @@ class TexBatchRenderer;
 class SpriteLoader;
 struct LaneState {
   long long lastStateTime = -1;
+  long long lastPressedTime = -1;
   bool isPressed = false;
   JudgeResult lastPressedJudge = JudgeResult(None, 0);
 };
 
 struct AtomicLaneState {
   std::atomic<long long> lastStateTime{-1};
+  std::atomic<long long> lastPressedTime{-1};
   std::atomic<bool> isPressed{false};
   std::atomic<int> lastPressedJudgement{None};
   std::atomic<long long> lastPressedDiff{0};

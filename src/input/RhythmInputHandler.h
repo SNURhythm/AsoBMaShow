@@ -20,7 +20,7 @@ struct FlickState {
   Uint32 startTime;
   bool active;
   int lastFlickDirection; // 0: none, 1: up, -1: down
-  bool isLongNote;
+  bms_parser::LongNote *activeLongNote;
 };
 class RhythmInputHandler : public IInputHandler {
 private:
