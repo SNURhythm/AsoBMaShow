@@ -215,6 +215,7 @@ private:
   size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
+  bool touchVisualizerLoaded = false;
   bool practiceGhostPublished = false;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;

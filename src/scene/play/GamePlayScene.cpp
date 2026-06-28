@@ -624,6 +624,7 @@ void GamePlayScene::reset() {
   replayKeySoundCursor = 0;
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
+  touchVisualizerLoaded = false;
   floatingLaneCoverDragActive = false;
   floatingLaneCoverDragChanged = false;
   floatingLaneCoverFinger = -1;
@@ -1094,6 +1095,7 @@ void GamePlayScene::update(float dt) {
 
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
   const long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
     processReplayKeySounds(rawSongTimeMicros);
     processReplayEvents(gameplayTimeMicros);
@@ -2040,7 +2042,7 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
 
   const long long gameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
-  if (renderer != nullptr) {
+  if (renderer != nullptr && touchVisualizerLoaded) {
     renderer->setLiveTouchPoint(static_cast<long long>(fingerIndex), action,
                                 normalizedLocation.x, normalizedLocation.y,
                                 gameplayTimeMicros);
