@@ -42,6 +42,9 @@ struct ArchiveAudioBatch {
   std::unordered_map<path_t, std::vector<int>> wavIdsByPath;
 };
 
+constexpr std::uint64_t kArchiveAudioMaxInFlightBytes =
+    64ull * 1024ull * 1024ull;
+
 long long elapsedMicros(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now() - start)
@@ -130,21 +133,65 @@ bool addArchiveAudioTarget(
   return true;
 }
 
-bool readArchiveAudioBatch(
-    const ArchiveAudioBatch &batch,
-    const std::optional<archive_file::EntryRange> &range,
-    std::vector<archive_file::FileData> &files, std::string *errorMessage) {
+bool readArchiveAudioBatch(const ArchiveAudioBatch &batch,
+                           const std::optional<archive_file::EntryRange> &range,
+                           std::vector<archive_file::FileData> &files,
+                           std::string *errorMessage,
+                           std::atomic_bool &isCancelled) {
+  files.clear();
+  const std::size_t workerCount =
+      static_cast<std::size_t>(parallel_worker_count(batch.innerPaths.size()));
+  if (workerCount > 1) {
+    std::mutex filesMutex;
+    std::vector<archive_file::FileData> concurrentFiles;
+    concurrentFiles.reserve(batch.innerPaths.size());
+    std::string concurrentError;
+    auto onFile = [&](archive_file::FileData &&file) {
+      if (isCancelled.load(std::memory_order_relaxed)) {
+        return false;
+      }
+      std::lock_guard<std::mutex> lock(filesMutex);
+      concurrentFiles.push_back(std::move(file));
+      return true;
+    };
+    const bool readOk = archive_file::readArchiveEntriesConcurrently(
+        batch.archivePath, batch.innerPaths, std::move(onFile), workerCount,
+        kArchiveAudioMaxInFlightBytes, &concurrentError, [&isCancelled]() {
+          return !isCancelled.load(std::memory_order_relaxed);
+        });
+    if (readOk && concurrentFiles.size() == batch.innerPaths.size()) {
+      files = std::move(concurrentFiles);
+      return true;
+    }
+    if (readOk) {
+      concurrentError = "Concurrent archive audio read returned " +
+                        std::to_string(concurrentFiles.size()) + " of " +
+                        std::to_string(batch.innerPaths.size()) +
+                        " requested files.";
+    }
+    if (!concurrentError.empty() &&
+        !isCancelled.load(std::memory_order_relaxed)) {
+      archive_file::appendDebugLogLine(
+          "Falling back to serial archive audio batch read: " +
+          fspath_to_utf8(batch.archivePath) + ": " + concurrentError);
+    }
+  }
+
+  auto pauseCallback = [&isCancelled]() {
+    return !isCancelled.load(std::memory_order_relaxed);
+  };
   if (range.has_value()) {
     std::string rangeError;
-    if (archive_file::readArchiveEntriesInRange(
-            batch.archivePath, batch.innerPaths, *range, files, &rangeError) &&
+    if (archive_file::readArchiveEntriesInRange(batch.archivePath,
+                                                batch.innerPaths, *range, files,
+                                                &rangeError, pauseCallback) &&
         files.size() == batch.innerPaths.size()) {
       return true;
     }
     files.clear();
   }
   return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
-                                          files, errorMessage);
+                                          files, errorMessage, pauseCallback);
 }
 
 std::unordered_map<std::string, const bms_parser::Note *>
@@ -239,7 +286,8 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     std::string errorMessage;
     const auto range = entryRangeForChartArchive(chart, batch.archivePath);
     const auto readStart = std::chrono::steady_clock::now();
-    if (!readArchiveAudioBatch(batch, range, files, &errorMessage)) {
+    if (!readArchiveAudioBatch(batch, range, files, &errorMessage,
+                               isCancelled)) {
       logMessage(options, "Chart audio archived preload failed: " +
                               fspath_to_utf8(batch.archivePath) +
                               ": " + errorMessage);
