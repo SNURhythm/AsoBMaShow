@@ -527,13 +527,24 @@ void mixActiveSounds(AudioCallbackState &state, float *mixBuffer,
     const int channels = soundData->channels;
 
     for (ma_uint32 frame = 0; frame < framesToRead; ++frame) {
+      const size_t sourceFrameOffset = (currentFrame + frame) * channels;
+      const size_t outputFrameOffset =
+          (outputOffsetFrames + frame) * outputChannels;
+
+      if (channels == 1) {
+        const float sample = src[sourceFrameOffset] / 32768.0f;
+        for (int outputChannel = 0; outputChannel < outputChannels;
+             ++outputChannel) {
+          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+        }
+        continue;
+      }
+
       for (int channel = 0; channel < channels; ++channel) {
         const int outputChannel = channel % outputChannels;
-        const float sample =
-            src[(currentFrame + frame) * channels + channel] / 32768.0f;
+        const float sample = src[sourceFrameOffset + channel] / 32768.0f;
 
-        mixBuffer[(outputOffsetFrames + frame) * outputChannels +
-                  outputChannel] += sample * gain;
+        mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
       }
     }
 
