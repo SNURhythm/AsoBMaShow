@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 #include "../path.h"
@@ -26,6 +27,9 @@ struct ImageData {
   int height;
   int channels;
 };
+
+using ChartResourceTable = std::unordered_map<int, std::string>;
+
 class Jukebox {
 public:
   struct PerformanceAnalytics {
@@ -50,6 +54,7 @@ public:
                  std::atomic_bool &isCancelled);
   void reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                             std::atomic_bool &isCancelled);
+  bool hasLoadedResources() const;
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
@@ -93,13 +98,22 @@ private:
   std::mutex playThreadLock;
   std::mutex schedulerWaitMutex;
   std::condition_variable schedulerWakeCv;
-  void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void loadSounds(bms_parser::Chart &chart,
+                  const ChartResourceTable &wavTable,
+                  std::atomic_bool &isCancelled);
   bool loadArchivedSounds(bms_parser::Chart &chart,
+                          const ChartResourceTable &wavTable,
                           std::atomic_bool &isCancelled);
-  bool loadArchivedChartAssets(bms_parser::Chart &chart, bool loadVisualAssets,
+  bool loadArchivedChartAssets(bms_parser::Chart &chart,
+                               const ChartResourceTable &wavTable,
+                               const ChartResourceTable &bmpTable,
+                               bool loadVisualAssets,
                                std::atomic_bool &isCancelled);
-  void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void loadBMPs(bms_parser::Chart &chart,
+                const ChartResourceTable &bmpTable,
+                std::atomic_bool &isCancelled);
   bool loadArchivedBMPs(bms_parser::Chart &chart,
+                        const ChartResourceTable &bmpTable,
                         std::atomic_bool &isCancelled);
   bool loadVideoPath(int id, const std::filesystem::path &path,
                      std::atomic_bool &isCancelled);
@@ -107,9 +121,11 @@ private:
                                  const std::filesystem::path &materializedPath,
                                  const std::filesystem::path &displayPath,
                                  std::atomic_bool &isCancelled);
-  bool loadImagePath(int id, const std::filesystem::path &path);
+  bool loadImagePath(int id, const std::filesystem::path &path,
+                     std::atomic_bool &isCancelled);
   bool loadImageBytes(int id, const std::filesystem::path &path,
-                      const std::vector<unsigned char> &bytes);
+                      const std::vector<unsigned char> &bytes,
+                      std::atomic_bool &isCancelled);
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);
@@ -125,9 +141,18 @@ private:
     bool video = false;
   };
   std::vector<ResolvedSoundAsset>
-  resolveSoundAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  resolveSoundAssets(bms_parser::Chart &chart,
+                     const ChartResourceTable &wavTable,
+                     std::atomic_bool &isCancelled);
   std::vector<ResolvedVisualAsset>
-  resolveVisualAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  resolveVisualAssets(bms_parser::Chart &chart,
+                      const ChartResourceTable &bmpTable,
+                      std::atomic_bool &isCancelled);
+  void loadResolvedChartResources(bms_parser::Chart &chart,
+                                  const ChartResourceTable &wavTable,
+                                  const ChartResourceTable &bmpTable,
+                                  bool loadVisualAssets,
+                                  std::atomic_bool &isCancelled);
   void reconcileSoundResources(
       bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
       std::atomic_bool &isCancelled);
@@ -170,7 +195,7 @@ private:
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;
   mutable std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
-  std::mutex imageTableMutex;
+  mutable std::mutex imageTableMutex;
   std::unordered_map<int, path_t> visualPathTable;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};

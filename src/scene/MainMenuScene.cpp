@@ -33,6 +33,7 @@
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -89,6 +90,7 @@ constexpr int kLibraryPanelWidth = 360;
 constexpr int kLibraryPanelPadding = 14;
 constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
+constexpr auto kPreviewDebounceDelay = std::chrono::milliseconds(100);
 constexpr size_t kFindBmsMaxLogLines = 120;
 constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 // Keep this below the modal's nominal width because row padding and the
@@ -2593,12 +2595,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
-      previewLoadCancelled = true;
-      if (loadThread.joinable()) {
-        SDL_Log("Joining preview thread");
-        loadThread.join();
-      }
-      stopAndClearSelectedChart();
+      retirePreviewLoadThread(true);
+      clearSelectedChart();
       jacketView->freeImage();
       refreshStartButtonForActiveFolder();
       return;
@@ -2610,12 +2608,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
         item.unavailable && !item.solidArchive &&
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
-    previewLoadCancelled = true;
-    if (loadThread.joinable()) {
-      SDL_Log("Joining preview thread");
-      loadThread.join();
-    }
-    stopAndClearSelectedChart();
+    retirePreviewLoadThread(true);
+    clearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
       return;
@@ -2675,54 +2669,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
-    previewLoadCancelled = false;
-    loadThread = std::thread([this, meta, &context]() {
-      SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
-
-      // Debounce selection changes before doing expensive chart/media loading.
-      for (int i = 0; i < 50; i++) {
-        if (previewLoadCancelled) {
-          return;
-        }
-        if (willStart.load())
-          break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      context.jukebox.stop();
-      SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
-      std::unique_ptr<bms_parser::Chart> chart;
-      try {
-        chart = play_options::parseChart(meta.BmsPath, previewLoadCancelled,
-                                         "preview");
-      } catch (const std::exception &e) {
-        SDL_Log("Preview parse failed %s: %s",
-                fspath_to_utf8(meta.BmsPath).c_str(), e.what());
-        archive_file::appendDebugLogLine(
-            "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
-            e.what());
-        return;
-      }
-      SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
-      if (chart == nullptr) {
-        SDL_Log("Chart is null");
-        archive_file::appendDebugLogLine(
-            "Preview chart is null: " + fspath_to_utf8(meta.BmsPath));
-        return;
-      }
-
-      context.jukebox.loadChart(*chart, true, previewLoadCancelled);
-      if (previewLoadCancelled) {
-        return;
-      }
-      setSelectedChart(std::move(chart), true);
-      if (previewLoadCancelled) {
-        clearSelectedChart();
-        return;
-      }
-      if (!willStart.load()) {
-        context.jukebox.play();
-      }
-    });
+    schedulePreviewLoad(meta);
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);
@@ -4572,7 +4519,7 @@ void MainMenuScene::startCourseDirect(
     startButtonText->setText("Loading...");
   }
   ImageView::dropAllCache();
-  previewLoadCancelled = true;
+  cancelActivePreviewLoading();
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   const int selectedLongNoteMode =
@@ -4593,6 +4540,7 @@ void MainMenuScene::startCourseDirect(
         if (loadThread.joinable()) {
           loadThread.join();
         }
+        joinRetiredPreviewLoadThreads();
         clearSelectedChart();
 
         const bms_parser::ChartMeta *firstMeta = session->currentMeta();
@@ -4726,11 +4674,12 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           return true;
         };
         if (!canReusePreviewForStart) {
-          previewLoadCancelled = true;
+          cancelActivePreviewLoading();
         }
         if (loadThread.joinable()) {
           loadThread.join();
         }
+        joinRetiredPreviewLoadThreads();
 
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
@@ -4757,6 +4706,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           return finishStart();
         }
 
+        cancelActivePreviewLoading();
         selectedChartMediaReady.store(false);
         selectedChartReusableForStart.store(false);
         std::atomic_bool parseCancelled = false;
@@ -5029,11 +4979,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     std::lock_guard<std::mutex> lock(unzipProgressMutex);
     pendingUnzipProgress.reset();
   }
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
-  stopAndClearSelectedChart();
+  cancelPreviewLoading(true);
   unzipEstimatedUncompressedSize =
       fullArchiveUnzip ? record.archiveUncompressedSize : 0;
 
@@ -5969,10 +5915,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
     return;
   }
 
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   context.jukebox.stop();
 
   MusicTrackRecord musicRecord{.representativeChart = record.meta,
@@ -6048,10 +5991,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
 }
 
 void MainMenuScene::playSavedMusicPlaylist() {
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -6075,10 +6015,7 @@ void MainMenuScene::clearSavedMusicPlaylist() {
 }
 
 void MainMenuScene::playRandomMusicLibrary() {
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -6132,10 +6069,7 @@ void MainMenuScene::seekMusicRelative(long long deltaMicros) {
 }
 
 void MainMenuScene::playNextMusicTrack() {
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -6145,10 +6079,7 @@ void MainMenuScene::playNextMusicTrack() {
 }
 
 void MainMenuScene::playPreviousMusicTrack() {
-  previewLoadCancelled = true;
-  if (loadThread.joinable()) {
-    loadThread.join();
-  }
+  cancelPreviewLoading(false);
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -7987,6 +7918,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
   }
 
   willStart.store(true);
+  cancelActivePreviewLoading();
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Loading...");
   }
@@ -8002,6 +7934,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         if (loadThread.joinable()) {
           loadThread.join();
         }
+        joinRetiredPreviewLoadThreads();
 
         if (replay_autoplay::isAutoPlayReplayId(replayId)) {
           std::atomic_bool parseCancelled = false;
@@ -8104,6 +8037,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
   }
 
   willStart.store(true);
+  cancelActivePreviewLoading();
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Loading...");
   }
@@ -8117,6 +8051,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         if (loadThread.joinable()) {
           loadThread.join();
         }
+        joinRetiredPreviewLoadThreads();
 
         auto replay = ReplayDBHelper::GetInstance().LoadCourseReplay(replayId);
         if (!replay.has_value() || replay->stages.empty()) {
@@ -8221,12 +8156,192 @@ void MainMenuScene::clearSelectedChart() {
   }
 }
 
+void MainMenuScene::schedulePreviewLoad(bms_parser::ChartMeta meta) {
+  {
+    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
+  previewLoadDebouncer.schedule(
+      kPreviewDebounceDelay,
+      [this, meta = std::move(meta)](const DebounceToken &previewToken) {
+        if (willStart.load() || previewToken.cancelled()) {
+          return;
+        }
+        startPreviewLoadThread(meta, previewToken);
+      });
+}
+
+void MainMenuScene::startPreviewLoadThread(
+    bms_parser::ChartMeta meta, DebounceToken previewToken) {
+  if (loadThread.joinable()) {
+    return;
+  }
+
+  auto cancelToken = std::make_shared<std::atomic_bool>(false);
+  auto finishedToken = std::make_shared<std::atomic_bool>(false);
+  previewLoadCancelToken = cancelToken;
+  previewLoadFinishedToken = finishedToken;
+  loadThread = std::thread([this, meta = std::move(meta), cancelToken,
+                            finishedToken, previewToken]() {
+    auto markFinished = makeScopeExit([finishedToken]() {
+      finishedToken->store(true, std::memory_order_release);
+    });
+    auto isCancelled = [cancelToken, previewToken]() {
+      return cancelToken->load(std::memory_order_relaxed) ||
+             previewToken.cancelled();
+    };
+    SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
+
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      if (isCancelled()) {
+        return;
+      }
+      context.jukebox.stop();
+    }
+    SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
+    std::unique_ptr<bms_parser::Chart> chart;
+    try {
+      chart = play_options::parseChart(meta.BmsPath, *cancelToken, "preview");
+    } catch (const std::exception &e) {
+      SDL_Log("Preview parse failed %s: %s",
+              fspath_to_utf8(meta.BmsPath).c_str(), e.what());
+      archive_file::appendDebugLogLine(
+          "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
+          e.what());
+      return;
+    }
+    if (isCancelled()) {
+      return;
+    }
+    SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
+    if (chart == nullptr) {
+      SDL_Log("Chart is null");
+      archive_file::appendDebugLogLine("Preview chart is null: " +
+                                       fspath_to_utf8(meta.BmsPath));
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      if (isCancelled()) {
+        return;
+      }
+      if (context.jukebox.hasLoadedResources()) {
+        context.jukebox.reloadChartResources(*chart, true, *cancelToken);
+      } else {
+        context.jukebox.loadChart(*chart, true, *cancelToken);
+      }
+      if (isCancelled()) {
+        return;
+      }
+      setSelectedChart(std::move(chart), true);
+      if (isCancelled()) {
+        clearSelectedChart();
+        return;
+      }
+      if (!willStart.load()) {
+        context.jukebox.play();
+      }
+    }
+  });
+}
+
+void MainMenuScene::cancelActivePreviewLoading() {
+  previewLoadDebouncer.cancel();
+  if (previewLoadCancelToken != nullptr) {
+    previewLoadCancelToken->store(true, std::memory_order_release);
+  }
+}
+
+void MainMenuScene::retirePreviewLoadThread(bool stopPreviewAudioWhenDone) {
+  cancelActivePreviewLoading();
+  {
+    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    if (stopPreviewAudioWhenDone) {
+      pendingStopAndClearSelectedChartAfterPreview = true;
+    }
+    if (loadThread.joinable()) {
+      SDL_Log("Retiring preview thread");
+      retiredPreviewLoadThreads.push_back(RetiredPreviewLoadThread{
+          .thread = std::move(loadThread),
+          .finished = previewLoadFinishedToken != nullptr
+                          ? previewLoadFinishedToken
+                          : std::make_shared<std::atomic_bool>(true),
+      });
+    }
+  }
+  previewLoadCancelToken = std::make_shared<std::atomic_bool>(true);
+  previewLoadFinishedToken = std::make_shared<std::atomic_bool>(true);
+  reapRetiredPreviewLoadThreads();
+}
+
+void MainMenuScene::reapRetiredPreviewLoadThreads() {
+  std::vector<RetiredPreviewLoadThread> finishedThreads;
+  bool shouldStopPreviewAudio = false;
+  {
+    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    auto it = retiredPreviewLoadThreads.begin();
+    while (it != retiredPreviewLoadThreads.end()) {
+      const bool finished =
+          it->finished == nullptr ||
+          it->finished->load(std::memory_order_acquire);
+      if (!finished) {
+        ++it;
+        continue;
+      }
+      finishedThreads.push_back(std::move(*it));
+      it = retiredPreviewLoadThreads.erase(it);
+    }
+
+    if (pendingStopAndClearSelectedChartAfterPreview &&
+        retiredPreviewLoadThreads.empty()) {
+      pendingStopAndClearSelectedChartAfterPreview = false;
+      shouldStopPreviewAudio = true;
+    }
+  }
+
+  for (auto &retiredThread : finishedThreads) {
+    if (retiredThread.thread.joinable()) {
+      SDL_Log("Joining finished preview thread");
+      retiredThread.thread.join();
+    }
+  }
+  if (shouldStopPreviewAudio) {
+    stopAndClearSelectedChart();
+  }
+}
+
+void MainMenuScene::joinRetiredPreviewLoadThreads() {
+  std::vector<RetiredPreviewLoadThread> retiredThreads;
+  bool shouldStopPreviewAudio = false;
+  {
+    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    retiredThreads.swap(retiredPreviewLoadThreads);
+    if (pendingStopAndClearSelectedChartAfterPreview) {
+      pendingStopAndClearSelectedChartAfterPreview = false;
+      shouldStopPreviewAudio = true;
+    }
+  }
+
+  for (auto &retiredThread : retiredThreads) {
+    if (retiredThread.thread.joinable()) {
+      SDL_Log("Joining retired preview thread");
+      retiredThread.thread.join();
+    }
+  }
+  if (shouldStopPreviewAudio) {
+    stopAndClearSelectedChart();
+  }
+}
+
 void MainMenuScene::cancelPreviewLoading(bool stopPreviewAudio) {
-  previewLoadCancelled = true;
+  cancelActivePreviewLoading();
   if (loadThread.joinable()) {
     SDL_Log("Joining preview thread");
     loadThread.join();
   }
+  joinRetiredPreviewLoadThreads();
   if (stopPreviewAudio) {
     stopAndClearSelectedChart();
   }
@@ -8295,7 +8410,7 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
   }
 
   willStart.store(true);
-  previewLoadCancelled = true;
+  cancelActivePreviewLoading();
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   {
@@ -8374,6 +8489,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       if (loadThread.joinable()) {
         loadThread.join();
       }
+      joinRetiredPreviewLoadThreads();
       context.jukebox.stop();
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -8495,6 +8611,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     if (loadThread.joinable()) {
       loadThread.join();
     }
+    joinRetiredPreviewLoadThreads();
     context.jukebox.stop();
 
     if (record.courseStart) {
@@ -8640,6 +8757,8 @@ void MainMenuScene::applyReplayExportResult() {
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
+  previewLoadDebouncer.update();
+  reapRetiredPreviewLoadThreads();
   refreshScoreClearRanksIfNeeded();
   refreshTasksButton();
   applyPendingUiUpdates();
@@ -8726,7 +8845,7 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
-  previewLoadCancelled = true;
+  cancelActivePreviewLoading();
   context.requestAddChartFolderFromFiles = nullptr;
   context.requestRebuildChartLibrary = nullptr;
   context.notifyBackgroundTaskPauseStateChanged = nullptr;
@@ -8766,6 +8885,7 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining loadThread");
     loadThread.join();
   }
+  joinRetiredPreviewLoadThreads();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   ClearIOSFolderAccess();
 #endif

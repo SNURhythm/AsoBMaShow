@@ -303,37 +303,35 @@ void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
     std::mutex decodedSoundsMutex;
     std::atomic_size_t decodedInBatch = 0;
     std::atomic_size_t failedInBatch = 0;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
-        const auto &file = files[static_cast<std::size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.wavIdsByPath.find(soundPath);
-        if (idsIt == batch.wavIdsByPath.end()) {
-          continue;
-        }
+    parallel_for_each_index(files.size(), [&](std::size_t i) {
+      if (isCancelled) {
+        return;
+      }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.wavIdsByPath.find(soundPath);
+      if (idsIt == batch.wavIdsByPath.end()) {
+        return;
+      }
 
-        auto decoded = std::make_shared<DecodedSound>();
-        if (!decodeAudioBytesToPCM(soundPath, file.bytes, decoded->pcm,
-                                   decoded->info, isCancelled) ||
-            !decodedSoundIsValid(*decoded)) {
-          std::lock_guard<std::mutex> lock(decodedSoundsMutex);
-          for (const int wav : idsIt->second) {
-            decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
-          }
-          ++failedInBatch;
-          continue;
-        }
-
+      auto decoded = std::make_shared<DecodedSound>();
+      if (!decodeAudioBytesToPCM(soundPath, file.bytes, decoded->pcm,
+                                 decoded->info, isCancelled) ||
+          !decodedSoundIsValid(*decoded)) {
         std::lock_guard<std::mutex> lock(decodedSoundsMutex);
         for (const int wav : idsIt->second) {
-          if (decodedSounds.emplace(wav, decoded).second) {
-            ++decodedInBatch;
-          }
+          decodedSounds.emplace(wav, std::shared_ptr<DecodedSound>{});
+        }
+        ++failedInBatch;
+        return;
+      }
+
+      std::lock_guard<std::mutex> lock(decodedSoundsMutex);
+      for (const int wav : idsIt->second) {
+        if (decodedSounds.emplace(wav, decoded).second) {
+          ++decodedInBatch;
         }
       }
     });

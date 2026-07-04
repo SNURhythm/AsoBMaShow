@@ -345,13 +345,23 @@ public:
   }
 
   void setChart(bms_parser::Chart *newChart) {
+    const std::optional<long long> previousSelectedTime = selectedTimeMicros;
     chart = newChart;
     markerGlyphTextures.clear();
-    selectedTimeMicros.reset();
-    selectedBeatPosition.reset();
     playbackActive = false;
     replayGhostEvents.clear();
     rebuildLayout();
+    selectedTimeMicros.reset();
+    selectedBeatPosition.reset();
+    if (chart == nullptr || !previousSelectedTime.has_value()) {
+      return;
+    }
+    const long long clampedTime = std::max(0LL, *previousSelectedTime);
+    if (clampedTime > chart_playback_duration::ChartTimelineEndMicros(*chart)) {
+      return;
+    }
+    selectedTimeMicros = clampedTime;
+    selectedBeatPosition = timeToBeatPosition(clampedTime);
   }
 
   void setShowInvisibleNotes(bool enabled) { showInvisibleNotes = enabled; }
@@ -2221,10 +2231,11 @@ void ChartViewerScene::update(float dt) {
 void ChartViewerScene::renderScene() {}
 
 void ChartViewerScene::cleanupScene() {
-  if (listenActive || listenAudioLoaded) {
+  if (listenActive || listenAudioLoaded || retainedListenResourcesForReload) {
     context.jukebox.stop();
     listenActive = false;
     listenAudioLoaded = false;
+    retainedListenResourcesForReload = false;
     listenEndMicros = 0;
   }
   chart.reset();
@@ -2683,12 +2694,7 @@ void ChartViewerScene::hideRandomDrawer() {
 
 void ChartViewerScene::parseAndRefresh(
     std::optional<std::vector<int>> requestedValues) {
-  stopListening();
-  if (listenAudioLoaded) {
-    context.jukebox.stop();
-    listenAudioLoaded = false;
-    listenEndMicros = 0;
-  }
+  retainLoadedListenResourcesForChartChange();
   if (canvasView != nullptr) {
     canvasView->clearGhostReplay();
   }
@@ -3166,12 +3172,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
     return false;
   }
 
-  stopListening();
-  if (listenAudioLoaded) {
-    context.jukebox.stop();
-    listenAudioLoaded = false;
-    listenEndMicros = 0;
-  }
+  retainLoadedListenResourcesForChartChange();
 
   randomSeed = replayChart->Meta.RandomSeed;
   randomPrng = replayChart->Meta.RandomPrng;
@@ -3665,6 +3666,21 @@ void ChartViewerScene::onCanvasSelectionChanged(long long timeMicros) {
   updateSelectionText();
 }
 
+void ChartViewerScene::retainLoadedListenResourcesForChartChange() {
+  stopListening();
+  if (listenAudioLoaded) {
+    context.jukebox.stop();
+    listenAudioLoaded = false;
+    retainedListenResourcesForReload = true;
+    listenEndMicros = 0;
+    return;
+  }
+  if (retainedListenResourcesForReload) {
+    context.jukebox.stop();
+    listenEndMicros = 0;
+  }
+}
+
 void ChartViewerScene::startListeningFromSelection() {
   if (chart == nullptr || canvasView == nullptr ||
       !canvasView->hasSelectedTime()) {
@@ -3676,8 +3692,11 @@ void ChartViewerScene::startListeningFromSelection() {
 
   const long long selectedTime = canvasView->getSelectedTimeMicros();
   if (statusText != nullptr) {
-    statusText->setText(listenAudioLoaded ? "Seeking audio..."
-                                          : "Loading audio...");
+    statusText->setText(
+        listenAudioLoaded
+            ? "Seeking audio..."
+            : (retainedListenResourcesForReload ? "Updating audio..."
+                                                : "Loading audio..."));
   }
   listenActive = false;
   canvasView->clearPlaybackTime();
@@ -3696,7 +3715,11 @@ void ChartViewerScene::startListeningFromSelection() {
           const bool previousVisuals = context.jukebox.getVisualsEnabled();
           context.jukebox.stop();
           context.jukebox.setVisualsEnabled(false);
-          context.jukebox.loadChart(*chart, true, cancelled);
+          if (retainedListenResourcesForReload) {
+            context.jukebox.reloadChartResources(*chart, true, cancelled);
+          } else {
+            context.jukebox.loadChart(*chart, true, cancelled);
+          }
           context.jukebox.setVisualsEnabled(previousVisuals);
           if (cancelled) {
             if (statusText != nullptr) {
@@ -3706,6 +3729,7 @@ void ChartViewerScene::startListeningFromSelection() {
             return true;
           }
           listenAudioLoaded = true;
+          retainedListenResourcesForReload = false;
         } else {
           context.jukebox.stop();
         }
@@ -3777,6 +3801,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
       gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
+  const bool canReuseJukeboxResources =
+      listenAudioLoaded || retainedListenResourcesForReload;
 
   stopListening();
   if (statusText != nullptr) {
@@ -3786,7 +3812,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       gaugeSelection, autoKeySound, assistOption, autoPlay]() {
+       gaugeSelection, autoKeySound, assistOption, autoPlay,
+       canReuseJukeboxResources]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -3823,7 +3850,12 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           return true;
         }
         context.jukebox.stop();
-        context.jukebox.loadChart(*practiceChart, true, parseCancelled);
+        if (canReuseJukeboxResources) {
+          context.jukebox.reloadChartResources(*practiceChart, true,
+                                               parseCancelled);
+        } else {
+          context.jukebox.loadChart(*practiceChart, true, parseCancelled);
+        }
         if (parseCancelled) {
           if (statusText != nullptr) {
             statusText->setText(autoPlay ? "Auto play load cancelled"
@@ -3831,6 +3863,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           }
           return true;
         }
+        listenAudioLoaded = false;
+        retainedListenResourcesForReload = true;
+        listenEndMicros = 0;
 
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +

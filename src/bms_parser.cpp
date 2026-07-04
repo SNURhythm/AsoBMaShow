@@ -3041,7 +3041,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             break;
           }
           if (ParseInt(val) != 0) {
-            auto bgNote = new Note{ToWaveId(new_chart, val, metaOnly)};
+            const int wavId = ToWaveId(new_chart, val, metaOnly);
+            RegisterReferencedWaveId(new_chart, wavId);
+            auto bgNote = new Note{wavId};
             timeline->AddBackgroundNote(bgNote);
           }
 
@@ -3055,15 +3057,24 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           timeline->BpmChange = true;
           break;
         }
-        case BgaPlay:
-          timeline->BgaBase = ParseInt(val);
+        case BgaPlay: {
+          const int bmpId = ParseInt(val);
+          RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
+          timeline->BgaBase = bmpId;
           break;
-        case PoorPlay:
-          timeline->BgaPoor = ParseInt(val);
+        }
+        case PoorPlay: {
+          const int bmpId = ParseInt(val);
+          RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
+          timeline->BgaPoor = bmpId;
           break;
-        case LayerPlay:
-          timeline->BgaLayer = ParseInt(val);
+        }
+        case LayerPlay: {
+          const int bmpId = ParseInt(val);
+          RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
+          timeline->BgaLayer = bmpId;
           break;
+        }
         case BpmChangeExtend: {
           const auto id = ParseInt(val);
           // std::cout << "BPM_CHANGE_EXTEND: " << id << ", on measure " <<
@@ -3136,7 +3147,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             lastTimeline->SetNote(laneNumber, ln);
             timeline->SetNote(laneNumber, ln->Tail);
           } else {
-            auto note = new Note{ToWaveId(new_chart, val, metaOnly)};
+            const int wavId = ToWaveId(new_chart, val, metaOnly);
+            RegisterReferencedWaveId(new_chart, wavId);
+            auto note = new Note{wavId};
             lastNote[laneNumber] = note;
             ++totalNotes;
             if (isScratch) {
@@ -3150,7 +3163,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           }
         } break;
         case P1InvisibleKeyBase: {
-          auto invNote = new Note{ToWaveId(new_chart, val, metaOnly)};
+          const int wavId = ToWaveId(new_chart, val, metaOnly);
+          RegisterReferencedWaveId(new_chart, wavId);
+          auto invNote = new Note{wavId};
           timeline->SetInvisibleNote(laneNumber, invNote);
           break;
         }
@@ -3165,8 +3180,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                 ++totalLongNotes;
               }
 
-              auto ln = new LongNote{ToWaveId(new_chart, val, metaOnly),
-                                     channelLongNoteType};
+              const int wavId = ToWaveId(new_chart, val, metaOnly);
+              RegisterReferencedWaveId(new_chart, wavId);
+              auto ln = new LongNote{wavId, channelLongNoteType};
               lnStart[laneNumber] = ln;
 
               if (metaOnly) {
@@ -3435,6 +3451,10 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       return;
     }
     Chart->WavTable[id] = Value;
+    if (Chart->ReferencedWavTable.find(id) !=
+        Chart->ReferencedWavTable.end()) {
+      Chart->ReferencedWavTable[id] = Value;
+    }
   } else if (MatchHeader(cmd, "BMP")) {
     if (Xx.empty() || Value.empty()) {
       // UE_LOG(LogTemp, Warning, TEXT("BMP command requires two arguments"));
@@ -3446,7 +3466,12 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       return;
     }
     Chart->BmpTable[id] = Value;
+    if (Chart->ReferencedBmpTable.find(id) !=
+        Chart->ReferencedBmpTable.end()) {
+      Chart->ReferencedBmpTable[id] = Value;
+    }
     if (Xx == "00") {
+      Chart->ReferencedBmpTable[id] = Value;
       Chart->Meta.BgaPoorDefault = true;
     }
   } else if (MatchHeader(cmd, "LNOBJ")) {
@@ -3500,6 +3525,29 @@ inline int Parser::ToWaveId(Chart *Chart, std::string_view Wav, bool metaOnly) {
 
   return Chart->WavTable.find(decoded) != Chart->WavTable.end() ? decoded
                                                                 : NoWav;
+}
+
+inline void Parser::RegisterReferencedWaveId(Chart *Chart, int WavId) const {
+  if (Chart == nullptr || WavId == NoWav || WavId == MetronomeWav) {
+    return;
+  }
+  const auto wavIt = Chart->WavTable.find(WavId);
+  if (wavIt == Chart->WavTable.end()) {
+    return;
+  }
+  Chart->ReferencedWavTable[WavId] = wavIt->second;
+}
+
+inline void Parser::RegisterReferencedBmpId(Chart *Chart, int BmpId,
+                                            bool metaOnly) const {
+  if (metaOnly || Chart == nullptr || !CheckResourceIdRange(BmpId)) {
+    return;
+  }
+  const auto bmpIt = Chart->BmpTable.find(BmpId);
+  if (bmpIt == Chart->BmpTable.end()) {
+    return;
+  }
+  Chart->ReferencedBmpTable[BmpId] = bmpIt->second;
 }
 
 inline int Parser::ParseHex(std::string_view Str) {

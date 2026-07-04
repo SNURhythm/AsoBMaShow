@@ -41,6 +41,35 @@ constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
 constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
     64ull * 1024ull * 1024ull;
 
+bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
+                              const ChartResourceTable &wavTable,
+                              const ChartResourceTable &bmpTable,
+                              bool loadVisualAssets) {
+  for (const auto &[id, wavPath] : wavTable) {
+    (void)id;
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / wavPath,
+                                       archivePath, innerPath)) {
+      return true;
+    }
+  }
+
+  if (!loadVisualAssets) {
+    return false;
+  }
+  for (const auto &[id, bmpPath] : bmpTable) {
+    (void)id;
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / bmpPath,
+                                       archivePath, innerPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 #if TARGET_OS_ANDROID
 struct UniqueFd {
   explicit UniqueFd(int fd) : value(fd) {}
@@ -56,11 +85,11 @@ struct UniqueFd {
 };
 
 std::optional<std::filesystem::path>
-normalizedAndroidAssetReference(const std::string &assetPath) {
+normalizedAndroidAssetReference(const std::filesystem::path &assetPath) {
   if (assetPath.empty()) {
     return std::nullopt;
   }
-  std::string normalized = assetPath;
+  std::string normalized = fspath_to_utf8(assetPath);
   std::replace(normalized.begin(), normalized.end(), '\\', '/');
   while (!normalized.empty() && normalized.front() == '/') {
     normalized.erase(normalized.begin());
@@ -81,7 +110,8 @@ normalizedAndroidAssetReference(const std::string &assetPath) {
 }
 
 void addAndroidAssetDirectory(
-    const std::filesystem::path &chartFolder, const std::string &assetPath,
+    const std::filesystem::path &chartFolder,
+    const std::filesystem::path &assetPath,
     std::vector<std::filesystem::path> &directories,
     std::unordered_set<path_t> &directoryKeys) {
   const auto relativePath = normalizedAndroidAssetReference(assetPath);
@@ -100,6 +130,8 @@ void addAndroidAssetDirectory(
 }
 
 void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
+                                            const ChartResourceTable &wavTable,
+                                            const ChartResourceTable &bmpTable,
                                             bool loadVisualAssets,
                                             std::atomic_bool &isCancelled) {
   if (!IsAndroidTreePath(chart.Meta.Folder)) {
@@ -115,19 +147,21 @@ void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
   directoryKeys.insert(chartFolderKey);
   directories.push_back(chartFolder);
 
-  for (const auto &wav : chart.WavTable) {
+  for (const auto &[id, wavPath] : wavTable) {
+    (void)id;
     if (isCancelled) {
       return;
     }
-    addAndroidAssetDirectory(chartFolder, wav.second, directories,
+    addAndroidAssetDirectory(chartFolder, wavPath, directories,
                              directoryKeys);
   }
   if (loadVisualAssets) {
-    for (const auto &bmp : chart.BmpTable) {
+    for (const auto &[id, bmpPath] : bmpTable) {
+      (void)id;
       if (isCancelled) {
         return;
       }
-      addAndroidAssetDirectory(chartFolder, bmp.second, directories,
+      addAndroidAssetDirectory(chartFolder, bmpPath, directories,
                                directoryKeys);
     }
   }
@@ -274,6 +308,13 @@ struct ArchiveChartAssetBatch {
   std::unordered_map<path_t, std::vector<int>> soundIdsByPath;
   std::unordered_map<path_t, std::vector<int>> videoIdsByPath;
   std::unordered_map<path_t, std::vector<int>> imageIdsByPath;
+};
+
+struct ReusableVisualSources {
+  std::vector<int> imageIds;
+  size_t nextImageIndex = 0;
+  std::vector<int> videoIds;
+  size_t nextVideoIndex = 0;
 };
 
 bool addArchiveAssetTarget(
@@ -826,10 +867,16 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   auto videoPlayer = std::make_unique<VideoPlayer>(stopwatch);
   const path_t playablePath = fspath_to_path_t(materializedPath);
 
   if (videoPlayer->loadVideo(path_t_to_utf8(playablePath), isCancelled)) {
+    if (isCancelled) {
+      return false;
+    }
     auto *loadedVideoPlayer = videoPlayer.get();
     loadedVideoPlayer->setDecodeSuspended(
         !visualsEnabled.load(std::memory_order_relaxed) ||
@@ -852,6 +899,9 @@ bool Jukebox::loadMaterializedVideoPath(
 
 bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
                             std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
 #if TARGET_OS_ANDROID
   if (IsAndroidTreePath(path)) {
     std::string fdError;
@@ -875,7 +925,10 @@ bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
 #endif
   std::string materializeError;
   const auto playablePath =
-      archive_file::materializeFile(path, &materializeError);
+      archive_file::materializeFile(path, &materializeError, &isCancelled);
+  if (isCancelled) {
+    return false;
+  }
   if (!playablePath.has_value()) {
     SDL_Log("Failed to materialize video: %s", materializeError.c_str());
     return false;
@@ -884,11 +937,18 @@ bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
 }
 
 bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
-                             const std::vector<unsigned char> &bytes) {
+                             const std::vector<unsigned char> &bytes,
+                             std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
   StbiImageHandle data(decodeImageBytes(bytes, &width, &height, &channels, 4));
+  if (isCancelled) {
+    return false;
+  }
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
@@ -896,6 +956,9 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   if (!decodedImageDimensionsAreValid(width, height)) {
     SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
             height);
+    return false;
+  }
+  if (isCancelled) {
     return false;
   }
   const auto texture = bgfx::createTexture2D(
@@ -913,8 +976,14 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (isCancelled) {
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (isCancelled) {
+      return false;
+    }
     replaceImageLocked(imageTable, id, image);
     visualPathTable[id] = displayPath;
     textureGuard.dismiss();
@@ -922,11 +991,18 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   return true;
 }
 
-bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
+bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
+                            std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
   StbiImageHandle data(loadImageFile(path, &width, &height, &channels, 4));
+  if (isCancelled) {
+    return false;
+  }
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
@@ -934,6 +1010,9 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
   if (!decodedImageDimensionsAreValid(width, height)) {
     SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
             height);
+    return false;
+  }
+  if (isCancelled) {
     return false;
   }
   const auto texture = bgfx::createTexture2D(
@@ -951,8 +1030,14 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (isCancelled) {
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (isCancelled) {
+      return false;
+    }
     replaceImageLocked(imageTable, id, image);
     visualPathTable[id] = displayPath;
     textureGuard.dismiss();
@@ -987,94 +1072,125 @@ Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
+                         const ChartResourceTable &wavTable,
                          std::atomic_bool &isCancelled) {
-  if (loadArchivedSounds(chart, isCancelled)) {
+  if (loadArchivedSounds(chart, wavTable, isCancelled)) {
     return;
   }
 
   using Clock = std::chrono::steady_clock;
   const auto loadStart = Clock::now();
   const std::size_t wavCount = chart.WavTable.size();
-  const unsigned int workerCount = parallel_worker_count(wavCount);
-  SDL_Log("Loading %zu sounds using %u workers", wavCount, workerCount);
+  const unsigned int workerCount = parallel_worker_count(wavTable.size());
+  SDL_Log("Loading %zu referenced sounds from %zu wav entries using %u workers",
+          wavTable.size(), wavCount, workerCount);
 
-  std::mutex wavTableLock;
-  std::mutex loadedPathsLock;
-  std::unordered_set<path_t> loadedPaths;
-  std::atomic_size_t loadedCount{0};
-  std::atomic_size_t duplicateCount{0};
+  std::vector<std::pair<int, std::optional<path_t>>> resolvedSoundPaths;
+  resolvedSoundPaths.reserve(wavTable.size());
+  for (const auto &[wavId, wavPath] : wavTable) {
+    (void)wavPath;
+    resolvedSoundPaths.emplace_back(wavId, std::nullopt);
+  }
   std::atomic_size_t failedCount{0};
   const auto audioExtensionViews = makeAudioExtensionViews();
 
   wavTableAbs.clear();
 
-  parallel_for(chart.WavTable.size(), [&](int start, int end) {
-    auto wav = std::next(chart.WavTable.begin(), start);
-    for (int i = start; i < end; i++, ++wav) {
-      if (isCancelled)
-        return;
-      bool found = false;
-      std::filesystem::path basePath = chart.Meta.Folder / wav->second;
-      const auto resolvedPath =
-          archive_file::findFileWithExtensions(basePath, audioExtensionViews);
-      if (resolvedPath.has_value()) {
-        const std::filesystem::path path = *resolvedPath;
-
-        const path_t soundPath = fspath_to_path_t(path);
-        bool needsLoad = true;
-        {
-          std::lock_guard<std::mutex> lock(loadedPathsLock);
-          needsLoad = !loadedPaths.contains(soundPath);
-        }
-
-        if (needsLoad && !audio.loadSound(soundPath, isCancelled)) {
-          failedCount.fetch_add(1, std::memory_order_relaxed);
-          continue;
-        }
-
-        if (needsLoad) {
-          std::lock_guard<std::mutex> lock(loadedPathsLock);
-          loadedPaths.insert(soundPath);
-          loadedCount.fetch_add(1, std::memory_order_relaxed);
-          SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION, "Loaded sound %d: %s",
-                         wav->first, path_t_to_utf8(soundPath).c_str());
-        } else {
-          duplicateCount.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        {
-          std::lock_guard<std::mutex> lock(wavTableLock);
-          auto idx = wav->first;
-          wavTableAbs[idx] = soundPath;
-        }
-
-        found = true;
-      }
-      if (!found) {
-        failedCount.fetch_add(1, std::memory_order_relaxed);
-        SDL_Log("Failed to load sound for all extensions: %s",
-                basePath.c_str());
-      }
+  parallel_for_each_index(resolvedSoundPaths.size(), [&](size_t i) {
+    if (isCancelled)
+      return;
+    const int wavId = resolvedSoundPaths[i].first;
+    const auto wavIt = wavTable.find(wavId);
+    if (wavIt == wavTable.end()) {
+      return;
+    }
+    const auto &wavPath = wavIt->second;
+    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
+    const auto resolvedPath =
+        archive_file::findFileWithExtensions(basePath, audioExtensionViews);
+    if (resolvedPath.has_value()) {
+      resolvedSoundPaths[i].second = fspath_to_path_t(*resolvedPath);
+    } else {
+      failedCount.fetch_add(1, std::memory_order_relaxed);
+      SDL_Log("Failed to load sound for all extensions: %s",
+              fspath_to_utf8(basePath).c_str());
     }
   });
+  if (isCancelled) {
+    return;
+  }
+
+  std::unordered_map<path_t, std::vector<int>> idsByPath;
+  std::vector<path_t> uniqueSoundPaths;
+  uniqueSoundPaths.reserve(wavTable.size());
+  std::size_t duplicateCount = 0;
+  for (const auto &[wavId, resolvedPath] : resolvedSoundPaths) {
+    if (!resolvedPath.has_value()) {
+      continue;
+    }
+    const path_t &soundPath = *resolvedPath;
+    auto [idsIt, inserted] = idsByPath.emplace(soundPath, std::vector<int>{});
+    if (inserted) {
+      uniqueSoundPaths.push_back(soundPath);
+    } else {
+      ++duplicateCount;
+    }
+    idsIt->second.push_back(wavId);
+  }
+
+  std::mutex loadedPathsMutex;
+  std::unordered_set<path_t> loadedPaths;
+  parallel_for_each_index(uniqueSoundPaths.size(), [&](size_t i) {
+    if (isCancelled) {
+      return;
+    }
+    const path_t &soundPath = uniqueSoundPaths[i];
+    if (!audio.loadSound(soundPath, isCancelled)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(loadedPathsMutex);
+    loadedPaths.insert(soundPath);
+  });
+  if (isCancelled) {
+    return;
+  }
+
+  std::size_t loadedIdCount = 0;
+  for (const auto &[soundPath, ids] : idsByPath) {
+    if (!loadedPaths.contains(soundPath)) {
+      failedCount.fetch_add(ids.size(), std::memory_order_relaxed);
+      for (const int wavId : ids) {
+        SDL_Log("Failed to load sound %d: %s", wavId,
+                path_t_to_utf8(soundPath).c_str());
+      }
+      continue;
+    }
+    for (const int wavId : ids) {
+      wavTableAbs[wavId] = soundPath;
+      ++loadedIdCount;
+      SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION, "Loaded sound %d: %s",
+                     wavId, path_t_to_utf8(soundPath).c_str());
+    }
+  }
 
   const double elapsedSeconds =
       std::chrono::duration<double>(Clock::now() - loadStart).count();
-  SDL_Log("Loaded sounds summary: wav=%zu loaded=%zu duplicate=%zu failed=%zu "
-          "workers=%u time=%.2fs",
-          wavCount, loadedCount.load(std::memory_order_relaxed),
-          duplicateCount.load(std::memory_order_relaxed),
-          failedCount.load(std::memory_order_relaxed), workerCount,
-          elapsedSeconds);
+  SDL_Log("Loaded sounds summary: wav=%zu referenced=%zu unique=%zu loaded=%zu "
+          "duplicate=%zu failed=%zu workers=%u time=%.2fs",
+          wavCount, wavTable.size(), uniqueSoundPaths.size(), loadedIdCount,
+          duplicateCount, failedCount.load(std::memory_order_relaxed),
+          workerCount, elapsedSeconds);
 }
 
 bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
+                                 const ChartResourceTable &wavTable,
                                  std::atomic_bool &isCancelled) {
   bool hasVirtualAssetBase = false;
-  for (const auto &wav : chart.WavTable) {
+  for (const auto &[id, wavPath] : wavTable) {
+    (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / wav.second,
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / wavPath,
                                        archivePath, innerPath)) {
       hasVirtualAssetBase = true;
       break;
@@ -1091,12 +1207,12 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
 
   wavTableAbs.clear();
-  for (const auto &wav : chart.WavTable) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       return true;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / wav.second;
+    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     std::optional<std::filesystem::path> resolvedPath;
@@ -1121,8 +1237,8 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
     const std::filesystem::path resolvedAssetPath = *resolvedPath;
     const path_t soundPath = fspath_to_path_t(resolvedAssetPath);
     if (!addArchiveAssetTarget(archiveBatches, archiveBatchOrder,
-                               resolvedAssetPath, wav.first)) {
-      regularLoads.emplace_back(wav.first, soundPath);
+                               resolvedAssetPath, wavId)) {
+      regularLoads.emplace_back(wavId, soundPath);
     }
   }
 
@@ -1164,32 +1280,30 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.idsByPath.find(soundPath);
-        if (idsIt == batch.idsByPath.end()) {
-          continue;
-        }
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
+      }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.idsByPath.find(soundPath);
+      if (idsIt == batch.idsByPath.end()) {
+        return;
+      }
 
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
 
-        {
-          std::lock_guard<std::mutex> lock(loadedPathsMutex);
-          loadedPaths.insert(soundPath);
-          for (const int wavId : idsIt->second) {
-            wavTableAbs[wavId] = soundPath;
-            SDL_Log("Loaded sound %d: %s", wavId,
-                    path_t_to_utf8(soundPath).c_str());
-          }
+      {
+        std::lock_guard<std::mutex> lock(loadedPathsMutex);
+        loadedPaths.insert(soundPath);
+        for (const int wavId : idsIt->second) {
+          wavTableAbs[wavId] = soundPath;
+          SDL_Log("Loaded sound %d: %s", wavId,
+                  path_t_to_utf8(soundPath).c_str());
         }
       }
     });
@@ -1208,33 +1322,21 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
 }
 
 bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
+                                      const ChartResourceTable &wavTable,
+                                      const ChartResourceTable &bmpTable,
                                       bool loadVisualAssets,
                                       std::atomic_bool &isCancelled) {
   using Clock = std::chrono::steady_clock;
 
-  bool hasVirtualAssetBase = false;
-  for (const auto &wav : chart.WavTable) {
-    std::filesystem::path archivePath;
-    std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / wav.second,
-                                       archivePath, innerPath)) {
-      hasVirtualAssetBase = true;
-      break;
-    }
-  }
-  if (!hasVirtualAssetBase && loadVisualAssets) {
-    for (const auto &bmp : chart.BmpTable) {
-      std::filesystem::path archivePath;
-      std::filesystem::path innerPath;
-      if (archive_file::splitVirtualPath(chart.Meta.Folder / bmp.second,
-                                         archivePath, innerPath)) {
-        hasVirtualAssetBase = true;
-        break;
-      }
-    }
-  }
-  if (!hasVirtualAssetBase) {
+  if (!chartHasVirtualAssetBase(chart, wavTable, bmpTable,
+                                loadVisualAssets)) {
     return false;
+  }
+
+  audio.unloadSounds();
+  clearVisualResources();
+  if (isCancelled) {
+    return true;
   }
 
   const auto audioExtensionViews = makeAudioExtensionViews();
@@ -1251,12 +1353,12 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
   wavTableAbs.clear();
 
-  for (const auto &wav : chart.WavTable) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       return true;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / wav.second;
+    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     std::optional<std::filesystem::path> resolvedPath;
@@ -1280,21 +1382,20 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
     }
 
     if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
-                                    *resolvedPath, wav.first,
+                                    *resolvedPath, wavId,
                                     ArchiveChartAssetKind::Sound)) {
       const std::filesystem::path resolvedSoundPath = *resolvedPath;
-      regularSounds.emplace_back(wav.first,
-                                 fspath_to_path_t(resolvedSoundPath));
+      regularSounds.emplace_back(wavId, fspath_to_path_t(resolvedSoundPath));
     }
   }
 
   if (loadVisualAssets) {
-    for (const auto &bmp : chart.BmpTable) {
+    for (const auto &[bmpId, bmpPath] : bmpTable) {
       if (isCancelled) {
         return true;
       }
 
-      const std::filesystem::path basePath = chart.Meta.Folder / bmp.second;
+      const std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
       std::filesystem::path archivePath;
       std::filesystem::path innerPath;
       const bool baseIsVirtual =
@@ -1317,9 +1418,9 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
       if (resolvedVideoPath.has_value()) {
         if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
-                                        *resolvedVideoPath, bmp.first,
+                                        *resolvedVideoPath, bmpId,
                                         ArchiveChartAssetKind::Video)) {
-          regularVideos.emplace_back(bmp.first, *resolvedVideoPath);
+          regularVideos.emplace_back(bmpId, *resolvedVideoPath);
         }
         continue;
       }
@@ -1352,9 +1453,9 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
           continue;
         }
         if (!addArchiveChartAssetTarget(archiveBatches, archiveBatchOrder,
-                                        *resolvedImagePath, bmp.first,
+                                        *resolvedImagePath, bmpId,
                                         ArchiveChartAssetKind::Image)) {
-          regularImages.emplace_back(bmp.first, *resolvedImagePath);
+          regularImages.emplace_back(bmpId, *resolvedImagePath);
         }
         found = true;
         break;
@@ -1403,7 +1504,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
       if (isCancelled) {
         return true;
       }
-      loadImagePath(id, path);
+      loadImagePath(id, path, isCancelled);
     }
   }
 
@@ -1450,32 +1551,30 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedSoundPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
+      }
 
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.soundIdsByPath.find(soundPath);
-        if (idsIt == batch.soundIdsByPath.end()) {
-          continue;
-        }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.soundIdsByPath.find(soundPath);
+      if (idsIt == batch.soundIdsByPath.end()) {
+        return;
+      }
 
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
 
-        std::lock_guard<std::mutex> lock(loadedPathsMutex);
-        loadedSoundPaths.insert(soundPath);
-        for (const int wavId : idsIt->second) {
-          wavTableAbs[wavId] = soundPath;
-          SDL_Log("Loaded sound %d: %s", wavId,
-                  path_t_to_utf8(soundPath).c_str());
-        }
+      std::lock_guard<std::mutex> lock(loadedPathsMutex);
+      loadedSoundPaths.insert(soundPath);
+      for (const int wavId : idsIt->second) {
+        wavTableAbs[wavId] = soundPath;
+        SDL_Log("Loaded sound %d: %s", wavId,
+                path_t_to_utf8(soundPath).c_str());
       }
     });
 
@@ -1505,12 +1604,18 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
           idsIt != batch.videoIdsByPath.end()) {
         std::string materializeError;
         const auto playablePath = archive_file::materializeFileBytes(
-            virtualPath, file.bytes, &materializeError);
+            virtualPath, file.bytes, &materializeError, &isCancelled);
+        if (isCancelled) {
+          return true;
+        }
         if (!playablePath.has_value()) {
           SDL_Log("Failed to materialize video: %s",
                   materializeError.c_str());
         } else {
           for (const int id : idsIt->second) {
+            if (isCancelled) {
+              return true;
+            }
             loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                       isCancelled);
           }
@@ -1520,7 +1625,10 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
       if (const auto idsIt = batch.imageIdsByPath.find(pathKey);
           idsIt != batch.imageIdsByPath.end()) {
         for (const int id : idsIt->second) {
-          loadImageBytes(id, virtualPath, file.bytes);
+          if (isCancelled) {
+            return true;
+          }
+          loadImageBytes(id, virtualPath, file.bytes, isCancelled);
         }
       }
     }
@@ -1530,46 +1638,56 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 }
 
 void Jukebox::loadBMPs(bms_parser::Chart &chart,
+                       const ChartResourceTable &bmpTable,
                        std::atomic_bool &isCancelled) {
-  if (loadArchivedBMPs(chart, isCancelled)) {
+  if (loadArchivedBMPs(chart, bmpTable, isCancelled)) {
     return;
   }
 
   const auto imageExtensionViews =
       toExtensionViews(imageExtensions, std::size(imageExtensions));
-  parallel_for(chart.BmpTable.size(), [&](int start, int end) {
-    auto bmp = std::next(chart.BmpTable.begin(), start);
-    for (int i = start; i < end; i++, ++bmp) {
+  std::vector<int> bmpIds;
+  bmpIds.reserve(bmpTable.size());
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
+    (void)bmpPath;
+    bmpIds.push_back(bmpId);
+  }
+  parallel_for_each_index(bmpIds.size(), [&](size_t i) {
+    if (isCancelled)
+      return;
+    const int bmpId = bmpIds[i];
+    const auto bmpIt = bmpTable.find(bmpId);
+    if (bmpIt == bmpTable.end()) {
+      return;
+    }
+    const auto &bmpPath = bmpIt->second;
+    bool found = false;
+    std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
+    std::filesystem::path path;
+
+    if (auto resolvedVideoPath = findWithReplacedExtensions(
+            basePath, videoExtensions, std::size(videoExtensions))) {
       if (isCancelled)
         return;
-      bool found = false;
-      std::filesystem::path basePath = chart.Meta.Folder / bmp->second;
-      std::filesystem::path path;
+      path = *resolvedVideoPath;
+      found = loadVideoPath(bmpId, path, isCancelled);
+    }
 
-      if (auto resolvedVideoPath = findWithReplacedExtensions(
-              basePath, videoExtensions, std::size(videoExtensions))) {
+    // if not found, fall back to image loading
+    if (!found) {
+      for (const auto &ext : imageExtensionViews) {
         if (isCancelled)
           return;
-        path = *resolvedVideoPath;
-        found = loadVideoPath(bmp->first, path, isCancelled);
-      }
-
-      // if not found, fall back to image loading
-      if (!found) {
-        for (const auto &ext : imageExtensionViews) {
-          if (isCancelled)
-            return;
-          path = basePath;
-          path.replace_extension(std::string(ext));
-          const auto resolvedImagePath =
-              archive_file::findFileWithExtensions(path, {});
-          if (!resolvedImagePath.has_value()) {
-            continue;
-          }
-          path = *resolvedImagePath;
-          if (loadImagePath(bmp->first, path)) {
-            break;
-          }
+        path = basePath;
+        path.replace_extension(std::string(ext));
+        const auto resolvedImagePath =
+            archive_file::findFileWithExtensions(path, {});
+        if (!resolvedImagePath.has_value()) {
+          continue;
+        }
+        path = *resolvedImagePath;
+        if (loadImagePath(bmpId, path, isCancelled)) {
+          break;
         }
       }
     }
@@ -1577,12 +1695,14 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
 }
 
 bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
+                               const ChartResourceTable &bmpTable,
                                std::atomic_bool &isCancelled) {
   bool hasVirtualAssetBase = false;
-  for (const auto &bmp : chart.BmpTable) {
+  for (const auto &[id, bmpPath] : bmpTable) {
+    (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / bmp.second,
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / bmpPath,
                                        archivePath, innerPath)) {
       hasVirtualAssetBase = true;
       break;
@@ -1603,12 +1723,12 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
   std::vector<std::pair<int, std::filesystem::path>> regularVideos;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
 
-  for (const auto &bmp : chart.BmpTable) {
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
     if (isCancelled) {
       return true;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / bmp.second;
+    const std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     const bool baseIsVirtual =
@@ -1628,8 +1748,8 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     }
     if (resolvedVideoPath.has_value()) {
       if (!addArchiveAssetTarget(videoBatches, videoBatchOrder,
-                                 *resolvedVideoPath, bmp.first)) {
-        regularVideos.emplace_back(bmp.first, *resolvedVideoPath);
+                                 *resolvedVideoPath, bmpId)) {
+        regularVideos.emplace_back(bmpId, *resolvedVideoPath);
       }
       continue;
     }
@@ -1659,8 +1779,8 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
         continue;
       }
       if (!addArchiveAssetTarget(imageBatches, imageBatchOrder,
-                                 *resolvedImagePath, bmp.first)) {
-        regularImages.emplace_back(bmp.first, *resolvedImagePath);
+                                 *resolvedImagePath, bmpId)) {
+        regularImages.emplace_back(bmpId, *resolvedImagePath);
       }
       found = true;
       break;
@@ -1681,7 +1801,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     if (isCancelled) {
       return true;
     }
-    loadImagePath(id, path);
+    loadImagePath(id, path, isCancelled);
   }
 
   for (const auto &archiveKey : videoBatchOrder) {
@@ -1723,13 +1843,19 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 
       std::string materializeError;
       const auto playablePath = archive_file::materializeFileBytes(
-          virtualPath, file.bytes, &materializeError);
+          virtualPath, file.bytes, &materializeError, &isCancelled);
+      if (isCancelled) {
+        return true;
+      }
       if (!playablePath.has_value()) {
         SDL_Log("Failed to materialize video: %s",
                 materializeError.c_str());
         continue;
       }
       for (const int id : idsIt->second) {
+        if (isCancelled) {
+          return true;
+        }
         loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                   isCancelled);
       }
@@ -1773,7 +1899,10 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
         continue;
       }
       for (const int id : idsIt->second) {
-        loadImageBytes(id, virtualPath, file.bytes);
+        if (isCancelled) {
+          return true;
+        }
+        loadImageBytes(id, virtualPath, file.bytes, isCancelled);
       }
     }
   }
@@ -1782,18 +1911,19 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 
 std::vector<Jukebox::ResolvedSoundAsset>
 Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
+                            const ChartResourceTable &wavTable,
                             std::atomic_bool &isCancelled) {
   const auto audioExtensionViews = makeAudioExtensionViews();
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
   std::vector<ResolvedSoundAsset> assets;
-  assets.reserve(chart.WavTable.size());
+  assets.reserve(wavTable.size());
 
-  for (const auto &wav : chart.WavTable) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       break;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / wav.second;
+    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     std::optional<std::filesystem::path> resolvedPath;
@@ -1817,7 +1947,7 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
     }
 
     const path_t key = fspath_to_path_t(*resolvedPath);
-    assets.push_back({.id = wav.first, .path = *resolvedPath, .key = key});
+    assets.push_back({.id = wavId, .path = *resolvedPath, .key = key});
   }
 
   return assets;
@@ -1825,20 +1955,21 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
 
 std::vector<Jukebox::ResolvedVisualAsset>
 Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
+                             const ChartResourceTable &bmpTable,
                              std::atomic_bool &isCancelled) {
   const auto imageExtensionViews =
       toExtensionViews(imageExtensions, std::size(imageExtensions));
   const std::vector<std::string_view> noExtensions;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
   std::vector<ResolvedVisualAsset> assets;
-  assets.reserve(chart.BmpTable.size());
+  assets.reserve(bmpTable.size());
 
-  for (const auto &bmp : chart.BmpTable) {
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
     if (isCancelled) {
       break;
     }
 
-    const std::filesystem::path basePath = chart.Meta.Folder / bmp.second;
+    const std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     const bool baseIsVirtual =
@@ -1859,7 +1990,7 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
     }
 
     if (resolvedVideoPath.has_value()) {
-      assets.push_back({.id = bmp.first,
+      assets.push_back({.id = bmpId,
                         .path = *resolvedVideoPath,
                         .key = fspath_to_path_t(*resolvedVideoPath),
                         .video = true});
@@ -1892,7 +2023,7 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
       if (!resolvedImagePath.has_value()) {
         continue;
       }
-      assets.push_back({.id = bmp.first,
+      assets.push_back({.id = bmpId,
                         .path = *resolvedImagePath,
                         .key = fspath_to_path_t(*resolvedImagePath),
                         .video = false});
@@ -1909,53 +2040,105 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
   return assets;
 }
 
+void Jukebox::loadResolvedChartResources(bms_parser::Chart &chart,
+                                         const ChartResourceTable &wavTable,
+                                         const ChartResourceTable &bmpTable,
+                                         bool loadVisualAssets,
+                                         std::atomic_bool &isCancelled) {
+  const auto soundAssets = resolveSoundAssets(chart, wavTable, isCancelled);
+  if (isCancelled) {
+    return;
+  }
+  reconcileSoundResources(chart, soundAssets, isCancelled);
+  if (isCancelled) {
+    return;
+  }
+
+  if (loadVisualAssets) {
+    const auto visualAssets = resolveVisualAssets(chart, bmpTable, isCancelled);
+    if (isCancelled) {
+      return;
+    }
+    reconcileVisualResources(chart, visualAssets, isCancelled);
+  } else {
+    clearVisualResources();
+  }
+}
+
 void Jukebox::reconcileSoundResources(
     bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
     std::atomic_bool &isCancelled) {
   std::unordered_map<int, path_t> nextWavTable;
+  nextWavTable.reserve(assets.size());
+
+  std::unordered_set<path_t> oldPaths;
+  oldPaths.reserve(wavTableAbs.size());
   std::unordered_set<path_t> requiredPaths;
-  std::unordered_set<path_t> existingPaths;
-  std::unordered_set<path_t> pathsToLoad;
+  requiredPaths.reserve(assets.size());
+  std::vector<ResolvedSoundAsset> assetsToLoad;
+  assetsToLoad.reserve(assets.size());
 
   for (const auto &[id, path] : wavTableAbs) {
     (void)id;
-    existingPaths.insert(path);
+    oldPaths.insert(path);
   }
   for (const auto &asset : assets) {
     requiredPaths.insert(asset.key);
-    if (existingPaths.contains(asset.key)) {
+    if (oldPaths.contains(asset.key)) {
       nextWavTable[asset.id] = asset.key;
     } else {
-      pathsToLoad.insert(asset.key);
+      assetsToLoad.push_back(asset);
     }
   }
 
   std::unordered_map<path_t, ArchiveAssetBatch> archiveBatches;
   std::vector<path_t> archiveBatchOrder;
   std::vector<ResolvedSoundAsset> regularLoads;
-  for (const auto &asset : assets) {
-    if (!pathsToLoad.contains(asset.key)) {
-      continue;
-    }
+  for (const auto &asset : assetsToLoad) {
     if (!addArchiveAssetTarget(archiveBatches, archiveBatchOrder, asset.path,
                                asset.id)) {
       regularLoads.push_back(asset);
     }
   }
 
-  std::unordered_set<path_t> loadedRegularPaths;
+  std::unordered_map<path_t, std::vector<int>> regularIdsByPath;
+  std::vector<path_t> regularLoadPaths;
+  regularLoadPaths.reserve(regularLoads.size());
   for (const auto &asset : regularLoads) {
+    auto [idsIt, inserted] = regularIdsByPath.emplace(asset.key,
+                                                      std::vector<int>{});
+    if (inserted) {
+      regularLoadPaths.push_back(asset.key);
+    }
+    idsIt->second.push_back(asset.id);
+  }
+
+  std::mutex loadedRegularPathsMutex;
+  std::unordered_set<path_t> loadedRegularPaths;
+  parallel_for_each_index(regularLoadPaths.size(), [&](size_t i) {
     if (isCancelled) {
       return;
     }
-    const bool alreadyLoaded = loadedRegularPaths.contains(asset.key);
-    if (!alreadyLoaded && !audio.loadSound(asset.key, isCancelled)) {
+    const path_t &path = regularLoadPaths[i];
+    if (!audio.loadSound(path, isCancelled)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(loadedRegularPathsMutex);
+    loadedRegularPaths.insert(path);
+  });
+
+  for (const auto &[path, ids] : regularIdsByPath) {
+    if (!loadedRegularPaths.contains(path)) {
+      for (const int wavId : ids) {
+        SDL_Log("Failed to load sound %d: %s", wavId,
+                path_t_to_utf8(path).c_str());
+      }
       continue;
     }
-    loadedRegularPaths.insert(asset.key);
-    nextWavTable[asset.id] = asset.key;
-    SDL_Log("Loaded sound %d: %s", asset.id,
-            path_t_to_utf8(asset.key).c_str());
+    for (const int wavId : ids) {
+      nextWavTable[wavId] = path;
+      SDL_Log("Loaded sound %d: %s", wavId, path_t_to_utf8(path).c_str());
+    }
   }
 
   for (const auto &archiveKey : archiveBatchOrder) {
@@ -1984,25 +2167,23 @@ void Jukebox::reconcileSoundResources(
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.idsByPath.find(soundPath);
-        if (idsIt == batch.idsByPath.end()) {
-          continue;
-        }
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
-        std::lock_guard<std::mutex> lock(loadedPathsMutex);
-        loadedPaths.insert(soundPath);
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
       }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.idsByPath.find(soundPath);
+      if (idsIt == batch.idsByPath.end()) {
+        return;
+      }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
+      std::lock_guard<std::mutex> lock(loadedPathsMutex);
+      loadedPaths.insert(soundPath);
     });
 
     for (const auto &[soundPath, ids] : batch.idsByPath) {
@@ -2021,11 +2202,6 @@ void Jukebox::reconcileSoundResources(
     }
   }
 
-  std::unordered_set<path_t> oldPaths;
-  for (const auto &[id, path] : wavTableAbs) {
-    (void)id;
-    oldPaths.insert(path);
-  }
   for (const path_t &path : oldPaths) {
     if (!requiredPaths.contains(path)) {
       audio.unloadSound(path);
@@ -2053,43 +2229,62 @@ void Jukebox::reconcileVisualResources(
   }
 
   std::unordered_map<int, std::unique_ptr<VideoPlayer>> nextVideoPlayers;
+  nextVideoPlayers.reserve(assets.size());
   std::unordered_map<int, std::filesystem::path> nextMaterializedPaths;
   std::unordered_map<int, ImageData> nextImages;
+  nextImages.reserve(assets.size());
   std::unordered_map<int, path_t> nextVisualPaths;
-  std::unordered_map<path_t, std::vector<int>> oldIdsByPath;
-  std::unordered_set<int> consumedOldIds;
+  nextVisualPaths.reserve(assets.size());
+  std::unordered_map<path_t, ReusableVisualSources> oldSourcesByPath;
+  oldSourcesByPath.reserve(oldVisualPaths.size());
   std::vector<ResolvedVisualAsset> unresolvedAssets;
+  unresolvedAssets.reserve(assets.size());
 
   for (const auto &[id, path] : oldVisualPaths) {
-    if (oldVideoPlayers.contains(id) || oldImages.contains(id)) {
-      oldIdsByPath[path].push_back(id);
+    const bool hasVideo = oldVideoPlayers.contains(id);
+    const bool hasImage = oldImages.contains(id);
+    if (!hasVideo && !hasImage) {
+      continue;
+    }
+
+    ReusableVisualSources &sources = oldSourcesByPath[path];
+    if (hasVideo) {
+      sources.videoIds.push_back(id);
+    }
+    if (hasImage) {
+      sources.imageIds.push_back(id);
     }
   }
 
-  auto sourceMatchesAssetKind = [&](const ResolvedVisualAsset &asset,
-                                    int sourceId) {
+  auto sourceIsAvailable = [&](const ResolvedVisualAsset &asset,
+                               int sourceId) {
     return asset.video ? oldVideoPlayers.contains(sourceId)
                        : oldImages.contains(sourceId);
   };
 
   auto trySelectSourceId = [&](const ResolvedVisualAsset &asset)
       -> std::optional<int> {
-    const auto sourcesIt = oldIdsByPath.find(asset.key);
-    if (sourcesIt == oldIdsByPath.end()) {
-      return std::nullopt;
-    }
-
-    if (!consumedOldIds.contains(asset.id) &&
-        sourceMatchesAssetKind(asset, asset.id)) {
+    const auto sameIdPathIt = oldVisualPaths.find(asset.id);
+    if (sameIdPathIt != oldVisualPaths.end() &&
+        sameIdPathIt->second == asset.key &&
+        sourceIsAvailable(asset, asset.id)) {
       return asset.id;
     }
 
-    for (const int sourceId : sourcesIt->second) {
-      if (consumedOldIds.contains(sourceId) ||
-          !sourceMatchesAssetKind(asset, sourceId)) {
-        continue;
+    const auto sourcesIt = oldSourcesByPath.find(asset.key);
+    if (sourcesIt == oldSourcesByPath.end()) {
+      return std::nullopt;
+    }
+
+    ReusableVisualSources &sources = sourcesIt->second;
+    std::vector<int> &ids = asset.video ? sources.videoIds : sources.imageIds;
+    size_t &nextIndex =
+        asset.video ? sources.nextVideoIndex : sources.nextImageIndex;
+    while (nextIndex < ids.size()) {
+      const int sourceId = ids[nextIndex++];
+      if (sourceIsAvailable(asset, sourceId)) {
+        return sourceId;
       }
-      return sourceId;
     }
 
     return std::nullopt;
@@ -2102,7 +2297,6 @@ void Jukebox::reconcileVisualResources(
       continue;
     }
 
-    consumedOldIds.insert(*sourceId);
     nextVisualPaths[asset.id] = asset.key;
     if (asset.video) {
       nextVideoPlayers[asset.id] = std::move(oldVideoPlayers[*sourceId]);
@@ -2165,7 +2359,7 @@ void Jukebox::reconcileVisualResources(
     if (asset.video) {
       loadVideoPath(asset.id, asset.path, isCancelled);
     } else {
-      loadImagePath(asset.id, asset.path);
+      loadImagePath(asset.id, asset.path, isCancelled);
     }
   }
 
@@ -2209,12 +2403,18 @@ void Jukebox::reconcileVisualResources(
           idsIt != batch.videoIdsByPath.end()) {
         std::string materializeError;
         const auto playablePath = archive_file::materializeFileBytes(
-            virtualPath, file.bytes, &materializeError);
+            virtualPath, file.bytes, &materializeError, &isCancelled);
+        if (isCancelled) {
+          return;
+        }
         if (!playablePath.has_value()) {
           SDL_Log("Failed to materialize video: %s",
                   materializeError.c_str());
         } else {
           for (const int id : idsIt->second) {
+            if (isCancelled) {
+              return;
+            }
             loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                       isCancelled);
           }
@@ -2223,7 +2423,10 @@ void Jukebox::reconcileVisualResources(
       if (const auto idsIt = batch.imageIdsByPath.find(pathKey);
           idsIt != batch.imageIdsByPath.end()) {
         for (const int id : idsIt->second) {
-          loadImageBytes(id, virtualPath, file.bytes);
+          if (isCancelled) {
+            return;
+          }
+          loadImageBytes(id, virtualPath, file.bytes, isCancelled);
         }
       }
     }
@@ -2285,7 +2488,7 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   if (isCancelled || !visualsEnabled.load(std::memory_order_relaxed)) {
     return;
   }
-  loadBMPs(chart, isCancelled);
+  loadBMPs(chart, chart.ReferencedBmpTable, isCancelled);
 }
 
 void Jukebox::unloadVisuals() { clearVisualResources(); }
@@ -2299,19 +2502,30 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   }
 
   audio.stopSounds();
-  audio.unloadSounds();
-
-  clearVisualResources();
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      if (videoPlayer.second != nullptr) {
+        videoPlayer.second->stop();
+      }
+    }
+  }
   if (isCancelled)
     return;
 
   const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
 #if TARGET_OS_ANDROID
-  prepareAndroidChartAssetDirectoryCache(chart, loadVisualAssets, isCancelled);
+  prepareAndroidChartAssetDirectoryCache(chart, chart.ReferencedWavTable,
+                                         chart.ReferencedBmpTable,
+                                         loadVisualAssets, isCancelled);
   if (isCancelled)
     return;
 #endif
-  if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
+  if (loadArchivedChartAssets(chart, chart.ReferencedWavTable,
+                              chart.ReferencedBmpTable, loadVisualAssets,
+                              isCancelled)) {
     if (isCancelled)
       return;
     schedule(chart, scheduleNotes, isCancelled);
@@ -2319,19 +2533,32 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
     return;
   }
 
-  SDL_Log("Loading sounds");
-  std::thread loadSoundThread(
-      [this, &chart, &isCancelled] { loadSounds(chart, isCancelled); });
-  if (loadVisualAssets) {
-    SDL_Log("Loading videos");
-    loadBMPs(chart, isCancelled);
-  }
-  loadSoundThread.join();
-
+  loadResolvedChartResources(chart, chart.ReferencedWavTable,
+                             chart.ReferencedBmpTable, loadVisualAssets,
+                             isCancelled);
   if (isCancelled)
     return;
   schedule(chart, scheduleNotes, isCancelled);
   SDL_Log("Chart loaded");
+}
+
+bool Jukebox::hasLoadedResources() const {
+  if (!wavTableAbs.empty() || !visualPathTable.empty()) {
+    return true;
+  }
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    if (!videoPlayerTable.empty()) {
+      return true;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (!imageTable.empty()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
@@ -2360,31 +2587,17 @@ void Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
 
   const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
 #if TARGET_OS_ANDROID
-  prepareAndroidChartAssetDirectoryCache(chart, loadVisualAssets, isCancelled);
+  prepareAndroidChartAssetDirectoryCache(chart, chart.ReferencedWavTable,
+                                         chart.ReferencedBmpTable,
+                                         loadVisualAssets, isCancelled);
   if (isCancelled) {
     return;
   }
 #endif
 
-  const auto soundAssets = resolveSoundAssets(chart, isCancelled);
-  if (isCancelled) {
-    return;
-  }
-  reconcileSoundResources(chart, soundAssets, isCancelled);
-  if (isCancelled) {
-    return;
-  }
-
-  if (loadVisualAssets) {
-    const auto visualAssets = resolveVisualAssets(chart, isCancelled);
-    if (isCancelled) {
-      return;
-    }
-    reconcileVisualResources(chart, visualAssets, isCancelled);
-  } else {
-    clearVisualResources();
-  }
-
+  loadResolvedChartResources(chart, chart.ReferencedWavTable,
+                             chart.ReferencedBmpTable, loadVisualAssets,
+                             isCancelled);
   if (isCancelled) {
     return;
   }

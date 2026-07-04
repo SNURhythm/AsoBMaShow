@@ -8,6 +8,7 @@
 #include "../ScoreDBHelper.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
+#include "../utils/Debouncer.h"
 #include "../view/ImageView.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/TextInputBox.h"
@@ -57,7 +58,6 @@ public:
 
 private:
   sqlite3 *db = nullptr;
-  std::atomic_bool previewLoadCancelled = false;
   std::atomic_bool willStart = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
@@ -65,6 +65,19 @@ private:
   std::atomic_bool selectedChartReusableForStart = false;
 
   std::thread loadThread;
+  struct RetiredPreviewLoadThread {
+    std::thread thread;
+    std::shared_ptr<std::atomic_bool> finished;
+  };
+  std::shared_ptr<std::atomic_bool> previewLoadCancelToken =
+      std::make_shared<std::atomic_bool>(false);
+  std::shared_ptr<std::atomic_bool> previewLoadFinishedToken =
+      std::make_shared<std::atomic_bool>(true);
+  Debouncer previewLoadDebouncer;
+  std::vector<RetiredPreviewLoadThread> retiredPreviewLoadThreads;
+  std::mutex retiredPreviewLoadThreadsMutex;
+  std::mutex previewJukeboxLoadMutex;
+  bool pendingStopAndClearSelectedChartAfterPreview = false;
   std::jthread checkEntriesThread;
   std::jthread addFolderPickerThread;
   std::jthread archiveImportPickerThread;
@@ -587,6 +600,13 @@ private:
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
+  void schedulePreviewLoad(bms_parser::ChartMeta meta);
+  void startPreviewLoadThread(bms_parser::ChartMeta meta,
+                              DebounceToken previewToken);
+  void cancelActivePreviewLoading();
+  void retirePreviewLoadThread(bool stopPreviewAudioWhenDone);
+  void reapRetiredPreviewLoadThreads();
+  void joinRetiredPreviewLoadThreads();
   void cancelPreviewLoading(bool stopPreviewAudio);
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo
