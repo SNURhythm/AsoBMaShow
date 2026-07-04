@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <unordered_set>
+#include <vector>
 #include "../path.h"
 #include "../video/VideoPlayer.h"
 #include "../utils/Stopwatch.h"
@@ -46,6 +48,8 @@ public:
 
   void loadChart(bms_parser::Chart &chart, bool scheduleNotes,
                  std::atomic_bool &isCancelled);
+  void reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
+                            std::atomic_bool &isCancelled);
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
@@ -109,6 +113,27 @@ private:
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);
+  struct ResolvedSoundAsset {
+    int id = 0;
+    std::filesystem::path path;
+    path_t key;
+  };
+  struct ResolvedVisualAsset {
+    int id = 0;
+    std::filesystem::path path;
+    path_t key;
+    bool video = false;
+  };
+  std::vector<ResolvedSoundAsset>
+  resolveSoundAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  std::vector<ResolvedVisualAsset>
+  resolveVisualAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void reconcileSoundResources(
+      bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
+      std::atomic_bool &isCancelled);
+  void reconcileVisualResources(
+      bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
+      std::atomic_bool &isCancelled);
   void scheduleAudioFromCursor();
   void playOverlappingAudioAt(long long micro);
   void wakeScheduler();
@@ -146,6 +171,7 @@ private:
   mutable std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
   std::mutex imageTableMutex;
+  std::unordered_map<int, path_t> visualPathTable;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};

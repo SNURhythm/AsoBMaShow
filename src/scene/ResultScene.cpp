@@ -994,7 +994,8 @@ void ResultScene::startRetry(bool samePattern) {
 
         context.jukebox.stop();
         if (!reuseCurrentPattern) {
-          context.jukebox.loadChart(*retryChart, true, parseCancelled);
+          context.jukebox.reloadChartResources(*retryChart, true,
+                                               parseCancelled);
           if (parseCancelled) {
             return true;
           }

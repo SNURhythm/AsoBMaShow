@@ -763,7 +763,7 @@ void GamePlayScene::retryWithNewPattern() {
         }
 
         context.jukebox.stop();
-        context.jukebox.loadChart(*retryChart, true, parseCancelled);
+        context.jukebox.reloadChartResources(*retryChart, true, parseCancelled);
         if (parseCancelled) {
           reset();
           return true;
