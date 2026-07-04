@@ -3451,6 +3451,10 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       return;
     }
     Chart->WavTable[id] = Value;
+    if (Chart->ReferencedWavTable.find(id) !=
+        Chart->ReferencedWavTable.end()) {
+      Chart->ReferencedWavTable[id] = Value;
+    }
   } else if (MatchHeader(cmd, "BMP")) {
     if (Xx.empty() || Value.empty()) {
       // UE_LOG(LogTemp, Warning, TEXT("BMP command requires two arguments"));
@@ -3462,8 +3466,12 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
       return;
     }
     Chart->BmpTable[id] = Value;
+    if (Chart->ReferencedBmpTable.find(id) !=
+        Chart->ReferencedBmpTable.end()) {
+      Chart->ReferencedBmpTable[id] = Value;
+    }
     if (Xx == "00") {
-      Chart->ReferencedBmpIds.insert(id);
+      Chart->ReferencedBmpTable[id] = Value;
       Chart->Meta.BgaPoorDefault = true;
     }
   } else if (MatchHeader(cmd, "LNOBJ")) {
@@ -3523,7 +3531,11 @@ inline void Parser::RegisterReferencedWaveId(Chart *Chart, int WavId) const {
   if (Chart == nullptr || WavId == NoWav || WavId == MetronomeWav) {
     return;
   }
-  Chart->ReferencedWavIds.insert(WavId);
+  const auto wavIt = Chart->WavTable.find(WavId);
+  if (wavIt == Chart->WavTable.end()) {
+    return;
+  }
+  Chart->ReferencedWavTable[WavId] = wavIt->second;
 }
 
 inline void Parser::RegisterReferencedBmpId(Chart *Chart, int BmpId,
@@ -3531,10 +3543,11 @@ inline void Parser::RegisterReferencedBmpId(Chart *Chart, int BmpId,
   if (metaOnly || Chart == nullptr || !CheckResourceIdRange(BmpId)) {
     return;
   }
-  if (Chart->BmpTable.find(BmpId) == Chart->BmpTable.end()) {
+  const auto bmpIt = Chart->BmpTable.find(BmpId);
+  if (bmpIt == Chart->BmpTable.end()) {
     return;
   }
-  Chart->ReferencedBmpIds.insert(BmpId);
+  Chart->ReferencedBmpTable[BmpId] = bmpIt->second;
 }
 
 inline int Parser::ParseHex(std::string_view Str) {

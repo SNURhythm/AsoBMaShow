@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 #include "../path.h"
@@ -26,6 +27,9 @@ struct ImageData {
   int height;
   int channels;
 };
+
+using ChartResourceTable = std::unordered_map<int, std::string>;
+
 class Jukebox {
 public:
   struct PerformanceAnalytics {
@@ -94,13 +98,22 @@ private:
   std::mutex playThreadLock;
   std::mutex schedulerWaitMutex;
   std::condition_variable schedulerWakeCv;
-  void loadSounds(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void loadSounds(bms_parser::Chart &chart,
+                  const ChartResourceTable &wavTable,
+                  std::atomic_bool &isCancelled);
   bool loadArchivedSounds(bms_parser::Chart &chart,
+                          const ChartResourceTable &wavTable,
                           std::atomic_bool &isCancelled);
-  bool loadArchivedChartAssets(bms_parser::Chart &chart, bool loadVisualAssets,
+  bool loadArchivedChartAssets(bms_parser::Chart &chart,
+                               const ChartResourceTable &wavTable,
+                               const ChartResourceTable &bmpTable,
+                               bool loadVisualAssets,
                                std::atomic_bool &isCancelled);
-  void loadBMPs(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void loadBMPs(bms_parser::Chart &chart,
+                const ChartResourceTable &bmpTable,
+                std::atomic_bool &isCancelled);
   bool loadArchivedBMPs(bms_parser::Chart &chart,
+                        const ChartResourceTable &bmpTable,
                         std::atomic_bool &isCancelled);
   bool loadVideoPath(int id, const std::filesystem::path &path,
                      std::atomic_bool &isCancelled);
@@ -128,10 +141,16 @@ private:
     bool video = false;
   };
   std::vector<ResolvedSoundAsset>
-  resolveSoundAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  resolveSoundAssets(bms_parser::Chart &chart,
+                     const ChartResourceTable &wavTable,
+                     std::atomic_bool &isCancelled);
   std::vector<ResolvedVisualAsset>
-  resolveVisualAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  resolveVisualAssets(bms_parser::Chart &chart,
+                      const ChartResourceTable &bmpTable,
+                      std::atomic_bool &isCancelled);
   void loadResolvedChartResources(bms_parser::Chart &chart,
+                                  const ChartResourceTable &wavTable,
+                                  const ChartResourceTable &bmpTable,
                                   bool loadVisualAssets,
                                   std::atomic_bool &isCancelled);
   void reconcileSoundResources(

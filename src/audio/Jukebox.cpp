@@ -41,27 +41,11 @@ constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
 constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
     64ull * 1024ull * 1024ull;
 
-std::vector<std::pair<int, std::filesystem::path>>
-referencedResourceEntries(
-    const std::unordered_map<int, std::string> &resourceTable,
-    const std::unordered_set<int> &referencedIds) {
-  std::vector<std::pair<int, std::filesystem::path>> entries;
-  entries.reserve(referencedIds.size());
-  for (const int id : referencedIds) {
-    const auto resourceIt = resourceTable.find(id);
-    if (resourceIt == resourceTable.end()) {
-      continue;
-    }
-    entries.emplace_back(id, resourceIt->second);
-  }
-  return entries;
-}
-
 bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
+                              const ChartResourceTable &wavTable,
+                              const ChartResourceTable &bmpTable,
                               bool loadVisualAssets) {
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
-  for (const auto &[id, wavPath] : wavEntries) {
+  for (const auto &[id, wavPath] : wavTable) {
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
@@ -74,9 +58,7 @@ bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
   if (!loadVisualAssets) {
     return false;
   }
-  const auto bmpEntries =
-      referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
-  for (const auto &[id, bmpPath] : bmpEntries) {
+  for (const auto &[id, bmpPath] : bmpTable) {
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
@@ -148,6 +130,8 @@ void addAndroidAssetDirectory(
 }
 
 void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
+                                            const ChartResourceTable &wavTable,
+                                            const ChartResourceTable &bmpTable,
                                             bool loadVisualAssets,
                                             std::atomic_bool &isCancelled) {
   if (!IsAndroidTreePath(chart.Meta.Folder)) {
@@ -163,9 +147,7 @@ void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
   directoryKeys.insert(chartFolderKey);
   directories.push_back(chartFolder);
 
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
-  for (const auto &[id, wavPath] : wavEntries) {
+  for (const auto &[id, wavPath] : wavTable) {
     (void)id;
     if (isCancelled) {
       return;
@@ -174,9 +156,7 @@ void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
                              directoryKeys);
   }
   if (loadVisualAssets) {
-    const auto bmpEntries =
-        referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
-    for (const auto &[id, bmpPath] : bmpEntries) {
+    for (const auto &[id, bmpPath] : bmpTable) {
       (void)id;
       if (isCancelled) {
         return;
@@ -1085,37 +1065,45 @@ Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
 }
 
 void Jukebox::loadSounds(bms_parser::Chart &chart,
+                         const ChartResourceTable &wavTable,
                          std::atomic_bool &isCancelled) {
-  if (loadArchivedSounds(chart, isCancelled)) {
+  if (loadArchivedSounds(chart, wavTable, isCancelled)) {
     return;
   }
 
   using Clock = std::chrono::steady_clock;
   const auto loadStart = Clock::now();
   const std::size_t wavCount = chart.WavTable.size();
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
-  const unsigned int workerCount = parallel_worker_count(wavEntries.size());
+  const unsigned int workerCount = parallel_worker_count(wavTable.size());
   SDL_Log("Loading %zu referenced sounds from %zu wav entries using %u workers",
-          wavEntries.size(), wavCount, workerCount);
+          wavTable.size(), wavCount, workerCount);
 
-  std::vector<std::optional<path_t>> resolvedSoundPaths(wavEntries.size());
+  std::vector<std::pair<int, std::optional<path_t>>> resolvedSoundPaths;
+  resolvedSoundPaths.reserve(wavTable.size());
+  for (const auto &[wavId, wavPath] : wavTable) {
+    (void)wavPath;
+    resolvedSoundPaths.emplace_back(wavId, std::nullopt);
+  }
   std::atomic_size_t failedCount{0};
   const auto audioExtensionViews = makeAudioExtensionViews();
 
   wavTableAbs.clear();
 
-  parallel_for(wavEntries.size(), [&](int start, int end) {
+  parallel_for(resolvedSoundPaths.size(), [&](int start, int end) {
     for (int i = start; i < end; ++i) {
       if (isCancelled)
         return;
-      const auto &[wavId, wavPath] = wavEntries[static_cast<size_t>(i)];
-      (void)wavId;
+      const int wavId = resolvedSoundPaths[static_cast<size_t>(i)].first;
+      const auto wavIt = wavTable.find(wavId);
+      if (wavIt == wavTable.end()) {
+        continue;
+      }
+      const auto &wavPath = wavIt->second;
       const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
       const auto resolvedPath =
           archive_file::findFileWithExtensions(basePath, audioExtensionViews);
       if (resolvedPath.has_value()) {
-        resolvedSoundPaths[static_cast<size_t>(i)] =
+        resolvedSoundPaths[static_cast<size_t>(i)].second =
             fspath_to_path_t(*resolvedPath);
       } else {
         failedCount.fetch_add(1, std::memory_order_relaxed);
@@ -1130,20 +1118,20 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
 
   std::unordered_map<path_t, std::vector<int>> idsByPath;
   std::vector<path_t> uniqueSoundPaths;
-  uniqueSoundPaths.reserve(wavEntries.size());
+  uniqueSoundPaths.reserve(wavTable.size());
   std::size_t duplicateCount = 0;
-  for (std::size_t i = 0; i < wavEntries.size(); ++i) {
-    if (!resolvedSoundPaths[i].has_value()) {
+  for (const auto &[wavId, resolvedPath] : resolvedSoundPaths) {
+    if (!resolvedPath.has_value()) {
       continue;
     }
-    const path_t &soundPath = *resolvedSoundPaths[i];
+    const path_t &soundPath = *resolvedPath;
     auto [idsIt, inserted] = idsByPath.emplace(soundPath, std::vector<int>{});
     if (inserted) {
       uniqueSoundPaths.push_back(soundPath);
     } else {
       ++duplicateCount;
     }
-    idsIt->second.push_back(wavEntries[i].first);
+    idsIt->second.push_back(wavId);
   }
 
   std::mutex loadedPathsMutex;
@@ -1187,17 +1175,16 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
       std::chrono::duration<double>(Clock::now() - loadStart).count();
   SDL_Log("Loaded sounds summary: wav=%zu referenced=%zu unique=%zu loaded=%zu "
           "duplicate=%zu failed=%zu workers=%u time=%.2fs",
-          wavCount, wavEntries.size(), uniqueSoundPaths.size(), loadedIdCount,
+          wavCount, wavTable.size(), uniqueSoundPaths.size(), loadedIdCount,
           duplicateCount, failedCount.load(std::memory_order_relaxed),
           workerCount, elapsedSeconds);
 }
 
 bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
+                                 const ChartResourceTable &wavTable,
                                  std::atomic_bool &isCancelled) {
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
   bool hasVirtualAssetBase = false;
-  for (const auto &[id, wavPath] : wavEntries) {
+  for (const auto &[id, wavPath] : wavTable) {
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
@@ -1218,7 +1205,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
 
   wavTableAbs.clear();
-  for (const auto &[wavId, wavPath] : wavEntries) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       return true;
     }
@@ -1335,43 +1322,21 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
 }
 
 bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
+                                      const ChartResourceTable &wavTable,
+                                      const ChartResourceTable &bmpTable,
                                       bool loadVisualAssets,
                                       std::atomic_bool &isCancelled) {
   using Clock = std::chrono::steady_clock;
 
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
-  std::vector<std::pair<int, std::filesystem::path>> bmpEntries;
-  if (loadVisualAssets) {
-    bmpEntries =
-        referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
+  if (!chartHasVirtualAssetBase(chart, wavTable, bmpTable,
+                                loadVisualAssets)) {
+    return false;
   }
 
-  bool hasVirtualAssetBase = false;
-  for (const auto &[id, wavPath] : wavEntries) {
-    (void)id;
-    std::filesystem::path archivePath;
-    std::filesystem::path innerPath;
-    if (archive_file::splitVirtualPath(chart.Meta.Folder / wavPath,
-                                       archivePath, innerPath)) {
-      hasVirtualAssetBase = true;
-      break;
-    }
-  }
-  if (!hasVirtualAssetBase) {
-    for (const auto &[id, bmpPath] : bmpEntries) {
-      (void)id;
-      std::filesystem::path archivePath;
-      std::filesystem::path innerPath;
-      if (archive_file::splitVirtualPath(chart.Meta.Folder / bmpPath,
-                                         archivePath, innerPath)) {
-        hasVirtualAssetBase = true;
-        break;
-      }
-    }
-  }
-  if (!hasVirtualAssetBase) {
-    return false;
+  audio.unloadSounds();
+  clearVisualResources();
+  if (isCancelled) {
+    return true;
   }
 
   const auto audioExtensionViews = makeAudioExtensionViews();
@@ -1388,7 +1353,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
   wavTableAbs.clear();
 
-  for (const auto &[wavId, wavPath] : wavEntries) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       return true;
     }
@@ -1425,7 +1390,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
   }
 
   if (loadVisualAssets) {
-    for (const auto &[bmpId, bmpPath] : bmpEntries) {
+    for (const auto &[bmpId, bmpPath] : bmpTable) {
       if (isCancelled) {
         return true;
       }
@@ -1675,20 +1640,30 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 }
 
 void Jukebox::loadBMPs(bms_parser::Chart &chart,
+                       const ChartResourceTable &bmpTable,
                        std::atomic_bool &isCancelled) {
-  if (loadArchivedBMPs(chart, isCancelled)) {
+  if (loadArchivedBMPs(chart, bmpTable, isCancelled)) {
     return;
   }
 
   const auto imageExtensionViews =
       toExtensionViews(imageExtensions, std::size(imageExtensions));
-  const auto bmpEntries =
-      referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
-  parallel_for(bmpEntries.size(), [&](int start, int end) {
+  std::vector<int> bmpIds;
+  bmpIds.reserve(bmpTable.size());
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
+    (void)bmpPath;
+    bmpIds.push_back(bmpId);
+  }
+  parallel_for(bmpIds.size(), [&](int start, int end) {
     for (int i = start; i < end; i++) {
       if (isCancelled)
         return;
-      const auto &[bmpId, bmpPath] = bmpEntries[static_cast<size_t>(i)];
+      const int bmpId = bmpIds[static_cast<size_t>(i)];
+      const auto bmpIt = bmpTable.find(bmpId);
+      if (bmpIt == bmpTable.end()) {
+        continue;
+      }
+      const auto &bmpPath = bmpIt->second;
       bool found = false;
       std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
       std::filesystem::path path;
@@ -1724,11 +1699,10 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
 }
 
 bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
+                               const ChartResourceTable &bmpTable,
                                std::atomic_bool &isCancelled) {
-  const auto bmpEntries =
-      referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
   bool hasVirtualAssetBase = false;
-  for (const auto &[id, bmpPath] : bmpEntries) {
+  for (const auto &[id, bmpPath] : bmpTable) {
     (void)id;
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
@@ -1753,7 +1727,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
   std::vector<std::pair<int, std::filesystem::path>> regularVideos;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
 
-  for (const auto &[bmpId, bmpPath] : bmpEntries) {
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
     if (isCancelled) {
       return true;
     }
@@ -1941,15 +1915,14 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 
 std::vector<Jukebox::ResolvedSoundAsset>
 Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
+                            const ChartResourceTable &wavTable,
                             std::atomic_bool &isCancelled) {
   const auto audioExtensionViews = makeAudioExtensionViews();
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
   std::vector<ResolvedSoundAsset> assets;
-  assets.reserve(chart.ReferencedWavIds.size());
-  const auto wavEntries =
-      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
+  assets.reserve(wavTable.size());
 
-  for (const auto &[wavId, wavPath] : wavEntries) {
+  for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
       break;
     }
@@ -1986,17 +1959,16 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
 
 std::vector<Jukebox::ResolvedVisualAsset>
 Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
+                             const ChartResourceTable &bmpTable,
                              std::atomic_bool &isCancelled) {
   const auto imageExtensionViews =
       toExtensionViews(imageExtensions, std::size(imageExtensions));
   const std::vector<std::string_view> noExtensions;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
   std::vector<ResolvedVisualAsset> assets;
-  assets.reserve(chart.ReferencedBmpIds.size());
-  const auto bmpEntries =
-      referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
+  assets.reserve(bmpTable.size());
 
-  for (const auto &[bmpId, bmpPath] : bmpEntries) {
+  for (const auto &[bmpId, bmpPath] : bmpTable) {
     if (isCancelled) {
       break;
     }
@@ -2073,9 +2045,11 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
 }
 
 void Jukebox::loadResolvedChartResources(bms_parser::Chart &chart,
+                                         const ChartResourceTable &wavTable,
+                                         const ChartResourceTable &bmpTable,
                                          bool loadVisualAssets,
                                          std::atomic_bool &isCancelled) {
-  const auto soundAssets = resolveSoundAssets(chart, isCancelled);
+  const auto soundAssets = resolveSoundAssets(chart, wavTable, isCancelled);
   if (isCancelled) {
     return;
   }
@@ -2085,7 +2059,7 @@ void Jukebox::loadResolvedChartResources(bms_parser::Chart &chart,
   }
 
   if (loadVisualAssets) {
-    const auto visualAssets = resolveVisualAssets(chart, isCancelled);
+    const auto visualAssets = resolveVisualAssets(chart, bmpTable, isCancelled);
     if (isCancelled) {
       return;
     }
@@ -2507,7 +2481,7 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   if (isCancelled || !visualsEnabled.load(std::memory_order_relaxed)) {
     return;
   }
-  loadBMPs(chart, isCancelled);
+  loadBMPs(chart, chart.ReferencedBmpTable, isCancelled);
 }
 
 void Jukebox::unloadVisuals() { clearVisualResources(); }
@@ -2536,28 +2510,25 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
 
   const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
 #if TARGET_OS_ANDROID
-  prepareAndroidChartAssetDirectoryCache(chart, loadVisualAssets, isCancelled);
+  prepareAndroidChartAssetDirectoryCache(chart, chart.ReferencedWavTable,
+                                         chart.ReferencedBmpTable,
+                                         loadVisualAssets, isCancelled);
   if (isCancelled)
     return;
 #endif
-  if (chartHasVirtualAssetBase(chart, loadVisualAssets)) {
-    audio.unloadSounds();
-    clearVisualResources();
-    if (isCancelled) {
-      return;
-    }
-    if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
-      if (isCancelled)
-        return;
-      schedule(chart, scheduleNotes, isCancelled);
-      SDL_Log("Chart loaded");
-      return;
-    }
+  if (loadArchivedChartAssets(chart, chart.ReferencedWavTable,
+                              chart.ReferencedBmpTable, loadVisualAssets,
+                              isCancelled)) {
     if (isCancelled)
       return;
+    schedule(chart, scheduleNotes, isCancelled);
+    SDL_Log("Chart loaded");
+    return;
   }
 
-  loadResolvedChartResources(chart, loadVisualAssets, isCancelled);
+  loadResolvedChartResources(chart, chart.ReferencedWavTable,
+                             chart.ReferencedBmpTable, loadVisualAssets,
+                             isCancelled);
   if (isCancelled)
     return;
   schedule(chart, scheduleNotes, isCancelled);
@@ -2609,13 +2580,17 @@ void Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
 
   const bool loadVisualAssets = visualsEnabled.load(std::memory_order_relaxed);
 #if TARGET_OS_ANDROID
-  prepareAndroidChartAssetDirectoryCache(chart, loadVisualAssets, isCancelled);
+  prepareAndroidChartAssetDirectoryCache(chart, chart.ReferencedWavTable,
+                                         chart.ReferencedBmpTable,
+                                         loadVisualAssets, isCancelled);
   if (isCancelled) {
     return;
   }
 #endif
 
-  loadResolvedChartResources(chart, loadVisualAssets, isCancelled);
+  loadResolvedChartResources(chart, chart.ReferencedWavTable,
+                             chart.ReferencedBmpTable, loadVisualAssets,
+                             isCancelled);
   if (isCancelled) {
     return;
   }
