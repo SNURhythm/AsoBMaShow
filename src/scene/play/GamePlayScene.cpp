@@ -462,24 +462,26 @@ void GamePlayScene::init() {
           Color(40, 173, 164, 255), ui_theme::accentBorderStrong(), [this]() {
         closePauseMenu();
       }));
+      const bool canRetrySame =
+          !coursePlayback && !isReplayPlayback() && !options.practiceMode &&
+          chart != nullptr && gameplayHasSamePatternRandomization(*chart,
+                                                                  options);
       pauseScreen->addView(makePauseButton(
           coursePlayback ? "Restart Course"
                          : (isReplayPlayback() ? "Replay" : "Retry"),
           Color(57, 105, 42, 238),
           Color(72, 127, 51, 248), Color(91, 153, 61, 255),
-          ui_theme::lime(), [this]() {
+          ui_theme::lime(), [this, canRetrySame]() {
             if (isCoursePlayback()) {
               restartCourseFromBeginning();
             } else if (isReplayPlayback() || options.practiceMode ||
-                options.autoPlay) {
+                       options.autoPlay || !canRetrySame) {
               restartCurrentPattern();
             } else {
               retryWithNewPattern();
             }
           }));
-      if (!coursePlayback && !isReplayPlayback() && !options.practiceMode &&
-          chart != nullptr && gameplayHasSamePatternRandomization(*chart,
-                                                                  options)) {
+      if (canRetrySame) {
         pauseScreen->addView(makePauseButton(
             "Retry Same", ui_theme::control(), ui_theme::controlHover(),
             ui_theme::controlPressed(), ui_theme::hairline(),

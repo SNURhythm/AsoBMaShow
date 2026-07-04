@@ -468,15 +468,15 @@ void ResultScene::addRetryButtons() {
                                  ui_theme::primaryActionPressed(),
                                  ui_theme::cyan()));
   } else {
-    retryRow->addView(makeButton("Retry", false, false,
-                                 ui_theme::primaryAction(),
-                                 ui_theme::primaryActionHover(),
-                                 ui_theme::primaryActionPressed(),
-                                 ui_theme::cyan()));
     const bool canRetrySame =
         retryData.has_value()
             ? play_options::hasSamePatternRandomization(*retryData)
             : play_options::hasSamePatternRandomization(meta);
+    retryRow->addView(makeButton("Retry", !canRetrySame, false,
+                                 ui_theme::primaryAction(),
+                                 ui_theme::primaryActionHover(),
+                                 ui_theme::primaryActionPressed(),
+                                 ui_theme::cyan()));
     if (canRetrySame) {
       retryRow->addView(makeButton("Retry Same", true, false,
                                    ui_theme::successAction(),
