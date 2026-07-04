@@ -25,12 +25,32 @@ struct ScoreRankByLongNoteMode {
   [[nodiscard]] int bestRankForMode(int lnMode) const;
 };
 
+struct ScoreBestSnapshot {
+  int score = 0;
+  int maxScore = 0;
+  int maxCombo = 0;
+  int comboBreak = 0;
+  float finalGauge = 0.0f;
+  int clearType = kClearTypeFailedRank;
+  std::string createdAt;
+};
+
+struct ScoreBestByLongNoteMode {
+  std::array<std::optional<ScoreBestSnapshot>, 4> snapshots{};
+
+  [[nodiscard]] std::optional<ScoreBestSnapshot>
+  bestForMode(int lnMode) const;
+};
+
 using ScoreRankMap = std::unordered_map<std::string, ScoreRankByLongNoteMode,
                                         TransparentStringHash,
                                         std::equal_to<>>;
 using CourseScoreRankMap =
     std::unordered_map<std::string, int, TransparentStringHash,
                        std::equal_to<>>;
+using ScoreBestMap = std::unordered_map<std::string, ScoreBestByLongNoteMode,
+                                        TransparentStringHash,
+                                        std::equal_to<>>;
 
 struct ScoreClearRankCache {
   ScoreRankMap rankBySha256;
@@ -51,22 +71,29 @@ struct ScoreClearRankCache {
   [[nodiscard]] int bestCourseRankForId(int courseId) const;
 };
 
+struct ScoreBestCache {
+  ScoreBestMap scoreBySha256;
+  ScoreBestMap scoreByMd5;
+  ScoreBestMap scoreByPath;
+
+  [[nodiscard]] std::optional<ScoreBestSnapshot>
+  bestFor(const bms_parser::ChartMeta &chartMeta,
+          int selectedLongNoteMode = 0) const;
+  [[nodiscard]] std::optional<ScoreBestSnapshot>
+  bestForHashes(const std::string &sha256, const std::string &md5,
+                const std::string &path = "", int longNoteMode = 0) const;
+  [[nodiscard]] std::optional<ScoreBestSnapshot>
+  bestForStoredKeys(std::string_view sha256, std::string_view md5,
+                    std::string_view path = "",
+                    int longNoteMode = 0) const;
+};
+
 [[nodiscard]] int scoreLongNoteModeForClearLamp(
     const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode = 0);
 [[nodiscard]] int scoreLongNoteModeForClearLamp(int chartLongNoteMode,
                                                 int totalLongNotes,
                                                 int totalBackSpinNotes,
                                                 int selectedLongNoteMode = 0);
-
-struct ScoreBestSnapshot {
-  int score = 0;
-  int maxScore = 0;
-  int maxCombo = 0;
-  int comboBreak = 0;
-  float finalGauge = 0.0f;
-  int clearType = kClearTypeFailedRank;
-  std::string createdAt;
-};
 
 struct CoursePlaySession;
 
@@ -99,5 +126,6 @@ public:
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
   ScoreClearRankCache LoadBestClearRanks();
+  ScoreBestCache LoadBestScores();
   [[nodiscard]] std::uint64_t GetRevision() const;
 };

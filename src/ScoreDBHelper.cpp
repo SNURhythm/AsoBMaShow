@@ -252,6 +252,36 @@ void storeBestCourseRank(CourseScoreRankMap &ranks, const std::string &key,
   }
 }
 
+bool isBetterScoreSnapshot(const ScoreBestSnapshot &candidate,
+                           const std::optional<ScoreBestSnapshot> &current) {
+  if (!current.has_value()) {
+    return true;
+  }
+  if (candidate.score != current->score) {
+    return candidate.score > current->score;
+  }
+  if (candidate.clearType != current->clearType) {
+    return candidate.clearType > current->clearType;
+  }
+  return candidate.createdAt > current->createdAt;
+}
+
+void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
+                    const ScoreBestSnapshot &snapshot) {
+  if (key.empty()) {
+    return;
+  }
+  auto it = scores.find(key);
+  if (it == scores.end()) {
+    it = scores.emplace(key, ScoreBestByLongNoteMode{}).first;
+  }
+  const int mode = long_note_mode::normalizeValue(lnMode);
+  auto &current = it->second.snapshots[static_cast<size_t>(mode)];
+  if (isBetterScoreSnapshot(snapshot, current)) {
+    current = snapshot;
+  }
+}
+
 int bestRankForPathKey(const ScoreRankMap &ranks, std::string_view path,
                        int longNoteMode) {
   if (path.empty()) {
@@ -271,6 +301,28 @@ int bestRankForPathKey(const ScoreRankMap &ranks, std::string_view path,
     return legacyPathIt->second.bestRankForMode(longNoteMode);
   }
   return kNoClearTypeRank;
+}
+
+std::optional<ScoreBestSnapshot>
+bestScoreForPathKey(const ScoreBestMap &scores, std::string_view path,
+                    int longNoteMode) {
+  if (path.empty()) {
+    return std::nullopt;
+  }
+  const auto pathIt = scores.find(path);
+  if (pathIt != scores.end()) {
+    return pathIt->second.bestForMode(longNoteMode);
+  }
+
+  const std::string legacyPath = legacyBmsRelativePath(path);
+  if (legacyPath.empty()) {
+    return std::nullopt;
+  }
+  const auto legacyPathIt = scores.find(legacyPath);
+  if (legacyPathIt != scores.end()) {
+    return legacyPathIt->second.bestForMode(longNoteMode);
+  }
+  return std::nullopt;
 }
 
 std::string bestClearMarkRankExpr() {
@@ -304,6 +356,41 @@ void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
     storeBestRank(cache.rankBySha256, sha256, lnMode, rank);
     storeBestRank(cache.rankByMd5, md5, lnMode, rank);
     storeBestRank(cache.rankByPath, path, lnMode, rank);
+  }
+}
+
+void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
+  const char *query =
+      "SELECT chart_sha256, chart_md5, chart_path, ln_mode, score, max_score,"
+      "max_combo, combo_break, final_gauge, clear_type, created_at "
+      "FROM scores WHERE (chart_sha256 IS NOT NULL AND chart_sha256 != '') "
+      "OR (chart_md5 IS NOT NULL AND chart_md5 != '') "
+      "OR (chart_path IS NOT NULL AND chart_path != '') "
+      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "loading score best scores",
+                                    logSqlErrorText)) {
+    return;
+  }
+
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    const std::string sha256 = normalizedHash(sqliteColumnString(stmt.get(), 0));
+    const std::string md5 = normalizedHash(sqliteColumnString(stmt.get(), 1));
+    const std::string path = normalizedPath(sqliteColumnString(stmt.get(), 2));
+    const int lnMode = sqlite3_column_int(stmt.get(), 3);
+    ScoreBestSnapshot snapshot;
+    snapshot.score = sqlite3_column_int(stmt.get(), 4);
+    snapshot.maxScore = sqlite3_column_int(stmt.get(), 5);
+    snapshot.maxCombo = sqlite3_column_int(stmt.get(), 6);
+    snapshot.comboBreak = sqlite3_column_int(stmt.get(), 7);
+    snapshot.finalGauge =
+        static_cast<float>(sqlite3_column_double(stmt.get(), 8));
+    snapshot.clearType = sqlite3_column_int(stmt.get(), 9);
+    snapshot.createdAt = sqliteColumnString(stmt.get(), 10);
+    storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
+    storeBestScore(cache.scoreByMd5, md5, lnMode, snapshot);
+    storeBestScore(cache.scoreByPath, path, lnMode, snapshot);
   }
 }
 
@@ -617,6 +704,16 @@ int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
   return ranks[0];
 }
 
+std::optional<ScoreBestSnapshot>
+ScoreBestByLongNoteMode::bestForMode(int lnMode) const {
+  const int mode = long_note_mode::normalizeValue(lnMode);
+  const auto &snapshot = snapshots[static_cast<size_t>(mode)];
+  if (snapshot.has_value() || mode != 1) {
+    return snapshot;
+  }
+  return snapshots[0];
+}
+
 int scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &chartMeta,
                                   int selectedLongNoteMode) {
   return scoreLongNoteModeForClearLampValues(
@@ -695,6 +792,67 @@ int ScoreClearRankCache::bestCourseRankForId(int courseId) const {
   }
   const auto it = rankByCourseId.find(std::to_string(courseId));
   return it == rankByCourseId.end() ? kNoClearTypeRank : it->second;
+}
+
+std::optional<ScoreBestSnapshot>
+ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
+                        int selectedLongNoteMode) const {
+  const auto chartPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
+  return bestForHashes(
+      chartMeta.SHA256, chartMeta.MD5, chartPath,
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
+}
+
+std::optional<ScoreBestSnapshot>
+ScoreBestCache::bestForHashes(const std::string &sha256,
+                              const std::string &md5,
+                              const std::string &path,
+                              int longNoteMode) const {
+  const std::string normalizedSha = normalizedHash(sha256);
+  const auto shaIt = scoreBySha256.find(normalizedSha);
+  if (shaIt != scoreBySha256.end()) {
+    const auto snapshot = shaIt->second.bestForMode(longNoteMode);
+    if (snapshot.has_value()) {
+      return snapshot;
+    }
+  }
+
+  const std::string normalizedMd5 = normalizedHash(md5);
+  const auto md5It = scoreByMd5.find(normalizedMd5);
+  if (md5It != scoreByMd5.end()) {
+    const auto snapshot = md5It->second.bestForMode(longNoteMode);
+    if (snapshot.has_value()) {
+      return snapshot;
+    }
+  }
+
+  const std::string normalizedChartPath = normalizedPath(path);
+  return bestScoreForPathKey(scoreByPath, normalizedChartPath, longNoteMode);
+}
+
+std::optional<ScoreBestSnapshot>
+ScoreBestCache::bestForStoredKeys(std::string_view sha256,
+                                  std::string_view md5,
+                                  std::string_view path,
+                                  int longNoteMode) const {
+  const auto shaIt = scoreBySha256.find(sha256);
+  if (shaIt != scoreBySha256.end()) {
+    const auto snapshot = shaIt->second.bestForMode(longNoteMode);
+    if (snapshot.has_value()) {
+      return snapshot;
+    }
+  }
+
+  const auto md5It = scoreByMd5.find(md5);
+  if (md5It != scoreByMd5.end()) {
+    const auto snapshot = md5It->second.bestForMode(longNoteMode);
+    if (snapshot.has_value()) {
+      return snapshot;
+    }
+  }
+
+  return bestScoreForPathKey(scoreByPath, path, longNoteMode);
 }
 
 ScoreDBHelper &ScoreDBHelper::GetInstance() {
@@ -1152,6 +1310,19 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   }
   if (CreateCourseScoreTable(connection.get())) {
     loadBestCourseRanks(connection.get(), cache.rankByCourseId);
+  }
+  return cache;
+}
+
+ScoreBestCache ScoreDBHelper::LoadBestScores() {
+  ScoreBestCache cache;
+  SqliteConnectionHandle connection(Connect());
+  if (connection.get() == nullptr) {
+    return cache;
+  }
+
+  if (CreateScoreTable(connection.get())) {
+    loadBestChartScores(connection.get(), cache);
   }
   return cache;
 }

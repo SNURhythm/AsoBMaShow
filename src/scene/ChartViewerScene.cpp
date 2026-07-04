@@ -110,6 +110,7 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.initialGaugeType = replay.initialGaugeType;
   summary.gaugeAutoShift = replay.gaugeAutoShift;
   summary.finalScore = replay.finalScore;
+  summary.maxScore = std::max(0, replay.chartMeta.TotalNotes) * 2;
   summary.finalGauge = replay.finalGauge;
   summary.clearType = replay.clearType;
   summary.createdAt = createdAt;

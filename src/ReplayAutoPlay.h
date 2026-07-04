@@ -60,6 +60,7 @@ inline ReplaySummary BuildSummary(
   summary.initialGaugeType = gaugeType;
   summary.gaugeAutoShift = gaugeAutoShift;
   summary.finalScore = std::max(0, meta.TotalNotes) * 2;
+  summary.maxScore = summary.finalScore;
   summary.finalGauge = 100.0f;
   summary.clearType = kClearTypeFullComboRank;
   summary.createdAt = kLabel;

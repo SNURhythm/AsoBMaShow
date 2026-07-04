@@ -419,6 +419,7 @@ private:
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
   ScoreClearRankCache scoreClearRanks;
+  ScoreBestCache scoreBestScores;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
   main_menu_library::FolderClearDataByLongNoteMode folderClearData;

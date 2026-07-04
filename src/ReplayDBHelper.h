@@ -15,6 +15,7 @@ struct ReplaySummary {
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;
+  int maxScore = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;

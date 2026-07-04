@@ -2,6 +2,7 @@
 
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
+#include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
 #include "RecyclerView.h"
 #include "TextView.h"
@@ -39,9 +40,11 @@ public:
   ReplaySummaryListItemView() {
     clearLamp = new View();
     textColumn = new View();
+    scoreColumn = new View();
     titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
     scoreText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    rankText = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
 
     setFlexDirection(FlexDirection::Row)
         ->setAlignItems(YGAlignCenter)
@@ -66,10 +69,27 @@ public:
     textColumn->addView(detailText);
     addView(textColumn);
 
-    scoreText->setWidth(140)->setHeight(32);
+    scoreColumn->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignFlexEnd)
+        ->setJustifyContent(YGJustifyCenter)
+        ->setWidth(150)
+        ->setHeight(52)
+        ->setFlexShrink(0)
+        ->setGap(2);
+
+    scoreText->setWidth(150)->setHeight(28);
     scoreText->setAlign(TextView::TextAlign::RIGHT);
     scoreText->setVAlign(TextView::TextVAlign::MIDDLE);
-    addView(scoreText);
+    scoreText->setOverflow(TextView::TextOverflow::Hidden);
+    scoreColumn->addView(scoreText);
+
+    rankText->setWidth(150)->setHeight(20);
+    rankText->setAlign(TextView::TextAlign::RIGHT);
+    rankText->setVAlign(TextView::TextVAlign::MIDDLE);
+    rankText->setOverflow(TextView::TextOverflow::Hidden);
+    scoreColumn->addView(rankText);
+
+    addView(scoreColumn);
     onUnselected();
   }
 
@@ -103,6 +123,8 @@ public:
     detailText->setText(detail);
     scoreText->setText(summary.autoPlay ? "AUTO"
                                         : std::to_string(summary.finalScore));
+    rankText->setText(score_rank::labelForScore(summary.finalScore,
+                                                summary.maxScore));
 
     if (hasClearLampColor(summary.clearType)) {
       clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
@@ -119,6 +141,7 @@ public:
     titleText->setThemedColor(ui_theme::textPrimary);
     detailText->setThemedColor(ui_theme::textSecondary);
     scoreText->setThemedColor(ui_theme::lime);
+    rankText->setThemedColor(ui_theme::amber);
   }
 
   void onUnselected() override {
@@ -130,14 +153,18 @@ public:
     detailText->setThemedColor(ui_theme::textMuted);
     scoreText->setThemedColor(
         [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
+    rankText->setThemedColor(
+        [] { return ui_theme::withAlpha(ui_theme::amber(), 218); });
   }
 
 private:
   View *clearLamp = nullptr;
   View *textColumn = nullptr;
+  View *scoreColumn = nullptr;
   TextView *titleText = nullptr;
   TextView *detailText = nullptr;
   TextView *scoreText = nullptr;
+  TextView *rankText = nullptr;
 };
 
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {

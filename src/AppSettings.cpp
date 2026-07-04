@@ -380,6 +380,13 @@ std::string parsePacemakerTargetId(const std::string &value,
       normalized == "MAX" || normalized == "PERFECT") {
     return normalized == "PERFECT" ? "MAX" : normalized;
   }
+  if (normalized == "MAX-" || normalized == "MAX--" ||
+      normalized == "MAX-MINUS" || normalized == "MAXMINUS" ||
+      normalized == "RATE-MAX-" || normalized == "RATE-MAX--" ||
+      normalized == "RATE-MAX-MINUS" || normalized == "RANK-MAX-" ||
+      normalized == "RANK-MAX--" || normalized == "RANK-MAX-MINUS") {
+    return "MAX-";
+  }
   return fallback;
 }
 

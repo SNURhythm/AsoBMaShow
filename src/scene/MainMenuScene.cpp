@@ -2544,6 +2544,21 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item);
     chartListItemView->setClearRank(clearRankForChart(item));
+    if (!item.courseStart && !item.solidArchive && !item.unavailable &&
+        !item.meta.BmsPath.empty()) {
+      const auto bestScore = scoreBestScores.bestFor(
+          item.meta, long_note_mode::valueFromId(selectedLnMode));
+      if (bestScore.has_value()) {
+        const int fallbackMaxScore = std::max(0, item.meta.TotalNotes) * 2;
+        chartListItemView->setBestScoreRank(
+            bestScore->score,
+            bestScore->maxScore > 0 ? bestScore->maxScore : fallbackMaxScore);
+      } else {
+        chartListItemView->setBestScoreRank(0, 0);
+      }
+    } else {
+      chartListItemView->setBestScoreRank(0, 0);
+    }
     chartListItemView->setFavoriteToggleHandler(
         [this](const ChartMetaRecord &record, bool favorite) {
           return toggleChartFavorite(record, favorite);
@@ -3781,6 +3796,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
 
 void MainMenuScene::reloadScoreClearRanks() {
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
+  scoreBestScores = ScoreDBHelper::GetInstance().LoadBestScores();
   scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
   rebuildScoreClearRankTempTable();
   folderClearData = main_menu_library::LoadFolderClearDataByLongNoteMode(
@@ -4359,7 +4375,7 @@ void MainMenuScene::refreshPacemakerTargetButtons() {
     }
 
     const std::string normalized = pacemaker::normalizeTargetId(item.target);
-    item.text->setText(normalized);
+    item.text->setText(pacemaker::displayTargetLabel(normalized));
     item.button->setOnClickListener([this, target = item.target]() {
       setPacemakerTargetSelection(target);
     });
@@ -4385,9 +4401,9 @@ void MainMenuScene::refreshReadySettingsSummary() {
     readyAssistOptionText->setText("Assist: " + effective.assistOption);
   }
   if (readyPacemakerText != nullptr) {
-    readyPacemakerText->setText("Target: " +
-                                pacemaker::normalizeTargetId(
-                                    selectedPacemakerTarget));
+    readyPacemakerText->setText(
+        "Target: " +
+        pacemaker::displayTargetLabel(selectedPacemakerTarget));
   }
 }
 
@@ -7122,7 +7138,8 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   auto makePacemakerTargetButton = [this](std::string target) {
     TextView *text = nullptr;
-    auto *button = makeModalButton(target, 18, &text);
+    auto *button =
+        makeModalButton(pacemaker::displayTargetLabel(target), 18, &text);
     button->setFlex(1);
     button->setOnClickListener(
         [this, target]() { setPacemakerTargetSelection(target); });
@@ -7134,14 +7151,18 @@ void MainMenuScene::buildPlayOptionsModal() {
     return button;
   };
 
-  auto *pacemakerRow = makeModalOptionRow(58);
-  auto *pacemakerRowB = makeModalOptionRow(58);
+  const size_t pacemakerColumns = kOptionContentWidth >= 440.0f ? 3U : 2U;
+  View *pacemakerRow = nullptr;
   for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
-    auto *row = i < 3 ? pacemakerRow : pacemakerRowB;
-    row->addView(makePacemakerTargetButton(pacemaker::kSelectableTargets[i]));
+    if (i % pacemakerColumns == 0) {
+      pacemakerRow = makeModalOptionRow(58);
+      optionsContent->addView(pacemakerRow);
+    }
+    if (pacemakerRow != nullptr) {
+      pacemakerRow->addView(
+          makePacemakerTargetButton(pacemaker::kSelectableTargets[i]));
+    }
   }
-  optionsContent->addView(pacemakerRow);
-  optionsContent->addView(pacemakerRowB);
 
   scrollView->setContentView(optionsContent);
   panel->addView(scrollView);

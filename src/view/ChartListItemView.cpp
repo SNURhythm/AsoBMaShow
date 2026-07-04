@@ -3,6 +3,7 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "../ScoreRankUtils.h"
 
 #include <cmath>
 #include <cstdint>
@@ -56,6 +57,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   artistView = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+  scoreRankView = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
   favoriteButton = new Button();
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
 
@@ -141,6 +143,13 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   keyModeView->setOverflow(TextView::TextOverflow::Hidden);
   keyModeView->setWidth(210)->setHeight(20);
   detailsLayout->addView(keyModeView);
+
+  scoreRankView->setAlign(TextView::TextAlign::RIGHT);
+  scoreRankView->setVAlign(TextView::TextVAlign::MIDDLE);
+  scoreRankView->setOverflow(TextView::TextOverflow::Hidden);
+  scoreRankView->setWidth(210)->setHeight(20);
+  detailsLayout->addView(scoreRankView);
+
   favoriteButton->setWidth(52)
       ->setHeight(52)
       ->setFlexShrink(0)
@@ -190,6 +199,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   }
   titleView->setText(title);
   artistView->setText(meta.Artist);
+  scoreRankView->setText("");
   if (record.courseStart) {
     levelView->setText(record.difficultyTableLabels.empty()
                            ? "Course"
@@ -224,6 +234,17 @@ void ChartListItemView::setClearRank(int clearRank) {
   } else {
     clearLamp->clearBackgroundColor();
   }
+}
+
+void ChartListItemView::setBestScoreRank(int score, int maxScore) {
+  if (currentRecord.courseStart || solidArchive || unavailable ||
+      maxScore <= 0 || score <= 0) {
+    scoreRankView->setText("");
+    return;
+  }
+
+  const std::string rank = score_rank::labelForScore(score, maxScore);
+  scoreRankView->setText(rank.empty() ? "" : "BEST " + rank);
 }
 
 void ChartListItemView::setFavoriteToggleHandler(
@@ -282,6 +303,8 @@ void ChartListItemView::applyTextColors(bool selected) {
     levelView->setThemedColor(ui_theme::lime);
     keyModeView->setThemedColor(selected ? ui_theme::textSecondary
                                          : ui_theme::textMuted);
+    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
+                                           : ui_theme::textMuted);
     return;
   }
 
@@ -296,6 +319,8 @@ void ChartListItemView::applyTextColors(bool selected) {
     levelView->setThemedColor(ui_theme::amber);
     keyModeView->setThemedColor(selected ? ui_theme::textSecondary
                                          : ui_theme::textMuted);
+    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
+                                           : ui_theme::textMuted);
     return;
   }
 
@@ -307,6 +332,8 @@ void ChartListItemView::applyTextColors(bool selected) {
                                                : Color(240, 132, 116, 255)));
     keyModeView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
                                                  : Color(211, 91, 84, 255)));
+    scoreRankView->setColor(ui_theme::sdl(
+        selected ? Color(255, 171, 158, 255) : Color(211, 91, 84, 255)));
     return;
   }
 
@@ -321,4 +348,10 @@ void ChartListItemView::applyTextColors(bool selected) {
   }
   keyModeView->setThemedColor(selected ? ui_theme::textSecondary
                                        : ui_theme::textMuted);
+  if (selected) {
+    scoreRankView->setThemedColor(ui_theme::amber);
+  } else {
+    scoreRankView->setThemedColor(
+        [] { return ui_theme::withAlpha(ui_theme::amber(), 218); });
+  }
 }
