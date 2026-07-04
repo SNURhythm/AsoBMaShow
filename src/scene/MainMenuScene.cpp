@@ -8227,7 +8227,11 @@ void MainMenuScene::startPreviewLoadThread(
       if (isCancelled()) {
         return;
       }
-      context.jukebox.loadChart(*chart, true, *cancelToken);
+      if (context.jukebox.hasLoadedResources()) {
+        context.jukebox.reloadChartResources(*chart, true, *cancelToken);
+      } else {
+        context.jukebox.loadChart(*chart, true, *cancelToken);
+      }
       if (isCancelled()) {
         return;
       }

@@ -50,6 +50,7 @@ public:
                  std::atomic_bool &isCancelled);
   void reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                             std::atomic_bool &isCancelled);
+  bool hasLoadedResources() const;
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
@@ -172,7 +173,7 @@ private:
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;
   mutable std::mutex videoPlayerTableMutex;
   std::unordered_map<int, ImageData> imageTable;
-  std::mutex imageTableMutex;
+  mutable std::mutex imageTableMutex;
   std::unordered_map<int, path_t> visualPathTable;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
