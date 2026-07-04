@@ -1246,16 +1246,29 @@ void GamePlayScene::update(float dt) {
               replayPacemakerResult))
                 ? options.pacemakerTarget
                 : pacemaker::kTargetOff;
+        const bms_parser::ChartMeta resultMeta = chart->Meta;
+        std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
+        bms_parser::Chart *reusableRetryChart = nullptr;
+        if (!isCoursePlayback()) {
+          if (ownedChart != nullptr) {
+            ownedReusableRetryChart = std::move(ownedChart);
+            reusableRetryChart = ownedReusableRetryChart.get();
+            chart = reusableRetryChart;
+          } else {
+            reusableRetryChart = chart;
+          }
+        }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, chart->Meta, *state, replayToSave,
+                context, resultMeta, *state, replayToSave,
                 !options.autoPlay && !options.practiceMode &&
                     !isReplayPlayback() && !isCoursePlayback(),
                 retrySource, practiceResultOptions,
                 options.autoPlay ||
                     (options.replayData != nullptr &&
                      options.replayData->autoPlay),
-                courseResultOptions, resultPacemakerTarget),
+                courseResultOptions, resultPacemakerTarget,
+                std::move(ownedReusableRetryChart), reusableRetryChart),
             false);
         return false;
       },

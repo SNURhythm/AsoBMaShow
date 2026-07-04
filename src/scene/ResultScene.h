@@ -53,7 +53,10 @@ public:
               ResultPracticeOptions practiceOptions = {},
               bool autoPlayResult = false,
               ResultCourseOptions courseOptions = {},
-              std::string pacemakerTarget = {});
+              std::string pacemakerTarget = {},
+              std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart =
+                  nullptr,
+              bms_parser::Chart *reusableRetryChart = nullptr);
   ~ResultScene() override = default;
 
   void init() override;
@@ -90,6 +93,8 @@ private:
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
+  std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
+  bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::string playModeLabel;
   std::string laneOrderLabel;

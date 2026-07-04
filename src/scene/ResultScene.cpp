@@ -246,7 +246,9 @@ ResultScene::ResultScene(ApplicationContext &context,
                          ResultPracticeOptions practiceOptions,
                          bool autoPlayResult,
                          ResultCourseOptions courseOptions,
-                         std::string pacemakerTarget)
+                         std::string pacemakerTarget,
+                         std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
+                         bms_parser::Chart *reusableRetryChart)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -256,6 +258,10 @@ ResultScene::ResultScene(ApplicationContext &context,
                                          : std::nullopt)),
       practiceOptions(std::move(practiceOptions)),
       courseOptions(std::move(courseOptions)),
+      ownedReusableRetryChart(std::move(ownedReusableRetryChart)),
+      reusableRetryChart(this->ownedReusableRetryChart != nullptr
+                             ? this->ownedReusableRetryChart.get()
+                             : reusableRetryChart),
       pacemakerTarget(pacemaker::normalizeTargetId(
           pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                   : pacemakerTarget)),
@@ -889,8 +895,22 @@ void ResultScene::startRetry(bool samePattern) {
   defer(
       [this, retrySource, samePattern]() {
         std::atomic_bool parseCancelled = false;
-        auto retryChart = play_options::parseChartForRetry(
-            retrySource, meta, parseCancelled, samePattern);
+        const bool reuseCurrentPattern =
+            samePattern && reusableRetryChart != nullptr;
+        std::unique_ptr<bms_parser::Chart> ownedRetryChart;
+        bms_parser::Chart *retryChart = nullptr;
+        if (reuseCurrentPattern) {
+          if (ownedReusableRetryChart != nullptr) {
+            ownedRetryChart = std::move(ownedReusableRetryChart);
+            retryChart = ownedRetryChart.get();
+          } else {
+            retryChart = reusableRetryChart;
+          }
+        } else {
+          ownedRetryChart = play_options::parseChartForRetry(
+              retrySource, meta, parseCancelled, samePattern);
+          retryChart = ownedRetryChart.get();
+        }
         if (retryChart == nullptr || parseCancelled) {
           return true;
         }
@@ -930,7 +950,14 @@ void ResultScene::startRetry(bool samePattern) {
           }
         }
 
-        if (retrySource.playOption.has_value()) {
+        if (reuseCurrentPattern) {
+          options.playOption = retrySource.playOption;
+          options.playOptionSeed = retrySource.playOptionSeed;
+          if (retryChart->Meta.IsDP) {
+            options.playOption2 = retrySource.playOption2;
+            options.playOption2Seed = retrySource.playOption2Seed;
+          }
+        } else if (retrySource.playOption.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption) &&
               !retrySource.playOptionSeed.has_value()) {
@@ -947,7 +974,8 @@ void ResultScene::startRetry(bool samePattern) {
           }
         }
 
-        if (retryChart->Meta.IsDP && retrySource.playOption2.has_value()) {
+        if (!reuseCurrentPattern && retryChart->Meta.IsDP &&
+            retrySource.playOption2.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption2) &&
               !retrySource.playOption2Seed.has_value()) {
@@ -965,15 +993,24 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         context.jukebox.stop();
-        context.jukebox.loadChart(*retryChart, true, parseCancelled);
-        if (parseCancelled) {
-          return true;
+        if (!reuseCurrentPattern) {
+          context.jukebox.loadChart(*retryChart, true, parseCancelled);
+          if (parseCancelled) {
+            return true;
+          }
         }
 
-        context.sceneManager->changeScene(
-            std::make_unique<GamePlayScene>(context, std::move(retryChart),
-                                            options),
-            false);
+        if (ownedRetryChart != nullptr) {
+          context.sceneManager->changeScene(
+              std::make_unique<GamePlayScene>(context, std::move(ownedRetryChart),
+                                              options),
+              false);
+        } else {
+          options.ownsChart = false;
+          context.sceneManager->changeScene(
+              std::make_unique<GamePlayScene>(context, retryChart, options),
+              false);
+        }
         return false;
       },
       0, true);
