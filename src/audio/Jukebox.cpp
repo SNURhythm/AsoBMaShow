@@ -57,6 +57,37 @@ referencedResourceEntries(
   return entries;
 }
 
+bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
+                              bool loadVisualAssets) {
+  const auto wavEntries =
+      referencedResourceEntries(chart.WavTable, chart.ReferencedWavIds);
+  for (const auto &[id, wavPath] : wavEntries) {
+    (void)id;
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / wavPath,
+                                       archivePath, innerPath)) {
+      return true;
+    }
+  }
+
+  if (!loadVisualAssets) {
+    return false;
+  }
+  const auto bmpEntries =
+      referencedResourceEntries(chart.BmpTable, chart.ReferencedBmpIds);
+  for (const auto &[id, bmpPath] : bmpEntries) {
+    (void)id;
+    std::filesystem::path archivePath;
+    std::filesystem::path innerPath;
+    if (archive_file::splitVirtualPath(chart.Meta.Folder / bmpPath,
+                                       archivePath, innerPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 #if TARGET_OS_ANDROID
 struct UniqueFd {
   explicit UniqueFd(int fd) : value(fd) {}
@@ -2041,6 +2072,29 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
   return assets;
 }
 
+void Jukebox::loadResolvedChartResources(bms_parser::Chart &chart,
+                                         bool loadVisualAssets,
+                                         std::atomic_bool &isCancelled) {
+  const auto soundAssets = resolveSoundAssets(chart, isCancelled);
+  if (isCancelled) {
+    return;
+  }
+  reconcileSoundResources(chart, soundAssets, isCancelled);
+  if (isCancelled) {
+    return;
+  }
+
+  if (loadVisualAssets) {
+    const auto visualAssets = resolveVisualAssets(chart, isCancelled);
+    if (isCancelled) {
+      return;
+    }
+    reconcileVisualResources(chart, visualAssets, isCancelled);
+  } else {
+    clearVisualResources();
+  }
+}
+
 void Jukebox::reconcileSoundResources(
     bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
     std::atomic_bool &isCancelled) {
@@ -2467,9 +2521,16 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   }
 
   audio.stopSounds();
-  audio.unloadSounds();
-
-  clearVisualResources();
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      if (videoPlayer.second != nullptr) {
+        videoPlayer.second->stop();
+      }
+    }
+  }
   if (isCancelled)
     return;
 
@@ -2479,23 +2540,24 @@ void Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
   if (isCancelled)
     return;
 #endif
-  if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
+  if (chartHasVirtualAssetBase(chart, loadVisualAssets)) {
+    audio.unloadSounds();
+    clearVisualResources();
+    if (isCancelled) {
+      return;
+    }
+    if (loadArchivedChartAssets(chart, loadVisualAssets, isCancelled)) {
+      if (isCancelled)
+        return;
+      schedule(chart, scheduleNotes, isCancelled);
+      SDL_Log("Chart loaded");
+      return;
+    }
     if (isCancelled)
       return;
-    schedule(chart, scheduleNotes, isCancelled);
-    SDL_Log("Chart loaded");
-    return;
   }
 
-  SDL_Log("Loading sounds");
-  std::thread loadSoundThread(
-      [this, &chart, &isCancelled] { loadSounds(chart, isCancelled); });
-  if (loadVisualAssets) {
-    SDL_Log("Loading videos");
-    loadBMPs(chart, isCancelled);
-  }
-  loadSoundThread.join();
-
+  loadResolvedChartResources(chart, loadVisualAssets, isCancelled);
   if (isCancelled)
     return;
   schedule(chart, scheduleNotes, isCancelled);
@@ -2553,25 +2615,7 @@ void Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
   }
 #endif
 
-  const auto soundAssets = resolveSoundAssets(chart, isCancelled);
-  if (isCancelled) {
-    return;
-  }
-  reconcileSoundResources(chart, soundAssets, isCancelled);
-  if (isCancelled) {
-    return;
-  }
-
-  if (loadVisualAssets) {
-    const auto visualAssets = resolveVisualAssets(chart, isCancelled);
-    if (isCancelled) {
-      return;
-    }
-    reconcileVisualResources(chart, visualAssets, isCancelled);
-  } else {
-    clearVisualResources();
-  }
-
+  loadResolvedChartResources(chart, loadVisualAssets, isCancelled);
   if (isCancelled) {
     return;
   }

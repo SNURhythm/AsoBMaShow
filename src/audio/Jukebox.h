@@ -131,6 +131,9 @@ private:
   resolveSoundAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   std::vector<ResolvedVisualAsset>
   resolveVisualAssets(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
+  void loadResolvedChartResources(bms_parser::Chart &chart,
+                                  bool loadVisualAssets,
+                                  std::atomic_bool &isCancelled);
   void reconcileSoundResources(
       bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
       std::atomic_bool &isCancelled);
