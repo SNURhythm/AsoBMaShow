@@ -310,6 +310,13 @@ struct ArchiveChartAssetBatch {
   std::unordered_map<path_t, std::vector<int>> imageIdsByPath;
 };
 
+struct ReusableVisualSources {
+  std::vector<int> imageIds;
+  size_t nextImageIndex = 0;
+  std::vector<int> videoIds;
+  size_t nextVideoIndex = 0;
+};
+
 bool addArchiveAssetTarget(
     std::unordered_map<path_t, ArchiveAssetBatch> &batches,
     std::vector<path_t> &batchOrder, const std::filesystem::path &path,
@@ -2073,30 +2080,32 @@ void Jukebox::reconcileSoundResources(
     bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
     std::atomic_bool &isCancelled) {
   std::unordered_map<int, path_t> nextWavTable;
+  nextWavTable.reserve(assets.size());
+
+  std::unordered_set<path_t> oldPaths;
+  oldPaths.reserve(wavTableAbs.size());
   std::unordered_set<path_t> requiredPaths;
-  std::unordered_set<path_t> existingPaths;
-  std::unordered_set<path_t> pathsToLoad;
+  requiredPaths.reserve(assets.size());
+  std::vector<ResolvedSoundAsset> assetsToLoad;
+  assetsToLoad.reserve(assets.size());
 
   for (const auto &[id, path] : wavTableAbs) {
     (void)id;
-    existingPaths.insert(path);
+    oldPaths.insert(path);
   }
   for (const auto &asset : assets) {
     requiredPaths.insert(asset.key);
-    if (existingPaths.contains(asset.key)) {
+    if (oldPaths.contains(asset.key)) {
       nextWavTable[asset.id] = asset.key;
     } else {
-      pathsToLoad.insert(asset.key);
+      assetsToLoad.push_back(asset);
     }
   }
 
   std::unordered_map<path_t, ArchiveAssetBatch> archiveBatches;
   std::vector<path_t> archiveBatchOrder;
   std::vector<ResolvedSoundAsset> regularLoads;
-  for (const auto &asset : assets) {
-    if (!pathsToLoad.contains(asset.key)) {
-      continue;
-    }
+  for (const auto &asset : assetsToLoad) {
     if (!addArchiveAssetTarget(archiveBatches, archiveBatchOrder, asset.path,
                                asset.id)) {
       regularLoads.push_back(asset);
@@ -2208,11 +2217,6 @@ void Jukebox::reconcileSoundResources(
     }
   }
 
-  std::unordered_set<path_t> oldPaths;
-  for (const auto &[id, path] : wavTableAbs) {
-    (void)id;
-    oldPaths.insert(path);
-  }
   for (const path_t &path : oldPaths) {
     if (!requiredPaths.contains(path)) {
       audio.unloadSound(path);
@@ -2240,43 +2244,62 @@ void Jukebox::reconcileVisualResources(
   }
 
   std::unordered_map<int, std::unique_ptr<VideoPlayer>> nextVideoPlayers;
+  nextVideoPlayers.reserve(assets.size());
   std::unordered_map<int, std::filesystem::path> nextMaterializedPaths;
   std::unordered_map<int, ImageData> nextImages;
+  nextImages.reserve(assets.size());
   std::unordered_map<int, path_t> nextVisualPaths;
-  std::unordered_map<path_t, std::vector<int>> oldIdsByPath;
-  std::unordered_set<int> consumedOldIds;
+  nextVisualPaths.reserve(assets.size());
+  std::unordered_map<path_t, ReusableVisualSources> oldSourcesByPath;
+  oldSourcesByPath.reserve(oldVisualPaths.size());
   std::vector<ResolvedVisualAsset> unresolvedAssets;
+  unresolvedAssets.reserve(assets.size());
 
   for (const auto &[id, path] : oldVisualPaths) {
-    if (oldVideoPlayers.contains(id) || oldImages.contains(id)) {
-      oldIdsByPath[path].push_back(id);
+    const bool hasVideo = oldVideoPlayers.contains(id);
+    const bool hasImage = oldImages.contains(id);
+    if (!hasVideo && !hasImage) {
+      continue;
+    }
+
+    ReusableVisualSources &sources = oldSourcesByPath[path];
+    if (hasVideo) {
+      sources.videoIds.push_back(id);
+    }
+    if (hasImage) {
+      sources.imageIds.push_back(id);
     }
   }
 
-  auto sourceMatchesAssetKind = [&](const ResolvedVisualAsset &asset,
-                                    int sourceId) {
+  auto sourceIsAvailable = [&](const ResolvedVisualAsset &asset,
+                               int sourceId) {
     return asset.video ? oldVideoPlayers.contains(sourceId)
                        : oldImages.contains(sourceId);
   };
 
   auto trySelectSourceId = [&](const ResolvedVisualAsset &asset)
       -> std::optional<int> {
-    const auto sourcesIt = oldIdsByPath.find(asset.key);
-    if (sourcesIt == oldIdsByPath.end()) {
-      return std::nullopt;
-    }
-
-    if (!consumedOldIds.contains(asset.id) &&
-        sourceMatchesAssetKind(asset, asset.id)) {
+    const auto sameIdPathIt = oldVisualPaths.find(asset.id);
+    if (sameIdPathIt != oldVisualPaths.end() &&
+        sameIdPathIt->second == asset.key &&
+        sourceIsAvailable(asset, asset.id)) {
       return asset.id;
     }
 
-    for (const int sourceId : sourcesIt->second) {
-      if (consumedOldIds.contains(sourceId) ||
-          !sourceMatchesAssetKind(asset, sourceId)) {
-        continue;
+    const auto sourcesIt = oldSourcesByPath.find(asset.key);
+    if (sourcesIt == oldSourcesByPath.end()) {
+      return std::nullopt;
+    }
+
+    ReusableVisualSources &sources = sourcesIt->second;
+    std::vector<int> &ids = asset.video ? sources.videoIds : sources.imageIds;
+    size_t &nextIndex =
+        asset.video ? sources.nextVideoIndex : sources.nextImageIndex;
+    while (nextIndex < ids.size()) {
+      const int sourceId = ids[nextIndex++];
+      if (sourceIsAvailable(asset, sourceId)) {
+        return sourceId;
       }
-      return sourceId;
     }
 
     return std::nullopt;
@@ -2289,7 +2312,6 @@ void Jukebox::reconcileVisualResources(
       continue;
     }
 
-    consumedOldIds.insert(*sourceId);
     nextVisualPaths[asset.id] = asset.key;
     if (asset.video) {
       nextVideoPlayers[asset.id] = std::move(oldVideoPlayers[*sourceId]);
