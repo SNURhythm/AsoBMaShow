@@ -241,8 +241,8 @@ size_t replayVideoFrameBufferMemoryBudgetBytes() {
     return static_cast<size_t>(kDefaultBudgetBytes);
   }
   return static_cast<size_t>(
-      std::clamp(physicalMemoryBytes / 32ULL, kMinBudgetBytes,
-                 kMaxBudgetBytes));
+      std::clamp<uint64_t>(physicalMemoryBytes / uint64_t{32},
+                           kMinBudgetBytes, kMaxBudgetBytes));
 }
 
 size_t replayVideoFrameBufferSlotBytes(int width, int height) {
