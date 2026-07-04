@@ -437,6 +437,9 @@ private:
   std::string difficultyText;
   std::vector<ReplaySummary> replaySummaries;
   ChartMetaRecord replayModalChart;
+  std::optional<ReplaySummary> selectedReplaySummary;
+  std::optional<ReplaySummary> replayExportSelection;
+  ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
   bool selectedExportFullResolution = true;
@@ -671,6 +674,8 @@ private:
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
+  void clearReplayModalSelection();
+  bool selectReplayModalIndex(int index);
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);

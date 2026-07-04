@@ -2488,6 +2488,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicStatusMessage.clear();
   replaySummaries.clear();
   selectedReplayIndex = -1;
+  selectedReplaySummary.reset();
+  replayExportSelection.reset();
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
@@ -4907,14 +4909,12 @@ void MainMenuScene::reselectCurrentChart() {
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
-  replaySummaries.clear();
-  selectedReplayIndex = -1;
   if (record != nullptr && record->courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
       activeFolder.courseId > 0) {
-    replaySummaries =
+    const auto courseReplays =
         ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId);
-    setReplayButtonVisible(!replaySummaries.empty());
+    setReplayButtonVisible(!courseReplays.empty());
     return;
   }
 
@@ -4924,7 +4924,6 @@ void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
     return;
   }
 
-  replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record->meta);
   setReplayButtonVisible(true);
 }
 
@@ -7273,7 +7272,7 @@ void MainMenuScene::buildReplayModal() {
       ->setGap(10);
   replayListView = new ReplaySummaryListView();
   replayListView->onSelectionChanged = [this](int idx) {
-    selectedReplayIndex = idx;
+    selectReplayModalIndex(idx);
     if (selectedReplayIsAutoPlay()) {
       selectedReplayRenderTouchPoints = false;
       selectedReplayRenderGhosts = false;
@@ -7561,15 +7560,7 @@ void MainMenuScene::buildReplayModal() {
       replayModalTitleText->setText("Replay");
       replayExportOptionsContent->setVisible(false);
       replayListContent->setVisible(true);
-      const int previousSelection = selectedReplayIndex;
-      const float previousScrollOffset = replayListView->scrollOffset;
-      replayListView->setReplaySummaries(replaySummaries);
-      replayListView->scrollOffset = previousScrollOffset;
-      selectedReplayIndex =
-          previousSelection >= 0 &&
-                  previousSelection < static_cast<int>(replaySummaries.size())
-              ? previousSelection
-              : -1;
+      replayExportSelection.reset();
       replayListView->restoreSelection(selectedReplayIndex);
       refreshReplayModalActions();
       return;
@@ -7580,12 +7571,10 @@ void MainMenuScene::buildReplayModal() {
     if (replayExportInProgress.load()) {
       return;
     }
-    if (selectedReplayIndex < 0 ||
-        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+    if (!selectedReplaySummary.has_value()) {
       return;
     }
-    startReplayPlayback(replayModalChart,
-                        replaySummaries[selectedReplayIndex].id);
+    startReplayPlayback(replayModalChart, selectedReplaySummary->id);
   });
   replayModalPhotoButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
@@ -7594,39 +7583,40 @@ void MainMenuScene::buildReplayModal() {
     if (selectedReplayIsAutoPlay()) {
       return;
     }
-    if (selectedReplayIndex < 0 ||
-        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+    if (!selectedReplaySummary.has_value()) {
       return;
     }
-    startReplayImageExport(replayModalChart,
-                           replaySummaries[selectedReplayIndex].id);
+    startReplayImageExport(replayModalChart, selectedReplaySummary->id);
   });
   replayModalExportButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
       return;
     }
-    if (selectedReplayIndex < 0 ||
-        selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
-      return;
-    }
     if (replayExportOptionsContent != nullptr &&
         replayExportOptionsContent->getVisible()) {
+      if (!replayExportSelection.has_value()) {
+        return;
+      }
+      const ReplaySummary exportSelection = replayExportSelection.value();
+      const bool exportAutoPlay = exportSelection.autoPlay;
       ReplayVideoExportOptions options;
       options.fps = selectedExportFps;
       options.includeResultScreen = selectedExportIncludeResultScreen;
       options.renderTouchPoints =
-          selectedReplayIsAutoPlay() ? false : selectedReplayRenderTouchPoints;
+          exportAutoPlay ? false : selectedReplayRenderTouchPoints;
       options.renderReplayGhosts =
-          selectedReplayIsAutoPlay() ? false : selectedReplayRenderGhosts;
+          exportAutoPlay ? false : selectedReplayRenderGhosts;
       options.pacemakerTarget =
-          selectedReplayIsAutoPlay()
+          exportAutoPlay
               ? pacemaker::kTargetOff
               : pacemaker::normalizeTargetId(selectedPacemakerTarget);
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
-      startReplayVideoExport(replayModalChart,
-                             replaySummaries[selectedReplayIndex].id, options);
+      startReplayVideoExport(replayExportChart, exportSelection.id, options);
+      return;
+    }
+    if (!selectedReplaySummary.has_value()) {
       return;
     }
     showReplayExportOptions();
@@ -7649,6 +7639,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   }
 
   replayModalChart = record;
+  replayExportSelection.reset();
   const bool courseReplayList =
       record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -7663,7 +7654,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   }
   setReplayButtonVisible(true);
 
-  selectedReplayIndex = -1;
+  clearReplayModalSelection();
   selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
   selectedReplayRenderGhosts = true;
   replayModalTitleText->setText("Replay");
@@ -7679,11 +7670,12 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
 }
 
 void MainMenuScene::showReplayExportOptions() {
-  if (replayModalRoot == nullptr || selectedReplayIndex < 0 ||
-      selectedReplayIndex >= static_cast<int>(replaySummaries.size())) {
+  if (replayModalRoot == nullptr || !selectedReplaySummary.has_value()) {
     return;
   }
 
+  replayExportSelection = selectedReplaySummary;
+  replayExportChart = replayModalChart;
   replayModalTitleText->setText("Export Options");
   replayListContent->setVisible(false);
   replayExportOptionsContent->setVisible(true);
@@ -7691,7 +7683,7 @@ void MainMenuScene::showReplayExportOptions() {
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
-  if (selectedReplayIsAutoPlay()) {
+  if (replayExportSelection->autoPlay) {
     selectedReplayRenderTouchPoints = false;
     selectedReplayRenderGhosts = false;
   }
@@ -7725,7 +7717,8 @@ void MainMenuScene::hideReplayModal() {
     return;
   }
   replayModalRoot->setVisible(false);
-  selectedReplayIndex = -1;
+  clearReplayModalSelection();
+  replayExportSelection.reset();
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
   }
@@ -7738,13 +7731,13 @@ void MainMenuScene::hideReplayModal() {
 }
 
 void MainMenuScene::refreshReplayModalActions() {
-  const bool hasSelection =
-      selectedReplayIndex >= 0 &&
-      selectedReplayIndex < static_cast<int>(replaySummaries.size());
   const bool optionsMode = replayExportOptionsContent != nullptr &&
                            replayExportOptionsContent->getVisible();
   const bool progressMode = replayExportProgressContent != nullptr &&
                             replayExportProgressContent->getVisible();
+  const bool hasSelection =
+      optionsMode ? replayExportSelection.has_value()
+                  : selectedReplaySummary.has_value();
   const bool exportInProgress = replayExportInProgress.load();
   const bool autoPlaySelection = selectedReplayIsAutoPlay();
   const bool courseReplaySelection = selectedReplayIsCourseReplay();
@@ -7893,16 +7886,39 @@ void MainMenuScene::updateReplayExportProgressUi(double fraction,
   }
 }
 
+void MainMenuScene::clearReplayModalSelection() {
+  selectedReplayIndex = -1;
+  selectedReplaySummary.reset();
+}
+
+bool MainMenuScene::selectReplayModalIndex(int index) {
+  clearReplayModalSelection();
+  if (index < 0 || index >= static_cast<int>(replaySummaries.size())) {
+    return false;
+  }
+
+  selectedReplayIndex = index;
+  selectedReplaySummary = replaySummaries[static_cast<std::size_t>(index)];
+  return true;
+}
+
 bool MainMenuScene::selectedReplayIsAutoPlay() const {
-  return selectedReplayIndex >= 0 &&
-         selectedReplayIndex < static_cast<int>(replaySummaries.size()) &&
-         replaySummaries[selectedReplayIndex].autoPlay;
+  if (replayExportOptionsContent != nullptr &&
+      replayExportOptionsContent->getVisible() &&
+      replayExportSelection.has_value()) {
+    return replayExportSelection->autoPlay;
+  }
+  return selectedReplaySummary.has_value() && selectedReplaySummary->autoPlay;
 }
 
 bool MainMenuScene::selectedReplayIsCourseReplay() const {
-  return selectedReplayIndex >= 0 &&
-         selectedReplayIndex < static_cast<int>(replaySummaries.size()) &&
-         replaySummaries[selectedReplayIndex].courseReplay;
+  if (replayExportOptionsContent != nullptr &&
+      replayExportOptionsContent->getVisible() &&
+      replayExportSelection.has_value()) {
+    return replayExportSelection->courseReplay;
+  }
+  return selectedReplaySummary.has_value() &&
+         selectedReplaySummary->courseReplay;
 }
 
 bms_parser::ChartMeta
@@ -7974,9 +7990,11 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Loading...");
   }
+  const std::string pacemakerTarget =
+      pacemaker::normalizeTargetId(selectedPacemakerTarget);
 
   defer(
-      [this, record, replayId]() {
+      [this, record, replayId, pacemakerTarget]() {
         auto failReplayLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -8020,6 +8038,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                     .longNoteMode =
                                         long_note_mode::valueFromId(selectedLnMode),
                                     .assistOption = selectedAssistOption,
+                                    .pacemakerTarget = pacemaker::kTargetOff,
                                     .touchVisualizationEnabled = false,
                                     .replayGhostRenderingEnabled = false,
                                 });
@@ -8065,6 +8084,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                   .gaugeType = replayData->initialGaugeType,
                                   .gaugeAutoShift = replayData->gaugeAutoShift,
                                   .replayData = replayData,
+                                  .pacemakerTarget = pacemakerTarget,
                                   .touchVisualizationEnabled =
                                       selectedReplayRenderTouchPoints,
                                   .replayGhostRenderingEnabled =
@@ -8589,6 +8609,10 @@ void MainMenuScene::applyReplayExportResult() {
     replayExportProgressContent->setVisible(false);
     replayExportOptionsContent->setVisible(false);
     replayListContent->setVisible(true);
+    replayExportSelection.reset();
+    if (replayListView != nullptr) {
+      replayListView->restoreSelection(selectedReplayIndex);
+    }
     refreshReplayModalActions();
   }
 
@@ -8938,6 +8962,8 @@ void MainMenuScene::cleanupScene() {
   selectedChartReusableForStart.store(false);
   replaySummaries.clear();
   selectedReplayIndex = -1;
+  selectedReplaySummary.reset();
+  replayExportSelection.reset();
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
