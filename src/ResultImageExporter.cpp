@@ -648,15 +648,18 @@ ResultImageExporter::Export(ApplicationContext &context,
 ResultImageExportResult
 ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
-                                  const ReplayData &replay) {
+                                  const ReplayData &replay,
+                                  const std::string &pacemakerTarget) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(chart.Meta, replay);
   std::optional<ResultPacemakerData> pacemaker;
   if (!replay.autoPlay) {
-    pacemaker = result_presentation::pacemakerDataForResult(
-        chart.Meta, state, context.settings.selectedPacemakerTarget,
-        previousBest);
+    const std::string target =
+        pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
+                                : pacemakerTarget;
+    pacemaker = result_presentation::pacemakerDataForReplayResult(
+        chart.Meta, state, replay, target, previousBest);
   }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(chart.Meta);

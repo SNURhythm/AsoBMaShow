@@ -856,6 +856,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
 
   const auto match = replayChartMatchFor(chartMeta);
   limit = std::max(1, limit);
+  const int maxScore = std::max(0, chartMeta.TotalNotes) * 2;
 
   std::string query =
       "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
@@ -882,7 +883,9 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   sqlite3_bind_int(stmt.get(), bindIndex++, limit);
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    replays.push_back(readReplaySummary(stmt.get(), 17, 18));
+    ReplaySummary summary = readReplaySummary(stmt.get(), 17, 18);
+    summary.maxScore = maxScore;
+    replays.push_back(std::move(summary));
   }
   return replays;
 }

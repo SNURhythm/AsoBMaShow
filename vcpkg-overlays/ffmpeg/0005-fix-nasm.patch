@@ -83,7 +83,7 @@ index 30aa97c..3975f98 100644
 +++ b/libavcodec/x86/vvc/mc.asm
 @@ -31,7 +31,9 @@
  
- SECTION_RODATA 32
+ SECTION_RODATA
  
 -%if ARCH_X86_64
 +%ifn ARCH_X86_64

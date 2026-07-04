@@ -16,6 +16,7 @@ public:
 
   void setMeta(const ChartMetaRecord &record);
   void setClearRank(int clearRank);
+  void setBestScoreRank(int score, int maxScore);
   void setFavoriteToggleHandler(
       std::function<bool(const ChartMetaRecord &, bool)> handler);
   void onSelected() override;
@@ -42,6 +43,7 @@ private:
   TextView *artistView;
   TextView *levelView;
   TextView *keyModeView;
+  TextView *scoreRankView;
   Button *favoriteButton;
   TextView *favoriteIconView;
 };

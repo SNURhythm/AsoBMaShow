@@ -26,7 +26,11 @@ dependency = {
     "libarchive": ["libarchive", "libz", "libbz2", "liblz4", "liblzma", "libzstd"],
     "lib7zip": ["lib7zip"],
 }
+extra_static_dependencies = {
+    "ffmpeg": ["libx264"],
+}
 package_specs = {
+    "ffmpeg": "ffmpeg[gpl,x264]",
     "libarchive": "libarchive[core,bzip2,lz4,lzma,zstd]",
     "lib7zip": "7zip",
 }
@@ -37,7 +41,7 @@ def install_package(package_name):
     # join like package_name:triplet1 package_name:triplet2
     package_spec = package_specs.get(package_name, package_name)
     joined_triplets = [f"{package_spec}:{triplet}" for triplet in triplets]
-    subprocess.run([f"{vcpkg_root}/vcpkg", "install", "--classic", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays", "--overlay-triplets", triplet_overlay_path], check=True)
+    subprocess.run([f"{vcpkg_root}/vcpkg", "install", "--classic", "--recurse", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays", "--overlay-triplets", triplet_overlay_path], check=True)
 
 
 # 2. generate xcframeworks with xcodebuild -create-xcframework to merge iOS Device and iOS Simulator triplets
@@ -67,7 +71,10 @@ def copy_license(package_name, output_name):
 
 def merge_all_dependents(package_name):
     for triplet in triplets:
-        libtool_merge_list= [f"{vcpkg_root}/installed/{triplet}/lib/{dep}.a" for dep in dependency[package_name]]
+        libtool_merge_list= [
+            f"{vcpkg_root}/installed/{triplet}/lib/{dep}.a"
+            for dep in dependency[package_name] + extra_static_dependencies.get(package_name, [])
+        ]
         subprocess.run(["libtool", "-static", "-o", f"{tmp_path}/{package_name}-{triplet}.a", *libtool_merge_list], check=True)
 
 # ffmpeg (libavformat, libavcodec, libavutil, libswresample, libswscale, libavdevice, libavfilter)
@@ -76,6 +83,8 @@ merge_all_dependents("ffmpeg")
 generate_xcframework("ffmpeg", True)
 copy_xcframework("ffmpeg")
 [copy_includes(name, True) for name in dependency["ffmpeg"]]
+copy_license("ffmpeg", "ffmpeg.txt")
+copy_license("x264", "x264.txt")
 
 install_package("libsndfile")
 merge_all_dependents("libsndfile")

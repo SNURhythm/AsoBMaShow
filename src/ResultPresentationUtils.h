@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ChartDBHelper.h"
+#include "ReplayDBHelper.h"
 #include "ReplayData.h"
 #include "ScoreDBHelper.h"
 #include "scene/play/Pacemaker.h"
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace result_presentation {
 inline ResultPreviousBestData
@@ -34,10 +36,43 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
           .createdAt = previousBest.createdAt};
 }
 
+inline std::optional<ReplayData> bestReplayForSnapshot(
+    const bms_parser::ChartMeta &meta, const ScoreBestSnapshot &best,
+    const std::optional<std::string> &beforeCreatedAt = std::nullopt) {
+  if (best.score <= 0 || meta.TotalNotes <= 0) {
+    return std::nullopt;
+  }
+
+  const auto summaries = ReplayDBHelper::GetInstance().ListReplays(meta, 100);
+  for (const ReplaySummary &summary : summaries) {
+    if (summary.courseReplay || summary.autoPlay ||
+        summary.finalScore != best.score || summary.eventCount <= 0) {
+      continue;
+    }
+    if (beforeCreatedAt.has_value() && !beforeCreatedAt->empty() &&
+        !summary.createdAt.empty() && summary.createdAt >= *beforeCreatedAt) {
+      continue;
+    }
+
+    auto replay = ReplayDBHelper::GetInstance().LoadReplay(summary.id, meta);
+    if (!replay.has_value() || replay->finalScore != best.score) {
+      continue;
+    }
+
+    const std::vector<int> progression =
+        pacemaker::buildReplayScoreProgression(*replay, meta.TotalNotes);
+    if (!progression.empty() && progression.back() == best.score) {
+      return replay;
+    }
+  }
+  return std::nullopt;
+}
+
 inline std::optional<ResultPacemakerData> pacemakerDataForResult(
     const bms_parser::ChartMeta &meta, const RhythmState &state,
     const std::string &targetId,
-    const std::optional<ResultPreviousBestData> &previousBest) {
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayData *bestReplay = nullptr) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (normalized == pacemaker::kTargetOff) {
     return std::nullopt;
@@ -49,7 +84,52 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
   }
 
   const pacemaker::Target target =
-      pacemaker::targetFromSelection(meta, normalized, best, nullptr);
+      pacemaker::targetFromSelection(meta, normalized, best, bestReplay);
+  if (!target.enabled) {
+    return std::nullopt;
+  }
+
+  return ResultPacemakerData{
+      .label = target.label,
+      .targetScore = target.finalScore,
+      .delta = state.getScore() - target.finalScore,
+      .usesReplayProgression = target.usesReplayProgression,
+  };
+}
+
+inline pacemaker::Target pacemakerTargetForReplay(
+    const bms_parser::ChartMeta &meta, const ReplayData &replay,
+    const std::string &targetId,
+    const std::optional<ResultPreviousBestData> &previousBest) {
+  const std::string normalized = pacemaker::normalizeTargetId(targetId);
+  if (replay.autoPlay || normalized == pacemaker::kTargetOff) {
+    return {};
+  }
+
+  std::optional<ScoreBestSnapshot> best;
+  std::optional<ReplayData> bestReplay;
+  if (previousBest.has_value()) {
+    best = scoreBestSnapshotFromPreviousBest(*previousBest);
+  }
+
+  if (normalized == pacemaker::kTargetBest && best.has_value()) {
+    std::optional<std::string> beforeCreatedAt;
+    if (!replay.createdAt.empty()) {
+      beforeCreatedAt = replay.createdAt;
+    }
+    bestReplay = bestReplayForSnapshot(meta, *best, beforeCreatedAt);
+  }
+
+  return pacemaker::targetFromSelection(
+      meta, normalized, best, bestReplay.has_value() ? &*bestReplay : nullptr);
+}
+
+inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
+    const bms_parser::ChartMeta &meta, const RhythmState &state,
+    const ReplayData &replay, const std::string &targetId,
+    const std::optional<ResultPreviousBestData> &previousBest) {
+  const pacemaker::Target target =
+      pacemakerTargetForReplay(meta, replay, targetId, previousBest);
   if (!target.enabled) {
     return std::nullopt;
   }

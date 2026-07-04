@@ -19,10 +19,12 @@ inline constexpr const char *kTargetBest = "BEST";
 inline constexpr const char *kTargetA = "A";
 inline constexpr const char *kTargetAA = "AA";
 inline constexpr const char *kTargetAAA = "AAA";
+inline constexpr const char *kTargetMaxMinus = "MAX-";
 inline constexpr const char *kTargetMax = "MAX";
 
-inline constexpr std::array<const char *, 6> kSelectableTargets = {
-    kTargetOff, kTargetBest, kTargetA, kTargetAA, kTargetAAA, kTargetMax};
+inline constexpr std::array<const char *, 7> kSelectableTargets = {
+    kTargetOff, kTargetBest, kTargetA, kTargetAA,
+    kTargetAAA, kTargetMaxMinus, kTargetMax};
 
 struct Target {
   bool enabled = false;
@@ -78,6 +80,11 @@ inline std::string normalizeTargetId(std::string value) {
                    }
                    return static_cast<char>(std::toupper(ch));
                  });
+  value.erase(std::unique(value.begin(), value.end(),
+                          [](char lhs, char rhs) {
+                            return lhs == '-' && rhs == '-';
+                          }),
+              value.end());
   if (value == "NONE" || value == "DISABLED") {
     return kTargetOff;
   }
@@ -88,6 +95,10 @@ inline std::string normalizeTargetId(std::string value) {
   if (value == "MAX" || value == "PERFECT") {
     return kTargetMax;
   }
+  if (value == "MAX-" || value == "MAX-MINUS" || value == "MAXMINUS" ||
+      value == "RATE-MAX-" || value == "RANK-MAX-") {
+    return kTargetMaxMinus;
+  }
   for (const char *target : kSelectableTargets) {
     if (value == target) {
       return target;
@@ -96,10 +107,19 @@ inline std::string normalizeTargetId(std::string value) {
   return kTargetBest;
 }
 
+inline std::string displayTargetLabel(const std::string &targetId) {
+  const std::string normalized = normalizeTargetId(targetId);
+  if (normalized == kTargetMaxMinus) {
+    return "MAX -";
+  }
+  return normalized;
+}
+
 inline bool targetIsGrade(const std::string &targetId) {
   const std::string normalized = normalizeTargetId(targetId);
   return normalized == kTargetA || normalized == kTargetAA ||
-         normalized == kTargetAAA || normalized == kTargetMax;
+         normalized == kTargetAAA || normalized == kTargetMaxMinus ||
+         normalized == kTargetMax;
 }
 
 inline int playedNotesForState(const RhythmState &state, int totalNotes) {
@@ -167,19 +187,28 @@ inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
   return target;
 }
 
-inline std::optional<int> gradeTargetNumerator(const std::string &targetId) {
+struct RateTargetFraction {
+  int numerator = 0;
+  int denominator = 1;
+};
+
+inline std::optional<RateTargetFraction>
+gradeTargetFraction(const std::string &targetId) {
   const std::string normalized = normalizeTargetId(targetId);
   if (normalized == kTargetA) {
-    return 6;
+    return RateTargetFraction{6, 9};
   }
   if (normalized == kTargetAA) {
-    return 7;
+    return RateTargetFraction{7, 9};
   }
   if (normalized == kTargetAAA) {
-    return 8;
+    return RateTargetFraction{8, 9};
+  }
+  if (normalized == kTargetMaxMinus) {
+    return RateTargetFraction{26, 27};
   }
   if (normalized == kTargetMax) {
-    return 9;
+    return RateTargetFraction{9, 9};
   }
   return std::nullopt;
 }
@@ -189,15 +218,18 @@ inline Target targetFromGrade(const bms_parser::ChartMeta &meta,
   const int totalNotes = std::max(0, meta.TotalNotes);
   const int maxScore = totalNotes * 2;
   Target target;
-  target.label = normalizeTargetId(targetId);
+  const std::string normalized = normalizeTargetId(targetId);
+  target.label = displayTargetLabel(normalized);
   target.maxScore = maxScore;
   target.totalNotes = totalNotes;
-  const std::optional<int> numerator = gradeTargetNumerator(target.label);
-  target.enabled = totalNotes > 0 && numerator.has_value();
+  const std::optional<RateTargetFraction> fraction =
+      gradeTargetFraction(normalized);
+  target.enabled = totalNotes > 0 && fraction.has_value();
   if (target.enabled) {
     target.finalScore = static_cast<int>(
         std::ceil(static_cast<double>(maxScore) *
-                  static_cast<double>(*numerator) / 9.0));
+                  static_cast<double>(fraction->numerator) /
+                  static_cast<double>(fraction->denominator)));
   }
   return target;
 }

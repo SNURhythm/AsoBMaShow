@@ -5,6 +5,7 @@
 #include "GamePlayScene.h"
 #include "../../PlayOptionUtils.h"
 #include "../../ReplayDBHelper.h"
+#include "../../ResultPresentationUtils.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
@@ -815,8 +816,21 @@ void GamePlayScene::configurePacemakerTarget() {
   const std::string selected =
       pacemaker::normalizeTargetId(options.pacemakerTarget);
   if (chart == nullptr || selected == pacemaker::kTargetOff ||
-      isReplayPlayback() || options.autoPlay || options.practiceMode ||
-      isCoursePlayback()) {
+      options.autoPlay || options.practiceMode || isCoursePlayback()) {
+    renderer->setPacemakerTarget(activePacemakerTarget);
+    return;
+  }
+
+  if (isReplayPlayback()) {
+    if (options.replayData == nullptr || options.replayData->autoPlay) {
+      renderer->setPacemakerTarget(activePacemakerTarget);
+      return;
+    }
+
+    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
+        chart->Meta, *options.replayData, selected,
+        result_presentation::previousBestForReplayChart(chart->Meta,
+                                                        *options.replayData));
     renderer->setPacemakerTarget(activePacemakerTarget);
     return;
   }
@@ -1220,9 +1234,14 @@ void GamePlayScene::update(float dt) {
           courseResultOptions.mode = ResultCourseMode::Stage;
           courseResultOptions.session = options.courseSession;
         }
+        const bool replayPacemakerResult =
+            !options.autoPlay && !options.practiceMode && isReplayPlayback() &&
+            !isCoursePlayback() && options.replayData != nullptr &&
+            !options.replayData->autoPlay;
         const std::string resultPacemakerTarget =
             (!options.autoPlay && !options.practiceMode &&
-             !isReplayPlayback() && !isCoursePlayback())
+             ((!isReplayPlayback() && !isCoursePlayback()) ||
+              replayPacemakerResult))
                 ? options.pacemakerTarget
                 : pacemaker::kTargetOff;
         context.sceneManager->changeScene(
