@@ -364,6 +364,25 @@ std::string parseAssistOptionId(const std::string &value,
   return fallback;
 }
 
+std::string parsePacemakerTargetId(const std::string &value,
+                                   const std::string &fallback) {
+  const std::string normalized = normalizeUpperOptionToken(value);
+  if (normalized == "OFF" || normalized == "NONE" ||
+      normalized == "DISABLED") {
+    return "OFF";
+  }
+  if (normalized == "BEST" || normalized == "PB" ||
+      normalized == "HIGHSCORE" || normalized == "HIGH-SCORE" ||
+      normalized == "PERSONAL-BEST") {
+    return "BEST";
+  }
+  if (normalized == "A" || normalized == "AA" || normalized == "AAA" ||
+      normalized == "MAX" || normalized == "PERFECT") {
+    return normalized == "PERFECT" ? "MAX" : normalized;
+  }
+  return fallback;
+}
+
 float sanitizePlayAreaWidth(float width) {
   return sanitizeFloat(width, AppSettings::kDefaultPlayAreaWidth,
                        AppSettings::kMinPlayAreaWidth,
@@ -496,6 +515,9 @@ void AppSettings::sanitize() {
   selectedLnMode = long_note_mode::parseId(selectedLnMode, kDefaultLnMode);
   selectedAssistOption =
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
+  selectedPacemakerTarget =
+      parsePacemakerTargetId(selectedPacemakerTarget,
+                             kDefaultPacemakerTarget);
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
@@ -645,6 +667,8 @@ bool AppSettings::save() const {
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   file << "selected_ln_mode=" << sanitized.selectedLnMode << "\n";
   file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
+  file << "selected_pacemaker_target="
+       << sanitized.selectedPacemakerTarget << "\n";
   file << "default_difficulty_tables_seeded="
        << (sanitized.defaultDifficultyTablesSeeded ? 1 : 0) << "\n";
   return file.good();
@@ -816,6 +840,9 @@ AppSettings AppSettings::load() {
       } else if (key == "selected_assist_option") {
         settings.selectedAssistOption =
             parseAssistOptionId(value, settings.selectedAssistOption);
+      } else if (key == "selected_pacemaker_target") {
+        settings.selectedPacemakerTarget =
+            parsePacemakerTargetId(value, settings.selectedPacemakerTarget);
       } else if (key == "default_difficulty_tables_seeded") {
         bool parsed = settings.defaultDifficultyTablesSeeded;
         if (parseBool(value, parsed)) {

@@ -321,6 +321,7 @@ private:
   TextView *readyGaugeText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
+  TextView *readyPacemakerText = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
@@ -472,6 +473,13 @@ private:
   };
   std::vector<AssistOptionButton> assistOptionButtons;
   std::string selectedAssistOption = assist_options::kOff;
+  struct PacemakerTargetButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::string target;
+  };
+  std::vector<PacemakerTargetButton> pacemakerTargetButtons;
+  std::string selectedPacemakerTarget = AppSettings::kDefaultPacemakerTarget;
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
     std::string longNoteMode = AppSettings::kDefaultLnMode;
@@ -563,6 +571,8 @@ private:
   void refreshLongNoteModeButtons();
   void setAssistOptionSelection(const std::string &option);
   void refreshAssistOptionButtons();
+  void setPacemakerTargetSelection(const std::string &target);
+  void refreshPacemakerTargetButtons();
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;

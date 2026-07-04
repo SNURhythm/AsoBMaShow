@@ -35,7 +35,9 @@ public:
                                                 std::nullopt,
                                         const std::optional<std::string>
                                             &headerDifficultyLabelOverride =
-                                                std::nullopt);
+                                                std::nullopt,
+                                        const std::optional<ResultPacemakerData>
+                                            &pacemaker = std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay);

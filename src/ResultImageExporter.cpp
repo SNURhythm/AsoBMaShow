@@ -477,6 +477,8 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                               &currentClearRankOverride,
                                           const std::optional<std::string>
                                               &headerDifficultyLabelOverride,
+                                          const std::optional<ResultPacemakerData>
+                                              &pacemaker,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const int height = rendering::render_height;
@@ -550,6 +552,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
   resultSkinData.currentClearRankOverride = currentClearRankOverride;
   resultSkinData.previousBest = previousBest;
+  resultSkinData.pacemaker = pacemaker;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
   resultRoot->applyYogaLayout();
@@ -613,7 +616,9 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::optional<int>
                                 &currentClearRankOverride,
                             const std::optional<std::string>
-                                &headerDifficultyLabelOverride) {
+                                &headerDifficultyLabelOverride,
+                            const std::optional<ResultPacemakerData>
+                                &pacemaker) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -636,7 +641,8 @@ ResultImageExporter::Export(ApplicationContext &context,
   return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
                            difficultyLabel, previousBest,
                            currentClearLabelOverride, currentClearRankOverride,
-                           headerDifficultyLabelOverride, outputPath);
+                           headerDifficultyLabelOverride, pacemaker,
+                           outputPath);
 }
 
 ResultImageExportResult
@@ -646,12 +652,19 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(chart.Meta, replay);
+  std::optional<ResultPacemakerData> pacemaker;
+  if (!replay.autoPlay) {
+    pacemaker = result_presentation::pacemakerDataForResult(
+        chart.Meta, state, context.settings.selectedPacemakerTarget,
+        previousBest);
+  }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
-                difficultyLabel, previousBest);
+                difficultyLabel, previousBest, std::nullopt, std::nullopt,
+                std::nullopt, pacemaker);
 }
 
 ResultImageExportResult
@@ -714,7 +727,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
         result_presentation::difficultyLabelForChart(chart->Meta),
         result_presentation::previousBestForReplayChart(chart->Meta,
                                                         stageReplay),
-        "NO PLAY", kNoClearTypeRank, std::nullopt, outputDir / filename);
+        "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
+        outputDir / filename);
     if (!result.success) {
       return result;
     }
@@ -743,7 +757,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
       "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
-      outputDir / "course_result.png");
+      std::nullopt, outputDir / "course_result.png");
   if (!courseResult.success) {
     return courseResult;
   }

@@ -52,7 +52,8 @@ public:
               const ReplayData *retrySource = nullptr,
               ResultPracticeOptions practiceOptions = {},
               bool autoPlayResult = false,
-              ResultCourseOptions courseOptions = {});
+              ResultCourseOptions courseOptions = {},
+              std::string pacemakerTarget = {});
   ~ResultScene() override = default;
 
   void init() override;
@@ -89,6 +90,7 @@ private:
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
+  std::string pacemakerTarget;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;

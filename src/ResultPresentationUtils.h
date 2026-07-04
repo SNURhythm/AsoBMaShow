@@ -3,6 +3,7 @@
 #include "ChartDBHelper.h"
 #include "ReplayData.h"
 #include "ScoreDBHelper.h"
+#include "scene/play/Pacemaker.h"
 #include "skin/SkinTypes.h"
 
 #include <algorithm>
@@ -20,6 +21,45 @@ previousBestDataFromSnapshot(const ScoreBestSnapshot &snapshot) {
           .finalGauge = snapshot.finalGauge,
           .clearType = snapshot.clearType,
           .createdAt = snapshot.createdAt};
+}
+
+inline ScoreBestSnapshot
+scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
+  return {.score = previousBest.score,
+          .maxScore = previousBest.maxScore,
+          .maxCombo = previousBest.maxCombo,
+          .comboBreak = previousBest.comboBreak,
+          .finalGauge = previousBest.finalGauge,
+          .clearType = previousBest.clearType,
+          .createdAt = previousBest.createdAt};
+}
+
+inline std::optional<ResultPacemakerData> pacemakerDataForResult(
+    const bms_parser::ChartMeta &meta, const RhythmState &state,
+    const std::string &targetId,
+    const std::optional<ResultPreviousBestData> &previousBest) {
+  const std::string normalized = pacemaker::normalizeTargetId(targetId);
+  if (normalized == pacemaker::kTargetOff) {
+    return std::nullopt;
+  }
+
+  std::optional<ScoreBestSnapshot> best;
+  if (previousBest.has_value()) {
+    best = scoreBestSnapshotFromPreviousBest(*previousBest);
+  }
+
+  const pacemaker::Target target =
+      pacemaker::targetFromSelection(meta, normalized, best, nullptr);
+  if (!target.enabled) {
+    return std::nullopt;
+  }
+
+  return ResultPacemakerData{
+      .label = target.label,
+      .targetScore = target.finalScore,
+      .delta = state.getScore() - target.finalScore,
+      .usesReplayProgression = target.usesReplayProgression,
+  };
 }
 
 inline std::optional<ResultPreviousBestData>

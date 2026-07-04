@@ -246,6 +246,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const auto nextRank = nextRankTarget(currentScore, maxScore);
   const auto hasPreviousBest =
       data != nullptr && data->previousBest.has_value();
+  const auto hasPacemaker = data != nullptr && data->pacemaker.has_value();
   const int previousScore = hasPreviousBest ? data->previousBest->score : 0;
   const int previousMaxScore =
       hasPreviousBest && data->previousBest->maxScore > 0
@@ -253,7 +254,9 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
           : maxScore;
   const int previousClearRank =
       hasPreviousBest ? data->previousBest->clearType : kNoClearTypeRank;
-  const int scoreDelta = hasPreviousBest ? currentScore - previousScore : 0;
+  const int scoreDelta =
+      hasPacemaker ? data->pacemaker->delta
+                   : (hasPreviousBest ? currentScore - previousScore : 0);
   const int comboDelta =
       hasPreviousBest ? resultState.maxCombo - data->previousBest->maxCombo : 0;
   const int breakDelta =
@@ -271,7 +274,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
       data != nullptr && data->currentClearLabelOverride.has_value()
           ? *data->currentClearLabelOverride
           : resultState.getClearTypeLabel();
-  const Color positiveDelta =
+  const Color scoreDeltaAccent =
       scoreDelta >= 0 ? ui_theme::lime() : ui_theme::coral();
   const std::string longNoteSummary =
       meta.TotalLongNotes > 0 ? std::to_string(meta.TotalLongNotes) + " LN"
@@ -415,26 +418,41 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   scorePanel->setFlexDirection(FlexDirection::Column);
   scorePanel->setPadding(Edge::All, 14);
   scorePanel->setGap(6);
-  addPanelTitle(scorePanel, "SCORE COMPARISON");
+  addPanelTitle(scorePanel, hasPacemaker ? "PACEMAKER" : "SCORE COMPARISON");
   auto *scoreCompareRow = new View();
   scoreCompareRow->setFlexDirection(FlexDirection::Row);
   scoreCompareRow->setAlignItems(YGAlignStretch);
   scoreCompareRow->setGap(10);
   scoreCompareRow->setFlexGrow(1);
+  const std::string targetLabel =
+      hasPacemaker ? data->pacemaker->label : "BEST";
+  const std::string targetValue =
+      hasPacemaker ? std::to_string(data->pacemaker->targetScore)
+                   : (hasPreviousBest ? std::to_string(previousScore)
+                                      : "NO PLAY");
+  const std::string targetDetail =
+      hasPacemaker
+          ? (data->pacemaker->usesReplayProgression ? "PACEMAKER GHOST"
+                                                    : "PACEMAKER")
+          : (hasPreviousBest ? gradeForScore(previousScore, previousMaxScore)
+                             : "");
+  const Color targetAccent =
+      hasPacemaker ? ui_theme::cyan()
+                   : (hasPreviousBest ? ui_theme::textPrimary()
+                                      : ui_theme::textMuted());
   scoreCompareRow->addView(makeComparisonColumn(
-      "BEST",
-      hasPreviousBest ? std::to_string(previousScore) : "NO PLAY",
-      hasPreviousBest ? gradeForScore(previousScore, previousMaxScore) : "",
-      hasPreviousBest ? ui_theme::textPrimary() : ui_theme::textMuted(), 44));
+      targetLabel, targetValue, targetDetail, targetAccent, 44));
   scoreCompareRow->addView(makeDivider());
   scoreCompareRow->addView(makeComparisonColumn(
       "CURRENT", std::to_string(currentScore),
       "MAX " + std::to_string(maxScore), ui_theme::textPrimary(), 44));
   scorePanel->addView(scoreCompareRow);
-  auto *scoreDeltaText =
-      makeLabel(hasPreviousBest ? "DELTA " + formatSignedDelta(scoreDelta)
-                                : "DELTA --",
-                22, hasPreviousBest ? positiveDelta : ui_theme::textMuted());
+  const bool hasScoreDelta = hasPacemaker || hasPreviousBest;
+  auto *scoreDeltaText = makeLabel(
+      hasScoreDelta ? (hasPacemaker ? "PACEMAKER " : "DELTA ") +
+                          formatSignedDelta(scoreDelta)
+                    : "DELTA --",
+      22, hasScoreDelta ? scoreDeltaAccent : ui_theme::textMuted());
   scoreDeltaText->setHeight(30);
   scoreDeltaText->setAlign(TextView::CENTER);
   scoreDeltaText->setOverflow(TextView::TextOverflow::Hidden);

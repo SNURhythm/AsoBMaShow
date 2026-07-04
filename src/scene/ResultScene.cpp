@@ -11,6 +11,7 @@
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
+#include "play/Pacemaker.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -244,7 +245,8 @@ ResultScene::ResultScene(ApplicationContext &context,
                          bool shouldSaveScore, const ReplayData *retrySource,
                          ResultPracticeOptions practiceOptions,
                          bool autoPlayResult,
-                         ResultCourseOptions courseOptions)
+                         ResultCourseOptions courseOptions,
+                         std::string pacemakerTarget)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -254,6 +256,9 @@ ResultScene::ResultScene(ApplicationContext &context,
                                          : std::nullopt)),
       practiceOptions(std::move(practiceOptions)),
       courseOptions(std::move(courseOptions)),
+      pacemakerTarget(pacemaker::normalizeTargetId(
+          pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
+                                  : pacemakerTarget)),
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled),
@@ -709,10 +714,15 @@ void ResultScene::exportPhoto() {
 
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
+  const std::optional<ResultPacemakerData> pacemaker =
+      (!isCourseStageResult() && !isCourseFinalResult())
+          ? result_presentation::pacemakerDataForResult(
+                meta, resultState, pacemakerTarget, previousBest)
+          : std::nullopt;
   const auto result = ResultImageExporter::Export(
       context, meta, resultState, playModeLabel, laneOrderLabel,
       difficultyLabel, previousBest, currentClearLabelOverride,
-      currentClearRankOverride, headerDifficultyLabelOverride);
+      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -899,6 +909,11 @@ void ResultScene::startRetry(bool samePattern) {
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;
+        options.pacemakerTarget =
+            practiceOptions.enabled
+                ? pacemaker::kTargetOff
+                : pacemaker::normalizeTargetId(
+                      context.settings.selectedPacemakerTarget);
         options.ownsChart = true;
         if (practiceOptions.enabled) {
           options.practiceMode = true;
@@ -1117,6 +1132,10 @@ void ResultScene::init() {
   }
   data.currentClearRankOverride = currentClearRankOverride;
   data.previousBest = previousBest;
+  if (!isCourseStageResult() && !isCourseFinalResult()) {
+    data.pacemaker = result_presentation::pacemakerDataForResult(
+        meta, resultState, pacemakerTarget, previousBest);
+  }
   skin->buildLayout("Result", rootLayout, &data);
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();

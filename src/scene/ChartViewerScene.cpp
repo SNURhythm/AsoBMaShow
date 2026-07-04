@@ -2519,6 +2519,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     randomDrawerScroll->setCornerRadius(ui_theme::controlRadius());
     randomDrawerScroll->setBorderColor(ui_theme::hairline());
     randomDrawerScroll->setBorderWidth(1);
+    randomDrawerScroll->setContentPadding(Edge::All, 12);
     panel->addView(randomDrawerScroll);
 
     randomDrawerRoot->addView(panel);
@@ -2528,7 +2529,6 @@ void ChartViewerScene::rebuildRandomDrawer() {
   auto *content = new View();
   content->setFlexDirection(FlexDirection::Column);
   content->setAlignItems(YGAlignStretch);
-  content->setPadding(Edge::All, 12);
   content->setGap(10);
 
   if (randomOptions.empty()) {
