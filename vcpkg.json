@@ -7,7 +7,13 @@
         "libsndfile",
         "sdl2",
         "sdl2-ttf",
-        "ffmpeg",
+        {
+            "name": "ffmpeg",
+            "features": [
+                "gpl",
+                "x264"
+            ]
+        },
         {
             "name": "curl",
             "platform": "!ios"

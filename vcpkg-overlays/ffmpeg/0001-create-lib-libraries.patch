@@ -1,27 +1,20 @@
 diff --git a/configure b/configure
-index 1f0b9497cb..3243e23021 100644
+index 281f111111..3243e23021 100644
 --- a/configure
 +++ b/configure
-@@ -5697,17 +5697,19 @@ case $target_os in
-         ;;
+@@ -6189,11 +6189,11 @@ case $target_os in
      win32|win64)
          disable symver
+         LIBSUF=".lib"
 -        if enabled shared; then
-+#        if enabled shared; then
-             # Link to the import library instead of the normal static library
-             # for shared libs.
-             LD_LIB='%.lib'
++        # if enabled shared; then
              # Cannot build both shared and static libs with MSVC or icl.
 -            disable static
+-            LIBSUF="-static.lib"
 -        fi
-+#            disable static
-+#        fi
++        #    disable static
++        #    LIBSUF="-static.lib"
++        # fi
          ! enabled small && test_cmd $windres --version && enable gnu_windres
          enabled x86_32 && check_ldflags -LARGEADDRESSAWARE
          add_cppflags -DWIN32_LEAN_AND_MEAN
-         shlibdir_default="$bindir_default"
-+        LIBPREF=""
-+        LIBSUF=".lib"
-         SLIBPREF=""
-         SLIBSUF=".dll"
-         SLIBNAME_WITH_VERSION='$(SLIBPREF)$(FULLNAME)-$(LIBVERSION)$(SLIBSUF)'

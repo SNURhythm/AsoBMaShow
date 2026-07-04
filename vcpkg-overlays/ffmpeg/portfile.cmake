@@ -2,7 +2,7 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO ffmpeg/ffmpeg
     REF "n${VERSION}"
-    SHA512 f31769a7ed52865165e7db4a03e9378b3376012b7aaf0bbc022aa76c3e999e71c3927e6eb8639d8681e04e33362dd73eafa9e7c62a3c71599ff78da09f5cee0a
+    SHA512 c72f4062aecc16d8b2b1e8678d5efe3af4cfaa0cc7c0997052248f9e499e60c2463acf07877cf3b78b246ce3e8078cb043e8d97e90a6b50d06af32ff7369a788
     HEAD_REF master
     PATCHES
         0001-create-lib-libraries.patch
@@ -15,7 +15,6 @@ vcpkg_from_github(
         0020-fix-aarch64-libswscale.patch
         0024-fix-osx-host-c11.patch
         0040-ffmpeg-add-av_stream_get_first_dts-for-chromium.patch # Do not remove this patch. It is required by chromium
-        0044-fix-vulkan-debug-callback-abi.patch
         0045-use-prebuilt-bin2c.patch
         0046-fix-msvc-detection.patch
 )
