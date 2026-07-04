@@ -1096,27 +1096,24 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
 
   wavTableAbs.clear();
 
-  parallel_for(resolvedSoundPaths.size(), [&](int start, int end) {
-    for (int i = start; i < end; ++i) {
-      if (isCancelled)
-        return;
-      const int wavId = resolvedSoundPaths[static_cast<size_t>(i)].first;
-      const auto wavIt = wavTable.find(wavId);
-      if (wavIt == wavTable.end()) {
-        continue;
-      }
-      const auto &wavPath = wavIt->second;
-      const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
-      const auto resolvedPath =
-          archive_file::findFileWithExtensions(basePath, audioExtensionViews);
-      if (resolvedPath.has_value()) {
-        resolvedSoundPaths[static_cast<size_t>(i)].second =
-            fspath_to_path_t(*resolvedPath);
-      } else {
-        failedCount.fetch_add(1, std::memory_order_relaxed);
-        SDL_Log("Failed to load sound for all extensions: %s",
-                fspath_to_utf8(basePath).c_str());
-      }
+  parallel_for_each_index(resolvedSoundPaths.size(), [&](size_t i) {
+    if (isCancelled)
+      return;
+    const int wavId = resolvedSoundPaths[i].first;
+    const auto wavIt = wavTable.find(wavId);
+    if (wavIt == wavTable.end()) {
+      return;
+    }
+    const auto &wavPath = wavIt->second;
+    const std::filesystem::path basePath = chart.Meta.Folder / wavPath;
+    const auto resolvedPath =
+        archive_file::findFileWithExtensions(basePath, audioExtensionViews);
+    if (resolvedPath.has_value()) {
+      resolvedSoundPaths[i].second = fspath_to_path_t(*resolvedPath);
+    } else {
+      failedCount.fetch_add(1, std::memory_order_relaxed);
+      SDL_Log("Failed to load sound for all extensions: %s",
+              fspath_to_utf8(basePath).c_str());
     }
   });
   if (isCancelled) {
@@ -1143,18 +1140,16 @@ void Jukebox::loadSounds(bms_parser::Chart &chart,
 
   std::mutex loadedPathsMutex;
   std::unordered_set<path_t> loadedPaths;
-  parallel_for(uniqueSoundPaths.size(), [&](int start, int end) {
-    for (int i = start; i < end; ++i) {
-      if (isCancelled) {
-        return;
-      }
-      const path_t &soundPath = uniqueSoundPaths[static_cast<size_t>(i)];
-      if (!audio.loadSound(soundPath, isCancelled)) {
-        continue;
-      }
-      std::lock_guard<std::mutex> lock(loadedPathsMutex);
-      loadedPaths.insert(soundPath);
+  parallel_for_each_index(uniqueSoundPaths.size(), [&](size_t i) {
+    if (isCancelled) {
+      return;
     }
+    const path_t &soundPath = uniqueSoundPaths[i];
+    if (!audio.loadSound(soundPath, isCancelled)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(loadedPathsMutex);
+    loadedPaths.insert(soundPath);
   });
   if (isCancelled) {
     return;
@@ -1285,32 +1280,30 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.idsByPath.find(soundPath);
-        if (idsIt == batch.idsByPath.end()) {
-          continue;
-        }
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
+      }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.idsByPath.find(soundPath);
+      if (idsIt == batch.idsByPath.end()) {
+        return;
+      }
 
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
 
-        {
-          std::lock_guard<std::mutex> lock(loadedPathsMutex);
-          loadedPaths.insert(soundPath);
-          for (const int wavId : idsIt->second) {
-            wavTableAbs[wavId] = soundPath;
-            SDL_Log("Loaded sound %d: %s", wavId,
-                    path_t_to_utf8(soundPath).c_str());
-          }
+      {
+        std::lock_guard<std::mutex> lock(loadedPathsMutex);
+        loadedPaths.insert(soundPath);
+        for (const int wavId : idsIt->second) {
+          wavTableAbs[wavId] = soundPath;
+          SDL_Log("Loaded sound %d: %s", wavId,
+                  path_t_to_utf8(soundPath).c_str());
         }
       }
     });
@@ -1558,32 +1551,30 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedSoundPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
+      }
 
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.soundIdsByPath.find(soundPath);
-        if (idsIt == batch.soundIdsByPath.end()) {
-          continue;
-        }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.soundIdsByPath.find(soundPath);
+      if (idsIt == batch.soundIdsByPath.end()) {
+        return;
+      }
 
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
 
-        std::lock_guard<std::mutex> lock(loadedPathsMutex);
-        loadedSoundPaths.insert(soundPath);
-        for (const int wavId : idsIt->second) {
-          wavTableAbs[wavId] = soundPath;
-          SDL_Log("Loaded sound %d: %s", wavId,
-                  path_t_to_utf8(soundPath).c_str());
-        }
+      std::lock_guard<std::mutex> lock(loadedPathsMutex);
+      loadedSoundPaths.insert(soundPath);
+      for (const int wavId : idsIt->second) {
+        wavTableAbs[wavId] = soundPath;
+        SDL_Log("Loaded sound %d: %s", wavId,
+                path_t_to_utf8(soundPath).c_str());
       }
     });
 
@@ -1661,44 +1652,42 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
     (void)bmpPath;
     bmpIds.push_back(bmpId);
   }
-  parallel_for(bmpIds.size(), [&](int start, int end) {
-    for (int i = start; i < end; i++) {
+  parallel_for_each_index(bmpIds.size(), [&](size_t i) {
+    if (isCancelled)
+      return;
+    const int bmpId = bmpIds[i];
+    const auto bmpIt = bmpTable.find(bmpId);
+    if (bmpIt == bmpTable.end()) {
+      return;
+    }
+    const auto &bmpPath = bmpIt->second;
+    bool found = false;
+    std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
+    std::filesystem::path path;
+
+    if (auto resolvedVideoPath = findWithReplacedExtensions(
+            basePath, videoExtensions, std::size(videoExtensions))) {
       if (isCancelled)
         return;
-      const int bmpId = bmpIds[static_cast<size_t>(i)];
-      const auto bmpIt = bmpTable.find(bmpId);
-      if (bmpIt == bmpTable.end()) {
-        continue;
-      }
-      const auto &bmpPath = bmpIt->second;
-      bool found = false;
-      std::filesystem::path basePath = chart.Meta.Folder / bmpPath;
-      std::filesystem::path path;
+      path = *resolvedVideoPath;
+      found = loadVideoPath(bmpId, path, isCancelled);
+    }
 
-      if (auto resolvedVideoPath = findWithReplacedExtensions(
-              basePath, videoExtensions, std::size(videoExtensions))) {
+    // if not found, fall back to image loading
+    if (!found) {
+      for (const auto &ext : imageExtensionViews) {
         if (isCancelled)
           return;
-        path = *resolvedVideoPath;
-        found = loadVideoPath(bmpId, path, isCancelled);
-      }
-
-      // if not found, fall back to image loading
-      if (!found) {
-        for (const auto &ext : imageExtensionViews) {
-          if (isCancelled)
-            return;
-          path = basePath;
-          path.replace_extension(std::string(ext));
-          const auto resolvedImagePath =
-              archive_file::findFileWithExtensions(path, {});
-          if (!resolvedImagePath.has_value()) {
-            continue;
-          }
-          path = *resolvedImagePath;
-          if (loadImagePath(bmpId, path, isCancelled)) {
-            break;
-          }
+        path = basePath;
+        path.replace_extension(std::string(ext));
+        const auto resolvedImagePath =
+            archive_file::findFileWithExtensions(path, {});
+        if (!resolvedImagePath.has_value()) {
+          continue;
+        }
+        path = *resolvedImagePath;
+        if (loadImagePath(bmpId, path, isCancelled)) {
+          break;
         }
       }
     }
@@ -2126,18 +2115,16 @@ void Jukebox::reconcileSoundResources(
 
   std::mutex loadedRegularPathsMutex;
   std::unordered_set<path_t> loadedRegularPaths;
-  parallel_for(regularLoadPaths.size(), [&](int start, int end) {
-    for (int i = start; i < end; ++i) {
-      if (isCancelled) {
-        return;
-      }
-      const path_t &path = regularLoadPaths[static_cast<size_t>(i)];
-      if (!audio.loadSound(path, isCancelled)) {
-        continue;
-      }
-      std::lock_guard<std::mutex> lock(loadedRegularPathsMutex);
-      loadedRegularPaths.insert(path);
+  parallel_for_each_index(regularLoadPaths.size(), [&](size_t i) {
+    if (isCancelled) {
+      return;
     }
+    const path_t &path = regularLoadPaths[i];
+    if (!audio.loadSound(path, isCancelled)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(loadedRegularPathsMutex);
+    loadedRegularPaths.insert(path);
   });
 
   for (const auto &[path, ids] : regularIdsByPath) {
@@ -2180,25 +2167,23 @@ void Jukebox::reconcileSoundResources(
 
     std::mutex loadedPathsMutex;
     std::unordered_set<path_t> loadedPaths;
-    parallel_for(files.size(), [&](int start, int end) {
-      for (int i = start; i < end; ++i) {
-        if (isCancelled) {
-          return;
-        }
-        const auto &file = files[static_cast<size_t>(i)];
-        const std::filesystem::path virtualPath =
-            archive_file::makeVirtualPath(batch.archivePath, file.path);
-        const path_t soundPath = fspath_to_path_t(virtualPath);
-        const auto idsIt = batch.idsByPath.find(soundPath);
-        if (idsIt == batch.idsByPath.end()) {
-          continue;
-        }
-        if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
-          continue;
-        }
-        std::lock_guard<std::mutex> lock(loadedPathsMutex);
-        loadedPaths.insert(soundPath);
+    parallel_for_each_index(files.size(), [&](size_t i) {
+      if (isCancelled) {
+        return;
       }
+      const auto &file = files[i];
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t soundPath = fspath_to_path_t(virtualPath);
+      const auto idsIt = batch.idsByPath.find(soundPath);
+      if (idsIt == batch.idsByPath.end()) {
+        return;
+      }
+      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+        return;
+      }
+      std::lock_guard<std::mutex> lock(loadedPathsMutex);
+      loadedPaths.insert(soundPath);
     });
 
     for (const auto &[soundPath, ids] : batch.idsByPath) {
