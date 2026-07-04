@@ -8,7 +8,11 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0")
+# Do not force CMAKE_OSX_DEPLOYMENT_TARGET here. Desktop builds link against
+# local vcpkg static libraries, and forcing an older minimum macOS version than
+# those libraries were built with emits one linker warning per archive object.
+# Set MACOSX_DEPLOYMENT_TARGET or -DCMAKE_OSX_DEPLOYMENT_TARGET explicitly when
+# building a release with matching dependency binaries.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Source directory
@@ -327,6 +331,15 @@ if (PLATFORM_MACOS AND NOT BUILD_MACOS_BUNDLE)
     target_link_options(main PRIVATE
         "LINKER:-sectcreate,__TEXT,__info_plist,${MACOS_INFO_PLIST}"
     )
+endif()
+
+if (PLATFORM_MACOS)
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "LINKER:-no_warn_duplicate_libraries"
+        ASOBMASHOW_HAS_NO_WARN_DUPLICATE_LIBRARIES)
+    if (ASOBMASHOW_HAS_NO_WARN_DUPLICATE_LIBRARIES)
+        target_link_options(main PRIVATE "LINKER:-no_warn_duplicate_libraries")
+    endif()
 endif()
 
 # Linking
