@@ -424,6 +424,19 @@ float gameplayHudMetricsWidth() {
                     430.0f, 540.0f);
 }
 
+float gameplayHudMetricsHeight(bool showPacemaker) {
+  return showPacemaker ? 78.0f : 58.0f;
+}
+
+float gameplayHudMetricsY(bool showPacemaker) {
+  return static_cast<float>(rendering::window_height) - kHudMargin -
+         gameplayHudMetricsHeight(showPacemaker);
+}
+
+std::string formatSignedScoreDelta(int delta) {
+  return (delta >= 0 ? "+" : "") + std::to_string(delta);
+}
+
 std::string formatGaugeBarLabel(GaugeType gaugeType,
                                 GaugeProfile gaugeProfile,
                                 bool gaugeAutoShift, float currentGauge) {
@@ -774,6 +787,12 @@ BMSRenderer::BMSRenderer(
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
+  pacemakerDeltaText = std::make_unique<TextView>(kHudFontPath, 32);
+  pacemakerDeltaText->setAlign(TextView::CENTER);
+  pacemakerDeltaText->setVAlign(TextView::MIDDLE);
+  pacemakerDeltaText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  pacemakerDeltaText->setOverflow(TextView::TextOverflow::Hidden);
+  pacemakerDeltaText->setVisible(false);
   judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
   judgementTimingDirectionText->setAlign(TextView::LEFT);
   judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
@@ -797,6 +816,13 @@ BMSRenderer::BMSRenderer(
   comboText->setVAlign(TextView::MIDDLE);
   comboText->setText("COMBO 0");
   comboText->setColor(ui_theme::sdl(ui_theme::lime()));
+  pacemakerText = std::make_unique<TextView>(kHudFontPath, 18);
+  pacemakerText->setAlign(TextView::CENTER);
+  pacemakerText->setVAlign(TextView::MIDDLE);
+  pacemakerText->setOverflow(TextView::TextOverflow::Hidden);
+  pacemakerText->setText("");
+  pacemakerText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  pacemakerText->setVisible(false);
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
@@ -904,6 +930,9 @@ void BMSRenderer::drawTitle(RenderContext &context) const {
   titleText->render(context);
 }
 void BMSRenderer::drawJudgement(RenderContext context) const {
+  if (pacemakerDeltaText != nullptr) {
+    pacemakerDeltaText->render(context);
+  }
   if (judgementTimingDirectionText != nullptr) {
     judgementTimingDirectionText->render(context);
   }
@@ -914,6 +943,9 @@ void BMSRenderer::drawJudgement(RenderContext context) const {
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
+  if (pacemakerText != nullptr) {
+    pacemakerText->render(context);
+  }
 }
 void BMSRenderer::drawGauge(RenderContext &context) const {
   if (gaugeText != nullptr) {
@@ -955,13 +987,17 @@ void BMSRenderer::drawGameplayHudPanels() {
   constexpr float radius = 12.0f;
   const float titleWidth = gameplayHudTitleWidth();
   const float metricsWidth = gameplayHudMetricsWidth();
+  const bool showPacemaker =
+      pendingPacemakerEnabled.load(std::memory_order_relaxed);
+  const float metricsHeight = gameplayHudMetricsHeight(showPacemaker);
 
   if (titleWidth > 1.0f) {
     drawHudRoundedPanel(margin, margin, titleWidth, 82.0f, radius,
                         hudPanelFill(), hudPanelBorder());
   }
-  drawHudRoundedPanel(margin, rendering::window_height - 86.0f, metricsWidth,
-                      58.0f, radius, hudPanelStrongFill(), hudPanelBorder());
+  drawHudRoundedPanel(margin, gameplayHudMetricsY(showPacemaker), metricsWidth,
+                      metricsHeight, radius, hudPanelStrongFill(),
+                      hudPanelBorder());
 }
 
 std::array<float, 4> BMSRenderer::worldGaugeRect() const {
@@ -1210,11 +1246,20 @@ void BMSRenderer::layoutGameplayHud() {
             std::max(1, titleWidth - 36), 26);
 
   const int metricsWidth = static_cast<int>(gameplayHudMetricsWidth());
-  const int compactMetricsY = rendering::window_height - 86;
-  placeText(scoreText.get(), margin + 18, compactMetricsY + 9,
-            metricsWidth / 2, 40);
+  const bool showPacemaker =
+      pendingPacemakerEnabled.load(std::memory_order_relaxed);
+  const int compactMetricsY =
+      static_cast<int>(std::round(gameplayHudMetricsY(showPacemaker)));
+  placeText(scoreText.get(), margin + 18, compactMetricsY + 7,
+            metricsWidth / 2, 36);
   placeText(comboText.get(), margin + metricsWidth / 2 - 8,
-            compactMetricsY + 9, metricsWidth / 2 - 10, 40);
+            compactMetricsY + 7, metricsWidth / 2 - 10, 36);
+  if (showPacemaker) {
+    placeText(pacemakerText.get(), margin + 18, compactMetricsY + 43,
+              std::max(1, metricsWidth - 36), 26);
+  } else if (pacemakerText != nullptr) {
+    placeText(pacemakerText.get(), margin + 18, compactMetricsY + 43, 1, 1);
+  }
   layoutGaugeText();
   layoutAutoPlayMark();
 
@@ -1395,10 +1440,13 @@ void BMSRenderer::layoutCenteredJudgementText() {
       judgementTimingDirectionText->getVisible();
   const bool hasTimingMs =
       judgementTimingMsText != nullptr && judgementTimingMsText->getVisible();
+  const bool hasPacemakerDelta =
+      pacemakerDeltaText != nullptr && pacemakerDeltaText->getVisible();
   if (judgementLayoutWidth == rendering::window_width &&
       judgementLayoutHeight == rendering::window_height &&
       judgementLayoutHasTimingDirection == hasTimingDirection &&
-      judgementLayoutHasTimingMs == hasTimingMs) {
+      judgementLayoutHasTimingMs == hasTimingMs &&
+      judgementLayoutHasPacemakerDelta == hasPacemakerDelta) {
     return;
   }
 
@@ -1406,10 +1454,12 @@ void BMSRenderer::layoutCenteredJudgementText() {
   judgementLayoutHeight = rendering::window_height;
   judgementLayoutHasTimingDirection = hasTimingDirection;
   judgementLayoutHasTimingMs = hasTimingMs;
+  judgementLayoutHasPacemakerDelta = hasPacemakerDelta;
 
   const int maxAvailableWidth = std::max(1, judgementLayoutWidth - 48);
   const int judgeLineHeight = 68;
   const int timingLineHeight = 28;
+  const int pacemakerDeltaLineHeight = 40;
   const int lineGap = 2;
   const float normalizedY =
       std::clamp(judgementTextY, AppSettings::kMinJudgementTextY,
@@ -1441,6 +1491,19 @@ void BMSRenderer::layoutCenteredJudgementText() {
                                       kTimingMsMaxWidth);
   const int timingX = (judgementLayoutWidth - timingWidth) / 2;
   const int timingY = std::max(0, judgeY - timingLineHeight - lineGap);
+  const int pacemakerDeltaWidth = std::min(maxAvailableWidth, 220);
+  const int pacemakerDeltaX =
+      (judgementLayoutWidth - pacemakerDeltaWidth) / 2;
+  const int pacemakerDeltaY =
+      std::max(0, timingY - pacemakerDeltaLineHeight - lineGap);
+  if (hasPacemakerDelta) {
+    pacemakerDeltaText->setPosition(pacemakerDeltaX, pacemakerDeltaY);
+    pacemakerDeltaText->setSize(pacemakerDeltaWidth,
+                                pacemakerDeltaLineHeight);
+  } else if (pacemakerDeltaText != nullptr) {
+    pacemakerDeltaText->setPosition(pacemakerDeltaX, pacemakerDeltaY);
+    pacemakerDeltaText->setSize(1, 1);
+  }
   if (hasTimingDirection) {
     judgementTimingDirectionText->setPosition(timingX, timingY);
     judgementTimingDirectionText->setSize(timingWidth, timingLineHeight);
@@ -2432,6 +2495,8 @@ void BMSRenderer::expireLingeringTimingText(long long currentMicros) {
 }
 
 void BMSRenderer::applyPendingHudText(long long currentMicros) {
+  applyPendingPacemakerText();
+
   const uint32_t revision = hudRevision.load(std::memory_order_acquire);
   if (revision == renderedHudRevision) {
     expireLingeringTimingText(currentMicros);
@@ -2523,6 +2588,64 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   judgementLayoutHeight = 0;
 }
 
+void BMSRenderer::applyPendingPacemakerText() {
+  const uint32_t revision =
+      pacemakerRevision.load(std::memory_order_acquire);
+  if (revision == renderedPacemakerRevision) {
+    return;
+  }
+  renderedPacemakerRevision = revision;
+
+  if (pacemakerText == nullptr && pacemakerDeltaText == nullptr) {
+    return;
+  }
+
+  const bool enabled =
+      pendingPacemakerEnabled.load(std::memory_order_relaxed);
+  if (pacemakerText != nullptr) {
+    pacemakerText->setVisible(enabled);
+  }
+  if (!enabled) {
+    if (pacemakerText != nullptr) {
+      pacemakerText->setText("");
+    }
+    if (pacemakerDeltaText != nullptr) {
+      pacemakerDeltaText->setVisible(false);
+      pacemakerDeltaText->setText("");
+    }
+    judgementLayoutWidth = 0;
+    judgementLayoutHeight = 0;
+    return;
+  }
+
+  const int delta =
+      pendingPacemakerDelta.load(std::memory_order_relaxed);
+  const int finalTarget =
+      pendingPacemakerFinalTargetScore.load(std::memory_order_relaxed);
+  const int playedNotes =
+      pendingPacemakerPlayedNotes.load(std::memory_order_relaxed);
+  const bool usesReplay =
+      pendingPacemakerUsesReplayProgression.load(std::memory_order_relaxed);
+  const std::string label = pacemakerLabel.empty() ? "TARGET" : pacemakerLabel;
+  std::string text = "PM " + label + " " + std::to_string(finalTarget);
+  if (usesReplay) {
+    text += " GHOST";
+  }
+  if (pacemakerText != nullptr) {
+    pacemakerText->setText(text);
+    pacemakerText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  }
+  if (pacemakerDeltaText != nullptr) {
+    pacemakerDeltaText->setVisible(playedNotes > 0);
+    pacemakerDeltaText->setText(playedNotes > 0 ? formatSignedScoreDelta(delta)
+                                                : "");
+    pacemakerDeltaText->setColor(
+        ui_theme::sdl(delta >= 0 ? ui_theme::lime() : ui_theme::coral()));
+  }
+  judgementLayoutWidth = 0;
+  judgementLayoutHeight = 0;
+}
+
 void BMSRenderer::updateJudgementCounterText() {
   const uint32_t revision =
       judgementCounterRevision.load(std::memory_order_acquire);
@@ -2572,6 +2695,7 @@ void BMSRenderer::reset() {
   renderedTimingFastShown = false;
   renderedTimingSlowShown = false;
   hudRevision.fetch_add(1, std::memory_order_release);
+  pacemakerRevision.fetch_add(1, std::memory_order_release);
   publishJudgementCounterSnapshot({});
   renderedJudgementCounterSnapshot = {};
   replayTouchCursor = 0;
@@ -2950,6 +3074,40 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
       currentGaugeType, currentGaugeProfile, currentGaugeAutoShift,
       currentGaugeValue));
   gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
+}
+
+void BMSRenderer::setPacemakerTarget(const pacemaker::Target &target) {
+  pacemakerLabel = target.label;
+  pendingPacemakerEnabled.store(target.enabled, std::memory_order_relaxed);
+  pendingPacemakerFinalTargetScore.store(target.finalScore,
+                                         std::memory_order_relaxed);
+  pendingPacemakerTargetScore.store(0, std::memory_order_relaxed);
+  pendingPacemakerCurrentScore.store(0, std::memory_order_relaxed);
+  pendingPacemakerDelta.store(0, std::memory_order_relaxed);
+  pendingPacemakerPlayedNotes.store(0, std::memory_order_relaxed);
+  pendingPacemakerTotalNotes.store(target.totalNotes,
+                                   std::memory_order_relaxed);
+  pendingPacemakerUsesReplayProgression.store(target.usesReplayProgression,
+                                              std::memory_order_relaxed);
+  pacemakerRevision.fetch_add(1, std::memory_order_release);
+}
+
+void BMSRenderer::setPacemakerStatus(const pacemaker::Snapshot &snapshot) {
+  pendingPacemakerEnabled.store(snapshot.enabled, std::memory_order_relaxed);
+  pendingPacemakerCurrentScore.store(snapshot.currentScore,
+                                     std::memory_order_relaxed);
+  pendingPacemakerTargetScore.store(snapshot.targetScore,
+                                    std::memory_order_relaxed);
+  pendingPacemakerFinalTargetScore.store(snapshot.finalTargetScore,
+                                         std::memory_order_relaxed);
+  pendingPacemakerDelta.store(snapshot.delta, std::memory_order_relaxed);
+  pendingPacemakerPlayedNotes.store(snapshot.playedNotes,
+                                    std::memory_order_relaxed);
+  pendingPacemakerTotalNotes.store(snapshot.totalNotes,
+                                   std::memory_order_relaxed);
+  pendingPacemakerUsesReplayProgression.store(snapshot.usesReplayProgression,
+                                              std::memory_order_relaxed);
+  pacemakerRevision.fetch_add(1, std::memory_order_release);
 }
 
 void BMSRenderer::setPlayOptionStatus(const std::string &label) {

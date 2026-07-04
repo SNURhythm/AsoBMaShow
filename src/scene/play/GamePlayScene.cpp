@@ -4,6 +4,7 @@
 
 #include "GamePlayScene.h"
 #include "../../PlayOptionUtils.h"
+#include "../../ReplayDBHelper.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
@@ -614,6 +615,8 @@ void GamePlayScene::reset() {
                          : options.assistOption;
   state->setAssistClearMark(assist_options::isEnabled(assistOption));
   initializeStartPositionState();
+  configurePacemakerTarget();
+  updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
   state->isPlaying = true;
@@ -801,6 +804,66 @@ bool GamePlayScene::shouldRecordReplay() const {
 
 bool GamePlayScene::shouldPersistRecordedReplay() const {
   return shouldRecordReplay() && !options.practiceMode && !isCoursePlayback();
+}
+
+void GamePlayScene::configurePacemakerTarget() {
+  activePacemakerTarget = {};
+  if (renderer == nullptr) {
+    return;
+  }
+
+  const std::string selected =
+      pacemaker::normalizeTargetId(options.pacemakerTarget);
+  if (chart == nullptr || selected == pacemaker::kTargetOff ||
+      isReplayPlayback() || options.autoPlay || options.practiceMode ||
+      isCoursePlayback()) {
+    renderer->setPacemakerTarget(activePacemakerTarget);
+    return;
+  }
+
+  std::optional<ScoreBestSnapshot> best;
+  std::optional<ReplayData> bestReplay;
+  if (selected == pacemaker::kTargetBest) {
+    best = ScoreDBHelper::GetInstance().LoadBestScore(chart->Meta);
+    if (best.has_value() && best->score > 0) {
+      const auto summaries =
+          ReplayDBHelper::GetInstance().ListReplays(chart->Meta, 100);
+      for (const ReplaySummary &summary : summaries) {
+        if (summary.courseReplay || summary.autoPlay ||
+            summary.finalScore != best->score || summary.eventCount <= 0) {
+          continue;
+        }
+
+        auto replay =
+            ReplayDBHelper::GetInstance().LoadReplay(summary.id, chart->Meta);
+        if (!replay.has_value() ||
+            replay->finalScore != best->score) {
+          continue;
+        }
+
+        const std::vector<int> progression =
+            pacemaker::buildReplayScoreProgression(*replay,
+                                                   chart->Meta.TotalNotes);
+        if (!progression.empty() && progression.back() == best->score) {
+          bestReplay = std::move(*replay);
+          break;
+        }
+      }
+    }
+  }
+
+  activePacemakerTarget = pacemaker::targetFromSelection(
+      chart->Meta, selected, best,
+      bestReplay.has_value() ? &bestReplay.value() : nullptr);
+  renderer->setPacemakerTarget(activePacemakerTarget);
+}
+
+void GamePlayScene::updatePacemakerStatus() {
+  if (renderer == nullptr || state == nullptr) {
+    return;
+  }
+  renderer->setPacemakerStatus(
+      pacemaker::snapshotForState(activePacemakerTarget, *state));
 }
 
 bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
@@ -1157,6 +1220,11 @@ void GamePlayScene::update(float dt) {
           courseResultOptions.mode = ResultCourseMode::Stage;
           courseResultOptions.session = options.courseSession;
         }
+        const std::string resultPacemakerTarget =
+            (!options.autoPlay && !options.practiceMode &&
+             !isReplayPlayback() && !isCoursePlayback())
+                ? options.pacemakerTarget
+                : pacemaker::kTargetOff;
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, chart->Meta, *state, replayToSave,
@@ -1166,7 +1234,7 @@ void GamePlayScene::update(float dt) {
                 options.autoPlay ||
                     (options.replayData != nullptr &&
                      options.replayData->autoPlay),
-                courseResultOptions),
+                courseResultOptions, resultPacemakerTarget),
             false);
         return false;
       },
@@ -1978,6 +2046,7 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
 
   state->applyGaugeJudgement(judgeResult.judgement);
   updateGaugeStatusText();
+  updatePacemakerStatus();
 }
 
 void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,

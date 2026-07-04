@@ -95,6 +95,7 @@ public:
   static constexpr const char *kDefaultPlayOption = "NORMAL";
   static constexpr const char *kDefaultLnMode = "LN";
   static constexpr const char *kDefaultAssistOption = "OFF";
+  static constexpr const char *kDefaultPacemakerTarget = "BEST";
 
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
@@ -145,6 +146,7 @@ public:
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
+  std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
   bool defaultDifficultyTablesSeeded = false;
 
   void sanitize();

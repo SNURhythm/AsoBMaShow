@@ -1,11 +1,17 @@
 #include "ScrollView.h"
 
+#include "../rendering/SimpleBatchRenderer.h"
+#include "UiTheme.h"
+
 #include <algorithm>
 #include <cmath>
 
 namespace {
 constexpr float kWheelStepUi = 48.0f;
 constexpr float kDragThresholdUi = 12.0f;
+constexpr float kScrollbarInset = 4.0f;
+constexpr float kScrollbarTrackWidth = 6.0f;
+constexpr float kScrollbarMinThumbHeight = 36.0f;
 
 SDL_Event makeCancelledMouseUpEvent(const SDL_Event &event) {
   SDL_Event cancelled = event;
@@ -32,11 +38,17 @@ void ScrollView::setContentView(View *view) {
   refreshContentLayout();
 }
 
+ScrollView *ScrollView::setContentPadding(Edge edge, float padding) {
+  updateStoredContentPadding(edge, padding);
+  refreshContentLayout();
+  return this;
+}
+
 void ScrollView::refreshContentLayout() {
   if (contentView == nullptr) {
     return;
   }
-  contentView->setWidth(static_cast<float>(getContentWidth()));
+  contentView->setWidth(static_cast<float>(getScrollContentWidth()));
   contentView->applyYogaLayout();
   clampScrollOffset();
   updateContentPosition();
@@ -47,8 +59,9 @@ void ScrollView::scrollToBottom() {
     return;
   }
   refreshContentLayout();
-  scrollOffset = std::max(0.0f, static_cast<float>(contentView->getHeight() -
-                                                  getContentHeight()));
+  scrollOffset = std::max(0.0f,
+                          static_cast<float>(contentView->getHeight() -
+                                             getScrollContentHeight()));
   updateContentPosition();
 }
 
@@ -68,9 +81,12 @@ void ScrollView::renderImpl(RenderContext &context) {
       touchMomentum.stop();
     }
   }
-  ScissorScope scissor(context, getContentX(), getContentY(),
-                       getContentWidth(), getContentHeight());
-  contentView->render(context);
+  {
+    ScissorScope scissor(context, getScrollContentX(), getScrollContentY(),
+                         getScrollContentWidth(), getScrollContentHeight());
+    contentView->render(context);
+  }
+  renderPersistentScrollbar(context);
 }
 
 bool ScrollView::handleEventsImpl(SDL_Event &event) {
@@ -291,8 +307,108 @@ void ScrollView::onResize(int newWidth, int newHeight) {
 }
 
 bool ScrollView::isInside(float uiX, float uiY) const {
-  return uiX >= getContentX() && uiX <= getContentX() + getContentWidth() &&
-         uiY >= getContentY() && uiY <= getContentY() + getContentHeight();
+  return uiX >= getViewportX() && uiX <= getViewportX() + getViewportWidth() &&
+         uiY >= getViewportY() && uiY <= getViewportY() + getViewportHeight();
+}
+
+int ScrollView::getViewportX() const { return getContentX(); }
+
+int ScrollView::getViewportY() const { return getContentY(); }
+
+int ScrollView::getViewportWidth() const { return getContentWidth(); }
+
+int ScrollView::getViewportHeight() const { return getContentHeight(); }
+
+int ScrollView::getScrollContentX() const {
+  return getViewportX() + contentPaddingLeft;
+}
+
+int ScrollView::getScrollContentY() const {
+  return getViewportY() + contentPaddingTop;
+}
+
+int ScrollView::getScrollContentWidth() const {
+  return std::max(0, getViewportWidth() - contentPaddingLeft -
+                         contentPaddingRight);
+}
+
+int ScrollView::getScrollContentHeight() const {
+  return std::max(0, getViewportHeight() - contentPaddingTop -
+                         contentPaddingBottom);
+}
+
+void ScrollView::updateStoredContentPadding(Edge edge, float padding) {
+  const int value =
+      std::max(0, static_cast<int>(std::round(std::max(0.0f, padding))));
+  switch (edge) {
+  case Edge::Left:
+  case Edge::Start:
+    contentPaddingLeft = value;
+    break;
+  case Edge::Top:
+    contentPaddingTop = value;
+    break;
+  case Edge::Right:
+  case Edge::End:
+    contentPaddingRight = value;
+    break;
+  case Edge::Bottom:
+    contentPaddingBottom = value;
+    break;
+  case Edge::All:
+    contentPaddingLeft = value;
+    contentPaddingTop = value;
+    contentPaddingRight = value;
+    contentPaddingBottom = value;
+    break;
+  }
+}
+
+bool ScrollView::hasScrollableOverflow() const {
+  return contentView != nullptr &&
+         contentView->getHeight() > getScrollContentHeight() + 1;
+}
+
+void ScrollView::renderPersistentScrollbar(RenderContext &context) const {
+  if (!hasScrollableOverflow() || getViewportWidth() <= 0 ||
+      getViewportHeight() <= 0) {
+    return;
+  }
+
+  const float viewportHeight = static_cast<float>(getScrollContentHeight());
+  const float contentHeight =
+      std::max(viewportHeight, static_cast<float>(contentView->getHeight()));
+  const float maxOffset = std::max(1.0f, contentHeight - viewportHeight);
+  const float trackViewportHeight = static_cast<float>(getViewportHeight());
+  const float trackHeight =
+      std::max(1.0f, trackViewportHeight - kScrollbarInset * 2.0f);
+  const float minThumbHeight =
+      std::min(kScrollbarMinThumbHeight, trackHeight);
+  const float thumbHeight = std::clamp(
+      trackHeight * viewportHeight / contentHeight, minThumbHeight,
+      trackHeight);
+  const float thumbTravel = std::max(0.0f, trackHeight - thumbHeight);
+  const float thumbY = static_cast<float>(getViewportY()) + kScrollbarInset +
+                       thumbTravel * std::clamp(scrollOffset / maxOffset,
+                                                0.0f, 1.0f);
+  const float trackX = static_cast<float>(getViewportX() + getViewportWidth()) -
+                       kScrollbarInset - kScrollbarTrackWidth;
+  const float trackY = static_cast<float>(getViewportY()) + kScrollbarInset;
+
+  rendering::SimpleBatchRenderer batch;
+  batch.setSubmitView(rendering::ui_view);
+  batch.begin();
+  batch.addRoundedRect(trackX, trackY, kScrollbarTrackWidth, trackHeight,
+                       kScrollbarTrackWidth * 0.5f,
+                       ui_theme::withAlpha(ui_theme::hairlineStrong(), 118)
+                           .toABGR());
+  batch.addRoundedRect(trackX, thumbY, kScrollbarTrackWidth, thumbHeight,
+                       kScrollbarTrackWidth * 0.5f,
+                       ui_theme::withAlpha(ui_theme::textSecondary(), 218)
+                           .toABGR());
+  rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                          context.scissor.width, context.scissor.height);
+  batch.end();
 }
 
 void ScrollView::clampScrollOffset() {
@@ -302,7 +418,7 @@ void ScrollView::clampScrollOffset() {
   }
   const float maxOffset = std::max(
       0.0f,
-      static_cast<float>(contentView->getHeight() - getContentHeight()));
+      static_cast<float>(contentView->getHeight() - getScrollContentHeight()));
   scrollOffset = std::clamp(scrollOffset, 0.0f, maxOffset);
 }
 
@@ -322,7 +438,8 @@ void ScrollView::updateContentPosition() {
     return;
   }
   contentView->setPositionNoLayout(
-      getContentX(), getContentY() - static_cast<int>(scrollOffset),
+      getScrollContentX(),
+      getScrollContentY() - static_cast<int>(scrollOffset),
       YGPositionTypeAbsolute);
 }
 

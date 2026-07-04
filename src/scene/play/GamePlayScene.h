@@ -6,6 +6,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
+#include "Pacemaker.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
@@ -33,6 +34,7 @@ struct StartOptions {
   std::optional<long long> playOption2Seed;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
+  std::string pacemakerTarget = pacemaker::kTargetBest;
   std::shared_ptr<CoursePlaySession> courseSession = nullptr;
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;
@@ -200,6 +202,7 @@ private:
                           bool recordEvent = true);
   std::unique_ptr<RhythmState> ownedState;
   RhythmState *state = nullptr;
+  pacemaker::Target activePacemakerTarget;
   std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
   std::unique_ptr<RhythmLaneInputController> ownedLaneInputController;
@@ -226,6 +229,8 @@ private:
   double currentGameplayBpm = 0.0;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
+  void configurePacemakerTarget();
+  void updatePacemakerStatus();
   void updateGaugeStatusText();
   void updateLaneStateText();
 };

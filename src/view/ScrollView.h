@@ -11,6 +11,7 @@ public:
   ~ScrollView() override;
 
   void setContentView(View *view);
+  ScrollView *setContentPadding(Edge edge, float padding);
   void refreshContentLayout();
   void scrollToBottom();
   float getScrollOffset() const { return scrollOffset; }
@@ -42,8 +43,23 @@ private:
   float lastTouchUiY = 0.0f;
   SDL_FingerID activeTouchId = -1;
   ScrollMomentum touchMomentum;
+  int contentPaddingLeft = 0;
+  int contentPaddingTop = 0;
+  int contentPaddingRight = 0;
+  int contentPaddingBottom = 0;
 
   bool isInside(float uiX, float uiY) const;
+  int getViewportX() const;
+  int getViewportY() const;
+  int getViewportWidth() const;
+  int getViewportHeight() const;
+  int getScrollContentX() const;
+  int getScrollContentY() const;
+  int getScrollContentWidth() const;
+  int getScrollContentHeight() const;
+  void updateStoredContentPadding(Edge edge, float padding);
+  bool hasScrollableOverflow() const;
+  void renderPersistentScrollbar(RenderContext &context) const;
   void clampScrollOffset();
   bool scrollBy(float delta);
   void updateContentPosition();

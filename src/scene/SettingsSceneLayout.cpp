@@ -426,6 +426,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewScroll->setFlex(1.0f);
   previewScroll->setFlexShrink(1.0f);
   previewScroll->setWidthPercent(100.0f);
+  previewScroll->setContentPadding(Edge::Right,
+                                   metrics.compact ? 10.0f : 12.0f);
 
   auto *previewControls = new View();
   previewControls->setFlexDirection(FlexDirection::Column);
@@ -2603,8 +2605,10 @@ void SettingsScene::initView() {
       metrics.contentWidth,
       metrics.compact ? std::clamp(metrics.contentWidth / 4, 150, 190)
                       : std::clamp(metrics.contentWidth / 6, 220, 280));
+  const int scrollRightPadding = metrics.compact ? 12 : 16;
   metrics.cardsWidth =
-      std::max(0, metrics.contentWidth - tabColumnWidth - metrics.bodyGap);
+      std::max(0, metrics.contentWidth - tabColumnWidth - metrics.bodyGap -
+                      scrollRightPadding);
   metrics.useDualCardRow = !metrics.compact && metrics.cardsWidth >= 980;
   metrics.secondaryCardWidth =
       metrics.useDualCardRow
@@ -2665,6 +2669,8 @@ void SettingsScene::initView() {
 
   scrollView = new ScrollView();
   scrollView->setFlex(1.0f);
+  scrollView->setContentPadding(Edge::Right,
+                                static_cast<float>(scrollRightPadding));
 
   auto *scrollContent = new View();
   scrollContent->setFlexDirection(FlexDirection::Column);

@@ -16,6 +16,7 @@
 #include "../../rendering/Camera.h"
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
+#include "Pacemaker.h"
 #include <bx/math.h>
 #include <array>
 #include <atomic>
@@ -111,10 +112,12 @@ public:
 private:
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
+  std::unique_ptr<TextView> pacemakerDeltaText;
   std::unique_ptr<TextView> judgementTimingDirectionText;
   std::unique_ptr<TextView> judgementTimingMsText;
   std::unique_ptr<TextView> scoreText;
   std::unique_ptr<TextView> comboText;
+  std::unique_ptr<TextView> pacemakerText;
   std::unique_ptr<TextView> gaugeText;
   std::unique_ptr<TextView> playOptionText;
   std::unique_ptr<TextView> autoPlayMarkText;
@@ -131,6 +134,17 @@ private:
   std::atomic<int> pendingCombo{0};
   std::atomic<long long> pendingJudgeDiffMicros{0};
   std::atomic<long long> pendingJudgeDisplayMicros{0};
+  std::atomic<uint32_t> pacemakerRevision{1};
+  uint32_t renderedPacemakerRevision = 0;
+  std::atomic<bool> pendingPacemakerEnabled{false};
+  std::atomic<int> pendingPacemakerCurrentScore{0};
+  std::atomic<int> pendingPacemakerTargetScore{0};
+  std::atomic<int> pendingPacemakerFinalTargetScore{0};
+  std::atomic<int> pendingPacemakerDelta{0};
+  std::atomic<int> pendingPacemakerPlayedNotes{0};
+  std::atomic<int> pendingPacemakerTotalNotes{0};
+  std::atomic<bool> pendingPacemakerUsesReplayProgression{false};
+  std::string pacemakerLabel;
   Judgement renderedJudgement = None;
   int renderedCombo = 0;
   bool renderedTimingFastShown = false;
@@ -233,6 +247,7 @@ private:
   int judgementLayoutHeight = 0;
   bool judgementLayoutHasTimingDirection = false;
   bool judgementLayoutHasTimingMs = false;
+  bool judgementLayoutHasPacemakerDelta = false;
 
   void drawRect(float width, float height, float x, float y, Color color);
   void drawHudRoundedPanel(float x, float y, float width, float height,
@@ -294,6 +309,7 @@ private:
   double visibleTimeReferenceBpm() const;
   double scrollPositionAtTime(long long timeMicros) const;
   void applyPendingHudText(long long currentMicros);
+  void applyPendingPacemakerText();
   void expireLingeringTimingText(long long currentMicros);
   bgfx::TextureHandle loadSheetTexture(SpriteLoader &loader, const char *label);
   bgfx::TextureHandle loadCroppedTexture(SpriteLoader &loader, int x, int y,
@@ -396,6 +412,8 @@ public:
   void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
                       float currentGauge,
                       GaugeProfile gaugeProfile = GaugeProfile::Standard);
+  void setPacemakerTarget(const pacemaker::Target &target);
+  void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
   void setAutoPlayMarkVisible(bool visible);

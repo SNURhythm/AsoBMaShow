@@ -19,6 +19,13 @@ struct ResultPreviousBestData {
   std::string createdAt;
 };
 
+struct ResultPacemakerData {
+  std::string label;
+  int targetScore = 0;
+  int delta = 0;
+  bool usesReplayProgression = false;
+};
+
 struct ResultSkinData {
   const RhythmState *state;
   const bms_parser::ChartMeta *meta;
@@ -32,4 +39,5 @@ struct ResultSkinData {
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   std::optional<ResultPreviousBestData> previousBest;
+  std::optional<ResultPacemakerData> pacemaker;
 };
