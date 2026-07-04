@@ -40,7 +40,9 @@ public:
                                             &pacemaker = std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
-                                              const ReplayData &replay);
+                                              const ReplayData &replay,
+                                              const std::string
+                                                  &pacemakerTarget = {});
   static ResultImageExportResult
   ExportCourseReplay(ApplicationContext &context,
                      const CourseReplayData &replay);

@@ -7618,6 +7618,10 @@ void MainMenuScene::buildReplayModal() {
           selectedReplayIsAutoPlay() ? false : selectedReplayRenderTouchPoints;
       options.renderReplayGhosts =
           selectedReplayIsAutoPlay() ? false : selectedReplayRenderGhosts;
+      options.pacemakerTarget =
+          selectedReplayIsAutoPlay()
+              ? pacemaker::kTargetOff
+              : pacemaker::normalizeTargetId(selectedPacemakerTarget);
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
@@ -8408,6 +8412,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;
+        exportOptions.pacemakerTarget = pacemaker::kTargetOff;
         complete(ReplayVideoExporter::Export(context, chart.get(), replay,
                                              exportOptions));
         return;
@@ -8508,7 +8513,9 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
     }
 
     updateReplayExportProgressUi(0.75, "Rendering photo");
-    complete(ResultImageExporter::ExportReplay(context, *chart, replay.value()));
+    complete(ResultImageExporter::ExportReplay(
+        context, *chart, replay.value(),
+        pacemaker::normalizeTargetId(selectedPacemakerTarget)));
   } catch (const std::exception &e) {
     complete({.success = false, .message = e.what()});
   } catch (...) {

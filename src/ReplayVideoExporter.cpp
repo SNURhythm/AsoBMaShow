@@ -147,6 +147,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.includeResultScreen = options.includeResultScreen;
   resolved.renderTouchPoints = options.renderTouchPoints;
   resolved.renderReplayGhosts = options.renderReplayGhosts;
+  resolved.pacemakerTarget = options.pacemakerTarget;
   resolved.progressCallback = options.progressCallback;
   return resolved;
 }
@@ -1014,6 +1015,33 @@ bool applyReplayEventForVideo(
     return false;
   }
   return false;
+}
+
+void applyReplayEventToPacemakerState(RhythmState &state,
+                                      const ReplayEvent &event) {
+  if (!pacemaker::replayEventCountsAsPlayedNote(event)) {
+    return;
+  }
+
+  const JudgeResult judgeResult(event.judgement, event.diffMicros);
+  state.judgeCount[event.judgement]++;
+  if (judgeResult.isComboBreak()) {
+    state.combo = 0;
+    state.comboBreak++;
+  } else if (event.judgement != Kpoor) {
+    state.combo++;
+    state.maxCombo = std::max(state.maxCombo, state.combo);
+  }
+  state.recordFastSlow(judgeResult);
+  state.combo = event.combo;
+  state.maxCombo = std::max(state.maxCombo, event.combo);
+  state.gaugeType = event.gaugeType;
+  state.currentGauge = event.gauge;
+  const int gaugeIndex = gaugeTypeIndex(event.gaugeType);
+  if (gaugeIndex >= 0 &&
+      gaugeIndex < static_cast<int>(state.gaugeValues.size())) {
+    state.gaugeValues[gaugeIndex] = event.gauge;
+  }
 }
 
 Color resultGaugeLineColor(float value) {
@@ -2405,6 +2433,21 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
   renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
   renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
+  const std::optional<ResultPreviousBestData> previousBest =
+      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+  const std::string selectedPacemakerTarget =
+      resolvedOptions.pacemakerTarget.empty()
+          ? settings.selectedPacemakerTarget
+          : resolvedOptions.pacemakerTarget;
+  const pacemaker::Target activePacemakerTarget =
+      result_presentation::pacemakerTargetForReplay(
+          chart.Meta, replay, selectedPacemakerTarget, previousBest);
+  RhythmState pacemakerState(&chart, false);
+  pacemakerState.configureGauge(replay.initialGaugeType,
+                                replay.gaugeAutoShift);
+  renderer.setPacemakerTarget(activePacemakerTarget);
+  renderer.setPacemakerStatus(
+      pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
 
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
@@ -2435,8 +2478,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                         rendering::window_height);
-    std::optional<ResultPreviousBestData> previousBest =
-        result_presentation::previousBestForReplayChart(chart.Meta, replay);
     const std::string difficultyLabel =
         result_presentation::difficultyLabelForChart(chart.Meta);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
@@ -2451,6 +2492,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resultSkinData.currentClearLabelOverride = "AUTO PLAY";
     }
     resultSkinData.previousBest = previousBest;
+    resultSkinData.pacemaker =
+        result_presentation::pacemakerDataForReplayResult(
+            chart.Meta, replayResultState, replay, selectedPacemakerTarget,
+            previousBest);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultRoot->applyYogaLayout();
@@ -2650,6 +2695,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                    visualTimeMicros, replay.gaugeAutoShift);
       if (appliedHud && event.judgement != None) {
+        applyReplayEventToPacemakerState(pacemakerState, event);
+        renderer.setPacemakerStatus(pacemaker::snapshotForState(
+            activePacemakerTarget, pacemakerState));
         replayJudgeCounts[event.judgement]++;
         if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
           replayComboBreak++;
