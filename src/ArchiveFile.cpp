@@ -8269,7 +8269,14 @@ findFileWithExtensions(const std::filesystem::path &basePath,
 }
 
 std::optional<std::filesystem::path>
-materializeFile(const std::filesystem::path &path, std::string *errorMessage) {
+materializeFile(const std::filesystem::path &path, std::string *errorMessage,
+                const std::atomic_bool *cancelled) {
+  if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Materialize cancelled.";
+    }
+    return std::nullopt;
+  }
 #if TARGET_OS_ANDROID
   if (IsAndroidTreePath(path)) {
     if (errorMessage != nullptr) {
@@ -8287,13 +8294,21 @@ materializeFile(const std::filesystem::path &path, std::string *errorMessage) {
   if (!readFile(path, bytes, errorMessage)) {
     return std::nullopt;
   }
-  return materializeFileBytes(path, bytes, errorMessage);
+  return materializeFileBytes(path, bytes, errorMessage, cancelled);
 }
 
 std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
-                     std::string *errorMessage) {
+                     std::string *errorMessage,
+                     const std::atomic_bool *cancelled) {
+  if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Materialize cancelled.";
+    }
+    return std::nullopt;
+  }
+
   std::filesystem::path cacheRoot = archiveCacheRoot();
   std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
   std::error_code error;
@@ -8327,6 +8342,13 @@ materializeFileBytes(const std::filesystem::path &path,
     needsWrite = size != bytes.size();
   }
   if (needsWrite) {
+    if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Materialize cancelled.";
+      }
+      return std::nullopt;
+    }
+
     std::ofstream file(output, std::ios::binary | std::ios::trunc);
     if (!file) {
       if (errorMessage != nullptr) {
@@ -8336,8 +8358,27 @@ materializeFileBytes(const std::filesystem::path &path,
       return std::nullopt;
     }
     if (!bytes.empty()) {
-      file.write(reinterpret_cast<const char *>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
+      constexpr std::size_t kMaterializeWriteChunkBytes = 1024 * 1024;
+      std::size_t offset = 0;
+      while (offset < bytes.size()) {
+        if (cancelled != nullptr &&
+            cancelled->load(std::memory_order_relaxed)) {
+          if (errorMessage != nullptr) {
+            *errorMessage = "Materialize cancelled.";
+          }
+          file.close();
+          std::filesystem::remove(output, error);
+          return std::nullopt;
+        }
+        const std::size_t chunkBytes =
+            std::min(kMaterializeWriteChunkBytes, bytes.size() - offset);
+        file.write(reinterpret_cast<const char *>(bytes.data() + offset),
+                   static_cast<std::streamsize>(chunkBytes));
+        if (!file) {
+          break;
+        }
+        offset += chunkBytes;
+      }
     }
     if (!file) {
       if (errorMessage != nullptr) {

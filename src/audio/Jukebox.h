@@ -107,9 +107,11 @@ private:
                                  const std::filesystem::path &materializedPath,
                                  const std::filesystem::path &displayPath,
                                  std::atomic_bool &isCancelled);
-  bool loadImagePath(int id, const std::filesystem::path &path);
+  bool loadImagePath(int id, const std::filesystem::path &path,
+                     std::atomic_bool &isCancelled);
   bool loadImageBytes(int id, const std::filesystem::path &path,
-                      const std::vector<unsigned char> &bytes);
+                      const std::vector<unsigned char> &bytes,
+                      std::atomic_bool &isCancelled);
   void clearVisualResources();
   void scheduleVisuals(bms_parser::Chart &chart,
                        std::atomic_bool &isCancelled);

@@ -93,6 +93,7 @@ private:
   size_t randomDrawerPage = 0;
   bool listenActive = false;
   bool listenAudioLoaded = false;
+  bool retainedListenResourcesForReload = false;
   long long listenEndMicros = 0;
   std::optional<ReplayData> practiceGhostReplay;
   std::vector<ReplaySummary> ghostReplaySummaries;
@@ -141,6 +142,7 @@ private:
   bool applyViewerPlayOptions(bms_parser::Chart &target,
                               const char *logContext);
   void onCanvasSelectionChanged(long long timeMicros);
+  void retainLoadedListenResourcesForChartChange();
   void startListeningFromSelection();
   void toggleListenPause();
   void stopListening();

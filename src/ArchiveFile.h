@@ -200,11 +200,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   UnzipProgressCallback progressCallback = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
-                std::string *errorMessage = nullptr);
+                std::string *errorMessage = nullptr,
+                const std::atomic_bool *cancelled = nullptr);
 std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
-                     std::string *errorMessage = nullptr);
+                     std::string *errorMessage = nullptr,
+                     const std::atomic_bool *cancelled = nullptr);
 std::filesystem::path
 materializedFileCachePath(const std::filesystem::path &path);
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,

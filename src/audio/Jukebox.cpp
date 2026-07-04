@@ -826,10 +826,16 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   auto videoPlayer = std::make_unique<VideoPlayer>(stopwatch);
   const path_t playablePath = fspath_to_path_t(materializedPath);
 
   if (videoPlayer->loadVideo(path_t_to_utf8(playablePath), isCancelled)) {
+    if (isCancelled) {
+      return false;
+    }
     auto *loadedVideoPlayer = videoPlayer.get();
     loadedVideoPlayer->setDecodeSuspended(
         !visualsEnabled.load(std::memory_order_relaxed) ||
@@ -852,6 +858,9 @@ bool Jukebox::loadMaterializedVideoPath(
 
 bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
                             std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
 #if TARGET_OS_ANDROID
   if (IsAndroidTreePath(path)) {
     std::string fdError;
@@ -875,7 +884,10 @@ bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
 #endif
   std::string materializeError;
   const auto playablePath =
-      archive_file::materializeFile(path, &materializeError);
+      archive_file::materializeFile(path, &materializeError, &isCancelled);
+  if (isCancelled) {
+    return false;
+  }
   if (!playablePath.has_value()) {
     SDL_Log("Failed to materialize video: %s", materializeError.c_str());
     return false;
@@ -884,11 +896,18 @@ bool Jukebox::loadVideoPath(int id, const std::filesystem::path &path,
 }
 
 bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
-                             const std::vector<unsigned char> &bytes) {
+                             const std::vector<unsigned char> &bytes,
+                             std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
   StbiImageHandle data(decodeImageBytes(bytes, &width, &height, &channels, 4));
+  if (isCancelled) {
+    return false;
+  }
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
@@ -896,6 +915,9 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   if (!decodedImageDimensionsAreValid(width, height)) {
     SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
             height);
+    return false;
+  }
+  if (isCancelled) {
     return false;
   }
   const auto texture = bgfx::createTexture2D(
@@ -913,8 +935,14 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (isCancelled) {
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (isCancelled) {
+      return false;
+    }
     replaceImageLocked(imageTable, id, image);
     visualPathTable[id] = displayPath;
     textureGuard.dismiss();
@@ -922,11 +950,18 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
   return true;
 }
 
-bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
+bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
+                            std::atomic_bool &isCancelled) {
+  if (isCancelled) {
+    return false;
+  }
   const path_t displayPath = fspath_to_path_t(path);
   const std::string utf8Path = path_t_to_utf8(displayPath);
   int width, height, channels;
   StbiImageHandle data(loadImageFile(path, &width, &height, &channels, 4));
+  if (isCancelled) {
+    return false;
+  }
   if (!data) {
     SDL_Log("Failed to load image: %s", utf8Path.c_str());
     return false;
@@ -934,6 +969,9 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
   if (!decodedImageDimensionsAreValid(width, height)) {
     SDL_Log("Invalid image dimensions for %s: %dx%d", utf8Path.c_str(), width,
             height);
+    return false;
+  }
+  if (isCancelled) {
     return false;
   }
   const auto texture = bgfx::createTexture2D(
@@ -951,8 +989,14 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path) {
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  if (isCancelled) {
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(imageTableMutex);
+    if (isCancelled) {
+      return false;
+    }
     replaceImageLocked(imageTable, id, image);
     visualPathTable[id] = displayPath;
     textureGuard.dismiss();
@@ -1403,7 +1447,7 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
       if (isCancelled) {
         return true;
       }
-      loadImagePath(id, path);
+      loadImagePath(id, path, isCancelled);
     }
   }
 
@@ -1505,12 +1549,18 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
           idsIt != batch.videoIdsByPath.end()) {
         std::string materializeError;
         const auto playablePath = archive_file::materializeFileBytes(
-            virtualPath, file.bytes, &materializeError);
+            virtualPath, file.bytes, &materializeError, &isCancelled);
+        if (isCancelled) {
+          return true;
+        }
         if (!playablePath.has_value()) {
           SDL_Log("Failed to materialize video: %s",
                   materializeError.c_str());
         } else {
           for (const int id : idsIt->second) {
+            if (isCancelled) {
+              return true;
+            }
             loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                       isCancelled);
           }
@@ -1520,7 +1570,10 @@ bool Jukebox::loadArchivedChartAssets(bms_parser::Chart &chart,
       if (const auto idsIt = batch.imageIdsByPath.find(pathKey);
           idsIt != batch.imageIdsByPath.end()) {
         for (const int id : idsIt->second) {
-          loadImageBytes(id, virtualPath, file.bytes);
+          if (isCancelled) {
+            return true;
+          }
+          loadImageBytes(id, virtualPath, file.bytes, isCancelled);
         }
       }
     }
@@ -1567,7 +1620,7 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
             continue;
           }
           path = *resolvedImagePath;
-          if (loadImagePath(bmp->first, path)) {
+          if (loadImagePath(bmp->first, path, isCancelled)) {
             break;
           }
         }
@@ -1681,7 +1734,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     if (isCancelled) {
       return true;
     }
-    loadImagePath(id, path);
+    loadImagePath(id, path, isCancelled);
   }
 
   for (const auto &archiveKey : videoBatchOrder) {
@@ -1723,13 +1776,19 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
 
       std::string materializeError;
       const auto playablePath = archive_file::materializeFileBytes(
-          virtualPath, file.bytes, &materializeError);
+          virtualPath, file.bytes, &materializeError, &isCancelled);
+      if (isCancelled) {
+        return true;
+      }
       if (!playablePath.has_value()) {
         SDL_Log("Failed to materialize video: %s",
                 materializeError.c_str());
         continue;
       }
       for (const int id : idsIt->second) {
+        if (isCancelled) {
+          return true;
+        }
         loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                   isCancelled);
       }
@@ -1773,7 +1832,10 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
         continue;
       }
       for (const int id : idsIt->second) {
-        loadImageBytes(id, virtualPath, file.bytes);
+        if (isCancelled) {
+          return true;
+        }
+        loadImageBytes(id, virtualPath, file.bytes, isCancelled);
       }
     }
   }
@@ -2165,7 +2227,7 @@ void Jukebox::reconcileVisualResources(
     if (asset.video) {
       loadVideoPath(asset.id, asset.path, isCancelled);
     } else {
-      loadImagePath(asset.id, asset.path);
+      loadImagePath(asset.id, asset.path, isCancelled);
     }
   }
 
@@ -2209,12 +2271,18 @@ void Jukebox::reconcileVisualResources(
           idsIt != batch.videoIdsByPath.end()) {
         std::string materializeError;
         const auto playablePath = archive_file::materializeFileBytes(
-            virtualPath, file.bytes, &materializeError);
+            virtualPath, file.bytes, &materializeError, &isCancelled);
+        if (isCancelled) {
+          return;
+        }
         if (!playablePath.has_value()) {
           SDL_Log("Failed to materialize video: %s",
                   materializeError.c_str());
         } else {
           for (const int id : idsIt->second) {
+            if (isCancelled) {
+              return;
+            }
             loadMaterializedVideoPath(id, *playablePath, virtualPath,
                                       isCancelled);
           }
@@ -2223,7 +2291,10 @@ void Jukebox::reconcileVisualResources(
       if (const auto idsIt = batch.imageIdsByPath.find(pathKey);
           idsIt != batch.imageIdsByPath.end()) {
         for (const int id : idsIt->second) {
-          loadImageBytes(id, virtualPath, file.bytes);
+          if (isCancelled) {
+            return;
+          }
+          loadImageBytes(id, virtualPath, file.bytes, isCancelled);
         }
       }
     }
