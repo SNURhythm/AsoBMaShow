@@ -104,6 +104,7 @@ struct ReplayData {
   GaugeType initialGaugeType = GaugeType::Normal;
   bool gaugeAutoShift = false;
   int finalScore = 0;
+  int maxCombo = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
@@ -130,6 +131,7 @@ struct CourseReplayData {
   bool gaugeAutoShift = false;
   int longNoteMode = 0;
   int finalScore = 0;
+  int maxCombo = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   int completedCharts = 0;

@@ -495,4 +495,11 @@ if (ASOBMASHOW_BUILD_TESTS)
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_summary_list_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_record_filters_tests
+        tests/replay_record_filters_tests.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 endif()

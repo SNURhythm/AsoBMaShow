@@ -1084,8 +1084,16 @@ void GamePlayScene::finishReplayRecording() {
   }
 
   recordedReplay.finalScore = state->getScore();
+  recordedReplay.maxCombo = state->maxCombo;
   recordedReplay.finalGauge = state->currentGauge;
   recordedReplay.clearType = state->getClearTypeRank();
+  const int totalNotes = chart != nullptr ? std::max(0, chart->Meta.TotalNotes)
+                                          : 0;
+  if (recordedReplay.clearType >= kClearTypeAssistedEasyClearRank &&
+      totalNotes > 0 && state->comboBreak == 0 &&
+      state->maxCombo >= totalNotes) {
+    recordedReplay.clearType = kClearTypeFullComboRank;
+  }
 }
 
 void GamePlayScene::publishPracticeGhost() {

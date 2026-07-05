@@ -216,11 +216,18 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
   replay.gaugeAutoShift = session.gaugeAutoShift;
   replay.longNoteMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   replay.finalScore = resultState.getScore();
+  replay.maxCombo = session.maxCombo;
   replay.finalGauge = resultState.currentGauge;
   replay.clearType = resultState.getClearTypeRank();
   replay.completedCharts =
       static_cast<int>(session.completedResults.size());
   replay.totalCharts = static_cast<int>(session.entries.size());
+  const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
+  if (result_presentation::isFullComboCourseResult(
+          replay.completedCharts, replay.totalCharts, session.entries.size(),
+          resultState, courseMeta)) {
+    replay.clearType = kClearTypeFullComboRank;
+  }
 
   const size_t stageCount =
       std::min(session.entries.size(), session.replayStages.size());

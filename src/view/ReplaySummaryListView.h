@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ReplayDBHelper.h"
+#include "../ReplayClearMarkUtils.h"
 #include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
@@ -83,8 +84,9 @@ public:
     rankText->setText(score_rank::labelForScore(summary.finalScore,
                                                 summary.maxScore));
 
-    if (hasClearLampColor(summary.clearType)) {
-      clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
+    const int clearRank = replay_clear_mark::effectiveClearRank(summary);
+    if (hasClearLampColor(clearRank)) {
+      clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
     } else {
       clearLamp->clearBackgroundColor();
     }

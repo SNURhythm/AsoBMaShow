@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "../ChartDBHelper.h"
 #include "../ReplayDBHelper.h"
+#include "../ReplayRecordFilters.h"
 #include "../ReplayVideoExporter.h"
 #include "../ScoreDBHelper.h"
 #include "../ThreadCompat.h"
@@ -251,6 +252,7 @@ private:
   View *replayModalRoot = nullptr;
   View *replayModalContentFrame = nullptr;
   View *replayListContent = nullptr;
+  View *replayFilterSortContent = nullptr;
   View *replayWatchOptionsContent = nullptr;
   View *replayExportOptionsContent = nullptr;
   View *replayExportProgressContent = nullptr;
@@ -343,6 +345,7 @@ private:
   Button *replayGBattleButton = nullptr;
   Button *replayModalPhotoButton = nullptr;
   Button *replayModalExportButton = nullptr;
+  Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
   Button *replayFps120Button = nullptr;
@@ -362,6 +365,7 @@ private:
   TextView *replayGBattleButtonText = nullptr;
   TextView *replayModalPhotoButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
+  TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
   TextView *replayFps120ButtonText = nullptr;
@@ -452,6 +456,8 @@ private:
   std::string searchText;
   std::string difficultyText;
   std::vector<ReplaySummary> replaySummaries;
+  std::vector<ReplaySummary> visibleReplaySummaries;
+  ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
   std::optional<ReplaySummary> selectedReplaySummary;
   std::optional<ReplaySummary> replayExportSelection;
@@ -463,6 +469,30 @@ private:
   bool selectedReplayRenderTouchPoints = true;
   bool selectedReplayRenderGhosts = true;
   double replayExportProgressFraction = 0.0;
+  struct ReplayClearFilterButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::optional<int> rank;
+  };
+  struct ReplayOptionFilterButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::optional<std::string> option;
+  };
+  struct ReplayScoreRankFilterButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    std::optional<std::string> rank;
+  };
+  struct ReplaySortButton {
+    Button *button = nullptr;
+    TextView *text = nullptr;
+    ReplayRecordSortCriterion criterion = ReplayRecordSortCriterion::Newest;
+  };
+  std::vector<ReplayClearFilterButton> replayClearFilterButtons;
+  std::vector<ReplayOptionFilterButton> replayPlayOptionFilterButtons;
+  std::vector<ReplayScoreRankFilterButton> replayScoreRankFilterButtons;
+  std::vector<ReplaySortButton> replaySortButtons;
   struct GaugeSelectionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
@@ -688,17 +718,25 @@ private:
   void hidePlayOptionsModal();
   void buildReplayModal();
   void showReplayListModal(const ChartMetaRecord &record);
+  void showReplayFilterSortOptions();
   void showReplayExportOptions();
   void showReplayExportProgress(const std::string &title = "Exporting Replay",
                                 const std::string &message =
                                     "Preparing export");
   void hideReplayModal();
   void refreshReplayModalActions();
+  void refreshReplayFilterSortButtons();
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
                                     const std::string &message);
   void clearReplayModalSelection();
   bool selectReplayModalIndex(int index);
+  void applyReplayRecordFilters(std::optional<int> preferredReplayId =
+                                    std::nullopt);
+  void setReplayClearFilter(std::optional<int> rank);
+  void setReplayPlayOptionFilter(std::optional<std::string> option);
+  void setReplayScoreRankFilter(std::optional<std::string> rank);
+  void setReplaySortCriterion(ReplayRecordSortCriterion criterion);
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);

@@ -16,6 +16,7 @@ struct ReplaySummary {
   bool gaugeAutoShift = false;
   int finalScore = 0;
   int maxScore = 0;
+  int maxCombo = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
