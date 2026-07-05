@@ -56,7 +56,9 @@ public:
               std::string pacemakerTarget = {},
               std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart =
                   nullptr,
-              bms_parser::Chart *reusableRetryChart = nullptr);
+              bms_parser::Chart *reusableRetryChart = nullptr,
+              std::optional<ResultPacemakerData> pacemakerOverride =
+                  std::nullopt);
   ~ResultScene() override = default;
 
   void init() override;
@@ -85,6 +87,8 @@ private:
   void exitResult();
   [[nodiscard]] bool isCourseStageResult() const;
   [[nodiscard]] bool isCourseFinalResult() const;
+  [[nodiscard]] std::optional<ResultPacemakerData>
+  pacemakerDataForCurrentResult() const;
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
@@ -96,6 +100,7 @@ private:
   std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
+  std::optional<ResultPacemakerData> pacemakerOverride;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;

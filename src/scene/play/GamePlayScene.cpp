@@ -1288,6 +1288,11 @@ void GamePlayScene::update(float dt) {
           courseResultOptions.mode = ResultCourseMode::Stage;
           courseResultOptions.session = options.courseSession;
         }
+        std::optional<ResultPacemakerData> gbattleResultPacemaker;
+        if (options.gbattleRecordData != nullptr) {
+          gbattleResultPacemaker = gbattle::resultPacemakerDataFromRecord(
+              *chart, *state, *options.gbattleRecordData);
+        }
         const bool replayPacemakerResult =
             !options.autoPlay && !options.practiceMode && isReplayPlayback() &&
             !isCoursePlayback() && options.replayData != nullptr &&
@@ -1320,7 +1325,8 @@ void GamePlayScene::update(float dt) {
                     (options.replayData != nullptr &&
                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
-                std::move(ownedReusableRetryChart), reusableRetryChart),
+                std::move(ownedReusableRetryChart), reusableRetryChart,
+                gbattleResultPacemaker),
             false);
         return false;
       },

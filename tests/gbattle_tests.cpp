@@ -76,6 +76,18 @@ int main() {
   ASSERT_EQ(2, target.scoreAfterNotes[1], "first note score");
   ASSERT_EQ(3, target.scoreAfterNotes[2], "second note score");
 
+  RhythmState state(&chart, false);
+  state.judgeCount[PGreat] = 2;
+  const auto resultPacemaker =
+      gbattle::resultPacemakerDataFromRecord(chart, state, replay);
+  ASSERT_TRUE(resultPacemaker.has_value(), "result pacemaker enabled");
+  ASSERT_EQ(std::string("G-BATTLE"), resultPacemaker->label,
+            "result pacemaker label");
+  ASSERT_EQ(3, resultPacemaker->targetScore, "result target score");
+  ASSERT_EQ(1, resultPacemaker->delta, "result score delta");
+  ASSERT_TRUE(resultPacemaker->usesReplayProgression,
+              "result uses replay progression");
+
   replay.autoPlay = true;
   const pacemaker::Target autoPlayTarget =
       gbattle::targetFromRecord(chart, replay);

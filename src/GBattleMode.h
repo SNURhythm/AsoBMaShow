@@ -2,8 +2,10 @@
 
 #include "ReplayData.h"
 #include "scene/play/Pacemaker.h"
+#include "skin/SkinTypes.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace gbattle {
@@ -32,6 +34,23 @@ inline pacemaker::Target targetFromRecord(bms_parser::Chart &chart,
   target.usesReplayProgression = true;
   target.scoreAfterNotes = std::move(progression);
   return target;
+}
+
+inline std::optional<ResultPacemakerData>
+resultPacemakerDataFromRecord(bms_parser::Chart &chart,
+                              const RhythmState &state,
+                              const ReplayData &record) {
+  pacemaker::Target target = targetFromRecord(chart, record);
+  if (!target.enabled) {
+    return std::nullopt;
+  }
+
+  return ResultPacemakerData{
+      .label = target.label,
+      .targetScore = target.finalScore,
+      .delta = state.getScore() - target.finalScore,
+      .usesReplayProgression = target.usesReplayProgression,
+  };
 }
 
 } // namespace gbattle

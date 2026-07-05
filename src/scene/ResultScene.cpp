@@ -248,7 +248,8 @@ ResultScene::ResultScene(ApplicationContext &context,
                          ResultCourseOptions courseOptions,
                          std::string pacemakerTarget,
                          std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
-                         bms_parser::Chart *reusableRetryChart)
+                         bms_parser::Chart *reusableRetryChart,
+                         std::optional<ResultPacemakerData> pacemakerOverride)
     : Scene(context), meta(meta), resultState(state),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
@@ -265,6 +266,7 @@ ResultScene::ResultScene(ApplicationContext &context,
       pacemakerTarget(pacemaker::normalizeTargetId(
           pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                   : pacemakerTarget)),
+      pacemakerOverride(std::move(pacemakerOverride)),
       shouldSaveScore(shouldSaveScore),
       replayResult(!shouldSaveScore && retrySource != nullptr &&
                    !this->practiceOptions.enabled),
@@ -310,6 +312,18 @@ bool ResultScene::isCourseStageResult() const {
 bool ResultScene::isCourseFinalResult() const {
   return courseOptions.mode == ResultCourseMode::CourseResult &&
          courseOptions.session != nullptr;
+}
+
+std::optional<ResultPacemakerData>
+ResultScene::pacemakerDataForCurrentResult() const {
+  if (isCourseStageResult() || isCourseFinalResult()) {
+    return std::nullopt;
+  }
+  if (pacemakerOverride.has_value()) {
+    return pacemakerOverride;
+  }
+  return result_presentation::pacemakerDataForResult(
+      meta, resultState, pacemakerTarget, previousBest);
 }
 
 void ResultScene::saveScore() {
@@ -721,10 +735,7 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
   const std::optional<ResultPacemakerData> pacemaker =
-      (!isCourseStageResult() && !isCourseFinalResult())
-          ? result_presentation::pacemakerDataForResult(
-                meta, resultState, pacemakerTarget, previousBest)
-          : std::nullopt;
+      pacemakerDataForCurrentResult();
   const auto result = ResultImageExporter::Export(
       context, meta, resultState, playModeLabel, laneOrderLabel,
       difficultyLabel, previousBest, currentClearLabelOverride,
@@ -1170,10 +1181,7 @@ void ResultScene::init() {
   }
   data.currentClearRankOverride = currentClearRankOverride;
   data.previousBest = previousBest;
-  if (!isCourseStageResult() && !isCourseFinalResult()) {
-    data.pacemaker = result_presentation::pacemakerDataForResult(
-        meta, resultState, pacemakerTarget, previousBest);
-  }
+  data.pacemaker = pacemakerDataForCurrentResult();
   skin->buildLayout("Result", rootLayout, &data);
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
