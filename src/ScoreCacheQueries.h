@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace score_cache_queries {
 
@@ -172,6 +173,14 @@ attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
   if (attached) {
     return std::nullopt;
   }
+  std::error_code existsError;
+  if (!std::filesystem::exists(path, existsError)) {
+    if (existsError) {
+      return "could not inspect score database path: " +
+             existsError.message();
+    }
+    return "score database does not exist: " + fspath_to_utf8(path);
+  }
   return attachSqliteDatabase(db, path, kScoreDatabaseSchema);
 }
 
@@ -181,64 +190,15 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema = {});
 inline std::optional<std::string>
 repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema);
 
-inline std::optional<std::string> attachEmptyScoreDatabase(sqlite3 *db) {
-  bool attached = false;
-  if (const auto error = isScoreDatabaseAttached(db, attached)) {
-    return error;
-  }
-  if (!attached) {
-    if (const auto error =
-            executeSqlite(db, "ATTACH ':memory:' AS score_db")) {
-      return error;
-    }
-  }
-  if (const auto error =
-          executeSqlite(db,
-                        "CREATE TABLE IF NOT EXISTS score_db.scores ("
-                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                        "chart_path TEXT,"
-                        "chart_md5 TEXT,"
-                        "chart_sha256 TEXT NOT NULL,"
-                        "ln_mode INTEGER NOT NULL DEFAULT 0,"
-                        "chart_title TEXT,"
-                        "chart_artist TEXT,"
-                        "score INTEGER NOT NULL,"
-                        "max_score INTEGER NOT NULL,"
-                        "max_combo INTEGER NOT NULL,"
-                        "combo_break INTEGER NOT NULL,"
-                        "pgreat INTEGER NOT NULL DEFAULT 0,"
-                        "great INTEGER NOT NULL DEFAULT 0,"
-                        "good INTEGER NOT NULL DEFAULT 0,"
-                        "bad INTEGER NOT NULL DEFAULT 0,"
-                        "poor INTEGER NOT NULL DEFAULT 0,"
-                        "kpoor INTEGER NOT NULL DEFAULT 0,"
-                        "fast INTEGER NOT NULL DEFAULT 0,"
-                        "slow INTEGER NOT NULL DEFAULT 0,"
-                        "final_gauge REAL NOT NULL DEFAULT 0,"
-                        "clear_type INTEGER NOT NULL,"
-                        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-                        ")")) {
-    return error;
-  }
-  return ensureScoreSummarySchema(db, kScoreDatabaseSchema);
-}
-
 inline std::optional<std::string>
 prepareScoreQueryDatabase(sqlite3 *db, const std::filesystem::path &path) {
   if (const auto attachError = attachScoreDatabaseIfNeeded(db, path)) {
-    if (const auto emptyError = attachEmptyScoreDatabase(db)) {
-      return "could not attach score database: " + *attachError +
-             "; could not prepare empty score database: " + *emptyError;
-    }
-    return std::nullopt;
+    return "could not attach score database: " + *attachError;
   }
 
-  if (const auto schemaError = ensureScoreSummarySchema(db, kScoreDatabaseSchema)) {
-    if (const auto emptyError = attachEmptyScoreDatabase(db)) {
-      return "could not prepare score summary schema: " + *schemaError +
-             "; could not prepare empty score database: " + *emptyError;
-    }
-    return std::nullopt;
+  if (const auto schemaError =
+          ensureScoreSummarySchema(db, kScoreDatabaseSchema)) {
+    return "could not prepare score summary schema: " + *schemaError;
   }
 
   if (const auto repairError =

@@ -1,4 +1,5 @@
 #include "targets.h"
+#include "AppDatabaseInitializer.h"
 #include "bgfx_helper.h"
 #include "rendering/ShaderManager.h"
 #include "./audio/decoder.h"
@@ -683,6 +684,14 @@ int main(int argv, char **args) {
 void run() {
   ApplicationContext context;
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
+  const auto databaseStatus =
+      app_database_initializer::initializeApplicationDatabases();
+  if (!databaseStatus.ok()) {
+    SDL_Log("Application database initialization failed: chart=%d score=%d "
+            "replay=%d music=%d",
+            databaseStatus.chart ? 1 : 0, databaseStatus.score ? 1 : 0,
+            databaseStatus.replay ? 1 : 0, databaseStatus.music ? 1 : 0);
+  }
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);

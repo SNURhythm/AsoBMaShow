@@ -186,6 +186,7 @@ public:
   bool CreateChartMetaTable(sqlite3 *db);
   bool CreateSolidArchiveTable(sqlite3 *db);
   bool CreateFavoritesTable(sqlite3 *db);
+  bool CreateChartStateTables(sqlite3 *db);
 
   // Insert ChartMeta
   bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);

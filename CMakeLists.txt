@@ -540,6 +540,12 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(score_cache_query_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_cache_query_tests PRIVATE cxx_std_23)
 
+    add_executable(app_database_initializer_tests
+        tests/app_database_initializer_tests.cpp
+    )
+    target_include_directories(app_database_initializer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(app_database_initializer_tests PRIVATE cxx_std_23)
+
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
         src/bms_parser.cpp

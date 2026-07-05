@@ -3409,6 +3409,18 @@ bool ChartDBHelper::CreateSolidArchiveTable(sqlite3 *db) {
   return true;
 }
 
+bool ChartDBHelper::CreateChartStateTables(sqlite3 *db) {
+  if (db == nullptr) {
+    return false;
+  }
+
+  bool ok = true;
+  ok = createChartMetadataRebuildStateTable(db) && ok;
+  ok = createChartScanCheckpointTable(db) && ok;
+  ok = createArchiveScanCacheTable(db) && ok;
+  return ok;
+}
+
 const char *insertChartMetaSql() {
   return "REPLACE INTO chart_meta ("
          "path,"
