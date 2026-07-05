@@ -503,6 +503,23 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_db_helper_tests
+        tests/replay_db_helper_tests.cpp
+        src/ReplayDBHelper.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_db_helper_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(replay_db_helper_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
+    endif()
+
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
         src/bms_parser.cpp

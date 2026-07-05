@@ -772,6 +772,7 @@ private:
   void setReplayPlayOptionFilter(std::optional<std::string> option);
   void setReplayScoreRankFilter(std::optional<std::string> rank);
   void setReplaySortCriterion(ReplayRecordSortCriterion criterion);
+  bool replayScoreRankFilterAvailable() const;
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);

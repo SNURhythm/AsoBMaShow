@@ -46,6 +46,7 @@ public:
   bool CreateReplayTables(sqlite3 *db);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
+  // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);
   std::vector<ReplaySummary> ListCourseReplays(int courseId,

@@ -61,6 +61,17 @@ int main() {
   ASSERT_EQ(2, filtered[0].id, "score rank filter id");
 
   filters = {};
+  filters.scoreRank = "AAA";
+  std::vector<ReplaySummary> courseSummaries = {
+      makeSummary(21, kClearTypeNormalClearRank, 900, 0, 120),
+      makeSummary(22, kClearTypeHardClearRank, 800, 0, 220),
+  };
+  courseSummaries[0].courseReplay = true;
+  courseSummaries[1].courseReplay = true;
+  filtered = replay_record_filters::apply(courseSummaries, filters);
+  ASSERT_EQ(2U, filtered.size(), "course score rank filter ignored size");
+
+  filters = {};
   filters.sort = ReplayRecordSortCriterion::ClearMark;
   filtered = replay_record_filters::apply(summaries, filters);
   ASSERT_EQ(2, filtered[0].id, "clear sort first id");

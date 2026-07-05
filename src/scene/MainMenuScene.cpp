@@ -8205,9 +8205,10 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
       activeFolder.courseId > 0;
   if (courseReplayList) {
     replaySummaries =
-        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId);
+        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId,
+                                                        0);
   } else {
-    replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta);
+    replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta, 0);
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(record));
   }
@@ -8466,8 +8467,15 @@ void MainMenuScene::refreshReplayFilterSortButtons() {
   }
   for (const ReplayScoreRankFilterButton &item :
        replayScoreRankFilterButtons) {
-    styleOptionButton(item.button, item.text,
-                      item.rank == replayRecordFilters.scoreRank);
+    if (item.rank.has_value() && !replayScoreRankFilterAvailable()) {
+      styleThemedActionButton(item.button, item.text, false,
+                              ui_theme::control, ui_theme::controlHover,
+                              ui_theme::controlPressed,
+                              ui_theme::hairlineStrong);
+    } else {
+      styleOptionButton(item.button, item.text,
+                        item.rank == replayRecordFilters.scoreRank);
+    }
   }
   for (const ReplaySortButton &item : replaySortButtons) {
     styleOptionButton(item.button, item.text,
@@ -8631,6 +8639,9 @@ void MainMenuScene::setReplayPlayOptionFilter(
 
 void MainMenuScene::setReplayScoreRankFilter(
     std::optional<std::string> rank) {
+  if (rank.has_value() && !replayScoreRankFilterAvailable()) {
+    return;
+  }
   replayRecordFilters.scoreRank = rank;
   applyReplayRecordFilters();
   refreshReplayFilterSortButtons();
@@ -8641,6 +8652,10 @@ void MainMenuScene::setReplaySortCriterion(
   replayRecordFilters.sort = criterion;
   applyReplayRecordFilters();
   refreshReplayFilterSortButtons();
+}
+
+bool MainMenuScene::replayScoreRankFilterAvailable() const {
+  return replay_record_filters::supportsScoreRankFilter(replaySummaries);
 }
 
 bool MainMenuScene::selectedReplayIsAutoPlay() const {

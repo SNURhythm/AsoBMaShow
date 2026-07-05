@@ -903,7 +903,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   }
 
   const auto match = replayChartMatchFor(chartMeta);
-  limit = std::max(1, limit);
+  const bool hasLimit = limit > 0;
   const int maxScore = std::max(0, chartMeta.TotalNotes) * 2;
 
   std::string query =
@@ -918,7 +918,10 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   query += replayChartMatchPredicate("r");
   query += " AND NOT EXISTS ("
            "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
-           ") ORDER BY r.id DESC LIMIT ?";
+           ") ORDER BY r.id DESC";
+  if (hasLimit) {
+    query += " LIMIT ?";
+  }
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -928,7 +931,9 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   }
 
   int bindIndex = bindReplayChartMatch(stmt.get(), 1, match);
-  sqlite3_bind_int(stmt.get(), bindIndex++, limit);
+  if (hasLimit) {
+    sqlite3_bind_int(stmt.get(), bindIndex++, limit);
+  }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     ReplaySummary summary = readReplaySummary(stmt.get(), 17, 18, 19);
@@ -952,8 +957,8 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
     return replays;
   }
 
-  limit = std::max(1, limit);
-  const char *query =
+  const bool hasLimit = limit > 0;
+  std::string query =
       "SELECT cr.id, cr.gauge_type, cr.gauge_auto_shift, cr.final_score,"
       "cr.final_gauge, cr.clear_type, cr.created_at,"
       "cr.requested_play_option, cr.assist_option, cr.completed_charts,"
@@ -969,7 +974,10 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
       "WHERE s.course_replay_id = cr.id) "
       "FROM course_replays cr "
       "WHERE cr.course_id = ? "
-      "ORDER BY cr.id DESC LIMIT ?";
+      "ORDER BY cr.id DESC";
+  if (hasLimit) {
+    query += " LIMIT ?";
+  }
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -979,7 +987,9 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   }
 
   sqlite3_bind_int(stmt.get(), 1, courseId);
-  sqlite3_bind_int(stmt.get(), 2, limit);
+  if (hasLimit) {
+    sqlite3_bind_int(stmt.get(), 2, limit);
+  }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     ReplaySummary summary;
