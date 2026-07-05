@@ -21,6 +21,7 @@ struct ReplaySummary {
   std::string createdAt;
   int eventCount = 0;
   int touchSampleCount = 0;
+  std::optional<bms_parser::ChartMeta> chartMeta;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

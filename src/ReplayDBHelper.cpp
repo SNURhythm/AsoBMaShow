@@ -885,6 +885,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     ReplaySummary summary = readReplaySummary(stmt.get(), 17, 18);
     summary.maxScore = maxScore;
+    summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));
   }
   return replays;

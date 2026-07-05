@@ -66,6 +66,7 @@ inline ReplaySummary BuildSummary(
   summary.createdAt = kLabel;
   summary.eventCount = std::max(0, meta.TotalNotes);
   summary.touchSampleCount = 0;
+  summary.chartMeta = meta;
   summary.playOption = playOption;
   summary.playOptionSeed = playOptionSeed;
   summary.playOption2 = playOption2;

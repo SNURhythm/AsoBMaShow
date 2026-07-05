@@ -115,6 +115,8 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.clearType = replay.clearType;
   summary.createdAt = createdAt;
   summary.eventCount = static_cast<int>(replay.events.size());
+  summary.touchSampleCount = static_cast<int>(replay.touchSamples.size());
+  summary.chartMeta = replay.chartMeta;
   summary.playOption = replay.playOption;
   summary.playOptionSeed = replay.playOptionSeed;
   summary.playOption2 = replay.playOption2;
