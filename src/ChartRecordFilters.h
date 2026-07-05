@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 struct ChartRecordFilters {
   std::optional<int> clearMarkRank;
@@ -72,6 +74,59 @@ inline void normalizeBpmRange(ChartRecordFilters &filters) {
   if (filters.bpmMin.has_value() && filters.bpmMax.has_value() &&
       *filters.bpmMin > *filters.bpmMax) {
     std::swap(filters.bpmMin, filters.bpmMax);
+  }
+}
+
+inline std::optional<size_t>
+difficultyLevelIndex(const std::vector<DifficultyLevelInfo> &levels,
+                     const std::optional<std::string> &level) {
+  if (!level.has_value()) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < levels.size(); ++i) {
+    if (levels[i].level == *level) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+inline void normalizeDifficultyRange(
+    ChartRecordFilters &filters,
+    const std::vector<DifficultyLevelInfo> &levels) {
+  auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (filters.difficultyMinLevel.has_value() && !minIndex.has_value()) {
+    filters.difficultyMinLevel.reset();
+  }
+  if (filters.difficultyMaxLevel.has_value() && !maxIndex.has_value()) {
+    filters.difficultyMaxLevel.reset();
+  }
+}
+
+inline void setDifficultyMinLevel(
+    ChartRecordFilters &filters,
+    const std::vector<DifficultyLevelInfo> &levels,
+    std::optional<std::string> level) {
+  filters.difficultyMinLevel = std::move(level);
+  normalizeDifficultyRange(filters, levels);
+  const auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  const auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
+    filters.difficultyMaxLevel = filters.difficultyMinLevel;
+  }
+}
+
+inline void setDifficultyMaxLevel(
+    ChartRecordFilters &filters,
+    const std::vector<DifficultyLevelInfo> &levels,
+    std::optional<std::string> level) {
+  filters.difficultyMaxLevel = std::move(level);
+  normalizeDifficultyRange(filters, levels);
+  const auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  const auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
+    filters.difficultyMinLevel = filters.difficultyMaxLevel;
   }
 }
 

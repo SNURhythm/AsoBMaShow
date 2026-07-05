@@ -195,5 +195,24 @@ int main() {
   ASSERT_EQ(120.0, *query.bpmMin, "normalized bpm min query value");
   ASSERT_EQ(220.0, *query.bpmMax, "normalized bpm max query value");
 
+  const std::vector<DifficultyLevelInfo> difficultyLevels = {
+      {.level = "4"}, {.level = "5"}, {.level = "6"}};
+
+  filters = {};
+  filters.difficultyMaxLevel = "4";
+  chart_record_filters::setDifficultyMinLevel(filters, difficultyLevels, "5");
+  ASSERT_EQ(std::string("5"), *filters.difficultyMinLevel,
+            "difficulty min changed side wins");
+  ASSERT_EQ(std::string("5"), *filters.difficultyMaxLevel,
+            "difficulty max clamps to changed min");
+
+  filters = {};
+  filters.difficultyMinLevel = "5";
+  chart_record_filters::setDifficultyMaxLevel(filters, difficultyLevels, "4");
+  ASSERT_EQ(std::string("4"), *filters.difficultyMinLevel,
+            "difficulty min clamps to changed max");
+  ASSERT_EQ(std::string("4"), *filters.difficultyMaxLevel,
+            "difficulty max changed side wins");
+
   return 0;
 }

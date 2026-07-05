@@ -215,33 +215,13 @@ std::optional<double> parseOptionalBpmFilter(const std::string &text) {
 std::optional<size_t>
 difficultyLevelIndex(const std::vector<DifficultyLevelInfo> &levels,
                      const std::optional<std::string> &level) {
-  if (!level.has_value()) {
-    return std::nullopt;
-  }
-  for (size_t i = 0; i < levels.size(); ++i) {
-    if (levels[i].level == *level) {
-      return i;
-    }
-  }
-  return std::nullopt;
+  return chart_record_filters::difficultyLevelIndex(levels, level);
 }
 
 void normalizeDifficultyFilterRange(
     ChartRecordFilters &filters,
     const std::vector<DifficultyLevelInfo> &levels) {
-  auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
-  auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
-  if (filters.difficultyMinLevel.has_value() && !minIndex.has_value()) {
-    filters.difficultyMinLevel.reset();
-  }
-  if (filters.difficultyMaxLevel.has_value() && !maxIndex.has_value()) {
-    filters.difficultyMaxLevel.reset();
-  }
-  minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
-  maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
-  if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
-    std::swap(filters.difficultyMinLevel, filters.difficultyMaxLevel);
-  }
+  chart_record_filters::normalizeDifficultyRange(filters, levels);
 }
 
 std::string longNoteModeOptionFromCourseConstraint(CourseLongNoteMode mode) {
@@ -3980,9 +3960,9 @@ void MainMenuScene::setChartBpmMaxFilter(const std::string &text) {
 
 void MainMenuScene::setChartDifficultyMinFilter(
     std::optional<std::string> level) {
-  chartRecordFilters.difficultyMinLevel = std::move(level);
-  normalizeDifficultyFilterRange(chartRecordFilters,
-                                 chartFilterDifficultyLevels());
+  chart_record_filters::setDifficultyMinLevel(chartRecordFilters,
+                                              chartFilterDifficultyLevels(),
+                                              std::move(level));
   chartDifficultyMinDropdownOpen = false;
   reloadChartList();
   refreshChartFilterPanel();
@@ -3990,9 +3970,9 @@ void MainMenuScene::setChartDifficultyMinFilter(
 
 void MainMenuScene::setChartDifficultyMaxFilter(
     std::optional<std::string> level) {
-  chartRecordFilters.difficultyMaxLevel = std::move(level);
-  normalizeDifficultyFilterRange(chartRecordFilters,
-                                 chartFilterDifficultyLevels());
+  chart_record_filters::setDifficultyMaxLevel(chartRecordFilters,
+                                              chartFilterDifficultyLevels(),
+                                              std::move(level));
   chartDifficultyMaxDropdownOpen = false;
   reloadChartList();
   refreshChartFilterPanel();
