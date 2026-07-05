@@ -61,11 +61,13 @@ inline ReplaySummary BuildSummary(
   summary.gaugeAutoShift = gaugeAutoShift;
   summary.finalScore = std::max(0, meta.TotalNotes) * 2;
   summary.maxScore = summary.finalScore;
+  summary.maxCombo = std::max(0, meta.TotalNotes);
   summary.finalGauge = 100.0f;
   summary.clearType = kClearTypeFullComboRank;
   summary.createdAt = kLabel;
   summary.eventCount = std::max(0, meta.TotalNotes);
   summary.touchSampleCount = 0;
+  summary.chartMeta = meta;
   summary.playOption = playOption;
   summary.playOptionSeed = playOptionSeed;
   summary.playOption2 = playOption2;
@@ -146,6 +148,7 @@ inline ReplayData BuildReplayData(
   }
 
   replay.finalScore = state.getScore();
+  replay.maxCombo = state.maxCombo;
   replay.finalGauge = state.currentGauge;
   replay.clearType =
       state.comboBreak == 0 ? kClearTypeFullComboRank : state.getClearTypeRank();

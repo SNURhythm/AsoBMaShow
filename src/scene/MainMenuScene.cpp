@@ -17,6 +17,7 @@
 #include "../SqliteRAII.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
+#include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
@@ -97,6 +98,8 @@ constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 // scrollbar gutter reduce the usable text area.
 constexpr size_t kParseLogRowMaxColumns = 88;
 constexpr int kParseLogRowHeight = 48;
+constexpr uint32_t kIconXmark = 0xf00d;
+constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -1027,6 +1030,23 @@ Button *makeModalButton(const std::string &label, int fontSize,
   text->setText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
+  button->setContentView(text);
+  button->setStyledBorderWidth(1);
+  button->setCornerRadius(ui_theme::controlRadius());
+  if (textOut != nullptr) {
+    *textOut = text;
+  }
+  return button;
+}
+
+Button *makeModalIconButton(uint32_t iconCodepoint, int fontSize,
+                            TextView **textOut = nullptr) {
+  auto *button = new Button(0, 0, 54, 54);
+  auto *text = new TextView(ui_icons::kFontAwesomeSolidPath, fontSize);
+  text->setText(ui_icons::textForCodepoint(iconCodepoint));
+  text->setAlign(TextView::CENTER);
+  text->setVAlign(TextView::MIDDLE);
+  text->setOverflow(TextView::TextOverflow::Hidden);
   button->setContentView(text);
   button->setStyledBorderWidth(1);
   button->setCornerRadius(ui_theme::controlRadius());
@@ -2336,6 +2356,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalRoot = nullptr;
   replayModalContentFrame = nullptr;
   replayListContent = nullptr;
+  replayFilterSortContent = nullptr;
+  replayWatchOptionsContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayExportProgressContent = nullptr;
   replayExportProgressTrack = nullptr;
@@ -2423,8 +2445,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
+  replayGBattleButton = nullptr;
   replayModalPhotoButton = nullptr;
   replayModalExportButton = nullptr;
+  replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
   replayFps120Button = nullptr;
@@ -2441,8 +2465,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportGhostShowButton = nullptr;
   replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
+  replayGBattleButtonText = nullptr;
   replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
+  replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
   replayFps120ButtonText = nullptr;
@@ -2489,6 +2515,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressLog.clear();
   musicStatusMessage.clear();
   replaySummaries.clear();
+  visibleReplaySummaries.clear();
+  replayRecordFilters = {};
   selectedReplayIndex = -1;
   selectedReplaySummary.reset();
   replayExportSelection.reset();
@@ -2503,6 +2531,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   longNoteModeButtons.clear();
   assistOptionButtons.clear();
   pacemakerTargetButtons.clear();
+  replayClearFilterButtons.clear();
+  replayPlayOptionFilterButtons.clear();
+  replayScoreRankFilterButtons.clear();
+  replaySortButtons.clear();
 
   appliedUiThemeMode = ui_theme::activeMode();
 
@@ -3056,7 +3088,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 
   replayButton = new Button(0, 0, 220, 58);
   replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  replayButtonText->setText("Replay");
+  replayButtonText->setText("Records");
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
@@ -7180,11 +7212,32 @@ void MainMenuScene::buildReplayModal() {
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setGap(10)
+      ->setHeight(54);
   replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  replayModalTitleText->setText("Replay");
+  replayModalTitleText->setText("Records");
   replayModalTitleText->setThemedColor(ui_theme::textPrimary);
-  replayModalTitleText->setHeight(42);
-  panel->addView(replayModalTitleText);
+  replayModalTitleText->setHeight(54);
+  replayModalTitleText->setFlexGrow(1.0f);
+  replayModalTitleText->setFlexBasis(0.0f);
+  replayModalTitleText->setMinWidth(0.0f);
+  replayModalFilterButton =
+      makeModalIconButton(kIconFilter, 20, &replayModalFilterButtonText);
+  replayModalFilterButton->setWidth(54);
+  replayModalFilterButton->setHeight(54);
+  replayModalFilterButton->setFlexShrink(0.0f);
+  replayModalCloseButton =
+      makeModalIconButton(kIconXmark, 22, &replayModalCloseButtonText);
+  replayModalCloseButton->setWidth(54);
+  replayModalCloseButton->setHeight(54);
+  replayModalCloseButton->setFlexShrink(0.0f);
+  header->addView(replayModalTitleText);
+  header->addView(replayModalFilterButton);
+  header->addView(replayModalCloseButton);
+  panel->addView(header);
 
   replayModalContentFrame = new View();
   replayModalContentFrame->setWidth(kModalContentWidth)
@@ -7216,6 +7269,176 @@ void MainMenuScene::buildReplayModal() {
   replayListView->setThemedBorderColor(ui_theme::hairline);
   replayListView->setBorderWidth(1);
   replayListContent->addView(replayListView);
+  replayModalContentFrame->addView(replayListContent);
+
+  replayFilterSortContent = new View();
+  replayFilterSortContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight);
+  replayFilterSortContent->setVisible(false);
+
+  constexpr float kFilterScrollRightPadding = 12.0f;
+  constexpr float kFilterContentWidth =
+      kModalContentWidth - kFilterScrollRightPadding;
+  auto *filterScroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
+                                      static_cast<int>(kModalContentHeight));
+  filterScroll->setWidth(kModalContentWidth);
+  filterScroll->setHeight(kModalContentHeight);
+  filterScroll->setContentPadding(Edge::Right, kFilterScrollRightPadding);
+
+  auto *filterContent = new View();
+  filterContent->setFlexDirection(FlexDirection::Column);
+  filterContent->setAlignItems(YGAlignStretch);
+  filterContent->setGap(10);
+  filterContent->setWidth(kFilterContentWidth);
+
+  auto makeFilterButton = [](const std::string &label, int fontSize,
+                             TextView **textOut) {
+    auto *button = makeModalButton(label, fontSize, textOut);
+    button->setHeight(46);
+    button->setFlexGrow(1.0f);
+    button->setFlexBasis(0.0f);
+    button->setFlexShrink(1.0f);
+    return button;
+  };
+  auto addFilterButton = [&](View *&row, size_t &index, size_t columns,
+                             Button *button) {
+    if (index % columns == 0) {
+      row = makeModalOptionRow(46);
+      filterContent->addView(row);
+    }
+    if (row != nullptr) {
+      row->addView(button);
+    }
+    ++index;
+  };
+
+  filterContent->addView(makeModalLabel("Clear Mark"));
+  View *filterRow = nullptr;
+  size_t filterIndex = 0;
+  auto makeClearFilterButton = [this, &makeFilterButton](
+                                   const std::string &label,
+                                   std::optional<int> rank) {
+    TextView *text = nullptr;
+    auto *button = makeFilterButton(label, 15, &text);
+    button->setOnClickListener(
+        [this, rank]() { setReplayClearFilter(rank); });
+    replayClearFilterButtons.push_back({
+        .button = button,
+        .text = text,
+        .rank = rank,
+    });
+    return button;
+  };
+  addFilterButton(filterRow, filterIndex, 3,
+                  makeClearFilterButton("All", std::nullopt));
+  for (const auto &filter : kDifficultyClearMarkFilters) {
+    if (filter.rank == kNoClearTypeRank) {
+      continue;
+    }
+    addFilterButton(filterRow, filterIndex, 3,
+                    makeClearFilterButton(filter.label, filter.rank));
+  }
+
+  filterContent->addView(makeModalLabel("Play Option"));
+  filterRow = nullptr;
+  filterIndex = 0;
+  auto makePlayOptionFilterButton = [this, &makeFilterButton](
+                                        const std::string &label,
+                                        std::optional<std::string> option) {
+    TextView *text = nullptr;
+    auto *button = makeFilterButton(label, 14, &text);
+    button->setOnClickListener(
+        [this, option]() { setReplayPlayOptionFilter(option); });
+    replayPlayOptionFilterButtons.push_back({
+        .button = button,
+        .text = text,
+        .option = option,
+    });
+    return button;
+  };
+  addFilterButton(filterRow, filterIndex, 4,
+                  makePlayOptionFilterButton("All", std::nullopt));
+  for (const char *option : play_options::kPlayOptions) {
+    addFilterButton(filterRow, filterIndex, 4,
+                    makePlayOptionFilterButton(option, std::string(option)));
+  }
+
+  filterContent->addView(makeModalLabel("Score Rank"));
+  filterRow = nullptr;
+  filterIndex = 0;
+  auto makeScoreRankFilterButton = [this, &makeFilterButton](
+                                       const std::string &label,
+                                       std::optional<std::string> rank) {
+    TextView *text = nullptr;
+    auto *button = makeFilterButton(label, 16, &text);
+    button->setOnClickListener(
+        [this, rank]() { setReplayScoreRankFilter(rank); });
+    replayScoreRankFilterButtons.push_back({
+        .button = button,
+        .text = text,
+        .rank = rank,
+    });
+    return button;
+  };
+  addFilterButton(filterRow, filterIndex, 4,
+                  makeScoreRankFilterButton("All", std::nullopt));
+  constexpr std::array<const char *, 10> kScoreRankFilterLabels = {
+      "MAX", "MAX -", "AAA", "AA", "A", "B", "C", "D", "E", "F"};
+  for (const char *rank : kScoreRankFilterLabels) {
+    addFilterButton(filterRow, filterIndex, 4,
+                    makeScoreRankFilterButton(rank, std::string(rank)));
+  }
+
+  filterContent->addView(makeModalLabel("Sort"));
+  filterRow = nullptr;
+  filterIndex = 0;
+  auto makeSortButton = [this, &makeFilterButton](
+                            const std::string &label,
+                            ReplayRecordSortCriterion criterion) {
+    TextView *text = nullptr;
+    auto *button = makeFilterButton(label, 16, &text);
+    button->setOnClickListener(
+        [this, criterion]() { setReplaySortCriterion(criterion); });
+    replaySortButtons.push_back({
+        .button = button,
+        .text = text,
+        .criterion = criterion,
+    });
+    return button;
+  };
+  addFilterButton(filterRow, filterIndex, 2,
+                  makeSortButton("Newest", ReplayRecordSortCriterion::Newest));
+  addFilterButton(
+      filterRow, filterIndex, 2,
+      makeSortButton("Clear Mark", ReplayRecordSortCriterion::ClearMark));
+  addFilterButton(filterRow, filterIndex, 2,
+                  makeSortButton("Score", ReplayRecordSortCriterion::Score));
+  addFilterButton(
+      filterRow, filterIndex, 2,
+      makeSortButton("Max Combo", ReplayRecordSortCriterion::MaxCombo));
+
+  filterScroll->setContentView(filterContent);
+  replayFilterSortContent->addView(filterScroll);
+  replayModalContentFrame->addView(replayFilterSortContent);
+
+  replayWatchOptionsContent = new View();
+  replayWatchOptionsContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setGap(12);
+  replayWatchOptionsContent->setVisible(false);
+
+  replayWatchOptionsContent->addView(makeModalLabel("Watch Visualization"));
   auto *replayTouchRow = makeModalOptionRow(52.0f);
   auto *replayTouchLabel = makeModalLabel("Touch Points");
   replayTouchLabel->setWidth(180);
@@ -7244,7 +7467,7 @@ void MainMenuScene::buildReplayModal() {
   replayTouchRow->addView(replayTouchLabel);
   replayTouchRow->addView(replayTouchShowButton);
   replayTouchRow->addView(replayTouchHideButton);
-  replayListContent->addView(replayTouchRow);
+  replayWatchOptionsContent->addView(replayTouchRow);
   auto *replayGhostRow = makeModalOptionRow(52.0f);
   auto *replayGhostLabel = makeModalLabel("Ghosts");
   replayGhostLabel->setWidth(180);
@@ -7273,8 +7496,8 @@ void MainMenuScene::buildReplayModal() {
   replayGhostRow->addView(replayGhostLabel);
   replayGhostRow->addView(replayGhostShowButton);
   replayGhostRow->addView(replayGhostHideButton);
-  replayListContent->addView(replayGhostRow);
-  replayModalContentFrame->addView(replayListContent);
+  replayWatchOptionsContent->addView(replayGhostRow);
+  replayModalContentFrame->addView(replayWatchOptionsContent);
 
   replayExportOptionsContent = new View();
   replayExportOptionsContent->setFlexDirection(FlexDirection::Column)
@@ -7472,12 +7695,12 @@ void MainMenuScene::buildReplayModal() {
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
-  footer->setGap(12);
+  footer->setGap(8);
   footer->setHeight(58);
 
-  replayModalCloseButton =
-      makeModalButton("Close", 20, &replayModalCloseButtonText);
   replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
+  replayGBattleButton =
+      makeModalButton("G-BATTLE", 18, &replayGBattleButtonText);
   replayModalPhotoButton =
       makeModalButton("Export Photo", 18, &replayModalPhotoButtonText);
   replayModalExportButton =
@@ -7486,17 +7709,22 @@ void MainMenuScene::buildReplayModal() {
     if (replayExportInProgress.load()) {
       return;
     }
-    if (replayExportOptionsContent != nullptr &&
-        replayExportOptionsContent->getVisible()) {
-      replayModalTitleText->setText("Replay");
-      replayExportOptionsContent->setVisible(false);
+    hideReplayModal();
+  });
+  replayModalFilterButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    if (replayFilterSortContent != nullptr &&
+        replayFilterSortContent->getVisible()) {
+      replayModalTitleText->setText("Records");
+      replayFilterSortContent->setVisible(false);
       replayListContent->setVisible(true);
-      replayExportSelection.reset();
       replayListView->restoreSelection(selectedReplayIndex);
       refreshReplayModalActions();
       return;
     }
-    hideReplayModal();
+    showReplayFilterSortOptions();
   });
   replayWatchButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
@@ -7505,7 +7733,30 @@ void MainMenuScene::buildReplayModal() {
     if (!selectedReplaySummary.has_value()) {
       return;
     }
-    startReplayPlayback(replayModalChart, selectedReplaySummary->id);
+    if (replayWatchOptionsContent != nullptr &&
+        replayWatchOptionsContent->getVisible()) {
+      startReplayPlayback(replayModalChart, selectedReplaySummary->id);
+      return;
+    }
+    replayModalTitleText->setText("Watch Options");
+    replayListContent->setVisible(false);
+    replayFilterSortContent->setVisible(false);
+    replayWatchOptionsContent->setVisible(true);
+    replayExportOptionsContent->setVisible(false);
+    replayExportProgressContent->setVisible(false);
+    refreshReplayExportOptionButtons();
+    refreshReplayModalActions();
+    replayModalRoot->applyYogaLayoutFromRoot();
+  });
+  replayGBattleButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load()) {
+      return;
+    }
+    if (!selectedReplaySummary.has_value() || selectedReplayIsAutoPlay() ||
+        selectedReplayIsCourseReplay()) {
+      return;
+    }
+    startGBattlePlayback(replayModalChart, selectedReplaySummary->id);
   });
   replayModalPhotoButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
@@ -7521,6 +7772,14 @@ void MainMenuScene::buildReplayModal() {
   });
   replayModalExportButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
+      return;
+    }
+    if (replayWatchOptionsContent != nullptr &&
+        replayWatchOptionsContent->getVisible()) {
+      return;
+    }
+    if (replayFilterSortContent != nullptr &&
+        replayFilterSortContent->getVisible()) {
       return;
     }
     if (replayExportOptionsContent != nullptr &&
@@ -7552,8 +7811,8 @@ void MainMenuScene::buildReplayModal() {
     }
     showReplayExportOptions();
   });
-  footer->addView(replayModalCloseButton);
   footer->addView(replayWatchButton);
+  footer->addView(replayGBattleButton);
   footer->addView(replayModalPhotoButton);
   footer->addView(replayModalExportButton);
   panel->addView(footer);
@@ -7588,14 +7847,34 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   clearReplayModalSelection();
   selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
   selectedReplayRenderGhosts = true;
-  replayModalTitleText->setText("Replay");
+  replayRecordFilters = {};
+  replayModalTitleText->setText("Records");
   replayListContent->setVisible(true);
+  replayFilterSortContent->setVisible(false);
+  replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(false);
-  replayListView->setReplaySummaries(replaySummaries);
+  applyReplayRecordFilters(std::nullopt);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
+  refreshReplayFilterSortButtons();
   refreshReplayExportOptionButtons();
+  refreshReplayModalActions();
+  replayModalRoot->applyYogaLayoutFromRoot();
+}
+
+void MainMenuScene::showReplayFilterSortOptions() {
+  if (replayModalRoot == nullptr || replayFilterSortContent == nullptr) {
+    return;
+  }
+  replayModalTitleText->setText("Filter / Sort");
+  replayListContent->setVisible(false);
+  replayFilterSortContent->setVisible(true);
+  replayWatchOptionsContent->setVisible(false);
+  replayExportOptionsContent->setVisible(false);
+  replayExportProgressContent->setVisible(false);
+  replayExportSelection.reset();
+  refreshReplayFilterSortButtons();
   refreshReplayModalActions();
   replayModalRoot->applyYogaLayoutFromRoot();
 }
@@ -7609,6 +7888,8 @@ void MainMenuScene::showReplayExportOptions() {
   replayExportChart = replayModalChart;
   replayModalTitleText->setText("Export Options");
   replayListContent->setVisible(false);
+  replayFilterSortContent->setVisible(false);
+  replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(true);
   replayExportProgressContent->setVisible(false);
   selectedExportFps = 120;
@@ -7631,6 +7912,8 @@ void MainMenuScene::showReplayExportProgress(const std::string &title,
 
   replayModalTitleText->setText(title);
   replayListContent->setVisible(false);
+  replayFilterSortContent->setVisible(false);
+  replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(true);
   updateReplayExportProgressUi(0.0, message);
@@ -7653,6 +7936,9 @@ void MainMenuScene::hideReplayModal() {
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
   }
+  if (replayGBattleButtonText != nullptr) {
+    replayGBattleButtonText->setText("G-BATTLE");
+  }
   if (replayModalPhotoButtonText != nullptr) {
     replayModalPhotoButtonText->setText("Export Photo");
   }
@@ -7662,6 +7948,10 @@ void MainMenuScene::hideReplayModal() {
 }
 
 void MainMenuScene::refreshReplayModalActions() {
+  const bool filterSortMode = replayFilterSortContent != nullptr &&
+                              replayFilterSortContent->getVisible();
+  const bool watchOptionsMode = replayWatchOptionsContent != nullptr &&
+                                replayWatchOptionsContent->getVisible();
   const bool optionsMode = replayExportOptionsContent != nullptr &&
                            replayExportOptionsContent->getVisible();
   const bool progressMode = replayExportProgressContent != nullptr &&
@@ -7674,7 +7964,17 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool courseReplaySelection = selectedReplayIsCourseReplay();
 
   if (replayModalCloseButtonText != nullptr) {
-    replayModalCloseButtonText->setText(optionsMode ? "Back" : "Close");
+    replayModalCloseButtonText->setText(ui_icons::textForCodepoint(kIconXmark));
+  }
+  if (replayModalFilterButtonText != nullptr) {
+    replayModalFilterButtonText->setText(
+        ui_icons::textForCodepoint(kIconFilter));
+  }
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Watch");
+  }
+  if (replayGBattleButtonText != nullptr) {
+    replayGBattleButtonText->setText("G-BATTLE");
   }
   if (replayModalPhotoButtonText != nullptr) {
     replayModalPhotoButtonText->setText(
@@ -7687,43 +7987,122 @@ void MainMenuScene::refreshReplayModalActions() {
                                                           : "Export Video");
   }
 
+  if (replayModalFilterButton != nullptr) {
+    const bool filterVisible =
+        !watchOptionsMode && !optionsMode && !progressMode;
+    replayModalFilterButton->setVisible(filterVisible);
+    replayModalFilterButton->setWidth(filterVisible ? 54.0f : 0.0f);
+  }
   if (replayWatchButton != nullptr) {
-    replayWatchButton->setVisible(!optionsMode && !progressMode);
-    replayWatchButton->setWidth((optionsMode || progressMode) ? 0.0f : 160.0f);
+    replayWatchButton->setVisible(!filterSortMode && !optionsMode &&
+                                  !progressMode);
+    replayWatchButton->setWidth(progressMode || optionsMode || filterSortMode
+                                    ? 0.0f
+                                    : (watchOptionsMode ? 160.0f : 124.0f));
+  }
+  if (replayGBattleButton != nullptr) {
+    replayGBattleButton->setVisible(!filterSortMode && !watchOptionsMode &&
+                                    !optionsMode && !progressMode);
+    replayGBattleButton->setWidth((filterSortMode || watchOptionsMode ||
+                                   optionsMode || progressMode)
+                                      ? 0.0f
+                                      : 144.0f);
   }
   if (replayModalPhotoButton != nullptr) {
-    replayModalPhotoButton->setVisible(!optionsMode && !progressMode);
-    replayModalPhotoButton->setWidth((optionsMode || progressMode) ? 0.0f
-                                                                   : 160.0f);
+    replayModalPhotoButton->setVisible(!filterSortMode && !watchOptionsMode &&
+                                       !optionsMode && !progressMode);
+    replayModalPhotoButton->setWidth((filterSortMode || watchOptionsMode ||
+                                      optionsMode || progressMode)
+                                         ? 0.0f
+                                         : 142.0f);
   }
   if (replayModalExportButton != nullptr) {
-    replayModalExportButton->setVisible(!progressMode);
-    replayModalExportButton->setWidth(progressMode ? 0.0f : 160.0f);
+    replayModalExportButton->setVisible(!filterSortMode && !watchOptionsMode &&
+                                        !progressMode);
+    replayModalExportButton->setWidth(
+        (filterSortMode || watchOptionsMode || progressMode)
+            ? 0.0f
+            : (optionsMode ? 160.0f : 142.0f));
   }
+
+  const bool gbattleEnabled = hasSelection && !filterSortMode &&
+                              !watchOptionsMode && !optionsMode &&
+                              !progressMode &&
+                              !exportInProgress && !autoPlaySelection &&
+                              !courseReplaySelection;
 
   styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
                           !exportInProgress, ui_theme::control,
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
+  if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
+      filterSortMode) {
+    styleThemedActionButton(
+        replayModalFilterButton, replayModalFilterButtonText,
+        !watchOptionsMode && !optionsMode && !progressMode &&
+            !exportInProgress,
+        ui_theme::primaryAction, ui_theme::primaryActionHover,
+        ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+  } else {
+    styleThemedActionButton(
+        replayModalFilterButton, replayModalFilterButtonText,
+        !watchOptionsMode && !optionsMode && !progressMode &&
+            !exportInProgress,
+        ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
+        ui_theme::hairlineStrong);
+  }
   styleThemedActionButton(replayWatchButton, replayWatchButtonText,
-                          hasSelection && !optionsMode && !progressMode &&
-                              !exportInProgress,
+                          hasSelection && !filterSortMode && !optionsMode &&
+                              !progressMode && !exportInProgress,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(replayGBattleButton, replayGBattleButtonText,
+                          gbattleEnabled, ui_theme::warningAction,
+                          ui_theme::warningActionHover,
+                          ui_theme::warningActionPressed, ui_theme::amber);
   styleThemedActionButton(replayModalPhotoButton, replayModalPhotoButtonText,
-                          hasSelection && !optionsMode && !progressMode &&
-                              !exportInProgress && !autoPlaySelection,
+                          hasSelection && !filterSortMode &&
+                              !watchOptionsMode && !optionsMode &&
+                              !progressMode && !exportInProgress &&
+                              !autoPlaySelection,
                           ui_theme::successAction,
                           ui_theme::successActionHover,
                           ui_theme::successActionPressed, ui_theme::lime);
   styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
-                          hasSelection && !progressMode && !exportInProgress,
+                          hasSelection && !filterSortMode &&
+                              !watchOptionsMode && !progressMode &&
+                              !exportInProgress,
                           ui_theme::violetAction, ui_theme::violetActionHover,
                           ui_theme::violetActionPressed,
                           ui_theme::violetActionHover);
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayoutFromRoot();
+  }
+}
+
+void MainMenuScene::refreshReplayFilterSortButtons() {
+  for (const ReplayClearFilterButton &item : replayClearFilterButtons) {
+    styleOptionButton(item.button, item.text,
+                      item.rank == replayRecordFilters.clearMarkRank);
+  }
+  for (const ReplayOptionFilterButton &item : replayPlayOptionFilterButtons) {
+    const std::optional<std::string> normalized =
+        item.option.has_value()
+            ? std::optional<std::string>(
+                  play_options::normalizePlayOption(*item.option))
+            : std::nullopt;
+    styleOptionButton(item.button, item.text,
+                      normalized == replayRecordFilters.playOption);
+  }
+  for (const ReplayScoreRankFilterButton &item :
+       replayScoreRankFilterButtons) {
+    styleOptionButton(item.button, item.text,
+                      item.rank == replayRecordFilters.scoreRank);
+  }
+  for (const ReplaySortButton &item : replaySortButtons) {
+    styleOptionButton(item.button, item.text,
+                      item.criterion == replayRecordFilters.sort);
   }
 }
 
@@ -7824,13 +8203,75 @@ void MainMenuScene::clearReplayModalSelection() {
 
 bool MainMenuScene::selectReplayModalIndex(int index) {
   clearReplayModalSelection();
-  if (index < 0 || index >= static_cast<int>(replaySummaries.size())) {
+  if (index < 0 || index >= static_cast<int>(visibleReplaySummaries.size())) {
     return false;
   }
 
   selectedReplayIndex = index;
-  selectedReplaySummary = replaySummaries[static_cast<std::size_t>(index)];
+  selectedReplaySummary =
+      visibleReplaySummaries[static_cast<std::size_t>(index)];
   return true;
+}
+
+void MainMenuScene::applyReplayRecordFilters(
+    std::optional<int> preferredReplayId) {
+  if (!preferredReplayId.has_value() && selectedReplaySummary.has_value()) {
+    preferredReplayId = selectedReplaySummary->id;
+  }
+
+  visibleReplaySummaries =
+      replay_record_filters::apply(replaySummaries, replayRecordFilters);
+  if (replayListView != nullptr) {
+    replayListView->setReplaySummaries(visibleReplaySummaries);
+  }
+
+  clearReplayModalSelection();
+  int restoreIndex = -1;
+  if (preferredReplayId.has_value()) {
+    for (size_t i = 0; i < visibleReplaySummaries.size(); ++i) {
+      if (visibleReplaySummaries[i].id == *preferredReplayId) {
+        restoreIndex = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+  if (restoreIndex >= 0) {
+    selectReplayModalIndex(restoreIndex);
+    if (replayListView != nullptr) {
+      replayListView->restoreSelection(restoreIndex);
+    }
+  }
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::setReplayClearFilter(std::optional<int> rank) {
+  replayRecordFilters.clearMarkRank = rank;
+  applyReplayRecordFilters();
+  refreshReplayFilterSortButtons();
+}
+
+void MainMenuScene::setReplayPlayOptionFilter(
+    std::optional<std::string> option) {
+  replayRecordFilters.playOption =
+      option.has_value() ? std::optional<std::string>(
+                               play_options::normalizePlayOption(*option))
+                         : std::nullopt;
+  applyReplayRecordFilters();
+  refreshReplayFilterSortButtons();
+}
+
+void MainMenuScene::setReplayScoreRankFilter(
+    std::optional<std::string> rank) {
+  replayRecordFilters.scoreRank = rank;
+  applyReplayRecordFilters();
+  refreshReplayFilterSortButtons();
+}
+
+void MainMenuScene::setReplaySortCriterion(
+    ReplayRecordSortCriterion criterion) {
+  replayRecordFilters.sort = criterion;
+  applyReplayRecordFilters();
+  refreshReplayFilterSortButtons();
 }
 
 bool MainMenuScene::selectedReplayIsAutoPlay() const {
@@ -8022,6 +8463,90 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                                       selectedReplayRenderTouchPoints,
                                   .replayGhostRenderingEnabled =
                                       selectedReplayRenderGhosts,
+                              });
+        willStart.store(false);
+        return true;
+      },
+      0, true);
+}
+
+void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
+                                         int replayId) {
+  if (record.courseStart || replay_autoplay::isAutoPlayReplayId(replayId) ||
+      willStart.load()) {
+    return;
+  }
+
+  willStart.store(true);
+  cancelActivePreviewLoading();
+  if (replayGBattleButtonText != nullptr) {
+    replayGBattleButtonText->setText("Loading...");
+  }
+
+  const GaugeType gaugeType = selectedGaugeType;
+  const bool gaugeAutoShift = selectedGaugeAutoShift;
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+
+  defer(
+      [this, record, replayId, gaugeType, gaugeAutoShift, autoKeySound]() {
+        auto failGBattleLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          return true;
+        };
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+
+        auto replay = ReplayDBHelper::GetInstance().LoadReplay(
+            replayId, replayLoadMetaForRecord(record));
+        if (!replay.has_value() || replay->autoPlay) {
+          resetReplayWatchLoadingUi();
+          refreshReplayAvailability(&record);
+          return true;
+        }
+
+        std::atomic_bool parseCancelled = false;
+        auto preparedChart = play_options::prepareReplayChart(
+            record.meta.BmsPath, replay.value(), parseCancelled);
+        if (preparedChart == nullptr || parseCancelled) {
+          return failGBattleLoad();
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+        if (parseCancelled) {
+          return failGBattleLoad();
+        }
+
+        auto *chart = setSelectedChart(std::move(preparedChart), true, false);
+        if (chart == nullptr) {
+          return failGBattleLoad();
+        }
+
+        auto recordData =
+            std::make_shared<ReplayData>(std::move(replay.value()));
+        context.jukebox.stop();
+        hideReplayModal();
+        changeToGameplayScene(chart,
+                              {
+                                  .startPosition = 0,
+                                  .autoKeySound = autoKeySound,
+                                  .autoPlay = false,
+                                  .gaugeType = gaugeType,
+                                  .gaugeAutoShift = gaugeAutoShift,
+                                  .gbattleRecordData = recordData,
+                                  .playOption = recordData->playOption,
+                                  .playOptionSeed = recordData->playOptionSeed,
+                                  .playOption2 = recordData->playOption2,
+                                  .playOption2Seed =
+                                      recordData->playOption2Seed,
+                                  .longNoteMode =
+                                      normalizeChartLongNoteModeValue(
+                                          recordData->chartMeta.LnMode),
+                                  .assistOption = recordData->assistOption,
+                                  .pacemakerTarget = pacemaker::kTargetOff,
+                                  .replayGhostRenderingEnabled = false,
                               });
         willStart.store(false);
         return true;
@@ -8390,6 +8915,9 @@ void MainMenuScene::resetReplayWatchLoadingUi() {
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
   }
+  if (replayGBattleButtonText != nullptr) {
+    replayGBattleButtonText->setText("G-BATTLE");
+  }
 }
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
@@ -8722,7 +9250,7 @@ void MainMenuScene::applyReplayExportResult() {
   }
   if (replayExportProgressContent != nullptr &&
       replayExportProgressContent->getVisible()) {
-    replayModalTitleText->setText("Replay");
+    replayModalTitleText->setText("Records");
     replayExportProgressContent->setVisible(false);
     replayExportOptionsContent->setVisible(false);
     replayListContent->setVisible(true);
@@ -8919,6 +9447,8 @@ void MainMenuScene::cleanupScene() {
   replayModalRoot = nullptr;
   replayModalContentFrame = nullptr;
   replayListContent = nullptr;
+  replayFilterSortContent = nullptr;
+  replayWatchOptionsContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayExportProgressContent = nullptr;
   replayExportProgressTrack = nullptr;
@@ -9006,8 +9536,10 @@ void MainMenuScene::cleanupScene() {
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
   replayWatchButton = nullptr;
+  replayGBattleButton = nullptr;
   replayModalPhotoButton = nullptr;
   replayModalExportButton = nullptr;
+  replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
   replayFps120Button = nullptr;
@@ -9024,8 +9556,10 @@ void MainMenuScene::cleanupScene() {
   replayExportGhostShowButton = nullptr;
   replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
+  replayGBattleButtonText = nullptr;
   replayModalPhotoButtonText = nullptr;
   replayModalExportButtonText = nullptr;
+  replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
   replayFps120ButtonText = nullptr;
@@ -9081,6 +9615,8 @@ void MainMenuScene::cleanupScene() {
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   replaySummaries.clear();
+  visibleReplaySummaries.clear();
+  replayRecordFilters = {};
   selectedReplayIndex = -1;
   selectedReplaySummary.reset();
   replayExportSelection.reset();
@@ -9095,6 +9631,10 @@ void MainMenuScene::cleanupScene() {
   longNoteModeButtons.clear();
   assistOptionButtons.clear();
   pacemakerTargetButtons.clear();
+  replayClearFilterButtons.clear();
+  replayPlayOptionFilterButtons.clear();
+  replayScoreRankFilterButtons.clear();
+  replaySortButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
+#include "../ReplayClearMarkUtils.h"
+#include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
 #include "RecyclerView.h"
@@ -10,30 +11,8 @@
 #include "View.h"
 
 #include <functional>
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <vector>
-
-namespace replay_summary_ui {
-
-inline std::string formatGauge(float gauge) {
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(1) << gauge << "%";
-  return stream.str();
-}
-
-inline std::string gaugeLabel(GaugeType gaugeType, bool autoShift) {
-  return autoShift ? "GAS" : gaugeTypeToShortLabel(gaugeType);
-}
-
-inline std::string playOptionLabel(const ReplaySummary &summary) {
-  return play_options::formatPlayOptionLabel(
-      summary.playOption, summary.playOptionSeed, summary.playOption2,
-      summary.playOption2Seed);
-}
-
-} // namespace replay_summary_ui
 
 class ReplaySummaryListItemView : public View {
 public:
@@ -99,35 +78,15 @@ public:
                            : (summary.createdAt.empty()
                                   ? "Replay #" + std::to_string(summary.id)
                                   : summary.createdAt));
-    std::string detail = replay_summary_ui::gaugeLabel(summary.initialGaugeType,
-                                                       summary.gaugeAutoShift) +
-                         "  Gauge " +
-                         replay_summary_ui::formatGauge(summary.finalGauge) +
-                         "  Events " + std::to_string(summary.eventCount);
-    if (summary.courseReplay) {
-      detail += "  Course " + std::to_string(summary.completedCharts) + "/" +
-                std::to_string(summary.totalCharts);
-    }
-    if (summary.autoPlay) {
-      detail += "  Automated";
-    } else if (summary.touchSampleCount > 0) {
-      detail += "  Touches " + std::to_string(summary.touchSampleCount);
-    }
-    const std::string optionLabel = replay_summary_ui::playOptionLabel(summary);
-    if (!optionLabel.empty()) {
-      detail += "  " + optionLabel;
-    }
-    if (assist_options::isEnabled(summary.assistOption)) {
-      detail += "  Assist " + assist_options::normalize(summary.assistOption);
-    }
-    detailText->setText(detail);
+    detailText->setText(replay_summary_ui::detailLabel(summary));
     scoreText->setText(summary.autoPlay ? "AUTO"
                                         : std::to_string(summary.finalScore));
     rankText->setText(score_rank::labelForScore(summary.finalScore,
                                                 summary.maxScore));
 
-    if (hasClearLampColor(summary.clearType)) {
-      clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearType));
+    const int clearRank = replay_clear_mark::effectiveClearRank(summary);
+    if (hasClearLampColor(clearRank)) {
+      clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
     } else {
       clearLamp->clearBackgroundColor();
     }

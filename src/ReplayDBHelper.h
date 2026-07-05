@@ -16,11 +16,13 @@ struct ReplaySummary {
   bool gaugeAutoShift = false;
   int finalScore = 0;
   int maxScore = 0;
+  int maxCombo = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
   int eventCount = 0;
   int touchSampleCount = 0;
+  std::optional<bms_parser::ChartMeta> chartMeta;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

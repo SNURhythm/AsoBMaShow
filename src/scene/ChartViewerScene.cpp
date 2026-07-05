@@ -111,10 +111,13 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.gaugeAutoShift = replay.gaugeAutoShift;
   summary.finalScore = replay.finalScore;
   summary.maxScore = std::max(0, replay.chartMeta.TotalNotes) * 2;
+  summary.maxCombo = replay.maxCombo;
   summary.finalGauge = replay.finalGauge;
   summary.clearType = replay.clearType;
   summary.createdAt = createdAt;
   summary.eventCount = static_cast<int>(replay.events.size());
+  summary.touchSampleCount = static_cast<int>(replay.touchSamples.size());
+  summary.chartMeta = replay.chartMeta;
   summary.playOption = replay.playOption;
   summary.playOptionSeed = replay.playOptionSeed;
   summary.playOption2 = replay.playOption2;
