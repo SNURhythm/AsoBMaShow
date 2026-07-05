@@ -78,6 +78,7 @@ void SettingsScene::resetViewState() {
   visibleTimeModeText = nullptr;
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
+  prepMetronomeModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
   floatingLaneCoverModeText = nullptr;
@@ -98,6 +99,7 @@ void SettingsScene::resetViewState() {
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
+  prepMetronomeModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   floatingLaneCoverModeButton = nullptr;
@@ -1335,13 +1337,25 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
     persistSettings();
   });
   keysoundControls->addView(keysoundModeButton);
+  prepMetronomeModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  prepMetronomeModeButton =
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        prepMetronomeModeText);
+  prepMetronomeModeButton->setOnClickListener([this]() {
+    context.settings.prepMetronomeEnabled =
+        !context.settings.prepMetronomeEnabled;
+    persistSettings();
+  });
+  keysoundControls->addView(prepMetronomeModeButton);
   secondaryCards->addView(makeCard(
-      metrics, "Input Keysounds",
+      metrics, "Input Audio",
       metrics.compact
-          ? "Manual hits keep classic feedback. Auto timed follows chart "
-            "timing."
+          ? "Manual hits keep classic feedback. Prep adds count-in clicks."
           : "Keep manual key clicks for classic BMS feedback, or switch to "
-            "auto-timed playback for cleaner timing practice.",
+            "auto-timed playback for cleaner timing practice. Prep adds a "
+            "one-measure metronome before chart start.",
       keysoundControls, metrics.modeCardHeight, metrics.secondaryCardWidth));
 
   auto *notePriorityControls = new View();

@@ -239,8 +239,8 @@ int main() {
   plan = prep_metronome::buildPlan(meta, true, false, 3000000);
   ASSERT_TRUE(plan.enabled, "insane bpm plan");
   ASSERT_EQ(180.0, plan.bpm, "prevalent bpm used");
-  ASSERT_EQ(166667LL, plan.beatIntervalMicros, "rounded beat interval");
-  ASSERT_EQ(2333332LL, plan.startTimeMicros, "positive playback anchor");
+  ASSERT_EQ(333333LL, plan.beatIntervalMicros, "rounded beat interval");
+  ASSERT_EQ(1666668LL, plan.startTimeMicros, "positive playback anchor");
 
   plan = prep_metronome::buildPlan(meta, false, false, 0);
   ASSERT_TRUE(!plan.enabled, "disabled setting");
@@ -295,7 +295,7 @@ PrepMetronomePlan buildPlan(const bms_parser::ChartMeta &meta,
 } // namespace prep_metronome
 ```
 
-Create `src/PrepMetronome.cpp` to implement sane BPM range 30 to 300, BPM fallback to prevalent then 120, beat fallback to 4, and click times from `playbackAnchorMicros - leadInMicros` up to one beat before the anchor.
+Create `src/PrepMetronome.cpp` to implement sane chart BPM range 30 to 400, BPM fallback to prevalent then 120, beat fallback to 4, and click times from `playbackAnchorMicros - leadInMicros` up to one beat before the anchor. Once chart meta BPM is outside the sane range, prefer any finite positive most-prevalent BPM even if it is also outside the sane range.
 
 - [ ] **Step 4: Verify app-side tests pass**
 

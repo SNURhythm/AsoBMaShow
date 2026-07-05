@@ -176,7 +176,8 @@ private:
     float x = 0.0f;
     float y = 0.0f;
     long long eventTimeMicros = 0;
-    long long releaseTimeMicros = -1;
+    long long releaseTimeMicros = 0;
+    bool released = false;
   };
   std::unordered_map<long long, TouchPointVisual> replayActiveTouchSamples;
   std::vector<TouchPointVisual> replayReleasedTouchSamples;

@@ -160,6 +160,8 @@ void SettingsScene::refreshSettingsText() {
           context.settings.visibleTimeBpmStrategy);
   const std::string keysoundLabel =
       context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
+  const std::string prepMetronomeLabel =
+      context.settings.prepMetronomeEnabled ? "Prep On" : "Prep Off";
   const std::string bgaLabel =
       context.settings.bgaEnabled ? "Enabled" : "Disabled";
   const std::string bgaDisplayLabel =
@@ -305,6 +307,9 @@ void SettingsScene::refreshSettingsText() {
   if (keysoundModeText != nullptr) {
     keysoundModeText->setText(keysoundLabel);
   }
+  if (prepMetronomeModeText != nullptr) {
+    prepMetronomeModeText->setText(prepMetronomeLabel);
+  }
   if (notePriorityModeText != nullptr) {
     notePriorityModeText->setText(notePriorityLabel);
   }
@@ -376,6 +381,10 @@ void SettingsScene::refreshSettingsText() {
                            context.settings.inputKeysoundEnabled
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Warning);
+  applySemanticButtonStyle(prepMetronomeModeButton, prepMetronomeModeText,
+                           context.settings.prepMetronomeEnabled
+                               ? SettingsButtonTone::Success
+                               : SettingsButtonTone::Info);
   applySemanticButtonStyle(notePriorityModeButton, notePriorityModeText,
                            context.settings.notePriorityMode ==
                                    AppSettings::NotePriorityMode::Lowest
