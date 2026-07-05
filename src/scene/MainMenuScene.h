@@ -460,6 +460,7 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
+  std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
   bool chartFilterPanelVisible = false;
   bool chartSortPanelVisible = false;
@@ -658,6 +659,7 @@ private:
   void refreshPacemakerTargetButtons();
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
+  void refreshSelectedChartActionState();
   EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;
   bool currentPlayOptionSelectionAllowed(const std::string &option) const;
   bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;

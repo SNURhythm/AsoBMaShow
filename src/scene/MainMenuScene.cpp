@@ -2379,6 +2379,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox = nullptr;
   chartFilterPanel = nullptr;
   chartSortPanel = nullptr;
+  selectedChartRecord.reset();
   chartFilterButton = nullptr;
   chartFilterButtonText = nullptr;
   chartSortButton = nullptr;
@@ -2668,6 +2669,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                               int idx) {
     if (willStart.load())
       return;
+    selectedChartRecord = item;
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
     if (selectedView) {
@@ -3167,21 +3169,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (willStart.load()) {
       return;
     }
-    auto selected = recyclerView->selectedIndex;
+    const auto selectedRecord = selectedRecordSnapshot();
     if (activeFolder.type == LibraryFolderItem::Type::Course &&
-        (selected < 0 || selected >= recyclerView->size() ||
-         recyclerView->get(selected).courseStart)) {
+        (!selectedRecord.has_value() || selectedRecord->courseStart)) {
       startSelectedCourse();
       return;
     }
-    if (selected >= 0 && selected < recyclerView->size()) {
-      const auto &selectedMeta = recyclerView->get(selected);
-      if (selectedMeta.solidArchive || selectedMeta.unavailable ||
-          selectedMeta.meta.BmsPath.empty()) {
-        return;
-      }
-      startSelectedChart();
+    if (!selectedRecord.has_value() || selectedRecord->solidArchive ||
+        selectedRecord->unavailable || selectedRecord->meta.BmsPath.empty()) {
+      return;
     }
+    startSelectedChart();
   });
   replayButtonSlot = new View();
   replayButtonSlot->setWidth(220)->setHeight(0);
@@ -3202,21 +3200,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
-    auto selected = recyclerView->selectedIndex;
-    if (selected < 0 || selected >= recyclerView->size()) {
+    const auto selectedMeta = selectedRecordSnapshot();
+    if (!selectedMeta.has_value()) {
       return;
     }
-    const auto &selectedMeta = recyclerView->get(selected);
     const bool courseStartReplay =
-        selectedMeta.courseStart &&
+        selectedMeta->courseStart &&
         activeFolder.type == LibraryFolderItem::Type::Course &&
         activeFolder.courseId > 0;
-    if (selectedMeta.solidArchive || selectedMeta.unavailable ||
-        (!courseStartReplay && selectedMeta.meta.BmsPath.empty())) {
+    if (selectedMeta->solidArchive || selectedMeta->unavailable ||
+        (!courseStartReplay && selectedMeta->meta.BmsPath.empty())) {
       return;
     }
 
-    showReplayListModal(selectedMeta);
+    showReplayListModal(*selectedMeta);
   });
   replayButtonSlot->addView(replayButton);
 
@@ -4105,14 +4102,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
-  int dbCount = 0;
-  if (!preserveViewState || previousSelectedPath.empty()) {
-    refreshReplayAvailability(nullptr);
-    refreshPlayOptionButtons();
-    refreshLongNoteModeButtons();
-    refreshAssistOptionButtons();
-  }
-  dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
+  int dbCount = ChartDBHelper::GetInstance().CountChartMeta(db, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(db, query, dbCount, std::move(leadingRecord));
@@ -4123,9 +4113,9 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
-  refreshStartButtonForActiveFolder();
-  if (!preserveViewState && activeFolder.type == LibraryFolderItem::Type::Course &&
-      count > 0) {
+  refreshSelectedChartActionState();
+  if (!selectedChartRecord.has_value() && !preserveViewState &&
+      activeFolder.type == LibraryFolderItem::Type::Course && count > 0) {
     recyclerView->selectedIndex = 0;
     if (recyclerView->onSelected) {
       recyclerView->onSelected(recyclerView->get(0), 0);
@@ -4177,12 +4167,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
-  if (restoredSelectedIndex < 0 && !previousSelectedPath.empty()) {
-    refreshReplayAvailability(nullptr);
-    setPlayableChartActionsVisible(false);
-    setUnzipButtonVisible(false);
-    setFindBmsButtonVisible(false);
-  }
+  refreshSelectedChartActionState();
   recyclerView->rebindVisibleItems();
 }
 
@@ -4433,11 +4418,48 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
 }
 
 std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const {
+  if (selectedChartRecord.has_value()) {
+    return selectedChartRecord;
+  }
   if (recyclerView == nullptr || recyclerView->selectedIndex < 0 ||
       recyclerView->selectedIndex >= recyclerView->size()) {
     return std::nullopt;
   }
   return recyclerView->get(recyclerView->selectedIndex);
+}
+
+void MainMenuScene::refreshSelectedChartActionState() {
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value()) {
+    refreshReplayAvailability(nullptr);
+    setPlayableChartActionsVisible(false);
+    setUnzipButtonVisible(false);
+    setFindBmsButtonVisible(false);
+    refreshStartButtonForActiveFolder();
+    return;
+  }
+
+  refreshReplayAvailability(&*record);
+  if (record->courseStart) {
+    const bool currentCourseStart =
+        activeFolder.type == LibraryFolderItem::Type::Course &&
+        activeFolder.courseId > 0;
+    setPlayableChartActionsVisible(currentCourseStart, false);
+    refreshUnzipButtonForSelection(nullptr);
+    setFindBmsButtonVisible(false);
+    refreshStartButtonForActiveFolder();
+    return;
+  }
+
+  setPlayableChartActionsVisible(!record->unavailable &&
+                                 !record->solidArchive &&
+                                 !record->meta.BmsPath.empty());
+  refreshUnzipButtonForSelection(&*record);
+  setFindBmsButtonVisible(
+      record->unavailable && !record->solidArchive &&
+      (!record->meta.SHA256.empty() || !record->meta.MD5.empty() ||
+       !record->meta.Title.empty()));
+  refreshStartButtonForActiveFolder();
 }
 
 MainMenuScene::EffectivePlayOptionSelection
@@ -4788,13 +4810,10 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
     startButtonText->setText("Start");
     return;
   }
-  if (recyclerView != nullptr && recyclerView->selectedIndex >= 0 &&
-      recyclerView->selectedIndex < recyclerView->size()) {
-    const auto &selectedRecord = recyclerView->get(recyclerView->selectedIndex);
-    if (!selectedRecord.courseStart) {
-      startButtonText->setText("Start");
-      return;
-    }
+  const auto selectedRecord = selectedRecordSnapshot();
+  if (selectedRecord.has_value() && !selectedRecord->courseStart) {
+    startButtonText->setText("Start");
+    return;
   }
 
   const CourseValidationCache &validation = courseValidationForActiveFolder();
@@ -5002,17 +5021,15 @@ void MainMenuScene::startSelectedChart() {
     return;
   }
 
-  int selected = recyclerView != nullptr ? recyclerView->selectedIndex : -1;
-  if (recyclerView == nullptr || selected < 0 ||
-      selected >= recyclerView->size()) {
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value()) {
     return;
   }
-  const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.solidArchive || record.unavailable ||
-      record.meta.BmsPath.empty()) {
+  if (record->solidArchive || record->unavailable ||
+      record->meta.BmsPath.empty()) {
     return;
   }
-  startChartDirect(record);
+  startChartDirect(*record);
 }
 
 void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
@@ -5173,17 +5190,16 @@ void MainMenuScene::openChartViewerForSelection() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value()) {
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.solidArchive || record.unavailable ||
-      record.meta.BmsPath.empty()) {
+  if (record->solidArchive || record->unavailable ||
+      record->meta.BmsPath.empty()) {
     return;
   }
-  openChartViewerDirect(record);
+  openChartViewerDirect(*record);
 }
 
 void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
@@ -5213,20 +5229,20 @@ void MainMenuScene::revealSelectedChartInFileManager() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value()) {
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
-  if (record.unavailable || record.meta.BmsPath.empty()) {
+  if (record->unavailable || record->meta.BmsPath.empty()) {
     return;
   }
 
   std::string errorMessage;
-  if (!revealPathInFileManager(record.meta.BmsPath, errorMessage)) {
+  if (!revealPathInFileManager(record->meta.BmsPath, errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
-            fspath_to_utf8(record.meta.BmsPath).c_str(), errorMessage.c_str());
+            fspath_to_utf8(record->meta.BmsPath).c_str(),
+            errorMessage.c_str());
   }
 }
 
@@ -9771,6 +9787,7 @@ void MainMenuScene::cleanupScene() {
   ClearIOSFolderAccess();
 #endif
   stopAndClearSelectedChart();
+  selectedChartRecord.reset();
   ChartDBHelper::GetInstance().Close(db);
   db = nullptr;
   recyclerView = nullptr;
