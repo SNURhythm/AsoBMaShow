@@ -4,6 +4,7 @@
 
 #include "GamePlayScene.h"
 #include "GamePlayTiming.h"
+#include "../../GBattleMode.h"
 #include "../../PlayOptionUtils.h"
 #include "../../PrepMetronome.h"
 #include "../../ReplayDBHelper.h"
@@ -207,6 +208,20 @@ std::string gameplayPlayOptionLabel(const StartOptions &options) {
       seed2 = options.replayData->playOption2Seed;
     }
   }
+  if (options.gbattleRecordData != nullptr) {
+    if (!option.has_value()) {
+      option = options.gbattleRecordData->playOption;
+    }
+    if (!seed.has_value()) {
+      seed = options.gbattleRecordData->playOptionSeed;
+    }
+    if (!option2.has_value()) {
+      option2 = options.gbattleRecordData->playOption2;
+    }
+    if (!seed2.has_value()) {
+      seed2 = options.gbattleRecordData->playOption2Seed;
+    }
+  }
 
   const std::string label =
       play_options::formatPlayOptionLabel(option, seed, option2, seed2);
@@ -224,6 +239,14 @@ bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
     }
     if (!option2.has_value()) {
       option2 = options.replayData->playOption2;
+    }
+  }
+  if (options.gbattleRecordData != nullptr) {
+    if (!option.has_value()) {
+      option = options.gbattleRecordData->playOption;
+    }
+    if (!option2.has_value()) {
+      option2 = options.gbattleRecordData->playOption2;
     }
   }
 
@@ -253,6 +276,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   retryOptions.startPosition = 0;
   retryOptions.autoPlay = false;
   retryOptions.replayData = nullptr;
+  retryOptions.gbattleRecordData = nullptr;
   retryOptions.playOption.reset();
   retryOptions.playOptionSeed.reset();
   retryOptions.playOption2.reset();
@@ -267,6 +291,14 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
     }
     if (!playOption2.has_value()) {
       playOption2 = sourceOptions.replayData->playOption2;
+    }
+  }
+  if (sourceOptions.gbattleRecordData != nullptr) {
+    if (!playOption.has_value()) {
+      playOption = sourceOptions.gbattleRecordData->playOption;
+    }
+    if (!playOption2.has_value()) {
+      playOption2 = sourceOptions.gbattleRecordData->playOption2;
     }
   }
 
@@ -322,7 +354,9 @@ void GamePlayScene::init() {
   if (chart != nullptr) {
     const int replayLongNoteMode =
         options.replayData != nullptr ? options.replayData->chartMeta.LnMode
-                                      : 0;
+        : (options.gbattleRecordData != nullptr
+               ? options.gbattleRecordData->chartMeta.LnMode
+               : 0);
     applyEffectiveLongNoteModeToChart(
         *chart, replayLongNoteMode > 0 ? replayLongNoteMode
                                        : options.longNoteMode);
@@ -582,8 +616,8 @@ void GamePlayScene::reset() {
       startPositionMicros);
   const auto prepPlan = prep_metronome::buildPlan(
       *chart, prepMetronomeEnabled, false, audioSeekPosition);
-  context.jukebox.schedule(*chart, options.autoKeySound && !isReplayPlayback(),
-                           isCancelled, practiceKeySoundCutoff,
+  context.jukebox.schedule(*chart, options.autoKeySound, isCancelled,
+                           practiceKeySoundCutoff,
                            prepPlan.enabled ? &prepPlan : nullptr);
   context.jukebox.play(prepPlan.enabled ? prepPlan.startTimeMicros
                                         : audioSeekPosition);
@@ -823,8 +857,20 @@ void GamePlayScene::configurePacemakerTarget() {
 
   const std::string selected =
       pacemaker::normalizeTargetId(options.pacemakerTarget);
-  if (chart == nullptr || selected == pacemaker::kTargetOff ||
-      options.autoPlay || options.practiceMode || isCoursePlayback()) {
+  if (chart == nullptr || options.autoPlay || options.practiceMode ||
+      isCoursePlayback()) {
+    renderer->setPacemakerTarget(activePacemakerTarget);
+    return;
+  }
+
+  if (options.gbattleRecordData != nullptr) {
+    activePacemakerTarget =
+        gbattle::targetFromRecord(*chart, *options.gbattleRecordData);
+    renderer->setPacemakerTarget(activePacemakerTarget);
+    return;
+  }
+
+  if (selected == pacemaker::kTargetOff) {
     renderer->setPacemakerTarget(activePacemakerTarget);
     return;
   }

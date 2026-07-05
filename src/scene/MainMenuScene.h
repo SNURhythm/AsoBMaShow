@@ -251,6 +251,7 @@ private:
   View *replayModalRoot = nullptr;
   View *replayModalContentFrame = nullptr;
   View *replayListContent = nullptr;
+  View *replayWatchOptionsContent = nullptr;
   View *replayExportOptionsContent = nullptr;
   View *replayExportProgressContent = nullptr;
   View *replayExportProgressTrack = nullptr;
@@ -339,6 +340,7 @@ private:
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
+  Button *replayGBattleButton = nullptr;
   Button *replayModalPhotoButton = nullptr;
   Button *replayModalExportButton = nullptr;
   Button *replayModalCloseButton = nullptr;
@@ -357,6 +359,7 @@ private:
   Button *replayExportGhostShowButton = nullptr;
   Button *replayExportGhostHideButton = nullptr;
   TextView *replayWatchButtonText = nullptr;
+  TextView *replayGBattleButtonText = nullptr;
   TextView *replayModalPhotoButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
@@ -712,6 +715,7 @@ private:
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
   void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,

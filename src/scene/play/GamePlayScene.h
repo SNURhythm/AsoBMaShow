@@ -28,6 +28,7 @@ struct StartOptions {
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   bool gaugeAutoShift = false;
   std::shared_ptr<ReplayData> replayData = nullptr;
+  std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
