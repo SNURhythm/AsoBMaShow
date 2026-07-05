@@ -237,5 +237,29 @@ int main() {
   ASSERT_EQ(std::string("4"), *filters.difficultyMaxLevel,
             "difficulty max swaps to match current table order");
 
+  filters = {};
+  filters.difficultyMinLevel = "4";
+  filters.difficultyMaxLevel = "5";
+  std::optional<int> activeDifficultyTableId = 10;
+  ASSERT_FALSE(chart_record_filters::resetDifficultyRangeOnTableChange(
+                   filters, activeDifficultyTableId, 10),
+               "same difficulty table keeps range");
+  ASSERT_TRUE(filters.difficultyMinLevel.has_value(),
+              "same difficulty table keeps min");
+  ASSERT_TRUE(filters.difficultyMaxLevel.has_value(),
+              "same difficulty table keeps max");
+
+  ASSERT_TRUE(chart_record_filters::resetDifficultyRangeOnTableChange(
+                  filters, activeDifficultyTableId, 11),
+              "different difficulty table resets range");
+  ASSERT_FALSE(filters.difficultyMinLevel.has_value(),
+               "different difficulty table clears min");
+  ASSERT_FALSE(filters.difficultyMaxLevel.has_value(),
+               "different difficulty table clears max");
+  ASSERT_TRUE(activeDifficultyTableId.has_value(),
+              "different difficulty table stores active table");
+  ASSERT_EQ(11, *activeDifficultyTableId,
+            "different difficulty table active id");
+
   return 0;
 }

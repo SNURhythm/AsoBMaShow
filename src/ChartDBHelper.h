@@ -43,7 +43,6 @@ struct ChartMetaQuery {
   int courseId = 0;
   int courseTableId = 0;
   std::string courseGroupName;
-  std::string difficultyText;
   bool clearMarkFilter = false;
   int clearMarkRank = -1;
   bool clearMarkOrAbove = false;

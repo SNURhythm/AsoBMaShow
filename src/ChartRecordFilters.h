@@ -126,6 +126,18 @@ inline void normalizeDifficultyRange(
   }
 }
 
+inline bool resetDifficultyRangeOnTableChange(
+    ChartRecordFilters &filters, std::optional<int> &activeTableId,
+    int tableId) {
+  if (activeTableId.has_value() && *activeTableId == tableId) {
+    return false;
+  }
+  activeTableId = tableId;
+  filters.difficultyMinLevel.reset();
+  filters.difficultyMaxLevel.reset();
+  return true;
+}
+
 inline void setDifficultyMinLevel(
     ChartRecordFilters &filters,
     const std::vector<DifficultyLevelInfo> &levels,

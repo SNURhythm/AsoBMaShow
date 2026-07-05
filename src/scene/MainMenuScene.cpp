@@ -2377,7 +2377,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
-  difficultyFilterBox = nullptr;
   chartFilterPanel = nullptr;
   chartSortPanel = nullptr;
   chartFilterButton = nullptr;
@@ -2988,24 +2987,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   searchBox->onSubmit(onSearchChanged);
   filterRow->addView(searchBox);
 
-  difficultyFilterBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
-  difficultyFilterBox->setText(difficultyText);
-  difficultyFilterBox->setHeight(56);
-  difficultyFilterBox->setWidth(180);
-  difficultyFilterBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);
-  difficultyFilterBox->setCornerRadius(ui_theme::controlRadius());
-  difficultyFilterBox->setThemedBorderColor(ui_theme::hairlineSubtle);
-  difficultyFilterBox->setBorderWidth(1);
-  difficultyFilterBox->setVAlign(TextView::MIDDLE);
-  difficultyFilterBox->setThemedColor(ui_theme::textPrimary);
-  auto onDifficultyChanged = [this](const std::string &text) {
-    difficultyText = text;
-    reloadChartList();
-  };
-  difficultyFilterBox->onTextChanged(onDifficultyChanged);
-  difficultyFilterBox->onSubmit(onDifficultyChanged);
-  filterRow->addView(difficultyFilterBox);
-
   chartFilterButton =
       makeModalIconButton(kIconFilter, 20, &chartFilterButtonText);
   chartFilterButton->setWidth(56);
@@ -3027,7 +3008,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(chartSortButton);
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  filterLabel->setText("Search / Difficulty / Filter / Sort");
+  filterLabel->setText("Search / Filter / Sort");
   filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
@@ -3725,7 +3706,6 @@ void MainMenuScene::refreshFavoriteFolderCount() {
 ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   ChartMetaQuery query;
   query.keyword = searchText;
-  query.difficultyText = difficultyText;
   query.selectedLongNoteMode = long_note_mode::valueFromId(selectedLnMode);
 
   switch (activeFolder.type) {
@@ -3816,6 +3796,7 @@ void MainMenuScene::setChartSortPanelVisible(bool visible) {
 }
 
 void MainMenuScene::refreshChartFilterPanel() {
+  const bool difficultyRangeEnabled = chartDifficultyRangeEnabled();
   const auto levels = chartFilterDifficultyLevels();
   const std::optional<int> folderClearMarkRank =
       activeFolder.clearMarkFolder
@@ -3842,9 +3823,18 @@ void MainMenuScene::refreshChartFilterPanel() {
     chartDifficultyMinDropdownOpen = false;
     chartDifficultyMaxDropdownOpen = false;
   }
-  if (chartDifficultyRangeEnabled()) {
+  if (difficultyRangeEnabled) {
+    const bool difficultyTableChanged =
+        chart_record_filters::resetDifficultyRangeOnTableChange(
+            chartRecordFilters, chartDifficultyRangeTableId,
+            activeFolder.tableId);
+    if (difficultyTableChanged) {
+      chartDifficultyMinDropdownOpen = false;
+      chartDifficultyMaxDropdownOpen = false;
+    }
     normalizeDifficultyFilterRange(chartRecordFilters, levels);
   } else {
+    chartDifficultyRangeTableId.reset();
     chartRecordFilters.difficultyMinLevel.reset();
     chartRecordFilters.difficultyMaxLevel.reset();
     chartDifficultyMinDropdownOpen = false;
@@ -3863,7 +3853,7 @@ void MainMenuScene::refreshChartFilterPanel() {
         .effectiveClearMarkRank = effectiveClearMarkRank,
         .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
         .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
-        .difficultyRangeEnabled = chartDifficultyRangeEnabled(),
+        .difficultyRangeEnabled = difficultyRangeEnabled,
         .difficultyMinDropdownOpen = chartDifficultyMinDropdownOpen,
         .difficultyMaxDropdownOpen = chartDifficultyMaxDropdownOpen,
         .difficultyLevels = levels,
@@ -3872,7 +3862,7 @@ void MainMenuScene::refreshChartFilterPanel() {
   if (chartSortPanel != nullptr) {
     chartSortPanel->refresh({
         .sort = chartRecordFilters.sort,
-        .difficultySortEnabled = chartDifficultyRangeEnabled(),
+        .difficultySortEnabled = difficultyRangeEnabled,
     }, chartSortPanelVisible);
   }
   refreshChartFilterButtons();
@@ -4850,7 +4840,7 @@ void MainMenuScene::startSelectedCourse() {
       if (dbIndex >= 0) {
         visibleMissingIndex = dbIndex + 1;
       }
-    } else if (searchText.empty() && difficultyText.empty()) {
+    } else if (searchText.empty()) {
       visibleMissingIndex = firstMissingIndex + 1;
     }
     if (visibleMissingIndex >= 0) {
@@ -9788,7 +9778,6 @@ void MainMenuScene::cleanupScene() {
   rootLayout = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
-  difficultyFilterBox = nullptr;
   startButton = nullptr;
   chartActionsRow = nullptr;
   replayButtonSlot = nullptr;

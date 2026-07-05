@@ -231,7 +231,6 @@ private:
   View *rootLayout = nullptr;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
-  TextInputBox *difficultyFilterBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
   ChartSortPanelView *chartSortPanel = nullptr;
   Button *chartFilterButton = nullptr;
@@ -461,7 +460,6 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
-  std::string difficultyText;
   ChartRecordFilters chartRecordFilters;
   bool chartFilterPanelVisible = false;
   bool chartSortPanelVisible = false;
@@ -471,6 +469,7 @@ private:
   bool chartScoreRankDropdownOpen = false;
   bool chartDifficultyMinDropdownOpen = false;
   bool chartDifficultyMaxDropdownOpen = false;
+  std::optional<int> chartDifficultyRangeTableId;
   std::vector<ReplaySummary> replaySummaries;
   std::vector<ReplaySummary> visibleReplaySummaries;
   ReplayRecordFilters replayRecordFilters;

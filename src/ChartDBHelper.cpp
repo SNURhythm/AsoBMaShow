@@ -321,17 +321,6 @@ void bindChartFavoriteDeleteIdentity(sqlite3_stmt *stmt,
   bindSqliteText(stmt, 3, identity.md5);
 }
 
-std::string normalizedDifficultyText(const std::string &difficultyText) {
-  return lowerCopy(trimCopy(difficultyText));
-}
-
-void bindDifficultySearchText(sqlite3_stmt *stmt, int &bindIndex,
-                              const std::string &difficultyText) {
-  const std::string difficulty = normalizedDifficultyText(difficultyText);
-  bindSqliteText(stmt, bindIndex++, difficulty);
-  bindSqliteText(stmt, bindIndex++, "%" + difficulty + "%");
-}
-
 std::string jsonValueToString(const json &value,
                               const std::string &fallback = "") {
   if (value.is_string()) {
@@ -1110,7 +1099,6 @@ int levelOrderFor(const std::unordered_map<std::string, int> &orderByLevel,
 bool queryNeedsDifficultyTableSchema(const ChartMetaQuery &query) {
   return query.tableId > 0 || query.coursesOnly || query.courseId > 0 ||
          query.courseTableId > 0 || !query.courseGroupName.empty() ||
-         !query.difficultyText.empty() ||
          query.difficultyMinLevel.has_value() ||
          query.difficultyMaxLevel.has_value();
 }
@@ -2037,36 +2025,6 @@ void appendChartMetaFilters(std::string &query,
     query += "))";
   }
 
-  if (!chartQuery.difficultyText.empty()) {
-    const char *difficultyClause =
-        "AND (lower(dt_filter.symbol || dte_filter.level) = @difficulty "
-        "OR lower(dte_filter.level) = @difficulty "
-        "OR lower(dt_filter.name || ' ' || dt_filter.symbol || "
-        "dte_filter.level) LIKE @difficulty_like "
-        "OR lower(dt_filter.name || ' ' || dte_filter.level) LIKE "
-        "@difficulty_like)";
-    query += " AND (cm.sha256 IN (SELECT ";
-    query += storedHashColumn("dte_filter", "sha256");
-    query += " FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE ";
-    query += sqlHashColumnHasValue("dte_filter", "sha256");
-    query += " ";
-    query += difficultyClause;
-    query += ") OR cm.md5 IN (SELECT ";
-    query += storedHashColumn("dte_filter", "md5");
-    query += " FROM "
-             "difficulty_table_entries dte_filter "
-             "JOIN difficulty_tables dt_filter ON dt_filter.id = "
-             "dte_filter.table_id "
-             "WHERE ";
-    query += sqlHashColumnHasValue("dte_filter", "md5");
-    query += " ";
-    query += difficultyClause;
-    query += "))";
-  }
   appendBpmFilters(query, "cm", chartQuery);
   appendChartScoreRankFilter(query, "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
@@ -2104,9 +2062,6 @@ void bindChartMetaFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
       bindSqliteText(stmt, bindIndex++, chartQuery.courseGroupName);
     }
   }
-  if (!chartQuery.difficultyText.empty()) {
-    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
-  }
   bindCommonChartFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
@@ -2125,14 +2080,6 @@ void appendDifficultyEntryFilters(std::string &query,
     query += kDifficultyEntrySearchText;
     query += " LIKE @text";
   }
-  if (!chartQuery.difficultyText.empty()) {
-    query +=
-        " AND (lower(dt.symbol || dte.level) = @difficulty "
-        "OR lower(dte.level) = @difficulty "
-        "OR lower(dt.name || ' ' || dt.symbol || dte.level) LIKE "
-        "@difficulty_like "
-        "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
-  }
   appendDifficultyLevelRangeFilter(query, chartQuery);
   appendBpmFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dte", "cm", chartQuery);
@@ -2150,9 +2097,6 @@ void bindDifficultyEntryFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
   }
   if (!chartQuery.keyword.empty()) {
     bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
   }
   if (chartQuery.difficultyMinLevel.has_value()) {
     bindSqliteText(stmt, bindIndex++, *chartQuery.difficultyMinLevel);
@@ -2184,18 +2128,6 @@ void appendDifficultyCourseEntryFilters(std::string &query,
     query += kDifficultyCourseEntrySearchText;
     query += " LIKE @text";
   }
-  if (!chartQuery.difficultyText.empty()) {
-    query +=
-        " AND (lower(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0')) = "
-        "@difficulty "
-        "OR lower(dt.symbol || dte.level) = @difficulty "
-        "OR lower(dce.level) = @difficulty "
-        "OR lower(dte.level) = @difficulty "
-        "OR lower(dt.symbol || dc.level) = @difficulty "
-        "OR lower(dc.level) = @difficulty "
-        "OR lower(dc.name) LIKE @difficulty_like "
-        "OR lower(dc.group_name || ' ' || dc.level) LIKE @difficulty_like)";
-  }
   appendBpmFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dce", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
@@ -2217,9 +2149,6 @@ void bindDifficultyCourseEntryFilterParameters(
   }
   if (!chartQuery.keyword.empty()) {
     bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
-  }
-  if (!chartQuery.difficultyText.empty()) {
-    bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
   }
   bindCommonChartFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.clearMarkFilter) {
@@ -4052,14 +3981,10 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   }
 
   if (chartMetaQueryUsesCourseEntries(chartQuery)) {
-    const bool needsDifficultyEntryJoin =
-        !chartQuery.keyword.empty() || !chartQuery.difficultyText.empty();
+    const bool needsDifficultyEntryJoin = !chartQuery.keyword.empty();
     std::string query =
         "SELECT COUNT(*) FROM difficulty_course_entries dce "
         "JOIN difficulty_courses dc ON dc.id = dce.course_id ";
-    if (!chartQuery.difficultyText.empty()) {
-      query += "JOIN difficulty_tables dt ON dt.id = dc.table_id ";
-    }
     if (needsDifficultyEntryJoin) {
       query += "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
       query += matchedDifficultyEntryIdSubquery();
