@@ -3,7 +3,9 @@
 //
 
 #include "GamePlayScene.h"
+#include "GamePlayTiming.h"
 #include "../../PlayOptionUtils.h"
+#include "../../PrepMetronome.h"
 #include "../../ReplayDBHelper.h"
 #include "../../ResultPresentationUtils.h"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -574,13 +576,17 @@ void GamePlayScene::reset() {
       options.practiceLeadInMicros > 0 ? std::optional<long long>(
                                              startPositionMicros)
                                        : std::nullopt;
-  context.jukebox.schedule(*chart, options.autoKeySound && !isReplayPlayback(),
-                           isCancelled, practiceKeySoundCutoff);
-  context.jukebox.play();
   const long long audioSeekPosition = getAudioSeekPositionMicros();
-  if (audioSeekPosition > 0) {
-    context.jukebox.seek(audioSeekPosition);
-  }
+  const bool prepMetronomeEnabled = gameplay_timing::shouldApplyPrepMetronome(
+      context.settings.prepMetronomeEnabled, options.practiceLeadInMicros,
+      startPositionMicros);
+  const auto prepPlan = prep_metronome::buildPlan(
+      *chart, prepMetronomeEnabled, false, audioSeekPosition);
+  context.jukebox.schedule(*chart, options.autoKeySound && !isReplayPlayback(),
+                           isCancelled, practiceKeySoundCutoff,
+                           prepPlan.enabled ? &prepPlan : nullptr);
+  context.jukebox.play(prepPlan.enabled ? prepPlan.startTimeMicros
+                                        : audioSeekPosition);
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -830,7 +836,7 @@ void GamePlayScene::configurePacemakerTarget() {
     }
 
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        chart->Meta, *options.replayData, selected,
+        *chart, *options.replayData, selected,
         result_presentation::previousBestForReplayChart(chart->Meta,
                                                         *options.replayData));
     renderer->setPacemakerTarget(activePacemakerTarget);
@@ -858,8 +864,7 @@ void GamePlayScene::configurePacemakerTarget() {
         }
 
         const std::vector<int> progression =
-            pacemaker::buildReplayScoreProgression(*replay,
-                                                   chart->Meta.TotalNotes);
+            pacemaker::buildReplayScoreProgression(*chart, *replay);
         if (!progression.empty() && progression.back() == best->score) {
           bestReplay = std::move(*replay);
           break;
@@ -869,7 +874,7 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   activePacemakerTarget = pacemaker::targetFromSelection(
-      chart->Meta, selected, best,
+      *chart, selected, best,
       bestReplay.has_value() ? &bestReplay.value() : nullptr);
   renderer->setPacemakerTarget(activePacemakerTarget);
 }
@@ -1159,7 +1164,8 @@ long long GamePlayScene::getVisualOffsetMicros() const {
 }
 
 long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
-  return std::max(0LL, songTimeMicros - getVisualOffsetMicros());
+  return gameplay_timing::visualTimeMicros(songTimeMicros,
+                                           getVisualOffsetMicros());
 }
 
 void GamePlayScene::update(float dt) {

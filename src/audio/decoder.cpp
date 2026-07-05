@@ -83,13 +83,14 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   }
   // Prepare a buffer to hold the PCM data
   buffer.resize(fileInfo.frames * fileInfo.channels, 0);
+  // Read through libsndfile's floating-point path, then convert explicitly.
+  // Direct int16 reads can produce audible differences for some keysounds.
+  std::vector<double> tempBuffer(fileInfo.frames * fileInfo.channels);
   if (isCancelled) {
     return false;
   }
-  // Decode directly to the final int16 PCM buffer. This avoids a full-size
-  // double buffer allocation and a second conversion pass for every sound.
   sf_count_t numFrames =
-      sf_readf_short(fileHandle.get(), buffer.data(), fileInfo.frames);
+      sf_readf_double(fileHandle.get(), tempBuffer.data(), fileInfo.frames);
   if (isCancelled) {
     return false;
   }
@@ -99,6 +100,15 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
             sf_strerror(fileHandle.get()));
     return false;
   }
+  // Convert the double buffer to short
+  std::transform(
+      tempBuffer.begin(), tempBuffer.end(), buffer.begin(), [](double val) {
+        return static_cast<short>(std::clamp(val, -1.0, 1.0) * 32767);
+      });
+  if (isCancelled) {
+    return false;
+  }
+
   if (numFrames < fileInfo.frames) {
     SDL_Log("Failed to read all audio data from file %s, read %lld frames",
             path_t_to_utf8(displayPath).c_str(), numFrames);

@@ -20,8 +20,9 @@
 #include <stb_image.h>
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -40,6 +41,34 @@ constexpr long long kSchedulerTickMicros = 1000000LL / 8000;
 constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
 constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
     64ull * 1024ull * 1024ull;
+constexpr int kPrepMetronomeAccentWav = -100000;
+constexpr int kPrepMetronomeRegularWav = -100001;
+const path_t kPrepMetronomeAccentPath = PATH("@prep_metronome_accent");
+const path_t kPrepMetronomeRegularPath = PATH("@prep_metronome_regular");
+constexpr int kPrepMetronomeSampleRate = 48000;
+constexpr int kPrepMetronomeChannels = 2;
+constexpr double kPrepMetronomeClickSeconds = 0.045;
+constexpr double kPrepMetronomePi = 3.14159265358979323846;
+
+std::vector<short> makePrepMetronomeClick(double frequency, double amplitude) {
+  const int frames = static_cast<int>(std::lround(
+      static_cast<double>(kPrepMetronomeSampleRate) *
+      kPrepMetronomeClickSeconds));
+  std::vector<short> pcm(static_cast<size_t>(frames) *
+                         kPrepMetronomeChannels);
+  for (int frame = 0; frame < frames; ++frame) {
+    const double t = static_cast<double>(frame) /
+                     static_cast<double>(kPrepMetronomeSampleRate);
+    const double envelope = std::exp(-t * 90.0);
+    const double sample =
+        std::sin(2.0 * kPrepMetronomePi * frequency * t) * envelope * amplitude;
+    const auto value = static_cast<short>(
+        std::clamp(sample, -1.0, 1.0) * static_cast<double>(INT16_MAX));
+    pcm[static_cast<size_t>(frame) * 2] = value;
+    pcm[static_cast<size_t>(frame) * 2 + 1] = value;
+  }
+  return pcm;
+}
 
 bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
                               const ChartResourceTable &wavTable,
@@ -2607,7 +2636,9 @@ void Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
 
 void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
                        std::atomic_bool &isCancelled,
-                       std::optional<long long> noteScheduleCutoffMicros) {
+                       std::optional<long long> noteScheduleCutoffMicros,
+                       const prep_metronome::PrepMetronomePlan
+                           *prepMetronomePlan) {
   audioCursor = 0;
   audioList.clear();
   scheduleVisuals(chart, isCancelled);
@@ -2650,6 +2681,14 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
           return;
         audioList.push_back(note);
       }
+    }
+  }
+  if (prepMetronomePlan != nullptr && prepMetronomePlan->enabled) {
+    ensurePrepMetronomeSoundsLoaded();
+    for (const auto &click : prepMetronomePlan->clicks) {
+      audioList.emplace_back(click.timeMicros,
+                             click.accent ? kPrepMetronomeAccentWav
+                                          : kPrepMetronomeRegularWav);
     }
   }
   std::sort(audioList.begin(), audioList.end());
@@ -2700,6 +2739,17 @@ void Jukebox::playOverlappingAudioAt(long long micro) {
   for (auto it = overlapping.rbegin(); it != overlapping.rend(); ++it) {
     audio.playSound(it->first, it->second);
   }
+}
+
+void Jukebox::ensurePrepMetronomeSoundsLoaded() {
+  audio.loadGeneratedSound(kPrepMetronomeAccentPath,
+                           makePrepMetronomeClick(1760.0, 0.65),
+                           kPrepMetronomeChannels, kPrepMetronomeSampleRate);
+  audio.loadGeneratedSound(kPrepMetronomeRegularPath,
+                           makePrepMetronomeClick(1100.0, 0.5),
+                           kPrepMetronomeChannels, kPrepMetronomeSampleRate);
+  wavTableAbs[kPrepMetronomeAccentWav] = kPrepMetronomeAccentPath;
+  wavTableAbs[kPrepMetronomeRegularWav] = kPrepMetronomeRegularPath;
 }
 
 void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
@@ -2818,18 +2868,34 @@ void Jukebox::renderVisualsAt(long long micro) {
   render();
 }
 
-void Jukebox::play() {
+void Jukebox::play(long long startMicros) {
   std::lock_guard<std::mutex> lock(playThreadLock);
   if (playThread.joinable())
     playThread.join();
   audio.stopSounds();
   isPlaying = true;
   stopwatch->reset();
-  audio.seekClock(0);
+  audio.seekClock(startMicros);
   {
     std::lock_guard<std::mutex> lock(seekLock);
     audioCursor = 0;
+    bmpCursor = 0;
+    bmpLayerCursor = 0;
+    const long long bgaTimelineMicro = getBgaTimelineMicros(startMicros);
+    while (audioCursor < audioList.size() &&
+           audioList[audioCursor].first < startMicros) {
+      audioCursor++;
+    }
     scheduleAudioFromCursor();
+    playOverlappingAudioAt(startMicros);
+    while (bmpCursor < bmpList.size() &&
+           bmpList[bmpCursor].first < bgaTimelineMicro) {
+      bmpCursor++;
+    }
+    while (bmpLayerCursor < bmpLayerList.size() &&
+           bmpLayerList[bmpLayerCursor].first < bgaTimelineMicro) {
+      bmpLayerCursor++;
+    }
   }
   audio.startDevice();
   stopwatch->start();

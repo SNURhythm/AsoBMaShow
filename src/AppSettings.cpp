@@ -608,6 +608,8 @@ bool AppSettings::save() const {
        << "\n";
   file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
        << "\n";
+  file << "prep_metronome_enabled="
+       << (sanitized.prepMetronomeEnabled ? 1 : 0) << "\n";
   file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
        << "\n";
   file << "touch_visualization_enabled="
@@ -725,6 +727,11 @@ AppSettings AppSettings::load() {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {
           settings.inputKeysoundEnabled = parsed;
+        }
+      } else if (key == "prep_metronome_enabled") {
+        bool parsed = settings.prepMetronomeEnabled;
+        if (parseBool(value, parsed)) {
+          settings.prepMetronomeEnabled = parsed;
         }
       } else if (key == "show_invisible_notes") {
         bool parsed = settings.showInvisibleNotes;

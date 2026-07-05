@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../ScoreDBHelper.h"
 #include "RhythmState.h"
@@ -10,6 +11,8 @@
 #include <cctype>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace pacemaker {
@@ -60,6 +63,62 @@ inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event) {
   return event.action == ReplayEventAction::Press ||
          event.action == ReplayEventAction::Release ||
          event.action == ReplayEventAction::Miss;
+}
+
+inline std::string replayNoteKey(int lane, long long noteTimeMicros) {
+  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
+}
+
+inline std::unordered_map<std::string, bms_parser::Note *>
+buildReplayNoteLookup(bms_parser::Chart &chart) {
+  std::unordered_map<std::string, bms_parser::Note *> lookup;
+  for (const auto &measure : chart.Measures) {
+    for (const auto &timeline : measure->TimeLines) {
+      for (auto *note : timeline->Notes) {
+        if (note != nullptr) {
+          lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        }
+      }
+      for (auto *note : timeline->LandmineNotes) {
+        if (note != nullptr) {
+          lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
+        }
+      }
+    }
+  }
+  return lookup;
+}
+
+inline bms_parser::Note *findReplayNote(
+    const std::unordered_map<std::string, bms_parser::Note *> &lookup,
+    const ReplayEvent &event) {
+  if (event.noteTimeMicros < 0) {
+    return nullptr;
+  }
+  const auto it = lookup.find(replayNoteKey(event.lane, event.noteTimeMicros));
+  return it == lookup.end() ? nullptr : it->second;
+}
+
+inline bool replayEventCountsAsPlayedNote(
+    bms_parser::Chart &chart,
+    const std::unordered_map<std::string, bms_parser::Note *> &lookup,
+    const ReplayEvent &event) {
+  if (!replayEventCountsAsPlayedNote(event)) {
+    return false;
+  }
+  if (event.action != ReplayEventAction::Press) {
+    return true;
+  }
+
+  const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  auto *note = findReplayNote(lookup, event);
+  if (note == nullptr || !note->IsLongNote()) {
+    return true;
+  }
+
+  auto *longNote = static_cast<bms_parser::LongNote *>(note);
+  return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
+         effectiveLongNoteIsCharge(longNote, chart);
 }
 
 inline std::string normalizeTargetId(std::string value) {
@@ -159,9 +218,38 @@ inline std::vector<int> buildReplayScoreProgression(const ReplayData &replay,
   return progression;
 }
 
+inline std::vector<int> buildReplayScoreProgression(bms_parser::Chart &chart,
+                                                    const ReplayData &replay) {
+  const int totalNotes = std::max(0, chart.Meta.TotalNotes);
+  if (totalNotes <= 0) {
+    return {};
+  }
+
+  const auto lookup = buildReplayNoteLookup(chart);
+  std::vector<int> progression(static_cast<std::size_t>(totalNotes) + 1U, 0);
+  int played = 0;
+  for (const ReplayEvent &event : replay.events) {
+    if (!replayEventCountsAsPlayedNote(chart, lookup, event)) {
+      continue;
+    }
+    ++played;
+    if (played > totalNotes) {
+      return {};
+    }
+    progression[static_cast<std::size_t>(played)] =
+        std::max(0, event.score);
+  }
+
+  if (played != totalNotes) {
+    return {};
+  }
+  return progression;
+}
+
 inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
                                      const ScoreBestSnapshot &best,
                                      const ReplayData *replay = nullptr) {
+  (void)replay;
   const int totalNotes = std::max(0, meta.TotalNotes);
   const int fallbackMaxScore = totalNotes * 2;
   Target target;
@@ -170,20 +258,22 @@ inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
   target.finalScore = std::max(0, best.score);
   target.maxScore = best.maxScore > 0 ? best.maxScore : fallbackMaxScore;
   target.totalNotes = totalNotes;
+  return target;
+}
 
-  if (!target.enabled) {
+inline Target targetFromBestSnapshot(bms_parser::Chart &chart,
+                                     const ScoreBestSnapshot &best,
+                                     const ReplayData *replay = nullptr) {
+  Target target = targetFromBestSnapshot(chart.Meta, best);
+  if (!target.enabled || replay == nullptr || replay->finalScore != best.score) {
     return target;
   }
 
-  if (replay != nullptr && replay->finalScore == best.score) {
-    std::vector<int> progression =
-        buildReplayScoreProgression(*replay, totalNotes);
-    if (!progression.empty() && progression.back() == target.finalScore) {
-      target.usesReplayProgression = true;
-      target.scoreAfterNotes = std::move(progression);
-    }
+  std::vector<int> progression = buildReplayScoreProgression(chart, *replay);
+  if (!progression.empty() && progression.back() == target.finalScore) {
+    target.usesReplayProgression = true;
+    target.scoreAfterNotes = std::move(progression);
   }
-
   return target;
 }
 
@@ -247,6 +337,23 @@ inline Target targetFromSelection(const bms_parser::ChartMeta &meta,
   }
   if (best.has_value()) {
     return targetFromBestSnapshot(meta, *best, bestReplay);
+  }
+  return {};
+}
+
+inline Target targetFromSelection(bms_parser::Chart &chart,
+                                  const std::string &targetId,
+                                  const std::optional<ScoreBestSnapshot> &best,
+                                  const ReplayData *bestReplay = nullptr) {
+  const std::string normalized = normalizeTargetId(targetId);
+  if (normalized == kTargetOff) {
+    return {};
+  }
+  if (targetIsGrade(normalized)) {
+    return targetFromGrade(chart.Meta, normalized);
+  }
+  if (best.has_value()) {
+    return targetFromBestSnapshot(chart, *best, bestReplay);
   }
   return {};
 }

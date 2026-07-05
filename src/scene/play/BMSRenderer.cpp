@@ -3,6 +3,8 @@
 //
 
 #include "BMSRenderer.h"
+#include "GamePlayTiming.h"
+#include "TouchVisualizationTiming.h"
 
 #include "../../CoursePlaySession.h"
 #include "GameplayGeometry.h"
@@ -1807,7 +1809,10 @@ double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
   if (timelineIt == timelines.begin()) {
     const auto *timeline = timelines.front();
     if (timeline->Timing <= 0) {
-      return timelineScrollPositions.front();
+      return timelineScrollPositions.front() -
+             gameplay_timing::leadInBeatDistance(timeline->Timing, timeMicros,
+                                                 timeline->Bpm) *
+                 timeline->Scroll;
     }
     const double progress =
         std::clamp(static_cast<double>(timeMicros) /
@@ -1992,7 +1997,8 @@ void BMSRenderer::applyTouchSample(
   switch (sample.action) {
   case ReplayTouchAction::Down:
   case ReplayTouchAction::Move:
-    visual.releaseTimeMicros = -1;
+    visual.releaseTimeMicros = 0;
+    visual.released = false;
     activeTouches[sample.fingerId] = visual;
     break;
   case ReplayTouchAction::Up:
@@ -2002,9 +2008,11 @@ void BMSRenderer::applyTouchSample(
       visual = it->second;
       visual.eventTimeMicros = sample.songTimeMicros;
       visual.releaseTimeMicros = sample.songTimeMicros;
+      visual.released = true;
       activeTouches.erase(it);
     } else {
       visual.releaseTimeMicros = sample.songTimeMicros;
+      visual.released = true;
     }
     visual.x = std::clamp(sample.x, 0.0f, 1.0f);
     visual.y = std::clamp(sample.y, 0.0f, 1.0f);
@@ -2036,9 +2044,11 @@ void BMSRenderer::pruneReleasedTouchSamples(
   releasedTouches.erase(
       std::remove_if(releasedTouches.begin(), releasedTouches.end(),
                      [currentTimeMicros](const TouchPointVisual &sample) {
-                       return sample.releaseTimeMicros >= 0 &&
-                              currentTimeMicros - sample.releaseTimeMicros >
-                                  kTouchPointReleaseLingerMicros;
+                       return touch_visualization_timing::
+                           shouldPruneReleasedTouch(
+                               sample.released, sample.releaseTimeMicros,
+                               currentTimeMicros,
+                               kTouchPointReleaseLingerMicros);
                      }),
       releasedTouches.end());
 }
@@ -2046,9 +2056,10 @@ void BMSRenderer::pruneReleasedTouchSamples(
 void BMSRenderer::drawTouchSample(const TouchPointVisual &sample,
                                   long long currentTimeMicros) {
   float releaseProgress = 0.0f;
-  if (sample.releaseTimeMicros >= 0) {
+  if (sample.released) {
     const long long elapsedMicros =
-        std::max(0LL, currentTimeMicros - sample.releaseTimeMicros);
+        touch_visualization_timing::releaseElapsedMicros(
+            sample.released, sample.releaseTimeMicros, currentTimeMicros);
     if (elapsedMicros > kTouchPointReleaseLingerMicros) {
       return;
     }
@@ -2070,7 +2081,7 @@ void BMSRenderer::drawTouchSample(const TouchPointVisual &sample,
       std::clamp(baseRadius, kTouchPointMinRadius, kTouchPointMaxRadius) *
       (1.0f + pulseProgress * kTouchPointReleasePulseScale);
   const float alphaScale =
-      sample.releaseTimeMicros >= 0 ? (1.0f - releaseProgress) : 1.0f;
+      sample.released ? (1.0f - releaseProgress) : 1.0f;
   const uint8_t outerAlpha = scaledAlpha(86, alphaScale);
   const uint8_t innerAlpha = scaledAlpha(112, alphaScale * alphaScale);
   if (outerAlpha > 0) {
@@ -2210,8 +2221,14 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                rxhs;
         }
       } else {
-        y += timeLine->BeatPosition * (timeLine->Timing - micro) /
-             timeLine->Timing * rxhs;
+        if (timeLine->Timing > 0) {
+          y += timeLine->BeatPosition * (timeLine->Timing - micro) /
+               timeLine->Timing * rxhs;
+        } else {
+          y += static_cast<float>(gameplay_timing::leadInBeatDistance(
+                                      timeLine->Timing, micro, timeLine->Bpm) *
+                                  timeLine->Scroll * rxhs);
+        }
       }
 
       if (timeLine->IsFirstInMeasure) {

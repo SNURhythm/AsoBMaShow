@@ -91,6 +91,7 @@ private:
   TextView *visibleTimeModeText = nullptr;
   TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
+  TextView *prepMetronomeModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
   TextView *touchVisualizationModeText = nullptr;
   TextView *floatingLaneCoverModeText = nullptr;
@@ -111,6 +112,7 @@ private:
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
+  Button *prepMetronomeModeButton = nullptr;
   Button *showInvisibleNotesModeButton = nullptr;
   Button *touchVisualizationModeButton = nullptr;
   Button *floatingLaneCoverModeButton = nullptr;

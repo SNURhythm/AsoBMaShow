@@ -471,3 +471,14 @@ install(DIRECTORY assets DESTINATION bin)
 add_subdirectory(bgfx)
 add_subdirectory(src)
 add_subdirectory(yoga)
+
+option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
+if (ASOBMASHOW_BUILD_TESTS)
+    add_executable(prep_metronome_tests
+        tests/prep_metronome_tests.cpp
+        src/PrepMetronome.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(prep_metronome_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(prep_metronome_tests PRIVATE cxx_std_23)
+endif()

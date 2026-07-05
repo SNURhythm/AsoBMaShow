@@ -947,6 +947,21 @@ bool AudioWrapper::loadSoundFromMemory(
                           sfInfo.samplerate, isCancelled);
 }
 
+bool AudioWrapper::loadGeneratedSound(const path_t &path,
+                                      std::vector<short> pcmData,
+                                      int channels, int sampleRate) {
+  {
+    std::lock_guard<std::mutex> lock(soundDataListMutex);
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+  }
+
+  std::atomic_bool isCancelled = false;
+  return loadDecodedSound(path, std::move(pcmData), channels, sampleRate,
+                          isCancelled);
+}
+
 bool AudioWrapper::loadDecodedSound(const path_t &path,
                                     std::vector<short> pcmData, int channels,
                                     int sampleRate,

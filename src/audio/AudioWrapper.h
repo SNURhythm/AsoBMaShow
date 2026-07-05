@@ -174,6 +174,8 @@ public:
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
                            std::atomic<bool> &isCancelled);
+  bool loadGeneratedSound(const path_t &path, std::vector<short> pcmData,
+                          int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
   bool playSound(const path_t &path, long long startOffsetMicros = 0);

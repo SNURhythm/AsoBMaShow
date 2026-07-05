@@ -1,5 +1,6 @@
 #pragma once
 #include "../bms_parser.hpp"
+#include "../PrepMetronome.h"
 #include "AudioWrapper.h"
 #include <array>
 #include <thread>
@@ -60,11 +61,13 @@ public:
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
                 std::atomic_bool &isCancelled,
                 std::optional<long long> noteScheduleCutoffMicros =
-                    std::nullopt);
+                    std::nullopt,
+                const prep_metronome::PrepMetronomePlan *prepMetronomePlan =
+                    nullptr);
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
-  void play();
+  void play(long long startMicros = 0);
   void stop();
   void render();
   bool hasActiveVisuals() const;
@@ -161,6 +164,7 @@ private:
       std::atomic_bool &isCancelled);
   void scheduleAudioFromCursor();
   void playOverlappingAudioAt(long long micro);
+  void ensurePrepMetronomeSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
   [[nodiscard]] long long getBgaOffsetMicros() const;
