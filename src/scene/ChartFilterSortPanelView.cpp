@@ -437,10 +437,10 @@ void ChartFilterPanelView::buildStaticContent() {
 void ChartFilterPanelView::refresh(const State &state, bool open) {
   currentState = state;
   if (bpmMinBox != nullptr && bpmMinBox->getText() != state.bpmMinText) {
-    bpmMinBox->setText(state.bpmMinText);
+    bpmMinBox->setEditingText(state.bpmMinText);
   }
   if (bpmMaxBox != nullptr && bpmMaxBox->getText() != state.bpmMaxText) {
-    bpmMaxBox->setText(state.bpmMaxText);
+    bpmMaxBox->setEditingText(state.bpmMaxText);
   }
   refreshDropdowns(state);
   refreshRangeButtons(state);
@@ -653,22 +653,15 @@ void ChartSortPanelView::buildContent() {
     return item;
   };
 
-  addGridCell(makeSortButton("Default", ChartRecordSortCriterion::Default).cell);
-  addGridCell(
-      makeSortButton("Clear Mark", ChartRecordSortCriterion::ClearMark).cell);
-  addGridCell(makeSortButton("Score", ChartRecordSortCriterion::Score).cell);
-  addGridCell(
-      makeSortButton("Max Combo", ChartRecordSortCriterion::MaxCombo).cell);
-  addGridCell(makeSortButton("Title", ChartRecordSortCriterion::Title).cell);
-  addGridCell(makeSortButton("Min BPM", ChartRecordSortCriterion::MinBpm).cell);
-  addGridCell(makeSortButton("Max BPM", ChartRecordSortCriterion::MaxBpm).cell);
-  addGridCell(
-      makeSortButton("Main BPM", ChartRecordSortCriterion::MainBpm).cell);
-  const SortButton difficulty =
-      makeSortButton("Difficulty", ChartRecordSortCriterion::Difficulty);
-  difficultySortCell = difficulty.cell;
-  difficultySortButton = difficulty.button;
-  addGridCell(difficultySortCell);
+  for (const auto &option : kSortOptions) {
+    const SortButton sortButton =
+        makeSortButton(option.label, option.criterion);
+    if (option.criterion == ChartRecordSortCriterion::Difficulty) {
+      difficultySortCell = sortButton.cell;
+      difficultySortButton = sortButton.button;
+    }
+    addGridCell(sortButton.cell);
+  }
   setDisplayed(difficultySortCell, false);
   setDisplayed(difficultySortButton, false);
 }

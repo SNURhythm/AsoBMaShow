@@ -173,6 +173,21 @@ inline std::string matchedChartPathSubquery(
   return query;
 }
 
+inline std::string defaultChartMetaBeforeTargetPredicate(
+    std::string_view chartAlias, std::string_view targetAlias) {
+  const std::string chartText(chartAlias);
+  const std::string targetText(targetAlias);
+  const std::string chartTitle = chartText + ".title";
+  const std::string targetTitle = targetText + ".target_title";
+  return "((" + targetTitle + " IS NOT NULL AND " + chartTitle +
+         " IS NULL) OR (" + targetTitle + " IS NOT NULL AND " + chartTitle +
+         " IS NOT NULL AND " + chartTitle + " COLLATE NOCASE < " +
+         targetTitle + " COLLATE NOCASE) OR ((" + chartTitle +
+         " COLLATE NOCASE = " + targetTitle + " COLLATE NOCASE OR (" +
+         chartTitle + " IS NULL AND " + targetTitle + " IS NULL)) AND " +
+         chartText + ".path < " + targetText + ".target_path))";
+}
+
 inline std::string preferredChartPredicate(
     std::string_view alias, std::string_view chartMetaTable = kChartMetaTable) {
   const std::string aliasText(alias);

@@ -206,6 +206,8 @@ public:
   static uint64_t addTemporaryEventListener(TemporaryEventListener listener);
   static void removeTemporaryEventListener(uint64_t listenerId);
   static void dispatchTemporaryEventListeners(SDL_Event &event);
+  static void deferAfterEvent(std::function<void()> callback);
+  static void dispatchDeferredEventCallbacks();
 
   virtual inline void onLayout() {};
 
@@ -526,6 +528,7 @@ private:
   inline static std::unordered_set<View *> dirtyRoots;
   inline static std::vector<TemporaryEventListenerEntry>
       temporaryEventListeners;
+  inline static std::vector<std::function<void()>> deferredEventCallbacks;
   inline static uint64_t nextTemporaryEventListenerId = 1;
   inline static bool dispatchingTemporaryEventListeners = false;
   std::string name;

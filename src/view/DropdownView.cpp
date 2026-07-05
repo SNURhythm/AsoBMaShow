@@ -23,6 +23,27 @@ constexpr float kIndicatorWidth = 5.0f;
 constexpr float kTriggerIndicatorHeight = 26.0f;
 constexpr float kOptionIndicatorHeight = 28.0f;
 
+class ScopedBoolFlag {
+public:
+  explicit ScopedBoolFlag(bool &flag) : flag(flag) { flag = true; }
+  ~ScopedBoolFlag() { flag = false; }
+
+private:
+  bool &flag;
+};
+
+bool colorsEqual(const std::optional<Color> &lhs,
+                 const std::optional<Color> &rhs) {
+  if (lhs.has_value() != rhs.has_value()) {
+    return false;
+  }
+  if (!lhs.has_value()) {
+    return true;
+  }
+  return lhs->r == rhs->r && lhs->g == rhs->g && lhs->b == rhs->b &&
+         lhs->a == rhs->a;
+}
+
 void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   if (button == nullptr || text == nullptr) {
     return;
@@ -90,6 +111,13 @@ DropdownView::DropdownView(Callbacks callbacks)
   buildView();
 }
 
+DropdownView::~DropdownView() {
+  if (lifetimeToken) {
+    *lifetimeToken = false;
+  }
+  pendingRefresh.reset();
+}
+
 void DropdownView::buildView() {
   triggerButton = new Button(0, 0, 160, static_cast<int>(kTriggerHeight));
   triggerButton->setHeight(kTriggerHeight);
@@ -153,11 +181,26 @@ void DropdownView::buildView() {
 }
 
 void DropdownView::refresh(const State &state) {
-  current = state;
-  if (current.maxVisibleItems <= 0) {
-    current.maxVisibleItems = 1;
+  State next = state;
+  if (next.maxVisibleItems <= 0) {
+    next.maxVisibleItems = 1;
   }
-  rebuildOptions();
+
+  if (dispatchingOptionCallback && refreshRequiresOptionRebuild(next)) {
+    pendingRefresh = std::move(next);
+    scheduleDeferredRefresh();
+    return;
+  }
+
+  applyRefresh(std::move(next));
+}
+
+void DropdownView::applyRefresh(State state) {
+  const bool rebuild = !optionsMatch(state.options);
+  current = std::move(state);
+  if (rebuild) {
+    rebuildOptions();
+  }
   refreshVisualState();
   updateMenuPlacement();
 }
@@ -201,6 +244,7 @@ void DropdownView::rebuildOptions() {
       if (!current.enabled) {
         return;
       }
+      ScopedBoolFlag dispatching(dispatchingOptionCallback);
       if (callbacks.onOptionSelected) {
         callbacks.onOptionSelected(id);
       }
@@ -306,6 +350,27 @@ void DropdownView::updateMenuPlacement() {
   placementUpdating = false;
 }
 
+void DropdownView::scheduleDeferredRefresh() {
+  if (deferredRefreshScheduled) {
+    return;
+  }
+  deferredRefreshScheduled = true;
+  std::weak_ptr<bool> aliveToken = lifetimeToken;
+  View::deferAfterEvent([this, aliveToken]() {
+    const auto alive = aliveToken.lock();
+    if (!alive || !*alive) {
+      return;
+    }
+    deferredRefreshScheduled = false;
+    if (!pendingRefresh.has_value()) {
+      return;
+    }
+    State next = std::move(*pendingRefresh);
+    pendingRefresh.reset();
+    applyRefresh(std::move(next));
+  });
+}
+
 std::string DropdownView::selectedLabel() const {
   for (const auto &option : current.options) {
     if (option.id == current.selectedId) {
@@ -323,6 +388,26 @@ std::optional<Color> DropdownView::selectedLeadingColor() const {
     }
   }
   return std::nullopt;
+}
+
+bool DropdownView::optionsMatch(const std::vector<Option> &options) const {
+  if (current.options.size() != options.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < options.size(); ++i) {
+    const auto &currentOption = current.options[i];
+    const auto &nextOption = options[i];
+    if (currentOption.id != nextOption.id ||
+        currentOption.label != nextOption.label ||
+        !colorsEqual(currentOption.leadingColor, nextOption.leadingColor)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool DropdownView::refreshRequiresOptionRebuild(const State &state) const {
+  return !optionsMatch(state.options);
 }
 
 bool DropdownView::pointInsideOpenArea(float uiX, float uiY) const {

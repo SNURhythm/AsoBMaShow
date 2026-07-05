@@ -195,6 +195,17 @@ int main() {
   ASSERT_EQ(120.0, *query.bpmMin, "normalized bpm min query value");
   ASSERT_EQ(220.0, *query.bpmMax, "normalized bpm max query value");
 
+  filters = {};
+  filters.bpmMin = 220.0;
+  filters.bpmMax = 120.0;
+  std::string bpmMinText = "220";
+  std::string bpmMaxText = "120";
+  chart_record_filters::normalizeBpmRange(filters, bpmMinText, bpmMaxText);
+  ASSERT_EQ(120.0, *filters.bpmMin, "normalized bpm min value with text");
+  ASSERT_EQ(220.0, *filters.bpmMax, "normalized bpm max value with text");
+  ASSERT_EQ(std::string("120"), bpmMinText, "normalized bpm min text");
+  ASSERT_EQ(std::string("220"), bpmMaxText, "normalized bpm max text");
+
   const std::vector<DifficultyLevelInfo> difficultyLevels = {
       {.level = "4"}, {.level = "5"}, {.level = "6"}};
 

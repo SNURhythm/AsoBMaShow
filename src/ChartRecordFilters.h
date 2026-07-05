@@ -36,7 +36,6 @@ defaultDirectionFor(ChartRecordSortCriterion criterion) {
   case ChartRecordSortCriterion::Default:
   case ChartRecordSortCriterion::ClearMark:
   case ChartRecordSortCriterion::Score:
-  case ChartRecordSortCriterion::MaxCombo:
   case ChartRecordSortCriterion::MaxBpm:
     return ChartRecordSortDirection::Descending;
   }
@@ -70,11 +69,23 @@ inline bool hasActiveCriteria(const ChartRecordFilters &filters) {
          filters.sort.criterion != ChartRecordSortCriterion::Default;
 }
 
-inline void normalizeBpmRange(ChartRecordFilters &filters) {
+inline bool normalizeBpmRange(ChartRecordFilters &filters) {
   if (filters.bpmMin.has_value() && filters.bpmMax.has_value() &&
       *filters.bpmMin > *filters.bpmMax) {
     std::swap(filters.bpmMin, filters.bpmMax);
+    return true;
   }
+  return false;
+}
+
+inline bool normalizeBpmRange(ChartRecordFilters &filters,
+                              std::string &bpmMinText,
+                              std::string &bpmMaxText) {
+  const bool swapped = normalizeBpmRange(filters);
+  if (swapped) {
+    std::swap(bpmMinText, bpmMaxText);
+  }
+  return swapped;
 }
 
 inline std::optional<size_t>

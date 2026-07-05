@@ -314,6 +314,25 @@ void View::dispatchTemporaryEventListeners(SDL_Event &event) {
   eraseInactiveTemporaryEventListeners();
 }
 
+void View::deferAfterEvent(std::function<void()> callback) {
+  if (callback) {
+    deferredEventCallbacks.push_back(std::move(callback));
+  }
+}
+
+void View::dispatchDeferredEventCallbacks() {
+  if (deferredEventCallbacks.empty()) {
+    return;
+  }
+  auto callbacks = std::move(deferredEventCallbacks);
+  deferredEventCallbacks.clear();
+  for (auto &callback : callbacks) {
+    if (callback) {
+      callback();
+    }
+  }
+}
+
 View *View::setWidth(float width) {
   YGNodeStyleSetWidth(node, width);
   requestLayoutIfDirty();

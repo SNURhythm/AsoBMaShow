@@ -28,5 +28,19 @@ static_assert(std::is_same_v<decltype(DropdownView::refreshIndicator(
                                  std::declval<View *>(),
                                  std::declval<const std::optional<Color> &>())),
                              bool>);
+static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
+                                           .pendingRefresh),
+                             std::optional<DropdownView::State>>);
+static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
+                                           .dispatchingOptionCallback),
+                             bool>);
+static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
+                                           .deferredRefreshScheduled),
+                             bool>);
+static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
+                                           .optionsMatch(
+                                               std::declval<const std::vector<
+                                                   DropdownView::Option> &>())),
+                             bool>);
 
 int main() { return 0; }

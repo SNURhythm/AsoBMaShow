@@ -4,6 +4,7 @@
 #include "../ChartDBHelper.h"
 #include "../view/View.h"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
@@ -97,6 +98,22 @@ public:
   void refresh(const State &state, bool open);
 
 private:
+  struct SortOptionDefinition {
+    const char *label = "";
+    ChartRecordSortCriterion criterion = ChartRecordSortCriterion::Default;
+  };
+
+  inline static constexpr std::array<SortOptionDefinition, 8> kSortOptions = {{
+      {.label = "Default", .criterion = ChartRecordSortCriterion::Default},
+      {.label = "Clear Mark", .criterion = ChartRecordSortCriterion::ClearMark},
+      {.label = "Score", .criterion = ChartRecordSortCriterion::Score},
+      {.label = "Title", .criterion = ChartRecordSortCriterion::Title},
+      {.label = "Min BPM", .criterion = ChartRecordSortCriterion::MinBpm},
+      {.label = "Max BPM", .criterion = ChartRecordSortCriterion::MaxBpm},
+      {.label = "Main BPM", .criterion = ChartRecordSortCriterion::MainBpm},
+      {.label = "Difficulty", .criterion = ChartRecordSortCriterion::Difficulty},
+  }};
+
   struct SortButton {
     View *cell = nullptr;
     Button *button = nullptr;

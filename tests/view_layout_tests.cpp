@@ -230,6 +230,20 @@ void testWrappedGridRowsKeepColumnMeasurements() {
 } // namespace
 
 int main() {
+  bool deferredRan = false;
+  View::deferAfterEvent([&]() { deferredRan = true; });
+  assert(!deferredRan);
+  View::dispatchDeferredEventCallbacks();
+  assert(deferredRan);
+  bool nestedDeferredRan = false;
+  View::deferAfterEvent([&]() {
+    View::deferAfterEvent([&]() { nestedDeferredRan = true; });
+  });
+  View::dispatchDeferredEventCallbacks();
+  assert(!nestedDeferredRan);
+  View::dispatchDeferredEventCallbacks();
+  assert(nestedDeferredRan);
+
   View root(0, 0, 300, 100);
   root.setFlexDirection(FlexDirection::Row);
   root.setAlignItems(YGAlignFlexStart);

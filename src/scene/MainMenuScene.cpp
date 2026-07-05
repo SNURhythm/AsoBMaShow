@@ -3945,7 +3945,8 @@ void MainMenuScene::setChartScoreRankFilter(std::optional<std::string> rank) {
 void MainMenuScene::setChartBpmMinFilter(const std::string &text) {
   chartBpmMinText = text;
   chartRecordFilters.bpmMin = parseOptionalBpmFilter(text);
-  chart_record_filters::normalizeBpmRange(chartRecordFilters);
+  chart_record_filters::normalizeBpmRange(chartRecordFilters, chartBpmMinText,
+                                          chartBpmMaxText);
   reloadChartList();
   refreshChartFilterPanel();
 }
@@ -3953,7 +3954,8 @@ void MainMenuScene::setChartBpmMinFilter(const std::string &text) {
 void MainMenuScene::setChartBpmMaxFilter(const std::string &text) {
   chartBpmMaxText = text;
   chartRecordFilters.bpmMax = parseOptionalBpmFilter(text);
-  chart_record_filters::normalizeBpmRange(chartRecordFilters);
+  chart_record_filters::normalizeBpmRange(chartRecordFilters, chartBpmMinText,
+                                          chartBpmMaxText);
   reloadChartList();
   refreshChartFilterPanel();
 }
@@ -4367,8 +4369,7 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
         chartRecordFilters.clearMarkRank.has_value() ||
         chartRecordFilters.scoreRank.has_value() ||
         chartRecordFilters.sort.criterion == ChartRecordSortCriterion::ClearMark ||
-        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Score ||
-        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::MaxCombo;
+        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Score;
     if (chartListDependsOnScores) {
       reloadChartList(true);
     } else {

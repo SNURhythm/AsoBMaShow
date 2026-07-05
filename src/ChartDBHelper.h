@@ -17,7 +17,6 @@ enum class ChartRecordSortCriterion {
   Default,
   ClearMark,
   Score,
-  MaxCombo,
   Title,
   MinBpm,
   MaxBpm,

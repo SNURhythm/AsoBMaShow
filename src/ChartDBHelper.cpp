@@ -50,6 +50,7 @@ namespace {
 using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
+using asobmshow::chart_sql::defaultChartMetaBeforeTargetPredicate;
 using asobmshow::chart_sql::kChartMetaColumnCount;
 using asobmshow::chart_sql::kChartMetaSelectColumns;
 using asobmshow::chart_sql::matchedChartPathSubquery;
@@ -1642,8 +1643,7 @@ bool chartMetaQueryHasScoreFilter(const ChartMetaQuery &chartQuery) {
 
 bool chartMetaQueryNeedsBestScore(const ChartMetaQuery &chartQuery) {
   return chartMetaQueryHasScoreFilter(chartQuery) ||
-         chartQuery.sortCriterion == ChartRecordSortCriterion::Score ||
-         chartQuery.sortCriterion == ChartRecordSortCriterion::MaxCombo;
+         chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
 }
 
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
@@ -1820,22 +1820,6 @@ void appendChartMetaOrderBy(std::string &query,
         ChartRecordSortDirection::Descending);
     query += ", ";
     break;
-  case ChartRecordSortCriterion::MaxCombo:
-    query += chartClearMarkRankExpr(chartAlias, chartQuery.selectedLongNoteMode);
-    query += " DESC, ";
-    appendNullableOrderExpr(
-        query,
-        chartBestScoreExpr(chartAlias, "max_combo",
-                           chartQuery.selectedLongNoteMode),
-        direction);
-    query += ", ";
-    appendNullableOrderExpr(
-        query,
-        chartBestScoreExpr(chartAlias, "score",
-                           chartQuery.selectedLongNoteMode),
-        ChartRecordSortDirection::Descending);
-    query += ", ";
-    break;
   case ChartRecordSortCriterion::Title:
     query += chartAlias + ".title COLLATE NOCASE " + sortDirectionSql(direction) +
              ", ";
@@ -1905,23 +1889,6 @@ void appendDifficultyEntryOrderBy(std::string &query,
         ChartRecordSortDirection::Descending);
     query += ", ";
     break;
-  case ChartRecordSortCriterion::MaxCombo:
-    query += difficultyEntryClearMarkRankExpr(
-        "dte", "cm", chartQuery.selectedLongNoteMode);
-    query += " DESC, ";
-    appendNullableOrderExpr(
-        query,
-        difficultyEntryBestScoreExpr("dte", "cm", "max_combo",
-                                     chartQuery.selectedLongNoteMode),
-        direction);
-    query += ", ";
-    appendNullableOrderExpr(
-        query,
-        difficultyEntryBestScoreExpr("dte", "cm", "score",
-                                     chartQuery.selectedLongNoteMode),
-        ChartRecordSortDirection::Descending);
-    query += ", ";
-    break;
   case ChartRecordSortCriterion::Title:
     query += titleExpr + " COLLATE NOCASE " + sortDirectionSql(direction) +
              ", ";
@@ -1986,23 +1953,6 @@ void appendDifficultyCourseEntryOrderBy(std::string &query,
     appendNullableOrderExpr(
         query,
         difficultyEntryBestScoreExpr("dce", "cm", "max_combo",
-                                     chartQuery.selectedLongNoteMode),
-        ChartRecordSortDirection::Descending);
-    query += ", ";
-    break;
-  case ChartRecordSortCriterion::MaxCombo:
-    query += difficultyEntryClearMarkRankExpr(
-        "dce", "cm", chartQuery.selectedLongNoteMode);
-    query += " DESC, ";
-    appendNullableOrderExpr(
-        query,
-        difficultyEntryBestScoreExpr("dce", "cm", "max_combo",
-                                     chartQuery.selectedLongNoteMode),
-        direction);
-    query += ", ";
-    appendNullableOrderExpr(
-        query,
-        difficultyEntryBestScoreExpr("dce", "cm", "score",
                                      chartQuery.selectedLongNoteMode),
         ChartRecordSortDirection::Descending);
     query += ", ";
@@ -4339,13 +4289,9 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
         "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM target) THEN -1 ELSE "
         "(SELECT COUNT(*) FROM chart_meta cm, target WHERE 1 = 1";
     appendChartMetaFilters(query, chartQuery);
-    query +=
-        " AND ((target.target_title IS NOT NULL AND cm.title IS NULL) "
-        "OR (target.target_title IS NOT NULL AND cm.title IS NOT NULL "
-        "AND cm.title < target.target_title) "
-        "OR ((cm.title = target.target_title "
-        "OR (cm.title IS NULL AND target.target_title IS NULL)) "
-        "AND cm.path < target.target_path))) END";
+    query += " AND ";
+    query += defaultChartMetaBeforeTargetPredicate("cm", "target");
+    query += ") END";
   }
 
   SqliteStatementHandle stmt;

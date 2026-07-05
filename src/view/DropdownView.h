@@ -4,6 +4,7 @@
 #include "View.h"
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@ public:
   };
 
   explicit DropdownView(Callbacks callbacks);
+  ~DropdownView() override;
 
   void refresh(const State &state);
   void onLayout() override;
@@ -60,14 +62,22 @@ private:
   ScrollView *menuScroll = nullptr;
   View *menuContent = nullptr;
   std::vector<OptionButton> optionButtons;
+  std::optional<State> pendingRefresh;
+  std::shared_ptr<bool> lifetimeToken = std::make_shared<bool>(true);
   bool placementUpdating = false;
+  bool dispatchingOptionCallback = false;
+  bool deferredRefreshScheduled = false;
 
   void buildView();
+  void applyRefresh(State state);
   void rebuildOptions();
   void refreshVisualState();
   void updateMenuPlacement();
+  void scheduleDeferredRefresh();
   [[nodiscard]] std::string selectedLabel() const;
   [[nodiscard]] std::optional<Color> selectedLeadingColor() const;
+  [[nodiscard]] bool optionsMatch(const std::vector<Option> &options) const;
+  [[nodiscard]] bool refreshRequiresOptionRebuild(const State &state) const;
   [[nodiscard]] bool pointInsideOpenArea(float uiX, float uiY) const;
   static bool refreshIndicator(View *indicator,
                                const std::optional<Color> &color);

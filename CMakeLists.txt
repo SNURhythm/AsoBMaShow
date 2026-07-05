@@ -510,6 +510,13 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(chart_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(chart_meta_index_order_tests
+        tests/chart_meta_index_order_tests.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_meta_index_order_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_meta_index_order_tests PRIVATE cxx_std_23)
+
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
         src/bms_parser.cpp
