@@ -156,7 +156,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
   std::string currentLevel;
   std::string currentLevelKey;
   runQuery(
-      "SELECT dte.table_id, dte.level, dte.sha256, "
+      "SELECT dte.table_id, dte.level, "
+      "COALESCE(NULLIF(dte.sha256, ''), cm.sha256, ''), "
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_table_entries dte "
@@ -203,7 +204,8 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
   std::string currentCourseGroupKey;
   std::string currentCourseKey;
   runQuery(
-      "SELECT dc.id, dc.table_id, dc.group_name, dce.sha256, "
+      "SELECT dc.id, dc.table_id, dc.group_name, "
+      "COALESCE(NULLIF(dce.sha256, ''), cm.sha256, ''), "
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_courses dc "

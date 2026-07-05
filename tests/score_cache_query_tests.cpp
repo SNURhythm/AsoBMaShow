@@ -19,6 +19,12 @@
     return 1;                                                                 \
   }
 
+#define ASSERT_TRUE(value, label)                                              \
+  if (!(value)) {                                                              \
+    std::cerr << label << " expected true" << std::endl;                      \
+    return 1;                                                                 \
+  }
+
 namespace {
 
 void execOrAbort(sqlite3 *db, const std::string &sql) {
@@ -116,6 +122,26 @@ int queryInt(sqlite3 *db, const std::string &sql) {
   const int value = sqlite3_column_int(stmt, 0);
   sqlite3_finalize(stmt);
   return value;
+}
+
+bool scoreColumnExists(sqlite3 *db, const std::string &column) {
+  sqlite3_stmt *stmt = nullptr;
+  const char *sql = "PRAGMA table_info(scores)";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    std::cerr << "prepare failed: " << sqlite3_errmsg(db) << "\n" << sql
+              << std::endl;
+    std::abort();
+  }
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const unsigned char *name = sqlite3_column_text(stmt, 1);
+    if (name != nullptr &&
+        std::string(reinterpret_cast<const char *>(name)) == column) {
+      sqlite3_finalize(stmt);
+      return true;
+    }
+  }
+  sqlite3_finalize(stmt);
+  return false;
 }
 
 void insertScore(sqlite3 *db, const std::string &sha256,
@@ -291,5 +317,46 @@ int main() {
             "prepared score query database backfills summaries");
   sqlite3_close(chartDb);
   std::filesystem::remove(scoreDbPath);
+
+  const std::filesystem::path missingScoreDbPath =
+      std::filesystem::temp_directory_path() /
+      "asobmashow_missing_score_cache_query_test.sqlite";
+  std::filesystem::remove(missingScoreDbPath);
+
+  sqlite3 *missingChartDb = nullptr;
+  if (sqlite3_open(":memory:", &missingChartDb) != SQLITE_OK) {
+    std::cerr << "open missing chart db failed" << std::endl;
+    return 1;
+  }
+  const auto missingPrepareError =
+      score_cache_queries::prepareScoreQueryDatabase(missingChartDb,
+                                                     missingScoreDbPath);
+  ASSERT_FALSE(missingPrepareError.has_value(),
+               "prepare missing score query database");
+  sqlite3_close(missingChartDb);
+
+  sqlite3 *createdScoreDb = nullptr;
+  if (sqlite3_open(missingScoreDbPath.string().c_str(), &createdScoreDb) !=
+      SQLITE_OK) {
+    std::cerr << "open created score db failed" << std::endl;
+    return 1;
+  }
+  ASSERT_TRUE(scoreColumnExists(createdScoreDb, "pgreat"),
+              "created fallback score table has pgreat");
+  ASSERT_TRUE(scoreColumnExists(createdScoreDb, "fast"),
+              "created fallback score table has fast");
+  ASSERT_TRUE(
+      execSucceeds(
+          createdScoreDb,
+          "INSERT INTO scores(chart_path, chart_md5, chart_sha256, ln_mode, "
+          "chart_title, chart_artist, score, max_score, max_combo, "
+          "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
+          "final_gauge, clear_type, created_at) VALUES("
+          "'BMS/new.bms', 'new-md5', 'new-sha', 0, 'New', 'Artist', 100, "
+          "200, 50, 2, 1, 2, 3, 4, 5, 6, 7, 8, 12.5, 300, "
+          "'2026-01-05 00:00:00')"),
+      "created fallback score table accepts full score insert");
+  sqlite3_close(createdScoreDb);
+  std::filesystem::remove(missingScoreDbPath);
   return 0;
 }

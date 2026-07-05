@@ -510,6 +510,21 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(chart_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(main_menu_library_tests
+        tests/main_menu_library_tests.cpp
+        src/scene/MainMenuLibrary.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(main_menu_library_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(main_menu_library_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(main_menu_library_tests PRIVATE SDL2)
+    endif()
+
     add_executable(chart_meta_index_order_tests
         tests/chart_meta_index_order_tests.cpp
         src/sqlite3.c

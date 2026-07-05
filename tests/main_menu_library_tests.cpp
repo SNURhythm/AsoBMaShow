@@ -1,0 +1,169 @@
+#include "../src/scene/MainMenuLibrary.h"
+#include "../src/LongNoteModeUtils.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <string>
+#include <string_view>
+
+#define ASSERT_EQ(expected, actual, label)                                     \
+  if ((expected) != (actual)) {                                                \
+    std::cerr << label << " expected " << (expected) << " actual "            \
+              << (actual) << std::endl;                                       \
+    return 1;                                                                 \
+  }
+
+namespace {
+
+void execOrAbort(sqlite3 *db, const std::string &sql) {
+  char *error = nullptr;
+  if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error) != SQLITE_OK) {
+    std::cerr << "exec failed: " << (error != nullptr ? error : "") << "\n"
+              << sql << std::endl;
+    sqlite3_free(error);
+    std::abort();
+  }
+}
+
+int folderRankForLn(const main_menu_library::FolderClearDataByLongNoteMode &data,
+                    const std::string &folderKey) {
+  const auto &ranks = data.clearRanks[long_note_mode::kLnValue];
+  const auto it = ranks.find(folderKey);
+  return it == ranks.end() ? kNoClearTypeRank : it->second;
+}
+
+int folderClearCountForLn(
+    const main_menu_library::FolderClearDataByLongNoteMode &data,
+    const std::string &folderKey, int clearRank) {
+  const auto &countsByFolder = data.clearMarkCounts[long_note_mode::kLnValue];
+  const auto folderIt = countsByFolder.find(folderKey);
+  if (folderIt == countsByFolder.end()) {
+    return 0;
+  }
+  const auto countIt = folderIt->second.find(clearRank);
+  return countIt == folderIt->second.end() ? 0 : countIt->second;
+}
+
+} // namespace
+
+std::size_t TransparentStringHash::operator()(std::string_view value) const
+    noexcept {
+  return std::hash<std::string_view>{}(value);
+}
+
+int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
+                                              int longNoteMode) const {
+  const auto it = rankBySha256.find(sha256);
+  if (it == rankBySha256.end()) {
+    return kNoClearTypeRank;
+  }
+  const int mode = long_note_mode::normalizeValue(longNoteMode);
+  return it->second.ranks[static_cast<std::size_t>(mode)];
+}
+
+int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
+                                  int totalBackSpinNotes,
+                                  int selectedLongNoteMode) {
+  if (std::max(0, totalLongNotes) + std::max(0, totalBackSpinNotes) <= 0) {
+    return 0;
+  }
+  const int forcedLongNoteMode =
+      long_note_mode::normalizeValue(chartLongNoteMode);
+  if (forcedLongNoteMode > 0) {
+    return forcedLongNoteMode;
+  }
+  return long_note_mode::normalizeValue(selectedLongNoteMode);
+}
+
+int main() {
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
+    std::cerr << "open failed" << std::endl;
+    return 1;
+  }
+
+  execOrAbort(db,
+              "CREATE TABLE chart_meta ("
+              "path TEXT PRIMARY KEY,"
+              "md5 TEXT NOT NULL,"
+              "sha256 TEXT NOT NULL,"
+              "ln_mode INTEGER NOT NULL DEFAULT 0,"
+              "total_long_notes INTEGER NOT NULL DEFAULT 0,"
+              "total_backspin_notes INTEGER NOT NULL DEFAULT 0,"
+              "source_priority INTEGER,"
+              "source_archive_size INTEGER"
+              ")");
+  execOrAbort(db,
+              "CREATE TABLE difficulty_table_entries ("
+              "table_id INTEGER NOT NULL,"
+              "level TEXT NOT NULL,"
+              "sha256 TEXT NOT NULL,"
+              "md5 TEXT NOT NULL"
+              ")");
+  execOrAbort(db,
+              "CREATE TABLE difficulty_courses ("
+              "id INTEGER PRIMARY KEY,"
+              "table_id INTEGER NOT NULL,"
+              "group_name TEXT NOT NULL"
+              ")");
+  execOrAbort(db,
+              "CREATE TABLE difficulty_course_entries ("
+              "course_id INTEGER NOT NULL,"
+              "sha256 TEXT NOT NULL,"
+              "md5 TEXT NOT NULL,"
+              "sort_order INTEGER NOT NULL"
+              ")");
+
+  execOrAbort(db,
+              "INSERT INTO chart_meta(path, md5, sha256) "
+              "VALUES('charts/md5-only.bms', 'md5-local', 'sha-local')");
+  execOrAbort(db,
+              "INSERT INTO difficulty_table_entries(table_id, level, sha256, "
+              "md5) VALUES(1, '12', '', 'md5-local')");
+  execOrAbort(db,
+              "INSERT INTO difficulty_courses(id, table_id, group_name) "
+              "VALUES(10, 1, 'Courses')");
+  execOrAbort(db,
+              "INSERT INTO difficulty_course_entries(course_id, sha256, md5, "
+              "sort_order) VALUES(10, '', 'md5-local', 1)");
+
+  ScoreClearRankCache scoreRanks;
+  scoreRanks.rankBySha256["sha-local"].ranks[0] = kClearTypeHardClearRank;
+
+  const auto data =
+      main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
+
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data, main_menu_library::folderKeyForTable(1)),
+            "difficulty table folder uses matched chart sha");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data,
+                            main_menu_library::folderKeyForLevel(1, "12")),
+            "difficulty level folder uses matched chart sha");
+  ASSERT_EQ(1,
+            folderClearCountForLn(
+                data, main_menu_library::folderKeyForTable(1),
+                kClearTypeHardClearRank),
+            "difficulty table clear mark count uses matched chart sha");
+  ASSERT_EQ(1,
+            folderClearCountForLn(
+                data, main_menu_library::folderKeyForLevel(1, "12"),
+                kClearTypeHardClearRank),
+            "difficulty level clear mark count uses matched chart sha");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data,
+                            main_menu_library::folderKeyForCourseTable(1)),
+            "course table folder uses matched chart sha");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(
+                data, main_menu_library::folderKeyForCourseGroup(1, "Courses")),
+            "course group folder uses matched chart sha");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data, main_menu_library::folderKeyForCourse(10)),
+            "course folder uses matched chart sha");
+
+  sqlite3_close(db);
+  return 0;
+}
