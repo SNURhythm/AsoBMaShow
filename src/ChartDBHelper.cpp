@@ -7,6 +7,7 @@
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
+#include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include <SDL2/SDL.h>
@@ -185,7 +186,6 @@ void bumpLibraryRevision() {
 using asobmshow::bms_metadata::lowerCopy;
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::bms_metadata::trimCopy;
-using asobmshow::chart_sql::legacyBmsRelativePathExpr;
 
 std::string sqlColumn(std::string_view alias, std::string_view column) {
   return std::string(alias) + "." + std::string(column);
@@ -1454,23 +1454,16 @@ std::string scoreLongNoteModeExpr(const std::string &alias,
          alias + ".ln_mode ELSE " + selected + " END)";
 }
 
-std::string scoreRankLookupExpr(const std::string &kind,
-                                const std::string &keyExpr,
+std::string scoreRankLookupExpr(const std::string &sha256Expr,
                                 const std::string &lnModeExpr) {
-  return "(SELECT scr.rank FROM temp.score_clear_rank_cache scr WHERE "
-         "scr.kind = " +
-         kind + " AND scr.key = " + keyExpr + " AND scr.ln_mode = " +
-         lnModeExpr + " LIMIT 1)";
+  return score_cache_queries::scoreRankLookupExpr(sha256Expr, lnModeExpr);
 }
 
-std::string scoreBestLookupExpr(const std::string &kind,
-                                const std::string &keyExpr,
+std::string scoreBestLookupExpr(const std::string &sha256Expr,
                                 const std::string &lnModeExpr,
                                 const std::string &column) {
-  return "(SELECT sbc." + column +
-         " FROM temp.score_best_cache sbc WHERE sbc.kind = " + kind +
-         " AND sbc.key = " + keyExpr + " AND sbc.ln_mode = " + lnModeExpr +
-         " LIMIT 1)";
+  return score_cache_queries::scoreBestLookupExpr(sha256Expr, lnModeExpr,
+                                                  column);
 }
 
 std::string scoreRankOrderExpr(const std::string &scoreRankExpr) {
@@ -1493,14 +1486,7 @@ std::string chartClearMarkRankExpr(const std::string &alias,
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreRankLookupExpr("0", storedHashColumn(alias, "sha256"),
-                             lnModeExpr) +
-         ", " +
-         scoreRankLookupExpr("1", storedHashColumn(alias, "md5"),
-                             lnModeExpr) +
-         ", " + scoreRankLookupExpr("2", alias + ".path", lnModeExpr) + ", " +
-         scoreRankLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
-                             lnModeExpr) +
+         scoreRankLookupExpr(storedHashColumn(alias, "sha256"), lnModeExpr) +
          ", " +
          std::to_string(kNoPlayClearMarkRank) + ")";
 }
@@ -1523,20 +1509,10 @@ std::string difficultyEntryClearMarkRankExpr(
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreRankLookupExpr("0", storedHashColumn(entryAlias, "sha256"),
+         scoreRankLookupExpr(storedHashColumn(entryAlias, "sha256"),
                              lnModeExpr) +
          ", " +
-         scoreRankLookupExpr("1", storedHashColumn(entryAlias, "md5"),
-                             lnModeExpr) +
-         ", " +
-         scoreRankLookupExpr("0", storedHashColumn(chartAlias, "sha256"),
-                             lnModeExpr) +
-         ", " +
-         scoreRankLookupExpr("1", storedHashColumn(chartAlias, "md5"),
-                             lnModeExpr) +
-         ", " +
-         scoreRankLookupExpr("2", chartAlias + ".path", lnModeExpr) + ", " +
-         scoreRankLookupExpr("2", legacyBmsRelativePathExpr(chartAlias + ".path"),
+         scoreRankLookupExpr(storedHashColumn(chartAlias, "sha256"),
                              lnModeExpr) +
          ", " + std::to_string(kNoPlayClearMarkRank) + ")";
 }
@@ -1561,15 +1537,8 @@ std::string chartBestScoreExpr(const std::string &alias,
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreBestLookupExpr("0", storedHashColumn(alias, "sha256"),
-                             lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("1", storedHashColumn(alias, "md5"), lnModeExpr,
+         scoreBestLookupExpr(storedHashColumn(alias, "sha256"), lnModeExpr,
                              column) +
-         ", " + scoreBestLookupExpr("2", alias + ".path", lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
-                             lnModeExpr, column) +
          ")";
 }
 
@@ -1580,21 +1549,10 @@ std::string difficultyEntryBestScoreExpr(const std::string &entryAlias,
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
   return "COALESCE(" +
-         scoreBestLookupExpr("0", storedHashColumn(entryAlias, "sha256"),
+         scoreBestLookupExpr(storedHashColumn(entryAlias, "sha256"),
                              lnModeExpr, column) +
          ", " +
-         scoreBestLookupExpr("1", storedHashColumn(entryAlias, "md5"),
-                             lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("0", storedHashColumn(chartAlias, "sha256"),
-                             lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("1", storedHashColumn(chartAlias, "md5"),
-                             lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("2", chartAlias + ".path", lnModeExpr, column) +
-         ", " +
-         scoreBestLookupExpr("2", legacyBmsRelativePathExpr(chartAlias + ".path"),
+         scoreBestLookupExpr(storedHashColumn(chartAlias, "sha256"),
                              lnModeExpr, column) +
          ")";
 }

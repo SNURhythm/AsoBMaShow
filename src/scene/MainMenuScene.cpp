@@ -14,7 +14,7 @@
 #include "../ResultImageExporter.h"
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
-#include "../ScoreRankUtils.h"
+#include "../ScoreCacheQueries.h"
 #include "../SqliteRAII.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
@@ -4200,158 +4200,28 @@ void MainMenuScene::reloadScoreClearRanks() {
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks();
   scoreBestScores = ScoreDBHelper::GetInstance().LoadBestScores();
   scoreClearRanksRevision = ScoreDBHelper::GetInstance().GetRevision();
-  rebuildScoreClearRankTempTable();
+  prepareScoreQueryDatabase();
   folderClearData = main_menu_library::LoadFolderClearDataByLongNoteMode(
       db, scoreClearRanks);
 }
 
-void MainMenuScene::rebuildScoreClearRankTempTable() {
+void MainMenuScene::prepareScoreQueryDatabase() {
   if (db == nullptr) {
     return;
   }
 
-  auto exec = [this](const char *query, const char *context) {
-    if (const auto error = executeSqlite(db, query)) {
-      SDL_Log("SQL error while %s: %s", context, error->c_str());
-      return false;
+  const std::filesystem::path scoreDbPath =
+      Utils::GetDocumentsPath("db") / "score.db";
+  if (const auto attachError =
+          score_cache_queries::attachScoreDatabaseIfNeeded(db, scoreDbPath)) {
+    SDL_Log("SQL error while attaching score database: %s",
+            attachError->c_str());
+    if (const auto emptyError =
+            score_cache_queries::attachEmptyScoreDatabase(db)) {
+      SDL_Log("SQL error while attaching empty score database: %s",
+              emptyError->c_str());
     }
-    return true;
-  };
-
-  if (!exec("DROP TABLE IF EXISTS temp.score_clear_rank_cache",
-            "dropping score clear rank cache") ||
-      !exec("CREATE TEMP TABLE score_clear_rank_cache ("
-            "kind INTEGER NOT NULL,"
-            "key TEXT NOT NULL,"
-            "ln_mode INTEGER NOT NULL,"
-            "rank INTEGER NOT NULL,"
-            "PRIMARY KEY(kind, key, ln_mode)"
-            ") WITHOUT ROWID",
-            "creating score clear rank cache") ||
-      !exec("DROP TABLE IF EXISTS temp.score_best_cache",
-            "dropping score best cache") ||
-      !exec("CREATE TEMP TABLE score_best_cache ("
-            "kind INTEGER NOT NULL,"
-            "key TEXT NOT NULL,"
-            "ln_mode INTEGER NOT NULL,"
-            "score INTEGER NOT NULL,"
-            "max_score INTEGER NOT NULL,"
-            "max_combo INTEGER NOT NULL,"
-            "clear_rank INTEGER NOT NULL,"
-            "score_rank TEXT NOT NULL,"
-            "PRIMARY KEY(kind, key, ln_mode)"
-            ") WITHOUT ROWID",
-            "creating score best cache") ||
-      !exec("BEGIN", "starting score clear rank cache rebuild")) {
-    return;
   }
-
-  SqliteStatementHandle rankStmt;
-  const int rc = prepareSqliteStatement(
-      db,
-      "INSERT INTO temp.score_clear_rank_cache(kind, key, ln_mode, rank) "
-      "VALUES (?, ?, ?, ?)",
-      rankStmt);
-  if (rc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing score clear rank cache insert: %s",
-            sqlite3_errmsg(db));
-    exec("ROLLBACK", "rolling back score clear rank cache rebuild");
-    return;
-  }
-  SqliteStatementHandle bestStmt;
-  const int bestRc = prepareSqliteStatement(
-      db,
-      "INSERT INTO temp.score_best_cache(kind, key, ln_mode, score, max_score, "
-      "max_combo, clear_rank, score_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      bestStmt);
-  if (bestRc != SQLITE_OK) {
-    SDL_Log("SQL error while preparing score best cache insert: %s",
-            sqlite3_errmsg(db));
-    exec("ROLLBACK", "rolling back score best cache rebuild");
-    return;
-  }
-
-  auto insertRanks = [&](int kind, const ScoreRankMap &ranks) {
-    for (const auto &[key, rankByMode] : ranks) {
-      if (key.empty()) {
-        continue;
-      }
-      for (int lnMode = 0; lnMode < static_cast<int>(rankByMode.ranks.size());
-           ++lnMode) {
-        int rank = rankByMode.ranks[static_cast<size_t>(lnMode)];
-        if (lnMode == 1 && rank == kNoClearTypeRank &&
-            rankByMode.ranks[0] != kNoClearTypeRank) {
-          rank = rankByMode.ranks[0];
-        }
-        if (rank < kNoClearTypeRank) {
-          continue;
-        }
-        sqlite3_reset(rankStmt.get());
-        sqlite3_clear_bindings(rankStmt.get());
-        sqlite3_bind_int(rankStmt.get(), 1, kind);
-        bindSqliteText(rankStmt.get(), 2, key);
-        sqlite3_bind_int(rankStmt.get(), 3, lnMode);
-        sqlite3_bind_int(rankStmt.get(), 4, rank);
-        if (sqlite3_step(rankStmt.get()) != SQLITE_DONE) {
-          SDL_Log("SQL error while inserting score clear rank cache row: %s",
-                  sqlite3_errmsg(db));
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-  auto insertBestScores = [&](int kind, const ScoreBestMap &scores) {
-    for (const auto &[key, bestByMode] : scores) {
-      if (key.empty()) {
-        continue;
-      }
-      for (int lnMode = 0; lnMode < static_cast<int>(bestByMode.snapshots.size());
-           ++lnMode) {
-        std::optional<ScoreBestSnapshot> snapshot =
-            bestByMode.snapshots[static_cast<size_t>(lnMode)];
-        if (!snapshot.has_value() && lnMode == 1) {
-          snapshot = bestByMode.snapshots[0];
-        }
-        if (!snapshot.has_value()) {
-          continue;
-        }
-        const int clearRank =
-            snapshot->comboBreak == 0 &&
-                    snapshot->clearType >= kClearTypeAssistedEasyClearRank
-                ? kClearTypeFullComboRank
-                : snapshot->clearType;
-        sqlite3_reset(bestStmt.get());
-        sqlite3_clear_bindings(bestStmt.get());
-        sqlite3_bind_int(bestStmt.get(), 1, kind);
-        bindSqliteText(bestStmt.get(), 2, key);
-        sqlite3_bind_int(bestStmt.get(), 3, lnMode);
-        sqlite3_bind_int(bestStmt.get(), 4, snapshot->score);
-        sqlite3_bind_int(bestStmt.get(), 5, snapshot->maxScore);
-        sqlite3_bind_int(bestStmt.get(), 6, snapshot->maxCombo);
-        sqlite3_bind_int(bestStmt.get(), 7, clearRank);
-        bindSqliteText(bestStmt.get(), 8,
-                       score_rank::labelForScore(snapshot->score,
-                                                  snapshot->maxScore));
-        if (sqlite3_step(bestStmt.get()) != SQLITE_DONE) {
-          SDL_Log("SQL error while inserting score best cache row: %s",
-                  sqlite3_errmsg(db));
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-
-  const bool ok = insertRanks(0, scoreClearRanks.rankBySha256) &&
-                  insertRanks(1, scoreClearRanks.rankByMd5) &&
-                  insertRanks(2, scoreClearRanks.rankByPath) &&
-                  insertBestScores(0, scoreBestScores.scoreBySha256) &&
-                  insertBestScores(1, scoreBestScores.scoreByMd5) &&
-                  insertBestScores(2, scoreBestScores.scoreByPath);
-  exec(ok ? "COMMIT" : "ROLLBACK",
-       ok ? "committing score clear rank cache rebuild"
-          : "rolling back score clear rank cache rebuild");
 }
 
 void MainMenuScene::refreshScoreClearRankViews() {

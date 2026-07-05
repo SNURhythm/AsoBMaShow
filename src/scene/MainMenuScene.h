@@ -588,7 +588,7 @@ private:
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
-  void rebuildScoreClearRankTempTable();
+  void prepareScoreQueryDatabase();
   void refreshScoreClearRankViews();
   void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
