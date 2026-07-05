@@ -836,7 +836,7 @@ void GamePlayScene::configurePacemakerTarget() {
     }
 
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        chart->Meta, *options.replayData, selected,
+        *chart, *options.replayData, selected,
         result_presentation::previousBestForReplayChart(chart->Meta,
                                                         *options.replayData));
     renderer->setPacemakerTarget(activePacemakerTarget);
@@ -864,8 +864,7 @@ void GamePlayScene::configurePacemakerTarget() {
         }
 
         const std::vector<int> progression =
-            pacemaker::buildReplayScoreProgression(*replay,
-                                                   chart->Meta.TotalNotes);
+            pacemaker::buildReplayScoreProgression(*chart, *replay);
         if (!progression.empty() && progression.back() == best->score) {
           bestReplay = std::move(*replay);
           break;
@@ -875,7 +874,7 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   activePacemakerTarget = pacemaker::targetFromSelection(
-      chart->Meta, selected, best,
+      *chart, selected, best,
       bestReplay.has_value() ? &bestReplay.value() : nullptr);
   renderer->setPacemakerTarget(activePacemakerTarget);
 }
