@@ -128,14 +128,14 @@ apply(const std::vector<ReplaySummary> &summaries,
                        }
                        break;
                      case ReplayRecordSortCriterion::MaxCombo:
-                       if (aClearRank != bClearRank) {
-                         return aClearRank > bClearRank;
-                       }
                        if (a.maxCombo != b.maxCombo) {
                          return a.maxCombo > b.maxCombo;
                        }
                        if (a.finalScore != b.finalScore) {
                          return a.finalScore > b.finalScore;
+                       }
+                       if (aClearRank != bClearRank) {
+                         return aClearRank > bClearRank;
                        }
                        break;
                      case ReplayRecordSortCriterion::Newest:

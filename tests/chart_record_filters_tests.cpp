@@ -208,6 +208,8 @@ int main() {
 
   const std::vector<DifficultyLevelInfo> difficultyLevels = {
       {.level = "4"}, {.level = "5"}, {.level = "6"}};
+  const std::vector<DifficultyLevelInfo> reorderedDifficultyLevels = {
+      {.level = "5"}, {.level = "4"}, {.level = "6"}};
 
   filters = {};
   filters.difficultyMaxLevel = "4";
@@ -224,6 +226,16 @@ int main() {
             "difficulty min clamps to changed max");
   ASSERT_EQ(std::string("4"), *filters.difficultyMaxLevel,
             "difficulty max changed side wins");
+
+  filters = {};
+  filters.difficultyMinLevel = "4";
+  filters.difficultyMaxLevel = "5";
+  chart_record_filters::normalizeDifficultyRange(filters,
+                                                 reorderedDifficultyLevels);
+  ASSERT_EQ(std::string("5"), *filters.difficultyMinLevel,
+            "difficulty min swaps to match current table order");
+  ASSERT_EQ(std::string("4"), *filters.difficultyMaxLevel,
+            "difficulty max swaps to match current table order");
 
   return 0;
 }

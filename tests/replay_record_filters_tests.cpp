@@ -95,7 +95,7 @@ int main() {
       makeSummary(49, kClearTypeNormalClearRank, 900, 1000, 360),
   };
   filtered = replay_record_filters::apply(clearMarkVsMaxComboSummaries, filters);
-  ASSERT_EQ(50, filtered[0].id, "max combo sort clear mark precedence id");
+  ASSERT_EQ(49, filtered[0].id, "max combo sort combo precedence id");
 
   filters.sort = ReplayRecordSortCriterion::MaxCombo;
   std::vector<ReplaySummary> tiedMaxComboSummaries = {
@@ -104,6 +104,15 @@ int main() {
   };
   filtered = replay_record_filters::apply(tiedMaxComboSummaries, filters);
   ASSERT_EQ(52, filtered[0].id, "max combo sort score tie id");
+
+  filters.sort = ReplayRecordSortCriterion::MaxCombo;
+  std::vector<ReplaySummary> tiedMaxComboAndScoreSummaries = {
+      makeSummary(61, kClearTypeNormalClearRank, 810, 1000, 360),
+      makeSummary(62, kClearTypeHardClearRank, 810, 1000, 360),
+  };
+  filtered =
+      replay_record_filters::apply(tiedMaxComboAndScoreSummaries, filters);
+  ASSERT_EQ(62, filtered[0].id, "max combo sort clear mark tie id");
 
   filters.sort = ReplayRecordSortCriterion::Newest;
   filtered = replay_record_filters::apply(summaries, filters);

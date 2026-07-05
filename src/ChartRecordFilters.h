@@ -102,7 +102,7 @@ difficultyLevelIndex(const std::vector<DifficultyLevelInfo> &levels,
   return std::nullopt;
 }
 
-inline void normalizeDifficultyRange(
+inline void removeUnavailableDifficultyLevels(
     ChartRecordFilters &filters,
     const std::vector<DifficultyLevelInfo> &levels) {
   auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
@@ -115,12 +115,23 @@ inline void normalizeDifficultyRange(
   }
 }
 
+inline void normalizeDifficultyRange(
+    ChartRecordFilters &filters,
+    const std::vector<DifficultyLevelInfo> &levels) {
+  removeUnavailableDifficultyLevels(filters, levels);
+  auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
+    std::swap(filters.difficultyMinLevel, filters.difficultyMaxLevel);
+  }
+}
+
 inline void setDifficultyMinLevel(
     ChartRecordFilters &filters,
     const std::vector<DifficultyLevelInfo> &levels,
     std::optional<std::string> level) {
   filters.difficultyMinLevel = std::move(level);
-  normalizeDifficultyRange(filters, levels);
+  removeUnavailableDifficultyLevels(filters, levels);
   const auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
   const auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
   if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
@@ -133,7 +144,7 @@ inline void setDifficultyMaxLevel(
     const std::vector<DifficultyLevelInfo> &levels,
     std::optional<std::string> level) {
   filters.difficultyMaxLevel = std::move(level);
-  normalizeDifficultyRange(filters, levels);
+  removeUnavailableDifficultyLevels(filters, levels);
   const auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
   const auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
   if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
