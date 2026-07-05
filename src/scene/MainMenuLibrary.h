@@ -24,6 +24,15 @@ std::string folderKeyForCourseTable(int tableId);
 std::string folderKeyForCourseGroup(int tableId, const std::string &groupName);
 std::string folderKeyForCourse(int courseId);
 
+inline bool difficultyRangeEnabledForFolder(bool difficultyTableFolder,
+                                            bool clearMarkFolder, int tableId,
+                                            const std::string &tableLevel) {
+  if (tableId <= 0) {
+    return false;
+  }
+  return difficultyTableFolder || (clearMarkFolder && tableLevel.empty());
+}
+
 FolderClearDataByLongNoteMode
 LoadFolderClearDataByLongNoteMode(sqlite3 *db,
                                   const ScoreClearRankCache &scoreRanks);

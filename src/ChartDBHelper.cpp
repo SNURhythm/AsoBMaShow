@@ -1109,7 +1109,9 @@ int levelOrderFor(const std::unordered_map<std::string, int> &orderByLevel,
 bool queryNeedsDifficultyTableSchema(const ChartMetaQuery &query) {
   return query.tableId > 0 || query.coursesOnly || query.courseId > 0 ||
          query.courseTableId > 0 || !query.courseGroupName.empty() ||
-         !query.difficultyText.empty();
+         !query.difficultyText.empty() ||
+         query.difficultyMinLevel.has_value() ||
+         query.difficultyMaxLevel.has_value();
 }
 
 std::vector<TableChartItem> readCourseCharts(const json &course) {
@@ -1460,8 +1462,33 @@ std::string scoreRankLookupExpr(const std::string &kind,
          lnModeExpr + " LIMIT 1)";
 }
 
-std::string chartClearMarkPredicate(const std::string &alias,
-                                    int selectedLongNoteMode) {
+std::string scoreBestLookupExpr(const std::string &kind,
+                                const std::string &keyExpr,
+                                const std::string &lnModeExpr,
+                                const std::string &column) {
+  return "(SELECT sbc." + column +
+         " FROM temp.score_best_cache sbc WHERE sbc.kind = " + kind +
+         " AND sbc.key = " + keyExpr + " AND sbc.ln_mode = " + lnModeExpr +
+         " LIMIT 1)";
+}
+
+std::string scoreRankOrderExpr(const std::string &scoreRankExpr) {
+  return "(CASE " + scoreRankExpr +
+         " WHEN 'MAX' THEN 9"
+         " WHEN 'MAX -' THEN 8"
+         " WHEN 'AAA' THEN 7"
+         " WHEN 'AA' THEN 6"
+         " WHEN 'A' THEN 5"
+         " WHEN 'B' THEN 4"
+         " WHEN 'C' THEN 3"
+         " WHEN 'D' THEN 2"
+         " WHEN 'E' THEN 1"
+         " WHEN 'F' THEN 0"
+         " ELSE NULL END)";
+}
+
+std::string chartClearMarkRankExpr(const std::string &alias,
+                                   int selectedLongNoteMode) {
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
   return "COALESCE(" +
@@ -1474,12 +1501,24 @@ std::string chartClearMarkPredicate(const std::string &alias,
          scoreRankLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
                              lnModeExpr) +
          ", " +
-         std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
+         std::to_string(kNoPlayClearMarkRank) + ")";
 }
 
-std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
-                                             const std::string &chartAlias,
-                                             int selectedLongNoteMode) {
+std::string chartClearMarkPredicate(const std::string &alias,
+                                    const ChartMetaQuery &chartQuery) {
+  std::string comparison = " = ";
+  if (chartQuery.clearMarkOrAbove) {
+    comparison = " >= ";
+  } else if (chartQuery.clearMarkOrBelow) {
+    comparison = " <= ";
+  }
+  return chartClearMarkRankExpr(alias, chartQuery.selectedLongNoteMode) +
+         comparison + "@clear_mark_rank";
+}
+
+std::string difficultyEntryClearMarkRankExpr(
+    const std::string &entryAlias, const std::string &chartAlias,
+    int selectedLongNoteMode) {
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
   return "COALESCE(" +
@@ -1489,7 +1528,92 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
          scoreRankLookupExpr("1", storedHashColumn(entryAlias, "md5"),
                              lnModeExpr) +
          ", " +
-         std::to_string(kNoPlayClearMarkRank) + ") = @clear_mark_rank";
+         scoreRankLookupExpr("0", storedHashColumn(chartAlias, "sha256"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("1", storedHashColumn(chartAlias, "md5"),
+                             lnModeExpr) +
+         ", " +
+         scoreRankLookupExpr("2", chartAlias + ".path", lnModeExpr) + ", " +
+         scoreRankLookupExpr("2", legacyBmsRelativePathExpr(chartAlias + ".path"),
+                             lnModeExpr) +
+         ", " + std::to_string(kNoPlayClearMarkRank) + ")";
+}
+
+std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
+                                             const std::string &chartAlias,
+                                             const ChartMetaQuery &chartQuery) {
+  std::string comparison = " = ";
+  if (chartQuery.clearMarkOrAbove) {
+    comparison = " >= ";
+  } else if (chartQuery.clearMarkOrBelow) {
+    comparison = " <= ";
+  }
+  return difficultyEntryClearMarkRankExpr(entryAlias, chartAlias,
+                                          chartQuery.selectedLongNoteMode) +
+         comparison + "@clear_mark_rank";
+}
+
+std::string chartBestScoreExpr(const std::string &alias,
+                               const std::string &column,
+                               int selectedLongNoteMode) {
+  const std::string lnModeExpr =
+      scoreLongNoteModeExpr(alias, selectedLongNoteMode);
+  return "COALESCE(" +
+         scoreBestLookupExpr("0", storedHashColumn(alias, "sha256"),
+                             lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("1", storedHashColumn(alias, "md5"), lnModeExpr,
+                             column) +
+         ", " + scoreBestLookupExpr("2", alias + ".path", lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("2", legacyBmsRelativePathExpr(alias + ".path"),
+                             lnModeExpr, column) +
+         ")";
+}
+
+std::string difficultyEntryBestScoreExpr(const std::string &entryAlias,
+                                         const std::string &chartAlias,
+                                         const std::string &column,
+                                         int selectedLongNoteMode) {
+  const std::string lnModeExpr =
+      scoreLongNoteModeExpr(chartAlias, selectedLongNoteMode);
+  return "COALESCE(" +
+         scoreBestLookupExpr("0", storedHashColumn(entryAlias, "sha256"),
+                             lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("1", storedHashColumn(entryAlias, "md5"),
+                             lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("0", storedHashColumn(chartAlias, "sha256"),
+                             lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("1", storedHashColumn(chartAlias, "md5"),
+                             lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("2", chartAlias + ".path", lnModeExpr, column) +
+         ", " +
+         scoreBestLookupExpr("2", legacyBmsRelativePathExpr(chartAlias + ".path"),
+                             lnModeExpr, column) +
+         ")";
+}
+
+std::string effectiveMinBpmExpr(const std::string &alias) {
+  return "(CASE WHEN COALESCE(" + alias +
+         ".min_bpm, 0) > 0 THEN " + alias +
+         ".min_bpm WHEN COALESCE(" + alias + ".max_bpm, 0) > 0 THEN " +
+         alias + ".max_bpm ELSE COALESCE(" + alias + ".bpm, 0) END)";
+}
+
+std::string effectiveMaxBpmExpr(const std::string &alias) {
+  return "(CASE WHEN COALESCE(" + alias +
+         ".max_bpm, 0) > 0 THEN " + alias +
+         ".max_bpm WHEN COALESCE(" + alias + ".min_bpm, 0) > 0 THEN " +
+         alias + ".min_bpm ELSE COALESCE(" + alias + ".bpm, 0) END)";
+}
+
+std::string mainBpmExpr(const std::string &alias) {
+  return "COALESCE(" + alias + ".bpm, 0)";
 }
 
 bool chartMetaQueryHasCourseFilter(const ChartMetaQuery &chartQuery) {
@@ -1506,6 +1630,404 @@ bool chartMetaQueryUsesDifficultyEntries(const ChartMetaQuery &chartQuery) {
 bool chartMetaQueryUsesCourseEntries(const ChartMetaQuery &chartQuery) {
   return chartQuery.coursesOnly || chartQuery.courseId > 0 ||
          chartQuery.courseTableId > 0 || !chartQuery.courseGroupName.empty();
+}
+
+bool chartMetaQueryHasBpmFilter(const ChartMetaQuery &chartQuery) {
+  return chartQuery.bpmMin.has_value() || chartQuery.bpmMax.has_value();
+}
+
+bool chartMetaQueryHasScoreFilter(const ChartMetaQuery &chartQuery) {
+  return chartQuery.scoreRank.has_value();
+}
+
+bool chartMetaQueryNeedsBestScore(const ChartMetaQuery &chartQuery) {
+  return chartMetaQueryHasScoreFilter(chartQuery) ||
+         chartQuery.sortCriterion == ChartRecordSortCriterion::Score ||
+         chartQuery.sortCriterion == ChartRecordSortCriterion::MaxCombo;
+}
+
+bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
+    const ChartMetaQuery &chartQuery) {
+  return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartMetaQueryHasBpmFilter(chartQuery) ||
+         chartMetaQueryHasScoreFilter(chartQuery) ||
+         chartMetaQueryNeedsBestScore(chartQuery);
+}
+
+bool chartMetaQueryNeedsChartJoinForCourseEntries(
+    const ChartMetaQuery &chartQuery) {
+  return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartMetaQueryHasBpmFilter(chartQuery) ||
+         chartMetaQueryHasScoreFilter(chartQuery) ||
+         chartMetaQueryNeedsBestScore(chartQuery);
+}
+
+void appendBpmFilters(std::string &query, const std::string &chartAlias,
+                      const ChartMetaQuery &chartQuery) {
+  if (!chartMetaQueryHasBpmFilter(chartQuery)) {
+    return;
+  }
+  query += " AND " + chartAlias + ".path IS NOT NULL";
+  if (chartQuery.bpmMin.has_value()) {
+    query += " AND " + effectiveMaxBpmExpr(chartAlias) + " >= @bpm_min";
+  }
+  if (chartQuery.bpmMax.has_value()) {
+    query += " AND " + effectiveMinBpmExpr(chartAlias) + " <= @bpm_max";
+  }
+}
+
+void appendDifficultyLevelRangeFilter(std::string &query,
+                                      const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.difficultyMinLevel.has_value() &&
+      !chartQuery.difficultyMaxLevel.has_value()) {
+    return;
+  }
+  query +=
+      " AND dte.level IN (SELECT dl.level FROM ("
+      "SELECT level, MIN(sort_order) AS level_sort "
+      "FROM difficulty_table_entries WHERE table_id = @table_id "
+      "GROUP BY level) dl WHERE 1 = 1";
+  if (chartQuery.difficultyMinLevel.has_value()) {
+    query +=
+        " AND dl.level_sort >= (SELECT MIN(dte_min.sort_order) "
+        "FROM difficulty_table_entries dte_min WHERE "
+        "dte_min.table_id = @table_id AND dte_min.level = "
+        "@difficulty_min_level)";
+  }
+  if (chartQuery.difficultyMaxLevel.has_value()) {
+    query +=
+        " AND dl.level_sort <= (SELECT MIN(dte_max.sort_order) "
+        "FROM difficulty_table_entries dte_max WHERE "
+        "dte_max.table_id = @table_id AND dte_max.level = "
+        "@difficulty_max_level)";
+  }
+  query += ")";
+}
+
+void appendChartScoreRankFilter(std::string &query,
+                                const std::string &chartAlias,
+                                const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.scoreRank.has_value()) {
+    return;
+  }
+  const std::string scoreRankExpr =
+      chartBestScoreExpr(chartAlias, "score_rank",
+                         chartQuery.selectedLongNoteMode);
+  query += " AND ";
+  if (chartQuery.scoreRankOrAbove) {
+    query += scoreRankOrderExpr(scoreRankExpr) + " >= " +
+             scoreRankOrderExpr("@score_rank");
+  } else if (chartQuery.scoreRankOrBelow) {
+    query += scoreRankOrderExpr(scoreRankExpr) + " <= " +
+             scoreRankOrderExpr("@score_rank");
+  } else {
+    query += scoreRankExpr + " = @score_rank";
+  }
+}
+
+void appendDifficultyEntryScoreRankFilter(std::string &query,
+                                          const std::string &entryAlias,
+                                          const std::string &chartAlias,
+                                          const ChartMetaQuery &chartQuery) {
+  if (!chartQuery.scoreRank.has_value()) {
+    return;
+  }
+  const std::string scoreRankExpr =
+      difficultyEntryBestScoreExpr(entryAlias, chartAlias, "score_rank",
+                                   chartQuery.selectedLongNoteMode);
+  query += " AND ";
+  if (chartQuery.scoreRankOrAbove) {
+    query += scoreRankOrderExpr(scoreRankExpr) + " >= " +
+             scoreRankOrderExpr("@score_rank");
+  } else if (chartQuery.scoreRankOrBelow) {
+    query += scoreRankOrderExpr(scoreRankExpr) + " <= " +
+             scoreRankOrderExpr("@score_rank");
+  } else {
+    query += scoreRankExpr + " = @score_rank";
+  }
+}
+
+void bindCommonChartFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
+                                     const ChartMetaQuery &chartQuery) {
+  if (chartQuery.bpmMin.has_value()) {
+    sqlite3_bind_double(stmt, bindIndex++, *chartQuery.bpmMin);
+  }
+  if (chartQuery.bpmMax.has_value()) {
+    sqlite3_bind_double(stmt, bindIndex++, *chartQuery.bpmMax);
+  }
+  if (chartQuery.scoreRank.has_value()) {
+    bindSqliteText(stmt, bindIndex++, *chartQuery.scoreRank);
+  }
+}
+
+std::string sortDirectionSql(ChartRecordSortDirection direction) {
+  return direction == ChartRecordSortDirection::Ascending ? "ASC" : "DESC";
+}
+
+void appendNullableOrderExpr(std::string &query, const std::string &expr,
+                             ChartRecordSortDirection direction) {
+  query += expr;
+  query += " IS NULL, ";
+  query += expr;
+  query += " ";
+  query += sortDirectionSql(direction);
+}
+
+std::string difficultyLevelSortExpr(const std::string &entryAlias) {
+  return "(SELECT MIN(dte_level.sort_order) FROM difficulty_table_entries "
+         "dte_level WHERE dte_level.table_id = " +
+         entryAlias + ".table_id AND dte_level.level = " + entryAlias +
+         ".level)";
+}
+
+void appendChartMetaOrderBy(std::string &query,
+                            const ChartMetaQuery &chartQuery,
+                            const std::string &chartAlias) {
+  query += " ORDER BY ";
+  const auto direction = chartQuery.sortDirection;
+  switch (chartQuery.sortCriterion) {
+  case ChartRecordSortCriterion::ClearMark:
+    query += chartClearMarkRankExpr(chartAlias, chartQuery.selectedLongNoteMode);
+    query += " ";
+    query += sortDirectionSql(direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "score",
+                           chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "max_combo",
+                           chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Score:
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "score",
+                           chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    query += chartClearMarkRankExpr(chartAlias, chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "max_combo",
+                           chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::MaxCombo:
+    query += chartClearMarkRankExpr(chartAlias, chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "max_combo",
+                           chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        chartBestScoreExpr(chartAlias, "score",
+                           chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Title:
+    query += chartAlias + ".title COLLATE NOCASE " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MinBpm:
+    query += effectiveMinBpmExpr(chartAlias) + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MaxBpm:
+    query += effectiveMaxBpmExpr(chartAlias) + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MainBpm:
+    query += mainBpmExpr(chartAlias) + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::Difficulty:
+    query += chartAlias + ".level " + sortDirectionSql(direction) + ", ";
+    break;
+  case ChartRecordSortCriterion::Default:
+    break;
+  }
+  query += chartAlias + ".title COLLATE NOCASE, " + chartAlias + ".path";
+}
+
+void appendDifficultyEntryOrderBy(std::string &query,
+                                  const ChartMetaQuery &chartQuery) {
+  const std::string missingExpr = "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
+  const std::string titleExpr =
+      "COALESCE(NULLIF(cm.title, ''), dte.title, '')";
+  query += " ORDER BY " + missingExpr + ", ";
+  const auto direction = chartQuery.sortDirection;
+  switch (chartQuery.sortCriterion) {
+  case ChartRecordSortCriterion::ClearMark:
+    query += difficultyEntryClearMarkRankExpr(
+        "dte", "cm", chartQuery.selectedLongNoteMode);
+    query += " ";
+    query += sortDirectionSql(direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Score:
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    query += difficultyEntryClearMarkRankExpr(
+        "dte", "cm", chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::MaxCombo:
+    query += difficultyEntryClearMarkRankExpr(
+        "dte", "cm", chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dte", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Title:
+    query += titleExpr + " COLLATE NOCASE " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MinBpm:
+    query += effectiveMinBpmExpr("cm") + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MaxBpm:
+    query += effectiveMaxBpmExpr("cm") + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MainBpm:
+    query += mainBpmExpr("cm") + " " + sortDirectionSql(direction) + ", ";
+    break;
+  case ChartRecordSortCriterion::Difficulty:
+    query += difficultyLevelSortExpr("dte") + " " +
+             sortDirectionSql(direction) + ", ";
+    break;
+  case ChartRecordSortCriterion::Default:
+    break;
+  }
+  query += "dte.sort_order, " + titleExpr + " COLLATE NOCASE, dte.id";
+}
+
+void appendDifficultyCourseEntryOrderBy(std::string &query,
+                                        const ChartMetaQuery &chartQuery) {
+  const std::string titleExpr =
+      "COALESCE(NULLIF(cm.title, ''), dce.title, '')";
+  query += " ORDER BY ";
+  const auto direction = chartQuery.sortDirection;
+  switch (chartQuery.sortCriterion) {
+  case ChartRecordSortCriterion::ClearMark:
+    query += difficultyEntryClearMarkRankExpr(
+        "dce", "cm", chartQuery.selectedLongNoteMode);
+    query += " ";
+    query += sortDirectionSql(direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Score:
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    query += difficultyEntryClearMarkRankExpr(
+        "dce", "cm", chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::MaxCombo:
+    query += difficultyEntryClearMarkRankExpr(
+        "dce", "cm", chartQuery.selectedLongNoteMode);
+    query += " DESC, ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "max_combo",
+                                     chartQuery.selectedLongNoteMode),
+        direction);
+    query += ", ";
+    appendNullableOrderExpr(
+        query,
+        difficultyEntryBestScoreExpr("dce", "cm", "score",
+                                     chartQuery.selectedLongNoteMode),
+        ChartRecordSortDirection::Descending);
+    query += ", ";
+    break;
+  case ChartRecordSortCriterion::Title:
+    query += titleExpr + " COLLATE NOCASE " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MinBpm:
+    query += effectiveMinBpmExpr("cm") + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MaxBpm:
+    query += effectiveMaxBpmExpr("cm") + " " + sortDirectionSql(direction) +
+             ", ";
+    break;
+  case ChartRecordSortCriterion::MainBpm:
+    query += mainBpmExpr("cm") + " " + sortDirectionSql(direction) + ", ";
+    break;
+  case ChartRecordSortCriterion::Difficulty:
+  case ChartRecordSortCriterion::Default:
+    break;
+  }
+  query += "dc.sort_order, dce.sort_order, " + titleExpr +
+           " COLLATE NOCASE, dce.id";
 }
 
 std::string matchedDifficultyEntryIdSubquery(
@@ -1618,9 +2140,11 @@ void appendChartMetaFilters(std::string &query,
     query += difficultyClause;
     query += "))";
   }
+  appendBpmFilters(query, "cm", chartQuery);
+  appendChartScoreRankFilter(query, "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
-    query += chartClearMarkPredicate("cm", chartQuery.selectedLongNoteMode);
+    query += chartClearMarkPredicate("cm", chartQuery);
   }
   if (chartQuery.favoritesOnly) {
     query += " AND ";
@@ -1656,6 +2180,7 @@ void bindChartMetaFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
   if (!chartQuery.difficultyText.empty()) {
     bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
   }
+  bindCommonChartFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
   }
@@ -1681,10 +2206,12 @@ void appendDifficultyEntryFilters(std::string &query,
         "@difficulty_like "
         "OR lower(dt.name || ' ' || dte.level) LIKE @difficulty_like)";
   }
+  appendDifficultyLevelRangeFilter(query, chartQuery);
+  appendBpmFilters(query, "cm", chartQuery);
+  appendDifficultyEntryScoreRankFilter(query, "dte", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
-    query += difficultyEntryClearMarkPredicate(
-        "dte", "cm", chartQuery.selectedLongNoteMode);
+    query += difficultyEntryClearMarkPredicate("dte", "cm", chartQuery);
   }
 }
 
@@ -1700,6 +2227,13 @@ void bindDifficultyEntryFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
   if (!chartQuery.difficultyText.empty()) {
     bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
   }
+  if (chartQuery.difficultyMinLevel.has_value()) {
+    bindSqliteText(stmt, bindIndex++, *chartQuery.difficultyMinLevel);
+  }
+  if (chartQuery.difficultyMaxLevel.has_value()) {
+    bindSqliteText(stmt, bindIndex++, *chartQuery.difficultyMaxLevel);
+  }
+  bindCommonChartFilterParameters(stmt, bindIndex, chartQuery);
   if (chartQuery.clearMarkFilter) {
     sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
   }
@@ -1735,6 +2269,12 @@ void appendDifficultyCourseEntryFilters(std::string &query,
         "OR lower(dc.name) LIKE @difficulty_like "
         "OR lower(dc.group_name || ' ' || dc.level) LIKE @difficulty_like)";
   }
+  appendBpmFilters(query, "cm", chartQuery);
+  appendDifficultyEntryScoreRankFilter(query, "dce", "cm", chartQuery);
+  if (chartQuery.clearMarkFilter) {
+    query += " AND ";
+    query += difficultyEntryClearMarkPredicate("dce", "cm", chartQuery);
+  }
 }
 
 void bindDifficultyCourseEntryFilterParameters(
@@ -1753,6 +2293,10 @@ void bindDifficultyCourseEntryFilterParameters(
   }
   if (!chartQuery.difficultyText.empty()) {
     bindDifficultySearchText(stmt, bindIndex, chartQuery.difficultyText);
+  }
+  bindCommonChartFilterParameters(stmt, bindIndex, chartQuery);
+  if (chartQuery.clearMarkFilter) {
+    sqlite3_bind_int(stmt, bindIndex++, chartQuery.clearMarkRank);
   }
 }
 
@@ -3422,9 +3966,7 @@ void ChartDBHelper::QueryChartMeta(
     query += " ";
     appendDifficultyEntryFilters(query, chartQuery);
 
-    query += " ORDER BY CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END, "
-             "dte.sort_order, COALESCE(NULLIF(cm.title, ''), dte.title, '') "
-             "COLLATE NOCASE, dte.id";
+    appendDifficultyEntryOrderBy(query, chartQuery);
     if (chartQuery.limit > 0) {
       query += " LIMIT @limit OFFSET @offset";
     }
@@ -3464,9 +4006,7 @@ void ChartDBHelper::QueryChartMeta(
     query += " ";
     appendDifficultyCourseEntryFilters(query, chartQuery);
 
-    query += " ORDER BY dc.sort_order, dce.sort_order, "
-             "COALESCE(NULLIF(cm.title, ''), dce.title, '') COLLATE NOCASE, "
-             "dce.id";
+    appendDifficultyCourseEntryOrderBy(query, chartQuery);
     if (chartQuery.limit > 0) {
       query += " LIMIT @limit OFFSET @offset";
     }
@@ -3497,7 +4037,7 @@ void ChartDBHelper::QueryChartMeta(
   query += chartFavoriteColumnExpr("cm");
   query += " FROM chart_meta cm WHERE 1 = 1";
   appendChartMetaFilters(query, chartQuery);
-  query += " ORDER BY cm.title, cm.path";
+  appendChartMetaOrderBy(query, chartQuery, "cm");
   if (chartQuery.limit > 0) {
     query += " LIMIT @limit OFFSET @offset";
   }
@@ -3554,7 +4094,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
   if (chartMetaQueryUsesDifficultyEntries(chartQuery)) {
     std::string query = "SELECT COUNT(*) FROM difficulty_table_entries dte "
                         "JOIN difficulty_tables dt ON dt.id = dte.table_id ";
-    if (!chartQuery.keyword.empty() || chartQuery.clearMarkFilter) {
+    if (chartMetaQueryNeedsChartJoinForDifficultyEntries(chartQuery)) {
       query += "LEFT JOIN chart_meta cm ON cm.path = ";
       query += matchedChartPathSubquery("dte", true);
       query += " ";
@@ -3592,7 +4132,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       query += matchedDifficultyEntryIdSubquery();
       query += " ";
     }
-    if (!chartQuery.keyword.empty()) {
+    if (chartMetaQueryNeedsChartJoinForCourseEntries(chartQuery)) {
       query += "LEFT JOIN chart_meta cm ON cm.path = ";
       query += matchedChartPathSubquery("dce", true);
       query += " ";
@@ -3648,6 +4188,20 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
 
   const std::string targetPath = StoredChartPathText(path);
   if (targetPath.empty()) {
+    return -1;
+  }
+
+  if (chartQuery.sortCriterion != ChartRecordSortCriterion::Default) {
+    ChartMetaQuery scanQuery = chartQuery;
+    scanQuery.limit = 0;
+    scanQuery.offset = 0;
+    std::vector<ChartMetaRecord> records;
+    QueryChartMeta(db, scanQuery, records);
+    for (size_t i = 0; i < records.size(); ++i) {
+      if (StoredChartPathText(records[i].meta.BmsPath) == targetPath) {
+        return static_cast<int>(i);
+      }
+    }
     return -1;
   }
 

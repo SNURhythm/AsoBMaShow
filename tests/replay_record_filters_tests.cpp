@@ -90,6 +90,14 @@ int main() {
   ASSERT_EQ(2, filtered[0].id, "max combo sort first id");
 
   filters.sort = ReplayRecordSortCriterion::MaxCombo;
+  std::vector<ReplaySummary> clearMarkVsMaxComboSummaries = {
+      makeSummary(50, kClearTypeHardClearRank, 740, 1000, 220),
+      makeSummary(49, kClearTypeNormalClearRank, 900, 1000, 360),
+  };
+  filtered = replay_record_filters::apply(clearMarkVsMaxComboSummaries, filters);
+  ASSERT_EQ(50, filtered[0].id, "max combo sort clear mark precedence id");
+
+  filters.sort = ReplayRecordSortCriterion::MaxCombo;
   std::vector<ReplaySummary> tiedMaxComboSummaries = {
       makeSummary(51, kClearTypeNormalClearRank, 740, 1000, 360),
       makeSummary(52, kClearTypeNormalClearRank, 810, 1000, 360),

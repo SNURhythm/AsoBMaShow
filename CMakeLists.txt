@@ -105,16 +105,16 @@ set(COMMON_LIBS SndFile::sndfile)
 if (IOS)
     # --- iOS: Use Submodules ---
     message(STATUS "Configuring for iOS - Using submodules for SDL2/SDL_ttf")
-    
+
     # Add subdirectories
     add_subdirectory(SDL)
     add_subdirectory(SDL_ttf)
-    
+
     # Setup variables for linking
     set(SDL2_LIB SDL2)
     set(SDL2_TFF_LIB SDL2_ttf)
     # TODO: FFmpeg / Lua handling for iOS if needed
-    
+
     find_library(UIKIT UIKit)
     find_library(FOUNDATION Foundation)
     find_library(CORE_GRAPHICS CoreGraphics)
@@ -177,7 +177,7 @@ else()
 
     # SDL2
     find_package(SDL2 CONFIG REQUIRED)
-    list(APPEND COMMON_LIBS 
+    list(APPEND COMMON_LIBS
         $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
     )
@@ -185,7 +185,7 @@ else()
     # SDL2_ttf
     # Try different package names as vcpkg naming can vary
     find_package(SDL2_ttf CONFIG REQUIRED)
-    list(APPEND COMMON_LIBS 
+    list(APPEND COMMON_LIBS
         $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
     )
 
@@ -227,10 +227,10 @@ else()
 
     # # Fontconfig & LibASS (Required by FFmpeg[all-gpl] static build)
     # find_package(PkgConfig REQUIRED)
-    
+
     # pkg_check_modules(FONTCONFIG REQUIRED fontconfig IMPORTED_TARGET)
     # list(APPEND COMMON_LIBS PkgConfig::FONTCONFIG)
-    
+
     # pkg_check_modules(LIBASS REQUIRED libass IMPORTED_TARGET)
     # list(APPEND COMMON_LIBS PkgConfig::LIBASS)
 
@@ -239,7 +239,7 @@ else()
     if (WIN32)
         # On Windows with vcpkg, LuaJIT is installed as lua51.lib (ABI version 5.1)
         # vcpkg sets CMAKE_PREFIX_PATH, so we can use find_library
-        find_library(LUAJIT_LIB 
+        find_library(LUAJIT_LIB
             NAMES lua51
             PATHS ${CMAKE_PREFIX_PATH}
             PATH_SUFFIXES lib
@@ -247,7 +247,7 @@ else()
         )
         # Fallback: try vcpkg_installed directory
         if (NOT LUAJIT_LIB)
-            find_library(LUAJIT_LIB 
+            find_library(LUAJIT_LIB
                 NAMES lua51
                 PATHS ${CMAKE_BINARY_DIR}/vcpkg_installed
                 PATH_SUFFIXES lib x64-windows/lib
@@ -344,12 +344,12 @@ endif()
 
 # Linking
 # Note: bgfx and yogacore are added via add_subdirectory later
-target_link_libraries(main 
-    PRIVATE 
+target_link_libraries(main
+    PRIVATE
     ${COMMON_LIBS}
-    TinyFileDialogs 
-    SQLite3 
-    bgfx 
+    TinyFileDialogs
+    SQLite3
+    bgfx
     yogacore
 )
 
@@ -401,11 +401,11 @@ if (PLATFORM_MACOS)
     find_library(COCOA Cocoa)
     find_library(METAL Metal)
     find_library(SECURITY Security)
-    
+
     target_link_libraries(main PRIVATE
-        ${FOUNDATION} ${AUDIO_TOOLBOX} ${VIDEO_TOOLBOX} ${CORE_AUDIO} 
-        ${AV_KIT} ${CORE_IMAGE} ${CORE_MEDIA} ${ACCELERATE} 
-        ${OPENGL} ${OPENCL} ${COCOA} ${METAL} ${SECURITY} 
+        ${FOUNDATION} ${AUDIO_TOOLBOX} ${VIDEO_TOOLBOX} ${CORE_AUDIO}
+        ${AV_KIT} ${CORE_IMAGE} ${CORE_MEDIA} ${ACCELERATE}
+        ${OPENGL} ${OPENCL} ${COCOA} ${METAL} ${SECURITY}
         bz2 z iconv
     )
 endif()
@@ -502,4 +502,35 @@ if (ASOBMASHOW_BUILD_TESTS)
     )
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
+
+    add_executable(chart_record_filters_tests
+        tests/chart_record_filters_tests.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(chart_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_record_filters_tests PRIVATE cxx_std_23)
+
+    add_executable(chart_filter_sort_panel_view_tests
+        tests/chart_filter_sort_panel_view_tests.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(chart_filter_sort_panel_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_filter_sort_panel_view_tests PRIVATE cxx_std_23)
+
+    add_executable(dropdown_view_tests
+        tests/dropdown_view_tests.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(dropdown_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(dropdown_view_tests PRIVATE cxx_std_23)
+
+    add_executable(view_layout_tests
+        tests/view_layout_tests.cpp
+        src/rendering/Color.cpp
+        src/view/View.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(view_layout_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(view_layout_tests PRIVATE cxx_std_23)
+    target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 endif()

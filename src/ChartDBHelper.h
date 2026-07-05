@@ -9,8 +9,31 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
+
+enum class ChartRecordSortCriterion {
+  Default,
+  ClearMark,
+  Score,
+  MaxCombo,
+  Title,
+  MinBpm,
+  MaxBpm,
+  MainBpm,
+  Difficulty,
+};
+
+enum class ChartRecordSortDirection {
+  Ascending,
+  Descending,
+};
+
+struct ChartRecordSortState {
+  ChartRecordSortCriterion criterion = ChartRecordSortCriterion::Default;
+  ChartRecordSortDirection direction = ChartRecordSortDirection::Descending;
+};
 
 struct ChartMetaQuery {
   std::string keyword;
@@ -24,6 +47,18 @@ struct ChartMetaQuery {
   std::string difficultyText;
   bool clearMarkFilter = false;
   int clearMarkRank = -1;
+  bool clearMarkOrAbove = false;
+  bool clearMarkOrBelow = false;
+  std::optional<std::string> scoreRank;
+  bool scoreRankOrAbove = false;
+  bool scoreRankOrBelow = false;
+  std::optional<double> bpmMin;
+  std::optional<double> bpmMax;
+  std::optional<std::string> difficultyMinLevel;
+  std::optional<std::string> difficultyMaxLevel;
+  ChartRecordSortCriterion sortCriterion = ChartRecordSortCriterion::Default;
+  ChartRecordSortDirection sortDirection =
+      ChartRecordSortDirection::Descending;
   int selectedLongNoteMode = 1;
   bool favoritesOnly = false;
   int limit = 0;

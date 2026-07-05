@@ -14,6 +14,7 @@
 #include "../ResultImageExporter.h"
 #include "../PlayOptionUtils.h"
 #include "../RAII.h"
+#include "../ScoreRankUtils.h"
 #include "../SqliteRAII.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
@@ -100,6 +101,7 @@ constexpr size_t kParseLogRowMaxColumns = 88;
 constexpr int kParseLogRowHeight = 48;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr uint32_t kIconFilter = 0xf0b0;
+constexpr uint32_t kIconSort = 0xf0dc;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -181,6 +183,66 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"FAILED", kClearTypeFailedRank},
     {"NO PLAY", kNoClearTypeRank},
 };
+
+std::string trimAsciiWhitespace(std::string text) {
+  const auto first = std::find_if_not(
+      text.begin(), text.end(),
+      [](unsigned char ch) { return std::isspace(ch) != 0; });
+  const auto last = std::find_if_not(
+      text.rbegin(), text.rend(),
+      [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+  if (first >= last) {
+    return "";
+  }
+  return std::string(first, last);
+}
+
+std::optional<double> parseOptionalBpmFilter(const std::string &text) {
+  const std::string trimmed = trimAsciiWhitespace(text);
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
+
+  char *end = nullptr;
+  const double value = std::strtod(trimmed.c_str(), &end);
+  if (end == trimmed.c_str() || end == nullptr || *end != '\0' ||
+      !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  return std::max(0.0, value);
+}
+
+std::optional<size_t>
+difficultyLevelIndex(const std::vector<DifficultyLevelInfo> &levels,
+                     const std::optional<std::string> &level) {
+  if (!level.has_value()) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < levels.size(); ++i) {
+    if (levels[i].level == *level) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+void normalizeDifficultyFilterRange(
+    ChartRecordFilters &filters,
+    const std::vector<DifficultyLevelInfo> &levels) {
+  auto minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  auto maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (filters.difficultyMinLevel.has_value() && !minIndex.has_value()) {
+    filters.difficultyMinLevel.reset();
+  }
+  if (filters.difficultyMaxLevel.has_value() && !maxIndex.has_value()) {
+    filters.difficultyMaxLevel.reset();
+  }
+  minIndex = difficultyLevelIndex(levels, filters.difficultyMinLevel);
+  maxIndex = difficultyLevelIndex(levels, filters.difficultyMaxLevel);
+  if (minIndex.has_value() && maxIndex.has_value() && *minIndex > *maxIndex) {
+    std::swap(filters.difficultyMinLevel, filters.difficultyMaxLevel);
+  }
+}
 
 std::string longNoteModeOptionFromCourseConstraint(CourseLongNoteMode mode) {
   return long_note_mode::idFromValue(courseLongNoteModeToChartMetaValue(mode),
@@ -1255,6 +1317,7 @@ void MainMenuScene::applyThemeChange() {
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
   refreshAssistOptionButtons();
+  refreshChartFilterButtons();
   refreshReplayModalActions();
   refreshReplayExportOptionButtons();
   refreshFindBmsModal();
@@ -2335,6 +2398,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = nullptr;
   searchBox = nullptr;
   difficultyFilterBox = nullptr;
+  chartFilterPanel = nullptr;
+  chartSortPanel = nullptr;
+  chartFilterButton = nullptr;
+  chartFilterButtonText = nullptr;
+  chartSortButton = nullptr;
+  chartSortButtonText = nullptr;
   startButton = nullptr;
   chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
@@ -2514,6 +2583,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
   musicStatusMessage.clear();
+  chartRecordFilters = {};
+  chartFilterPanelVisible = false;
+  chartSortPanelVisible = false;
+  chartBpmMinText.clear();
+  chartBpmMaxText.clear();
+  chartClearMarkDropdownOpen = false;
+  chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = false;
+  chartDifficultyMaxDropdownOpen = false;
   replaySummaries.clear();
   visibleReplaySummaries.clear();
   replayRecordFilters = {};
@@ -2948,11 +3026,74 @@ void MainMenuScene::initView(ApplicationContext &context) {
   difficultyFilterBox->onSubmit(onDifficultyChanged);
   filterRow->addView(difficultyFilterBox);
 
+  chartFilterButton =
+      makeModalIconButton(kIconFilter, 20, &chartFilterButtonText);
+  chartFilterButton->setWidth(56);
+  chartFilterButton->setHeight(56);
+  chartFilterButton->setFlexShrink(0.0f);
+  chartFilterButton->setOnClickListener([this]() {
+    setChartFilterPanelVisible(!chartFilterPanelVisible);
+  });
+  filterRow->addView(chartFilterButton);
+
+  chartSortButton =
+      makeModalIconButton(kIconSort, 20, &chartSortButtonText);
+  chartSortButton->setWidth(56);
+  chartSortButton->setHeight(56);
+  chartSortButton->setFlexShrink(0.0f);
+  chartSortButton->setOnClickListener([this]() {
+    setChartSortPanelVisible(!chartSortPanelVisible);
+  });
+  filterRow->addView(chartSortButton);
+
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  filterLabel->setText("Search / Difficulty");
+  filterLabel->setText("Search / Difficulty / Filter / Sort");
   filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
+
+  chartFilterPanel = new ChartFilterPanelView({
+      .onClearMarkChanged =
+          [this](std::optional<int> rank) { setChartClearFilter(rank); },
+      .onScoreRankChanged = [this](std::optional<std::string> rank) {
+        setChartScoreRankFilter(std::move(rank));
+      },
+      .onBpmMinChanged =
+          [this](const std::string &text) { setChartBpmMinFilter(text); },
+      .onBpmMaxChanged =
+          [this](const std::string &text) { setChartBpmMaxFilter(text); },
+      .onDifficultyMinChanged = [this](std::optional<std::string> level) {
+        setChartDifficultyMinFilter(std::move(level));
+      },
+      .onDifficultyMaxChanged = [this](std::optional<std::string> level) {
+        setChartDifficultyMaxFilter(std::move(level));
+      },
+      .onClearMarkDropdownChanged = [this](bool open) {
+        setChartClearMarkDropdownOpen(open);
+      },
+      .onScoreRankDropdownChanged = [this](bool open) {
+        setChartScoreRankDropdownOpen(open);
+      },
+      .onClearMarkRangeChanged = [this](bool orAbove, bool orBelow) {
+        setChartClearMarkRange(orAbove, orBelow);
+      },
+      .onScoreRankRangeChanged = [this](bool orAbove, bool orBelow) {
+        setChartScoreRankRange(orAbove, orBelow);
+      },
+      .onDifficultyDropdownChanged = [this](bool minLevel, bool open) {
+        setChartDifficultyDropdownOpen(minLevel, open);
+      },
+  });
+
+  chartSortPanel = new ChartSortPanelView({
+      .onSortChanged = [this](ChartRecordSortCriterion criterion) {
+        setChartSortCriterion(criterion);
+      },
+  });
+
+  left->addView(chartFilterPanel);
+  left->addView(chartSortPanel);
+  refreshChartFilterPanel();
 
   recyclerView->setFlex(1);
   recyclerView->clearBackgroundColor();
@@ -3524,6 +3665,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     activeFolder = folders.front();
     activeIndex = 0;
   }
+  refreshChartFilterPanel();
 
   const int folderCount = static_cast<int>(folders.size());
   folderRecyclerView->setItems(std::move(folders));
@@ -3643,7 +3785,304 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   default:
     break;
   }
+  chart_record_filters::applyToQuery(query, chartRecordFilters,
+                                     chartDifficultyRangeEnabled());
   return query;
+}
+
+bool MainMenuScene::chartDifficultyRangeEnabled() const {
+  return main_menu_library::difficultyRangeEnabledForFolder(
+      activeFolder.type == LibraryFolderItem::Type::DifficultyTable,
+      activeFolder.clearMarkFolder, activeFolder.tableId,
+      activeFolder.tableLevel);
+}
+
+std::vector<DifficultyLevelInfo>
+MainMenuScene::chartFilterDifficultyLevels() const {
+  if (!chartDifficultyRangeEnabled()) {
+    return {};
+  }
+  const auto tableIt = folderMetadataCache.levelsByTable.find(
+      activeFolder.tableId);
+  if (tableIt == folderMetadataCache.levelsByTable.end()) {
+    return {};
+  }
+  return tableIt->second;
+}
+
+void MainMenuScene::setChartFilterPanelVisible(bool visible) {
+  chartFilterPanelVisible = visible;
+  if (visible) {
+    chartSortPanelVisible = false;
+  } else {
+    chartClearMarkDropdownOpen = false;
+    chartScoreRankDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartSortPanelVisible(bool visible) {
+  chartSortPanelVisible = visible;
+  if (visible) {
+    chartFilterPanelVisible = false;
+    chartClearMarkDropdownOpen = false;
+    chartScoreRankDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::refreshChartFilterPanel() {
+  const auto levels = chartFilterDifficultyLevels();
+  const std::optional<int> folderClearMarkRank =
+      activeFolder.clearMarkFolder
+          ? std::optional<int>(activeFolder.clearMarkRank)
+          : std::nullopt;
+  if (activeFolder.clearMarkFolder) {
+    chartRecordFilters.clearMarkRank.reset();
+    chartRecordFilters.clearMarkOrAbove = false;
+    chartRecordFilters.clearMarkOrBelow = false;
+    chartClearMarkDropdownOpen = false;
+  }
+  chart_record_filters::normalizeSelection(chartRecordFilters,
+                                           folderClearMarkRank);
+  const std::optional<int> effectiveClearMarkRank =
+      chartRecordFilters.clearMarkRank.has_value()
+          ? chartRecordFilters.clearMarkRank
+          : folderClearMarkRank;
+  if (!chart_record_filters::scoreRankFilterEnabled(effectiveClearMarkRank)) {
+    chartScoreRankDropdownOpen = false;
+  }
+  if (!chartFilterPanelVisible) {
+    chartClearMarkDropdownOpen = false;
+    chartScoreRankDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  if (chartDifficultyRangeEnabled()) {
+    normalizeDifficultyFilterRange(chartRecordFilters, levels);
+  } else {
+    chartRecordFilters.difficultyMinLevel.reset();
+    chartRecordFilters.difficultyMaxLevel.reset();
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+    if (chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Difficulty) {
+      chartRecordFilters.sort = {};
+    }
+  }
+
+  if (chartFilterPanel != nullptr) {
+    chartFilterPanel->refresh({
+        .filters = chartRecordFilters,
+        .bpmMinText = chartBpmMinText,
+        .bpmMaxText = chartBpmMaxText,
+        .clearMarkFilterVisible = !activeFolder.clearMarkFolder,
+        .effectiveClearMarkRank = effectiveClearMarkRank,
+        .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
+        .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
+        .difficultyRangeEnabled = chartDifficultyRangeEnabled(),
+        .difficultyMinDropdownOpen = chartDifficultyMinDropdownOpen,
+        .difficultyMaxDropdownOpen = chartDifficultyMaxDropdownOpen,
+        .difficultyLevels = levels,
+    }, chartFilterPanelVisible);
+  }
+  if (chartSortPanel != nullptr) {
+    chartSortPanel->refresh({
+        .sort = chartRecordFilters.sort,
+        .difficultySortEnabled = chartDifficultyRangeEnabled(),
+    }, chartSortPanelVisible);
+  }
+  refreshChartFilterButtons();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void MainMenuScene::refreshChartFilterButtons() {
+  const bool filterActive =
+      chartFilterPanelVisible || chartRecordFilters.clearMarkRank.has_value() ||
+      chartRecordFilters.scoreRank.has_value() ||
+      chartRecordFilters.bpmMin.has_value() ||
+      chartRecordFilters.bpmMax.has_value() ||
+      chartRecordFilters.difficultyMinLevel.has_value() ||
+      chartRecordFilters.difficultyMaxLevel.has_value();
+  styleThemedActionButton(
+      chartFilterButton, chartFilterButtonText, true,
+      filterActive ? ui_theme::primaryAction : ui_theme::control,
+      filterActive ? ui_theme::primaryActionHover : ui_theme::controlHover,
+      filterActive ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
+      filterActive ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+
+  const bool sortActive =
+      chartSortPanelVisible ||
+      chartRecordFilters.sort.criterion != ChartRecordSortCriterion::Default;
+  styleThemedActionButton(
+      chartSortButton, chartSortButtonText, true,
+      sortActive ? ui_theme::primaryAction : ui_theme::control,
+      sortActive ? ui_theme::primaryActionHover : ui_theme::controlHover,
+      sortActive ? ui_theme::primaryActionPressed : ui_theme::controlPressed,
+      sortActive ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong);
+}
+
+void MainMenuScene::setChartClearFilter(std::optional<int> rank) {
+  if (activeFolder.clearMarkFolder) {
+    rank.reset();
+  }
+  chartRecordFilters.clearMarkRank = rank;
+  if (!rank.has_value()) {
+    chartRecordFilters.clearMarkOrAbove = false;
+    chartRecordFilters.clearMarkOrBelow = false;
+  }
+  chart_record_filters::normalizeSelection(chartRecordFilters);
+  chartClearMarkDropdownOpen = false;
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartScoreRankFilter(std::optional<std::string> rank) {
+  const std::optional<int> effectiveClearMarkRank =
+      chartRecordFilters.clearMarkRank.has_value()
+          ? chartRecordFilters.clearMarkRank
+          : (activeFolder.clearMarkFolder
+                 ? std::optional<int>(activeFolder.clearMarkRank)
+                 : std::nullopt);
+  if (!chart_record_filters::scoreRankFilterEnabled(effectiveClearMarkRank)) {
+    rank.reset();
+  }
+  chartRecordFilters.scoreRank = rank;
+  if (!rank.has_value()) {
+    chartRecordFilters.scoreRankOrAbove = false;
+    chartRecordFilters.scoreRankOrBelow = false;
+  }
+  chartScoreRankDropdownOpen = false;
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartBpmMinFilter(const std::string &text) {
+  chartBpmMinText = text;
+  chartRecordFilters.bpmMin = parseOptionalBpmFilter(text);
+  chart_record_filters::normalizeBpmRange(chartRecordFilters);
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartBpmMaxFilter(const std::string &text) {
+  chartBpmMaxText = text;
+  chartRecordFilters.bpmMax = parseOptionalBpmFilter(text);
+  chart_record_filters::normalizeBpmRange(chartRecordFilters);
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartDifficultyMinFilter(
+    std::optional<std::string> level) {
+  chartRecordFilters.difficultyMinLevel = std::move(level);
+  normalizeDifficultyFilterRange(chartRecordFilters,
+                                 chartFilterDifficultyLevels());
+  chartDifficultyMinDropdownOpen = false;
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartDifficultyMaxFilter(
+    std::optional<std::string> level) {
+  chartRecordFilters.difficultyMaxLevel = std::move(level);
+  normalizeDifficultyFilterRange(chartRecordFilters,
+                                 chartFilterDifficultyLevels());
+  chartDifficultyMaxDropdownOpen = false;
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartClearMarkDropdownOpen(bool open) {
+  if (activeFolder.clearMarkFolder) {
+    open = false;
+  }
+  chartClearMarkDropdownOpen = open;
+  if (open) {
+    chartScoreRankDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartScoreRankDropdownOpen(bool open) {
+  const std::optional<int> effectiveClearMarkRank =
+      chartRecordFilters.clearMarkRank.has_value()
+          ? chartRecordFilters.clearMarkRank
+          : (activeFolder.clearMarkFolder
+                 ? std::optional<int>(activeFolder.clearMarkRank)
+                 : std::nullopt);
+  if (!chart_record_filters::scoreRankFilterEnabled(effectiveClearMarkRank)) {
+    open = false;
+  }
+  chartScoreRankDropdownOpen = open;
+  if (open) {
+    chartClearMarkDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartClearMarkRange(bool orAbove, bool orBelow) {
+  if (!chartRecordFilters.clearMarkRank.has_value()) {
+    chartRecordFilters.clearMarkOrAbove = false;
+    chartRecordFilters.clearMarkOrBelow = false;
+  } else {
+    chartRecordFilters.clearMarkOrAbove = orAbove;
+    chartRecordFilters.clearMarkOrBelow = !orAbove && orBelow;
+  }
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartScoreRankRange(bool orAbove, bool orBelow) {
+  if (!chartRecordFilters.scoreRank.has_value()) {
+    chartRecordFilters.scoreRankOrAbove = false;
+    chartRecordFilters.scoreRankOrBelow = false;
+  } else {
+    chartRecordFilters.scoreRankOrAbove = orAbove;
+    chartRecordFilters.scoreRankOrBelow = !orAbove && orBelow;
+  }
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartDifficultyDropdownOpen(bool minLevel, bool open) {
+  if (open) {
+    chartClearMarkDropdownOpen = false;
+    chartScoreRankDropdownOpen = false;
+  }
+  if (minLevel) {
+    chartDifficultyMinDropdownOpen = open;
+    if (open) {
+      chartDifficultyMaxDropdownOpen = false;
+    }
+  } else {
+    chartDifficultyMaxDropdownOpen = open;
+    if (open) {
+      chartDifficultyMinDropdownOpen = false;
+    }
+  }
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartSortCriterion(
+    ChartRecordSortCriterion criterion) {
+  if (criterion == ChartRecordSortCriterion::Difficulty &&
+      !chartDifficultyRangeEnabled()) {
+    return;
+  }
+  chartRecordFilters.sort =
+      chart_record_filters::nextSortState(chartRecordFilters.sort, criterion);
+  reloadChartList();
+  refreshChartFilterPanel();
 }
 
 void MainMenuScene::reloadChartList(bool preserveViewState) {
@@ -3807,20 +4246,46 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
             "PRIMARY KEY(kind, key, ln_mode)"
             ") WITHOUT ROWID",
             "creating score clear rank cache") ||
+      !exec("DROP TABLE IF EXISTS temp.score_best_cache",
+            "dropping score best cache") ||
+      !exec("CREATE TEMP TABLE score_best_cache ("
+            "kind INTEGER NOT NULL,"
+            "key TEXT NOT NULL,"
+            "ln_mode INTEGER NOT NULL,"
+            "score INTEGER NOT NULL,"
+            "max_score INTEGER NOT NULL,"
+            "max_combo INTEGER NOT NULL,"
+            "clear_rank INTEGER NOT NULL,"
+            "score_rank TEXT NOT NULL,"
+            "PRIMARY KEY(kind, key, ln_mode)"
+            ") WITHOUT ROWID",
+            "creating score best cache") ||
       !exec("BEGIN", "starting score clear rank cache rebuild")) {
     return;
   }
 
-  SqliteStatementHandle stmt;
+  SqliteStatementHandle rankStmt;
   const int rc = prepareSqliteStatement(
       db,
       "INSERT INTO temp.score_clear_rank_cache(kind, key, ln_mode, rank) "
       "VALUES (?, ?, ?, ?)",
-      stmt);
+      rankStmt);
   if (rc != SQLITE_OK) {
     SDL_Log("SQL error while preparing score clear rank cache insert: %s",
             sqlite3_errmsg(db));
     exec("ROLLBACK", "rolling back score clear rank cache rebuild");
+    return;
+  }
+  SqliteStatementHandle bestStmt;
+  const int bestRc = prepareSqliteStatement(
+      db,
+      "INSERT INTO temp.score_best_cache(kind, key, ln_mode, score, max_score, "
+      "max_combo, clear_rank, score_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      bestStmt);
+  if (bestRc != SQLITE_OK) {
+    SDL_Log("SQL error while preparing score best cache insert: %s",
+            sqlite3_errmsg(db));
+    exec("ROLLBACK", "rolling back score best cache rebuild");
     return;
   }
 
@@ -3839,14 +4304,55 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
         if (rank < kNoClearTypeRank) {
           continue;
         }
-        sqlite3_reset(stmt.get());
-        sqlite3_clear_bindings(stmt.get());
-        sqlite3_bind_int(stmt.get(), 1, kind);
-        bindSqliteText(stmt.get(), 2, key);
-        sqlite3_bind_int(stmt.get(), 3, lnMode);
-        sqlite3_bind_int(stmt.get(), 4, rank);
-        if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        sqlite3_reset(rankStmt.get());
+        sqlite3_clear_bindings(rankStmt.get());
+        sqlite3_bind_int(rankStmt.get(), 1, kind);
+        bindSqliteText(rankStmt.get(), 2, key);
+        sqlite3_bind_int(rankStmt.get(), 3, lnMode);
+        sqlite3_bind_int(rankStmt.get(), 4, rank);
+        if (sqlite3_step(rankStmt.get()) != SQLITE_DONE) {
           SDL_Log("SQL error while inserting score clear rank cache row: %s",
+                  sqlite3_errmsg(db));
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  auto insertBestScores = [&](int kind, const ScoreBestMap &scores) {
+    for (const auto &[key, bestByMode] : scores) {
+      if (key.empty()) {
+        continue;
+      }
+      for (int lnMode = 0; lnMode < static_cast<int>(bestByMode.snapshots.size());
+           ++lnMode) {
+        std::optional<ScoreBestSnapshot> snapshot =
+            bestByMode.snapshots[static_cast<size_t>(lnMode)];
+        if (!snapshot.has_value() && lnMode == 1) {
+          snapshot = bestByMode.snapshots[0];
+        }
+        if (!snapshot.has_value()) {
+          continue;
+        }
+        const int clearRank =
+            snapshot->comboBreak == 0 &&
+                    snapshot->clearType >= kClearTypeAssistedEasyClearRank
+                ? kClearTypeFullComboRank
+                : snapshot->clearType;
+        sqlite3_reset(bestStmt.get());
+        sqlite3_clear_bindings(bestStmt.get());
+        sqlite3_bind_int(bestStmt.get(), 1, kind);
+        bindSqliteText(bestStmt.get(), 2, key);
+        sqlite3_bind_int(bestStmt.get(), 3, lnMode);
+        sqlite3_bind_int(bestStmt.get(), 4, snapshot->score);
+        sqlite3_bind_int(bestStmt.get(), 5, snapshot->maxScore);
+        sqlite3_bind_int(bestStmt.get(), 6, snapshot->maxCombo);
+        sqlite3_bind_int(bestStmt.get(), 7, clearRank);
+        bindSqliteText(bestStmt.get(), 8,
+                       score_rank::labelForScore(snapshot->score,
+                                                  snapshot->maxScore));
+        if (sqlite3_step(bestStmt.get()) != SQLITE_DONE) {
+          SDL_Log("SQL error while inserting score best cache row: %s",
                   sqlite3_errmsg(db));
           return false;
         }
@@ -3857,7 +4363,10 @@ void MainMenuScene::rebuildScoreClearRankTempTable() {
 
   const bool ok = insertRanks(0, scoreClearRanks.rankBySha256) &&
                   insertRanks(1, scoreClearRanks.rankByMd5) &&
-                  insertRanks(2, scoreClearRanks.rankByPath);
+                  insertRanks(2, scoreClearRanks.rankByPath) &&
+                  insertBestScores(0, scoreBestScores.scoreBySha256) &&
+                  insertBestScores(1, scoreBestScores.scoreByMd5) &&
+                  insertBestScores(2, scoreBestScores.scoreByPath);
   exec(ok ? "COMMIT" : "ROLLBACK",
        ok ? "committing score clear rank cache rebuild"
           : "rolling back score clear rank cache rebuild");
@@ -3873,7 +4382,14 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
     reloadFolderItems(true);
   }
   if (recyclerView != nullptr) {
-    if (activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark) {
+    const bool chartListDependsOnScores =
+        activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark ||
+        chartRecordFilters.clearMarkRank.has_value() ||
+        chartRecordFilters.scoreRank.has_value() ||
+        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::ClearMark ||
+        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Score ||
+        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::MaxCombo;
+    if (chartListDependsOnScores) {
       reloadChartList(true);
     } else {
       recyclerView->rebindVisibleItems();
@@ -4047,6 +4563,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
 
   const bool chartQueryUnchanged = activeFolder.key == item.key;
   activeFolder = item;
+  refreshChartFilterPanel();
   if (item.expandable) {
     toggleExpandedFolder(item.key);
     reloadFolderItems(true);

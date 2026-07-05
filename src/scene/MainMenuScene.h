@@ -1,6 +1,7 @@
 #pragma once
 #include "../BmsSearchService.h"
 #include "../view/RecyclerView.h"
+#include "ChartFilterSortPanelView.h"
 #include "Scene.h"
 #include "../ChartDBHelper.h"
 #include "../ReplayDBHelper.h"
@@ -231,6 +232,12 @@ private:
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   TextInputBox *difficultyFilterBox = nullptr;
+  ChartFilterPanelView *chartFilterPanel = nullptr;
+  ChartSortPanelView *chartSortPanel = nullptr;
+  Button *chartFilterButton = nullptr;
+  TextView *chartFilterButtonText = nullptr;
+  Button *chartSortButton = nullptr;
+  TextView *chartSortButtonText = nullptr;
   Button *startButton = nullptr;
   View *chartActionsRow = nullptr;
   View *replayButtonSlot = nullptr;
@@ -455,6 +462,15 @@ private:
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
   std::string difficultyText;
+  ChartRecordFilters chartRecordFilters;
+  bool chartFilterPanelVisible = false;
+  bool chartSortPanelVisible = false;
+  std::string chartBpmMinText;
+  std::string chartBpmMaxText;
+  bool chartClearMarkDropdownOpen = false;
+  bool chartScoreRankDropdownOpen = false;
+  bool chartDifficultyMinDropdownOpen = false;
+  bool chartDifficultyMaxDropdownOpen = false;
   std::vector<ReplaySummary> replaySummaries;
   std::vector<ReplaySummary> visibleReplaySummaries;
   ReplayRecordFilters replayRecordFilters;
@@ -552,6 +568,24 @@ private:
   void reloadFolderItems(bool preserveViewState = false);
   void refreshFavoriteFolderCount();
   ChartMetaQuery chartQueryForActiveFolder() const;
+  bool chartDifficultyRangeEnabled() const;
+  std::vector<DifficultyLevelInfo> chartFilterDifficultyLevels() const;
+  void setChartFilterPanelVisible(bool visible);
+  void setChartSortPanelVisible(bool visible);
+  void refreshChartFilterPanel();
+  void refreshChartFilterButtons();
+  void setChartClearFilter(std::optional<int> rank);
+  void setChartScoreRankFilter(std::optional<std::string> rank);
+  void setChartBpmMinFilter(const std::string &text);
+  void setChartBpmMaxFilter(const std::string &text);
+  void setChartDifficultyMinFilter(std::optional<std::string> level);
+  void setChartDifficultyMaxFilter(std::optional<std::string> level);
+  void setChartClearMarkDropdownOpen(bool open);
+  void setChartScoreRankDropdownOpen(bool open);
+  void setChartClearMarkRange(bool orAbove, bool orBelow);
+  void setChartScoreRankRange(bool orAbove, bool orBelow);
+  void setChartDifficultyDropdownOpen(bool minLevel, bool open);
+  void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
   void reloadScoreClearRanks();
   void rebuildScoreClearRankTempTable();

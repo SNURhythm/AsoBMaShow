@@ -47,9 +47,8 @@ float visibleUiBorderInset(float width) {
   if (width <= 0.0f) {
     return 0.0f;
   }
-  return std::max(
-      width, std::max(oneDrawablePixelInUi(rendering::ui_scale_x),
-                      oneDrawablePixelInUi(rendering::ui_scale_y)));
+  return std::max(width, std::max(oneDrawablePixelInUi(rendering::ui_scale_x),
+                                  oneDrawablePixelInUi(rendering::ui_scale_y)));
 }
 
 void submitColoredRect(const RenderContext &context, float x, float y,
@@ -60,14 +59,12 @@ void submitColoredRect(const RenderContext &context, float x, float y,
 
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
-  if (bgfx::getAvailTransientVertexBuffer(4,
-                                          rendering::PosColorVertex::ms_decl) <
-          4 ||
+  if (bgfx::getAvailTransientVertexBuffer(
+          4, rendering::PosColorVertex::ms_decl) < 4 ||
       bgfx::getAvailTransientIndexBuffer(6) < 6) {
     return;
   }
-  bgfx::allocTransientVertexBuffer(&tvb, 4,
-                                   rendering::PosColorVertex::ms_decl);
+  bgfx::allocTransientVertexBuffer(&tvb, 4, rendering::PosColorVertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, 6);
   auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(tvb.data);
   auto *indices = reinterpret_cast<uint16_t *>(tib.data);
@@ -126,8 +123,7 @@ void submitRoundedRect(const RenderContext &context, float x, float y,
   auto *indices = reinterpret_cast<uint16_t *>(tib.data);
   const uint32_t abgr = color.toABGR();
   uint16_t vertexIndex = 0;
-  vertices[vertexIndex++] = {x + width * 0.5f, y + height * 0.5f, 0.0f,
-                             abgr};
+  vertices[vertexIndex++] = {x + width * 0.5f, y + height * 0.5f, 0.0f, abgr};
 
   const auto appendCorner = [&](float cx, float cy, float startAngle) {
     for (int i = 0; i <= segments; ++i) {
@@ -189,19 +185,16 @@ void submitShadowRect(const RenderContext &context, int x, int y, int width,
                                    rendering::PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, kIndexCount);
 
-  auto *vertices =
-      reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
+  auto *vertices = reinterpret_cast<rendering::PosTexCoord0Vertex *>(tvb.data);
   auto *indices = reinterpret_cast<uint16_t *>(tib.data);
-  vertices[0] = {static_cast<float>(shadowX), static_cast<float>(shadowY),
-                 0.0f, 0.0f, 0.0f};
+  vertices[0] = {static_cast<float>(shadowX), static_cast<float>(shadowY), 0.0f,
+                 0.0f, 0.0f};
   vertices[1] = {static_cast<float>(shadowX + shadowWidth),
                  static_cast<float>(shadowY), 0.0f, 1.0f, 0.0f};
   vertices[2] = {static_cast<float>(shadowX + shadowWidth),
-                 static_cast<float>(shadowY + shadowHeight), 0.0f, 1.0f,
-                 1.0f};
+                 static_cast<float>(shadowY + shadowHeight), 0.0f, 1.0f, 1.0f};
   vertices[3] = {static_cast<float>(shadowX),
-                 static_cast<float>(shadowY + shadowHeight), 0.0f, 0.0f,
-                 1.0f};
+                 static_cast<float>(shadowY + shadowHeight), 0.0f, 0.0f, 1.0f};
 
   indices[0] = 0;
   indices[1] = 1;
@@ -323,112 +316,140 @@ void View::dispatchTemporaryEventListeners(SDL_Event &event) {
 
 View *View::setWidth(float width) {
   YGNodeStyleSetWidth(node, width);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setWidthPercent(float widthPercent) {
   YGNodeStyleSetWidthPercent(node, widthPercent);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setHeight(float height) {
   YGNodeStyleSetHeight(node, height);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setMinWidth(float minWidth) {
   YGNodeStyleSetMinWidth(node, minWidth);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setMinHeight(float minHeight) {
   YGNodeStyleSetMinHeight(node, minHeight);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlex(float flex) {
   YGNodeStyleSetFlex(node, flex);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlexGrow(float flexGrow) {
   YGNodeStyleSetFlexGrow(node, flexGrow);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlexBasis(float flexBasis) {
   YGNodeStyleSetFlexBasis(node, flexBasis);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlexWrap(YGWrap flexWrap) {
   YGNodeStyleSetFlexWrap(node, flexWrap);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlexShrink(float flexShrink) {
   YGNodeStyleSetFlexShrink(node, flexShrink);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setMargin(Edge edge, float margin) {
   YGNodeStyleSetMargin(node, static_cast<YGEdge>(edge), margin);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setPadding(Edge edge, float padding) {
   YGNodeStyleSetPadding(node, static_cast<YGEdge>(edge), padding);
   updateStoredPadding(edge, padding);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setPosition(Edge edge, float position) {
   YGNodeStyleSetPosition(node, static_cast<YGEdge>(edge), position);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setPositionType(YGPositionType positionType) {
   YGNodeStyleSetPositionType(node, positionType);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setAlignItems(YGAlign align) {
   YGNodeStyleSetAlignItems(node, align);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setAlignSelf(YGAlign align) {
   YGNodeStyleSetAlignSelf(node, align);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setAlignContent(YGAlign align) {
   YGNodeStyleSetAlignContent(node, align);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setJustifyContent(YGJustify justify) {
   YGNodeStyleSetJustifyContent(node, justify);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setFlexDirection(FlexDirection direction) {
   YGNodeStyleSetFlexDirection(node, static_cast<YGFlexDirection>(direction));
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setGap(YGGutter gutter, float gap) {
   YGNodeStyleSetGap(node, gutter, gap);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setGap(float gap) {
   YGNodeStyleSetGap(node, YGGutterAll, gap);
+  requestLayoutIfDirty();
   return this;
 }
 
 View *View::setDirection(YGDirection direction) {
   YGNodeStyleSetDirection(node, direction);
+  requestLayoutIfDirty();
+  return this;
+}
+
+View *View::setDisplay(YGDisplay display) {
+  YGNodeStyleSetDisplay(node, display);
+  requestLayoutIfDirty();
   return this;
 }
 
@@ -484,8 +505,7 @@ View *View::setShadow(const Color &color, int offsetX, int offsetY,
   return this;
 }
 
-View *View::setShadow(const Color &color,
-                      const ui_theme::ShadowSpec &shadow) {
+View *View::setShadow(const Color &color, const ui_theme::ShadowSpec &shadow) {
   setShadow(color, shadow.offsetX, shadow.offsetY, shadow.spread);
   shadowRadiusInset = std::max(0.0f, shadow.radiusInset);
   return this;
@@ -567,25 +587,26 @@ View *View::addView(View *view) {
   return this;
 }
 
-void View::applyYogaLayout() {
-  if (layoutBatchDepth > 0) {
-    markLayoutDirty();
-    return;
+View *View::clearChildren() {
+  for (auto *view : children) {
+    dirtyRoots.erase(view);
+    if (node != nullptr && view != nullptr && view->node != nullptr) {
+      YGNodeRemoveChild(node, view->node);
+    }
+    if (view != nullptr) {
+      view->parent = nullptr;
+      delete view;
+    }
   }
-  applyYogaLayoutImmediate();
+  children.clear();
+  childrenOrderDirty = false;
+  applyYogaLayout();
+  return this;
 }
 
-void View::applyYogaLayoutFromRoot() {
-  if (layoutBatchDepth > 0) {
-    markLayoutDirty();
-    return;
-  }
-  View *root = this;
-  while (root->parent != nullptr) {
-    root = root->parent;
-  }
-  root->applyYogaLayoutImmediate();
-}
+void View::applyYogaLayout() { requestLayout(); }
+
+void View::applyYogaLayoutFromRoot() { requestLayout(); }
 
 void View::onThemeChanged() {
   if (themedBackgroundColorProvider) {
@@ -626,28 +647,28 @@ void View::renderBoxDecoration(RenderContext &context) const {
   int layoutInset = hasBorder ? borderWidth : 0;
   layoutInset = std::min(layoutInset, std::min(width / 2, height / 2));
   const float borderWidthX =
-      hasBorder
-          ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
-                                          rendering::ui_scale_x),
-                     static_cast<float>(width) * 0.5f)
-          : 0.0f;
-  const float borderWidthY =
-      hasBorder
-          ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
-                                          rendering::ui_scale_y),
-                     static_cast<float>(height) * 0.5f)
-          : 0.0f;
-  const float borderInset =
-      hasBorder ? std::min(visibleUiBorderInset(static_cast<float>(layoutInset)),
-                           static_cast<float>(std::min(width, height)) * 0.5f)
+      hasBorder ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
+                                                rendering::ui_scale_x),
+                           static_cast<float>(width) * 0.5f)
                 : 0.0f;
+  const float borderWidthY =
+      hasBorder ? std::min(visibleUiBorderWidth(static_cast<float>(layoutInset),
+                                                rendering::ui_scale_y),
+                           static_cast<float>(height) * 0.5f)
+                : 0.0f;
+  const float borderInset =
+      hasBorder
+          ? std::min(visibleUiBorderInset(static_cast<float>(layoutInset)),
+                     static_cast<float>(std::min(width, height)) * 0.5f)
+          : 0.0f;
   const bool rounded = cornerRadius > 0.5f;
 
   if (hasShadow) {
     RenderContext shadowContext;
     if (prepareShadowRenderContext(context, shadowContext, shadowSpread,
                                    shadowOffsetX, shadowOffsetY)) {
-      const float shadowRadius = std::max(0.0f, cornerRadius - shadowRadiusInset);
+      const float shadowRadius =
+          std::max(0.0f, cornerRadius - shadowRadiusInset);
       submitShadowRect(shadowContext, x + shadowOffsetX, y + shadowOffsetY,
                        width, height, shadowRadius, shadowSpread, shadowColor);
     }
@@ -658,7 +679,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
 
     const float backgroundX = static_cast<float>(x) + borderInset;
     const float backgroundY = static_cast<float>(y) + borderInset;
-    const float backgroundWidth = static_cast<float>(width) - borderInset * 2.0f;
+    const float backgroundWidth =
+        static_cast<float>(width) - borderInset * 2.0f;
     const float backgroundHeight =
         static_cast<float>(height) - borderInset * 2.0f;
     const float backgroundRadius = std::max(0.0f, cornerRadius - borderInset);
@@ -682,10 +704,8 @@ void View::renderBoxDecoration(RenderContext &context) const {
 
   if (hasBorder && layoutInset > 0) {
     submitColoredRect(context, x, y, width, borderWidthY, borderColor);
-    submitColoredRect(context, x,
-                      static_cast<float>(y + height) - borderWidthY, width,
-                      borderWidthY,
-                      borderColor);
+    submitColoredRect(context, x, static_cast<float>(y + height) - borderWidthY,
+                      width, borderWidthY, borderColor);
 
     const float middleY = static_cast<float>(y) + borderWidthY;
     const float middleHeight = static_cast<float>(height) - borderWidthY * 2.0f;
@@ -693,8 +713,7 @@ void View::renderBoxDecoration(RenderContext &context) const {
       submitColoredRect(context, x, middleY, borderWidthX, middleHeight,
                         borderColor);
       submitColoredRect(context, static_cast<float>(x + width) - borderWidthX,
-                        middleY, borderWidthX,
-                        middleHeight, borderColor);
+                        middleY, borderWidthX, middleHeight, borderColor);
     }
   }
 
@@ -717,6 +736,11 @@ void View::renderBoxDecoration(RenderContext &context) const {
 }
 
 void View::applyYogaLayoutImmediate() {
+  const bool outermostLayout = layoutApplyDepth == 0;
+  ++layoutApplyDepth;
+
+  auto prevX = absoluteX;
+  auto prevY = absoluteY;
   auto prevWidth = YGNodeLayoutGetWidth(node);
   auto prevHeight = YGNodeLayoutGetHeight(node);
   // Only calculate layout from root node
@@ -743,10 +767,18 @@ void View::applyYogaLayoutImmediate() {
 
   // Call onLayout to notify derived classes
   onLayout();
+  if (prevX != absoluteX || prevY != absoluteY) {
+    onMove(YGNodeLayoutGetLeft(node), YGNodeLayoutGetTop(node));
+  }
   auto newWidth = YGNodeLayoutGetWidth(node);
   auto newHeight = YGNodeLayoutGetHeight(node);
   if (prevWidth != newWidth || prevHeight != newHeight) {
     onResize(newWidth, newHeight);
+  }
+
+  --layoutApplyDepth;
+  if (outermostLayout && layoutBatchDepth == 0) {
+    flushLayoutBatches();
   }
 }
 
