@@ -2,6 +2,7 @@
 #include "../src/sqlite3.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -244,5 +245,51 @@ int main() {
             "rebuilt clear rank summary keeps best clear lamp");
 
   sqlite3_close(db);
+
+  const std::filesystem::path scoreDbPath =
+      std::filesystem::temp_directory_path() /
+      "asobmashow_score_cache_query_test.sqlite";
+  std::filesystem::remove(scoreDbPath);
+  sqlite3 *scoreDb = nullptr;
+  if (sqlite3_open(scoreDbPath.string().c_str(), &scoreDb) != SQLITE_OK) {
+    std::cerr << "open score db failed" << std::endl;
+    return 1;
+  }
+  execOrAbort(scoreDb,
+              "CREATE TABLE scores ("
+              "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+              "chart_sha256 TEXT NOT NULL,"
+              "ln_mode INTEGER NOT NULL DEFAULT 0,"
+              "score INTEGER NOT NULL,"
+              "max_score INTEGER NOT NULL,"
+              "max_combo INTEGER NOT NULL,"
+              "combo_break INTEGER NOT NULL,"
+              "final_gauge REAL NOT NULL DEFAULT 0,"
+              "clear_type INTEGER NOT NULL,"
+              "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+              ")");
+  execOrAbort(scoreDb,
+              "INSERT INTO scores(chart_sha256, ln_mode, score, max_score, "
+              "max_combo, combo_break, clear_type, created_at) "
+              "VALUES('prepared-sha', 0, 123, 200, 50, 1, 300, "
+              "'2026-01-04 00:00:00')");
+  sqlite3_close(scoreDb);
+
+  sqlite3 *chartDb = nullptr;
+  if (sqlite3_open(":memory:", &chartDb) != SQLITE_OK) {
+    std::cerr << "open chart db failed" << std::endl;
+    return 1;
+  }
+  const auto prepareError =
+      score_cache_queries::prepareScoreQueryDatabase(chartDb, scoreDbPath);
+  ASSERT_FALSE(prepareError.has_value(), "prepare score query database");
+  ASSERT_EQ(123,
+            queryInt(chartDb,
+                     "SELECT " +
+                         score_cache_queries::scoreBestLookupExpr(
+                             "'prepared-sha'", "0", "score")),
+            "prepared score query database backfills summaries");
+  sqlite3_close(chartDb);
+  std::filesystem::remove(scoreDbPath);
   return 0;
 }

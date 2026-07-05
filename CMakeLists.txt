@@ -519,6 +519,7 @@ if (ASOBMASHOW_BUILD_TESTS)
 
     add_executable(score_cache_query_tests
         tests/score_cache_query_tests.cpp
+        src/path.cpp
         src/sqlite3.c
     )
     target_include_directories(score_cache_query_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

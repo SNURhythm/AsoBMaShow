@@ -4212,15 +4212,10 @@ void MainMenuScene::prepareScoreQueryDatabase() {
 
   const std::filesystem::path scoreDbPath =
       Utils::GetDocumentsPath("db") / "score.db";
-  if (const auto attachError =
-          score_cache_queries::attachScoreDatabaseIfNeeded(db, scoreDbPath)) {
-    SDL_Log("SQL error while attaching score database: %s",
-            attachError->c_str());
-    if (const auto emptyError =
-            score_cache_queries::attachEmptyScoreDatabase(db)) {
-      SDL_Log("SQL error while attaching empty score database: %s",
-              emptyError->c_str());
-    }
+  if (const auto error =
+          score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
+    SDL_Log("SQL error while preparing score query database: %s",
+            error->c_str());
   }
 }
 

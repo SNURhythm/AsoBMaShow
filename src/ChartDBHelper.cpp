@@ -1536,10 +1536,8 @@ std::string chartBestScoreExpr(const std::string &alias,
                                int selectedLongNoteMode) {
   const std::string lnModeExpr =
       scoreLongNoteModeExpr(alias, selectedLongNoteMode);
-  return "COALESCE(" +
-         scoreBestLookupExpr(storedHashColumn(alias, "sha256"), lnModeExpr,
-                             column) +
-         ")";
+  return scoreBestLookupExpr(storedHashColumn(alias, "sha256"), lnModeExpr,
+                             column);
 }
 
 std::string difficultyEntryBestScoreExpr(const std::string &entryAlias,
@@ -1602,6 +1600,27 @@ bool chartMetaQueryHasScoreFilter(const ChartMetaQuery &chartQuery) {
 bool chartMetaQueryNeedsBestScore(const ChartMetaQuery &chartQuery) {
   return chartMetaQueryHasScoreFilter(chartQuery) ||
          chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
+}
+
+bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
+  return chartQuery.clearMarkFilter || chartMetaQueryHasScoreFilter(chartQuery) ||
+         chartQuery.sortCriterion == ChartRecordSortCriterion::ClearMark ||
+         chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
+}
+
+bool ensureScoreQueryDatabase(sqlite3 *db, const ChartMetaQuery &chartQuery) {
+  if (!chartMetaQueryNeedsScoreCache(chartQuery)) {
+    return true;
+  }
+  const std::filesystem::path scoreDbPath =
+      Utils::GetDocumentsPath("db") / "score.db";
+  if (const auto error =
+          score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
+    SDL_Log("SQL error while preparing score query database: %s",
+            error->c_str());
+    return false;
+  }
+  return true;
 }
 
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
@@ -3811,6 +3830,9 @@ void ChartDBHelper::QueryChartMeta(
       !CreateDifficultyTableTables(db)) {
     return;
   }
+  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+    return;
+  }
   if (chartQuery.solidArchivesOnly) {
     std::string query = "SELECT ";
     query += kSolidArchiveSelectColumns;
@@ -3978,6 +4000,9 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return 0;
   }
+  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+    return 0;
+  }
   if (chartQuery.solidArchivesOnly) {
     std::string query = "SELECT COUNT(*) FROM solid_archives sa WHERE 1 = 1";
     if (!chartQuery.keyword.empty()) {
@@ -4091,6 +4116,9 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
   }
   if (queryNeedsDifficultyTableSchema(chartQuery) &&
       !CreateDifficultyTableTables(db)) {
+    return -1;
+  }
+  if (!ensureScoreQueryDatabase(db, chartQuery)) {
     return -1;
   }
 

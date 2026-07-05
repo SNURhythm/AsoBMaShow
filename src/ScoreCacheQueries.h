@@ -178,6 +178,9 @@ attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
 inline std::optional<std::string>
 ensureScoreSummarySchema(sqlite3 *db, std::string_view schema = {});
 
+inline std::optional<std::string>
+repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema);
+
 inline std::optional<std::string> attachEmptyScoreDatabase(sqlite3 *db) {
   bool attached = false;
   if (const auto error = isScoreDatabaseAttached(db, attached)) {
@@ -208,6 +211,31 @@ inline std::optional<std::string> attachEmptyScoreDatabase(sqlite3 *db) {
     return error;
   }
   return ensureScoreSummarySchema(db, kScoreDatabaseSchema);
+}
+
+inline std::optional<std::string>
+prepareScoreQueryDatabase(sqlite3 *db, const std::filesystem::path &path) {
+  if (const auto attachError = attachScoreDatabaseIfNeeded(db, path)) {
+    if (const auto emptyError = attachEmptyScoreDatabase(db)) {
+      return "could not attach score database: " + *attachError +
+             "; could not prepare empty score database: " + *emptyError;
+    }
+    return std::nullopt;
+  }
+
+  if (const auto schemaError = ensureScoreSummarySchema(db, kScoreDatabaseSchema)) {
+    if (const auto emptyError = attachEmptyScoreDatabase(db)) {
+      return "could not prepare score summary schema: " + *schemaError +
+             "; could not prepare empty score database: " + *emptyError;
+    }
+    return std::nullopt;
+  }
+
+  if (const auto repairError =
+          repairScoreSummaryTablesIfEmpty(db, kScoreDatabaseSchema)) {
+    return repairError;
+  }
+  return std::nullopt;
 }
 
 inline std::optional<std::string>
