@@ -87,13 +87,27 @@ inline bool matches(const ReplaySummary &summary,
   return true;
 }
 
+inline bool
+supportsScoreRankFilter(const std::vector<ReplaySummary> &summaries) {
+  return std::any_of(summaries.begin(), summaries.end(),
+                     [](const ReplaySummary &summary) {
+                       return !summary.courseReplay && summary.maxScore > 0;
+                     });
+}
+
 inline std::vector<ReplaySummary>
 apply(const std::vector<ReplaySummary> &summaries,
       const ReplayRecordFilters &filters) {
+  ReplayRecordFilters effectiveFilters = filters;
+  if (effectiveFilters.scoreRank.has_value() &&
+      !supportsScoreRankFilter(summaries)) {
+    effectiveFilters.scoreRank.reset();
+  }
+
   std::vector<ReplaySummary> result;
   result.reserve(summaries.size());
   for (const ReplaySummary &summary : summaries) {
-    if (matches(summary, filters)) {
+    if (matches(summary, effectiveFilters)) {
       result.push_back(summary);
     }
   }
@@ -104,7 +118,7 @@ apply(const std::vector<ReplaySummary> &summaries,
                          replay_clear_mark::effectiveClearRank(a);
                      const int bClearRank =
                          replay_clear_mark::effectiveClearRank(b);
-                     switch (filters.sort) {
+                     switch (effectiveFilters.sort) {
                      case ReplayRecordSortCriterion::ClearMark:
                        if (aClearRank != bClearRank) {
                          return aClearRank > bClearRank;

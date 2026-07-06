@@ -61,6 +61,17 @@ int main() {
   ASSERT_EQ(2, filtered[0].id, "score rank filter id");
 
   filters = {};
+  filters.scoreRank = "AAA";
+  std::vector<ReplaySummary> courseSummaries = {
+      makeSummary(21, kClearTypeNormalClearRank, 900, 0, 120),
+      makeSummary(22, kClearTypeHardClearRank, 800, 0, 220),
+  };
+  courseSummaries[0].courseReplay = true;
+  courseSummaries[1].courseReplay = true;
+  filtered = replay_record_filters::apply(courseSummaries, filters);
+  ASSERT_EQ(2U, filtered.size(), "course score rank filter ignored size");
+
+  filters = {};
   filters.sort = ReplayRecordSortCriterion::ClearMark;
   filtered = replay_record_filters::apply(summaries, filters);
   ASSERT_EQ(2, filtered[0].id, "clear sort first id");
@@ -90,12 +101,29 @@ int main() {
   ASSERT_EQ(2, filtered[0].id, "max combo sort first id");
 
   filters.sort = ReplayRecordSortCriterion::MaxCombo;
+  std::vector<ReplaySummary> clearMarkVsMaxComboSummaries = {
+      makeSummary(50, kClearTypeHardClearRank, 740, 1000, 220),
+      makeSummary(49, kClearTypeNormalClearRank, 900, 1000, 360),
+  };
+  filtered = replay_record_filters::apply(clearMarkVsMaxComboSummaries, filters);
+  ASSERT_EQ(49, filtered[0].id, "max combo sort combo precedence id");
+
+  filters.sort = ReplayRecordSortCriterion::MaxCombo;
   std::vector<ReplaySummary> tiedMaxComboSummaries = {
       makeSummary(51, kClearTypeNormalClearRank, 740, 1000, 360),
       makeSummary(52, kClearTypeNormalClearRank, 810, 1000, 360),
   };
   filtered = replay_record_filters::apply(tiedMaxComboSummaries, filters);
   ASSERT_EQ(52, filtered[0].id, "max combo sort score tie id");
+
+  filters.sort = ReplayRecordSortCriterion::MaxCombo;
+  std::vector<ReplaySummary> tiedMaxComboAndScoreSummaries = {
+      makeSummary(61, kClearTypeNormalClearRank, 810, 1000, 360),
+      makeSummary(62, kClearTypeHardClearRank, 810, 1000, 360),
+  };
+  filtered =
+      replay_record_filters::apply(tiedMaxComboAndScoreSummaries, filters);
+  ASSERT_EQ(62, filtered[0].id, "max combo sort clear mark tie id");
 
   filters.sort = ReplayRecordSortCriterion::Newest;
   filtered = replay_record_filters::apply(summaries, filters);

@@ -54,38 +54,27 @@ using ScoreBestMap = std::unordered_map<std::string, ScoreBestByLongNoteMode,
 
 struct ScoreClearRankCache {
   ScoreRankMap rankBySha256;
-  ScoreRankMap rankByMd5;
-  ScoreRankMap rankByPath;
   CourseScoreRankMap rankByCourseId;
 
   [[nodiscard]] int bestRankFor(const bms_parser::ChartMeta &chartMeta,
                                 int selectedLongNoteMode = 0) const;
-  [[nodiscard]] int bestRankForHashes(const std::string &sha256,
-                                      const std::string &md5,
-                                      const std::string &path = "",
-                                      int longNoteMode = 0) const;
-  [[nodiscard]] int bestRankForStoredKeys(std::string_view sha256,
-                                          std::string_view md5,
-                                          std::string_view path = "",
-                                          int longNoteMode = 0) const;
+  [[nodiscard]] int bestRankForHash(const std::string &sha256,
+                                    int longNoteMode = 0) const;
+  [[nodiscard]] int bestRankForStoredKey(std::string_view sha256,
+                                         int longNoteMode = 0) const;
   [[nodiscard]] int bestCourseRankForId(int courseId) const;
 };
 
 struct ScoreBestCache {
   ScoreBestMap scoreBySha256;
-  ScoreBestMap scoreByMd5;
-  ScoreBestMap scoreByPath;
 
   [[nodiscard]] std::optional<ScoreBestSnapshot>
   bestFor(const bms_parser::ChartMeta &chartMeta,
           int selectedLongNoteMode = 0) const;
   [[nodiscard]] std::optional<ScoreBestSnapshot>
-  bestForHashes(const std::string &sha256, const std::string &md5,
-                const std::string &path = "", int longNoteMode = 0) const;
+  bestForHash(const std::string &sha256, int longNoteMode = 0) const;
   [[nodiscard]] std::optional<ScoreBestSnapshot>
-  bestForStoredKeys(std::string_view sha256, std::string_view md5,
-                    std::string_view path = "",
-                    int longNoteMode = 0) const;
+  bestForStoredKey(std::string_view sha256, int longNoteMode = 0) const;
 };
 
 [[nodiscard]] int scoreLongNoteModeForClearLamp(

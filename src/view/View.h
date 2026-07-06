@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_set>
+#include <utility>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/Color.h"
@@ -205,6 +206,8 @@ public:
   static uint64_t addTemporaryEventListener(TemporaryEventListener listener);
   static void removeTemporaryEventListener(uint64_t listenerId);
   static void dispatchTemporaryEventListeners(SDL_Event &event);
+  static void deferAfterEvent(std::function<void()> callback);
+  static void dispatchDeferredEventCallbacks();
 
   virtual inline void onLayout() {};
 
@@ -219,9 +222,8 @@ public:
     YGNodeStyleSetWidth(node, newWidth);
     YGNodeStyleSetHeight(node, newHeight);
 
-    if (isResized) {
-      onResize(newWidth, newHeight);
-      applyYogaLayout();
+    if (isResized || YGNodeIsDirty(node)) {
+      requestLayout();
     }
   }
 
@@ -241,8 +243,7 @@ public:
     YGNodeStyleSetPosition(node, YGEdgeLeft, newX);
     YGNodeStyleSetPosition(node, YGEdgeTop, newY);
 
-    applyYogaLayout();
-    onMove(newX, newY);
+    requestLayoutIfDirty();
   }
   // Use for absolute-positioned views to avoid full layout recalculation.
   inline void setPositionNoLayout(
@@ -313,6 +314,7 @@ public:
   View *setGap(YGGutter gutter, float gap);
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
+  View *setDisplay(YGDisplay display);
   View *setBackgroundColor(const Color &color);
   View *setThemedBackgroundColor(ThemeColorProvider provider);
   View *setBackgroundGradient(const Color &topColor, const Color &bottomColor);
@@ -331,6 +333,7 @@ public:
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
+  View *clearChildren();
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }
   void setName(const std::string &name) { this->name = name; }
@@ -412,6 +415,7 @@ private:
     YGNodeStyleSetBorder(
         node, YGEdgeAll,
         hasBorder ? static_cast<float>(std::max(0, borderWidth)) : 0.0f);
+    requestLayoutIfDirty();
   }
   void markLayoutDirty() {
     View *root = this;
@@ -424,10 +428,31 @@ private:
     if (dirtyRoots.empty()) {
       return;
     }
-    for (auto *root : dirtyRoots) {
-      root->applyYogaLayoutImmediate();
+    while (!dirtyRoots.empty()) {
+      auto roots = std::move(dirtyRoots);
+      dirtyRoots.clear();
+      for (auto *root : roots) {
+        if (root != nullptr) {
+          root->applyYogaLayoutImmediate();
+        }
+      }
     }
-    dirtyRoots.clear();
+  }
+  void requestLayout() {
+    if (layoutBatchDepth > 0 || layoutApplyDepth > 0) {
+      markLayoutDirty();
+      return;
+    }
+    View *root = this;
+    while (root->parent != nullptr) {
+      root = root->parent;
+    }
+    root->applyYogaLayoutImmediate();
+  }
+  void requestLayoutIfDirty() {
+    if (YGNodeIsDirty(node)) {
+      requestLayout();
+    }
   }
   void applyYogaLayoutImmediate();
 
@@ -473,8 +498,8 @@ private:
   ThemeColorProvider themedBackgroundColorProvider;
   ThemeColorProvider themedBorderColorProvider;
   ThemeColorProvider themedShadowColorProvider;
-  int absoluteX;
-  int absoluteY;
+  int absoluteX = 0;
+  int absoluteY = 0;
   bool isVisible; // Visibility of the view
   bool hasBackground = false;
   bool hasGradientBackground = false;
@@ -499,9 +524,11 @@ private:
   uint64_t insertionOrder = 0;
   inline static uint64_t nextInsertionOrder = 1;
   inline static int layoutBatchDepth = 0;
+  inline static int layoutApplyDepth = 0;
   inline static std::unordered_set<View *> dirtyRoots;
   inline static std::vector<TemporaryEventListenerEntry>
       temporaryEventListeners;
+  inline static std::vector<std::function<void()>> deferredEventCallbacks;
   inline static uint64_t nextTemporaryEventListenerId = 1;
   inline static bool dispatchingTemporaryEventListeners = false;
   std::string name;

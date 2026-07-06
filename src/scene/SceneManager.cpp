@@ -121,6 +121,7 @@ EventHandleResult SceneManager::handleEvents(SDL_Event &event) {
   if (currentScene) {
     result = currentScene->handleEvents(event);
   }
+  View::dispatchDeferredEventCallbacks();
   return result;
 }
 

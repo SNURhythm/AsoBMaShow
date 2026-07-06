@@ -5,6 +5,7 @@
 #include "ChartSqlExpressions.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
+#include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
@@ -12,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -23,29 +25,16 @@
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-constexpr int kScoreDatabaseSchemaVersion = 3;
+constexpr int kScoreDatabaseSchemaVersion = 4;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 
 using asobmshow::bms_metadata::normalizedHash;
-using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::chartSourceArchiveSizeExpr;
 using asobmshow::chart_sql::chartSourcePriorityExpr;
-using asobmshow::chart_sql::kStoredDocumentsBmsPrefix;
 using asobmshow::chart_sql::normalizedSqlHash;
 using asobmshow::chart_sql::storedOrLegacyBmsPathMatchCondition;
-
-std::string normalizedPath(const std::string &value) {
-  return trimCopy(value);
-}
-
-std::string legacyBmsRelativePath(std::string_view path) {
-  if (!path.starts_with(kStoredDocumentsBmsPrefix)) {
-    return "";
-  }
-  return std::string(path.substr(kStoredDocumentsBmsPrefix.size()));
-}
 
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
@@ -93,6 +82,34 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return true;
 }
 
+std::string createScoreTableSql(std::string_view tableName) {
+  return "CREATE TABLE IF NOT EXISTS " + std::string(tableName) +
+         " ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+         "chart_path TEXT,"
+         "chart_md5 TEXT,"
+         "chart_sha256 TEXT NOT NULL,"
+         "ln_mode INTEGER NOT NULL DEFAULT 0,"
+         "chart_title TEXT,"
+         "chart_artist TEXT,"
+         "score INTEGER NOT NULL,"
+         "max_score INTEGER NOT NULL,"
+         "max_combo INTEGER NOT NULL,"
+         "combo_break INTEGER NOT NULL,"
+         "pgreat INTEGER NOT NULL,"
+         "great INTEGER NOT NULL,"
+         "good INTEGER NOT NULL,"
+         "bad INTEGER NOT NULL,"
+         "poor INTEGER NOT NULL,"
+         "kpoor INTEGER NOT NULL,"
+         "fast INTEGER NOT NULL,"
+         "slow INTEGER NOT NULL,"
+         "final_gauge REAL NOT NULL,"
+         "clear_type INTEGER NOT NULL,"
+         "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+         ")";
+}
+
 bool ensureScoreChartIdentityColumns(sqlite3 *db) {
   return ensureSqliteTableColumnLogged(
              db, "scores", "chart_path",
@@ -111,6 +128,19 @@ bool ensureScoreChartIdentityColumns(sqlite3 *db) {
              logSqlErrorText);
 }
 
+bool ensureScoreChartMetadataColumns(sqlite3 *db) {
+  return ensureSqliteTableColumnLogged(
+             db, "scores", "chart_title",
+             "ALTER TABLE scores ADD COLUMN chart_title TEXT",
+             "reading score schema", "adding score chart title column",
+             logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "chart_artist",
+             "ALTER TABLE scores ADD COLUMN chart_artist TEXT",
+             "reading score schema", "adding score chart artist column",
+             logSqlErrorText);
+}
+
 bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
   int changedRows = 0;
   int totalChangedRows = 0;
@@ -122,7 +152,8 @@ bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
   }
   totalChangedRows += changedRows;
   if (!updateSqliteColumnWithExpressionLogged(
-          db, "scores", "chart_sha256", normalizedSqlHash("chart_sha256"),
+          db, "scores", "chart_sha256",
+          "COALESCE(" + normalizedSqlHash("chart_sha256") + ", '')",
           "normalizing stored score sha256 hashes", logSqlErrorText,
           &changedRows)) {
     return false;
@@ -132,6 +163,88 @@ bool normalizeScoreChartIdentityHashes(sqlite3 *db) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
+}
+
+bool scoreSha256ColumnIsNotNull(sqlite3 *db, bool &notNull) {
+  notNull = false;
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA table_info(\"scores\")", stmt,
+                                    "reading score schema",
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  int stepRc = SQLITE_OK;
+  while ((stepRc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    if (sqliteColumnString(stmt.get(), 1) == "chart_sha256") {
+      notNull = sqlite3_column_int(stmt.get(), 3) != 0;
+      return true;
+    }
+  }
+  if (stepRc != SQLITE_DONE) {
+    logSqlError("reading score schema", db);
+    return false;
+  }
+  SDL_Log("SQL error while reading score schema: chart_sha256 column missing");
+  return false;
+}
+
+bool rebuildScoreTableWithRequiredSha256(sqlite3 *db) {
+  bool ok = execSql(db, "SAVEPOINT score_sha256_required_migration",
+                    "starting score sha256 required migration");
+  if (ok) {
+    ok = execSql(db, "DROP TABLE IF EXISTS scores_sha256_rebuild",
+                 "dropping stale score sha256 rebuild table");
+  }
+  if (ok) {
+    const std::string createRebuildTable =
+        createScoreTableSql("scores_sha256_rebuild");
+    ok = execSql(db, createRebuildTable.c_str(),
+                 "creating score sha256 rebuild table");
+  }
+  if (ok) {
+    ok = execSql(db,
+                 "INSERT INTO scores_sha256_rebuild ("
+                 "id, chart_path, chart_md5, chart_sha256, ln_mode, "
+                 "chart_title, chart_artist, score, max_score, max_combo, "
+                 "combo_break, pgreat, great, good, bad, poor, kpoor, fast, "
+                 "slow, final_gauge, clear_type, created_at) "
+                 "SELECT id, chart_path, chart_md5, "
+                 "COALESCE(chart_sha256, ''), ln_mode, chart_title, "
+                 "chart_artist, score, max_score, max_combo, combo_break, "
+                 "pgreat, great, good, bad, poor, kpoor, fast, slow, "
+                 "final_gauge, clear_type, created_at FROM scores",
+                 "copying scores into sha256 required table");
+  }
+  if (ok) {
+    ok = execSql(db, "DROP TABLE scores",
+                 "dropping nullable score table");
+  }
+  if (ok) {
+    ok = execSql(db, "ALTER TABLE scores_sha256_rebuild RENAME TO scores",
+                 "renaming sha256 required score table");
+  }
+
+  if (ok) {
+    return execSql(db, "RELEASE score_sha256_required_migration",
+                   "committing score sha256 required migration");
+  }
+  execSql(db, "ROLLBACK TO score_sha256_required_migration",
+          "rolling back score sha256 required migration");
+  execSql(db, "RELEASE score_sha256_required_migration",
+          "releasing score sha256 required migration");
+  return false;
+}
+
+bool ensureScoreSha256Required(sqlite3 *db) {
+  bool notNull = false;
+  if (!scoreSha256ColumnIsNotNull(db, notNull)) {
+    return false;
+  }
+  if (notNull) {
+    return true;
+  }
+  return rebuildScoreTableWithRequiredSha256(db);
 }
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
@@ -282,49 +395,6 @@ void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
   }
 }
 
-int bestRankForPathKey(const ScoreRankMap &ranks, std::string_view path,
-                       int longNoteMode) {
-  if (path.empty()) {
-    return kNoClearTypeRank;
-  }
-  const auto pathIt = ranks.find(path);
-  if (pathIt != ranks.end()) {
-    return pathIt->second.bestRankForMode(longNoteMode);
-  }
-
-  const std::string legacyPath = legacyBmsRelativePath(path);
-  if (legacyPath.empty()) {
-    return kNoClearTypeRank;
-  }
-  const auto legacyPathIt = ranks.find(legacyPath);
-  if (legacyPathIt != ranks.end()) {
-    return legacyPathIt->second.bestRankForMode(longNoteMode);
-  }
-  return kNoClearTypeRank;
-}
-
-std::optional<ScoreBestSnapshot>
-bestScoreForPathKey(const ScoreBestMap &scores, std::string_view path,
-                    int longNoteMode) {
-  if (path.empty()) {
-    return std::nullopt;
-  }
-  const auto pathIt = scores.find(path);
-  if (pathIt != scores.end()) {
-    return pathIt->second.bestForMode(longNoteMode);
-  }
-
-  const std::string legacyPath = legacyBmsRelativePath(path);
-  if (legacyPath.empty()) {
-    return std::nullopt;
-  }
-  const auto legacyPathIt = scores.find(legacyPath);
-  if (legacyPathIt != scores.end()) {
-    return legacyPathIt->second.bestForMode(longNoteMode);
-  }
-  return std::nullopt;
-}
-
 std::string bestClearMarkRankExpr() {
   return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
          std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
@@ -333,13 +403,9 @@ std::string bestClearMarkRankExpr() {
 }
 
 void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
-  const std::string query =
-      "SELECT chart_sha256, chart_md5, chart_path, ln_mode, " +
-      bestClearMarkRankExpr() +
-      " FROM scores WHERE (chart_sha256 IS NOT NULL AND chart_sha256 != '') "
-      "OR (chart_md5 IS NOT NULL AND chart_md5 != '') "
-      "OR (chart_path IS NOT NULL AND chart_path != '') "
-      "GROUP BY chart_sha256, chart_md5, chart_path, ln_mode";
+  const char *query =
+      "SELECT chart_sha256, ln_mode, rank "
+      "FROM score_sha256_clear_rank_cache";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading score clear ranks",
@@ -348,25 +414,18 @@ void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
   }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const std::string sha256 = normalizedHash(sqliteColumnString(stmt.get(), 0));
-    const std::string md5 = normalizedHash(sqliteColumnString(stmt.get(), 1));
-    const std::string path = normalizedPath(sqliteColumnString(stmt.get(), 2));
-    const int lnMode = sqlite3_column_int(stmt.get(), 3);
-    const int rank = sqlite3_column_int(stmt.get(), 4);
+    const std::string sha256 = sqliteColumnString(stmt.get(), 0);
+    const int lnMode = sqlite3_column_int(stmt.get(), 1);
+    const int rank = sqlite3_column_int(stmt.get(), 2);
     storeBestRank(cache.rankBySha256, sha256, lnMode, rank);
-    storeBestRank(cache.rankByMd5, md5, lnMode, rank);
-    storeBestRank(cache.rankByPath, path, lnMode, rank);
   }
 }
 
 void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
   const char *query =
-      "SELECT chart_sha256, chart_md5, chart_path, ln_mode, score, max_score,"
-      "max_combo, combo_break, final_gauge, clear_type, created_at "
-      "FROM scores WHERE (chart_sha256 IS NOT NULL AND chart_sha256 != '') "
-      "OR (chart_md5 IS NOT NULL AND chart_md5 != '') "
-      "OR (chart_path IS NOT NULL AND chart_path != '') "
-      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC";
+      "SELECT chart_sha256, ln_mode, score, max_score, max_combo, combo_break, "
+      "final_gauge, clear_type, created_at "
+      "FROM score_sha256_best_score_cache";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading score best scores",
@@ -375,22 +434,18 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
   }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const std::string sha256 = normalizedHash(sqliteColumnString(stmt.get(), 0));
-    const std::string md5 = normalizedHash(sqliteColumnString(stmt.get(), 1));
-    const std::string path = normalizedPath(sqliteColumnString(stmt.get(), 2));
-    const int lnMode = sqlite3_column_int(stmt.get(), 3);
+    const std::string sha256 = sqliteColumnString(stmt.get(), 0);
+    const int lnMode = sqlite3_column_int(stmt.get(), 1);
     ScoreBestSnapshot snapshot;
-    snapshot.score = sqlite3_column_int(stmt.get(), 4);
-    snapshot.maxScore = sqlite3_column_int(stmt.get(), 5);
-    snapshot.maxCombo = sqlite3_column_int(stmt.get(), 6);
-    snapshot.comboBreak = sqlite3_column_int(stmt.get(), 7);
+    snapshot.score = sqlite3_column_int(stmt.get(), 2);
+    snapshot.maxScore = sqlite3_column_int(stmt.get(), 3);
+    snapshot.maxCombo = sqlite3_column_int(stmt.get(), 4);
+    snapshot.comboBreak = sqlite3_column_int(stmt.get(), 5);
     snapshot.finalGauge =
-        static_cast<float>(sqlite3_column_double(stmt.get(), 8));
-    snapshot.clearType = sqlite3_column_int(stmt.get(), 9);
-    snapshot.createdAt = sqliteColumnString(stmt.get(), 10);
+        static_cast<float>(sqlite3_column_double(stmt.get(), 6));
+    snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
+    snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
     storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
-    storeBestScore(cache.scoreByMd5, md5, lnMode, snapshot);
-    storeBestScore(cache.scoreByPath, path, lnMode, snapshot);
   }
 }
 
@@ -639,6 +694,20 @@ bool migrateScoreDatabaseToVersion3(sqlite3 *db, bool &completed) {
   return completed;
 }
 
+bool migrateScoreDatabaseToVersion4(sqlite3 *db, bool &completed) {
+  completed = false;
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("creating score identity summary schema", *error);
+    return false;
+  }
+  if (const auto error = score_cache_queries::rebuildScoreSummaryTables(db)) {
+    logSqlErrorText("backfilling score identity summaries", *error);
+    return false;
+  }
+  completed = true;
+  return true;
+}
+
 bool runScoreDatabaseMigrationPasses(
     sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -682,6 +751,7 @@ bool migrateScoreDatabaseSchema(sqlite3 *db) {
       {2, "repair legacy score long note modes",
        migrateScoreDatabaseToVersion2},
       {3, "normalize score chart hashes", migrateScoreDatabaseToVersion3},
+      {4, "score identity summaries", migrateScoreDatabaseToVersion4},
   };
   return runScoreDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -731,56 +801,22 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 
 int ScoreClearRankCache::bestRankFor(
     const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode) const {
-  const auto chartPath =
-      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
-  return bestRankForHashes(
-      chartMeta.SHA256, chartMeta.MD5, chartPath,
+  return bestRankForHash(
+      chartMeta.SHA256,
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
 }
 
-int ScoreClearRankCache::bestRankForHashes(const std::string &sha256,
-                                           const std::string &md5,
-                                           const std::string &path,
-                                           int longNoteMode) const {
+int ScoreClearRankCache::bestRankForHash(const std::string &sha256,
+                                         int longNoteMode) const {
   const std::string normalizedSha = normalizedHash(sha256);
-  const auto shaIt = rankBySha256.find(normalizedSha);
-  if (shaIt != rankBySha256.end()) {
-    return shaIt->second.bestRankForMode(longNoteMode);
-  }
-
-  const std::string normalizedMd5 = normalizedHash(md5);
-  const auto md5It = rankByMd5.find(normalizedMd5);
-  if (md5It != rankByMd5.end()) {
-    return md5It->second.bestRankForMode(longNoteMode);
-  }
-
-  const std::string normalizedChartPath = normalizedPath(path);
-  const int pathRank =
-      bestRankForPathKey(rankByPath, normalizedChartPath, longNoteMode);
-  if (pathRank != kNoClearTypeRank) {
-    return pathRank;
-  }
-
-  return kNoClearTypeRank;
+  return bestRankForStoredKey(normalizedSha, longNoteMode);
 }
 
-int ScoreClearRankCache::bestRankForStoredKeys(std::string_view sha256,
-                                               std::string_view md5,
-                                               std::string_view path,
-                                               int longNoteMode) const {
+int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
+                                              int longNoteMode) const {
   const auto shaIt = rankBySha256.find(sha256);
   if (shaIt != rankBySha256.end()) {
     return shaIt->second.bestRankForMode(longNoteMode);
-  }
-
-  const auto md5It = rankByMd5.find(md5);
-  if (md5It != rankByMd5.end()) {
-    return md5It->second.bestRankForMode(longNoteMode);
-  }
-
-  const int pathRank = bestRankForPathKey(rankByPath, path, longNoteMode);
-  if (pathRank != kNoClearTypeRank) {
-    return pathRank;
   }
 
   return kNoClearTypeRank;
@@ -797,45 +833,21 @@ int ScoreClearRankCache::bestCourseRankForId(int courseId) const {
 std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
                         int selectedLongNoteMode) const {
-  const auto chartPath =
-      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
-  return bestForHashes(
-      chartMeta.SHA256, chartMeta.MD5, chartPath,
+  return bestForHash(
+      chartMeta.SHA256,
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
 }
 
 std::optional<ScoreBestSnapshot>
-ScoreBestCache::bestForHashes(const std::string &sha256,
-                              const std::string &md5,
-                              const std::string &path,
-                              int longNoteMode) const {
+ScoreBestCache::bestForHash(const std::string &sha256,
+                            int longNoteMode) const {
   const std::string normalizedSha = normalizedHash(sha256);
-  const auto shaIt = scoreBySha256.find(normalizedSha);
-  if (shaIt != scoreBySha256.end()) {
-    const auto snapshot = shaIt->second.bestForMode(longNoteMode);
-    if (snapshot.has_value()) {
-      return snapshot;
-    }
-  }
-
-  const std::string normalizedMd5 = normalizedHash(md5);
-  const auto md5It = scoreByMd5.find(normalizedMd5);
-  if (md5It != scoreByMd5.end()) {
-    const auto snapshot = md5It->second.bestForMode(longNoteMode);
-    if (snapshot.has_value()) {
-      return snapshot;
-    }
-  }
-
-  const std::string normalizedChartPath = normalizedPath(path);
-  return bestScoreForPathKey(scoreByPath, normalizedChartPath, longNoteMode);
+  return bestForStoredKey(normalizedSha, longNoteMode);
 }
 
 std::optional<ScoreBestSnapshot>
-ScoreBestCache::bestForStoredKeys(std::string_view sha256,
-                                  std::string_view md5,
-                                  std::string_view path,
-                                  int longNoteMode) const {
+ScoreBestCache::bestForStoredKey(std::string_view sha256,
+                                 int longNoteMode) const {
   const auto shaIt = scoreBySha256.find(sha256);
   if (shaIt != scoreBySha256.end()) {
     const auto snapshot = shaIt->second.bestForMode(longNoteMode);
@@ -844,15 +856,7 @@ ScoreBestCache::bestForStoredKeys(std::string_view sha256,
     }
   }
 
-  const auto md5It = scoreByMd5.find(md5);
-  if (md5It != scoreByMd5.end()) {
-    const auto snapshot = md5It->second.bestForMode(longNoteMode);
-    if (snapshot.has_value()) {
-      return snapshot;
-    }
-  }
-
-  return bestScoreForPathKey(scoreByPath, path, longNoteMode);
+  return std::nullopt;
 }
 
 ScoreDBHelper &ScoreDBHelper::GetInstance() {
@@ -897,36 +901,13 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
     return false;
   }
 
-  const char *query =
-      "CREATE TABLE IF NOT EXISTS scores ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "chart_path TEXT,"
-      "chart_md5 TEXT,"
-      "chart_sha256 TEXT,"
-      "ln_mode INTEGER NOT NULL DEFAULT 0,"
-      "chart_title TEXT,"
-      "chart_artist TEXT,"
-      "score INTEGER NOT NULL,"
-      "max_score INTEGER NOT NULL,"
-      "max_combo INTEGER NOT NULL,"
-      "combo_break INTEGER NOT NULL,"
-      "pgreat INTEGER NOT NULL,"
-      "great INTEGER NOT NULL,"
-      "good INTEGER NOT NULL,"
-      "bad INTEGER NOT NULL,"
-      "poor INTEGER NOT NULL,"
-      "kpoor INTEGER NOT NULL,"
-      "fast INTEGER NOT NULL,"
-      "slow INTEGER NOT NULL,"
-      "final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-      ")";
-  if (!execSql(db, query, "creating score table")) {
+  const std::string query = createScoreTableSql("scores");
+  if (!execSql(db, query.c_str(), "creating score table")) {
     return false;
   }
 
-  if (!ensureScoreChartIdentityColumns(db)) {
+  if (!ensureScoreChartIdentityColumns(db) ||
+      !ensureScoreChartMetadataColumns(db)) {
     return false;
   }
 
@@ -934,7 +915,8 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
     if (!migrateScoreDatabaseSchema(db)) {
       return false;
     }
-  } else if (!setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+  }
+  if (!ensureScoreSha256Required(db)) {
     return false;
   }
 
@@ -962,6 +944,21 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
     if (!execSql(db, indexQuery, "creating score index")) {
       return false;
     }
+  }
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("creating score identity summary schema", *error);
+    return false;
+  }
+  if (existingScoreTable) {
+    if (const auto error =
+            score_cache_queries::repairScoreSummaryTablesIfEmpty(db)) {
+      logSqlErrorText("repairing score identity summaries", *error);
+      return false;
+    }
+  }
+  if (!existingScoreTable &&
+      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+    return false;
   }
   return true;
 }
@@ -1049,10 +1046,17 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
 
   const auto chartPath =
       Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
+  const std::string chartSha256 = normalizedHash(chartMeta.SHA256);
+  if (chartSha256.empty()) {
+    SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION,
+                    "Refusing to save score without chart SHA256: %s",
+                    chartMeta.BmsPath.c_str());
+    std::abort();
+  }
   int bindIndex = 1;
   bindSqliteText(stmt.get(), bindIndex++, chartPath);
   bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.MD5));
-  bindSqliteText(stmt.get(), bindIndex++, normalizedHash(chartMeta.SHA256));
+  bindSqliteText(stmt.get(), bindIndex++, chartSha256);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    scoreLongNoteModeForClearLamp(chartMeta));
   bindSqliteText(stmt.get(), bindIndex++, chartMeta.Title);
@@ -1075,6 +1079,9 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     logSqlError("saving score", db);
+    if (sqlite3_extended_errcode(db) == SQLITE_CONSTRAINT_NOTNULL) {
+      std::abort();
+    }
     return false;
   }
   return true;
