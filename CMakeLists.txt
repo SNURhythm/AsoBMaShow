@@ -773,6 +773,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(sdl_display_backend_tests PRIVATE SDL2)
     endif()
 
+    add_executable(midi_input_tests
+        tests/midi_input_tests.cpp
+        src/input/MidiMessageParser.cpp
+    )
+    target_include_directories(midi_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(midi_input_tests PRIVATE cxx_std_23)
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -833,4 +842,5 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
+    asobmashow_register_test(midi_input_tests foundation_input_midi)
 endif()
