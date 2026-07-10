@@ -103,6 +103,7 @@ public:
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
+  [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   sqlite3 *Connect();
@@ -130,7 +131,9 @@ public:
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
   ScoreClearRankCache LoadBestClearRanks();
+  ScoreClearRankCache LoadBestClearRanks(sqlite3 *db, std::string_view schema);
   ScoreBestCache LoadBestScores();
+  ScoreBestCache LoadBestScores(sqlite3 *db, std::string_view schema);
   [[nodiscard]] std::uint64_t GetRevision() const;
 
 private:

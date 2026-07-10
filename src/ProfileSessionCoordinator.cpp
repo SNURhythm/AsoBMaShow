@@ -74,7 +74,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
   profile_database_activity::SwitchGuard databaseGuard;
   if (!databaseGuard.ownsLock()) {
     return switchFailure(ProfileError::SwitchBlocked,
-                         "A score or replay write is active.");
+                         "A score or replay database operation is active.");
   }
 
   if (manager_.activeProfile().id == profileId) {

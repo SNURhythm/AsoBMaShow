@@ -63,6 +63,7 @@ public:
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
+  [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   sqlite3 *Connect();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ProfileDatabaseActivity.h"
 #include "SqliteRAII.h"
 #include "scene/play/RhythmState.h"
 
@@ -144,8 +145,10 @@ inline std::string scoreIdentityCte(std::string_view schema) {
 } // namespace detail
 
 inline std::optional<std::string>
-isScoreDatabaseAttached(sqlite3 *db, bool &attached) {
+inspectScoreDatabaseAttachment(sqlite3 *db, bool &attached,
+                               std::filesystem::path &attachedPath) {
   attached = false;
+  attachedPath.clear();
   SqliteStatementHandle stmt;
   if (prepareSqliteStatement(db, "PRAGMA database_list", stmt) != SQLITE_OK) {
     return sqliteDatabaseError(db);
@@ -155,7 +158,7 @@ isScoreDatabaseAttached(sqlite3 *db, bool &attached) {
   while ((stepRc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
     if (sqliteColumnString(stmt.get(), 1) == kScoreDatabaseSchema) {
       attached = true;
-      return std::nullopt;
+      attachedPath = sqliteColumnString(stmt.get(), 2);
     }
   }
   if (stepRc != SQLITE_DONE) {
@@ -165,13 +168,10 @@ isScoreDatabaseAttached(sqlite3 *db, bool &attached) {
 }
 
 inline std::optional<std::string>
-attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
-  bool attached = false;
-  if (const auto error = isScoreDatabaseAttached(db, attached)) {
-    return error;
-  }
-  if (attached) {
-    return std::nullopt;
+canonicalScoreDatabasePath(const std::filesystem::path &path,
+                           std::filesystem::path &canonicalPath) {
+  if (path.empty()) {
+    return "score database path is empty";
   }
   std::error_code existsError;
   if (!std::filesystem::exists(path, existsError)) {
@@ -181,7 +181,57 @@ attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
     }
     return "score database does not exist: " + fspath_to_utf8(path);
   }
-  return attachSqliteDatabase(db, path, kScoreDatabaseSchema);
+  std::error_code canonicalError;
+  canonicalPath = std::filesystem::canonical(path, canonicalError);
+  if (canonicalError) {
+    return "could not canonicalize score database path: " +
+           canonicalError.message();
+  }
+  return std::nullopt;
+}
+
+inline std::optional<std::string>
+attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
+  profile_database_activity::WriteGuard operation;
+  std::filesystem::path targetPath;
+  if (const auto error = canonicalScoreDatabasePath(path, targetPath)) {
+    return error;
+  }
+
+  bool attached = false;
+  std::filesystem::path attachedPath;
+  if (const auto error =
+          inspectScoreDatabaseAttachment(db, attached, attachedPath)) {
+    return error;
+  }
+  if (attached) {
+    if (!attachedPath.empty()) {
+      std::error_code canonicalError;
+      const std::filesystem::path canonicalAttachedPath =
+          std::filesystem::canonical(attachedPath, canonicalError);
+      if (canonicalError) {
+        return "could not canonicalize attached score database path: " +
+               canonicalError.message();
+      }
+      std::error_code equivalentError;
+      const bool sameDatabase = std::filesystem::equivalent(
+          canonicalAttachedPath, targetPath, equivalentError);
+      if (equivalentError) {
+        return "could not compare attached score database path: " +
+               equivalentError.message();
+      }
+      if (sameDatabase) {
+        return std::nullopt;
+      }
+    }
+
+    const std::string detachSql =
+        std::string("DETACH DATABASE ") + kScoreDatabaseSchema;
+    if (const auto error = executeSqlite(db, detachSql.c_str())) {
+      return "could not detach previous score database: " + *error;
+    }
+  }
+  return attachSqliteDatabase(db, targetPath, kScoreDatabaseSchema);
 }
 
 inline std::optional<std::string>
@@ -192,6 +242,7 @@ repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema);
 
 inline std::optional<std::string>
 prepareScoreQueryDatabase(sqlite3 *db, const std::filesystem::path &path) {
+  profile_database_activity::WriteGuard operation;
   if (const auto attachError = attachScoreDatabaseIfNeeded(db, path)) {
     return "could not attach score database: " + *attachError;
   }
@@ -210,6 +261,7 @@ prepareScoreQueryDatabase(sqlite3 *db, const std::filesystem::path &path) {
 
 inline std::optional<std::string>
 ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
+  profile_database_activity::WriteGuard operation;
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
   const std::string trigger =
@@ -250,6 +302,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
 
 inline std::optional<std::string>
 rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
+  profile_database_activity::WriteGuard operation;
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
   const std::string identityCte = detail::scoreIdentityCte(schema);
@@ -310,6 +363,7 @@ queryHasRows(sqlite3 *db, const std::string &query, bool &hasRows) {
 
 inline std::optional<std::string>
 repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema = {}) {
+  profile_database_activity::WriteGuard operation;
   const std::string scores = detail::qualifiedName(schema, "scores");
   const std::string hasScoreIdentityQuery =
       "SELECT 1 FROM " + scores + " WHERE " +

@@ -769,6 +769,7 @@ ReplayDBHelper::ReplayDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
 void ReplayDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
+  profile_database_activity::WriteGuard operation;
   std::unique_lock lock(databasePathMutex_);
   databasePath_ = std::move(databasePath);
 }
@@ -786,6 +787,7 @@ std::filesystem::path ReplayDBHelper::GetResolvedDatabasePath() const {
 
 bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
                                       std::string &errorMessage) {
+  profile_database_activity::WriteGuard operation;
   if (databasePath.empty()) {
     errorMessage = "replay database path is empty";
     return false;
@@ -797,6 +799,10 @@ bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   }
   SetDatabasePath(std::move(databasePath));
   return true;
+}
+
+bool ReplayDBHelper::HasActiveReads() {
+  return profile_database_activity::readsActive();
 }
 
 bool ReplayDBHelper::HasActiveWrites() {
@@ -829,6 +835,7 @@ sqlite3 *ReplayDBHelper::Connect() {
 void ReplayDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
 bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
+  profile_database_activity::WriteGuard operation;
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
     return false;
   }
@@ -1040,6 +1047,7 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 }
 
 bool ReplayDBHelper::EnsureSchema() {
+  profile_database_activity::WriteGuard operation;
   SqliteConnectionHandle connection(Connect());
   return connection.get() != nullptr && CreateReplayTables(connection.get());
 }
@@ -1232,6 +1240,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
 
 std::vector<ReplaySummary>
 ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
+  profile_database_activity::ReadGuard operation;
   std::vector<ReplaySummary> replays;
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
@@ -1374,6 +1383,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
 
 std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
                                                              int limit) {
+  profile_database_activity::ReadGuard operation;
   std::vector<ReplaySummary> replays;
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
@@ -1745,6 +1755,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
 std::optional<ReplayData>
 ReplayDBHelper::LoadReplay(int replayId,
                            const bms_parser::ChartMeta &chartMeta) {
+  profile_database_activity::ReadGuard operation;
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr || !CreateReplayTables(db)) {
@@ -1769,6 +1780,7 @@ ReplayDBHelper::LoadReplay(int replayId,
 }
 
 std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
+  profile_database_activity::ReadGuard operation;
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
@@ -1875,6 +1887,7 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
 
 std::optional<ReplayData>
 ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
+  profile_database_activity::ReadGuard operation;
   const auto replays = ListReplays(chartMeta, 1);
   if (replays.empty()) {
     return std::nullopt;

@@ -784,6 +784,7 @@
 				scene/ChartFilterSortPanelView.cpp,
 				scene/ChartViewerScene.cpp,
 				scene/MainMenuLibrary.cpp,
+				scene/MainMenuProfileSelections.h,
 				scene/MainMenuScene.cpp,
 				scene/MusicPlayerScene.cpp,
 				scene/ResultScene.cpp,

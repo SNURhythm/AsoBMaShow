@@ -4,16 +4,20 @@
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
 #include "../src/ReplayDBHelper.h"
+#include "../src/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/input/InputProfileStore.h"
+#include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -100,6 +104,128 @@ Database openDatabase(const std::filesystem::path &path) {
   return Database(raw);
 }
 
+int queryInt(sqlite3 *database, const std::string &sql) {
+  sqlite3_stmt *statement = nullptr;
+  if (sqlite3_prepare_v2(database, sql.c_str(), -1, &statement, nullptr) !=
+      SQLITE_OK) {
+    return 0;
+  }
+  const int value = sqlite3_step(statement) == SQLITE_ROW
+                        ? sqlite3_column_int(statement, 0)
+                        : 0;
+  sqlite3_finalize(statement);
+  return value;
+}
+
+std::filesystem::path attachedDatabasePath(sqlite3 *database,
+                                           std::string_view schema) {
+  sqlite3_stmt *statement = nullptr;
+  if (sqlite3_prepare_v2(database, "PRAGMA database_list", -1, &statement,
+                         nullptr) != SQLITE_OK) {
+    return {};
+  }
+  std::filesystem::path path;
+  while (sqlite3_step(statement) == SQLITE_ROW) {
+    if (sqliteColumnString(statement, 1) == schema) {
+      path = sqliteColumnString(statement, 2);
+      break;
+    }
+  }
+  sqlite3_finalize(statement);
+  return path;
+}
+
+struct DenyNextAttach {
+  bool pending = true;
+};
+
+int denyNextAttach(void *rawState, int action, const char *, const char *,
+                   const char *, const char *) {
+  auto &state = *static_cast<DenyNextAttach *>(rawState);
+  if (action == SQLITE_ATTACH && state.pending) {
+    state.pending = false;
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+struct BlockingStatementTrace {
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::string fragment;
+  bool entered = false;
+  bool released = false;
+};
+
+BlockingStatementTrace *activeBlockingTrace = nullptr;
+
+int blockMatchingStatement(unsigned traceType, void *rawContext,
+                           void *statement, void *) {
+  if (traceType != SQLITE_TRACE_STMT) {
+    return 0;
+  }
+  auto &trace = *static_cast<BlockingStatementTrace *>(rawContext);
+  const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  if (sql == nullptr ||
+      std::string_view(sql).find(trace.fragment) == std::string_view::npos) {
+    return 0;
+  }
+  std::unique_lock lock(trace.mutex);
+  if (trace.entered) {
+    return 0;
+  }
+  trace.entered = true;
+  trace.condition.notify_all();
+  trace.condition.wait(lock, [&trace] { return trace.released; });
+  return 0;
+}
+
+int installBlockingStatementTrace(sqlite3 *database, char **,
+                                  const sqlite3_api_routines *) {
+  if (activeBlockingTrace == nullptr) {
+    return SQLITE_OK;
+  }
+  return sqlite3_trace_v2(database, SQLITE_TRACE_STMT, blockMatchingStatement,
+                          activeBlockingTrace);
+}
+
+class ScopedBlockingStatementTrace {
+public:
+  explicit ScopedBlockingStatementTrace(std::string fragment) {
+    trace_.fragment = std::move(fragment);
+    activeBlockingTrace = &trace_;
+    sqlite3_reset_auto_extension();
+    installed_ = sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+                     installBlockingStatementTrace)) == SQLITE_OK;
+  }
+
+  ~ScopedBlockingStatementTrace() {
+    release();
+    sqlite3_reset_auto_extension();
+    activeBlockingTrace = nullptr;
+  }
+
+  [[nodiscard]] bool installed() const { return installed_; }
+
+  bool waitUntilEntered() {
+    std::unique_lock lock(trace_.mutex);
+    return trace_.condition.wait_for(lock, std::chrono::seconds(5),
+                                     [this] { return trace_.entered; });
+  }
+
+  void release() {
+    {
+      std::lock_guard lock(trace_.mutex);
+      trace_.released = true;
+    }
+    trace_.condition.notify_all();
+  }
+
+private:
+  BlockingStatementTrace trace_;
+  bool installed_ = false;
+};
+
 constexpr std::string_view kChartSha =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 constexpr std::string_view kChartMd5 = "0123456789abcdef0123456789abcdef";
@@ -169,6 +295,7 @@ struct SwitchFixture {
   bool failRefreshOnce = false;
   std::optional<std::string> blocker;
   int refreshCount = 0;
+  std::function<void()> refreshAction;
   std::filesystem::path appliedInputPath;
   InputProfile currentInput = makeDefaultInputProfile();
   PlayerProfileManager manager;
@@ -179,6 +306,7 @@ struct SwitchFixture {
   AppSettings currentSettings;
   ScoreDBHelper score;
   ReplayDBHelper replay;
+  Database persistentChartDatabase;
   ProfileSessionCoordinator coordinator;
 
   SwitchFixture()
@@ -209,11 +337,19 @@ struct SwitchFixture {
 
     AppSettings firstSettings;
     firstSettings.audioOffsetMs = -17;
+    firstSettings.selectedGaugeType = "gas";
     firstSettings.selectedPlayOption = "MIRROR";
+    firstSettings.selectedLnMode = "LN";
+    firstSettings.selectedAssistOption = "DRAG";
+    firstSettings.selectedPacemakerTarget = "A";
     firstSettings.sanitize();
     AppSettings secondSettings;
     secondSettings.audioOffsetMs = 42;
+    secondSettings.selectedGaugeType = "hard";
     secondSettings.selectedPlayOption = "R-RANDOM";
+    secondSettings.selectedLnMode = "HCN";
+    secondSettings.selectedAssistOption = "OFF";
+    secondSettings.selectedPacemakerTarget = "MAX-";
     secondSettings.sanitize();
     std::string error;
     expect(
@@ -340,6 +476,16 @@ struct SwitchFixture {
       failRefreshOnce = false;
       throw std::runtime_error("injected cache refresh failure");
     }
+    if (refreshAction) {
+      refreshAction();
+    }
+    if (persistentChartDatabase) {
+      const auto error = score_cache_queries::prepareScoreQueryDatabase(
+          persistentChartDatabase.get(), score.GetResolvedDatabasePath());
+      if (error.has_value()) {
+        throw std::runtime_error(*error);
+      }
+    }
   }
 
   [[nodiscard]] int currentClearRank() {
@@ -459,6 +605,9 @@ void testEveryDeclaredBlockerRejectsWithoutMutation() {
       readFile(fixture.temp.path() / "active-profile.json");
   {
     profile_database_activity::WriteGuard activeWrite;
+    expect(ScoreDBHelper::HasActiveWrites() &&
+               ReplayDBHelper::HasActiveWrites(),
+           "shared database activity reports a real active write");
     const ProfileSwitchResult result =
         fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
     expect(result.error == ProfileError::SwitchBlocked,
@@ -570,6 +719,50 @@ void testInvalidTargetFailsBeforeSavingOrBinding() {
   expectFirstProfileState(fixture, bootstrapBefore, "invalid target");
 }
 
+void testPersistentScoreAttachmentFailureRollsBackToSource() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+  fixture.persistentChartDatabase = openDatabase(":memory:");
+  expect(fixture.persistentChartDatabase != nullptr,
+         "persistent chart connection opens");
+  if (!fixture.persistentChartDatabase) {
+    return;
+  }
+  const auto initialError = score_cache_queries::prepareScoreQueryDatabase(
+      fixture.persistentChartDatabase.get(), fixture.firstPaths.scoresDb);
+  expect(!initialError.has_value(),
+         "persistent chart connection initially attaches profile A");
+  const std::string bootstrapBefore =
+      readFile(fixture.temp.path() / "active-profile.json");
+
+  DenyNextAttach denyState;
+  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(),
+                                denyNextAttach, &denyState) == SQLITE_OK,
+         "one-shot profile B attach failure installs");
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(), nullptr,
+                                nullptr) == SQLITE_OK,
+         "one-shot profile B attach failure clears");
+
+  expect(!result.ok(), "score cache reattach failure aborts profile switch");
+  expect(!denyState.pending, "target score attach was attempted");
+  expect(std::filesystem::canonical(attachedDatabasePath(
+             fixture.persistentChartDatabase.get(), "score_db")) ==
+             std::filesystem::canonical(fixture.firstPaths.scoresDb),
+         "rollback refresh reattaches profile A score database");
+  expect(queryInt(fixture.persistentChartDatabase.get(),
+                  "SELECT " + score_cache_queries::scoreBestLookupExpr(
+                                  "'" + std::string(kChartSha) + "'", "0",
+                                  "score")) == 500,
+         "rollback persistent connection queries profile A score data");
+  fixture.persistentChartDatabase.reset();
+  expectFirstProfileState(fixture, bootstrapBefore,
+                          "score attachment refresh failure");
+}
+
 void testDatabasePathReadsAreIndependentSnapshots() {
   const std::filesystem::path scoreFirst = "profile-one/scores.db";
   const std::filesystem::path scoreSecond = "profile-two/scores.db";
@@ -606,6 +799,101 @@ void testDatabasePathReadsAreIndependentSnapshots() {
   expect(!sawUnexpectedPath.load(std::memory_order_acquire),
          "concurrent path rebinding exposes only complete path snapshots");
 }
+
+void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+  main_menu_profile::Selections retained =
+      main_menu_profile::Selections::fromSettings(fixture.currentSettings);
+  fixture.refreshAction = [&]() { retained.reload(fixture.currentSettings); };
+  const ProfileSwitchResult switched =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(switched.ok(), "retained MainMenu selection test switches to B");
+  expect(retained.gaugeType == GaugeType::Hard && !retained.gaugeAutoShift &&
+             retained.playOption == "R-RANDOM" &&
+             retained.longNoteMode == "HCN" && retained.assistOption == "OFF" &&
+             retained.pacemakerTarget == "MAX-",
+         "retained MainMenu gameplay selections reload every profile B value");
+
+  AppSettings laterSave;
+  retained.applyTo(laterSave);
+  expect(laterSave.selectedGaugeType == "hard" &&
+             laterSave.selectedPlayOption == "R-RANDOM" &&
+             laterSave.selectedLnMode == "HCN" &&
+             laterSave.selectedAssistOption == "OFF" &&
+             laterSave.selectedPacemakerTarget == "MAX-",
+         "later retained MainMenu save cannot leak profile A selections");
+
+  SwitchFixture rollbackFixture;
+  if (rollbackFixture.firstId.empty()) {
+    return;
+  }
+  main_menu_profile::Selections rollbackSelections =
+      main_menu_profile::Selections::fromSettings(
+          rollbackFixture.currentSettings);
+  rollbackFixture.refreshAction = [&]() {
+    rollbackSelections.reload(rollbackFixture.currentSettings);
+  };
+  rollbackFixture.failBootstrap = true;
+  const ProfileSwitchResult rolledBack = rollbackFixture.coordinator.switchTo(
+      rollbackFixture.secondId, rollbackFixture.currentSettings);
+  expect(!rolledBack.ok(), "retained MainMenu rollback test fails bootstrap");
+  expect(rollbackSelections.gaugeType == GaugeType::ExHard &&
+             rollbackSelections.gaugeAutoShift &&
+             rollbackSelections.playOption == "MIRROR" &&
+             rollbackSelections.longNoteMode == "LN" &&
+             rollbackSelections.assistOption == "DRAG" &&
+             rollbackSelections.pacemakerTarget == "A",
+         "rollback refresh restores every retained profile A selection");
+}
+
+void testRealScoreReadBlocksSwitchUntilQueryCompletes() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+  ScopedBlockingStatementTrace blockedRead(
+      "FROM score_sha256_clear_rank_cache");
+  expect(blockedRead.installed(), "real score read trace installs");
+
+  int readRank = kNoClearTypeRank;
+  std::thread reader([&]() { readRank = fixture.currentClearRank(); });
+  const bool readEntered = blockedRead.waitUntilEntered();
+  expect(readEntered, "real score cache query reaches deterministic gate");
+  if (!readEntered) {
+    blockedRead.release();
+    reader.join();
+    return;
+  }
+  expect(ScoreDBHelper::HasActiveReads() && ReplayDBHelper::HasActiveReads(),
+         "shared database activity reports the real active read");
+
+  const auto switchStarted = std::chrono::steady_clock::now();
+  const ProfileSwitchResult duringRead =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  const auto switchElapsed = std::chrono::steady_clock::now() - switchStarted;
+  expect(duringRead.error == ProfileError::SwitchBlocked,
+         "real old-profile score read immediately blocks profile switch");
+  expect(switchElapsed < std::chrono::seconds(1),
+         "active read rejection is nonblocking");
+
+  blockedRead.release();
+  reader.join();
+  expect(!ScoreDBHelper::HasActiveReads() && !ReplayDBHelper::HasActiveReads(),
+         "active read state clears after the query completes");
+  expect(readRank == kClearTypeEasyClearRank,
+         "old-profile read completes before any successful switch");
+
+  if (duringRead.error == ProfileError::SwitchBlocked) {
+    const ProfileSwitchResult afterRead =
+        fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+    expect(afterRead.ok(), "profile switch succeeds after real read completes");
+    expect(fixture.currentClearRank() == kClearTypeHardClearRank,
+           "post-read switch exposes profile B score data");
+  }
+}
 } // namespace
 
 int main() {
@@ -613,7 +901,10 @@ int main() {
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testEveryTransactionalFailureRollsBackAllVisibleState();
   testInvalidTargetFailsBeforeSavingOrBinding();
+  testPersistentScoreAttachmentFailureRollsBackToSource();
   testDatabasePathReadsAreIndependentSnapshots();
+  testRetainedMainMenuSelectionsReloadWithoutProfileLeakage();
+  testRealScoreReadBlocksSwitchUntilQueryCompletes();
 
   if (failures != 0) {
     std::cerr << failures << " profile switch test(s) failed.\n";
