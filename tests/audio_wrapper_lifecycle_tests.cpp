@@ -1,6 +1,7 @@
 #include "audio/AudioWrapper.h"
 #include "audio/Jukebox.h"
 #include "audio/JukeboxLifecycle.h"
+#include "audio/JukeboxSoundResources.h"
 #include "audio/decoder.h"
 
 #include <atomic>
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,
@@ -73,8 +75,11 @@ struct BackendControl {
   bool startEntered = false;
   bool releaseStart = false;
   bool failStop = false;
+  int failStopCall = -1;
+  int failObserveCall = -1;
   bool failStart = false;
   bool destroyed = false;
+  std::atomic<int> observeCalls{0};
   std::atomic<int> stopCalls{0};
   std::atomic<int> startCalls{0};
 };
@@ -93,20 +98,27 @@ public:
   }
 
   audio::playback::BackendStateObservation observeState() const override {
+    const int observeCall =
+        control->observeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
     std::lock_guard lock(control->mutex);
+    if (control->failObserveCall == observeCall) {
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "gated observation failure"};
+    }
     return {.state = control->state};
   }
 
   int outputSampleRate() const override { return 44100; }
 
   audio::playback::BackendOperationResult stopAndDrain() override {
-    control->stopCalls.fetch_add(1, std::memory_order_relaxed);
+    const int stopCall =
+        control->stopCalls.fetch_add(1, std::memory_order_relaxed) + 1;
     std::unique_lock lock(control->mutex);
     control->stopEntered = true;
     control->condition.notify_all();
     control->condition.wait(
         lock, [this] { return !control->blockStop || control->releaseStop; });
-    if (control->failStop) {
+    if (control->failStop || control->failStopCall == stopCall) {
       return {.success = false, .diagnostic = "gated stop failure"};
     }
     control->state = audio::playback::BackendRunState::Stopped;
@@ -142,6 +154,7 @@ struct WrapperFixture {
     require(control->state == audio::playback::BackendRunState::Running,
             "the injected backend is started by the production wrapper");
     control->startCalls.store(0, std::memory_order_relaxed);
+    control->observeCalls.store(0, std::memory_order_relaxed);
     control->startEntered = false;
   }
 
@@ -254,6 +267,132 @@ void testUnloadAllSerializesDrainClearAndEraseAgainstPlay() {
   require(!fixture.wrapper->getSoundDurationMicros(firstPath).has_value() &&
               !fixture.wrapper->getSoundDurationMicros(secondPath).has_value(),
           "the entire sound store is erased only after positive drain");
+}
+
+void testBatchPruneNoOpDoesNotObserveOrDrainBackend() {
+  WrapperFixture fixture;
+  const path_t retainedPath = PATH("batch-no-op-retained");
+  fixture.load(retainedPath);
+  const int observationsBefore = fixture.control->observeCalls.load();
+  const int drainsBefore = fixture.control->stopCalls.load();
+
+  const auto empty = fixture.wrapper->pruneSounds({});
+  const auto missing =
+      fixture.wrapper->pruneSounds({PATH("batch-no-op-missing")});
+
+  require(empty.success && missing.success,
+          "empty and absent batch-prune requests are successful no-ops");
+  require(fixture.control->observeCalls.load() == observationsBefore &&
+              fixture.control->stopCalls.load() == drainsBefore,
+          "no-op batch prune does not observe or drain the backend");
+  require(fixture.wrapper->getSoundDurationMicros(retainedPath).has_value(),
+          "no-op batch prune preserves unrelated storage");
+}
+
+void testBatchPruneUsesOneConfirmationForEveryCandidate() {
+  WrapperFixture fixture;
+  const path_t firstPath = PATH("batch-prune-first");
+  const path_t secondPath = PATH("batch-prune-second");
+  const path_t retainedPath = PATH("batch-prune-retained");
+  fixture.load(firstPath);
+  fixture.load(secondPath);
+  fixture.load(retainedPath);
+  const int drainsBefore = fixture.control->stopCalls.load();
+  const int observationsBefore = fixture.control->observeCalls.load();
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failObserveCall = observationsBefore + 3;
+  }
+
+  const auto result =
+      fixture.wrapper->pruneSounds({firstPath, secondPath, firstPath});
+
+  require(result.success &&
+              fixture.control->stopCalls.load() == drainsBefore + 1 &&
+              fixture.control->observeCalls.load() == observationsBefore + 2,
+          "one confirmation commits every candidate without reaching a "
+          "configured second-candidate observation failure");
+  require(
+      !fixture.wrapper->getSoundDurationMicros(firstPath).has_value() &&
+          !fixture.wrapper->getSoundDurationMicros(secondPath).has_value() &&
+          fixture.wrapper->getSoundDurationMicros(retainedPath).has_value(),
+      "batch prune erases all candidates together and retains other owners");
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failObserveCall = -1;
+  }
+}
+
+void testBatchPruneFailureKeepsOldMapAndPartiallyLoadedNewOwner() {
+  WrapperFixture fixture;
+  const path_t oldFirst = PATH("batch-map-old-first");
+  const path_t oldSecond = PATH("batch-map-old-second");
+  const path_t newOwner = PATH("batch-map-new-owner");
+  fixture.load(oldFirst);
+  fixture.load(oldSecond);
+  fixture.load(newOwner);
+  std::unordered_map<int, path_t> currentMap{{1, oldFirst}, {2, oldSecond}};
+  const std::unordered_map<int, path_t> nextMap{{3, newOwner}};
+  const int drainsBefore = fixture.control->stopCalls.load();
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failStopCall = drainsBefore + 1;
+  }
+
+  auto result = jukebox_sound_resources::PruneAndCommitSoundMap(
+      *fixture.wrapper, currentMap, nextMap, {oldFirst, oldSecond});
+
+  require(!result.success &&
+              currentMap == std::unordered_map<int, path_t>{{1, oldFirst},
+                                                            {2, oldSecond}},
+          "failed batch confirmation leaves the advertised old map intact");
+  require(
+      fixture.wrapper->getSoundDurationMicros(oldFirst).has_value() &&
+          fixture.wrapper->getSoundDurationMicros(oldSecond).has_value() &&
+          fixture.wrapper->getSoundDurationMicros(newOwner).has_value(),
+      "failure preserves old owners, callback safety, and a partial new load");
+
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failStopCall = -1;
+  }
+  result = jukebox_sound_resources::PruneAndCommitSoundMap(
+      *fixture.wrapper, currentMap, nextMap, {oldFirst, oldSecond});
+  require(result.success && currentMap == nextMap,
+          "successful batch prune publishes the corresponding map once");
+  require(!fixture.wrapper->getSoundDurationMicros(oldFirst).has_value() &&
+              !fixture.wrapper->getSoundDurationMicros(oldSecond).has_value() &&
+              fixture.wrapper->getSoundDurationMicros(newOwner).has_value(),
+          "successful map commit matches the all-at-once owner set");
+}
+
+void testBatchPruneSerializesProducerAgainstWholeErase() {
+  WrapperFixture fixture;
+  const path_t firstPath = PATH("batch-producer-first");
+  const path_t secondPath = PATH("batch-producer-second");
+  fixture.load(firstPath);
+  fixture.load(secondPath);
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->blockStop = true;
+  }
+
+  auto prune = std::async(std::launch::async, [&] {
+    return fixture.wrapper->pruneSounds({firstPath, secondPath});
+  });
+  fixture.waitForStopEntry();
+  auto producer = std::async(std::launch::async, [&] {
+    return fixture.wrapper->playSound(secondPath, audio::Bus::Keysound);
+  });
+  require(producer.wait_for(50ms) == std::future_status::timeout,
+          "producer remains behind the complete batch-prune transaction");
+
+  fixture.releaseStop();
+  require(prune.wait_for(2s) == std::future_status::ready &&
+              producer.wait_for(2s) == std::future_status::ready,
+          "batch prune and blocked producer finish without deadlock");
+  require(prune.get().success && !producer.get(),
+          "producer cannot reacquire any owner erased by the committed batch");
 }
 
 void testConcurrentStartThenUnloadUsesOneLockOrder() {
@@ -419,7 +558,9 @@ void testJukeboxLifecycleActionsRunOnlyAfterConfirmation() {
 
 struct JukeboxStateFixture {
   std::atomic_bool isPlaying{true};
+  std::atomic_bool schedulerActive{true};
   Stopwatch stopwatch;
+  std::mutex transitionMutex;
   std::mutex positionMutex;
   size_t audioCursor = 7;
   size_t bmpCursor = 8;
@@ -435,7 +576,9 @@ struct JukeboxStateFixture {
 
   jukebox_lifecycle::SessionState state() {
     return {.isPlaying = isPlaying,
+            .schedulerActive = schedulerActive,
             .stopwatch = stopwatch,
+            .transitionMutex = transitionMutex,
             .positionMutex = positionMutex,
             .audioCursor = audioCursor,
             .bmpCursor = bmpCursor,
@@ -448,6 +591,285 @@ struct JukeboxStateFixture {
     return [this] { ++schedulerWakes; };
   }
 };
+
+class GatedJukeboxLifecycle {
+public:
+  audio::playback::BackendOperationResult stopResult{.success = true};
+  audio::playback::BackendOperationResult startResult{.success = true};
+
+  audio::playback::BackendOperationResult stopSounds() {
+    std::unique_lock lock(mutex);
+    stopEntered = true;
+    condition.notify_all();
+    condition.wait(lock, [this] { return !blockStop || releaseStop; });
+    return stopResult;
+  }
+
+  audio::playback::BackendOperationResult startDevice() {
+    std::unique_lock lock(mutex);
+    startEntered = true;
+    condition.notify_all();
+    condition.wait(lock, [this] { return !blockStart || releaseStart; });
+    return startResult;
+  }
+
+  void gateStop() {
+    std::lock_guard lock(mutex);
+    blockStop = true;
+    releaseStop = false;
+  }
+
+  void gateStart() {
+    std::lock_guard lock(mutex);
+    blockStart = true;
+    releaseStart = false;
+  }
+
+  void waitForStop() {
+    std::unique_lock lock(mutex);
+    require(condition.wait_for(lock, 2s, [this] { return stopEntered; }),
+            "seek reaches the gated stop while owning its transition");
+  }
+
+  void waitForStart() {
+    std::unique_lock lock(mutex);
+    require(condition.wait_for(lock, 2s, [this] { return startEntered; }),
+            "seek reaches the gated restart before target publication");
+  }
+
+  void allowStop() {
+    {
+      std::lock_guard lock(mutex);
+      releaseStop = true;
+    }
+    condition.notify_all();
+  }
+
+  void allowStart() {
+    {
+      std::lock_guard lock(mutex);
+      releaseStart = true;
+    }
+    condition.notify_all();
+  }
+
+private:
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool blockStop = false;
+  bool releaseStop = false;
+  bool stopEntered = false;
+  bool blockStart = false;
+  bool releaseStart = false;
+  bool startEntered = false;
+};
+
+void testPlayingSeekAtomicallyExcludesStaleSchedulerAndReaders() {
+  JukeboxStateFixture fixture;
+  fixture.stopwatch.start();
+  auto state = fixture.state();
+  GatedJukeboxLifecycle lifecycle;
+  lifecycle.gateStop();
+  lifecycle.gateStart();
+
+  std::mutex schedulerGateMutex;
+  std::condition_variable schedulerGateCondition;
+  bool schedulerPassedRunningCheck = false;
+  bool allowSchedulerPositionLock = false;
+  bool schedulerAdvanced = false;
+  size_t schedulerObservedCursor = 0;
+  auto scheduler = std::async(std::launch::async, [&] {
+    require(fixture.isPlaying && fixture.stopwatch.isRunning(),
+            "scheduler passes its outer running check before seek begins");
+    {
+      std::unique_lock gateLock(schedulerGateMutex);
+      schedulerPassedRunningCheck = true;
+      schedulerGateCondition.notify_all();
+      schedulerGateCondition.wait(gateLock,
+                                  [&] { return allowSchedulerPositionLock; });
+    }
+    std::lock_guard positionLock(fixture.positionMutex);
+    if (jukebox_lifecycle::CanAdvanceSchedulerLocked(state)) {
+      schedulerAdvanced = true;
+      schedulerObservedCursor = fixture.audioCursor;
+    }
+  });
+  {
+    std::unique_lock gateLock(schedulerGateMutex);
+    require(schedulerGateCondition.wait_for(
+                gateLock, 2s, [&] { return schedulerPassedRunningCheck; }),
+            "gated scheduler reaches the pre-lock race window");
+  }
+
+  const jukebox_lifecycle::CursorPosition target{
+      .audio = 40, .bmp = 50, .bmpLayer = 60};
+  std::atomic<long long> publishedAudioMicros{111111};
+  bool commitRan = false;
+  auto seek = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 654321,
+        [&](bool wasPlaying) {
+          require(wasPlaying,
+                  "running seek identifies its audio restart commit");
+          require(!fixture.isPlaying && !fixture.stopwatch.isRunning(),
+                  "seek commits clock, cursors, and audio while unpublished");
+          publishedAudioMicros.store(777777, std::memory_order_release);
+          commitRan = true;
+        },
+        fixture.wakeScheduler());
+  });
+  lifecycle.waitForStop();
+  require(!fixture.isPlaying && !fixture.stopwatch.isRunning(),
+          "playing seek publishes a conservative transition before drain");
+
+  {
+    std::lock_guard gateLock(schedulerGateMutex);
+    allowSchedulerPositionLock = true;
+  }
+  schedulerGateCondition.notify_all();
+
+  std::atomic<int> liveTimeReads{0};
+  auto readTime = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::ReadPublishedTime(state, [&] {
+      liveTimeReads.fetch_add(1, std::memory_order_relaxed);
+      return publishedAudioMicros.load(std::memory_order_acquire);
+    });
+  });
+  std::atomic<int> keysoundsPlayed{0};
+  auto playKey = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::PlayKeySoundIfPublished(state, [&] {
+      keysoundsPlayed.fetch_add(1, std::memory_order_relaxed);
+    });
+  });
+  require(scheduler.wait_for(50ms) == std::future_status::timeout &&
+              readTime.wait_for(50ms) == std::future_status::timeout &&
+              playKey.wait_for(50ms) == std::future_status::timeout,
+          "stale scheduler and readers remain behind the full seek transition");
+
+  lifecycle.allowStop();
+  lifecycle.waitForStart();
+  require(!commitRan && !fixture.isPlaying && fixture.audioCursor == 7 &&
+              publishedAudioMicros.load() == 111111,
+          "restart confirmation precedes every target-state publication");
+  lifecycle.allowStart();
+
+  require(seek.wait_for(2s) == std::future_status::ready &&
+              scheduler.wait_for(2s) == std::future_status::ready &&
+              readTime.wait_for(2s) == std::future_status::ready &&
+              playKey.wait_for(2s) == std::future_status::ready,
+          "seek and all blocked production readers finish without deadlock");
+  const auto result = seek.get();
+  require(result.success && commitRan && fixture.isPlaying &&
+              fixture.stopwatch.isRunning() && fixture.audioCursor == 40 &&
+              fixture.bmpCursor == 50 && fixture.bmpLayerCursor == 60,
+          "successful seek publishes running only after target commit");
+  scheduler.get();
+  require(schedulerAdvanced && schedulerObservedCursor == 40,
+          "stale scheduler can only advance the newly committed position");
+  require(readTime.get() == 777777 && liveTimeReads.load() == 1,
+          "time reader observes the committed audio clock, never the old one");
+  require(playKey.get() && keysoundsPlayed.load() == 1,
+          "keysound request resumes only after successful publication");
+}
+
+void testPlayingSeekFailureLeavesSchedulerAndReadersStopped() {
+  JukeboxStateFixture fixture;
+  fixture.stopwatch.start();
+  auto state = fixture.state();
+  GatedJukeboxLifecycle lifecycle;
+  lifecycle.gateStop();
+  lifecycle.startResult = {.success = false,
+                           .diagnostic = "restart stayed unavailable"};
+
+  const jukebox_lifecycle::CursorPosition target{
+      .audio = 40, .bmp = 50, .bmpLayer = 60};
+  bool commitRan = false;
+  auto seek = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 654321,
+        [&](bool wasPlaying) {
+          require(wasPlaying,
+                  "failed running seek retains its pre-transition identity");
+          commitRan = true;
+        },
+        fixture.wakeScheduler());
+  });
+  lifecycle.waitForStop();
+
+  std::atomic<int> liveTimeReads{0};
+  auto readTime = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::ReadPublishedTime(state, [&] {
+      liveTimeReads.fetch_add(1, std::memory_order_relaxed);
+      return 999999LL;
+    });
+  });
+  std::atomic<int> keysoundsPlayed{0};
+  auto playKey = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::PlayKeySoundIfPublished(
+        state, [&] { keysoundsPlayed.fetch_add(1); });
+  });
+  lifecycle.allowStop();
+
+  require(seek.wait_for(2s) == std::future_status::ready &&
+              readTime.wait_for(2s) == std::future_status::ready &&
+              playKey.wait_for(2s) == std::future_status::ready,
+          "failed restart releases blocked readers in conservative state");
+  const auto result = seek.get();
+  require(!result.success &&
+              result.diagnostic.find("restart stayed unavailable") !=
+                  std::string::npos &&
+              !commitRan && !fixture.isPlaying && !fixture.schedulerActive &&
+              !fixture.stopwatch.isRunning() && fixture.audioCursor == 7 &&
+              fixture.bmpCursor == 8 && fixture.bmpLayerCursor == 9,
+          "restart failure publishes neither old advancement nor new target");
+  require(readTime.get() != 999999 && liveTimeReads.load() == 0,
+          "failed seek reader uses only the frozen logical clock");
+  require(!playKey.get() && keysoundsPlayed.load() == 0,
+          "failed seek cannot queue a keysound after transition");
+}
+
+void testSeekTransitionSerializesConcurrentPlayAndStopEntry() {
+  JukeboxStateFixture fixture;
+  fixture.stopwatch.start();
+  auto state = fixture.state();
+  GatedJukeboxLifecycle lifecycle;
+  lifecycle.gateStop();
+  const jukebox_lifecycle::CursorPosition target{
+      .audio = 12, .bmp = 13, .bmpLayer = 14};
+
+  auto seek = std::async(std::launch::async, [&] {
+    return jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 246810,
+        [](bool wasPlaying) {
+          require(wasPlaying, "serialized seek began from playing state");
+        },
+        fixture.wakeScheduler());
+  });
+  lifecycle.waitForStop();
+
+  std::atomic<int> serializedEntries{0};
+  auto playEntry = std::async(std::launch::async, [&] {
+    std::lock_guard transitionLock(fixture.transitionMutex);
+    serializedEntries.fetch_add(1, std::memory_order_relaxed);
+  });
+  auto stopEntry = std::async(std::launch::async, [&] {
+    std::lock_guard transitionLock(fixture.transitionMutex);
+    serializedEntries.fetch_add(1, std::memory_order_relaxed);
+  });
+  require(playEntry.wait_for(50ms) == std::future_status::timeout &&
+              stopEntry.wait_for(50ms) == std::future_status::timeout,
+          "concurrent play and stop stay behind the complete seek transaction");
+
+  lifecycle.allowStop();
+  require(seek.wait_for(2s) == std::future_status::ready &&
+              playEntry.wait_for(2s) == std::future_status::ready &&
+              stopEntry.wait_for(2s) == std::future_status::ready,
+          "serialized seek, play, and stop entries finish without deadlock");
+  require(seek.get().success && serializedEntries.load() == 2,
+          "play and stop enter only after seek publishes its final state");
+  playEntry.get();
+  stopEntry.get();
+}
 
 void testJukeboxProductionStateTransitionsFailClosed() {
   {
@@ -528,80 +950,73 @@ void testJukeboxProductionStateTransitionsFailClosed() {
     JukeboxStateFixture fixture;
     FakeJukeboxLifecycle lifecycle;
     auto state = fixture.state();
-    const auto snapshot = jukebox_lifecycle::CaptureSeekState(state);
     lifecycle.stopResult = {.success = false,
                             .diagnostic = "seek drain failure"};
-    auto result = jukebox_lifecycle::StopForSeek(
-        lifecycle, "Jukebox::seek", state, snapshot, fixture.wakeScheduler());
-    require(!result.success && fixture.isPlaying &&
-                fixture.stopwatch.elapsedMicros() == 123456 &&
-                fixture.audioCursor == 7 && fixture.schedulerWakes == 0,
-            "seek stop failure leaves every logical position untouched");
-
-    lifecycle.stopResult = {.success = true};
-    result = jukebox_lifecycle::StopForSeek(lifecycle, "Jukebox::seek", state,
-                                            snapshot, fixture.wakeScheduler());
-    require(result.success && fixture.isPlaying &&
-                fixture.stopwatch.elapsedMicros() == 123456 &&
-                fixture.schedulerWakes == 1,
-            "confirmed seek stop pauses without advancing the target position");
-
-    lifecycle.startResult = {.success = false,
-                             .diagnostic = "seek restart failure"};
     bool committedSeek = false;
     const jukebox_lifecycle::CursorPosition target{
         .audio = 4, .bmp = 5, .bmpLayer = 6};
-    result = jukebox_lifecycle::RestartAndCommitSeek(
-        lifecycle, "Jukebox::seek", state, snapshot, target, 654321,
-        [&] { committedSeek = true; }, fixture.wakeScheduler());
-    require(
-        !result.success && !committedSeek && !fixture.isPlaying &&
-            !fixture.stopwatch.isRunning() &&
-            fixture.stopwatch.elapsedMicros() == 123456 &&
-            fixture.audioCursor == 7 && fixture.bmpCursor == 8 &&
-            fixture.bmpLayerCursor == 9 && fixture.schedulerWakes == 2,
-        "seek restart failure stops the session without claiming target state");
+    const auto result = jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 654321,
+        [&](bool wasPlaying) {
+          require(wasPlaying, "drain failure began from a playing session");
+          committedSeek = true;
+        },
+        fixture.wakeScheduler());
+    require(!result.success && !committedSeek && !fixture.isPlaying &&
+                !fixture.schedulerActive && !fixture.stopwatch.isRunning() &&
+                fixture.stopwatch.elapsedMicros() == 123456 &&
+                fixture.audioCursor == 7 && fixture.bmpCursor == 8 &&
+                fixture.bmpLayerCursor == 9 && fixture.schedulerWakes == 2,
+            "seek drain failure keeps old position in a conservative stopped "
+            "session");
   }
 
   {
     JukeboxStateFixture fixture;
     FakeJukeboxLifecycle lifecycle;
     auto state = fixture.state();
-    const auto snapshot = jukebox_lifecycle::CaptureSeekState(state);
     const jukebox_lifecycle::CursorPosition target{
         .audio = 4, .bmp = 5, .bmpLayer = 6};
     bool committedSeek = false;
-    const auto result = jukebox_lifecycle::RestartAndCommitSeek(
-        lifecycle, "Jukebox::seek", state, snapshot, target, 654321,
-        [&] {
+    const auto result = jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 654321,
+        [&](bool wasPlaying) {
+          require(wasPlaying,
+                  "paused playing seek still restarts audio ownership");
           require(fixture.audioCursor == 4 && fixture.bmpCursor == 5 &&
                       fixture.bmpLayerCursor == 6 &&
                       fixture.stopwatch.elapsedMicros() == 654321 &&
-                      fixture.isPlaying,
-                  "seek target is prepared before dependent audio commands");
+                      !fixture.isPlaying && !fixture.stopwatch.isRunning(),
+                  "seek target and audio commit remain unpublished");
           committedSeek = true;
         },
         fixture.wakeScheduler());
     require(
         result.success && committedSeek && fixture.isPlaying &&
-            !fixture.stopwatch.isRunning() && fixture.schedulerWakes == 1,
+            fixture.schedulerActive && !fixture.stopwatch.isRunning() &&
+            fixture.schedulerWakes == 2,
         "confirmed paused seek commits target state without resuming clock");
   }
 
   {
     JukeboxStateFixture fixture;
     fixture.isPlaying = false;
+    fixture.schedulerActive = false;
     FakeJukeboxLifecycle lifecycle;
     auto state = fixture.state();
-    const auto snapshot = jukebox_lifecycle::CaptureSeekState(state);
     const jukebox_lifecycle::CursorPosition target{
         .audio = 10, .bmp = 11, .bmpLayer = 12};
     bool committedSeek = false;
-    jukebox_lifecycle::CommitStoppedSeek(
-        state, snapshot, target, 777777, [&] { committedSeek = true; },
+    const auto result = jukebox_lifecycle::ExecuteSeekTransition(
+        lifecycle, "Jukebox::seek", state, target, 777777,
+        [&](bool wasPlaying) {
+          require(!wasPlaying, "stopped seek does not enqueue playback audio");
+          committedSeek = true;
+        },
         fixture.wakeScheduler());
     require(
-        committedSeek && !fixture.isPlaying && !fixture.stopwatch.isRunning() &&
+        result.success && committedSeek && !fixture.isPlaying &&
+            !fixture.schedulerActive && !fixture.stopwatch.isRunning() &&
             fixture.stopwatch.elapsedMicros() == 777777 &&
             fixture.audioCursor == 10 && fixture.bmpCursor == 11 &&
             fixture.bmpLayerCursor == 12 && lifecycle.events.empty() &&
@@ -616,10 +1031,17 @@ int main() {
   try {
     testUnloadOneSerializesDrainClearAndEraseAgainstPlay();
     testUnloadAllSerializesDrainClearAndEraseAgainstPlay();
+    testBatchPruneNoOpDoesNotObserveOrDrainBackend();
+    testBatchPruneUsesOneConfirmationForEveryCandidate();
+    testBatchPruneFailureKeepsOldMapAndPartiallyLoadedNewOwner();
+    testBatchPruneSerializesProducerAgainstWholeErase();
     testConcurrentStartThenUnloadUsesOneLockOrder();
     testFailedStopRetainsSingleAndAllStorage();
     testDestructorReleasesBackendBeforeDependentStorageOnStopFailure();
     testJukeboxLifecycleActionsRunOnlyAfterConfirmation();
+    testPlayingSeekAtomicallyExcludesStaleSchedulerAndReaders();
+    testPlayingSeekFailureLeavesSchedulerAndReadersStopped();
+    testSeekTransitionSerializesConcurrentPlayAndStopEntry();
     testJukeboxProductionStateTransitionsFailClosed();
     return 0;
   } catch (const std::exception &error) {

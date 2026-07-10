@@ -1028,27 +1028,52 @@ AudioWrapper::stopSoundsWithLifecycleAndCommandLocked() {
 
 audio::playback::BackendOperationResult
 AudioWrapper::unloadSound(const path_t &path) {
+  return pruneSounds({path});
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::vector<size_t> removedIndices;
+  removedIndices.reserve(paths.size());
+  for (const path_t &path : paths) {
+    if (const auto indexIt = soundDataIndexMap.find(path);
+        indexIt != soundDataIndexMap.end()) {
+      removedIndices.push_back(indexIt->second);
+    }
+  }
+  std::sort(removedIndices.begin(), removedIndices.end());
+  removedIndices.erase(
+      std::unique(removedIndices.begin(), removedIndices.end()),
+      removedIndices.end());
+  if (removedIndices.empty()) {
+    return {.success = true};
+  }
+
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
   if (!stopped.success) {
     return stopped;
   }
 
-  if (const auto indexIt = soundDataIndexMap.find(path);
-      indexIt != soundDataIndexMap.end()) {
-    const size_t index = indexIt->second;
-
-    soundDataList.erase(soundDataList.begin() + index);
-    soundDataIndexMap.erase(indexIt);
-
-    // Update indices in the map
-    for (auto &entry : soundDataIndexMap) {
-      if (entry.second > index) {
-        entry.second--;
-      }
+  for (auto indexIt = removedIndices.rbegin(); indexIt != removedIndices.rend();
+       ++indexIt) {
+    soundDataList.erase(soundDataList.begin() + *indexIt);
+  }
+  for (auto mapIt = soundDataIndexMap.begin();
+       mapIt != soundDataIndexMap.end();) {
+    const size_t oldIndex = mapIt->second;
+    if (std::binary_search(removedIndices.begin(), removedIndices.end(),
+                           oldIndex)) {
+      mapIt = soundDataIndexMap.erase(mapIt);
+      continue;
     }
+    mapIt->second -= static_cast<size_t>(
+        std::distance(removedIndices.begin(),
+                      std::lower_bound(removedIndices.begin(),
+                                       removedIndices.end(), oldIndex)));
+    ++mapIt;
   }
   return {.success = true};
 }

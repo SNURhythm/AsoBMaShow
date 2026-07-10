@@ -17,6 +17,7 @@
 #include "../rendering/UniformCache.h"
 #include "ChartAssetExtensions.h"
 #include "JukeboxLifecycle.h"
+#include "JukeboxSoundResources.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
 #include <algorithm>
@@ -669,6 +670,7 @@ Jukebox::Jukebox(Stopwatch *stopwatch)
 
 Jukebox::~Jukebox() {
   isPlaying = false;
+  schedulerActive = false;
   wakeScheduler();
   if (playThread.joinable())
     playThread.join();
@@ -1379,7 +1381,14 @@ bool Jukebox::loadArchivedChartAssets(
     return false;
   }
 
-  auto unloaded = audio.unloadSounds();
+  std::vector<path_t> obsoletePaths;
+  obsoletePaths.reserve(wavTableAbs.size());
+  for (const auto &[wavId, path] : wavTableAbs) {
+    (void)wavId;
+    obsoletePaths.push_back(path);
+  }
+  auto unloaded = jukebox_sound_resources::PruneAndCommitSoundMap(
+      audio, wavTableAbs, {}, obsoletePaths);
   if (!unloaded.success) {
     lifecycleResult = jukebox_lifecycle::ContextualizeFailure(
         std::move(unloaded), "Jukebox::loadChart", "unload");
@@ -1401,8 +1410,6 @@ bool Jukebox::loadArchivedChartAssets(
   std::vector<std::pair<int, std::filesystem::path>> regularVideos;
   std::vector<std::pair<int, std::filesystem::path>> regularImages;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
-
-  wavTableAbs.clear();
 
   for (const auto &[wavId, wavPath] : wavTable) {
     if (isCancelled) {
@@ -2257,17 +2264,20 @@ Jukebox::reconcileSoundResources(bms_parser::Chart &chart,
     }
   }
 
+  std::vector<path_t> obsoletePaths;
+  obsoletePaths.reserve(oldPaths.size());
   for (const path_t &path : oldPaths) {
     if (!requiredPaths.contains(path)) {
-      auto unloaded = audio.unloadSound(path);
-      if (!unloaded.success) {
-        return jukebox_lifecycle::ContextualizeFailure(
-            std::move(unloaded), "Jukebox::reconcileSoundResources", "unload");
-      }
+      obsoletePaths.push_back(path);
     }
   }
-  wavTableAbs = std::move(nextWavTable);
-  return {.success = true};
+  auto committed = jukebox_sound_resources::PruneAndCommitSoundMap(
+      audio, wavTableAbs, std::move(nextWavTable), obsoletePaths);
+  if (!committed.success) {
+    return jukebox_lifecycle::ContextualizeFailure(
+        std::move(committed), "Jukebox::reconcileSoundResources", "unload");
+  }
+  return committed;
 }
 
 void Jukebox::reconcileVisualResources(
@@ -2540,6 +2550,8 @@ void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
 void Jukebox::loadVisuals(bms_parser::Chart &chart,
                           std::atomic_bool &isCancelled) {
   isPlaying = false;
+  schedulerActive = false;
+  wakeScheduler();
   if (playThread.joinable()) {
     playThread.join();
   }
@@ -2558,7 +2570,9 @@ Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
                    std::atomic_bool &isCancelled) {
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
       .positionMutex = seekLock,
       .audioCursor = audioCursor,
       .bmpCursor = bmpCursor,
@@ -2654,7 +2668,9 @@ Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                               std::atomic_bool &isCancelled) {
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
       .positionMutex = seekLock,
       .audioCursor = audioCursor,
       .bmpCursor = bmpCursor,
@@ -2777,14 +2793,25 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
 }
 void Jukebox::playKeySound(int wav) {
-  if (!isPlaying) {
-    return;
-  }
-  if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
-    audio.playSound(
-        it->second.c_str(),
-        audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound));
-  }
+  jukebox_lifecycle::SessionState lifecycleState{
+      .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
+      .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
+      .positionMutex = seekLock,
+      .audioCursor = audioCursor,
+      .bmpCursor = bmpCursor,
+      .bmpLayerCursor = bmpLayerCursor,
+      .currentBga = currentBga,
+      .currentBmpLayer = currentBmpLayer,
+  };
+  jukebox_lifecycle::PlayKeySoundIfPublished(lifecycleState, [this, wav] {
+    if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
+      audio.playSound(
+          it->second.c_str(),
+          audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound));
+    }
+  });
 }
 
 void Jukebox::scheduleAudioFromCursor() {
@@ -2848,7 +2875,9 @@ void Jukebox::ensurePrepMetronomeSoundsLoaded() {
 void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
 
 void Jukebox::syncVisualClockToAudio() {
-  if (isPlaying.load(std::memory_order_relaxed) && stopwatch->isRunning()) {
+  std::lock_guard<std::mutex> positionLock(seekLock);
+  if (schedulerActive.load(std::memory_order_acquire) &&
+      isPlaying.load(std::memory_order_acquire) && stopwatch->isRunning()) {
     stopwatch->seek(getBgaTimelineMicros(audio.getTimeMicros()));
   }
 }
@@ -2965,7 +2994,9 @@ audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
   std::lock_guard<std::mutex> lock(playThreadLock);
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
       .positionMutex = seekLock,
       .audioCursor = audioCursor,
       .bmpCursor = bmpCursor,
@@ -3034,8 +3065,21 @@ audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
 #endif
     using Clock = std::chrono::steady_clock;
     auto prevTimestamp = Clock::now();
-    while (isPlaying) {
-      if (!stopwatch->isRunning()) {
+    jukebox_lifecycle::SessionState lifecycleState{
+        .isPlaying = isPlaying,
+        .schedulerActive = schedulerActive,
+        .stopwatch = *stopwatch,
+        .transitionMutex = playThreadLock,
+        .positionMutex = seekLock,
+        .audioCursor = audioCursor,
+        .bmpCursor = bmpCursor,
+        .bmpLayerCursor = bmpLayerCursor,
+        .currentBga = currentBga,
+        .currentBmpLayer = currentBmpLayer,
+    };
+    while (schedulerActive.load(std::memory_order_acquire)) {
+      if (!isPlaying.load(std::memory_order_acquire) ||
+          !stopwatch->isRunning()) {
         std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
         schedulerWakeCv.wait_for(
             waitLock,
@@ -3048,6 +3092,10 @@ audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
       {
         // Keep scheduling state consistent with seek/reset.
         std::lock_guard<std::mutex> lock(seekLock);
+        if (!jukebox_lifecycle::CanAdvanceSchedulerLocked(lifecycleState)) {
+          prevTimestamp = Clock::now();
+          continue;
+        }
         const long long positionMicro = audio.getTimeMicros();
         const long long bgaPositionMicro = getBgaTimelineMicros(positionMicro);
         stopwatch->seek(bgaPositionMicro);
@@ -3230,10 +3278,20 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
 }
 
 long long Jukebox::getTimeMicros() {
-  if (isPlaying.load(std::memory_order_relaxed)) {
-    return audio.getTimeMicros();
-  }
-  return stopwatch->elapsedMicros();
+  jukebox_lifecycle::SessionState lifecycleState{
+      .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
+      .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
+      .positionMutex = seekLock,
+      .audioCursor = audioCursor,
+      .bmpCursor = bmpCursor,
+      .bmpLayerCursor = bmpLayerCursor,
+      .currentBga = currentBga,
+      .currentBmpLayer = currentBmpLayer,
+  };
+  return jukebox_lifecycle::ReadPublishedTime(
+      lifecycleState, [this] { return audio.getTimeMicros(); });
 }
 void Jukebox::pause() {
   SDL_Log("Pausing");
@@ -3251,7 +3309,9 @@ audio::playback::BackendOperationResult Jukebox::stop() {
   std::lock_guard<std::mutex> playGuard(playThreadLock);
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
       .positionMutex = seekLock,
       .audioCursor = audioCursor,
       .bmpCursor = bmpCursor,
@@ -3277,7 +3337,9 @@ audio::playback::BackendOperationResult Jukebox::stop() {
 audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
       .positionMutex = seekLock,
       .audioCursor = audioCursor,
       .bmpCursor = bmpCursor,
@@ -3285,16 +3347,7 @@ audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
       .currentBga = currentBga,
       .currentBmpLayer = currentBmpLayer,
   };
-  const auto snapshot = jukebox_lifecycle::CaptureSeekState(lifecycleState);
   const long long bgaTimelineMicro = getBgaTimelineMicros(micro);
-  const auto stopped =
-      jukebox_lifecycle::StopForSeek(audio, "Jukebox::seek", lifecycleState,
-                                     snapshot, [this] { wakeScheduler(); });
-  if (!stopped.success) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
-    return stopped;
-  }
-
   const jukebox_lifecycle::CursorPosition target{
       .audio = static_cast<size_t>(std::distance(
           audioList.begin(),
@@ -3318,27 +3371,20 @@ audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
                            }))),
   };
 
-  if (!snapshot.wasPlaying) {
-    jukebox_lifecycle::CommitStoppedSeek(
-        lifecycleState, snapshot, target, bgaTimelineMicro,
-        [this, micro] { audio.seekClock(micro); }, [this] { wakeScheduler(); });
-    return {.success = true};
-  }
-
-  const auto started = jukebox_lifecycle::RestartAndCommitSeek(
-      audio, "Jukebox::seek", lifecycleState, snapshot, target,
-      bgaTimelineMicro,
-      [this, micro] {
+  const auto transitioned = jukebox_lifecycle::ExecuteSeekTransition(
+      audio, "Jukebox::seek", lifecycleState, target, bgaTimelineMicro,
+      [this, micro](bool wasPlaying) {
         audio.seekClock(micro);
-        scheduleAudioFromCursor();
-        playOverlappingAudioAt(micro);
+        if (wasPlaying) {
+          scheduleAudioFromCursor();
+          playOverlappingAudioAt(micro);
+        }
       },
       [this] { wakeScheduler(); });
-  if (!started.success) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", started.diagnostic.c_str());
-    return started;
+  if (!transitioned.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", transitioned.diagnostic.c_str());
   }
-  return {.success = true};
+  return transitioned;
 }
 
 double Jukebox::getAvgDeltaTime() {

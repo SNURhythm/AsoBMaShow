@@ -129,6 +129,8 @@ public:
   audio::playback::BackendOperationResult startDevice();
   audio::playback::BackendOperationResult stopSounds();
   audio::playback::BackendOperationResult unloadSound(const path_t &path);
+  audio::playback::BackendOperationResult
+  pruneSounds(const std::vector<path_t> &paths);
 
   void setBassBoost(float db);
   void setTrebleBoost(float db);

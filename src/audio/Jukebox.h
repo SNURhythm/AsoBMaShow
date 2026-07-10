@@ -236,6 +236,7 @@ private:
   };
   BgaRect calculateBgaRect(int sourceWidth, int sourceHeight) const;
   std::atomic_bool isPlaying = false;
+  std::atomic_bool schedulerActive = false;
   std::thread playThread;
   Stopwatch *stopwatch;
   AudioWrapper audio;
