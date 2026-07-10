@@ -180,6 +180,10 @@ bool syncDirectoryMetadata(const std::filesystem::path &path,
       break;
     }
     const std::filesystem::path parent = directory.parent_path();
+    if (parent.empty() && syncRoot == std::filesystem::path(".")) {
+      directory = syncRoot;
+      continue;
+    }
     if (parent.empty() || parent == directory) {
       errorMessage = "metadata sync root '" + syncRoot.string() +
                      "' is not an ancestor of '" + path.string() + "'";

@@ -445,6 +445,22 @@ void testAtomicFirstSaveCreatesNestedParents() {
   expect(readFile(target) == contents,
          "atomic first save installs content under nested parents");
 }
+
+void testAtomicFirstSaveCreatesRelativeNestedParents() {
+  TempDirectory temp;
+  const auto previousDirectory = std::filesystem::current_path();
+  std::filesystem::current_path(temp.path());
+  const std::filesystem::path target =
+      std::filesystem::path("relative") / "profile" / "settings.json";
+  const std::string contents = "relative-first-save";
+  std::string error;
+  const bool saved = atomic_file::writeWithBackup(
+      target, std::as_bytes(std::span(contents)), error);
+  std::filesystem::current_path(previousDirectory);
+  expect(saved, "atomic relative first save syncs nested parents: " + error);
+  expect(readFile(temp.path() / target) == contents,
+         "atomic relative first save installs nested content");
+}
 } // namespace
 
 int main() {
@@ -458,6 +474,7 @@ int main() {
   testAtomicFailureRestoresDestinationAndExistingBackup();
   testAtomicSuccessRotatesOneBackupGeneration();
   testAtomicFirstSaveCreatesNestedParents();
+  testAtomicFirstSaveCreatesRelativeNestedParents();
   if (failures != 0) {
     std::cerr << failures << " app settings store assertion(s) failed\n";
     return 1;
