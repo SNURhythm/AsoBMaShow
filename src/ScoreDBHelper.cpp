@@ -59,19 +59,6 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                              "duplicate column name");
 }
 
-int databaseUserVersion(sqlite3 *db) {
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
-                                    "reading score database version",
-                                    logSqlErrorText)) {
-    return 0;
-  }
-  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
-    return 0;
-  }
-  return sqlite3_column_int(stmt.get(), 0);
-}
-
 bool setDatabaseUserVersion(sqlite3 *db, int version) {
   const std::string query =
       "PRAGMA user_version = " + std::to_string(std::max(0, version));
@@ -92,11 +79,17 @@ bool rejectFutureScoreDatabase(sqlite3 *db) {
     }
     return false;
   }
-  const int version = databaseUserVersion(db);
-  if (version <= kScoreDatabaseSchemaVersion) {
+  std::string error;
+  const auto version = readSqliteUserVersion(db, error);
+  if (!version.has_value()) {
+    SDL_Log("Refusing score database with unreadable version: %s",
+            error.c_str());
+    return true;
+  }
+  if (*version <= kScoreDatabaseSchemaVersion) {
     return false;
   }
-  SDL_Log("Refusing future score database version %d (supported: %d)", version,
+  SDL_Log("Refusing future score database version %d (supported: %d)", *version,
           kScoreDatabaseSchemaVersion);
   return true;
 }
@@ -128,14 +121,19 @@ bool ensureScoreProvenanceColumns(sqlite3 *db, const char *tableName) {
 }
 
 bool migrateScoreDatabaseToVersion5(sqlite3 *db) {
-  const int version = databaseUserVersion(db);
-  if (version > kScoreDatabaseSchemaVersion) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading score provenance migration version", versionError);
     return false;
   }
-  if (version >= kScoreDatabaseSchemaVersion) {
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreDatabaseSchemaVersion) {
     return true;
   }
-  if (version < kLegacyScoreDatabaseSchemaVersion) {
+  if (*version < kLegacyScoreDatabaseSchemaVersion) {
     SDL_Log("Score database must reach version %d before provenance migration",
             kLegacyScoreDatabaseSchemaVersion);
     return false;
@@ -799,7 +797,13 @@ bool migrateScoreDatabaseToVersion4(sqlite3 *db, bool &completed) {
 bool runScoreDatabaseMigrationPasses(sqlite3 *db,
                                      const ScoreDatabaseMigrationPass *passes,
                                      std::size_t passCount, int latestVersion) {
-  int currentVersion = databaseUserVersion(db);
+  std::string versionError;
+  const auto storedVersion = readSqliteUserVersion(db, versionError);
+  if (!storedVersion.has_value()) {
+    logSqlErrorText("reading score migration version", versionError);
+    return false;
+  }
+  int currentVersion = *storedVersion;
   if (currentVersion >= latestVersion) {
     return true;
   }

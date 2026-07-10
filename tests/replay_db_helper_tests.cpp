@@ -1157,6 +1157,14 @@ int denyJournalModeAuthorizer(void *, int action, const char *first,
              : SQLITE_OK;
 }
 
+int denyUserVersionAuthorizer(void *, int action, const char *first,
+                              const char *, const char *, const char *) {
+  return action == SQLITE_PRAGMA && first != nullptr &&
+                 std::string_view(first) == "user_version"
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
 int installDenyJournalMode(sqlite3 *db, char **, const sqlite3_api_routines *) {
   return sqlite3_set_authorizer(db, denyJournalModeAuthorizer, nullptr);
 }
@@ -1235,6 +1243,36 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+}
+
+void testReplayTransactionalVersionErrorsDoNotMutateSchema(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "transaction-negative-version" / "replay.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA user_version=-1");
+    const std::string beforeSchema = schemaSnapshot(db.get());
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    ReplayDBHelper helper(path);
+    assert(!helper.CreateReplayTables(db.get()));
+    assert(queryInt(db.get(), "PRAGMA user_version") == -1);
+    assert(schemaSnapshot(db.get()) == beforeSchema);
+    execOrAbort(db.get(), "ROLLBACK");
+  }
+
+  {
+    const auto path = root / "transaction-version-read-error" / "replay.db";
+    auto db = openDatabase(path);
+    const std::string beforeSchema = schemaSnapshot(db.get());
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    assert(sqlite3_set_authorizer(db.get(), denyUserVersionAuthorizer,
+                                  nullptr) == SQLITE_OK);
+    ReplayDBHelper helper(path);
+    assert(!helper.CreateReplayTables(db.get()));
+    assert(schemaSnapshot(db.get()) == beforeSchema);
+    assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+    execOrAbort(db.get(), "ROLLBACK");
   }
 }
 
@@ -1571,6 +1609,7 @@ int main() {
   testFutureReplayPreflightPreservesRawDatabaseFamily(root);
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
+  testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
   testLargeWalReplayPreflightPreservesFamily(root);
   testChartSummaryValidationAndDetailsShareWalSnapshot(root);
   testCourseSummaryValidationAndDetailsShareWalSnapshot(root);

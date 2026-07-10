@@ -75,19 +75,19 @@ Replace separate preflight/open/pragma sequences with `openValidatedSqliteDataba
 - Consumes: `readSqliteUserVersion` and isolated validation from Task 1.
 - Produces: every schema/migration guard accepts only `0 <= version <= maximum`.
 
-- [ ] **Step 1: Add negative and denied-PRAGMA transaction tests**
+- [x] **Step 1: Add negative and denied-PRAGMA transaction tests**
 
 For score and replay, begin caller-owned transactions on negative-version fixtures and assert direct schema entry points reject with identical schema/version/row state. Install a connection authorizer that denies `PRAGMA user_version`, repeat inside a transaction, and assert no schema delta.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Expected: current integer fallback accepts negative versions and may migrate them; denied reads are treated as version zero.
 
-- [ ] **Step 3: Propagate optional versions**
+- [x] **Step 3: Propagate optional versions**
 
 Replace both local integer helpers with the shared optional reader. Update reject guards, migration entry points, and migration-pass loops to reject null/negative values explicitly. Preserve isolated validation for autocommit caller-owned handles and use the in-connection snapshot only when a caller transaction is active.
 
-- [ ] **Step 4: Run GREEN and commit Task 2**
+- [x] **Step 4: Run GREEN and commit Task 2**
 
 Build/run both focused targets and confirm every negative/error fixture remains unchanged.
 

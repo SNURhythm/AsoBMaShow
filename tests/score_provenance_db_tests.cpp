@@ -947,6 +947,14 @@ int denyJournalModeAuthorizer(void *, int action, const char *first,
              : SQLITE_OK;
 }
 
+int denyUserVersionAuthorizer(void *, int action, const char *first,
+                              const char *, const char *, const char *) {
+  return action == SQLITE_PRAGMA && first != nullptr &&
+                 std::string_view(first) == "user_version"
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
 int installDenyJournalMode(sqlite3 *db, char **, const sqlite3_api_routines *) {
   return sqlite3_set_authorizer(db, denyJournalModeAuthorizer, nullptr);
 }
@@ -1095,6 +1103,36 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
 #endif
 }
 
+void testScoreTransactionalVersionErrorsDoNotMutateSchema(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "transaction-negative-version" / "score.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA user_version=-1");
+    const std::string beforeSchema = schemaSnapshot(db.get());
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    ScoreDBHelper helper(path);
+    assert(!helper.CreateScoreTable(db.get()));
+    assert(queryInt(db.get(), "PRAGMA user_version") == -1);
+    assert(schemaSnapshot(db.get()) == beforeSchema);
+    execOrAbort(db.get(), "ROLLBACK");
+  }
+
+  {
+    const auto path = root / "transaction-version-read-error" / "score.db";
+    auto db = openDatabase(path);
+    const std::string beforeSchema = schemaSnapshot(db.get());
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    assert(sqlite3_set_authorizer(db.get(), denyUserVersionAuthorizer,
+                                  nullptr) == SQLITE_OK);
+    ScoreDBHelper helper(path);
+    assert(!helper.CreateScoreTable(db.get()));
+    assert(schemaSnapshot(db.get()) == beforeSchema);
+    assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+    execOrAbort(db.get(), "ROLLBACK");
+  }
+}
+
 void testLargeWalPreflightUsesOnlySparseFirstPage(
     const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
@@ -1174,6 +1212,7 @@ int main() {
   testScorePreflightRejectsMalformedStatesAndAllowsCreation(root);
   testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
+  testScoreTransactionalVersionErrorsDoNotMutateSchema(root);
   testLargeWalPreflightUsesOnlySparseFirstPage(root);
 
   std::filesystem::remove_all(root);

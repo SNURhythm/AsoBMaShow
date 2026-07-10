@@ -43,19 +43,6 @@ bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
 
-int databaseUserVersion(sqlite3 *db) {
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
-                                    "reading replay database version",
-                                    logSqlErrorText)) {
-    return 0;
-  }
-  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
-    return 0;
-  }
-  return sqlite3_column_int(stmt.get(), 0);
-}
-
 bool setDatabaseUserVersion(sqlite3 *db, int version) {
   const std::string query =
       "PRAGMA user_version = " + std::to_string(std::max(0, version));
@@ -76,12 +63,18 @@ bool rejectFutureReplayDatabase(sqlite3 *db) {
     }
     return false;
   }
-  const int version = databaseUserVersion(db);
-  if (version <= kReplayDatabaseSchemaVersion) {
+  std::string error;
+  const auto version = readSqliteUserVersion(db, error);
+  if (!version.has_value()) {
+    SDL_Log("Refusing replay database with unreadable version: %s",
+            error.c_str());
+    return true;
+  }
+  if (*version <= kReplayDatabaseSchemaVersion) {
     return false;
   }
-  SDL_Log("Refusing future replay database version %d (supported: %d)", version,
-          kReplayDatabaseSchemaVersion);
+  SDL_Log("Refusing future replay database version %d (supported: %d)",
+          *version, kReplayDatabaseSchemaVersion);
   return true;
 }
 
@@ -144,17 +137,22 @@ bool ensureReplayProvenanceColumns(sqlite3 *db, const char *tableName) {
 }
 
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
-  const int version = databaseUserVersion(db);
-  if (version > kReplayDatabaseSchemaVersion) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading replay migration version", versionError);
     return false;
   }
-  if (version >= kReplayDatabaseSchemaVersion) {
+  if (*version > kReplayDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kReplayDatabaseSchemaVersion) {
     return true;
   }
-  if (version < 1 && !normalizeReplayChartIdentityHashes(db)) {
+  if (*version < 1 && !normalizeReplayChartIdentityHashes(db)) {
     return false;
   }
-  if (version < kLegacyReplayDatabaseSchemaVersion &&
+  if (*version < kLegacyReplayDatabaseSchemaVersion &&
       !backfillReplayMaxCombo(db)) {
     return false;
   }
