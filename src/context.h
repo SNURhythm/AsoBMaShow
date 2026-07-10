@@ -34,9 +34,9 @@ public:
   std::atomic<bool> backgroundTasksPausedForForegroundScene{false};
   std::atomic<bool> ignoreBgaPostOptions{false};
   std::atomic<std::uint32_t> bgfxResetFlags{0};
+  FramePacer framePacer;
   std::unique_ptr<display::IDisplayBackend> displayBackend;
   std::unique_ptr<display::DisplaySettingsManager> displaySettingsManager;
-  FramePacer framePacer;
   std::function<void()> restoreGameplayRenderViews;
   std::function<void()> requestAddChartFolderFromFiles;
   std::function<void()> requestRebuildChartLibrary;

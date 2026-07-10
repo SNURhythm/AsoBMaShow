@@ -36,10 +36,14 @@ std::string rollbackMessage(RollbackReason reason) {
 } // namespace
 
 DisplaySettingsManager::DisplaySettingsManager(
-    IDisplayBackend &backendValue,
-    player_settings::VideoSettings initialSettings)
-    : backend(backendValue), backendCapabilities(backend.capabilities()),
-      confirmedSettings(std::move(initialSettings)) {}
+    IDisplayBackend &backendValue, IFrameCapRuntime &frameCapRuntimeValue,
+    player_settings::VideoSettings configuredIntentValue)
+    : backend(backendValue), frameCapRuntime(frameCapRuntimeValue),
+      backendCapabilities(backend.capabilities()),
+      persistedIntent(std::move(configuredIntentValue)) {
+  confirmedSettings = backend.capture().settings;
+  confirmedSettings.frameCap = frameCapRuntime.currentFrameCap();
+}
 
 DisplaySettingsManager::~DisplaySettingsManager() {
   if (pendingPreview.has_value()) {
@@ -49,6 +53,45 @@ DisplaySettingsManager::~DisplaySettingsManager() {
 
 Capabilities DisplaySettingsManager::capabilities() const {
   return backendCapabilities;
+}
+
+const player_settings::VideoSettings &
+DisplaySettingsManager::configuredIntent() const {
+  return persistedIntent;
+}
+
+const player_settings::VideoSettings &
+DisplaySettingsManager::lastWorkingSettings() const {
+  return confirmedSettings;
+}
+
+ApplyResult DisplaySettingsManager::applySafeStartupIntent() {
+  const std::uint32_t candidateCap = persistedIntent.frameCap;
+  if (candidateCap != 0 && (candidateCap < 15 || candidateCap > 1000)) {
+    return {.status = ApplyStatus::Unsupported,
+            .effective = confirmedSettings,
+            .message =
+                "The persisted frame cap is outside the supported range."};
+  }
+  if (candidateCap != confirmedSettings.frameCap &&
+      !backendCapabilities.canSetFrameCap) {
+    return {.status = ApplyStatus::Unsupported,
+            .effective = confirmedSettings,
+            .message = "Frame limiting is not supported on this platform."};
+  }
+
+  std::string errorMessage;
+  if (!applyFrameCap(candidateCap, errorMessage)) {
+    return {.status = ApplyStatus::FailedRolledBack,
+            .effective = confirmedSettings,
+            .message = errorMessage.empty()
+                           ? "Could not apply the persisted frame cap."
+                           : std::move(errorMessage)};
+  }
+  confirmedSettings.frameCap = candidateCap;
+  return {.status = ApplyStatus::Applied,
+          .effective = confirmedSettings,
+          .message = {}};
 }
 
 bool DisplaySettingsManager::displayFieldsEqual(
@@ -121,6 +164,52 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
   return std::nullopt;
 }
 
+bool DisplaySettingsManager::applyFrameCap(std::uint32_t candidate,
+                                           std::string &errorMessage) {
+  if (frameCapRuntime.currentFrameCap() == candidate) {
+    return true;
+  }
+  return frameCapRuntime.applyFrameCap(candidate, errorMessage);
+}
+
+ApplyResult DisplaySettingsManager::rollback(const RuntimeState &previous,
+                                             RollbackReason reason,
+                                             std::string applyError) {
+  std::string displayError;
+  const bool displayRestored = backend.restore(previous, displayError);
+  std::string frameCapError;
+  const bool frameCapRestored =
+      applyFrameCap(previous.settings.frameCap, frameCapError);
+  if (displayRestored && frameCapRestored) {
+    std::string message =
+        reason == RollbackReason::ApplyFailed && !applyError.empty()
+            ? std::move(applyError)
+            : rollbackMessage(reason);
+    return {.status = reason == RollbackReason::ApplyFailed
+                          ? ApplyStatus::FailedRolledBack
+                          : ApplyStatus::Applied,
+            .effective = confirmedSettings,
+            .message = std::move(message)};
+  }
+
+  std::ostringstream message;
+  if (!applyError.empty()) {
+    message << applyError << " ";
+  }
+  message << "Could not restore the previous runtime state.";
+  if (!displayRestored && !displayError.empty()) {
+    message << " Display: " << displayError;
+  }
+  if (!frameCapRestored && !frameCapError.empty()) {
+    message << " Frame cap: " << frameCapError;
+  }
+  auto effective = backend.capture().settings;
+  effective.frameCap = frameCapRuntime.currentFrameCap();
+  return {.status = ApplyStatus::FailedUnrecoverable,
+          .effective = std::move(effective),
+          .message = message.str()};
+}
+
 ApplyResult DisplaySettingsManager::beginPreview(
     const player_settings::VideoSettings &candidate,
     std::chrono::steady_clock::time_point now) {
@@ -138,6 +227,14 @@ ApplyResult DisplaySettingsManager::beginPreview(
   }
 
   if (displayFieldsEqual(candidate, confirmedSettings)) {
+    std::string frameCapError;
+    if (!applyFrameCap(candidate.frameCap, frameCapError)) {
+      return {.status = ApplyStatus::FailedRolledBack,
+              .effective = confirmedSettings,
+              .message = frameCapError.empty()
+                             ? "Could not apply the requested frame cap."
+                             : std::move(frameCapError)};
+    }
     confirmedSettings = candidate;
     return {.status = ApplyStatus::Applied,
             .effective = confirmedSettings,
@@ -145,27 +242,17 @@ ApplyResult DisplaySettingsManager::beginPreview(
   }
 
   RuntimeState previous = backend.capture();
-  previous.settings.frameCap = confirmedSettings.frameCap;
+  previous.settings.frameCap = frameCapRuntime.currentFrameCap();
   std::string applyError;
   if (!backend.apply(candidate, applyError)) {
-    std::string restoreError;
-    if (backend.restore(previous, restoreError)) {
-      return {.status = ApplyStatus::FailedRolledBack,
-              .effective = confirmedSettings,
-              .message = applyError.empty()
-                             ? rollbackMessage(RollbackReason::ApplyFailed)
-                             : applyError};
-    }
+    return rollback(previous, RollbackReason::ApplyFailed,
+                    std::move(applyError));
+  }
 
-    std::ostringstream message;
-    message << (applyError.empty() ? "Display apply failed." : applyError)
-            << " Restoration also failed";
-    if (!restoreError.empty()) {
-      message << ": " << restoreError;
-    }
-    return {.status = ApplyStatus::FailedUnrecoverable,
-            .effective = candidate,
-            .message = message.str()};
+  std::string frameCapError;
+  if (!applyFrameCap(candidate.frameCap, frameCapError)) {
+    return rollback(previous, RollbackReason::ApplyFailed,
+                    std::move(frameCapError));
   }
 
   pendingPreview = PendingPreview{.previous = std::move(previous),
@@ -194,20 +281,7 @@ ApplyResult DisplaySettingsManager::cancelPreview(RollbackReason reason) {
 
   PendingPreview pending = std::move(*pendingPreview);
   pendingPreview.reset();
-  std::string errorMessage;
-  if (backend.restore(pending.previous, errorMessage)) {
-    return {.status = ApplyStatus::Applied,
-            .effective = confirmedSettings,
-            .message = rollbackMessage(reason)};
-  }
-
-  std::string message = "Could not restore the previous display state.";
-  if (!errorMessage.empty()) {
-    message += " " + errorMessage;
-  }
-  return {.status = ApplyStatus::FailedUnrecoverable,
-          .effective = pending.candidate,
-          .message = std::move(message)};
+  return rollback(pending.previous, reason);
 }
 
 std::optional<ApplyResult>
@@ -218,10 +292,11 @@ DisplaySettingsManager::tick(std::chrono::steady_clock::time_point now) {
   return cancelPreview(RollbackReason::Timeout);
 }
 
-void DisplaySettingsManager::onFocusLost() {
-  if (pendingPreview.has_value()) {
-    (void)cancelPreview(RollbackReason::FocusLost);
+std::optional<ApplyResult> DisplaySettingsManager::onFocusLost() {
+  if (!pendingPreview.has_value()) {
+    return std::nullopt;
   }
+  return cancelPreview(RollbackReason::FocusLost);
 }
 
 bool DisplaySettingsManager::hasPendingPreview() const {

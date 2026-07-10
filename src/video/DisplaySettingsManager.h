@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FrameCapRuntime.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <chrono>
@@ -39,6 +40,8 @@ struct RuntimeState {
   int windowY = 0;
   std::uint32_t sdlWindowFlags = 0;
   std::uint32_t bgfxResetFlags = 0;
+  int exclusiveRefreshRateHz = 0;
+  std::uint32_t exclusivePixelFormat = 0;
   bool operator==(const RuntimeState &) const = default;
 };
 
@@ -72,17 +75,20 @@ class DisplaySettingsManager {
 public:
   static constexpr std::chrono::seconds kConfirmationTimeout{15};
 
-  DisplaySettingsManager(IDisplayBackend &,
-                         player_settings::VideoSettings initialSettings);
+  DisplaySettingsManager(IDisplayBackend &, IFrameCapRuntime &,
+                         player_settings::VideoSettings configuredIntent);
   ~DisplaySettingsManager();
 
   Capabilities capabilities() const;
+  const player_settings::VideoSettings &configuredIntent() const;
+  const player_settings::VideoSettings &lastWorkingSettings() const;
+  ApplyResult applySafeStartupIntent();
   ApplyResult beginPreview(const player_settings::VideoSettings &,
                            std::chrono::steady_clock::time_point now);
   bool confirmPreview();
   ApplyResult cancelPreview(RollbackReason);
   std::optional<ApplyResult> tick(std::chrono::steady_clock::time_point now);
-  void onFocusLost();
+  std::optional<ApplyResult> onFocusLost();
   bool hasPendingPreview() const;
 
 private:
@@ -96,9 +102,14 @@ private:
   unsupportedReason(const player_settings::VideoSettings &) const;
   static bool displayFieldsEqual(const player_settings::VideoSettings &,
                                  const player_settings::VideoSettings &);
+  bool applyFrameCap(std::uint32_t, std::string &errorMessage);
+  ApplyResult rollback(const RuntimeState &, RollbackReason,
+                       std::string applyError = {});
 
   IDisplayBackend &backend;
+  IFrameCapRuntime &frameCapRuntime;
   Capabilities backendCapabilities;
+  player_settings::VideoSettings persistedIntent;
   player_settings::VideoSettings confirmedSettings;
   std::optional<PendingPreview> pendingPreview;
 };

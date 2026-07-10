@@ -774,22 +774,35 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
-  context.framePacer.setCap(context.settings.audioVideo.video.frameCap);
-  context.framePacer.reset(lastFrameTime);
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
+      [&context](std::uint32_t /*resetFlags*/, std::string &errorMessage) {
+        if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
+          errorMessage =
+              "Cannot change the display while replay export is active.";
+          return false;
+        }
+        return true;
+      },
       [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
                                         std::string &errorMessage) {
         if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
           errorMessage =
-              "Cannot reset the renderer while replay export is active.";
+              "Cannot synchronize the renderer while replay export is active.";
           return false;
         }
-        std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
-        activeBgfxResetFlags = resetFlags;
-        s_bgfxResetFlags = resetFlags;
-        context.bgfxResetFlags.store(resetFlags, std::memory_order_relaxed);
+        std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
+                                              std::try_to_lock);
+        if (!bgfxLock.owns_lock()) {
+          errorMessage = "The renderer is busy with another transaction.";
+          return false;
+        }
+        if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
+          errorMessage =
+              "Replay export started during display synchronization.";
+          return false;
+        }
         int logicalWidth = 0;
         int logicalHeight = 0;
         int renderWidth = 0;
@@ -797,25 +810,36 @@ void run() {
         SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
         getWindowDrawableSize(s_window, logicalWidth, logicalHeight,
                               renderWidth, renderHeight);
-        if (logicalWidth > 0 && logicalHeight > 0 && renderWidth > 0 &&
-            renderHeight > 0) {
-          rendering::widthScale = static_cast<float>(renderWidth) /
-                                  static_cast<float>(logicalWidth);
-          rendering::heightScale = static_cast<float>(renderHeight) /
-                                   static_cast<float>(logicalHeight);
-          rendering::updateUIScale(renderWidth, renderHeight);
+        if (logicalWidth <= 0 || logicalHeight <= 0 || renderWidth <= 0 ||
+            renderHeight <= 0) {
+          errorMessage = "The display produced an invalid drawable size.";
+          return false;
         }
+        rendering::widthScale =
+            static_cast<float>(renderWidth) / static_cast<float>(logicalWidth);
+        rendering::heightScale = static_cast<float>(renderHeight) /
+                                 static_cast<float>(logicalHeight);
+        rendering::updateUIScale(renderWidth, renderHeight);
+        activeBgfxResetFlags = resetFlags;
+        s_bgfxResetFlags = resetFlags;
+        context.bgfxResetFlags.store(resetFlags, std::memory_order_relaxed);
         bgfx::reset(rendering::render_width, rendering::render_height,
                     resetFlags);
         s_postProcess.resize(rendering::render_width, rendering::render_height);
         context.restoreGameplayRenderViews();
         context.framePacer.reset(std::chrono::steady_clock::now());
         return true;
-      },
-      context.settings.audioVideo.video.frameCap);
+      });
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(
-          *context.displayBackend, context.settings.audioVideo.video);
+          *context.displayBackend, context.framePacer,
+          context.settings.audioVideo.video);
+  const auto startupDisplayResult =
+      context.displaySettingsManager->applySafeStartupIntent();
+  if (!startupDisplayResult.message.empty()) {
+    SDL_Log("%s", startupDisplayResult.message.c_str());
+  }
+  context.framePacer.reset(lastFrameTime);
   bool pacingExportActive =
       context.replayVideoExportActive.load(std::memory_order_acquire);
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
@@ -837,7 +861,11 @@ void run() {
   };
   auto setAppBackground = [&](bool background) {
     if (background && context.displaySettingsManager) {
-      context.displaySettingsManager->onFocusLost();
+      if (const auto rollbackResult =
+              context.displaySettingsManager->onFocusLost();
+          rollbackResult.has_value() && !rollbackResult->message.empty()) {
+        SDL_Log("%s", rollbackResult->message.c_str());
+      }
     }
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);

@@ -87,6 +87,32 @@ void testDeadlinesAdvanceWithoutDrift() {
             "late frames stay aligned to the original pacing phase");
   }
 }
+
+void testDeadlinesSaturateAtClockMaximum() {
+  FramePacer pacer;
+  pacer.setCap(100);
+  const auto nearMaximum = Clock::time_point::max() - 5ms;
+  pacer.reset(nearMaximum);
+  pacer.framePresented(nearMaximum);
+  require(pacer.remaining(nearMaximum) == 5ms,
+          "first deadline saturates instead of overflowing the clock");
+  pacer.framePresented(Clock::time_point::max());
+  require(pacer.remaining(Clock::time_point::max()) == Clock::duration::zero(),
+          "presentation at the clock maximum cannot wrap the deadline");
+}
+
+void testMultiDayCatchUpKeepsTheOriginalPhase() {
+  FramePacer pacer;
+  const auto start = Clock::time_point{};
+  pacer.setCap(1000);
+  pacer.reset(start);
+  pacer.framePresented(start);
+
+  const auto afterThirtyDays = start + std::chrono::hours(24 * 30) + 500us;
+  pacer.framePresented(afterThirtyDays);
+  require(pacer.remaining(afterThirtyDays) == 500us,
+          "multi-day catch-up is phase aligned and bounded");
+}
 } // namespace
 
 int main() {
@@ -94,5 +120,7 @@ int main() {
   testExactDeadlineAndOverrun();
   testCapChangesAndBackgroundReset();
   testDeadlinesAdvanceWithoutDrift();
+  testDeadlinesSaturateAtClockMaximum();
+  testMultiDayCatchUpKeepsTheOriginalPhase();
   return 0;
 }
