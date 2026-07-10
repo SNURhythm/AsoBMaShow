@@ -448,6 +448,7 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
 
 display::ApplyResult SettingsAudioVideoSession::keepDisplayPreview() {
   display::ApplyResult result = displayManager_.confirmPreview();
+  noteDisplayRollbackRecovery(result);
   if (result.status == display::ApplyStatus::Applied &&
       displayPreviewCandidate_.has_value()) {
     settings_.audioVideo.video = *displayPreviewCandidate_;
@@ -459,8 +460,10 @@ display::ApplyResult SettingsAudioVideoSession::keepDisplayPreview() {
 }
 
 display::ApplyResult SettingsAudioVideoSession::revertDisplayPreview() {
+  displayPreviewCandidate_.reset();
   display::ApplyResult result =
       displayManager_.cancelPreview(display::RollbackReason::Cancelled);
+  noteDisplayRollbackRecovery(result);
   finishDisplayPreviewIfResolved();
   return result;
 }
@@ -470,7 +473,9 @@ display::ApplyResult SettingsAudioVideoSession::leaveDisplayTab() {
 }
 
 display::ApplyResult SettingsAudioVideoSession::cleanup() {
+  displayPreviewCandidate_.reset();
   display::ApplyResult result = displayManager_.shutdown();
+  noteDisplayRollbackRecovery(result);
   finishDisplayPreviewIfResolved();
   return result;
 }
@@ -478,12 +483,18 @@ display::ApplyResult SettingsAudioVideoSession::cleanup() {
 std::optional<display::ApplyResult>
 SettingsAudioVideoSession::tick(std::chrono::steady_clock::time_point now) {
   auto result = displayManager_.tick(now);
+  if (result.has_value()) {
+    noteDisplayRollbackRecovery(*result);
+  }
   finishDisplayPreviewIfResolved();
   return result;
 }
 
 std::optional<display::ApplyResult> SettingsAudioVideoSession::onFocusLost() {
   auto result = displayManager_.onFocusLost();
+  if (result.has_value()) {
+    noteDisplayRollbackRecovery(*result);
+  }
   finishDisplayPreviewIfResolved();
   return result;
 }
@@ -518,6 +529,15 @@ void SettingsAudioVideoSession::persist() {
   if (callbacks_.persist) {
     callbacks_.persist();
   }
+}
+
+void SettingsAudioVideoSession::noteDisplayRollbackRecovery(
+    const display::ApplyResult &result) {
+  if (result.status != display::ApplyStatus::RollbackPending) {
+    return;
+  }
+  displayPreviewCandidate_.reset();
+  displayPreviewBlocking_ = true;
 }
 
 void SettingsAudioVideoSession::finishDisplayPreviewIfResolved() {

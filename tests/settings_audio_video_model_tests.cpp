@@ -1,5 +1,6 @@
 #include "scene/SettingsAudioVideoModel.h"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -615,6 +616,66 @@ void testDisplayTimeoutFocusLossAndTabExitRevertWithoutSaving() {
   }
 }
 
+void testRetryablePreviewRollbackBecomesBlockingNonConfirmableRecovery() {
+  enum class Trigger { Timeout, FocusLoss, Revert, TabExit };
+  constexpr std::array triggers = {Trigger::Timeout, Trigger::FocusLoss,
+                                   Trigger::Revert, Trigger::TabExit};
+
+  for (const auto trigger : triggers) {
+    SessionFixture fixture;
+    const auto now = Clock::time_point{};
+    require(fixture.session.beginDisplayPreview(riskyDisplayCandidate(), now)
+                    .status == display::ApplyStatus::PreviewPending,
+            "test setup opens a normal confirmable preview");
+    fixture.displayBackend.restoreStatuses = {
+        display::RestoreStatus::RetryableFailure,
+        display::RestoreStatus::Restored,
+    };
+
+    display::ApplyResult pending;
+    switch (trigger) {
+    case Trigger::Timeout: {
+      const auto result = fixture.session.tick(
+          now + display::DisplaySettingsManager::kConfirmationTimeout);
+      require(result.has_value(), "timeout initiates rollback");
+      pending = *result;
+      break;
+    }
+    case Trigger::FocusLoss: {
+      const auto result = fixture.session.onFocusLost();
+      require(result.has_value(), "focus loss initiates rollback");
+      pending = *result;
+      break;
+    }
+    case Trigger::Revert:
+      pending = fixture.session.revertDisplayPreview();
+      break;
+    case Trigger::TabExit:
+      pending = fixture.session.leaveDisplayTab();
+      break;
+    }
+
+    require(pending.status == display::ApplyStatus::RollbackPending,
+            "retryable restore enters rollback recovery");
+    require(fixture.session.hasDisplayPreview(),
+            "rollback recovery keeps the blocking overlay active");
+    require(!fixture.session.displayPreviewCandidate().has_value(),
+            "rollback recovery clears the confirmable candidate immediately");
+    require(fixture.session.displayPreviewSecondsRemaining(now) == 0,
+            "rollback recovery no longer exposes a confirmation countdown");
+    require(fixture.saves == 0,
+            "rollback transition never persists the preview candidate");
+
+    const auto recovered = fixture.session.tick(
+        now + display::DisplaySettingsManager::kConfirmationTimeout);
+    require(recovered.has_value() &&
+                recovered->status == display::ApplyStatus::Applied,
+            "subsequent tick completes retryable preview rollback");
+    require(!fixture.session.hasDisplayPreview() && fixture.saves == 0,
+            "blocking recovery ends after restoration without saving");
+  }
+}
+
 void testCleanupDrainsRetryableDisplayRollback() {
   SessionFixture fixture;
   fixture.session.beginDisplayPreview(riskyDisplayCandidate(),
@@ -684,6 +745,7 @@ int main() {
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();
   testBorderlessPreviewIgnoresStaleWindowedResolutionIntent();
   testDisplayTimeoutFocusLossAndTabExitRevertWithoutSaving();
+  testRetryablePreviewRollbackBecomesBlockingNonConfirmableRecovery();
   testCleanupDrainsRetryableDisplayRollback();
   testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes();
   return 0;

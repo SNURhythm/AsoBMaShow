@@ -113,6 +113,7 @@ public:
 
 private:
   void persist();
+  void noteDisplayRollbackRecovery(const display::ApplyResult &result);
   void finishDisplayPreviewIfResolved();
 
   AppSettings &settings_;
