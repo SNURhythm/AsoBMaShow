@@ -85,13 +85,16 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
     return "Frame limiting is not supported on this platform.";
   }
 
-  if (displayChanged || resolutionChanged) {
+  if (modeChanged || displayChanged || resolutionChanged) {
     const DisplayInfo *display =
         findDisplay(backendCapabilities, candidate.displayIndex);
     if (display == nullptr) {
       return "The requested display is unavailable.";
     }
-    if (resolutionChanged &&
+    const bool exclusiveModeNeedsMatch =
+        candidate.mode == player_settings::DisplayMode::ExclusiveFullscreen &&
+        (modeChanged || displayChanged);
+    if ((resolutionChanged || exclusiveModeNeedsMatch) &&
         !hasResolution(*display, candidate.width, candidate.height)) {
       return "The requested resolution is unavailable on that display.";
     }

@@ -222,6 +222,21 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
   require(unknownResolutionBackend.captureCalls == 0 &&
               unknownResolutionBackend.applyCalls == 0,
           "unknown resolution is rejected before capture");
+
+  FakeBackend exclusiveModeBackend;
+  exclusiveModeBackend.exposedCapabilities.displays[0].resolutions = {
+      {1920, 1080, 60}};
+  display::DisplaySettingsManager exclusiveModeManager(exclusiveModeBackend,
+                                                       initialSettings());
+  candidate = initialSettings();
+  candidate.mode = DisplayMode::ExclusiveFullscreen;
+  const auto unavailableExclusive =
+      exclusiveModeManager.beginPreview(candidate, Clock::time_point{});
+  require(unavailableExclusive.status == display::ApplyStatus::Unsupported,
+          "exclusive mode validates its unchanged requested size");
+  require(exclusiveModeBackend.captureCalls == 0 &&
+              exclusiveModeBackend.applyCalls == 0,
+          "unavailable exclusive mode is rejected before capture");
 }
 
 void testSecondPreviewRestoresFirstAndFrameCapIsSafe() {
