@@ -433,6 +433,18 @@ void testAtomicSuccessRotatesOneBackupGeneration() {
   expect(!std::filesystem::exists(target.string() + ".bak.previous"),
          "successful atomic write removes backup staging file");
 }
+
+void testAtomicFirstSaveCreatesNestedParents() {
+  TempDirectory temp;
+  const auto target = temp.path() / "new" / "profile" / "settings.json";
+  const std::string contents = "first-save";
+  std::string error;
+  expect(atomic_file::writeWithBackup(
+             target, std::as_bytes(std::span(contents)), error),
+         "atomic first save creates and syncs nested parents: " + error);
+  expect(readFile(target) == contents,
+         "atomic first save installs content under nested parents");
+}
 } // namespace
 
 int main() {
@@ -445,6 +457,7 @@ int main() {
   testInvalidValuesAreSanitizedWithDiagnostics();
   testAtomicFailureRestoresDestinationAndExistingBackup();
   testAtomicSuccessRotatesOneBackupGeneration();
+  testAtomicFirstSaveCreatesNestedParents();
   if (failures != 0) {
     std::cerr << failures << " app settings store assertion(s) failed\n";
     return 1;

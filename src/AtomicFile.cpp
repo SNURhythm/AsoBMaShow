@@ -145,33 +145,47 @@ bool readExistingFile(const std::filesystem::path &path,
 }
 
 bool syncDirectoryMetadata(const std::filesystem::path &path,
+                           const std::filesystem::path &syncRoot,
                            std::string &errorMessage) {
 #ifdef _WIN32
   // realReplace uses MOVEFILE_WRITE_THROUGH. Windows does not expose a
   // portable directory-fsync equivalent for ordinary application handles.
   (void)path;
+  (void)syncRoot;
   (void)errorMessage;
   return true;
 #else
-  const std::filesystem::path directory = path.parent_path().empty()
-                                              ? std::filesystem::path(".")
-                                              : path.parent_path();
-  const int descriptor = ::open(directory.c_str(), O_RDONLY);
-  if (descriptor < 0) {
-    errorMessage =
-        "open parent directory failed: " + std::string(std::strerror(errno));
-    return false;
-  }
-  if (::fsync(descriptor) != 0) {
-    errorMessage =
-        "parent directory fsync failed: " + std::string(std::strerror(errno));
-    ::close(descriptor);
-    return false;
-  }
-  if (::close(descriptor) != 0) {
-    errorMessage =
-        "close parent directory failed: " + std::string(std::strerror(errno));
-    return false;
+  std::filesystem::path directory = path.parent_path().empty()
+                                        ? std::filesystem::path(".")
+                                        : path.parent_path();
+  while (!directory.empty()) {
+    const int descriptor = ::open(directory.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+      errorMessage = "open directory '" + directory.string() +
+                     "' failed: " + std::string(std::strerror(errno));
+      return false;
+    }
+    if (::fsync(descriptor) != 0) {
+      errorMessage = "directory fsync for '" + directory.string() +
+                     "' failed: " + std::string(std::strerror(errno));
+      ::close(descriptor);
+      return false;
+    }
+    if (::close(descriptor) != 0) {
+      errorMessage = "close directory '" + directory.string() +
+                     "' failed: " + std::string(std::strerror(errno));
+      return false;
+    }
+    if (directory == syncRoot) {
+      break;
+    }
+    const std::filesystem::path parent = directory.parent_path();
+    if (parent.empty() || parent == directory) {
+      errorMessage = "metadata sync root '" + syncRoot.string() +
+                     "' is not an ancestor of '" + path.string() + "'";
+      return false;
+    }
+    directory = parent;
   }
   return true;
 #endif
@@ -204,6 +218,22 @@ bool writeWithBackup(const std::filesystem::path &path,
   }
 
   std::error_code ec;
+  std::filesystem::path metadataSyncRoot = path.parent_path().empty()
+                                               ? std::filesystem::path(".")
+                                               : path.parent_path();
+  while (!std::filesystem::exists(metadataSyncRoot, ec)) {
+    if (ec) {
+      errorMessage =
+          "settings ancestor existence check failed: " + ec.message();
+      return false;
+    }
+    const auto parent = metadataSyncRoot.parent_path();
+    metadataSyncRoot = parent.empty() ? std::filesystem::path(".") : parent;
+  }
+  if (ec) {
+    errorMessage = "settings ancestor existence check failed: " + ec.message();
+    return false;
+  }
   if (!path.parent_path().empty()) {
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) {
@@ -253,7 +283,7 @@ bool writeWithBackup(const std::filesystem::path &path,
       ops.remove(backup);
     }
     restoreError.clear();
-    if (!syncDirectoryMetadata(path, restoreError)) {
+    if (!syncDirectoryMetadata(path, metadataSyncRoot, restoreError)) {
       appendError(errorMessage,
                   "backup metadata restore failed: ", restoreError);
     }
@@ -275,7 +305,7 @@ bool writeWithBackup(const std::filesystem::path &path,
         return false;
       }
       previousBackupMoved = true;
-      if (!syncDirectoryMetadata(path, errorMessage)) {
+      if (!syncDirectoryMetadata(path, metadataSyncRoot, errorMessage)) {
         restoreBackupState();
         ops.remove(temporary);
         ops.remove(backupCandidate);
@@ -292,7 +322,7 @@ bool writeWithBackup(const std::filesystem::path &path,
       return false;
     }
     backupPrepared = true;
-    if (!syncDirectoryMetadata(path, errorMessage)) {
+    if (!syncDirectoryMetadata(path, metadataSyncRoot, errorMessage)) {
       restoreBackupState();
       ops.remove(temporary);
       ops.remove(backupCandidate);
@@ -310,7 +340,7 @@ bool writeWithBackup(const std::filesystem::path &path,
   }
 
   std::string syncError;
-  if (!syncDirectoryMetadata(path, syncError)) {
+  if (!syncDirectoryMetadata(path, metadataSyncRoot, syncError)) {
     appendError(errorMessage,
                 "installed-file metadata sync failed: ", syncError);
     std::string rollbackError;
@@ -323,7 +353,7 @@ bool writeWithBackup(const std::filesystem::path &path,
       }
     } else {
       ops.remove(path);
-      if (!syncDirectoryMetadata(path, rollbackError)) {
+      if (!syncDirectoryMetadata(path, metadataSyncRoot, rollbackError)) {
         appendError(errorMessage,
                     "new-file rollback sync failed: ", rollbackError);
       }
@@ -333,7 +363,7 @@ bool writeWithBackup(const std::filesystem::path &path,
 
   if (previousBackupMoved) {
     ops.remove(savedBackup);
-    syncDirectoryMetadata(path, syncError);
+    syncDirectoryMetadata(path, metadataSyncRoot, syncError);
   }
   return true;
 }
