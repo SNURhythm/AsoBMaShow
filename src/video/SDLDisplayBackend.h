@@ -89,6 +89,7 @@ public:
                     RendererTransactionFactory beginRendererTransaction);
 
   Capabilities capabilities() const override;
+  void observeRuntimeState() const override;
   RuntimeState capture() const override;
   bool apply(const player_settings::VideoSettings &,
              std::string &errorMessage) override;
@@ -96,6 +97,15 @@ public:
                         std::string &errorMessage) override;
 
 private:
+  struct WindowedGeometry {
+    int width = 0;
+    int height = 0;
+    int x = 0;
+    int y = 0;
+  };
+
+  void rememberWindowedGeometry(const SDLWindowState &) const;
+  void rememberRestoredWindowedGeometry(const RuntimeState &) const;
   bool applyWindowSettings(const player_settings::VideoSettings &, int windowX,
                            int windowY, bool restoreExactPosition,
                            std::optional<SDLNativeDisplayMode> restoreMode,
@@ -103,8 +113,8 @@ private:
                            std::string &errorMessage);
   bool verifyWindowSettings(const player_settings::VideoSettings &,
                             const std::optional<SDLNativeDisplayMode> &,
-                            bool verifyPosition, int expectedX, int expectedY,
-                            std::string &errorMessage) const;
+                            bool verifySize, bool verifyPosition, int expectedX,
+                            int expectedY, std::string &errorMessage) const;
   bool restoreSDLOnly(const RuntimeState &, std::string &errorMessage);
   std::uint32_t currentResetFlags() const;
 
@@ -112,5 +122,6 @@ private:
   bool fixedMobileDisplay = false;
   ResetFlagsReader readResetFlags;
   RendererTransactionFactory beginRendererTransaction;
+  mutable std::optional<WindowedGeometry> lastWindowedGeometry;
 };
 } // namespace display

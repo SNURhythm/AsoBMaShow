@@ -1,7 +1,9 @@
 #include "DisplaySettingsManager.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 namespace display {
@@ -46,7 +48,15 @@ DisplaySettingsManager::DisplaySettingsManager(
 
 DisplaySettingsManager::~DisplaySettingsManager() {
   if (pendingPreview.has_value()) {
-    (void)cancelPreview(RollbackReason::Cancelled);
+    const ApplyResult result = shutdown();
+    if (result.status == ApplyStatus::RollbackPending) {
+      std::fputs("Display rollback remained pending during manager teardown.\n",
+                 stderr);
+    } else if (result.status == ApplyStatus::FailedUnrecoverable) {
+      std::fprintf(stderr,
+                   "Display rollback failed during manager teardown: %s\n",
+                   result.message.c_str());
+    }
   }
 }
 
@@ -104,9 +114,14 @@ ApplyResult DisplaySettingsManager::applySafeStartupIntent() {
 bool DisplaySettingsManager::displayFieldsEqual(
     const player_settings::VideoSettings &left,
     const player_settings::VideoSettings &right) {
-  return left.mode == right.mode && left.displayIndex == right.displayIndex &&
-         left.width == right.width && left.height == right.height &&
-         left.vsync == right.vsync;
+  if (left.mode != right.mode || left.displayIndex != right.displayIndex ||
+      left.vsync != right.vsync) {
+    return false;
+  }
+  if (left.mode == player_settings::DisplayMode::BorderlessFullscreen) {
+    return true;
+  }
+  return left.width == right.width && left.height == right.height;
 }
 
 std::optional<std::string> DisplaySettingsManager::unsupportedReason(
@@ -351,8 +366,21 @@ ApplyResult DisplaySettingsManager::cancelPreview(RollbackReason reason) {
   return result;
 }
 
+ApplyResult DisplaySettingsManager::shutdown() {
+  constexpr int kMaxRollbackAttempts = 16;
+  ApplyResult result = cancelPreview(RollbackReason::Cancelled);
+  for (int attempt = 1; attempt < kMaxRollbackAttempts &&
+                        result.status == ApplyStatus::RollbackPending;
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    result = cancelPreview(RollbackReason::Cancelled);
+  }
+  return result;
+}
+
 std::optional<ApplyResult>
 DisplaySettingsManager::tick(std::chrono::steady_clock::time_point now) {
+  backend.observeRuntimeState();
   if (!pendingPreview.has_value()) {
     return std::nullopt;
   }

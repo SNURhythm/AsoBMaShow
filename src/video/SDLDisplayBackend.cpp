@@ -251,6 +251,34 @@ std::uint32_t SDLDisplayBackend::currentResetFlags() const {
   return readResetFlags ? readResetFlags() : 0;
 }
 
+void SDLDisplayBackend::rememberWindowedGeometry(
+    const SDLWindowState &state) const {
+  if (state.mode != player_settings::DisplayMode::Windowed || state.maximized ||
+      state.width <= 0 || state.height <= 0) {
+    return;
+  }
+  lastWindowedGeometry = WindowedGeometry{
+      .width = state.width, .height = state.height, .x = state.x, .y = state.y};
+}
+
+void SDLDisplayBackend::rememberRestoredWindowedGeometry(
+    const RuntimeState &state) const {
+  if (state.settings.mode != player_settings::DisplayMode::Windowed ||
+      state.settings.width <= 0 || state.settings.height <= 0) {
+    return;
+  }
+  lastWindowedGeometry = WindowedGeometry{.width = state.settings.width,
+                                          .height = state.settings.height,
+                                          .x = state.windowX,
+                                          .y = state.windowY};
+}
+
+void SDLDisplayBackend::observeRuntimeState() const {
+  if (adapter) {
+    rememberWindowedGeometry(adapter->windowState());
+  }
+}
+
 Capabilities SDLDisplayBackend::capabilities() const {
   const bool rendererTransactionsAvailable =
       static_cast<bool>(beginRendererTransaction);
@@ -319,14 +347,23 @@ RuntimeState SDLDisplayBackend::capture() const {
   }
 
   const SDLWindowState state = adapter->windowState();
+  rememberWindowedGeometry(state);
   result.sdlWindowFlags = state.windowFlags;
   result.settings.mode = state.mode;
   result.settings.displayIndex =
       fixedMobileDisplay ? 0 : std::max(0, state.displayIndex);
-  result.settings.width = state.width;
-  result.settings.height = state.height;
-  result.windowX = state.x;
-  result.windowY = state.y;
+  if (state.mode == player_settings::DisplayMode::Windowed && state.maximized &&
+      lastWindowedGeometry.has_value()) {
+    result.settings.width = lastWindowedGeometry->width;
+    result.settings.height = lastWindowedGeometry->height;
+    result.windowX = lastWindowedGeometry->x;
+    result.windowY = lastWindowedGeometry->y;
+  } else {
+    result.settings.width = state.width;
+    result.settings.height = state.height;
+    result.windowX = state.x;
+    result.windowY = state.y;
+  }
   result.windowMaximized = state.maximized;
   if (state.requestedWindowMode.has_value()) {
     result.exclusiveRefreshRateHz = state.requestedWindowMode->refreshRateHz;
@@ -422,7 +459,7 @@ bool SDLDisplayBackend::applyWindowSettings(
 bool SDLDisplayBackend::verifyWindowSettings(
     const player_settings::VideoSettings &settings,
     const std::optional<SDLNativeDisplayMode> &expectedExclusiveMode,
-    bool verifyPosition, int expectedX, int expectedY,
+    bool verifySize, bool verifyPosition, int expectedX, int expectedY,
     std::string &errorMessage) const {
   if (!adapter) {
     errorMessage = "Display backend has no SDL adapter.";
@@ -453,7 +490,8 @@ bool SDLDisplayBackend::verifyWindowSettings(
     expectedWidth = bounds->width;
     expectedHeight = bounds->height;
   }
-  if (actual.width != expectedWidth || actual.height != expectedHeight) {
+  if (verifySize &&
+      (actual.width != expectedWidth || actual.height != expectedHeight)) {
     std::ostringstream message;
     message << "SDL window size is " << actual.width << "x" << actual.height
             << ", expected " << expectedWidth << "x" << expectedHeight << ".";
@@ -506,6 +544,7 @@ bool SDLDisplayBackend::restoreSDLOnly(const RuntimeState &snapshot,
   }
   adapter->setWindowMaximized(snapshot.windowMaximized);
   if (!verifyWindowSettings(snapshot.settings, expectedMode,
+                            !snapshot.windowMaximized,
                             !snapshot.windowMaximized, snapshot.windowX,
                             snapshot.windowY, errorMessage)) {
     return false;
@@ -514,6 +553,7 @@ bool SDLDisplayBackend::restoreSDLOnly(const RuntimeState &snapshot,
     errorMessage = "SDL did not restore the captured maximized state.";
     return false;
   }
+  rememberRestoredWindowedGeometry(snapshot);
   return true;
 }
 
@@ -569,7 +609,7 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
     restoreAfterFailure();
     return false;
   }
-  if (!verifyWindowSettings(settings, expectedMode, false, 0, 0,
+  if (!verifyWindowSettings(settings, expectedMode, true, false, 0, 0,
                             errorMessage)) {
     restoreAfterFailure();
     return false;
@@ -656,6 +696,7 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
     adapter->setWindowMaximized(snapshot.windowMaximized);
   }
   if (!verifyWindowSettings(snapshot.settings, expectedMode,
+                            !snapshot.windowMaximized,
                             restorePosition && !snapshot.windowMaximized,
                             snapshot.windowX, snapshot.windowY, errorMessage) ||
       adapter->windowState().maximized != snapshot.windowMaximized) {
@@ -670,6 +711,8 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
     undoFailedRestore();
     return RestoreStatus::Failed;
   }
+
+  rememberRestoredWindowedGeometry(snapshot);
 
   // sdlWindowFlags remains diagnostic for focus/minimize/visibility and other
   // window-manager-owned bits. Maximized state is captured explicitly above.

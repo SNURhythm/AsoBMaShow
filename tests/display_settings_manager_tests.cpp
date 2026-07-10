@@ -57,6 +57,7 @@ public:
                               .bgfxResetFlags = 0x40};
   bool applySucceeds = true;
   display::RestoreStatus restoreStatus = display::RestoreStatus::Restored;
+  std::vector<display::RestoreStatus> restoreStatuses;
   mutable int capabilitiesCalls = 0;
   mutable int captureCalls = 0;
   int applyCalls = 0;
@@ -86,6 +87,10 @@ public:
   display::RestoreStatus restore(const display::RuntimeState &snapshot,
                                  std::string &errorMessage) override {
     ++restoreCalls;
+    if (!restoreStatuses.empty()) {
+      restoreStatus = restoreStatuses.front();
+      restoreStatuses.erase(restoreStatuses.begin());
+    }
     if (restoreStatus != display::RestoreStatus::Restored) {
       errorMessage = "injected restore failure";
       return restoreStatus;
@@ -364,6 +369,26 @@ void testCleanupRestoresPendingPreview() {
           "manager cleanup leaves the confirmed backend state");
   require(frameCapRuntime.cap == 0,
           "manager cleanup restores the captured frame cap");
+}
+
+void testCleanupRetriesTransientRollback() {
+  FakeBackend backend;
+  backend.restoreStatuses = {display::RestoreStatus::RetryableFailure,
+                             display::RestoreStatus::Restored};
+  FakeFrameCapRuntime frameCapRuntime;
+  {
+    display::DisplaySettingsManager manager(backend, frameCapRuntime,
+                                            initialSettings());
+    require(
+        manager.beginPreview(previewSettings(), Clock::time_point{}).status ==
+            display::ApplyStatus::PreviewPending,
+        "retrying cleanup regression starts a preview");
+  }
+  require(backend.restoreCalls == 2,
+          "manager cleanup retries a transient display rollback");
+  require(backend.state.settings == initialSettings() &&
+              frameCapRuntime.cap == 0,
+          "retrying cleanup restores the complete captured runtime");
 }
 
 void testSecondPreviewStopsWhenFirstCannotRestore() {
@@ -657,6 +682,7 @@ int main() {
   testUnsupportedFieldsRejectWithoutBackendCalls();
   testSecondPreviewRestoresFirstAndFrameCapIsSafe();
   testCleanupRestoresPendingPreview();
+  testCleanupRetriesTransientRollback();
   testSecondPreviewStopsWhenFirstCannotRestore();
   testFrameCapRuntimeAcrossEveryPreviewTerminalPath();
   testPersistedIntentRemainsSeparateFromCapturedRuntime();

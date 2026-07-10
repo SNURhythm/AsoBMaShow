@@ -52,6 +52,7 @@ class IDisplayBackend {
 public:
   virtual ~IDisplayBackend() = default;
   virtual Capabilities capabilities() const = 0;
+  virtual void observeRuntimeState() const {}
   virtual RuntimeState capture() const = 0;
   virtual bool apply(const player_settings::VideoSettings &,
                      std::string &errorMessage) = 0;
@@ -92,6 +93,7 @@ public:
                            std::chrono::steady_clock::time_point now);
   ApplyResult confirmPreview();
   ApplyResult cancelPreview(RollbackReason);
+  ApplyResult shutdown();
   std::optional<ApplyResult> tick(std::chrono::steady_clock::time_point now);
   std::optional<ApplyResult> onFocusLost();
   bool hasPendingPreview() const;

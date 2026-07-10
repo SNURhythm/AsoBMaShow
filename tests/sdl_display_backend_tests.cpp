@@ -59,6 +59,7 @@ public:
   int maximizeCalls = 0;
   std::optional<display::SDLNativeDisplayMode> requestedMode;
   std::optional<display::SDLNativeDisplayMode> lastRequestedMode;
+  std::optional<display::SDLWindowState> restoredWindowState;
 
   int displayCount() const override { return static_cast<int>(bounds.size()); }
   std::string displayName(int index) const override {
@@ -130,6 +131,9 @@ public:
     ++sizeCalls;
     state.width = width;
     state.height = height;
+    if (!state.maximized && state.mode == DisplayMode::Windowed) {
+      restoredWindowState = state;
+    }
   }
   void setWindowPosition(int x, int y) override {
     beforeMutation();
@@ -137,6 +141,9 @@ public:
     if (!ignorePosition) {
       state.x = x;
       state.y = y;
+      if (!state.maximized && state.mode == DisplayMode::Windowed) {
+        restoredWindowState = state;
+      }
     }
     for (std::size_t index = 0; index < bounds.size(); ++index) {
       if (x >= bounds[index].x && x < bounds[index].x + bounds[index].width) {
@@ -157,6 +164,18 @@ public:
     beforeMutation();
     ++maximizeCalls;
     if (!ignoreMaximize) {
+      if (state.maximized && !maximized && restoredWindowState.has_value()) {
+        const bool wasMaximized = state.maximized;
+        state = *restoredWindowState;
+        state.maximized = wasMaximized;
+      } else if (!state.maximized && maximized) {
+        restoredWindowState = state;
+        const auto &displayBounds = bounds.at(state.displayIndex);
+        state.x = displayBounds.x;
+        state.y = displayBounds.y;
+        state.width = displayBounds.width;
+        state.height = displayBounds.height;
+      }
       state.maximized = maximized;
     }
   }
@@ -577,6 +596,50 @@ void testExportUiFrameUnlockStillExcludesDisplayTransactions() {
           "display reservation resumes after export release");
 }
 
+void testOverlappingExportUiFrameUnlocksRemainReferenceSafe() {
+  std::mutex rendererMutex;
+  std::atomic<bool> exportActive{false};
+  display::RendererAccessCoordinator coordinator(rendererMutex, exportActive);
+  auto firstExport = coordinator.acquireExport();
+  firstExport.unlockForUiFrame();
+
+  auto secondExport = coordinator.acquireExport();
+  secondExport.release();
+
+  std::string errorMessage;
+  require(exportActive.load(std::memory_order_acquire),
+          "a completed overlapping export cannot clear the older lifetime");
+  require(!coordinator.tryAcquireDisplay(errorMessage).has_value(),
+          "display stays excluded until every export lifetime ends");
+
+  firstExport.release();
+  require(!exportActive.load(std::memory_order_acquire) &&
+              coordinator.tryAcquireDisplay(errorMessage).has_value(),
+          "the final export release reopens display transactions");
+}
+
+void testBorderlessPreviewConfirmsAtDesktopDimensions() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x40;
+  auto backend = makeBackend(adapter, renderer, activeFlags);
+  FramePacer pacer;
+  display::DisplaySettingsManager manager(backend, pacer, VideoSettings{});
+  auto candidate = VideoSettings{};
+  candidate.mode = DisplayMode::BorderlessFullscreen;
+
+  const auto preview =
+      manager.beginPreview(candidate, std::chrono::steady_clock::time_point{});
+  require(preview.status == display::ApplyStatus::PreviewPending &&
+              preview.effective.width == 1920 &&
+              preview.effective.height == 1080,
+          "SDL applies borderless preview at the selected desktop bounds");
+  const auto confirmed = manager.confirmPreview();
+  require(confirmed.status == display::ApplyStatus::Applied &&
+              !manager.hasPendingPreview(),
+          "desktop-sized borderless runtime confirms requested window intent");
+}
+
 void testConcreteTransientRollbackRetriesForCancelFocusAndTimeout() {
   auto adapter = std::make_shared<FakeSDLAdapter>();
   RendererSpy renderer;
@@ -698,6 +761,92 @@ void testMaximizedWindowStateRestoresAndVerifies() {
               display::RestoreStatus::Failed,
           "restore rejects a window manager that ignores maximization");
 }
+
+void testMaximizedRollbackPreservesNormalWindowGeometry() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x40;
+  auto backend = makeBackend(adapter, renderer, activeFlags);
+
+  const auto normal = backend.capture();
+  adapter->restoredWindowState = adapter->state;
+  adapter->setWindowMaximized(true);
+  const auto maximized = backend.capture();
+  require(maximized.windowMaximized &&
+              maximized.settings.width == normal.settings.width &&
+              maximized.settings.height == normal.settings.height,
+          "maximized capture retains its underlying normal window size");
+
+  auto candidate = VideoSettings{};
+  candidate.mode = DisplayMode::BorderlessFullscreen;
+  std::string errorMessage;
+  require(backend.apply(candidate, errorMessage),
+          "maximized geometry regression enters a borderless preview");
+  require(backend.restore(maximized, errorMessage) ==
+              display::RestoreStatus::Restored,
+          "maximized geometry regression restores its snapshot");
+
+  adapter->setWindowMaximized(false);
+  require(adapter->state.width == normal.settings.width &&
+              adapter->state.height == normal.settings.height &&
+              adapter->state.x == normal.windowX &&
+              adapter->state.y == normal.windowY,
+          "unmaximizing after rollback returns to the original normal bounds");
+}
+
+void testNormalResizeRefreshesFutureMaximizedRestoreGeometry() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x40;
+  auto backend = makeBackend(adapter, renderer, activeFlags);
+  FramePacer pacer;
+  display::DisplaySettingsManager manager(backend, pacer, VideoSettings{});
+
+  adapter->state.width = 1600;
+  adapter->state.height = 900;
+  adapter->state.x = 140;
+  adapter->state.y = 160;
+  adapter->restoredWindowState = adapter->state;
+  require(!manager.tick(std::chrono::steady_clock::time_point{}).has_value(),
+          "idle display tick only observes current normal geometry");
+
+  adapter->setWindowMaximized(true);
+  const auto maximized = backend.capture();
+  require(maximized.windowMaximized && maximized.settings.width == 1600 &&
+              maximized.settings.height == 900 && maximized.windowX == 140 &&
+              maximized.windowY == 160,
+          "later normal resize becomes the maximized restore rectangle");
+}
+
+void testMaximizedPreviewRollbackRestoresCachedNormalGeometry() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  adapter->modes[0].push_back({1600, 900, 60, 1});
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x40;
+  auto backend = makeBackend(adapter, renderer, activeFlags);
+  FramePacer pacer;
+  display::DisplaySettingsManager manager(backend, pacer, VideoSettings{});
+
+  adapter->restoredWindowState = adapter->state;
+  adapter->setWindowMaximized(true);
+  auto candidate = VideoSettings{};
+  candidate.width = 1600;
+  candidate.height = 900;
+  require(
+      manager.beginPreview(candidate, std::chrono::steady_clock::time_point{})
+              .status == display::ApplyStatus::PreviewPending,
+      "maximized window can preview a different normal resolution");
+
+  const auto cancelled =
+      manager.cancelPreview(display::RollbackReason::Cancelled);
+  require(cancelled.status == display::ApplyStatus::Applied &&
+              cancelled.effective.width == 1280 &&
+              cancelled.effective.height == 720,
+          "rollback reports the restored pre-maximize normal geometry");
+  require(backend.capture().settings.width == 1280 &&
+              backend.capture().settings.height == 720,
+          "rollback repairs the cached normal geometry as well as SDL");
+}
 } // namespace
 
 int main() {
@@ -713,6 +862,11 @@ int main() {
   testFixedMobileDisplayOnlyAdvertisesFrameCap();
   testRendererReservationExcludesExportBeforeFirstSDLMutation();
   testExportUiFrameUnlockStillExcludesDisplayTransactions();
+  testOverlappingExportUiFrameUnlocksRemainReferenceSafe();
+  testBorderlessPreviewConfirmsAtDesktopDimensions();
+  testMaximizedRollbackPreservesNormalWindowGeometry();
+  testNormalResizeRefreshesFutureMaximizedRestoreGeometry();
+  testMaximizedPreviewRollbackRestoresCachedNormalGeometry();
   testConcreteTransientRollbackRetriesForCancelFocusAndTimeout();
   testMaximizedWindowStateRestoresAndVerifies();
   return 0;

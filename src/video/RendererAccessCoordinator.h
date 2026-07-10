@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -38,9 +39,11 @@ public:
   private:
     friend class RendererAccessCoordinator;
     ExportReservation(std::mutex &rendererMutex,
-                      std::atomic<bool> &exportActive);
+                      std::atomic<bool> &exportActive,
+                      std::size_t &activeExports);
     std::unique_lock<std::mutex> lock;
     std::atomic<bool> *exportActive = nullptr;
+    std::size_t *activeExports = nullptr;
     bool released = false;
   };
 
@@ -54,5 +57,6 @@ public:
 private:
   std::mutex &rendererMutex;
   std::atomic<bool> &exportActive;
+  std::size_t activeExports = 0;
 };
 } // namespace display

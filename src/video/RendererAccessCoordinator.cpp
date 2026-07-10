@@ -12,8 +12,11 @@ bool RendererAccessCoordinator::DisplayReservation::ownsLock() const {
 }
 
 RendererAccessCoordinator::ExportReservation::ExportReservation(
-    std::mutex &rendererMutex, std::atomic<bool> &exportActiveValue)
-    : lock(rendererMutex), exportActive(&exportActiveValue) {
+    std::mutex &rendererMutex, std::atomic<bool> &exportActiveValue,
+    std::size_t &activeExportsValue)
+    : lock(rendererMutex), exportActive(&exportActiveValue),
+      activeExports(&activeExportsValue) {
+  ++*activeExports;
   exportActive->store(true, std::memory_order_release);
 }
 
@@ -21,6 +24,7 @@ RendererAccessCoordinator::ExportReservation::ExportReservation(
     ExportReservation &&other) noexcept
     : lock(std::move(other.lock)),
       exportActive(std::exchange(other.exportActive, nullptr)),
+      activeExports(std::exchange(other.activeExports, nullptr)),
       released(std::exchange(other.released, true)) {}
 
 RendererAccessCoordinator::ExportReservation::~ExportReservation() {
@@ -40,13 +44,16 @@ void RendererAccessCoordinator::ExportReservation::relockAfterUiFrame() {
 }
 
 void RendererAccessCoordinator::ExportReservation::release() {
-  if (released || exportActive == nullptr) {
+  if (released || exportActive == nullptr || activeExports == nullptr) {
     return;
   }
   if (!lock.owns_lock()) {
     lock.lock();
   }
-  exportActive->store(false, std::memory_order_release);
+  if (*activeExports > 0) {
+    --*activeExports;
+  }
+  exportActive->store(*activeExports != 0, std::memory_order_release);
   lock.unlock();
   released = true;
 }
@@ -66,7 +73,7 @@ RendererAccessCoordinator::tryAcquireDisplay(std::string &errorMessage) {
     errorMessage = "The renderer is busy with another transaction.";
     return std::nullopt;
   }
-  if (exportActive.load(std::memory_order_acquire)) {
+  if (activeExports != 0) {
     errorMessage = "Replay export is active.";
     return std::nullopt;
   }
@@ -75,6 +82,6 @@ RendererAccessCoordinator::tryAcquireDisplay(std::string &errorMessage) {
 
 RendererAccessCoordinator::ExportReservation
 RendererAccessCoordinator::acquireExport() {
-  return ExportReservation(rendererMutex, exportActive);
+  return ExportReservation(rendererMutex, exportActive, activeExports);
 }
 } // namespace display

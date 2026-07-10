@@ -1413,6 +1413,12 @@ void run() {
     //
   }
   sceneManager.cleanup();
+  if (context.displaySettingsManager) {
+    const auto shutdownResult = context.displaySettingsManager->shutdown();
+    if (!shutdownResult.message.empty()) {
+      SDL_Log("%s", shutdownResult.message.c_str());
+    }
+  }
   context.displaySettingsManager.reset();
   context.displayBackend.reset();
   s_postProcess.shutdown();
