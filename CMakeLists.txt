@@ -696,6 +696,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(input_device_registry_tests PRIVATE SDL2)
     endif()
 
+    add_executable(logical_gameplay_input_tests
+        tests/logical_gameplay_input_tests.cpp
+        src/input/LogicalGameplayInputAdapter.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputNormalizer.cpp
+    )
+    target_include_directories(logical_gameplay_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(logical_gameplay_input_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
+    endif()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -739,4 +758,5 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
+    asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
 endif()
