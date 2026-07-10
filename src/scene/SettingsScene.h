@@ -37,6 +37,7 @@ class Note;
 
 #include "../input/IRhythmControl.h"
 #include "../input/InputTypes.h"
+#include "SettingsSceneInputRebuild.h"
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
@@ -179,6 +180,7 @@ private:
   bool inputKeyModeDropdownOpen = false;
   bool inputDeviceDropdownOpen = false;
   std::optional<input::LogicalAction> inputCaptureAction;
+  settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
   bool previewPanelFolded = false;

@@ -320,6 +320,7 @@ void SettingsScene::cleanupScene() {
   destroyPreviewRenderer();
   inputCaptureController.reset();
   inputCaptureAction.reset();
+  inputViewRebuildGate.reset();
   inputLastViewSignature.clear();
   previewLanePressed.clear();
   previewCombo = 0;

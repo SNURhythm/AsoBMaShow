@@ -2670,6 +2670,8 @@ void SettingsScene::initView() {
           inputCaptureController != nullptr) {
         inputCaptureController->cancel();
         inputCaptureAction.reset();
+        inputViewRebuildGate.reset();
+        inputLastViewSignature.clear();
       }
       activeTab = tab;
       lastLayoutWidth = -1;

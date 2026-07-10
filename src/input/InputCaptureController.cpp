@@ -26,6 +26,23 @@ bool isDirectionalAnalog(input::ControlKind kind) {
   return kind == input::ControlKind::Axis;
 }
 
+template <typename Bindings>
+auto findUniqueBinding(Bindings &bindings, std::string_view bindingId)
+    -> std::pair<decltype(bindings.begin()), bool> {
+  auto match = bindings.end();
+  for (auto candidate = bindings.begin(); candidate != bindings.end();
+       ++candidate) {
+    if (std::string_view(candidate->id) != bindingId) {
+      continue;
+    }
+    if (match != bindings.end()) {
+      return {bindings.end(), true};
+    }
+    match = candidate;
+  }
+  return {match, false};
+}
+
 } // namespace
 
 InputCaptureController::InputCaptureController(InputDeviceRegistry &registry,
@@ -46,11 +63,18 @@ InputCaptureController::InputCaptureController(InputDeviceRegistry &registry,
       registry_.subscribeInput([this](const input::PhysicalInputEvent &event) {
         resolver_.consume(event);
       });
+  deviceSubscription_ = registry_.subscribeDevices(
+      [this](const input::InputDeviceSnapshot &device) {
+        observeDevice(device);
+      });
 }
 
 InputCaptureController::~InputCaptureController() {
   if (inputSubscription_ != 0) {
     registry_.unsubscribe(inputSubscription_);
+  }
+  if (deviceSubscription_ != 0) {
+    registry_.unsubscribe(deviceSubscription_);
   }
 }
 
@@ -99,23 +123,33 @@ void InputCaptureController::rejectReplace() {
 }
 
 void InputCaptureController::updateBinding(std::string_view bindingId,
-                                           float deadZone,
-                                           float activationThreshold,
-                                           float releaseThreshold,
-                                           bool inverted) {
-  const auto current = std::ranges::find_if(
-      profile_.bindings, [&](const input::InputBinding &binding) {
-        return std::string_view(binding.id) == bindingId;
-      });
+                                           const BindingEdit &edit) {
+  lastError_.clear();
+  const auto [current, ambiguous] =
+      findUniqueBinding(profile_.bindings, bindingId);
+  if (ambiguous) {
+    lastError_ = "Input binding ID is ambiguous; edit was not saved.";
+    return;
+  }
   if (current == profile_.bindings.end()) {
     return;
   }
+  const std::size_t bindingIndex =
+      static_cast<std::size_t>(current - profile_.bindings.begin());
 
   input::InputBinding edited = *current;
-  edited.deadZone = deadZone;
-  edited.activationThreshold = activationThreshold;
-  edited.releaseThreshold = releaseThreshold;
-  edited.inverted = inverted;
+  if (edit.deadZone.has_value()) {
+    edited.deadZone = *edit.deadZone;
+  }
+  if (edit.activationThreshold.has_value()) {
+    edited.activationThreshold = *edit.activationThreshold;
+  }
+  if (edit.releaseThreshold.has_value()) {
+    edited.releaseThreshold = *edit.releaseThreshold;
+  }
+  if (edit.inverted.has_value()) {
+    edited.inverted = *edit.inverted;
+  }
 
   InputProfile sanitizer{.bindings = {edited}};
   std::vector<std::string> diagnostics;
@@ -126,12 +160,23 @@ void InputCaptureController::updateBinding(std::string_view bindingId,
   }
 
   InputProfile next = profile_;
-  const auto destination = std::ranges::find_if(
-      next.bindings, [&](const input::InputBinding &binding) {
-        return std::string_view(binding.id) == bindingId;
-      });
-  *destination = std::move(edited);
+  next.bindings[bindingIndex] = std::move(edited);
   persist(std::move(next));
+}
+
+void InputCaptureController::toggleBindingInversion(
+    std::string_view bindingId) {
+  lastError_.clear();
+  const auto [current, ambiguous] =
+      findUniqueBinding(profile_.bindings, bindingId);
+  if (ambiguous) {
+    lastError_ = "Input binding ID is ambiguous; edit was not saved.";
+    return;
+  }
+  if (current == profile_.bindings.end()) {
+    return;
+  }
+  updateBinding(bindingId, {.inverted = !current->inverted});
 }
 
 void InputCaptureController::resetScopeToDefaults(input::InputScope scope) {
@@ -165,11 +210,9 @@ InputCaptureController::pendingConflicts() const {
 
 bool InputCaptureController::isBindingDeviceMissing(
     std::string_view bindingId) const {
-  const auto binding = std::ranges::find_if(
-      profile_.bindings, [&](const input::InputBinding &candidate) {
-        return std::string_view(candidate.id) == bindingId;
-      });
-  if (binding == profile_.bindings.end()) {
+  const auto [binding, ambiguous] =
+      findUniqueBinding(profile_.bindings, bindingId);
+  if (ambiguous || binding == profile_.bindings.end()) {
     return false;
   }
   return binding->control.deviceId.empty() ||
@@ -178,6 +221,16 @@ bool InputCaptureController::isBindingDeviceMissing(
 
 std::string_view InputCaptureController::lastError() const {
   return lastError_;
+}
+
+void InputCaptureController::observeDevice(
+    const input::InputDeviceSnapshot &device) {
+  if (device.connected) {
+    return;
+  }
+  std::erase_if(activationStates_, [&](const auto &entry) {
+    return entry.first.deviceId == device.stableId;
+  });
 }
 
 void InputCaptureController::observeSample(

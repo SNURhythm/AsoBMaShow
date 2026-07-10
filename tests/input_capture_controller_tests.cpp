@@ -49,6 +49,23 @@ input::PhysicalControl axisControl(std::string deviceId, int index) {
           .direction = input::ControlDirection::Any};
 }
 
+input::PhysicalControl hatControl(std::string deviceId, int index,
+                                  input::ControlDirection direction) {
+  return {.deviceId = std::move(deviceId),
+          .deviceClass = input::DeviceClass::Joystick,
+          .kind = input::ControlKind::Hat,
+          .index = index,
+          .direction = direction};
+}
+
+input::PhysicalControl midiNoteControl(std::string deviceId, int index) {
+  return {.deviceId = std::move(deviceId),
+          .deviceClass = input::DeviceClass::Midi,
+          .kind = input::ControlKind::MidiNote,
+          .index = index,
+          .direction = input::ControlDirection::Any};
+}
+
 input::InputBinding binding(std::string id, input::InputScope scope,
                             input::LogicalAction action,
                             input::PhysicalControl control) {
@@ -331,11 +348,17 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
         return true;
       });
 
-  controller.updateBinding("does-not-exist", 0.1F, 0.8F, 0.4F, true);
+  controller.updateBinding("does-not-exist", {.deadZone = 0.1F,
+                                              .activationThreshold = 0.8F,
+                                              .releaseThreshold = 0.4F,
+                                              .inverted = true});
   require(saves == 0, "editing an unknown binding is a no-op");
 
-  controller.updateBinding("editable", std::numeric_limits<float>::quiet_NaN(),
-                           0.2F, 0.9F, true);
+  controller.updateBinding("editable",
+                           {.deadZone = std::numeric_limits<float>::quiet_NaN(),
+                            .activationThreshold = 0.2F,
+                            .releaseThreshold = 0.9F,
+                            .inverted = true});
   require(saves == 1 && savedProfiles.size() == 1,
           "a committed binding edit persists once");
   const auto &edited = profile.bindings.front();
@@ -345,9 +368,11 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
   require(sameBinding(profile.bindings[1], untouched),
           "sanitizing one edit does not rewrite an unrelated binding");
 
-  controller.updateBinding("editable", edited.deadZone,
-                           edited.activationThreshold, edited.releaseThreshold,
-                           edited.inverted);
+  controller.updateBinding("editable",
+                           {.deadZone = edited.deadZone,
+                            .activationThreshold = edited.activationThreshold,
+                            .releaseThreshold = edited.releaseThreshold,
+                            .inverted = edited.inverted});
   require(saves == 1,
           "an edit with no effective committed change does not persist");
 
@@ -372,6 +397,129 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
           "scoped reset preserves every binding in other scopes");
 }
 
+void testPartialBindingEditsComposeAgainstCurrentProfileState() {
+  RegistryHarness harness;
+  auto editable =
+      binding("editable", {1, 7}, lane(0), buttonControl("pad:one", 0));
+  InputProfile profile{.bindings = {editable}};
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+
+  controller.updateBinding("editable", {.deadZone = 0.1F});
+  controller.toggleBindingInversion("editable");
+  require(profile.bindings.front().deadZone == 0.1F &&
+              profile.bindings.front().inverted,
+          "an inversion click composes with the threshold committed by "
+          "pointer-down focus loss");
+  controller.toggleBindingInversion("editable");
+  controller.toggleBindingInversion("editable");
+  controller.updateBinding("editable", {.releaseThreshold = 0.3F});
+
+  const auto &edited = profile.bindings.front();
+  require(saves == 5, "each committed partial edit persists exactly once");
+  require(edited.deadZone == 0.1F && edited.releaseThreshold == 0.3F &&
+              edited.activationThreshold == editable.activationThreshold &&
+              edited.inverted,
+          "sibling edits and two rapid inversion toggles compose against the "
+          "latest binding instead of a stale snapshot");
+}
+
+void testAmbiguousBindingIdsFailClosed() {
+  RegistryHarness harness;
+  auto first =
+      binding("duplicate", {1, 7}, lane(0), buttonControl("pad:missing", 0));
+  auto second = binding("duplicate", {1, 7}, lane(1), keyControl(4));
+  InputProfile profile{.bindings = {first, second}};
+  const InputProfile before = profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+
+  controller.updateBinding("duplicate", {.inverted = true});
+  require(saves == 0 && sameProfile(profile, before),
+          "an ambiguous binding edit fails closed without persistence or "
+          "mutation");
+  require(!controller.lastError().empty(),
+          "an ambiguous binding edit exposes a diagnostic");
+  require(!controller.isBindingDeviceMissing("duplicate"),
+          "an ambiguous missing-device lookup fails closed rather than "
+          "selecting the first row");
+}
+
+void testDisconnectRearmsFirstCaptureAfterReconnect() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+
+  harness.device({.stableId = "pad:one",
+                  .displayName = "Pad",
+                  .deviceClass = input::DeviceClass::GameController,
+                  .connected = true});
+  harness.input(event(buttonControl("pad:one", 3), 1.0F));
+  harness.device({.stableId = "pad:one",
+                  .displayName = "Pad",
+                  .deviceClass = input::DeviceClass::GameController,
+                  .connected = false});
+  harness.device({.stableId = "pad:one",
+                  .displayName = "Pad",
+                  .deviceClass = input::DeviceClass::GameController,
+                  .connected = true});
+
+  controller.begin({1, 7}, lane(0));
+  harness.input(event(buttonControl("pad:one", 3), 1.0F));
+  require(controller.state() == InputCaptureController::State::Idle &&
+              profile.bindings.size() == 1 && saves == 1,
+          "disconnect clears the held edge so the first press after reconnect "
+          "captures without a synthetic release");
+}
+
+void testNegativeAxisHatAndMidiCapturePreserveControlIdentity() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+
+  controller.begin({1, 7}, lane(0));
+  harness.input(event(axisControl("stick:one", 2), -0.49F));
+  require(profile.bindings.empty(),
+          "negative axis noise below the threshold remains unbound");
+  harness.input(event(axisControl("stick:one", 2), -0.5F));
+  require(profile.bindings.back().control.direction ==
+              input::ControlDirection::Negative,
+          "negative axis capture persists its sign-specific direction");
+
+  controller.begin({1, 7}, lane(1));
+  harness.input(
+      event(hatControl("stick:one", 0, input::ControlDirection::Up), 1.0F));
+  require(profile.bindings.back().control.kind == input::ControlKind::Hat &&
+              profile.bindings.back().control.direction ==
+                  input::ControlDirection::Up,
+          "hat capture preserves its discrete direction");
+
+  controller.begin({1, 7}, lane(2));
+  harness.input(event(midiNoteControl("midi:one", 2 * 128 + 60), 1.0F));
+  require(
+      profile.bindings.back().control.kind == input::ControlKind::MidiNote &&
+          profile.bindings.back().control.index == 2 * 128 + 60 && saves == 3,
+      "MIDI capture preserves channel-note identity and saves once");
+}
+
 } // namespace
 
 int main() {
@@ -381,6 +529,10 @@ int main() {
     testSaveFailureNeverCommitsProfileMutation();
     testMissingStableIdsRemainVisibleAcrossHotplug();
     testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges();
+    testPartialBindingEditsComposeAgainstCurrentProfileState();
+    testAmbiguousBindingIdsFailClosed();
+    testDisconnectRearmsFirstCaptureAfterReconnect();
+    testNegativeAxisHatAndMidiCapturePreserveControlIdentity();
   } catch (const std::exception &error) {
     std::cerr << "input_capture_controller_tests: " << error.what() << '\n';
     return 1;

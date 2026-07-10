@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <set>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -85,6 +87,42 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
     uniqueBindings.push_back(binding);
   }
   bindings = std::move(uniqueBindings);
+
+  std::set<std::string> reservedOriginalIds;
+  for (const auto &binding : bindings) {
+    if (!binding.id.empty()) {
+      reservedOriginalIds.insert(binding.id);
+    }
+  }
+
+  std::set<std::string> usedIds;
+  std::size_t nextBlankId = 1;
+  for (auto &binding : bindings) {
+    if (!binding.id.empty() && usedIds.insert(binding.id).second) {
+      continue;
+    }
+
+    const std::string originalId = binding.id;
+    std::string repairedId;
+    if (originalId.empty()) {
+      do {
+        repairedId = "binding-" + std::to_string(nextBlankId++);
+      } while (reservedOriginalIds.contains(repairedId) ||
+               usedIds.contains(repairedId));
+      diagnostics.emplace_back("Assigned missing input binding ID '" +
+                               repairedId + "'.");
+    } else {
+      std::size_t suffix = 2;
+      do {
+        repairedId = originalId + "-" + std::to_string(suffix++);
+      } while (reservedOriginalIds.contains(repairedId) ||
+               usedIds.contains(repairedId));
+      diagnostics.emplace_back("Reassigned duplicate input binding ID '" +
+                               originalId + "' to '" + repairedId + "'.");
+    }
+    binding.id = std::move(repairedId);
+    usedIds.insert(binding.id);
+  }
 }
 
 std::vector<std::reference_wrapper<const input::InputBinding>>

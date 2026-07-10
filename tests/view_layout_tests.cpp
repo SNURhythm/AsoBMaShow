@@ -1,5 +1,6 @@
 #include "../src/view/View.h"
 #include "scene/SettingsSceneInputLayout.h"
+#include "scene/SettingsSceneInputRebuild.h"
 
 #include <cassert>
 #include <algorithm>
@@ -251,10 +252,27 @@ void testInputSettingsLayoutPolicy() {
   assert(empty.numericControlWidth == 0);
 }
 
+void testInputSettingsRebuildWaitsForPointerTransaction() {
+  settings_scene::InputSettingsRebuildGate gate;
+  assert(gate.request());
+  assert(!gate.request());
+  gate.markEventComplete();
+  assert(!gate.consume(true));
+  assert(!gate.request());
+  assert(gate.consume(false));
+  assert(!gate.consume(false));
+
+  assert(gate.request());
+  gate.markEventComplete();
+  gate.noticeStateChange();
+  assert(gate.consume(false));
+}
+
 } // namespace
 
 int main() {
   testInputSettingsLayoutPolicy();
+  testInputSettingsRebuildWaitsForPointerTransaction();
   bool deferredRan = false;
   View::deferAfterEvent([&]() { deferredRan = true; });
   assert(!deferredRan);

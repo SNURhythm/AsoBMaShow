@@ -4,7 +4,9 @@
 #include "../input/InputCaptureController.h"
 #include "../view/DropdownView.h"
 
+#include <SDL2/SDL_mouse.h>
 #include <SDL2/SDL_scancode.h>
+#include <SDL2/SDL_touch.h>
 
 #include <algorithm>
 #include <array>
@@ -206,6 +208,19 @@ bool matchesDeviceFilter(const input::InputBinding &binding,
   return binding.control.deviceId == filter;
 }
 
+bool inputPointerTransactionActive() {
+  if ((SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) != 0) {
+    return true;
+  }
+  const int touchDeviceCount = SDL_GetNumTouchDevices();
+  for (int index = 0; index < touchDeviceCount; ++index) {
+    if (SDL_GetNumTouchFingers(SDL_GetTouchDevice(index)) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 void SettingsScene::ensureInputCaptureController() {
@@ -224,8 +239,10 @@ void SettingsScene::ensureInputCaptureController() {
 }
 
 void SettingsScene::requestInputViewRebuild() {
-  inputLastViewSignature.clear();
-  lastLayoutWidth = -1;
+  if (!inputViewRebuildGate.request()) {
+    return;
+  }
+  View::deferAfterEvent([this]() { inputViewRebuildGate.markEventComplete(); });
 }
 
 std::string SettingsScene::inputViewSignature() const {
@@ -275,6 +292,10 @@ void SettingsScene::updateInputSettingsState() {
   }
   const std::string signature = inputViewSignature();
   if (!inputLastViewSignature.empty() && signature != inputLastViewSignature) {
+    inputViewRebuildGate.noticeStateChange();
+  }
+  if (inputViewRebuildGate.consume(inputPointerTransactionActive())) {
+    inputLastViewSignature.clear();
     lastLayoutWidth = -1;
   }
 }
@@ -699,38 +720,35 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         return field;
       };
 
-      editor->addView(makeThresholdField(
-          "Dead zone", binding.deadZone, [this, binding](float value) {
-            inputCaptureController->updateBinding(
-                binding.id, value, binding.activationThreshold,
-                binding.releaseThreshold, binding.inverted);
-            requestInputViewRebuild();
-          }));
       editor->addView(
-          makeThresholdField("Activate", binding.activationThreshold,
-                             [this, binding](float value) {
+          makeThresholdField("Dead zone", binding.deadZone,
+                             [this, bindingId = binding.id](float value) {
                                inputCaptureController->updateBinding(
-                                   binding.id, binding.deadZone, value,
-                                   binding.releaseThreshold, binding.inverted);
+                                   bindingId, {.deadZone = value});
                                requestInputViewRebuild();
                              }));
-      editor->addView(makeThresholdField(
-          "Release", binding.releaseThreshold, [this, binding](float value) {
-            inputCaptureController->updateBinding(binding.id, binding.deadZone,
-                                                  binding.activationThreshold,
-                                                  value, binding.inverted);
-            requestInputViewRebuild();
-          }));
+      editor->addView(
+          makeThresholdField("Activate", binding.activationThreshold,
+                             [this, bindingId = binding.id](float value) {
+                               inputCaptureController->updateBinding(
+                                   bindingId, {.activationThreshold = value});
+                               requestInputViewRebuild();
+                             }));
+      editor->addView(
+          makeThresholdField("Release", binding.releaseThreshold,
+                             [this, bindingId = binding.id](float value) {
+                               inputCaptureController->updateBinding(
+                                   bindingId, {.releaseThreshold = value});
+                               requestInputViewRebuild();
+                             }));
       auto *invertButton = makeControlButton(
           std::max(0, layout.numericControlWidth), metrics.actionButtonHeight,
           makeText(binding.inverted ? "Inverted: On" : "Inverted: Off",
                    metrics.smallTextSize, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       invertButton->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
-      invertButton->setOnClickListener([this, binding]() {
-        inputCaptureController->updateBinding(
-            binding.id, binding.deadZone, binding.activationThreshold,
-            binding.releaseThreshold, !binding.inverted);
+      invertButton->setOnClickListener([this, bindingId = binding.id]() {
+        inputCaptureController->toggleBindingInversion(bindingId);
         requestInputViewRebuild();
       });
       editor->addView(invertButton);

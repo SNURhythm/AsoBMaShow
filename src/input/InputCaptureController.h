@@ -16,6 +16,12 @@
 class InputCaptureController {
 public:
   enum class State { Idle, Listening, AwaitingConflictConfirmation };
+  struct BindingEdit {
+    std::optional<float> deadZone;
+    std::optional<float> activationThreshold;
+    std::optional<float> releaseThreshold;
+    std::optional<bool> inverted;
+  };
   using SaveCallback =
       std::function<bool(const InputProfile &, std::string &errorMessage)>;
 
@@ -29,9 +35,8 @@ public:
   void cancel();
   void confirmReplace();
   void rejectReplace();
-  void updateBinding(std::string_view bindingId, float deadZone,
-                     float activationThreshold, float releaseThreshold,
-                     bool inverted);
+  void updateBinding(std::string_view bindingId, const BindingEdit &edit);
+  void toggleBindingInversion(std::string_view bindingId);
   void resetScopeToDefaults(input::InputScope);
 
   [[nodiscard]] State state() const;
@@ -43,6 +48,7 @@ public:
 private:
   static constexpr float kCaptureActivationThreshold = 0.5F;
 
+  void observeDevice(const input::InputDeviceSnapshot &device);
   void observeSample(const input::PhysicalInputEvent &event);
   void considerCandidate(const input::PhysicalInputEvent &event);
   void considerControlActivation(const input::PhysicalInputEvent &event,
@@ -57,6 +63,7 @@ private:
   SaveCallback save_;
   InputBindingResolver resolver_;
   std::uint64_t inputSubscription_ = 0;
+  std::uint64_t deviceSubscription_ = 0;
   std::uint64_t nextBindingId_ = 1;
   State state_ = State::Idle;
   input::InputScope targetScope_;
