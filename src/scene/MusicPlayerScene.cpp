@@ -3979,7 +3979,7 @@ void MusicPlayerScene::applySystemPlaybackPrivacy(bool persist) {
       errorMessage);
   if (persist) {
     context.settings.sanitize();
-    if (!context.settings.save()) {
+    if (!context.saveSettings()) {
       setStatus("Could not save system playback privacy.");
     } else if (!applied && !errorMessage.empty()) {
       setStatus(errorMessage);

@@ -771,6 +771,7 @@
 				PlayerProfileManager.cpp,
 				PrepMetronome.cpp,
 				ProfileDatabaseTools.cpp,
+				ProfileSessionCoordinator.cpp,
 				rendering/BlurPass.cpp,
 				rendering/Camera.cpp,
 				rendering/Color.cpp,

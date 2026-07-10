@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -98,7 +99,11 @@ public:
   static ScoreDBHelper &GetInstance();
 
   void SetDatabasePath(std::filesystem::path databasePath);
-  [[nodiscard]] const std::filesystem::path &GetDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
+  bool BindDatabasePath(std::filesystem::path databasePath,
+                        std::string &errorMessage);
+  [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   sqlite3 *Connect();
   void Close(sqlite3 *db);
@@ -130,5 +135,6 @@ public:
 
 private:
   bool EnsureSchema(sqlite3 *db);
+  mutable std::shared_mutex databasePathMutex_;
   std::filesystem::path databasePath_;
 };

@@ -381,9 +381,15 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
-GamePlayScene::~GamePlayScene() = default;
+GamePlayScene::~GamePlayScene() {
+  if (profileGameplayBlockerActive) {
+    context.profileGameplayActive.store(false, std::memory_order_release);
+  }
+}
 
 void GamePlayScene::init() {
+  context.profileGameplayActive.store(true, std::memory_order_release);
+  profileGameplayBlockerActive = true;
   if (chart != nullptr) {
     const int replayLongNoteMode =
         options.replayData != nullptr ? options.replayData->chartMeta.LnMode
@@ -1675,6 +1681,8 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
+  context.profileGameplayActive.store(false, std::memory_order_release);
+  profileGameplayBlockerActive = false;
   context.jukebox.removeOnTick();
   SDL_Log("Stopping input handler");
   if (inputHandler != nullptr) {
@@ -2413,7 +2421,7 @@ void GamePlayScene::persistFloatingLaneCoverSettings() {
   }
   floatingLaneCoverSettingsDirty = false;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save floating lane cover settings");
   }
 }

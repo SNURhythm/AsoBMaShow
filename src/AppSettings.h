@@ -161,8 +161,6 @@ public:
   float playAreaWidthForKeyMode(int keyMode) const;
   void setPlayAreaWidthForKeyMode(int keyMode, float width);
   bool operator==(const AppSettings &) const = default;
-  bool save() const;
-  static AppSettings load();
 
 private:
   friend class AppSettingsStore;
@@ -171,5 +169,4 @@ private:
   static bool loadLegacyCfg(const std::filesystem::path &path,
                             AppSettings &settings,
                             std::vector<std::string> *diagnostics = nullptr);
-  static std::filesystem::path configPath();
 };

@@ -7,6 +7,7 @@
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
+#include "ScoreDBHelper.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -1601,7 +1602,7 @@ bool ensureScoreQueryDatabase(sqlite3 *db, const ChartMetaQuery &chartQuery) {
     return true;
   }
   const std::filesystem::path scoreDbPath =
-      Utils::GetDocumentsPath("db") / "score.db";
+      ScoreDBHelper::GetInstance().GetResolvedDatabasePath();
   if (const auto error =
           score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
     SDL_Log("SQL error while preparing score query database: %s",

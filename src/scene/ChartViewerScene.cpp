@@ -3476,7 +3476,7 @@ void ChartViewerScene::setViewerAssistOption(const std::string &option) {
   viewerAssistOption = assist_options::normalize(option);
   context.settings.selectedAssistOption = viewerAssistOption;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save chart viewer assist option");
   }
   refreshOptionsDrawer();

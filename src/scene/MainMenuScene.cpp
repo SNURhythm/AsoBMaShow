@@ -1237,6 +1237,32 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 void MainMenuScene::init() {
   // Initialize the scene
   db = ChartDBHelper::GetInstance().Connect();
+  context.profileSwitchSceneBlocker = [this]() -> std::optional<std::string> {
+    if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
+        androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
+      return "A chart library scan or import is active.";
+    }
+    if (replayExportInProgress.load(std::memory_order_acquire)) {
+      return "A replay export is active.";
+    }
+    if (unzipInProgress.load(std::memory_order_acquire) ||
+        findBmsJobRunning.load(std::memory_order_acquire)) {
+      return "A chart archive operation is active.";
+    }
+    if (addFolderPickerInProgress.load(std::memory_order_acquire) ||
+        archiveImportPickerInProgress.load(std::memory_order_acquire)) {
+      return "A chart import picker is active.";
+    }
+    if (willStart.load(std::memory_order_acquire)) {
+      return "A chart or replay transition is active.";
+    }
+    return std::nullopt;
+  };
+  context.refreshProfileCaches = [this]() {
+    if (db != nullptr) {
+      refreshScoreClearRankViews();
+    }
+  };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   context.requestAddChartFolderFromFiles = [this]() {
     addIOSFolderEntryFromFiles();
@@ -1837,7 +1863,7 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
 
   if (allSucceeded) {
     context.settings.defaultDifficultyTablesSeeded = true;
-    if (!context.settings.save()) {
+    if (!context.saveSettings()) {
       SDL_Log("Failed to save default difficulty table seed setting");
     }
   }
@@ -4186,7 +4212,7 @@ void MainMenuScene::prepareScoreQueryDatabase() {
   }
 
   const std::filesystem::path scoreDbPath =
-      Utils::GetDocumentsPath("db") / "score.db";
+      ScoreDBHelper::GetInstance().GetResolvedDatabasePath();
   if (const auto error =
           score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
     SDL_Log("SQL error while preparing score query database: %s",
@@ -4548,7 +4574,7 @@ void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
   selectedGaugeAutoShift = autoShift;
   context.settings.selectedGaugeType = gaugeSettingId(gaugeType, autoShift);
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save gauge selection");
   }
   refreshGaugeSelectionButtons();
@@ -4592,7 +4618,7 @@ void MainMenuScene::setPlayOptionSelection(const std::string &option) {
   selectedPlayOption = play_options::normalizePlayOption(option);
   context.settings.selectedPlayOption = selectedPlayOption;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save play option selection");
   }
   refreshPlayOptionButtons();
@@ -4634,7 +4660,7 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
   selectedLnMode = long_note_mode::parseId(mode, AppSettings::kDefaultLnMode);
   context.settings.selectedLnMode = selectedLnMode;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save long note mode selection");
   }
   refreshLongNoteModeButtons();
@@ -4678,7 +4704,7 @@ void MainMenuScene::setAssistOptionSelection(const std::string &option) {
   selectedAssistOption = assist_options::normalize(option);
   context.settings.selectedAssistOption = selectedAssistOption;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save assist option selection");
   }
   refreshAssistOptionButtons();
@@ -4716,7 +4742,7 @@ void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
   selectedPacemakerTarget = pacemaker::normalizeTargetId(target);
   context.settings.selectedPacemakerTarget = selectedPacemakerTarget;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save pacemaker target selection");
   }
   refreshPacemakerTargetButtons();
@@ -9758,6 +9784,8 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   cancelActivePreviewLoading();
+  context.profileSwitchSceneBlocker = nullptr;
+  context.refreshProfileCaches = nullptr;
   context.requestAddChartFolderFromFiles = nullptr;
   context.requestRebuildChartLibrary = nullptr;
   context.notifyBackgroundTaskPauseStateChanged = nullptr;

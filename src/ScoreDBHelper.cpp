@@ -5,6 +5,7 @@
 #include "ChartSqlExpressions.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
+#include "ProfileDatabaseActivity.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -960,18 +961,45 @@ ScoreDBHelper::ScoreDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
 void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
-  databasePath_ = std::move(databasePath);
+  {
+    std::unique_lock lock(databasePathMutex_);
+    databasePath_ = std::move(databasePath);
+  }
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
-const std::filesystem::path &ScoreDBHelper::GetDatabasePath() const {
+std::filesystem::path ScoreDBHelper::GetDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
   return databasePath_;
 }
 
+std::filesystem::path ScoreDBHelper::GetResolvedDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
+  return databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
+                               : databasePath_;
+}
+
+bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
+                                     std::string &errorMessage) {
+  if (databasePath.empty()) {
+    errorMessage = "score database path is empty";
+    return false;
+  }
+  ScoreDBHelper candidate(databasePath);
+  if (!candidate.EnsureSchema()) {
+    errorMessage = "score database validation failed";
+    return false;
+  }
+  SetDatabasePath(std::move(databasePath));
+  return true;
+}
+
+bool ScoreDBHelper::HasActiveWrites() {
+  return profile_database_activity::writesActive();
+}
+
 sqlite3 *ScoreDBHelper::Connect() {
-  const std::filesystem::path path =
-      databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
-                            : databasePath_;
+  const std::filesystem::path path = GetResolvedDatabasePath();
   const std::filesystem::path directory = path.parent_path();
   std::error_code directoryError;
   if (!directory.empty() &&
@@ -1145,6 +1173,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 const RhythmState &state,
                                 const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   const auto provenanceJson =
       serializeValidatedScoreProvenance(provenance, provenanceError);
@@ -1231,6 +1260,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       const RhythmState &state,
                                       int completedCharts, int totalCharts,
                                       const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   const auto provenanceJson =
       serializeValidatedScoreProvenance(provenance, provenanceError);
@@ -1323,6 +1353,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state,
                               const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   if (!serializeValidatedScoreProvenance(provenance, provenanceError)
            .has_value()) {
@@ -1348,6 +1379,7 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   if (!serializeValidatedScoreProvenance(provenance, provenanceError)
            .has_value()) {

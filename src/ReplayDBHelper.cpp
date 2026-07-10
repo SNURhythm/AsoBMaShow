@@ -3,6 +3,7 @@
 #include "BmsMetadataText.h"
 #include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
+#include "ProfileDatabaseActivity.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
 #include "path.h"
@@ -768,17 +769,42 @@ ReplayDBHelper::ReplayDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
 void ReplayDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
+  std::unique_lock lock(databasePathMutex_);
   databasePath_ = std::move(databasePath);
 }
 
-const std::filesystem::path &ReplayDBHelper::GetDatabasePath() const {
+std::filesystem::path ReplayDBHelper::GetDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
   return databasePath_;
 }
 
+std::filesystem::path ReplayDBHelper::GetResolvedDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
+  return databasePath_.empty() ? Utils::GetDocumentsPath("db") / "replay.db"
+                               : databasePath_;
+}
+
+bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
+                                      std::string &errorMessage) {
+  if (databasePath.empty()) {
+    errorMessage = "replay database path is empty";
+    return false;
+  }
+  ReplayDBHelper candidate(databasePath);
+  if (!candidate.EnsureSchema()) {
+    errorMessage = "replay database validation failed";
+    return false;
+  }
+  SetDatabasePath(std::move(databasePath));
+  return true;
+}
+
+bool ReplayDBHelper::HasActiveWrites() {
+  return profile_database_activity::writesActive();
+}
+
 sqlite3 *ReplayDBHelper::Connect() {
-  const std::filesystem::path path =
-      databasePath_.empty() ? Utils::GetDocumentsPath("db") / "replay.db"
-                            : databasePath_;
+  const std::filesystem::path path = GetResolvedDatabasePath();
   const std::filesystem::path directory = path.parent_path();
   std::error_code directoryError;
   if (!directory.empty() &&
@@ -1019,6 +1045,7 @@ bool ReplayDBHelper::EnsureSchema() {
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
+  profile_database_activity::WriteGuard writeGuard;
   if (!hasMatchableReplayChartIdentity(replay)) {
     SDL_Log("Refusing to save replay without a matchable chart identity");
     return std::nullopt;
@@ -1062,6 +1089,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
 
 std::optional<int>
 ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
+  profile_database_activity::WriteGuard writeGuard;
   if (replay.stages.empty() ||
       replay.stages.size() >
           static_cast<std::size_t>(
