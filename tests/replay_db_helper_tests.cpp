@@ -920,7 +920,7 @@ void testCourseSummariesOmitInvalidLinkedStages(
       {.replay = sampleReplay(root, "summary-stage-course-b")});
 
   std::vector<int> courseReplayIds;
-  for (int i = 0; i < 6; ++i) {
+  for (int i = 0; i < 12; ++i) {
     course.finalScore = 300 + i;
     const auto id = helper.SaveCourseReplay(course);
     assert(id.has_value());
@@ -937,6 +937,13 @@ void testCourseSummariesOmitInvalidLinkedStages(
       "SELECT replay_id FROM course_replay_stages WHERE course_replay_id=" +
           std::to_string(courseReplayIds[2]) +
           " ORDER BY stage_index DESC LIMIT 1");
+  const auto replayIdForStage = [&](int courseReplayId, int stageIndex) {
+    return queryInt(
+        db.get(),
+        "SELECT replay_id FROM course_replay_stages WHERE course_replay_id=" +
+            std::to_string(courseReplayId) +
+            " AND stage_index=" + std::to_string(stageIndex));
+  };
   execOrAbort(db.get(),
               "DELETE FROM course_replay_stages WHERE course_replay_id=" +
                   std::to_string(courseReplayIds[3]));
@@ -948,6 +955,35 @@ void testCourseSummariesOmitInvalidLinkedStages(
               "UPDATE course_replay_stages SET stage_index=-1-stage_index "
               "WHERE course_replay_id=" +
                   std::to_string(courseReplayIds[5]));
+  const int emptyIdentityReplayId = replayIdForStage(courseReplayIds[6], 0);
+  execOrAbort(db.get(),
+              "UPDATE replays SET chart_path='',chart_md5='',chart_sha256='' "
+              "WHERE id=" +
+                  std::to_string(emptyIdentityReplayId));
+  const int partiallyMissingReplayId = replayIdForStage(courseReplayIds[7], 0);
+  execOrAbort(db.get(), "DELETE FROM replays WHERE id=" +
+                            std::to_string(partiallyMissingReplayId));
+  execOrAbort(db.get(), "UPDATE course_replay_stages SET stage_index=2 WHERE "
+                        "course_replay_id=" +
+                            std::to_string(courseReplayIds[8]) +
+                            " AND stage_index=1");
+  execOrAbort(db.get(), "UPDATE course_replay_stages SET stage_index=0 WHERE "
+                        "course_replay_id=" +
+                            std::to_string(courseReplayIds[9]) +
+                            " AND stage_index=1");
+  execOrAbort(db.get(),
+              "UPDATE course_replay_stages SET stage_index=CASE stage_index "
+              "WHEN 0 THEN -1 ELSE 0 END WHERE course_replay_id=" +
+                  std::to_string(courseReplayIds[10]));
+  const int repeatedReplayId = replayIdForStage(courseReplayIds[11], 0);
+  execOrAbort(
+      db.get(),
+      "WITH RECURSIVE counter(value) AS (VALUES(2) UNION ALL SELECT value+1 "
+      "FROM counter WHERE value<256) INSERT INTO course_replay_stages "
+      "(course_replay_id,stage_index,replay_id,rest_micros_after_stage) "
+      "SELECT " +
+          std::to_string(courseReplayIds[11]) + ",value," +
+          std::to_string(repeatedReplayId) + ",0 FROM counter");
   execOrAbort(db.get(), "UPDATE replays SET ruleset_version=99 WHERE id=" +
                             std::to_string(mismatchedStageId));
   execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
@@ -960,11 +996,9 @@ void testCourseSummariesOmitInvalidLinkedStages(
   const auto all = helper.ListCourseReplays(course.courseId, 0);
   assert(all.size() == 1);
   assert(all.front().id == courseReplayIds[0]);
-  assert(!helper.LoadCourseReplay(courseReplayIds[1]).has_value());
-  assert(!helper.LoadCourseReplay(courseReplayIds[2]).has_value());
-  assert(!helper.LoadCourseReplay(courseReplayIds[3]).has_value());
-  assert(!helper.LoadCourseReplay(courseReplayIds[4]).has_value());
-  assert(!helper.LoadCourseReplay(courseReplayIds[5]).has_value());
+  for (std::size_t i = 1; i < courseReplayIds.size(); ++i) {
+    assert(!helper.LoadCourseReplay(courseReplayIds[i]).has_value());
+  }
 }
 
 void testFutureVersionRejectsWithoutSchemaMutation(
@@ -1179,6 +1213,55 @@ public:
   ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
 };
 
+struct InterruptCourseStageTrace {
+  sqlite3 *db = nullptr;
+  sqlite3_stmt *target = nullptr;
+  bool interrupted = false;
+};
+
+int interruptCourseStageTrace(unsigned traceType, void *rawContext,
+                              void *statement, void *) {
+  auto *context = static_cast<InterruptCourseStageTrace *>(rawContext);
+  if (traceType == SQLITE_TRACE_STMT) {
+    auto *stmt = static_cast<sqlite3_stmt *>(statement);
+    const char *sql = sqlite3_sql(stmt);
+    if (sql != nullptr &&
+        std::string_view(sql).find("FROM course_replay_stages s") !=
+            std::string_view::npos) {
+      context->target = stmt;
+    }
+  } else if (traceType == SQLITE_TRACE_ROW && statement == context->target &&
+             !context->interrupted) {
+    context->interrupted = true;
+    sqlite3_interrupt(context->db);
+  } else if (traceType == SQLITE_TRACE_CLOSE) {
+    delete context;
+  }
+  return 0;
+}
+
+int installInterruptCourseStageTrace(sqlite3 *db, char **,
+                                     const sqlite3_api_routines *) {
+  auto *context = new InterruptCourseStageTrace{.db = db};
+  const int rc = sqlite3_trace_v2(
+      db, SQLITE_TRACE_STMT | SQLITE_TRACE_ROW | SQLITE_TRACE_CLOSE,
+      interruptCourseStageTrace, context);
+  if (rc != SQLITE_OK) {
+    delete context;
+  }
+  return rc;
+}
+
+class ScopedInterruptCourseStageAutoExtension {
+public:
+  ScopedInterruptCourseStageAutoExtension() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installInterruptCourseStageTrace)) == SQLITE_OK);
+  }
+  ~ScopedInterruptCourseStageAutoExtension() { sqlite3_reset_auto_extension(); }
+};
+
 void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
   std::filesystem::create_directories(path.parent_path());
   std::string bytes(4096, '\0');
@@ -1273,6 +1356,38 @@ void testReplayTransactionalVersionErrorsDoNotMutateSchema(
     assert(schemaSnapshot(db.get()) == beforeSchema);
     assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
     execOrAbort(db.get(), "ROLLBACK");
+  }
+}
+
+void testCourseStageStepErrorsFailListsAndFullLoad(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-stage-step-error" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  CourseReplayData course;
+  course.courseId = 72;
+  course.courseName = "Interrupted stage course";
+  course.completedCharts = 2;
+  course.totalCharts = 2;
+  course.provenance = sampleProvenance("interrupted-stage-course");
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "interrupted-stage-a")});
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "interrupted-stage-b")});
+  const auto courseReplayId = helper.SaveCourseReplay(course);
+  assert(courseReplayId.has_value());
+
+  {
+    ScopedInterruptCourseStageAutoExtension interrupt;
+    assert(helper.ListCourseReplays(course.courseId, 1).empty());
+  }
+  {
+    ScopedInterruptCourseStageAutoExtension interrupt;
+    assert(helper.ListCourseReplays(course.courseId, 0).empty());
+  }
+  {
+    ScopedInterruptCourseStageAutoExtension interrupt;
+    assert(!helper.LoadCourseReplay(*courseReplayId).has_value());
   }
 }
 
@@ -1610,6 +1725,7 @@ int main() {
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
+  testCourseStageStepErrorsFailListsAndFullLoad(root);
   testLargeWalReplayPreflightPreservesFamily(root);
   testChartSummaryValidationAndDetailsShareWalSnapshot(root);
   testCourseSummaryValidationAndDetailsShareWalSnapshot(root);

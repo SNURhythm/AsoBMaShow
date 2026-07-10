@@ -104,23 +104,23 @@ Build/run both focused targets and confirm every negative/error fixture remains 
 - Produces: ordered stage descriptor reader used by list and load paths.
 - Produces: connection-local replay loader used by `LoadReplay` and `LoadCourseReplay`.
 
-- [ ] **Step 1: Add malformed-structure and step-error public regressions**
+- [x] **Step 1: Add malformed-structure and step-error public regressions**
 
 Create one older valid course behind empty-identity, partial-missing, indexes `0,2`, duplicate, negative-plus-valid, and 257-stage candidates. Assert limit-one and unlimited lists return only the valid course and full load returns null for every invalid id. Use an SQLite auto-extension trace callback to interrupt the stage SELECT and assert limited/unlimited list and full load fail closed on terminal step error.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Expected: empty identity is advertised, while partial/gapped/negative-plus-valid/257-stage full loads return partial or default-filled data.
 
-- [ ] **Step 3: Implement the shared descriptor reader**
+- [x] **Step 3: Implement the shared descriptor reader**
 
 Use one `LEFT JOIN` query selecting index, linked id, rest time, identity, and provenance. Enforce 1..256, exact contiguous indexes, present replay, nonempty trimmed identity, optional provenance coherence, and terminal `SQLITE_DONE`.
 
-- [ ] **Step 4: Hydrate courses on one connection/snapshot**
+- [x] **Step 4: Hydrate courses on one connection/snapshot**
 
 Extract the body of `LoadReplay` into a connection-local helper. Make public `LoadReplay` delegate after Connect/schema setup. Make `LoadCourseReplay` hold one deferred read transaction across aggregate read, shared stage validation, and every stage replay/event/touch/lane-cover load; commit only after complete success.
 
-- [ ] **Step 5: Run GREEN, retain bounded scans, and commit Task 3**
+- [x] **Step 5: Run GREEN, retain bounded scans, and commit Task 3**
 
 Run focused tests plus the existing 600-corrupt-row budget fixture. Confirm one aggregate log and the prior 513-candidate bound.
 

@@ -508,44 +508,96 @@ validatedProvenanceJson(const ScoreProvenance &provenance,
   return serialized;
 }
 
-bool courseReplayStagesHaveValidProvenance(sqlite3_stmt *stmt,
-                                           int courseReplayId,
-                                           std::string &error) {
+struct CourseReplayStageDescriptor {
+  int stageIndex = 0;
+  int replayId = 0;
+  long long restMicros = 0;
+  bms_parser::ChartMeta chartMeta;
+};
+
+constexpr const char *kCourseReplayStageDescriptorQuery =
+    "SELECT s.stage_index, s.replay_id, s.rest_micros_after_stage,"
+    "r.id, r.chart_path, r.chart_md5, r.chart_sha256, r.chart_title,"
+    "r.chart_artist, r.ruleset_version, r.eligibility, r.provenance_json "
+    "FROM course_replay_stages s "
+    "LEFT JOIN replays r ON r.id = s.replay_id "
+    "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
+
+bool readCourseReplayStageDescriptors(
+    sqlite3_stmt *stmt, int courseReplayId, bool validateProvenance,
+    std::vector<CourseReplayStageDescriptor> &stages, std::string &error) {
+  stages.clear();
   sqlite3_reset(stmt);
   sqlite3_clear_bindings(stmt);
-  sqlite3_bind_int(stmt, 1, courseReplayId);
-  sqlite3_bind_int(stmt, 2,
-                   replay_summary_scan::kMaxCourseStagesPerCandidate + 1);
+  if (sqlite3_bind_int(stmt, 1, courseReplayId) != SQLITE_OK ||
+      sqlite3_bind_int(stmt, 2,
+                       replay_summary_scan::kMaxCourseStagesPerCandidate + 1) !=
+          SQLITE_OK) {
+    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
+    return false;
+  }
 
-  int stageCount = 0;
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-    if (sqlite3_column_int(stmt, 0) != stageCount) {
+    const int expectedIndex = static_cast<int>(stages.size());
+    if (sqlite3_column_int(stmt, 0) != expectedIndex) {
       error = "course replay stage indexes are not contiguous";
       return false;
     }
-    ++stageCount;
-    if (stageCount > replay_summary_scan::kMaxCourseStagesPerCandidate) {
+    if (stages.size() >=
+        static_cast<std::size_t>(
+            replay_summary_scan::kMaxCourseStagesPerCandidate)) {
       error = "course replay has too many stages";
       return false;
     }
-    if (sqlite3_column_type(stmt, 1) == SQLITE_NULL) {
+    if (sqlite3_column_type(stmt, 3) == SQLITE_NULL) {
       error = "course replay references a missing stage replay";
       return false;
     }
-    if (!decodeStoredProvenance(stmt, 2, 3, 4, error).has_value()) {
+    const int replayId = sqlite3_column_int(stmt, 1);
+    if (replayId <= 0 || replayId != sqlite3_column_int(stmt, 3)) {
+      error = "course replay has an invalid stage replay id";
       return false;
     }
+
+    CourseReplayStageDescriptor stage;
+    stage.stageIndex = expectedIndex;
+    stage.replayId = replayId;
+    stage.restMicros = sqlite3_column_int64(stmt, 2);
+    stage.chartMeta.BmsPath = readText(stmt, 4);
+    stage.chartMeta.MD5 = readText(stmt, 5);
+    stage.chartMeta.SHA256 = readText(stmt, 6);
+    stage.chartMeta.Title = readText(stmt, 7);
+    stage.chartMeta.Artist = readText(stmt, 8);
+    if (trimCopy(stage.chartMeta.BmsPath.string()).empty() &&
+        normalizedHash(stage.chartMeta.MD5).empty() &&
+        normalizedHash(stage.chartMeta.SHA256).empty()) {
+      error = "course replay stage has no matchable chart identity";
+      return false;
+    }
+    if (validateProvenance &&
+        !decodeStoredProvenance(stmt, 9, 10, 11, error).has_value()) {
+      return false;
+    }
+    stages.push_back(std::move(stage));
   }
   if (rc != SQLITE_DONE) {
     error = sqliteDatabaseError(sqlite3_db_handle(stmt));
     return false;
   }
-  if (stageCount == 0) {
+  if (stages.empty()) {
     error = "course replay has no linked stages";
     return false;
   }
   return true;
+}
+
+bool courseReplayStagesHaveValidProvenance(sqlite3_stmt *stmt,
+                                           int courseReplayId,
+                                           std::string &error) {
+  std::vector<CourseReplayStageDescriptor> stages;
+  return readCourseReplayStageDescriptors(stmt, courseReplayId, true, stages,
+                                          error);
 }
 
 std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
@@ -1308,15 +1360,9 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
     return replays;
   }
 
-  const char *stageProvenanceQuery =
-      "SELECT s.stage_index, r.id, r.ruleset_version, r.eligibility, "
-      "r.provenance_json "
-      "FROM course_replay_stages s "
-      "LEFT JOIN replays r ON r.id = s.replay_id "
-      "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
   SqliteStatementHandle stageProvenanceStmt;
   if (!prepareSqliteStatementLogged(
-          db, stageProvenanceQuery, stageProvenanceStmt,
+          db, kCourseReplayStageDescriptorQuery, stageProvenanceStmt,
           "preparing course replay stage provenance scan", logSqlErrorText)) {
     return replays;
   }
@@ -1462,19 +1508,9 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   return replays;
 }
 
-std::optional<ReplayData>
-ReplayDBHelper::LoadReplay(int replayId,
-                           const bms_parser::ChartMeta &chartMeta) {
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
-    return std::nullopt;
-  }
-
-  if (!CreateReplayTables(db)) {
-    return std::nullopt;
-  }
-
+static std::optional<ReplayData>
+loadReplayFromConnection(sqlite3 *db, int replayId,
+                         const bms_parser::ChartMeta &chartMeta) {
   const auto match = replayChartMatchFor(chartMeta);
   std::string query =
       "SELECT id, chart_path, chart_md5, chart_sha256, chart_title,"
@@ -1641,6 +1677,32 @@ ReplayDBHelper::LoadReplay(int replayId,
   return replay;
 }
 
+std::optional<ReplayData>
+ReplayDBHelper::LoadReplay(int replayId,
+                           const bms_parser::ChartMeta &chartMeta) {
+  SqliteConnectionHandle dbHandle(Connect());
+  sqlite3 *db = dbHandle.get();
+  if (db == nullptr || !CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string snapshotError;
+  SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
+  if (!readSnapshot.active()) {
+    logSqlErrorText("starting replay load snapshot", snapshotError);
+    return std::nullopt;
+  }
+  auto replay = loadReplayFromConnection(db, replayId, chartMeta);
+  if (!replay.has_value()) {
+    return std::nullopt;
+  }
+  if (!readSnapshot.commit(snapshotError)) {
+    logSqlErrorText("committing replay load snapshot", snapshotError);
+    return std::nullopt;
+  }
+  return replay;
+}
+
 std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
@@ -1649,6 +1711,13 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
   }
 
   if (!CreateReplayTables(db)) {
+    return std::nullopt;
+  }
+
+  std::string snapshotError;
+  SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
+  if (!readSnapshot.active()) {
+    logSqlErrorText("starting course replay load snapshot", snapshotError);
     return std::nullopt;
   }
 
@@ -1703,73 +1772,37 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
   courseReplay.provenance = std::move(*provenance);
   stmt.reset();
 
-  const char *stageQuery =
-      "SELECT s.stage_index, s.replay_id, s.rest_micros_after_stage,"
-      "r.chart_path, r.chart_md5, r.chart_sha256, r.chart_title,"
-      "r.chart_artist "
-      "FROM course_replay_stages s "
-      "JOIN replays r ON r.id = s.replay_id "
-      "WHERE s.course_replay_id = ? "
-      "ORDER BY s.stage_index";
-
   SqliteStatementHandle stageStmt;
-  if (!prepareSqliteStatementLogged(db, stageQuery, stageStmt,
-                                    "preparing course replay stage load",
-                                    logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(
+          db, kCourseReplayStageDescriptorQuery, stageStmt,
+          "preparing course replay stage load", logSqlErrorText)) {
     return std::nullopt;
   }
 
-  struct PendingCourseReplayStage {
-    int stageIndex = 0;
-    int replayId = 0;
-    long long restMicros = 0;
-    bms_parser::ChartMeta chartMeta;
-  };
-  std::vector<PendingCourseReplayStage> pendingStages;
-  sqlite3_bind_int(stageStmt.get(), 1, replayId);
-  while (sqlite3_step(stageStmt.get()) == SQLITE_ROW) {
-    const int stageIndex = sqlite3_column_int(stageStmt.get(), 0);
-    const int stageReplayId = sqlite3_column_int(stageStmt.get(), 1);
-    const long long restMicros = sqlite3_column_int64(stageStmt.get(), 2);
-    if (stageIndex < 0 || stageReplayId <= 0) {
-      continue;
-    }
-
-    bms_parser::ChartMeta stageMeta;
-    stageMeta.BmsPath = readText(stageStmt.get(), 3);
-    stageMeta.MD5 = readText(stageStmt.get(), 4);
-    stageMeta.SHA256 = readText(stageStmt.get(), 5);
-    stageMeta.Title = readText(stageStmt.get(), 6);
-    stageMeta.Artist = readText(stageStmt.get(), 7);
-    pendingStages.push_back({.stageIndex = stageIndex,
-                             .replayId = stageReplayId,
-                             .restMicros = restMicros,
-                             .chartMeta = std::move(stageMeta)});
+  std::vector<CourseReplayStageDescriptor> pendingStages;
+  std::string stageError;
+  if (!readCourseReplayStageDescriptors(stageStmt.get(), replayId, true,
+                                        pendingStages, stageError)) {
+    logSqlErrorText("validating course replay stages", stageError);
+    return std::nullopt;
   }
   stageStmt.reset();
-  dbHandle.reset();
 
   for (auto &pendingStage : pendingStages) {
-    auto stageReplay =
-        LoadReplay(pendingStage.replayId, pendingStage.chartMeta);
+    auto stageReplay = loadReplayFromConnection(db, pendingStage.replayId,
+                                                pendingStage.chartMeta);
     if (!stageReplay.has_value()) {
       SDL_Log("Failed to load course replay stage %d replay %d",
               pendingStage.stageIndex, pendingStage.replayId);
       return std::nullopt;
     }
-
-    if (courseReplay.stages.size() <=
-        static_cast<size_t>(pendingStage.stageIndex)) {
-      courseReplay.stages.resize(static_cast<size_t>(pendingStage.stageIndex) +
-                                 1);
-    }
-    courseReplay.stages[static_cast<size_t>(pendingStage.stageIndex)] =
-        CourseReplayStageData{.replay = std::move(*stageReplay),
-                              .restMicrosAfterStage =
-                                  std::max(0LL, pendingStage.restMicros)};
+    courseReplay.stages.push_back(CourseReplayStageData{
+        .replay = std::move(*stageReplay),
+        .restMicrosAfterStage = std::max(0LL, pendingStage.restMicros)});
   }
 
-  if (courseReplay.stages.empty()) {
+  if (!readSnapshot.commit(snapshotError)) {
+    logSqlErrorText("committing course replay load snapshot", snapshotError);
     return std::nullopt;
   }
   return courseReplay;
