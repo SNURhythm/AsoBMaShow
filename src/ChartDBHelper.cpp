@@ -1603,7 +1603,7 @@ bool ensureScoreQueryDatabase(
   if (!chartMetaQueryNeedsScoreCache(chartQuery)) {
     return true;
   }
-  prepared.emplace(ScoreDBHelper::GetInstance().PrepareScoreQueryDatabase(db));
+  prepared.emplace(ScoreDBHelper::GetInstance(), db);
   if (const auto &error = prepared->error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());

@@ -1009,13 +1009,6 @@ ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
 ScoreDBHelper::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
     default;
 
-ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
-    PreparedScoreQueryDatabase &&) noexcept = default;
-
-ScoreDBHelper::PreparedScoreQueryDatabase &
-ScoreDBHelper::PreparedScoreQueryDatabase::operator=(
-    PreparedScoreQueryDatabase &&) noexcept = default;
-
 const std::optional<std::string> &
 ScoreDBHelper::PreparedScoreQueryDatabase::error() const {
   return state_->error;

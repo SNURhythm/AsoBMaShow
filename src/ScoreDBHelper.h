@@ -94,10 +94,11 @@ public:
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
+    PreparedScoreQueryDatabase(const ScoreDBHelper &, sqlite3 *chartDatabase);
     ~PreparedScoreQueryDatabase();
-    PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) noexcept;
+    PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) = delete;
     PreparedScoreQueryDatabase &
-    operator=(PreparedScoreQueryDatabase &&) noexcept;
+    operator=(PreparedScoreQueryDatabase &&) noexcept = delete;
 
     PreparedScoreQueryDatabase(const PreparedScoreQueryDatabase &) = delete;
     PreparedScoreQueryDatabase &
@@ -108,11 +109,7 @@ public:
   private:
     struct State;
 
-    PreparedScoreQueryDatabase(const ScoreDBHelper &, sqlite3 *chartDatabase);
-
     std::unique_ptr<State> state_;
-
-    friend class ScoreDBHelper;
   };
 
   ScoreDBHelper() = default;

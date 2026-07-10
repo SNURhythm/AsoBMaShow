@@ -23,11 +23,17 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
 int failures = 0;
+
+static_assert(
+    !std::is_move_constructible_v<ScoreDBHelper::PreparedScoreQueryDatabase>);
+static_assert(
+    !std::is_move_assignable_v<ScoreDBHelper::PreparedScoreQueryDatabase>);
 
 void expect(bool condition, const std::string &message) {
   if (!condition) {
