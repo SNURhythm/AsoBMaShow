@@ -1,5 +1,7 @@
 #include "LogicalGameplayInputAdapter.h"
 
+#include <SDL2/SDL_scancode.h>
+
 #include <algorithm>
 #include <utility>
 
@@ -36,6 +38,29 @@ bool hasActiveKeyboardActionBinding(
            binding.control.index == scancode &&
            binding.control.direction == input::ControlDirection::Any;
   });
+}
+
+InputProfile makeGameplayInputProfileWithEscapeFallback(
+    const InputProfile &profile,
+    std::span<const input::InputScope> activeScopes) {
+  InputProfile result = profile;
+  if (activeScopes.empty() ||
+      hasActiveKeyboardActionBinding(result, activeScopes, SDL_SCANCODE_ESCAPE,
+                                     input::LogicalActionKind::Pause)) {
+    return result;
+  }
+  const auto scope = activeScopes.front();
+  result.bindings.push_back(
+      {.id = "compat-keyboard-escape-pause-p" + std::to_string(scope.player) +
+             "-k" + std::to_string(scope.keyMode),
+       .scope = scope,
+       .action = {.kind = input::LogicalActionKind::Pause},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_ESCAPE,
+                   .direction = input::ControlDirection::Any}});
+  return result;
 }
 
 LogicalGameplayInputAdapter::LogicalGameplayInputAdapter(
@@ -106,15 +131,16 @@ void LogicalGameplayInputAdapter::reset() {
     (void)scopes;
     effectiveHeldLanes.insert(lane);
   }
-  for (const auto &[lane, direction] : heldScratchDirections_) {
-    (void)direction;
-    effectiveHeldLanes.insert(lane);
+  for (const auto &[lane, state] : scratchLaneStates_) {
+    if (state.activeDirection.has_value()) {
+      effectiveHeldLanes.insert(lane);
+    }
   }
   for (const int lane : effectiveHeldLanes) {
     control_.releaseLane(lane, 0.0, false);
   }
   heldLaneScopes_.clear();
-  heldScratchDirections_.clear();
+  scratchLaneStates_.clear();
 }
 
 int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
@@ -122,8 +148,10 @@ int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
 }
 
 bool LogicalGameplayInputAdapter::isLaneHeld(int lane) const {
+  const auto scratch = scratchLaneStates_.find(lane);
   return heldLaneScopes_.contains(lane) ||
-         heldScratchDirections_.contains(lane);
+         (scratch != scratchLaneStates_.end() &&
+          scratch->second.activeDirection.has_value());
 }
 
 void LogicalGameplayInputAdapter::applyLane(
@@ -157,32 +185,102 @@ void LogicalGameplayInputAdapter::applyScratch(
     const input::LogicalInputTransition &transition, ScratchDirection direction,
     bool reversing) {
   const int lane = scratchLane(transition.scope);
-  const auto held = heldScratchDirections_.find(lane);
   if (!transition.pressed) {
-    if (held != heldScratchDirections_.end() && held->second == direction) {
-      heldScratchDirections_.erase(held);
-      if (reversing || !isLaneHeld(lane)) {
-        control_.releaseLane(lane, 0.0, reversing);
-        if (reversing && isLaneHeld(lane)) {
-          control_.pressLane(lane);
-        }
+    const auto found = scratchLaneStates_.find(lane);
+    if (found == scratchLaneStates_.end() ||
+        found->second.heldDirections.erase(direction) == 0) {
+      return;
+    }
+    auto &state = found->second;
+    if (state.activeDirection != direction) {
+      if (state.heldDirections.empty()) {
+        scratchLaneStates_.erase(found);
+      }
+      return;
+    }
+
+    if (!state.heldDirections.empty()) {
+      state.activeDirection = *state.heldDirections.begin();
+      control_.releaseLane(lane, 0.0, true);
+      control_.pressLane(lane);
+      return;
+    }
+
+    state.activeDirection.reset();
+    const bool digitalLaneHeld = heldLaneScopes_.contains(lane);
+    if (reversing || !digitalLaneHeld) {
+      control_.releaseLane(lane, 0.0, reversing);
+      if (reversing && digitalLaneHeld) {
+        control_.pressLane(lane);
       }
     }
+    scratchLaneStates_.erase(found);
     return;
   }
 
-  if (held != heldScratchDirections_.end()) {
-    if (held->second == direction) {
-      return;
-    }
-    control_.releaseLane(lane, 0.0, true);
-    control_.pressLane(lane);
-    heldScratchDirections_.insert_or_assign(lane, direction);
+  const bool wasHeld = isLaneHeld(lane);
+  auto &state = scratchLaneStates_[lane];
+  state.heldDirections.insert(direction);
+  if (state.activeDirection == direction) {
     return;
   }
-  const bool wasHeld = isLaneHeld(lane);
-  heldScratchDirections_.insert_or_assign(lane, direction);
+  if (state.activeDirection.has_value()) {
+    control_.releaseLane(lane, 0.0, true);
+    control_.pressLane(lane);
+    state.activeDirection = direction;
+    return;
+  }
+  state.activeDirection = direction;
   if (!wasHeld) {
     control_.pressLane(lane);
   }
+}
+
+LogicalGameplayInputPipeline::LogicalGameplayInputPipeline(
+    IRhythmControl &control, const InputProfile &profile,
+    std::vector<input::InputScope> activeScopes,
+    LogicalGameplayInputAdapter::CommandCallback commandCallback,
+    LogicalGameplayRegistryPolicy registryPolicy)
+    : adapter_(control, std::move(commandCallback)),
+      resolver_(
+          profile, std::move(activeScopes),
+          {.onTransitions =
+               [this](
+                   std::span<const input::LogicalInputTransition> transitions) {
+                 adapter_.apply(transitions);
+               }}),
+      registryPolicy_(registryPolicy) {}
+
+bool LogicalGameplayInputPipeline::consumeRegistryEvent(
+    const input::PhysicalInputEvent &event) {
+  if (!registryPolicy_.acceptKeyboardFromRegistry &&
+      event.control.deviceClass == input::DeviceClass::Keyboard) {
+    return false;
+  }
+  resolver_.consume(event);
+  return true;
+}
+
+bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
+                                                         bool pressed) {
+  if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
+    return false;
+  }
+  resolver_.consume({.control = {.deviceId = "keyboard",
+                                 .deviceClass = input::DeviceClass::Keyboard,
+                                 .kind = input::ControlKind::Key,
+                                 .index = scancode,
+                                 .direction = input::ControlDirection::Any},
+                     .rawValue = pressed ? 1.0 : 0.0,
+                     .normalizedValue = pressed ? 1.0F : 0.0F});
+  return true;
+}
+
+void LogicalGameplayInputPipeline::disconnectDevice(std::string_view stableId) {
+  resolver_.disconnectDevice(stableId);
+}
+
+void LogicalGameplayInputPipeline::reset() {
+  resolver_.reset();
+  adapter_.reset();
 }

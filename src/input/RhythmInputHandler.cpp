@@ -48,29 +48,17 @@ bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
 void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
   const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
   SDL_Log("KeyDown: %d (%d)", keyCode, scancode);
-  if (scancode != SDL_SCANCODE_UNKNOWN && bindingResolver != nullptr) {
-    bindingResolver->consume(
-        {.control = {.deviceId = "keyboard",
-                     .deviceClass = input::DeviceClass::Keyboard,
-                     .kind = input::ControlKind::Key,
-                     .index = static_cast<int>(scancode),
-                     .direction = input::ControlDirection::Any},
-         .rawValue = 1.0,
-         .normalizedValue = 1.0F});
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
+                                                true);
   }
 }
 void RhythmInputHandler::onKeyUp(int keyCode, KeySource keySource) {
   SDL_Log("KeyUp: %d", keyCode);
   const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
-  if (scancode != SDL_SCANCODE_UNKNOWN && bindingResolver != nullptr) {
-    bindingResolver->consume(
-        {.control = {.deviceId = "keyboard",
-                     .deviceClass = input::DeviceClass::Keyboard,
-                     .kind = input::ControlKind::Key,
-                     .index = static_cast<int>(scancode),
-                     .direction = input::ControlDirection::Any},
-         .rawValue = 0.0,
-         .normalizedValue = 0.0F});
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
+                                                false);
   }
 }
 
@@ -307,14 +295,14 @@ bool RhythmInputHandler::startListenSDL() {
   }
   inputSubscriptionToken = inputDeviceRegistry->subscribeInput(
       [this](const input::PhysicalInputEvent &event) {
-        if (bindingResolver != nullptr) {
-          bindingResolver->consume(event);
+        if (logicalInputPipeline != nullptr) {
+          logicalInputPipeline->consumeRegistryEvent(event);
         }
       });
   deviceSubscriptionToken = inputDeviceRegistry->subscribeDevices(
       [this](const input::InputDeviceSnapshot &device) {
-        if (!device.connected && bindingResolver != nullptr) {
-          bindingResolver->disconnectDevice(device.stableId);
+        if (!device.connected && logicalInputPipeline != nullptr) {
+          logicalInputPipeline->disconnectDevice(device.stableId);
         }
       });
   return true;
@@ -338,11 +326,8 @@ void RhythmInputHandler::stopListen() {
       deviceSubscriptionToken = 0;
     }
   }
-  if (bindingResolver != nullptr) {
-    bindingResolver->reset();
-  }
-  if (logicalInputAdapter != nullptr) {
-    logicalInputAdapter->reset();
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->reset();
   }
   if (touchInputSource != nullptr) {
     touchInputSource->stopListen();
@@ -476,20 +461,11 @@ RhythmInputHandler::RhythmInputHandler(
     InputDeviceRegistry &registry, const InputProfile &profile,
     std::vector<input::InputScope> activeScopes,
     LogicalGameplayInputAdapter::CommandCallback commandCallback,
-    float configuredPlayAreaWidth)
+    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy)
     : inputDeviceRegistry(&registry), control(control) {
-  logicalInputAdapter = std::make_unique<LogicalGameplayInputAdapter>(
-      *control, std::move(commandCallback));
-  bindingResolver = std::make_unique<InputBindingResolver>(
-      profile, std::move(activeScopes),
-      InputBindingResolver::Callbacks{
-          .onTransitions =
-              [this](
-                  std::span<const input::LogicalInputTransition> transitions) {
-                if (logicalInputAdapter != nullptr) {
-                  logicalInputAdapter->apply(transitions);
-                }
-              }});
+  logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
+      *control, profile, std::move(activeScopes), std::move(commandCallback),
+      registryPolicy);
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();

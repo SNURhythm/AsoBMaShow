@@ -169,7 +169,8 @@ void SettingsScene::ensurePreviewInputHandler() {
         context.inputProfile,
         makeGameplayInputScopes(previewChart->Meta.KeyMode),
         LogicalGameplayInputAdapter::CommandCallback{},
-        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode),
+        LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
     previewInputHandler->startListenSDL();
   }

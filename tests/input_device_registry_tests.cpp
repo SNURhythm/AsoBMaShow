@@ -57,7 +57,19 @@ public:
 
   void stop() override { ++stopCalls; }
 
-  void handleSdlEvent(const SDL_Event &) override { ++handledEvents; }
+  void handleSdlEvent(const SDL_Event &event) override {
+    ++handledEvents;
+    if (publishHandledKeyboardEvents &&
+        (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)) {
+      publishInput(
+          {.control = {.deviceId = "keyboard",
+                       .deviceClass = input::DeviceClass::Keyboard,
+                       .kind = input::ControlKind::Key,
+                       .index = static_cast<int>(event.key.keysym.scancode)},
+           .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
+           .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F});
+    }
+  }
 
   void pump() override { ++pumpCalls; }
 
@@ -73,6 +85,7 @@ public:
   int stopCalls = 0;
   int handledEvents = 0;
   int pumpCalls = 0;
+  bool publishHandledKeyboardEvents = false;
 
 private:
   bool startResult_ = true;
@@ -352,6 +365,104 @@ void testRegistryQueuesCallbacksAndKeepsKeyboard() {
   registry.handleSdlEvent(event);
   expect(backend->handledEvents == 1,
          "registry forwards every SDL event to each backend");
+}
+
+input::PhysicalInputEvent fakeKeyEvent(int index);
+
+void testInputSubscriptionDoesNotInheritAlreadyQueuedEvents() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  registry.pump();
+
+  backend->sendInput(fakeKeyEvent(40));
+  std::vector<int> received;
+  registry.subscribeInput(
+      [&](const auto &event) { received.push_back(event.control.index); });
+  registry.pump();
+  expect(received.empty(),
+         "an input subscriber does not inherit pre-subscription events");
+
+  backend->sendInput(fakeKeyEvent(41));
+  registry.pump();
+  expect(received == std::vector<int>({41}),
+         "an input subscriber receives events queued after subscription");
+}
+
+void testSdlDispatchCompletesBeforeSceneMutationWithoutPumpingBackends() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  registry.pump();
+  backend->publishHandledKeyboardEvents = true;
+  std::vector<std::string> order;
+  registry.subscribeInput([&](const auto &event) {
+    if (event.control.index == SDL_SCANCODE_S) {
+      order.emplace_back("lane");
+    } else if (event.control.index == SDL_SCANCODE_ESCAPE) {
+      order.emplace_back("pause");
+    }
+  });
+
+  SDL_Event lane{};
+  lane.type = SDL_KEYDOWN;
+  lane.key.keysym.scancode = SDL_SCANCODE_S;
+  registry.handleSdlEventAndDispatch(lane);
+  order.emplace_back("scene-after-lane");
+
+  SDL_Event escape{};
+  escape.type = SDL_KEYDOWN;
+  escape.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+  registry.handleSdlEventAndDispatch(escape);
+  order.emplace_back("scene-after-escape");
+
+  expect(order == std::vector<std::string>({"lane", "scene-after-lane", "pause",
+                                            "scene-after-escape"}),
+         "physical input dispatch completes before each scene mutation");
+  expect(backend->pumpCalls == 1,
+         "per-SDL-event dispatch does not repeatedly pump native backends");
+}
+
+void testSubscriptionEpochRejectsLaterPendingEventsFromTheSamePump() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  registry.pump();
+  std::uint64_t lateToken = 0;
+  std::vector<int> lateEvents;
+  registry.subscribeInput([&](const auto &) {
+    if (lateToken == 0) {
+      lateToken = registry.subscribeInput([&](const auto &event) {
+        lateEvents.push_back(event.control.index);
+      });
+    }
+  });
+
+  backend->sendInput(fakeKeyEvent(50));
+  backend->sendInput(fakeKeyEvent(51));
+  registry.pump();
+  expect(lateEvents.empty(),
+         "a new subscription rejects all events queued before its epoch");
+
+  backend->sendInput(fakeKeyEvent(52));
+  registry.pump();
+  expect(lateEvents == std::vector<int>({52}),
+         "a new subscription accepts the first post-subscription event");
+}
+
+void testUnsubscribedQueuedInputIsNeverReassignedToANewOwner() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  registry.pump();
+  int oldCallbacks = 0;
+  const auto oldToken =
+      registry.subscribeInput([&](const auto &) { ++oldCallbacks; });
+  backend->sendInput(fakeKeyEvent(60));
+  registry.unsubscribe(oldToken);
+  int newCallbacks = 0;
+  registry.subscribeInput([&](const auto &) { ++newCallbacks; });
+
+  registry.pump();
+  expect(oldCallbacks == 0 && newCallbacks == 0,
+         "unsubscribe explicitly cancels its queued input instead of "
+         "reassigning it to a new owner");
 }
 
 input::PhysicalInputEvent fakeKeyEvent(int index) {
@@ -1245,6 +1356,10 @@ int main() {
   testIdentityPrecedenceAndNameOrdinals();
   testIdentityDisambiguatesActiveDuplicateSerials();
   testRegistryQueuesCallbacksAndKeepsKeyboard();
+  testInputSubscriptionDoesNotInheritAlreadyQueuedEvents();
+  testSdlDispatchCompletesBeforeSceneMutationWithoutPumpingBackends();
+  testSubscriptionEpochRejectsLaterPendingEventsFromTheSamePump();
+  testUnsubscribedQueuedInputIsNeverReassignedToANewOwner();
   testInputSubscriptionsAreSafeDuringSamePumpMutation();
   testDeviceSubscriptionsAreSafeDuringSamePumpMutation();
   testReentrantPumpPreservesQueuedEventFifo();

@@ -85,7 +85,7 @@ private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
   bool isGamePaused = false;
-  bool escapeUsesLogicalPauseBinding = false;
+  bool escapeHandledByInputPipeline = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
 

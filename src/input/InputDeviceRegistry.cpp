@@ -21,21 +21,28 @@ input::InputDeviceSnapshot keyboardSnapshot() {
 } // namespace
 
 struct InputDeviceRegistry::QueueState {
-  void enqueue(QueuedEvent event) {
+  void enqueue(QueuedPayload payload) {
     const std::lock_guard lock(mutex);
     if (accepting) {
-      queue.emplace_back(std::move(event));
+      queue.push_back(
+          {.sequence = nextSequence++, .payload = std::move(payload)});
     }
   }
 
-  void enqueue(std::deque<QueuedEvent> events) {
+  void enqueue(std::deque<QueuedPayload> payloads) {
     const std::lock_guard lock(mutex);
     if (!accepting) {
       return;
     }
-    for (auto &event : events) {
-      queue.emplace_back(std::move(event));
+    for (auto &payload : payloads) {
+      queue.push_back(
+          {.sequence = nextSequence++, .payload = std::move(payload)});
     }
+  }
+
+  template <typename Callback> void atSequenceBoundary(Callback &&callback) {
+    const std::lock_guard lock(mutex);
+    callback(nextSequence);
   }
 
   std::deque<QueuedEvent> take() {
@@ -53,21 +60,22 @@ struct InputDeviceRegistry::QueueState {
 
   std::mutex mutex;
   std::deque<QueuedEvent> queue;
+  std::uint64_t nextSequence = 1;
   bool accepting = true;
 };
 
 struct InputDeviceRegistry::BackendSinkGate {
-  void enqueue(QueuedEvent event) {
+  void enqueue(QueuedPayload payload) {
     const std::lock_guard lock(mutex);
     if (closed) {
       return;
     }
     if (!active) {
-      staged.emplace_back(std::move(event));
+      staged.emplace_back(std::move(payload));
       return;
     }
     if (const auto destinationQueue = destination.lock()) {
-      destinationQueue->enqueue(std::move(event));
+      destinationQueue->enqueue(std::move(payload));
     }
   }
 
@@ -91,7 +99,7 @@ struct InputDeviceRegistry::BackendSinkGate {
 
   std::mutex mutex;
   std::weak_ptr<QueueState> destination;
-  std::deque<QueuedEvent> staged;
+  std::deque<QueuedPayload> staged;
   bool active = false;
   bool closed = false;
 };
@@ -116,11 +124,11 @@ InputDeviceRegistry::InputDeviceRegistry(
     input::InputBackendSink sink{
         .enqueueInput =
             [sinkGate](input::PhysicalInputEvent event) {
-              sinkGate->enqueue(QueuedEvent(std::move(event)));
+              sinkGate->enqueue(QueuedPayload(std::move(event)));
             },
         .enqueueDevice =
             [sinkGate](input::InputDeviceSnapshot device) {
-              sinkGate->enqueue(QueuedEvent(std::move(device)));
+              sinkGate->enqueue(QueuedPayload(std::move(device)));
             }};
     auto backend = factory(sink);
     if (!backend) {
@@ -163,37 +171,53 @@ void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
   }
 }
 
-void InputDeviceRegistry::pump() {
+void InputDeviceRegistry::handleSdlEventAndDispatch(const SDL_Event &event) {
+  handleSdlEvent(event);
+  dispatchPending();
+}
+
+void InputDeviceRegistry::pump() { pumpInternal(true); }
+
+void InputDeviceRegistry::dispatchPending() { pumpInternal(false); }
+
+void InputDeviceRegistry::pumpInternal(bool pumpBackends) {
   if (pumping_) {
     repumpRequested_ = true;
+    repumpBackendsRequested_ = repumpBackendsRequested_ || pumpBackends;
     return;
   }
   pumping_ = true;
+  bool shouldPumpBackends = pumpBackends;
 
   try {
     do {
       repumpRequested_ = false;
-      for (const auto &backend : backends_) {
-        backend->pump();
+      if (shouldPumpBackends) {
+        for (const auto &backend : backends_) {
+          backend->pump();
+        }
       }
+      shouldPumpBackends = false;
 
       std::deque<QueuedEvent> pending = queueState_->take();
 
       for (const auto &event : pending) {
         if (const auto *inputEvent =
-                std::get_if<input::PhysicalInputEvent>(&event)) {
-          std::vector<std::pair<std::uint64_t, InputListener>> listeners(
+                std::get_if<input::PhysicalInputEvent>(&event.payload)) {
+          std::vector<std::pair<std::uint64_t, InputSubscription>> listeners(
               inputListeners_.begin(), inputListeners_.end());
-          for (const auto &[token, listener] : listeners) {
-            if (!inputListeners_.contains(token)) {
+          for (const auto &[token, subscription] : listeners) {
+            if (!inputListeners_.contains(token) ||
+                event.sequence < subscription.firstEventSequence) {
               continue;
             }
-            listener(*inputEvent);
+            subscription.listener(*inputEvent);
           }
           continue;
         }
 
-        const auto &device = std::get<input::InputDeviceSnapshot>(event);
+        const auto &device =
+            std::get<input::InputDeviceSnapshot>(event.payload);
         devices_.insert_or_assign(device.stableId, device);
         std::vector<std::pair<std::uint64_t, DeviceListener>> listeners(
             deviceListeners_.begin(), deviceListeners_.end());
@@ -204,10 +228,15 @@ void InputDeviceRegistry::pump() {
           listener(device);
         }
       }
+      if (repumpBackendsRequested_) {
+        shouldPumpBackends = true;
+        repumpBackendsRequested_ = false;
+      }
     } while (repumpRequested_);
   } catch (...) {
     pumping_ = false;
     repumpRequested_ = false;
+    repumpBackendsRequested_ = false;
     throw;
   }
   pumping_ = false;
@@ -215,7 +244,11 @@ void InputDeviceRegistry::pump() {
 
 std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener) {
   const std::uint64_t token = nextSubscriptionToken_++;
-  inputListeners_.emplace(token, std::move(listener));
+  queueState_->atSequenceBoundary([&](std::uint64_t firstEventSequence) {
+    inputListeners_.emplace(
+        token, InputSubscription{.firstEventSequence = firstEventSequence,
+                                 .listener = std::move(listener)});
+  });
   return token;
 }
 
@@ -251,9 +284,9 @@ const std::vector<std::string> &InputDeviceRegistry::diagnostics() const {
 }
 
 void InputDeviceRegistry::enqueueInput(input::PhysicalInputEvent event) {
-  queueState_->enqueue(QueuedEvent(std::move(event)));
+  queueState_->enqueue(QueuedPayload(std::move(event)));
 }
 
 void InputDeviceRegistry::enqueueDevice(input::InputDeviceSnapshot device) {
-  queueState_->enqueue(QueuedEvent(std::move(device)));
+  queueState_->enqueue(QueuedPayload(std::move(device)));
 }

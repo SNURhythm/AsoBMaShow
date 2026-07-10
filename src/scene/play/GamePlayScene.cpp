@@ -405,11 +405,12 @@ void GamePlayScene::init() {
   reset();
   if (!isReplayPlayback() && !options.autoPlay) {
     const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
-    escapeUsesLogicalPauseBinding = hasActiveKeyboardActionBinding(
-        context.inputProfile, activeInputScopes, SDL_SCANCODE_ESCAPE,
-        input::LogicalActionKind::Pause);
+    const auto gameplayInputProfile =
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
+                                                   activeInputScopes);
+    escapeHandledByInputPipeline = true;
     ownedInputHandler = std::make_unique<RhythmInputHandler>(
-        this, chart->Meta, context.inputDeviceRegistry, context.inputProfile,
+        this, chart->Meta, context.inputDeviceRegistry, gameplayInputProfile,
         activeInputScopes,
         [this](const input::LogicalInputTransition &transition) {
           handleLogicalInputCommand(transition);
@@ -2511,7 +2512,7 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   Scene::handleEvents(event);
   if (event.type == SDL_KEYDOWN) {
     if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE &&
-        !escapeUsesLogicalPauseBinding) {
+        !escapeHandledByInputPipeline) {
       togglePauseMenuFromInput();
     }
   }

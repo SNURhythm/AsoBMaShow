@@ -8,9 +8,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
+
+static_assert(!std::is_move_constructible_v<LogicalGameplayInputPipeline>);
+static_assert(!std::is_copy_constructible_v<LogicalGameplayInputPipeline>);
 
 struct ControlCall {
   enum class Kind { Press, Release } kind = Kind::Press;
@@ -128,6 +133,36 @@ void testScratchReversalAndLateReleaseOrdering() {
           },
       "scratch reversal releases the old direction before the new press, "
       "ignores its late release, and normally releases the active side");
+}
+
+void testScratchReversalFallsBackToOlderHeldDirection() {
+  RecordingControl control;
+  LogicalGameplayInputAdapter adapter(control, {});
+
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 true),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0,
+                 0.0F),
+  });
+
+  require(
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release,
+               .lane = 7,
+               .backSpin = false},
+          },
+      "releasing the newest scratch direction reactivates the older held "
+      "direction before its final release");
 }
 
 void testSecondPlayerScratchUsesLaneFifteen() {
@@ -260,6 +295,134 @@ void testDefaultProfileRoutesThroughResolverAndAdapter() {
           "resolver-adapter path");
 }
 
+void testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap() {
+  RecordingControl control;
+  const InputProfile profile = makeDefaultInputProfile();
+  LogicalGameplayInputPipeline pipeline(control, profile,
+                                        makeGameplayInputScopes(7), {},
+                                        {.acceptKeyboardFromRegistry = false});
+
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, true);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, false);
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_S, true));
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_S, false));
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 0},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 0,
+                   .backSpin = false},
+              },
+          "a gated direct keyboard tap is not replayed by the registry queue");
+}
+
+void testDirectKeyboardPolicyRejectsViewConsumedRegistryKeys() {
+  RecordingControl control;
+  LogicalGameplayInputPipeline pipeline(control, makeDefaultInputProfile(),
+                                        makeGameplayInputScopes(7), {},
+                                        {.acceptKeyboardFromRegistry = false});
+
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_S, true));
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_S, false));
+
+  require(control.calls.empty(),
+          "a keyboard event consumed by the settings UI never reaches the "
+          "preview through the registry");
+}
+
+void testDirectKeyboardPolicyStillAcceptsRegistryControllers() {
+  RecordingControl control;
+  const InputProfile profile{
+      .bindings = {
+          {.id = "preview-controller",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::Lane, 2},
+           .control = {.deviceId = "pad:preview",
+                       .deviceClass = input::DeviceClass::GameController,
+                       .kind = input::ControlKind::Button,
+                       .index = 3,
+                       .direction = input::ControlDirection::Any}}}};
+  LogicalGameplayInputPipeline pipeline(control, profile,
+                                        makeGameplayInputScopes(7), {},
+                                        {.acceptKeyboardFromRegistry = false});
+  const input::PhysicalControl button{
+      .deviceId = "pad:preview",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 3,
+      .direction = input::ControlDirection::Any};
+
+  pipeline.consumeRegistryEvent(
+      {.control = button, .rawValue = 1.0, .normalizedValue = 1.0F});
+  pipeline.consumeRegistryEvent(
+      {.control = button, .rawValue = 0.0, .normalizedValue = 0.0F});
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 2},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 2,
+                   .backSpin = false},
+              },
+          "excluding registry keyboard events retains controller input");
+}
+
+void testDirectionalScratchDisconnectFallsBackThenResets() {
+  RecordingControl control;
+  const auto clockwiseControl =
+      input::PhysicalControl{.deviceId = "pad:clockwise",
+                             .deviceClass = input::DeviceClass::GameController,
+                             .kind = input::ControlKind::Button,
+                             .index = 1,
+                             .direction = input::ControlDirection::Any};
+  const auto counterClockwiseControl =
+      input::PhysicalControl{.deviceId = "pad:counter-clockwise",
+                             .deviceClass = input::DeviceClass::GameController,
+                             .kind = input::ControlKind::Button,
+                             .index = 2,
+                             .direction = input::ControlDirection::Any};
+  const InputProfile profile{
+      .bindings = {
+          {.id = "clockwise",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchClockwise},
+           .control = clockwiseControl},
+          {.id = "counter-clockwise",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchCounterClockwise},
+           .control = counterClockwiseControl}}};
+  LogicalGameplayInputPipeline pipeline(control, profile,
+                                        makeGameplayInputScopes(7));
+  const auto event = [](input::PhysicalControl inputControl, bool pressed) {
+    return input::PhysicalInputEvent{.control = std::move(inputControl),
+                                     .rawValue = pressed ? 1.0 : 0.0,
+                                     .normalizedValue = pressed ? 1.0F : 0.0F};
+  };
+
+  pipeline.consumeRegistryEvent(event(clockwiseControl, true));
+  pipeline.consumeRegistryEvent(event(counterClockwiseControl, true));
+  control.calls.clear();
+  pipeline.disconnectDevice("pad:counter-clockwise");
+  require(
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7}},
+      "disconnecting the newest scratch direction reactivates the older "
+      "device hold");
+  pipeline.reset();
+  require(
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release,
+               .lane = 7,
+               .backSpin = false}},
+      "pipeline reset releases the final effective scratch hold once");
+}
+
 void testDefaultDpProfileActivatesSecondPlayerScope() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -390,6 +553,39 @@ void testEscapeFallbackYieldsToAnActiveLogicalPauseBinding() {
                                           SDL_SCANCODE_ESCAPE,
                                           input::LogicalActionKind::Pause),
           "inactive key-mode bindings do not suppress the Escape fallback");
+
+  const auto withFallback =
+      makeGameplayInputProfileWithEscapeFallback(profile, activeScopes);
+  require(withFallback.bindings.size() == profile.bindings.size(),
+          "an explicit active Escape pause binding is not duplicated");
+}
+
+void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
+  RecordingControl control;
+  const auto scopes = makeGameplayInputScopes(7);
+  const InputProfile profile = makeGameplayInputProfileWithEscapeFallback(
+      makeDefaultInputProfile(), scopes);
+  std::vector<input::LogicalInputTransition> commands;
+  std::size_t controlCallsAtPause = 0;
+  LogicalGameplayInputPipeline pipeline(
+      control, profile, scopes, [&](const auto &command) {
+        commands.push_back(command);
+        if (command.pressed &&
+            command.action.kind == input::LogicalActionKind::Pause) {
+          controlCallsAtPause = control.calls.size();
+        }
+      });
+
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_S, true));
+  pipeline.consumeRegistryEvent(keyEvent(SDL_SCANCODE_ESCAPE, true));
+
+  require(control.calls ==
+                  std::vector<ControlCall>{
+                      {.kind = ControlCall::Kind::Press, .lane = 0}} &&
+              commands.size() == 1 && commands.front().pressed &&
+              commands.front().action.kind == input::LogicalActionKind::Pause &&
+              controlCallsAtPause == 1,
+          "the lane edge is applied before the queued Escape pause fallback");
 }
 
 } // namespace
@@ -398,16 +594,22 @@ int main() {
   testLaneTransitionsPreserveDpLaneNumbers();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testScratchReversalAndLateReleaseOrdering();
+  testScratchReversalFallsBackToOlderHeldDirection();
   testSecondPlayerScratchUsesLaneFifteen();
   testResolverOrderedScratchReversalUsesBackspinRelease();
   testCommandsNeverReachRhythmControl();
   testResetReleasesOnlyHeldLogicalLanes();
   testDefaultProfileRoutesThroughResolverAndAdapter();
+  testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap();
+  testDirectKeyboardPolicyRejectsViewConsumedRegistryKeys();
+  testDirectKeyboardPolicyStillAcceptsRegistryControllers();
+  testDirectionalScratchDisconnectFallsBackThenResets();
   testDefaultDpProfileActivatesSecondPlayerScope();
   testLegacyKeyboardCallbacksPreservePhysicalScancodes();
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();
   testSameLaneAcrossScopesUsesReferenceSemantics();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
+  testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   return 0;
 }

@@ -45,8 +45,7 @@ public:
 
   ApplicationContext()
       : quitFlag(false), settings(AppSettings::load()),
-        inputProfile(makeDefaultInputProfile()),
-        jukebox(&gameStopwatch) {
+        inputProfile(makeDefaultInputProfile()), jukebox(&gameStopwatch) {
     settings.sanitize();
     ui_theme::setActiveMode(settings.uiThemeMode == AppSettings::UiThemeMode::Light
                                 ? ui_theme::ThemeMode::Light

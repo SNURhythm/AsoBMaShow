@@ -9,7 +9,6 @@
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"
 #include "IInputSource.h"
-#include "InputBindingResolver.h"
 #include "InputDeviceRegistry.h"
 #include "LogicalGameplayInputAdapter.h"
 #include <functional>
@@ -29,8 +28,7 @@ class RhythmInputHandler : public IInputHandler {
 private:
   std::unique_ptr<IInputSource> touchInputSource;
   InputDeviceRegistry *inputDeviceRegistry = nullptr;
-  std::unique_ptr<LogicalGameplayInputAdapter> logicalInputAdapter;
-  std::unique_ptr<InputBindingResolver> bindingResolver;
+  std::unique_ptr<LogicalGameplayInputPipeline> logicalInputPipeline;
   std::uint64_t inputSubscriptionToken = 0;
   std::uint64_t deviceSubscriptionToken = 0;
   int totalLaneCount;
@@ -68,7 +66,8 @@ public:
       InputDeviceRegistry &registry, const InputProfile &profile,
       std::vector<input::InputScope> activeScopes,
       LogicalGameplayInputAdapter::CommandCallback commandCallback = {},
-      float playAreaWidth = 8.0f);
+      float playAreaWidth = 8.0f,
+      LogicalGameplayRegistryPolicy registryPolicy = {});
   ~RhythmInputHandler() override;
   void onKeyDown(int keyCode, KeySource keySource) override;
   void onKeyUp(int KeyCode, KeySource Source) override;
