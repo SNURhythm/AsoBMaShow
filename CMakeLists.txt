@@ -701,6 +701,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/sdl_display_backend_tests.cpp
         src/video/DisplaySettingsManager.cpp
         src/video/FramePacer.cpp
+        src/video/RendererAccessCoordinator.cpp
         src/video/SDLDisplayBackend.cpp
     )
     target_include_directories(sdl_display_backend_tests PRIVATE

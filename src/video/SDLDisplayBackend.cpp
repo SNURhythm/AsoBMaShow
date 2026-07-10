@@ -97,13 +97,14 @@ public:
     }
     result.windowFlags = SDL_GetWindowFlags(window);
     result.mode = modeFromFlags(result.windowFlags);
+    result.maximized = (result.windowFlags & SDL_WINDOW_MAXIMIZED) != 0;
     result.displayIndex = SDL_GetWindowDisplayIndex(window);
     SDL_GetWindowSize(window, &result.width, &result.height);
     SDL_GetWindowPosition(window, &result.x, &result.y);
     if (result.mode == player_settings::DisplayMode::ExclusiveFullscreen) {
       SDL_DisplayMode mode{};
       if (SDL_GetWindowDisplayMode(window, &mode) == 0) {
-        result.effectiveDisplayMode =
+        result.requestedWindowMode =
             SDLNativeDisplayMode{.width = mode.w,
                                  .height = mode.h,
                                  .refreshRateHz = mode.refresh_rate,
@@ -111,6 +112,18 @@ public:
       }
     }
     return result;
+  }
+
+  std::optional<SDLNativeDisplayMode>
+  currentDisplayMode(int displayIndex) const override {
+    SDL_DisplayMode mode{};
+    if (SDL_GetCurrentDisplayMode(displayIndex, &mode) != 0) {
+      return std::nullopt;
+    }
+    return SDLNativeDisplayMode{.width = mode.w,
+                                .height = mode.h,
+                                .refreshRateHz = mode.refresh_rate,
+                                .pixelFormat = mode.format};
   }
 
   bool setFullscreenMode(player_settings::DisplayMode mode,
@@ -166,6 +179,17 @@ public:
     return true;
   }
 
+  void setWindowMaximized(bool maximized) override {
+    if (window == nullptr) {
+      return;
+    }
+    if (maximized) {
+      SDL_MaximizeWindow(window);
+    } else {
+      SDL_RestoreWindow(window);
+    }
+  }
+
 private:
   SDL_Window *window = nullptr;
 };
@@ -209,23 +233,19 @@ std::uint32_t resetFlagsForVsync(std::uint32_t current, bool vsync) {
 SDLDisplayBackend::SDLDisplayBackend(
     SDL_Window *window, bool fixedMobileDisplayValue,
     ResetFlagsReader readResetFlagsValue,
-    RendererPreflight preflightRendererValue,
-    RendererSynchronizer synchronizeRendererValue)
+    RendererTransactionFactory beginRendererTransactionValue)
     : SDLDisplayBackend(std::make_shared<RealSDLDisplayAdapter>(window),
                         fixedMobileDisplayValue, std::move(readResetFlagsValue),
-                        std::move(preflightRendererValue),
-                        std::move(synchronizeRendererValue)) {}
+                        std::move(beginRendererTransactionValue)) {}
 
 SDLDisplayBackend::SDLDisplayBackend(
     std::shared_ptr<ISDLDisplayAdapter> adapterValue,
     bool fixedMobileDisplayValue, ResetFlagsReader readResetFlagsValue,
-    RendererPreflight preflightRendererValue,
-    RendererSynchronizer synchronizeRendererValue)
+    RendererTransactionFactory beginRendererTransactionValue)
     : adapter(std::move(adapterValue)),
       fixedMobileDisplay(fixedMobileDisplayValue),
       readResetFlags(std::move(readResetFlagsValue)),
-      preflightRenderer(std::move(preflightRendererValue)),
-      synchronizeRenderer(std::move(synchronizeRendererValue)) {}
+      beginRendererTransaction(std::move(beginRendererTransactionValue)) {}
 
 std::uint32_t SDLDisplayBackend::currentResetFlags() const {
   return readResetFlags ? readResetFlags() : 0;
@@ -233,8 +253,7 @@ std::uint32_t SDLDisplayBackend::currentResetFlags() const {
 
 Capabilities SDLDisplayBackend::capabilities() const {
   const bool rendererTransactionsAvailable =
-      static_cast<bool>(preflightRenderer) &&
-      static_cast<bool>(synchronizeRenderer);
+      static_cast<bool>(beginRendererTransaction);
   Capabilities result{
       .canChangeMode = !fixedMobileDisplay && rendererTransactionsAvailable,
       .canSelectDisplay = !fixedMobileDisplay && rendererTransactionsAvailable,
@@ -308,9 +327,10 @@ RuntimeState SDLDisplayBackend::capture() const {
   result.settings.height = state.height;
   result.windowX = state.x;
   result.windowY = state.y;
-  if (state.effectiveDisplayMode.has_value()) {
-    result.exclusiveRefreshRateHz = state.effectiveDisplayMode->refreshRateHz;
-    result.exclusivePixelFormat = state.effectiveDisplayMode->pixelFormat;
+  result.windowMaximized = state.maximized;
+  if (state.requestedWindowMode.has_value()) {
+    result.exclusiveRefreshRateHz = state.requestedWindowMode->refreshRateHz;
+    result.exclusivePixelFormat = state.requestedWindowMode->pixelFormat;
   }
   return result;
 }
@@ -349,6 +369,9 @@ bool SDLDisplayBackend::applyWindowSettings(
                                   errorMessage) ||
       !adapter->clearWindowDisplayMode(errorMessage)) {
     return false;
+  }
+  if (current.maximized) {
+    adapter->setWindowMaximized(false);
   }
 
   const auto bounds =
@@ -439,12 +462,11 @@ bool SDLDisplayBackend::verifyWindowSettings(
   }
 
   if (settings.mode == player_settings::DisplayMode::ExclusiveFullscreen) {
-    if (!expectedExclusiveMode.has_value() ||
-        !actual.effectiveDisplayMode.has_value() ||
-        actual.effectiveDisplayMode->width != expectedExclusiveMode->width ||
-        actual.effectiveDisplayMode->height != expectedExclusiveMode->height ||
-        actual.effectiveDisplayMode->refreshRateHz !=
-            expectedExclusiveMode->refreshRateHz) {
+    const auto currentMode = adapter->currentDisplayMode(actual.displayIndex);
+    if (!expectedExclusiveMode.has_value() || !currentMode.has_value() ||
+        currentMode->width != expectedExclusiveMode->width ||
+        currentMode->height != expectedExclusiveMode->height ||
+        currentMode->refreshRateHz != expectedExclusiveMode->refreshRateHz) {
       errorMessage =
           "SDL did not activate the selected exclusive display mode.";
       return false;
@@ -482,8 +504,17 @@ bool SDLDisplayBackend::restoreSDLOnly(const RuntimeState &snapshot,
                            expectedMode, errorMessage)) {
     return false;
   }
-  return verifyWindowSettings(snapshot.settings, expectedMode, true,
-                              snapshot.windowX, snapshot.windowY, errorMessage);
+  adapter->setWindowMaximized(snapshot.windowMaximized);
+  if (!verifyWindowSettings(snapshot.settings, expectedMode,
+                            !snapshot.windowMaximized, snapshot.windowX,
+                            snapshot.windowY, errorMessage)) {
+    return false;
+  }
+  if (adapter->windowState().maximized != snapshot.windowMaximized) {
+    errorMessage = "SDL did not restore the captured maximized state.";
+    return false;
+  }
+  return true;
 }
 
 bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
@@ -496,15 +527,18 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
   const SDLWindowState current = adapter->windowState();
   const bool mutateWindow = !sameDisplayFields(settings, current);
   const std::uint32_t resetFlags =
-      resetFlagsForVsync(currentResetFlags(), settings.vsync);
-  const bool synchronize = mutateWindow || resetFlags != currentResetFlags();
+      resetFlagsForVsync(previous.bgfxResetFlags, settings.vsync);
+  const bool synchronize =
+      mutateWindow || resetFlags != previous.bgfxResetFlags;
 
+  std::unique_ptr<IRendererDisplayTransaction> rendererTransaction;
   if (synchronize) {
-    if (!preflightRenderer || !synchronizeRenderer) {
+    if (!beginRendererTransaction) {
       errorMessage = "Renderer display synchronization is unavailable.";
       return false;
     }
-    if (!preflightRenderer(resetFlags, errorMessage)) {
+    rendererTransaction = beginRendererTransaction(resetFlags, errorMessage);
+    if (!rendererTransaction) {
       return false;
     }
   }
@@ -540,38 +574,42 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
     restoreAfterFailure();
     return false;
   }
-  if (synchronize && !synchronizeRenderer(resetFlags, errorMessage)) {
-    // A false synchronizer result is contractually pre-mutation, so repairing
-    // the SDL window alone restores coherence even if export starts meanwhile.
+  if (synchronize &&
+      !rendererTransaction->synchronize(resetFlags, errorMessage)) {
     restoreAfterFailure();
     return false;
   }
   return true;
 }
 
-bool SDLDisplayBackend::restore(const RuntimeState &snapshot,
-                                std::string &errorMessage) {
+RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
+                                         std::string &errorMessage) {
   if (!adapter) {
     errorMessage = "Display backend has no SDL adapter.";
-    return false;
+    return RestoreStatus::Failed;
   }
   const RuntimeState beforeRestore = capture();
   const SDLWindowState current = adapter->windowState();
   const bool restorePosition =
       snapshot.settings.mode == player_settings::DisplayMode::Windowed &&
+      !snapshot.windowMaximized &&
       (current.x != snapshot.windowX || current.y != snapshot.windowY);
-  const bool mutateWindow =
-      !sameDisplayFields(snapshot.settings, current) || restorePosition;
+  const bool restoreMaximized = current.maximized != snapshot.windowMaximized;
+  const bool mutateWindow = !sameDisplayFields(snapshot.settings, current) ||
+                            restorePosition || restoreMaximized;
   const bool synchronize =
-      mutateWindow || snapshot.bgfxResetFlags != currentResetFlags();
+      mutateWindow || snapshot.bgfxResetFlags != beforeRestore.bgfxResetFlags;
 
+  std::unique_ptr<IRendererDisplayTransaction> rendererTransaction;
   if (synchronize) {
-    if (!preflightRenderer || !synchronizeRenderer) {
+    if (!beginRendererTransaction) {
       errorMessage = "Renderer display synchronization is unavailable.";
-      return false;
+      return RestoreStatus::Failed;
     }
-    if (!preflightRenderer(snapshot.bgfxResetFlags, errorMessage)) {
-      return false;
+    rendererTransaction =
+        beginRendererTransaction(snapshot.bgfxResetFlags, errorMessage);
+    if (!rendererTransaction) {
+      return RestoreStatus::RetryableFailure;
     }
   }
 
@@ -591,7 +629,7 @@ bool SDLDisplayBackend::restore(const RuntimeState &snapshot,
                           snapshot.settings.width, snapshot.settings.height);
     if (!restoreMode.has_value()) {
       errorMessage = "No matching exclusive fullscreen mode is available.";
-      return false;
+      return RestoreStatus::Failed;
     }
   }
   std::optional<SDLNativeDisplayMode> expectedMode = restoreMode;
@@ -612,22 +650,29 @@ bool SDLDisplayBackend::restore(const RuntimeState &snapshot,
                            snapshot.windowY, true, std::move(restoreMode),
                            expectedMode, errorMessage)) {
     undoFailedRestore();
-    return false;
+    return RestoreStatus::Failed;
   }
-  if (!verifyWindowSettings(snapshot.settings, expectedMode, restorePosition,
-                            snapshot.windowX, snapshot.windowY, errorMessage)) {
-    undoFailedRestore();
-    return false;
+  if (mutateWindow) {
+    adapter->setWindowMaximized(snapshot.windowMaximized);
   }
-  if (synchronize &&
-      !synchronizeRenderer(snapshot.bgfxResetFlags, errorMessage)) {
+  if (!verifyWindowSettings(snapshot.settings, expectedMode,
+                            restorePosition && !snapshot.windowMaximized,
+                            snapshot.windowX, snapshot.windowY, errorMessage) ||
+      adapter->windowState().maximized != snapshot.windowMaximized) {
+    if (errorMessage.empty()) {
+      errorMessage = "SDL did not restore the captured maximized state.";
+    }
     undoFailedRestore();
-    return false;
+    return RestoreStatus::Failed;
+  }
+  if (synchronize && !rendererTransaction->synchronize(snapshot.bgfxResetFlags,
+                                                       errorMessage)) {
+    undoFailedRestore();
+    return RestoreStatus::Failed;
   }
 
-  // SDL_WINDOW_* focus/minimize/visibility bits are window-manager owned and
-  // intentionally diagnostic-only in RuntimeState. Mode, display, size,
-  // exclusive refresh, position, and renderer flags are restored explicitly.
-  return true;
+  // sdlWindowFlags remains diagnostic for focus/minimize/visibility and other
+  // window-manager-owned bits. Maximized state is captured explicitly above.
+  return RestoreStatus::Restored;
 }
 } // namespace display

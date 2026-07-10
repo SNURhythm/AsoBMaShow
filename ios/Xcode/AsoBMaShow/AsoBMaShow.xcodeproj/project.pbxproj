@@ -793,6 +793,7 @@
 				VersionedJson.cpp,
 				video/DisplaySettingsManager.cpp,
 				video/FramePacer.cpp,
+				video/RendererAccessCoordinator.cpp,
 				video/SDLDisplayBackend.cpp,
 				video/VideoPlayer.cpp,
 				view/Button.cpp,

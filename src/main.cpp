@@ -199,6 +199,30 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   }
 }
 
+class CallbackRendererDisplayTransaction final
+    : public display::IRendererDisplayTransaction {
+public:
+  using Synchronizer =
+      std::function<bool(std::uint32_t, std::string &errorMessage)>;
+
+  CallbackRendererDisplayTransaction(
+      std::shared_ptr<display::RendererAccessCoordinator::DisplayReservation>
+          reservationValue,
+      Synchronizer synchronizeValue)
+      : reservation(std::move(reservationValue)),
+        synchronizeCallback(std::move(synchronizeValue)) {}
+
+  bool synchronize(std::uint32_t resetFlags,
+                   std::string &errorMessage) override {
+    return synchronizeCallback(resetFlags, errorMessage);
+  }
+
+private:
+  std::shared_ptr<display::RendererAccessCoordinator::DisplayReservation>
+      reservation;
+  Synchronizer synchronizeCallback;
+};
+
 #if TARGET_OS_IPHONE
 void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
                              int &renderW, int &renderH) {
@@ -777,58 +801,50 @@ void run() {
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
-      [&context](std::uint32_t /*resetFlags*/, std::string &errorMessage) {
-        if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
-          errorMessage =
-              "Cannot change the display while replay export is active.";
-          return false;
+      [&context, &activeBgfxResetFlags](std::uint32_t /*resetFlags*/,
+                                        std::string &errorMessage)
+          -> std::unique_ptr<display::IRendererDisplayTransaction> {
+        auto reservation =
+            context.rendererAccess.tryAcquireDisplay(errorMessage);
+        if (!reservation.has_value()) {
+          return nullptr;
         }
-        return true;
-      },
-      [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
-                                        std::string &errorMessage) {
-        if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
-          errorMessage =
-              "Cannot synchronize the renderer while replay export is active.";
-          return false;
-        }
-        std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
-                                              std::try_to_lock);
-        if (!bgfxLock.owns_lock()) {
-          errorMessage = "The renderer is busy with another transaction.";
-          return false;
-        }
-        if (context.replayVideoExportActive.load(std::memory_order_acquire)) {
-          errorMessage =
-              "Replay export started during display synchronization.";
-          return false;
-        }
-        int logicalWidth = 0;
-        int logicalHeight = 0;
-        int renderWidth = 0;
-        int renderHeight = 0;
-        SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
-        getWindowDrawableSize(s_window, logicalWidth, logicalHeight,
-                              renderWidth, renderHeight);
-        if (logicalWidth <= 0 || logicalHeight <= 0 || renderWidth <= 0 ||
-            renderHeight <= 0) {
-          errorMessage = "The display produced an invalid drawable size.";
-          return false;
-        }
-        rendering::widthScale =
-            static_cast<float>(renderWidth) / static_cast<float>(logicalWidth);
-        rendering::heightScale = static_cast<float>(renderHeight) /
-                                 static_cast<float>(logicalHeight);
-        rendering::updateUIScale(renderWidth, renderHeight);
-        activeBgfxResetFlags = resetFlags;
-        s_bgfxResetFlags = resetFlags;
-        context.bgfxResetFlags.store(resetFlags, std::memory_order_relaxed);
-        bgfx::reset(rendering::render_width, rendering::render_height,
-                    resetFlags);
-        s_postProcess.resize(rendering::render_width, rendering::render_height);
-        context.restoreGameplayRenderViews();
-        context.framePacer.reset(std::chrono::steady_clock::now());
-        return true;
+        auto lifetime = std::make_shared<
+            display::RendererAccessCoordinator::DisplayReservation>(
+            std::move(*reservation));
+        return std::make_unique<CallbackRendererDisplayTransaction>(
+            std::move(lifetime),
+            [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
+                                              std::string &syncError) {
+              int logicalWidth = 0;
+              int logicalHeight = 0;
+              int renderWidth = 0;
+              int renderHeight = 0;
+              SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+              getWindowDrawableSize(s_window, logicalWidth, logicalHeight,
+                                    renderWidth, renderHeight);
+              if (logicalWidth <= 0 || logicalHeight <= 0 || renderWidth <= 0 ||
+                  renderHeight <= 0) {
+                syncError = "The display produced an invalid drawable size.";
+                return false;
+              }
+              rendering::widthScale = static_cast<float>(renderWidth) /
+                                      static_cast<float>(logicalWidth);
+              rendering::heightScale = static_cast<float>(renderHeight) /
+                                       static_cast<float>(logicalHeight);
+              rendering::updateUIScale(renderWidth, renderHeight);
+              activeBgfxResetFlags = resetFlags;
+              s_bgfxResetFlags = resetFlags;
+              context.bgfxResetFlags.store(resetFlags,
+                                           std::memory_order_relaxed);
+              bgfx::reset(rendering::render_width, rendering::render_height,
+                          resetFlags);
+              s_postProcess.resize(rendering::render_width,
+                                   rendering::render_height);
+              context.restoreGameplayRenderViews();
+              context.framePacer.reset(std::chrono::steady_clock::now());
+              return true;
+            });
       });
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(

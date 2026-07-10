@@ -36,7 +36,8 @@ struct SDLWindowState {
   int x = 0;
   int y = 0;
   std::uint32_t windowFlags = 0;
-  std::optional<SDLNativeDisplayMode> effectiveDisplayMode;
+  bool maximized = false;
+  std::optional<SDLNativeDisplayMode> requestedWindowMode;
 };
 
 class ISDLDisplayAdapter {
@@ -51,6 +52,8 @@ public:
   virtual std::optional<SDLDisplayBounds>
   displayBounds(int displayIndex, std::string &errorMessage) const = 0;
   virtual SDLWindowState windowState() const = 0;
+  virtual std::optional<SDLNativeDisplayMode>
+  currentDisplayMode(int displayIndex) const = 0;
   virtual bool setFullscreenMode(player_settings::DisplayMode,
                                  std::string &errorMessage) = 0;
   virtual bool clearWindowDisplayMode(std::string &errorMessage) = 0;
@@ -58,32 +61,39 @@ public:
   virtual void setWindowPosition(int x, int y) = 0;
   virtual bool setWindowDisplayMode(const SDLNativeDisplayMode &,
                                     std::string &errorMessage) = 0;
+  virtual void setWindowMaximized(bool maximized) = 0;
+};
+
+class IRendererDisplayTransaction {
+public:
+  virtual ~IRendererDisplayTransaction() = default;
+  // The transaction owns renderer access from construction through
+  // destruction. A false result must occur before renderer state mutation so
+  // the backend can repair SDL while the same reservation is still held.
+  virtual bool synchronize(std::uint32_t resetFlags,
+                           std::string &errorMessage) = 0;
 };
 
 class SDLDisplayBackend final : public IDisplayBackend {
 public:
   using ResetFlagsReader = std::function<std::uint32_t()>;
-  // Preflight is side-effect free. A false synchronizer result must likewise
-  // occur before renderer mutation; a true result commits the renderer state.
-  using RendererPreflight =
-      std::function<bool(std::uint32_t, std::string &errorMessage)>;
-  using RendererSynchronizer =
-      std::function<bool(std::uint32_t, std::string &errorMessage)>;
+  using RendererTransactionFactory =
+      std::function<std::unique_ptr<IRendererDisplayTransaction>(
+          std::uint32_t, std::string &errorMessage)>;
 
   SDLDisplayBackend(SDL_Window *window, bool fixedMobileDisplay,
                     ResetFlagsReader readResetFlags,
-                    RendererPreflight preflightRenderer,
-                    RendererSynchronizer synchronizeRenderer);
+                    RendererTransactionFactory beginRendererTransaction);
   SDLDisplayBackend(std::shared_ptr<ISDLDisplayAdapter>,
                     bool fixedMobileDisplay, ResetFlagsReader readResetFlags,
-                    RendererPreflight preflightRenderer,
-                    RendererSynchronizer synchronizeRenderer);
+                    RendererTransactionFactory beginRendererTransaction);
 
   Capabilities capabilities() const override;
   RuntimeState capture() const override;
   bool apply(const player_settings::VideoSettings &,
              std::string &errorMessage) override;
-  bool restore(const RuntimeState &, std::string &errorMessage) override;
+  RestoreStatus restore(const RuntimeState &,
+                        std::string &errorMessage) override;
 
 private:
   bool applyWindowSettings(const player_settings::VideoSettings &, int windowX,
@@ -101,7 +111,6 @@ private:
   std::shared_ptr<ISDLDisplayAdapter> adapter;
   bool fixedMobileDisplay = false;
   ResetFlagsReader readResetFlags;
-  RendererPreflight preflightRenderer;
-  RendererSynchronizer synchronizeRenderer;
+  RendererTransactionFactory beginRendererTransaction;
 };
 } // namespace display

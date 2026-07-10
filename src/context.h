@@ -16,6 +16,7 @@
 #include "audio/MusicPlayerService.h"
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
+#include "video/RendererAccessCoordinator.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -28,6 +29,8 @@ public:
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
+  display::RendererAccessCoordinator rendererAccess{bgfxRenderMutex,
+                                                    replayVideoExportActive};
   std::atomic<bool> replayVideoExportUiFrameRequested{false};
   std::atomic<std::uint64_t> replayVideoExportUiFrameSerial{0};
   std::atomic<bool> appInBackground{false};

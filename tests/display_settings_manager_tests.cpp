@@ -56,7 +56,7 @@ public:
                               .sdlWindowFlags = 0,
                               .bgfxResetFlags = 0x40};
   bool applySucceeds = true;
-  bool restoreSucceeds = true;
+  display::RestoreStatus restoreStatus = display::RestoreStatus::Restored;
   mutable int capabilitiesCalls = 0;
   mutable int captureCalls = 0;
   int applyCalls = 0;
@@ -83,15 +83,15 @@ public:
     return true;
   }
 
-  bool restore(const display::RuntimeState &snapshot,
-               std::string &errorMessage) override {
+  display::RestoreStatus restore(const display::RuntimeState &snapshot,
+                                 std::string &errorMessage) override {
     ++restoreCalls;
-    if (!restoreSucceeds) {
+    if (restoreStatus != display::RestoreStatus::Restored) {
       errorMessage = "injected restore failure";
-      return false;
+      return restoreStatus;
     }
     state = snapshot;
-    return true;
+    return display::RestoreStatus::Restored;
   }
 };
 
@@ -133,7 +133,8 @@ void testPreviewConfirmation() {
   require(manager.hasPendingPreview(), "preview is pending");
   require(backend.applyCalls == 1 && backend.restoreCalls == 0,
           "preview applies once without restoring");
-  require(manager.confirmPreview(), "pending preview confirms");
+  require(manager.confirmPreview().status == display::ApplyStatus::Applied,
+          "pending preview confirms");
   require(!manager.hasPendingPreview(), "confirmation clears preview");
   require(!manager.tick(now + std::chrono::seconds(30)).has_value(),
           "confirmed preview cannot later time out");
@@ -206,7 +207,7 @@ void testApplyFailureRollsBackAndReportsRestoreFailure() {
 
   FakeBackend brokenRestoreBackend;
   brokenRestoreBackend.applySucceeds = false;
-  brokenRestoreBackend.restoreSucceeds = false;
+  brokenRestoreBackend.restoreStatus = display::RestoreStatus::Failed;
   FakeFrameCapRuntime brokenRestoreFrameCap;
   display::DisplaySettingsManager brokenRestoreManager(
       brokenRestoreBackend, brokenRestoreFrameCap, initialSettings());
@@ -233,8 +234,8 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
   require(invalidManager.beginPreview(invalid, Clock::time_point{}).status ==
               display::ApplyStatus::Unsupported,
           "invalid frame cap is rejected");
-  require(invalidBackend.captureCalls == 1 && invalidBackend.applyCalls == 0,
-          "invalid settings cause no capture beyond initial runtime capture");
+  require(invalidBackend.captureCalls >= 3 && invalidBackend.applyCalls == 0,
+          "invalid settings recapture runtime but never mutate it");
 
   FakeBackend backend;
   backend.exposedCapabilities = {
@@ -252,7 +253,7 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
   const auto unsupported = manager.beginPreview(candidate, Clock::time_point{});
   require(unsupported.status == display::ApplyStatus::Unsupported,
           "unsupported mode is rejected");
-  require(backend.captureCalls == 1 && backend.applyCalls == 0 &&
+  require(backend.captureCalls >= 2 && backend.applyCalls == 0 &&
               backend.restoreCalls == 0,
           "unsupported fields cause no backend mutation calls");
 
@@ -266,7 +267,7 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
       unknownDisplayManager.beginPreview(candidate, Clock::time_point{});
   require(unknownDisplay.status == display::ApplyStatus::Unsupported,
           "unknown display is rejected");
-  require(unknownDisplayBackend.captureCalls == 1 &&
+  require(unknownDisplayBackend.captureCalls >= 2 &&
               unknownDisplayBackend.applyCalls == 0,
           "unknown display is rejected before capture");
 
@@ -281,7 +282,7 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
       unknownResolutionManager.beginPreview(candidate, Clock::time_point{});
   require(unknownResolution.status == display::ApplyStatus::Unsupported,
           "unknown resolution is rejected");
-  require(unknownResolutionBackend.captureCalls == 1 &&
+  require(unknownResolutionBackend.captureCalls >= 2 &&
               unknownResolutionBackend.applyCalls == 0,
           "unknown resolution is rejected before capture");
 
@@ -297,7 +298,7 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
       exclusiveModeManager.beginPreview(candidate, Clock::time_point{});
   require(unavailableExclusive.status == display::ApplyStatus::Unsupported,
           "exclusive mode validates its unchanged requested size");
-  require(exclusiveModeBackend.captureCalls == 1 &&
+  require(exclusiveModeBackend.captureCalls >= 2 &&
               exclusiveModeBackend.applyCalls == 0,
           "unavailable exclusive mode is rejected before capture");
 }
@@ -316,7 +317,7 @@ void testSecondPreviewRestoresFirstAndFrameCapIsSafe() {
           "frame-cap-only changes apply without a preview");
   require(capped.effective == frameCapOnly,
           "frame-cap-only result becomes effective");
-  require(backend.captureCalls == 1 && backend.applyCalls == 0,
+  require(backend.captureCalls >= 3 && backend.applyCalls == 0,
           "app-owned frame cap does not touch the display backend");
   require(frameCapRuntime.cap == 120 && frameCapRuntime.applyCalls == 1,
           "frame-cap-only apply mutates the runtime immediately");
@@ -373,7 +374,7 @@ void testSecondPreviewStopsWhenFirstCannotRestore() {
   require(manager.beginPreview(previewSettings(), Clock::time_point{}).status ==
               display::ApplyStatus::PreviewPending,
           "failed replacement regression starts a preview");
-  backend.restoreSucceeds = false;
+  backend.restoreStatus = display::RestoreStatus::Failed;
 
   auto replacement = previewSettings();
   replacement.mode = DisplayMode::BorderlessFullscreen;
@@ -385,8 +386,8 @@ void testSecondPreviewStopsWhenFirstCannotRestore() {
           "second candidate is never applied after rollback failure");
   require(!manager.hasPendingPreview(),
           "unrecoverable rollback does not retain a false pending state");
-  require(frameCapRuntime.cap == 0,
-          "frame cap still restores when display restoration fails");
+  require(frameCapRuntime.cap == 120,
+          "permanent display failure keeps the candidate cap coherent");
 }
 
 void testFrameCapRuntimeAcrossEveryPreviewTerminalPath() {
@@ -519,6 +520,134 @@ void testRealFramePacerIsTheManagedFrameCapRuntime() {
   require(pacer.remaining(now) == std::chrono::milliseconds(10),
           "managed cap changes the real pacer's next deadline");
 }
+
+void testExternalResizeIsRecapturedBeforeApply() {
+  FakeBackend backend;
+  FakeFrameCapRuntime frameCapRuntime;
+  display::DisplaySettingsManager manager(backend, frameCapRuntime,
+                                          initialSettings());
+  auto externallyResized = initialSettings();
+  externallyResized.width = 1600;
+  externallyResized.height = 900;
+  backend.state.settings = externallyResized;
+
+  const auto result =
+      manager.beginPreview(initialSettings(), Clock::time_point{});
+  require(result.status == display::ApplyStatus::PreviewPending,
+          "stale accepted size cannot make an external resize a false no-op");
+  require(backend.applyCalls == 1,
+          "Apply mutates runtime after an external resize");
+  require(manager.configuredIntent() == initialSettings(),
+          "runtime recapture does not overwrite persisted intent");
+}
+
+void testConfirmationRecapturesRuntimeAndRejectsDrift() {
+  FakeBackend backend;
+  FakeFrameCapRuntime frameCapRuntime;
+  display::DisplaySettingsManager manager(backend, frameCapRuntime,
+                                          initialSettings());
+  const auto candidate = previewSettings();
+  manager.beginPreview(candidate, Clock::time_point{});
+
+  auto drifted = candidate;
+  drifted.width = 1600;
+  drifted.height = 900;
+  backend.state.settings = drifted;
+  const auto keep = manager.confirmPreview();
+  require(keep.status == display::ApplyStatus::PreviewPending,
+          "Keep cannot confirm a candidate that is no longer effective");
+  require(keep.effective == drifted,
+          "failed Keep reports authoritative drifted runtime");
+  require(manager.hasPendingPreview(),
+          "drifted preview remains pending for safe rollback");
+  require(
+      manager.lastWorkingSettings() == initialSettings(),
+      "failed Keep does not promote drifted runtime to last-working intent");
+
+  const auto cancelled =
+      manager.cancelPreview(display::RollbackReason::Cancelled);
+  require(cancelled.status == display::ApplyStatus::Applied &&
+              cancelled.effective == initialSettings(),
+          "drifted preview cancellation reports the restored snapshot");
+}
+
+void testTransientRollbackRemainsPendingAndRetries() {
+  const auto now = Clock::time_point{};
+
+  FakeBackend timeoutBackend;
+  FakeFrameCapRuntime timeoutCap;
+  display::DisplaySettingsManager timeoutManager(timeoutBackend, timeoutCap,
+                                                 initialSettings());
+  timeoutManager.beginPreview(previewSettings(), now);
+  timeoutBackend.restoreStatus = display::RestoreStatus::RetryableFailure;
+  const auto deferredTimeout = timeoutManager.tick(
+      now + display::DisplaySettingsManager::kConfirmationTimeout);
+  require(deferredTimeout.has_value() &&
+              deferredTimeout->status == display::ApplyStatus::RollbackPending,
+          "timeout reports a transient rollback without discarding it");
+  require(timeoutManager.hasPendingPreview() && timeoutCap.cap == 120,
+          "deferred timeout keeps candidate display and cap coherent");
+  timeoutBackend.restoreStatus = display::RestoreStatus::Restored;
+  const auto retriedTimeout = timeoutManager.tick(
+      now + display::DisplaySettingsManager::kConfirmationTimeout +
+      std::chrono::seconds(1));
+  require(retriedTimeout.has_value() &&
+              retriedTimeout->status == display::ApplyStatus::Applied &&
+              !timeoutManager.hasPendingPreview() && timeoutCap.cap == 0,
+          "timeout retries and completes after renderer access returns");
+
+  FakeBackend focusBackend;
+  FakeFrameCapRuntime focusCap;
+  display::DisplaySettingsManager focusManager(focusBackend, focusCap,
+                                               initialSettings());
+  focusManager.beginPreview(previewSettings(), now);
+  focusBackend.restoreStatus = display::RestoreStatus::RetryableFailure;
+  const auto deferredFocus = focusManager.onFocusLost();
+  require(deferredFocus.has_value() &&
+              deferredFocus->status == display::ApplyStatus::RollbackPending &&
+              focusManager.hasPendingPreview() && focusCap.cap == 120,
+          "focus rollback remains pending while renderer access is transient");
+  focusBackend.restoreStatus = display::RestoreStatus::Restored;
+  require(
+      focusManager.cancelPreview(display::RollbackReason::FocusLost).status ==
+          display::ApplyStatus::Applied,
+      "focus rollback can be retried explicitly");
+
+  FakeBackend cancelBackend;
+  FakeFrameCapRuntime cancelCap;
+  display::DisplaySettingsManager cancelManager(cancelBackend, cancelCap,
+                                                initialSettings());
+  cancelManager.beginPreview(previewSettings(), now);
+  cancelBackend.restoreStatus = display::RestoreStatus::RetryableFailure;
+  require(
+      cancelManager.cancelPreview(display::RollbackReason::Cancelled).status ==
+              display::ApplyStatus::RollbackPending &&
+          cancelManager.hasPendingPreview() && cancelCap.cap == 120,
+      "explicit cancel remains pending after a transient failure");
+  cancelBackend.restoreStatus = display::RestoreStatus::Restored;
+  require(
+      cancelManager.cancelPreview(display::RollbackReason::Cancelled).status ==
+          display::ApplyStatus::Applied,
+      "explicit cancel succeeds on retry");
+}
+
+void testRuntimeDriftBeforeRollbackReportsRestoredSnapshot() {
+  FakeBackend backend;
+  FakeFrameCapRuntime frameCapRuntime;
+  display::DisplaySettingsManager manager(backend, frameCapRuntime,
+                                          initialSettings());
+  const auto now = Clock::time_point{};
+  manager.beginPreview(previewSettings(), now);
+  auto drifted = previewSettings();
+  drifted.width = 1600;
+  drifted.height = 900;
+  backend.state.settings = drifted;
+
+  const auto timeout =
+      manager.tick(now + display::DisplaySettingsManager::kConfirmationTimeout);
+  require(timeout.has_value() && timeout->effective == initialSettings(),
+          "timeout after runtime drift reports authoritative restored state");
+}
 } // namespace
 
 int main() {
@@ -533,5 +662,9 @@ int main() {
   testPersistedIntentRemainsSeparateFromCapturedRuntime();
   testUnsupportedPersistedDisplayIntentStaysPendingSafely();
   testRealFramePacerIsTheManagedFrameCapRuntime();
+  testExternalResizeIsRecapturedBeforeApply();
+  testConfirmationRecapturesRuntimeAndRejectsDrift();
+  testTransientRollbackRemainsPendingAndRetries();
+  testRuntimeDriftBeforeRollbackReportsRestoredSnapshot();
   return 0;
 }
