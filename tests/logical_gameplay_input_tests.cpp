@@ -9,7 +9,6 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -141,10 +140,16 @@ void testScratchReversalFallsBackToOlderHeldDirection() {
 
   adapter.apply(std::vector{
       transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true),
+  });
+  adapter.apply(std::vector{
       transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
                  true),
+  });
+  adapter.apply(std::vector{
       transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
                  false, 0, 0.0F),
+  });
+  adapter.apply(std::vector{
       transition({1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0,
                  0.0F),
   });
@@ -260,6 +265,13 @@ input::PhysicalInputEvent keyEvent(SDL_Scancode scancode, bool pressed) {
                       .kind = input::ControlKind::Key,
                       .index = static_cast<int>(scancode),
                       .direction = input::ControlDirection::Any},
+          .rawValue = pressed ? 1.0 : 0.0,
+          .normalizedValue = pressed ? 1.0F : 0.0F};
+}
+
+input::PhysicalInputEvent controlEvent(const input::PhysicalControl &control,
+                                       bool pressed) {
+  return {.control = control,
           .rawValue = pressed ? 1.0 : 0.0,
           .normalizedValue = pressed ? 1.0F : 0.0F};
 }
@@ -394,14 +406,8 @@ void testDirectionalScratchDisconnectFallsBackThenResets() {
            .control = counterClockwiseControl}}};
   LogicalGameplayInputPipeline pipeline(control, profile,
                                         makeGameplayInputScopes(7));
-  const auto event = [](input::PhysicalControl inputControl, bool pressed) {
-    return input::PhysicalInputEvent{.control = std::move(inputControl),
-                                     .rawValue = pressed ? 1.0 : 0.0,
-                                     .normalizedValue = pressed ? 1.0F : 0.0F};
-  };
-
-  pipeline.consumeRegistryEvent(event(clockwiseControl, true));
-  pipeline.consumeRegistryEvent(event(counterClockwiseControl, true));
+  pipeline.consumeRegistryEvent(controlEvent(clockwiseControl, true));
+  pipeline.consumeRegistryEvent(controlEvent(counterClockwiseControl, true));
   control.calls.clear();
   pipeline.disconnectDevice("pad:counter-clockwise");
   require(
@@ -421,6 +427,165 @@ void testDirectionalScratchDisconnectFallsBackThenResets() {
                .lane = 7,
                .backSpin = false}},
       "pipeline reset releases the final effective scratch hold once");
+}
+
+void testDirectionalScratchResetClearsBothDirectionsAtomically() {
+  const auto runReset = [](bool clockwisePressedFirst) {
+    RecordingControl control;
+    const input::PhysicalControl clockwiseControl{
+        .deviceId = "pad:reset",
+        .deviceClass = input::DeviceClass::GameController,
+        .kind = input::ControlKind::Button,
+        .index = 1,
+        .direction = input::ControlDirection::Any};
+    const input::PhysicalControl counterClockwiseControl{
+        .deviceId = "pad:reset",
+        .deviceClass = input::DeviceClass::GameController,
+        .kind = input::ControlKind::Button,
+        .index = 2,
+        .direction = input::ControlDirection::Any};
+    const InputProfile profile{
+        .bindings = {
+            {.id = "clockwise",
+             .scope = {1, 7},
+             .action = {input::LogicalActionKind::ScratchClockwise},
+             .control = clockwiseControl},
+            {.id = "counter-clockwise",
+             .scope = {1, 7},
+             .action = {input::LogicalActionKind::ScratchCounterClockwise},
+             .control = counterClockwiseControl}}};
+    LogicalGameplayInputPipeline pipeline(control, profile,
+                                          makeGameplayInputScopes(7));
+
+    const auto &first =
+        clockwisePressedFirst ? clockwiseControl : counterClockwiseControl;
+    const auto &second =
+        clockwisePressedFirst ? counterClockwiseControl : clockwiseControl;
+    pipeline.consumeRegistryEvent(controlEvent(first, true));
+    pipeline.consumeRegistryEvent(controlEvent(second, true));
+    control.calls.clear();
+
+    pipeline.reset();
+    const auto resetCalls = control.calls;
+    control.calls.clear();
+    pipeline.reset();
+    require(control.calls.empty(), "an atomic scratch reset is idempotent");
+    return resetCalls;
+  };
+
+  const std::vector expected{ControlCall{
+      .kind = ControlCall::Kind::Release, .lane = 7, .backSpin = false}};
+  require(runReset(true) == expected,
+          "reset atomically clears clockwise then counter-clockwise holds");
+  require(runReset(false) == expected,
+          "reset atomically clears counter-clockwise then clockwise holds");
+}
+
+void testSameDeviceScratchDisconnectClearsBothDirectionsAtomically() {
+  RecordingControl control;
+  const input::PhysicalControl clockwiseControl{
+      .deviceId = "pad:shared",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 1,
+      .direction = input::ControlDirection::Any};
+  const input::PhysicalControl counterClockwiseControl{
+      .deviceId = "pad:shared",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 2,
+      .direction = input::ControlDirection::Any};
+  const InputProfile profile{
+      .bindings = {
+          {.id = "clockwise",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchClockwise},
+           .control = clockwiseControl},
+          {.id = "counter-clockwise",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchCounterClockwise},
+           .control = counterClockwiseControl}}};
+  LogicalGameplayInputPipeline pipeline(control, profile,
+                                        makeGameplayInputScopes(7));
+
+  pipeline.consumeRegistryEvent(controlEvent(counterClockwiseControl, true));
+  pipeline.consumeRegistryEvent(controlEvent(clockwiseControl, true));
+  control.calls.clear();
+  pipeline.disconnectDevice("pad:shared");
+
+  require(control.calls ==
+              std::vector<ControlCall>{{.kind = ControlCall::Kind::Release,
+                                        .lane = 7,
+                                        .backSpin = false}},
+          "same-device disconnect clears both scratch directions without a "
+          "synthetic opposite press");
+  control.calls.clear();
+  pipeline.disconnectDevice("pad:shared");
+  require(control.calls.empty(),
+          "same-device scratch disconnect is idempotent");
+}
+
+void testScratchDisconnectPreservesIndependentDirectionReferences() {
+  RecordingControl control;
+  const input::PhysicalControl sharedClockwiseControl{
+      .deviceId = "pad:shared",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 1,
+      .direction = input::ControlDirection::Any};
+  const input::PhysicalControl survivingClockwiseControl{
+      .deviceId = "pad:survivor",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 3,
+      .direction = input::ControlDirection::Any};
+  const input::PhysicalControl sharedCounterClockwiseControl{
+      .deviceId = "pad:shared",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 2,
+      .direction = input::ControlDirection::Any};
+  const InputProfile profile{
+      .bindings = {
+          {.id = "clockwise-shared",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchClockwise},
+           .control = sharedClockwiseControl},
+          {.id = "clockwise-survivor",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchClockwise},
+           .control = survivingClockwiseControl},
+          {.id = "counter-clockwise-shared",
+           .scope = {1, 7},
+           .action = {input::LogicalActionKind::ScratchCounterClockwise},
+           .control = sharedCounterClockwiseControl}}};
+  LogicalGameplayInputPipeline pipeline(control, profile,
+                                        makeGameplayInputScopes(7));
+
+  pipeline.consumeRegistryEvent(controlEvent(sharedClockwiseControl, true));
+  pipeline.consumeRegistryEvent(controlEvent(survivingClockwiseControl, true));
+  pipeline.consumeRegistryEvent(
+      controlEvent(sharedCounterClockwiseControl, true));
+  control.calls.clear();
+  pipeline.disconnectDevice("pad:shared");
+
+  require(
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7}},
+      "disconnect falls back to an independently referenced scratch direction");
+  pipeline.disconnectDevice("pad:survivor");
+  require(
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release,
+               .lane = 7,
+               .backSpin = false}},
+      "the independently referenced scratch direction releases with its "
+      "final device");
 }
 
 void testDefaultDpProfileActivatesSecondPlayerScope() {
@@ -604,6 +769,9 @@ int main() {
   testDirectKeyboardPolicyRejectsViewConsumedRegistryKeys();
   testDirectKeyboardPolicyStillAcceptsRegistryControllers();
   testDirectionalScratchDisconnectFallsBackThenResets();
+  testSameDeviceScratchDisconnectClearsBothDirectionsAtomically();
+  testDirectionalScratchResetClearsBothDirectionsAtomically();
+  testScratchDisconnectPreservesIndependentDirectionReferences();
   testDefaultDpProfileActivatesSecondPlayerScope();
   testLegacyKeyboardCallbacksPreservePhysicalScancodes();
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();

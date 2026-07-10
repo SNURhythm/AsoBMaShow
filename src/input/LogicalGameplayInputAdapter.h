@@ -43,7 +43,8 @@ private:
   [[nodiscard]] bool isLaneHeld(int lane) const;
   void applyLane(const input::LogicalInputTransition &transition);
   void applyScratch(const input::LogicalInputTransition &transition,
-                    ScratchDirection direction, bool reversing = false);
+                    ScratchDirection direction, bool reversing = false,
+                    bool oppositeReleasedInBatch = false);
 
   IRhythmControl &control_;
   CommandCallback commandCallback_;

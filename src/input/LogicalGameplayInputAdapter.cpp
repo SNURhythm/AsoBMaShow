@@ -82,17 +82,18 @@ void LogicalGameplayInputAdapter::apply(
               ? ScratchDirection::Clockwise
               : ScratchDirection::CounterClockwise;
       bool reversing = false;
+      bool oppositeReleasedInBatch = false;
       if (!transition.pressed) {
         const int lane = scratchLane(transition.scope);
-        for (std::size_t next = index + 1; next < transitions.size(); ++next) {
-          const auto &candidate = transitions[next];
+        for (std::size_t candidateIndex = 0;
+             candidateIndex < transitions.size(); ++candidateIndex) {
+          const auto &candidate = transitions[candidateIndex];
           const bool candidateIsScratch =
               candidate.action.kind ==
                   input::LogicalActionKind::ScratchClockwise ||
               candidate.action.kind ==
                   input::LogicalActionKind::ScratchCounterClockwise;
-          if (!candidateIsScratch || !candidate.pressed ||
-              scratchLane(candidate.scope) != lane) {
+          if (!candidateIsScratch || scratchLane(candidate.scope) != lane) {
             continue;
           }
           const bool opposite =
@@ -102,13 +103,17 @@ void LogicalGameplayInputAdapter::apply(
               (direction == ScratchDirection::CounterClockwise &&
                candidate.action.kind ==
                    input::LogicalActionKind::ScratchClockwise);
-          if (opposite) {
+          if (!opposite) {
+            continue;
+          }
+          if (!candidate.pressed) {
+            oppositeReleasedInBatch = true;
+          } else if (candidateIndex > index) {
             reversing = true;
-            break;
           }
         }
       }
-      applyScratch(transition, direction, reversing);
+      applyScratch(transition, direction, reversing, oppositeReleasedInBatch);
       break;
     }
     case input::LogicalActionKind::Start:
@@ -183,7 +188,7 @@ void LogicalGameplayInputAdapter::applyLane(
 
 void LogicalGameplayInputAdapter::applyScratch(
     const input::LogicalInputTransition &transition, ScratchDirection direction,
-    bool reversing) {
+    bool reversing, bool oppositeReleasedInBatch) {
   const int lane = scratchLane(transition.scope);
   if (!transition.pressed) {
     const auto found = scratchLaneStates_.find(lane);
@@ -201,6 +206,9 @@ void LogicalGameplayInputAdapter::applyScratch(
 
     if (!state.heldDirections.empty()) {
       state.activeDirection = *state.heldDirections.begin();
+      if (oppositeReleasedInBatch) {
+        return;
+      }
       control_.releaseLane(lane, 0.0, true);
       control_.pressLane(lane);
       return;
