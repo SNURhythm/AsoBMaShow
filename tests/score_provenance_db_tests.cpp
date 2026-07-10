@@ -3,7 +3,9 @@
 #include "../src/ScoreDBHelper.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/SqliteRAII.h"
+#include "../src/targets.h"
 
+#include <array>
 #include <cassert>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +13,13 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
+
+#if !TARGET_OS_WINDOWS
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 // ScoreDBHelper's pre-v1 migration can consult ChartDBHelper. These v4/v5
 // fixtures never take that path, so the focused target supplies only the
@@ -140,6 +149,189 @@ void createFutureSentinelDatabase(const std::filesystem::path &path) {
   execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
   execOrAbort(db.get(), "PRAGMA user_version = 99");
 }
+
+struct RawDatabaseFamilySnapshot {
+  std::array<std::optional<std::string>, 4> files;
+
+  bool operator==(const RawDatabaseFamilySnapshot &) const = default;
+};
+
+RawDatabaseFamilySnapshot
+rawDatabaseFamilySnapshot(const std::filesystem::path &path) {
+  constexpr std::array<const char *, 4> suffixes = {"", "-journal", "-wal",
+                                                    "-shm"};
+  RawDatabaseFamilySnapshot snapshot;
+  for (std::size_t i = 0; i < suffixes.size(); ++i) {
+    const std::filesystem::path familyPath = path.string() + suffixes[i];
+    std::error_code existsError;
+    const bool exists = std::filesystem::exists(familyPath, existsError);
+    assert(!existsError);
+    if (exists) {
+      snapshot.files[i] = readFileBytes(familyPath);
+    }
+  }
+  return snapshot;
+}
+
+enum class FutureDatabaseState { Delete, WalAfterExit, HotJournal };
+
+const char *futureDatabaseStateName(FutureDatabaseState state) {
+  switch (state) {
+  case FutureDatabaseState::Delete:
+    return "delete";
+  case FutureDatabaseState::WalAfterExit:
+    return "wal-after-exit";
+  case FutureDatabaseState::HotJournal:
+    return "hot-journal";
+  }
+  return "unknown";
+}
+
+#if !TARGET_OS_WINDOWS
+[[noreturn]] void executeChildSqlAndExit(const std::filesystem::path &path,
+                                         const char *sql,
+                                         bool flushCache = false) {
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK || db == nullptr) {
+    _exit(10);
+  }
+  char *error = nullptr;
+  if (sqlite3_exec(db, sql, nullptr, nullptr, &error) != SQLITE_OK) {
+    sqlite3_free(error);
+    _exit(11);
+  }
+  if (flushCache && sqlite3_db_cacheflush(db) != SQLITE_OK) {
+    _exit(12);
+  }
+  _exit(0);
+}
+
+void waitForSuccessfulChild(pid_t child) {
+  int status = 0;
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status));
+  assert(WEXITSTATUS(status) == 0);
+}
+
+void createFutureDatabaseState(const std::filesystem::path &path,
+                               FutureDatabaseState state) {
+  std::filesystem::create_directories(path.parent_path());
+  if (state == FutureDatabaseState::Delete) {
+    createFutureSentinelDatabase(path);
+    return;
+  }
+  if (state == FutureDatabaseState::HotJournal) {
+    createFutureSentinelDatabase(path);
+  }
+
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    if (state == FutureDatabaseState::WalAfterExit) {
+      executeChildSqlAndExit(
+          path, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+                "CREATE TABLE sentinel(value TEXT);"
+                "INSERT INTO sentinel VALUES ('unchanged');"
+                "PRAGMA user_version=99;");
+    }
+    executeChildSqlAndExit(
+        path,
+        "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;"
+        "PRAGMA cache_size=1; BEGIN IMMEDIATE; PRAGMA user_version=98;"
+        "CREATE TABLE uncommitted(payload BLOB);"
+        "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
+        "SELECT value + 1 FROM counter WHERE value < 200) "
+        "INSERT INTO uncommitted SELECT randomblob(4096) FROM counter;",
+        true);
+  }
+  waitForSuccessfulChild(child);
+
+  if (state == FutureDatabaseState::WalAfterExit) {
+    assert(std::filesystem::exists(path.string() + "-wal"));
+    assert(std::filesystem::exists(path.string() + "-shm"));
+  } else {
+    assert(std::filesystem::exists(path.string() + "-journal"));
+    assert(std::filesystem::file_size(path.string() + "-journal") > 0);
+  }
+}
+
+void createLargeFutureWalDatabase(const std::filesystem::path &path) {
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE padding(payload BLOB)");
+    execOrAbort(db.get(),
+                "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
+                "SELECT value + 1 FROM counter WHERE value < 512) "
+                "INSERT INTO padding SELECT randomblob(4096) FROM counter");
+  }
+  assert(std::filesystem::file_size(path) > 2 * 1024 * 1024);
+
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    executeChildSqlAndExit(
+        path, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+              "PRAGMA user_version=99;");
+  }
+  waitForSuccessfulChild(child);
+  assert(std::filesystem::exists(path.string() + "-wal"));
+}
+
+template <typename Operation>
+void withLiveWalWriter(const std::filesystem::path &path, int userVersion,
+                       const Operation &operation) {
+  std::filesystem::create_directories(path.parent_path());
+  int readyPipe[2] = {-1, -1};
+  int releasePipe[2] = {-1, -1};
+  assert(pipe(readyPipe) == 0);
+  assert(pipe(releasePipe) == 0);
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    close(readyPipe[0]);
+    close(releasePipe[1]);
+    sqlite3 *db = nullptr;
+    if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK ||
+        db == nullptr) {
+      _exit(20);
+    }
+    const std::string setup =
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+        "CREATE TABLE sentinel(value TEXT);"
+        "INSERT INTO sentinel VALUES ('unchanged');"
+        "PRAGMA user_version=" +
+        std::to_string(userVersion) +
+        "; BEGIN IMMEDIATE; UPDATE sentinel SET value='uncommitted';";
+    char *error = nullptr;
+    if (sqlite3_exec(db, setup.c_str(), nullptr, nullptr, &error) !=
+        SQLITE_OK) {
+      sqlite3_free(error);
+      _exit(21);
+    }
+    const char ready = 'R';
+    if (write(readyPipe[1], &ready, 1) != 1) {
+      _exit(22);
+    }
+    char release = 0;
+    if (read(releasePipe[0], &release, 1) != 1) {
+      _exit(23);
+    }
+    _exit(0);
+  }
+
+  close(readyPipe[1]);
+  close(releasePipe[0]);
+  char ready = 0;
+  assert(read(readyPipe[0], &ready, 1) == 1);
+  assert(ready == 'R');
+  close(readyPipe[0]);
+  operation();
+  const char release = 'X';
+  assert(write(releasePipe[1], &release, 1) == 1);
+  close(releasePipe[1]);
+  waitForSuccessfulChild(child);
+}
+#endif
 
 void createVersion4ScoreFixture(const std::filesystem::path &path) {
   auto db = openDatabase(path);
@@ -588,21 +780,202 @@ void testFutureScoreWritesPreservePersistentDatabaseState(
         ScoreDBHelper helper(path);
         assert(!helper.SaveCourseScore(session, state, 1, 1, provenance));
       });
-  assertUnchanged(
-      root / "future-direct-score" / "score.db", [&](const auto &path) {
-        ScoreDBHelper helper(path);
-        SqliteConnectionHandle db(helper.Connect());
-        assert(db);
-        assert(!helper.InsertScore(db.get(), meta, state, provenance));
-      });
+  assertUnchanged(root / "future-direct-score" / "score.db",
+                  [&](const auto &path) {
+                    ScoreDBHelper helper(path);
+                    SqliteConnectionHandle db(helper.Connect());
+                    assert(!db);
+                  });
   assertUnchanged(root / "future-direct-course-score" / "score.db",
                   [&](const auto &path) {
                     ScoreDBHelper helper(path);
                     SqliteConnectionHandle db(helper.Connect());
-                    assert(db);
-                    assert(!helper.InsertCourseScore(db.get(), session, state,
-                                                     1, 1, provenance));
+                    assert(!db);
                   });
+}
+
+void testFutureScorePreflightPreservesRawDatabaseFamily(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  const auto meta = sampleMeta(root, "future-raw-preflight");
+  const auto state = sampleState(8, 2);
+  const auto provenance = sampleProvenance("future-raw-preflight");
+  CoursePlaySession session;
+  session.courseId = 57;
+  session.courseName = "Future raw preflight course";
+  session.entries.push_back({.meta = meta});
+
+  const auto assertRejectedWithoutFamilyMutation =
+      [&](FutureDatabaseState databaseState, const std::string &operationName,
+          const auto &operation) {
+        const auto path =
+            root / "future-raw-score" /
+            (operationName + "-" + futureDatabaseStateName(databaseState)) /
+            "score.db";
+        createFutureDatabaseState(path, databaseState);
+        const auto before = rawDatabaseFamilySnapshot(path);
+        const bool rejected = operation(path);
+        const auto after = rawDatabaseFamilySnapshot(path);
+        assert(after == before);
+        assert(rejected);
+      };
+
+  constexpr std::array states = {FutureDatabaseState::WalAfterExit,
+                                 FutureDatabaseState::HotJournal,
+                                 FutureDatabaseState::Delete};
+  for (const FutureDatabaseState databaseState : states) {
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "connect", [&](const auto &path) {
+          ScoreDBHelper helper(path);
+          SqliteConnectionHandle db(helper.Connect());
+          return !db;
+        });
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "save-chart", [&](const auto &path) {
+          ScoreDBHelper helper(path);
+          return !helper.SaveScore(meta, state, provenance);
+        });
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "save-course", [&](const auto &path) {
+          ScoreDBHelper helper(path);
+          return !helper.SaveCourseScore(session, state, 1, 1, provenance);
+        });
+  }
+
+  const auto directPath =
+      root / "future-raw-score" / "direct-live-wal" / "score.db";
+  auto directDb = openDatabase(directPath);
+  execOrAbort(directDb.get(), "PRAGMA journal_mode=WAL");
+  execOrAbort(directDb.get(), "PRAGMA wal_autocheckpoint=0");
+  execOrAbort(directDb.get(), "CREATE TABLE sentinel(value TEXT)");
+  execOrAbort(directDb.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(directDb.get(), "PRAGMA user_version=99");
+  const auto directBefore = rawDatabaseFamilySnapshot(directPath);
+  ScoreDBHelper directHelper(directPath);
+  assert(!directHelper.InsertScore(directDb.get(), meta, state, provenance));
+  assert(!directHelper.InsertCourseScore(directDb.get(), session, state, 1, 1,
+                                         provenance));
+  assert(rawDatabaseFamilySnapshot(directPath) == directBefore);
+#else
+  (void)root;
+#endif
+}
+
+void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "preflight-negative-version" / "score.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA user_version=-1");
+    db.reset();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "preflight-stale-shm" / "score.db";
+    createFutureSentinelDatabase(path);
+    std::ofstream staleShm(path.string() + "-shm", std::ios::binary);
+    staleShm << "stale-shm-without-wal";
+    staleShm.close();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "preflight-zero-byte" / "score.db";
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream empty(path, std::ios::binary);
+    empty.close();
+    ScoreDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    assert(std::filesystem::file_size(path) > 0);
+  }
+
+  {
+    const auto path = root / "preflight-missing" / "score.db";
+    ScoreDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    assert(std::filesystem::exists(path));
+  }
+
+#if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "preflight-live-writer" / "score.db";
+    withLiveWalWriter(path, 5, [&] {
+      const auto before = rawDatabaseFamilySnapshot(path);
+      ScoreDBHelper helper(path);
+      SqliteConnectionHandle connection(helper.Connect());
+      const auto after = rawDatabaseFamilySnapshot(path);
+      assert(!connection);
+      assert(after == before);
+    });
+  }
+#endif
+}
+
+void testLargeWalPreflightUsesOnlySparseFirstPage(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  const auto sourcePath = root / "preflight-sparse-source" / "score.db";
+  {
+    auto db = openDatabase(sourcePath);
+    execOrAbort(db.get(), "CREATE TABLE padding(payload BLOB)");
+    execOrAbort(db.get(),
+                "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
+                "SELECT value + 1 FROM counter WHERE value < 512) "
+                "INSERT INTO padding SELECT randomblob(4096) FROM counter");
+  }
+  const auto sourceSize = std::filesystem::file_size(sourcePath);
+  assert(sourceSize > 2 * 1024 * 1024);
+  std::string error;
+  const auto pageSize = readRawSqlitePageSize(sourcePath, error);
+  assert(pageSize.has_value());
+
+  const auto snapshotPath = root / "preflight-sparse-copy" / "score.db";
+  std::filesystem::create_directories(snapshotPath.parent_path());
+  assert(writeSqliteFirstPageSnapshot(sourcePath, snapshotPath, *pageSize,
+                                      sourceSize, error));
+  assert(std::filesystem::file_size(snapshotPath) == sourceSize);
+
+  std::vector<char> sourceFirstPage(*pageSize);
+  std::vector<char> snapshotFirstPage(*pageSize);
+  std::vector<char> sourceSecondPage(*pageSize);
+  std::vector<char> snapshotSecondPage(*pageSize);
+  std::ifstream source(sourcePath, std::ios::binary);
+  std::ifstream snapshot(snapshotPath, std::ios::binary);
+  assert(source.read(sourceFirstPage.data(), sourceFirstPage.size()));
+  assert(snapshot.read(snapshotFirstPage.data(), snapshotFirstPage.size()));
+  assert(sourceFirstPage == snapshotFirstPage);
+  assert(source.read(sourceSecondPage.data(), sourceSecondPage.size()));
+  assert(snapshot.read(snapshotSecondPage.data(), snapshotSecondPage.size()));
+  assert(std::any_of(sourceSecondPage.begin(), sourceSecondPage.end(),
+                     [](char value) { return value != 0; }));
+  assert(std::all_of(snapshotSecondPage.begin(), snapshotSecondPage.end(),
+                     [](char value) { return value == 0; }));
+
+  struct stat snapshotStat{};
+  assert(stat(snapshotPath.c_str(), &snapshotStat) == 0);
+  const auto physicalBytes =
+      static_cast<std::uintmax_t>(snapshotStat.st_blocks) * 512U;
+  assert(physicalBytes < sourceSize / 8U);
+
+  const auto walPath = root / "preflight-large-wal" / "score.db";
+  createLargeFutureWalDatabase(walPath);
+  const auto before = rawDatabaseFamilySnapshot(walPath);
+  ScoreDBHelper helper(walPath);
+  SqliteConnectionHandle connection(helper.Connect());
+  assert(!connection);
+  assert(rawDatabaseFamilySnapshot(walPath) == before);
+#else
+  (void)root;
+#endif
 }
 
 } // namespace
@@ -622,6 +995,9 @@ int main() {
   testInvalidProvenanceDoesNotCreateScoreDatabase(root);
   testPublicWritesNestInsideCallerTransactions(root);
   testFutureScoreWritesPreservePersistentDatabaseState(root);
+  testFutureScorePreflightPreservesRawDatabaseFamily(root);
+  testScorePreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testLargeWalPreflightUsesOnlySparseFirstPage(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

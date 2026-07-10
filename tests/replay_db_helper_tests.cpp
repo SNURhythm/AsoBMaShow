@@ -7,6 +7,7 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,12 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+#if !TARGET_OS_WINDOWS
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -137,6 +144,270 @@ void createFutureSentinelDatabase(const std::filesystem::path &path) {
   execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
   execOrAbort(db.get(), "PRAGMA user_version = 99");
 }
+
+struct RawDatabaseFamilySnapshot {
+  std::array<std::optional<std::string>, 4> files;
+
+  bool operator==(const RawDatabaseFamilySnapshot &) const = default;
+};
+
+RawDatabaseFamilySnapshot
+rawDatabaseFamilySnapshot(const std::filesystem::path &path) {
+  constexpr std::array<const char *, 4> suffixes = {"", "-journal", "-wal",
+                                                    "-shm"};
+  RawDatabaseFamilySnapshot snapshot;
+  for (std::size_t i = 0; i < suffixes.size(); ++i) {
+    const std::filesystem::path familyPath = path.string() + suffixes[i];
+    std::error_code existsError;
+    const bool exists = std::filesystem::exists(familyPath, existsError);
+    assert(!existsError);
+    if (exists) {
+      snapshot.files[i] = readFileBytes(familyPath);
+    }
+  }
+  return snapshot;
+}
+
+enum class FutureDatabaseState { Delete, WalAfterExit, HotJournal };
+
+const char *futureDatabaseStateName(FutureDatabaseState state) {
+  switch (state) {
+  case FutureDatabaseState::Delete:
+    return "delete";
+  case FutureDatabaseState::WalAfterExit:
+    return "wal-after-exit";
+  case FutureDatabaseState::HotJournal:
+    return "hot-journal";
+  }
+  return "unknown";
+}
+
+#if !TARGET_OS_WINDOWS
+[[noreturn]] void executeChildSqlAndExit(const std::filesystem::path &path,
+                                         const char *sql,
+                                         bool flushCache = false) {
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK || db == nullptr) {
+    _exit(10);
+  }
+  char *error = nullptr;
+  if (sqlite3_exec(db, sql, nullptr, nullptr, &error) != SQLITE_OK) {
+    sqlite3_free(error);
+    _exit(11);
+  }
+  if (flushCache && sqlite3_db_cacheflush(db) != SQLITE_OK) {
+    _exit(12);
+  }
+  _exit(0);
+}
+
+void waitForSuccessfulChild(pid_t child) {
+  int status = 0;
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status));
+  assert(WEXITSTATUS(status) == 0);
+}
+
+void createFutureDatabaseState(const std::filesystem::path &path,
+                               FutureDatabaseState state) {
+  std::filesystem::create_directories(path.parent_path());
+  if (state == FutureDatabaseState::Delete) {
+    createFutureSentinelDatabase(path);
+    return;
+  }
+  if (state == FutureDatabaseState::HotJournal) {
+    createFutureSentinelDatabase(path);
+  }
+
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    if (state == FutureDatabaseState::WalAfterExit) {
+      executeChildSqlAndExit(
+          path, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+                "CREATE TABLE sentinel(value TEXT);"
+                "INSERT INTO sentinel VALUES ('unchanged');"
+                "PRAGMA user_version=99;");
+    }
+    executeChildSqlAndExit(
+        path,
+        "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;"
+        "PRAGMA cache_size=1; BEGIN IMMEDIATE; PRAGMA user_version=98;"
+        "CREATE TABLE uncommitted(payload BLOB);"
+        "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
+        "SELECT value + 1 FROM counter WHERE value < 200) "
+        "INSERT INTO uncommitted SELECT randomblob(4096) FROM counter;",
+        true);
+  }
+  waitForSuccessfulChild(child);
+
+  if (state == FutureDatabaseState::WalAfterExit) {
+    assert(std::filesystem::exists(path.string() + "-wal"));
+    assert(std::filesystem::exists(path.string() + "-shm"));
+  } else {
+    assert(std::filesystem::exists(path.string() + "-journal"));
+    assert(std::filesystem::file_size(path.string() + "-journal") > 0);
+  }
+}
+
+void createLargeFutureWalDatabase(const std::filesystem::path &path) {
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE padding(payload BLOB)");
+    execOrAbort(db.get(),
+                "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
+                "SELECT value + 1 FROM counter WHERE value < 512) "
+                "INSERT INTO padding SELECT randomblob(4096) FROM counter");
+  }
+  assert(std::filesystem::file_size(path) > 2 * 1024 * 1024);
+
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    executeChildSqlAndExit(
+        path, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+              "PRAGMA user_version=99;");
+  }
+  waitForSuccessfulChild(child);
+  assert(std::filesystem::exists(path.string() + "-wal"));
+}
+
+template <typename Operation>
+void withLiveWalWriter(const std::filesystem::path &path, int userVersion,
+                       const Operation &operation) {
+  std::filesystem::create_directories(path.parent_path());
+  int readyPipe[2] = {-1, -1};
+  int releasePipe[2] = {-1, -1};
+  assert(pipe(readyPipe) == 0);
+  assert(pipe(releasePipe) == 0);
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    close(readyPipe[0]);
+    close(releasePipe[1]);
+    sqlite3 *db = nullptr;
+    if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK ||
+        db == nullptr) {
+      _exit(20);
+    }
+    const std::string setup =
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+        "CREATE TABLE sentinel(value TEXT);"
+        "INSERT INTO sentinel VALUES ('unchanged');"
+        "PRAGMA user_version=" +
+        std::to_string(userVersion) +
+        "; BEGIN IMMEDIATE; UPDATE sentinel SET value='uncommitted';";
+    char *error = nullptr;
+    if (sqlite3_exec(db, setup.c_str(), nullptr, nullptr, &error) !=
+        SQLITE_OK) {
+      sqlite3_free(error);
+      _exit(21);
+    }
+    const char ready = 'R';
+    if (write(readyPipe[1], &ready, 1) != 1) {
+      _exit(22);
+    }
+    char release = 0;
+    if (read(releasePipe[0], &release, 1) != 1) {
+      _exit(23);
+    }
+    _exit(0);
+  }
+
+  close(readyPipe[1]);
+  close(releasePipe[0]);
+  char ready = 0;
+  assert(read(readyPipe[0], &ready, 1) == 1);
+  assert(ready == 'R');
+  close(readyPipe[0]);
+  operation();
+  const char release = 'X';
+  assert(write(releasePipe[1], &release, 1) == 1);
+  close(releasePipe[1]);
+  waitForSuccessfulChild(child);
+}
+
+bool anotherProcessHoldsWalReadLock(int shmFd) {
+  struct flock lock{};
+  lock.l_type = F_WRLCK;
+  lock.l_whence = SEEK_SET;
+  // SQLite's unix VFS reserves bytes 120-127 for WAL-index locks. Reader
+  // marks occupy offsets 3-7 within that range.
+  lock.l_start = 120 + 3;
+  lock.l_len = 5;
+  if (fcntl(shmFd, F_GETLK, &lock) == -1) {
+    return false;
+  }
+  return lock.l_type != F_UNLCK;
+}
+
+template <typename Operation>
+auto withMutationDuringLongWalRead(const std::filesystem::path &path,
+                                   const std::string &mutationSql,
+                                   const Operation &operation) {
+  int readyPipe[2] = {-1, -1};
+  assert(pipe(readyPipe) == 0);
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    close(readyPipe[0]);
+    const char ready = 'R';
+    if (write(readyPipe[1], &ready, 1) != 1) {
+      _exit(30);
+    }
+    close(readyPipe[1]);
+
+    int shmFd = -1;
+    int continuouslyLocked = 0;
+    for (int attempt = 0; attempt < 80000; ++attempt) {
+      if (shmFd == -1) {
+        shmFd = open((path.string() + "-shm").c_str(), O_RDWR);
+      }
+      if (shmFd != -1 && anotherProcessHoldsWalReadLock(shmFd)) {
+        ++continuouslyLocked;
+        if (continuouslyLocked >= 20) {
+          break;
+        }
+      } else {
+        continuouslyLocked = 0;
+      }
+      usleep(250);
+    }
+    if (shmFd != -1) {
+      close(shmFd);
+    }
+    if (continuouslyLocked < 20) {
+      _exit(31);
+    }
+
+    sqlite3 *rawDb = nullptr;
+    if (sqlite3_open(path.string().c_str(), &rawDb) != SQLITE_OK ||
+        rawDb == nullptr) {
+      _exit(32);
+    }
+    SqliteConnectionHandle writer(rawDb);
+    sqlite3_busy_timeout(writer.get(), 5000);
+    const std::string transaction =
+        "BEGIN IMMEDIATE;" + mutationSql + ";COMMIT;";
+    char *error = nullptr;
+    if (sqlite3_exec(writer.get(), transaction.c_str(), nullptr, nullptr,
+                     &error) != SQLITE_OK) {
+      sqlite3_free(error);
+      _exit(33);
+    }
+    _exit(0);
+  }
+
+  close(readyPipe[1]);
+  char ready = 0;
+  assert(read(readyPipe[0], &ready, 1) == 1);
+  assert(ready == 'R');
+  close(readyPipe[0]);
+  auto result = operation();
+  waitForSuccessfulChild(child);
+  return result;
+}
+#endif
 
 class ScopedLogCapture {
 public:
@@ -630,7 +901,7 @@ void testCourseSummariesOmitInvalidLinkedStages(
       {.replay = sampleReplay(root, "summary-stage-course-b")});
 
   std::vector<int> courseReplayIds;
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 6; ++i) {
     course.finalScore = 300 + i;
     const auto id = helper.SaveCourseReplay(course);
     assert(id.has_value());
@@ -647,6 +918,17 @@ void testCourseSummariesOmitInvalidLinkedStages(
       "SELECT replay_id FROM course_replay_stages WHERE course_replay_id=" +
           std::to_string(courseReplayIds[2]) +
           " ORDER BY stage_index DESC LIMIT 1");
+  execOrAbort(db.get(),
+              "DELETE FROM course_replay_stages WHERE course_replay_id=" +
+                  std::to_string(courseReplayIds[3]));
+  execOrAbort(db.get(),
+              "DELETE FROM replays WHERE id IN (SELECT replay_id FROM "
+              "course_replay_stages WHERE course_replay_id=" +
+                  std::to_string(courseReplayIds[4]) + ")");
+  execOrAbort(db.get(),
+              "UPDATE course_replay_stages SET stage_index=-1-stage_index "
+              "WHERE course_replay_id=" +
+                  std::to_string(courseReplayIds[5]));
   execOrAbort(db.get(), "UPDATE replays SET ruleset_version=99 WHERE id=" +
                             std::to_string(mismatchedStageId));
   execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
@@ -661,6 +943,9 @@ void testCourseSummariesOmitInvalidLinkedStages(
   assert(all.front().id == courseReplayIds[0]);
   assert(!helper.LoadCourseReplay(courseReplayIds[1]).has_value());
   assert(!helper.LoadCourseReplay(courseReplayIds[2]).has_value());
+  assert(!helper.LoadCourseReplay(courseReplayIds[3]).has_value());
+  assert(!helper.LoadCourseReplay(courseReplayIds[4]).has_value());
+  assert(!helper.LoadCourseReplay(courseReplayIds[5]).has_value());
 }
 
 void testFutureVersionRejectsWithoutSchemaMutation(
@@ -717,9 +1002,147 @@ void testFutureReplayWritesPreservePersistentDatabaseState(
                   [&](const auto &path) {
                     ReplayDBHelper helper(path);
                     SqliteConnectionHandle db(helper.Connect());
-                    assert(db);
-                    assert(!helper.CreateReplayTables(db.get()));
+                    assert(!db);
                   });
+}
+
+void testFutureReplayPreflightPreservesRawDatabaseFamily(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  ReplayData replay = sampleReplay(root, "future-raw-preflight");
+  CourseReplayData course;
+  course.courseId = 66;
+  course.courseName = "Future raw preflight course";
+  course.provenance = replay.provenance;
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "future-raw-preflight-stage")});
+
+  const auto assertRejectedWithoutFamilyMutation =
+      [&](FutureDatabaseState databaseState, const std::string &operationName,
+          const auto &operation) {
+        const auto path =
+            root / "future-raw-replay" /
+            (operationName + "-" + futureDatabaseStateName(databaseState)) /
+            "replay.db";
+        createFutureDatabaseState(path, databaseState);
+        const auto before = rawDatabaseFamilySnapshot(path);
+        const bool rejected = operation(path);
+        const auto after = rawDatabaseFamilySnapshot(path);
+        assert(after == before);
+        assert(rejected);
+      };
+
+  constexpr std::array states = {FutureDatabaseState::WalAfterExit,
+                                 FutureDatabaseState::HotJournal,
+                                 FutureDatabaseState::Delete};
+  for (const FutureDatabaseState databaseState : states) {
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "connect", [&](const auto &path) {
+          ReplayDBHelper helper(path);
+          SqliteConnectionHandle db(helper.Connect());
+          return !db;
+        });
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "save-chart", [&](const auto &path) {
+          ReplayDBHelper helper(path);
+          return !helper.SaveReplay(replay).has_value();
+        });
+    assertRejectedWithoutFamilyMutation(
+        databaseState, "save-course", [&](const auto &path) {
+          ReplayDBHelper helper(path);
+          return !helper.SaveCourseReplay(course).has_value();
+        });
+  }
+
+  const auto directPath =
+      root / "future-raw-replay" / "direct-live-wal" / "replay.db";
+  auto directDb = openDatabase(directPath);
+  execOrAbort(directDb.get(), "PRAGMA journal_mode=WAL");
+  execOrAbort(directDb.get(), "PRAGMA wal_autocheckpoint=0");
+  execOrAbort(directDb.get(), "CREATE TABLE sentinel(value TEXT)");
+  execOrAbort(directDb.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(directDb.get(), "PRAGMA user_version=99");
+  const auto directBefore = rawDatabaseFamilySnapshot(directPath);
+  ReplayDBHelper directHelper(directPath);
+  assert(!directHelper.CreateReplayTables(directDb.get()));
+  assert(rawDatabaseFamilySnapshot(directPath) == directBefore);
+#else
+  (void)root;
+#endif
+}
+
+void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "preflight-negative-version" / "replay.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA user_version=-1");
+    db.reset();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "preflight-stale-shm" / "replay.db";
+    createFutureSentinelDatabase(path);
+    std::ofstream staleShm(path.string() + "-shm", std::ios::binary);
+    staleShm << "stale-shm-without-wal";
+    staleShm.close();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "preflight-zero-byte" / "replay.db";
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream empty(path, std::ios::binary);
+    empty.close();
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    assert(std::filesystem::file_size(path) > 0);
+  }
+
+  {
+    const auto path = root / "preflight-missing" / "replay.db";
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    assert(std::filesystem::exists(path));
+  }
+
+#if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "preflight-live-writer" / "replay.db";
+    withLiveWalWriter(path, 3, [&] {
+      const auto before = rawDatabaseFamilySnapshot(path);
+      ReplayDBHelper helper(path);
+      SqliteConnectionHandle connection(helper.Connect());
+      const auto after = rawDatabaseFamilySnapshot(path);
+      assert(!connection);
+      assert(after == before);
+    });
+  }
+#endif
+}
+
+void testLargeWalReplayPreflightPreservesFamily(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  const auto path = root / "preflight-large-wal" / "replay.db";
+  createLargeFutureWalDatabase(path);
+  const auto before = rawDatabaseFamilySnapshot(path);
+  ReplayDBHelper helper(path);
+  SqliteConnectionHandle connection(helper.Connect());
+  assert(!connection);
+  assert(rawDatabaseFamilySnapshot(path) == before);
+#else
+  (void)root;
+#endif
 }
 
 void insertChartReplays(sqlite3 *db, int count) {
@@ -735,6 +1158,14 @@ void insertChartReplays(sqlite3 *db, int count) {
 }
 
 void insertCourseReplays(sqlite3 *db, int courseId, int count) {
+  execOrAbort(
+      db,
+      "INSERT INTO replays (chart_path, chart_md5, chart_sha256, "
+      "chart_title, chart_artist, gauge_type, gauge_auto_shift, final_score,"
+      "max_combo, final_gauge, clear_type, assist_option) VALUES "
+      "('BMS/course-stage.bms','course-stage-md5','course-stage-sha',"
+      "'Course stage','Artist',0,0,0,0,100.0,300,'OFF')");
+  const int stageReplayId = static_cast<int>(sqlite3_last_insert_rowid(db));
   for (int i = 1; i <= count; ++i) {
     execOrAbort(
         db, "INSERT INTO course_replays (course_id, course_name, "
@@ -746,7 +1177,128 @@ void insertCourseReplays(sqlite3 *db, int courseId, int count) {
                 ",'Course','Group','{}',0,0,0,0,'NORMAL','OFF'," +
                 std::to_string(i) + "," + std::to_string(i) +
                 ",100.0,300,1,1)");
+    const int courseReplayId = static_cast<int>(sqlite3_last_insert_rowid(db));
+    execOrAbort(db, "INSERT INTO course_replay_stages (course_replay_id,"
+                    "stage_index,replay_id,rest_micros_after_stage) VALUES (" +
+                        std::to_string(courseReplayId) + ",0," +
+                        std::to_string(stageReplayId) + ",0)");
   }
+}
+
+void padStoredProvenance(sqlite3 *db, const std::string &table,
+                         std::size_t paddingBytes) {
+  std::string padded = queryText(db, "SELECT provenance_json FROM " + table +
+                                         " ORDER BY id LIMIT 1");
+  padded.append(paddingBytes, ' ');
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(db,
+                                "UPDATE " + table + " SET provenance_json=?",
+                                stmt) == SQLITE_OK);
+  assert(sqlite3_bind_text(stmt.get(), 1, padded.data(),
+                           static_cast<int>(padded.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK);
+  assert(sqlite3_step(stmt.get()) == SQLITE_DONE);
+}
+
+void testChartSummaryValidationAndDetailsShareWalSnapshot(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  constexpr int kCandidateCount = 64;
+  constexpr std::size_t kPaddingBytes = 512 * 1024;
+  const auto path = root / "chart-summary-wal-snapshot" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  auto db = openDatabase(path);
+  insertChartReplays(db.get(), kCandidateCount);
+  padStoredProvenance(db.get(), "replays", kPaddingBytes);
+  const int targetId = queryInt(db.get(), "SELECT MAX(id) FROM replays");
+  db.reset();
+
+  const std::string mutation =
+      "UPDATE replays SET ruleset_version=99 WHERE id=" +
+      std::to_string(targetId) +
+      ";INSERT INTO replay_events (replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES (" +
+      std::to_string(targetId) + ",0,0,0,0,0,0,0,0,0.0,0,0,0)";
+
+  bms_parser::ChartMeta meta;
+  meta.SHA256 = "sha";
+  meta.MD5 = "md5";
+  meta.BmsPath = root / "BMS" / "chart.bms";
+  meta.TotalNotes = 500;
+  const auto summaries = withMutationDuringLongWalRead(
+      path, mutation, [&] { return helper.ListReplays(meta, 0); });
+  const auto target =
+      std::find_if(summaries.begin(), summaries.end(),
+                   [&](const auto &value) { return value.id == targetId; });
+  assert(target != summaries.end());
+  assert(target->rulesetVersion == 0);
+  assert(target->eventCount == 0);
+
+  auto mutated = openDatabase(path);
+  assert(queryInt(mutated.get(), "SELECT ruleset_version FROM replays WHERE "
+                                 "id=" +
+                                     std::to_string(targetId)) == 99);
+  assert(queryInt(mutated.get(), "SELECT COUNT(*) FROM replay_events WHERE "
+                                 "replay_id=" +
+                                     std::to_string(targetId)) == 1);
+#else
+  (void)root;
+#endif
+}
+
+void testCourseSummaryValidationAndDetailsShareWalSnapshot(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  constexpr int kCandidateCount = 64;
+  constexpr std::size_t kPaddingBytes = 512 * 1024;
+  constexpr int kCourseId = 71;
+  const auto path = root / "course-summary-wal-snapshot" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  auto db = openDatabase(path);
+  insertCourseReplays(db.get(), kCourseId, kCandidateCount);
+  padStoredProvenance(db.get(), "course_replays", kPaddingBytes);
+  const int targetId = queryInt(db.get(), "SELECT MAX(id) FROM course_replays");
+  const int stageReplayId =
+      queryInt(db.get(), "SELECT replay_id FROM course_replay_stages WHERE "
+                         "course_replay_id=" +
+                             std::to_string(targetId));
+  db.reset();
+
+  const std::string mutation =
+      "UPDATE course_replays SET ruleset_version=99,completed_charts=9 "
+      "WHERE id=" +
+      std::to_string(targetId) +
+      ";UPDATE replays SET ruleset_version=99 WHERE id=" +
+      std::to_string(stageReplayId) +
+      ";INSERT INTO replay_events (replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES (" +
+      std::to_string(stageReplayId) + ",0,0,0,0,0,0,0,0,0.0,0,0,0)";
+
+  const auto summaries = withMutationDuringLongWalRead(
+      path, mutation, [&] { return helper.ListCourseReplays(kCourseId, 0); });
+  const auto target =
+      std::find_if(summaries.begin(), summaries.end(),
+                   [&](const auto &value) { return value.id == targetId; });
+  assert(target != summaries.end());
+  assert(target->rulesetVersion == 0);
+  assert(target->completedCharts == 1);
+  assert(target->stageCount == 1);
+  assert(target->eventCount == 0);
+
+  auto mutated = openDatabase(path);
+  assert(queryInt(mutated.get(),
+                  "SELECT ruleset_version FROM course_replays WHERE id=" +
+                      std::to_string(targetId)) == 99);
+  assert(queryInt(mutated.get(), "SELECT ruleset_version FROM replays WHERE "
+                                 "id=" +
+                                     std::to_string(stageReplayId)) == 99);
+#else
+  (void)root;
+#endif
 }
 
 void insertCorruptChartSummaryRows(sqlite3 *db, const ReplayData &replay,
@@ -900,6 +1452,11 @@ int main() {
   testCourseSummariesOmitInvalidLinkedStages(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testFutureReplayWritesPreservePersistentDatabaseState(root);
+  testFutureReplayPreflightPreservesRawDatabaseFamily(root);
+  testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testLargeWalReplayPreflightPreservesFamily(root);
+  testChartSummaryValidationAndDetailsShareWalSnapshot(root);
+  testCourseSummaryValidationAndDetailsShareWalSnapshot(root);
   testExistingListLimits(root);
   testLimitedSummaryScansHaveFiniteCorruptBudget(root);
 

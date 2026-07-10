@@ -79,6 +79,19 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 }
 
 bool rejectFutureScoreDatabase(sqlite3 *db) {
+  const char *filename =
+      db != nullptr ? sqlite3_db_filename(db, "main") : nullptr;
+  if (db != nullptr && sqlite3_get_autocommit(db) != 0 && filename != nullptr &&
+      filename[0] != '\0') {
+    std::string error;
+    if (!preflightSqliteUserVersion(filename, kScoreDatabaseSchemaVersion,
+                                    error)
+             .has_value()) {
+      SDL_Log("Refusing score database schema preflight: %s", error.c_str());
+      return true;
+    }
+    return false;
+  }
   const int version = databaseUserVersion(db);
   if (version <= kScoreDatabaseSchemaVersion) {
     return false;
@@ -964,15 +977,20 @@ sqlite3 *ScoreDBHelper::Connect() {
     return nullptr;
   }
 
+  std::string preflightError;
+  if (!preflightSqliteUserVersion(path, kScoreDatabaseSchemaVersion,
+                                  preflightError)
+           .has_value()) {
+    SDL_Log("Refusing to open score database %s: %s",
+            fspath_to_utf8(path).c_str(), preflightError.c_str());
+    return nullptr;
+  }
+
   std::string openError;
   sqlite3 *db = openSqliteDatabase(path, openError);
   if (db == nullptr) {
     SDL_Log("Can't open score database: %s", openError.c_str());
     return nullptr;
-  }
-
-  if (databaseUserVersion(db) > kScoreDatabaseSchemaVersion) {
-    return db;
   }
 
   if (const auto pragmaError = applySqlitePragmas(

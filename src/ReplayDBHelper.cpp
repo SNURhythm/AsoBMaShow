@@ -63,6 +63,19 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 }
 
 bool rejectFutureReplayDatabase(sqlite3 *db) {
+  const char *filename =
+      db != nullptr ? sqlite3_db_filename(db, "main") : nullptr;
+  if (db != nullptr && sqlite3_get_autocommit(db) != 0 && filename != nullptr &&
+      filename[0] != '\0') {
+    std::string error;
+    if (!preflightSqliteUserVersion(filename, kReplayDatabaseSchemaVersion,
+                                    error)
+             .has_value()) {
+      SDL_Log("Refusing replay database schema preflight: %s", error.c_str());
+      return true;
+    }
+    return false;
+  }
   const int version = databaseUserVersion(db);
   if (version <= kReplayDatabaseSchemaVersion) {
     return false;
@@ -509,21 +522,29 @@ bool courseReplayStagesHaveValidProvenance(sqlite3_stmt *stmt,
   int stageCount = 0;
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (sqlite3_column_int(stmt, 0) != stageCount) {
+      error = "course replay stage indexes are not contiguous";
+      return false;
+    }
     ++stageCount;
     if (stageCount > replay_summary_scan::kMaxCourseStagesPerCandidate) {
       error = "course replay has too many stages";
       return false;
     }
-    if (sqlite3_column_type(stmt, 0) == SQLITE_NULL) {
+    if (sqlite3_column_type(stmt, 1) == SQLITE_NULL) {
       error = "course replay references a missing stage replay";
       return false;
     }
-    if (!decodeStoredProvenance(stmt, 1, 2, 3, error).has_value()) {
+    if (!decodeStoredProvenance(stmt, 2, 3, 4, error).has_value()) {
       return false;
     }
   }
   if (rc != SQLITE_DONE) {
     error = sqliteDatabaseError(sqlite3_db_handle(stmt));
+    return false;
+  }
+  if (stageCount == 0) {
+    error = "course replay has no linked stages";
     return false;
   }
   return true;
@@ -711,15 +732,20 @@ sqlite3 *ReplayDBHelper::Connect() {
     return nullptr;
   }
 
+  std::string preflightError;
+  if (!preflightSqliteUserVersion(path, kReplayDatabaseSchemaVersion,
+                                  preflightError)
+           .has_value()) {
+    SDL_Log("Refusing to open replay database %s: %s",
+            fspath_to_utf8(path).c_str(), preflightError.c_str());
+    return nullptr;
+  }
+
   std::string openError;
   sqlite3 *db = openSqliteDatabase(path, openError);
   if (db == nullptr) {
     SDL_Log("Can't open replay database: %s", openError.c_str());
     return nullptr;
-  }
-
-  if (databaseUserVersion(db) > kReplayDatabaseSchemaVersion) {
-    return db;
   }
 
   if (const auto pragmaError = applySqlitePragmas(
@@ -1131,6 +1157,13 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
     return replays;
   }
 
+  std::string snapshotError;
+  SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
+  if (!readSnapshot.active()) {
+    logSqlErrorText("starting replay summary snapshot", snapshotError);
+    return replays;
+  }
+
   const auto match = replayChartMatchFor(chartMeta);
   const bool hasLimit = limit > 0;
   const std::size_t requestedCount =
@@ -1245,6 +1278,11 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
     summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));
   }
+  detailStmt.reset();
+  if (!readSnapshot.commit(snapshotError)) {
+    logSqlErrorText("committing replay summary snapshot", snapshotError);
+    return {};
+  }
   return replays;
 }
 
@@ -1258,6 +1296,13 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   }
 
   if (!CreateReplayTables(db)) {
+    return replays;
+  }
+
+  std::string snapshotError;
+  SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
+  if (!readSnapshot.active()) {
+    logSqlErrorText("starting course replay summary snapshot", snapshotError);
     return replays;
   }
 
@@ -1279,7 +1324,8 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   }
 
   const char *stageProvenanceQuery =
-      "SELECT r.id, r.ruleset_version, r.eligibility, r.provenance_json "
+      "SELECT s.stage_index, r.id, r.ruleset_version, r.eligibility, "
+      "r.provenance_json "
       "FROM course_replay_stages s "
       "LEFT JOIN replays r ON r.id = s.replay_id "
       "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
@@ -1422,6 +1468,11 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
       summary.eligibility = static_cast<ScoreEligibility>(eligibility);
     }
     replays.push_back(std::move(summary));
+  }
+  detailStmt.reset();
+  if (!readSnapshot.commit(snapshotError)) {
+    logSqlErrorText("committing course replay summary snapshot", snapshotError);
+    return {};
   }
   return replays;
 }
@@ -1683,6 +1734,13 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
     return std::nullopt;
   }
 
+  struct PendingCourseReplayStage {
+    int stageIndex = 0;
+    int replayId = 0;
+    long long restMicros = 0;
+    bms_parser::ChartMeta chartMeta;
+  };
+  std::vector<PendingCourseReplayStage> pendingStages;
   sqlite3_bind_int(stageStmt.get(), 1, replayId);
   while (sqlite3_step(stageStmt.get()) == SQLITE_ROW) {
     const int stageIndex = sqlite3_column_int(stageStmt.get(), 0);
@@ -1698,20 +1756,32 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
     stageMeta.SHA256 = readText(stageStmt.get(), 5);
     stageMeta.Title = readText(stageStmt.get(), 6);
     stageMeta.Artist = readText(stageStmt.get(), 7);
-    auto stageReplay = LoadReplay(stageReplayId, stageMeta);
+    pendingStages.push_back({.stageIndex = stageIndex,
+                             .replayId = stageReplayId,
+                             .restMicros = restMicros,
+                             .chartMeta = std::move(stageMeta)});
+  }
+  stageStmt.reset();
+  dbHandle.reset();
+
+  for (auto &pendingStage : pendingStages) {
+    auto stageReplay =
+        LoadReplay(pendingStage.replayId, pendingStage.chartMeta);
     if (!stageReplay.has_value()) {
-      SDL_Log("Failed to load course replay stage %d replay %d", stageIndex,
-              stageReplayId);
+      SDL_Log("Failed to load course replay stage %d replay %d",
+              pendingStage.stageIndex, pendingStage.replayId);
       return std::nullopt;
     }
 
-    if (courseReplay.stages.size() <= static_cast<size_t>(stageIndex)) {
-      courseReplay.stages.resize(static_cast<size_t>(stageIndex) + 1);
+    if (courseReplay.stages.size() <=
+        static_cast<size_t>(pendingStage.stageIndex)) {
+      courseReplay.stages.resize(static_cast<size_t>(pendingStage.stageIndex) +
+                                 1);
     }
-    courseReplay.stages[static_cast<size_t>(stageIndex)] =
+    courseReplay.stages[static_cast<size_t>(pendingStage.stageIndex)] =
         CourseReplayStageData{.replay = std::move(*stageReplay),
                               .restMicrosAfterStage =
-                                  std::max(0LL, restMicros)};
+                                  std::max(0LL, pendingStage.restMicros)};
   }
 
   if (courseReplay.stages.empty()) {
