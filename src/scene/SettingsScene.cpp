@@ -39,8 +39,8 @@ std::string formatCacheCleanupResult(
                         " (" + std::to_string(result.removedEntries) +
                         " entries).";
   if (result.skippedEntries > 0) {
-    message += " Skipped " + std::to_string(result.skippedEntries) +
-               " active file";
+    message +=
+        " Skipped " + std::to_string(result.skippedEntries) + " active file";
     if (result.skippedEntries != 1) {
       message += "s";
     }
@@ -49,8 +49,8 @@ std::string formatCacheCleanupResult(
   return message;
 }
 
-std::string formatCacheUsageResult(
-    const archive_file::TemporaryCacheUsageResult &result) {
+std::string
+formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
   if (!result.cacheExisted || result.entries == 0) {
     return "Temporary archive cache is empty.";
   }
@@ -125,9 +125,8 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
         std::string errorMessage;
         const std::vector<std::filesystem::path> protectedPaths =
             context.jukebox.activeMaterializedVideoPaths();
-        const bool cleaned =
-            archive_file::cleanupTemporaryCache(result, protectedPaths,
-                                                &errorMessage);
+        const bool cleaned = archive_file::cleanupTemporaryCache(
+            result, protectedPaths, &errorMessage);
 
         if (token.stop_requested()) {
           archiveCacheCleanupRunning = false;
@@ -141,9 +140,9 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
         }
         if (!cleaned) {
           requestArchiveCacheCleanupStatus(
-              errorMessage.empty() ? "Archive cache cleanup failed."
-                                   : "Archive cache cleanup failed: " +
-                                         errorMessage,
+              errorMessage.empty()
+                  ? "Archive cache cleanup failed."
+                  : "Archive cache cleanup failed: " + errorMessage,
               {255, 177, 170, 255});
           return;
         }
@@ -196,9 +195,9 @@ void SettingsScene::measureTemporaryArchiveCache() {
         }
         if (!measured) {
           requestArchiveCacheCleanupStatus(
-              errorMessage.empty() ? "Archive cache measurement failed."
-                                   : "Archive cache measurement failed: " +
-                                         errorMessage,
+              errorMessage.empty()
+                  ? "Archive cache measurement failed."
+                  : "Archive cache measurement failed: " + errorMessage,
               {255, 177, 170, 255});
           return;
         }
@@ -210,11 +209,31 @@ void SettingsScene::measureTemporaryArchiveCache() {
 
 void SettingsScene::init() {
   lastLayoutWidth = -1;
+  ensureAudioVideoSession();
   observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
 }
 
 void SettingsScene::update(float dt) {
+  if (audioVideoSession != nullptr) {
+    const bool hadPreview = audioVideoSession->hasDisplayPreview();
+    const auto previewResult =
+        audioVideoSession->tick(std::chrono::steady_clock::now());
+    if (previewResult.has_value() && !previewResult->message.empty()) {
+      setDisplayStatus(previewResult->message,
+                       previewResult->status == display::ApplyStatus::Applied
+                           ? SDL_Color{157, 220, 176, 255}
+                           : SDL_Color{255, 177, 170, 255});
+    } else if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
+      setDisplayStatus("The display preview ended and the previous settings "
+                       "were restored.",
+                       {255, 209, 128, 255});
+    }
+    if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
+      displayDraft = context.settings.audioVideo.video;
+    }
+    updateDisplayPreviewUi();
+  }
   if (previewActive) {
     ensurePreviewRenderer();
     ensurePreviewInputHandler();
@@ -280,6 +299,22 @@ void SettingsScene::renderScene() {
 }
 
 EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
+  const bool losesFocus = event.type == SDL_APP_WILLENTERBACKGROUND ||
+                          event.type == SDL_APP_DIDENTERBACKGROUND ||
+                          (event.type == SDL_WINDOWEVENT &&
+                           (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                            event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
+                            event.window.event == SDL_WINDOWEVENT_HIDDEN));
+  if (losesFocus && audioVideoSession != nullptr &&
+      audioVideoSession->hasDisplayPreview()) {
+    const auto result = audioVideoSession->onFocusLost();
+    displayDraft = context.settings.audioVideo.video;
+    setDisplayStatus(result.has_value() && !result->message.empty()
+                         ? result->message
+                         : "Display preview was restored after focus loss.",
+                     {255, 209, 128, 255});
+    updateDisplayPreviewUi();
+  }
   bool handledByView = false;
   for (auto *view : views) {
     if (!view->handleEvents(event)) {
@@ -294,6 +329,13 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 }
 
 void SettingsScene::cleanupScene() {
+  if (audioVideoSession != nullptr) {
+    const auto result = audioVideoSession->cleanup();
+    if (!result.message.empty()) {
+      SDL_Log("%s", result.message.c_str());
+    }
+    audioVideoSession.reset();
+  }
   if (difficultyTableJobThread.joinable()) {
     SDL_Log("Joining difficultyTableJobThread");
     difficultyTableJobThread.request_stop();
@@ -370,12 +412,16 @@ void SettingsScene::cleanupScene() {
   visualTabButton = nullptr;
   laneTabButton = nullptr;
   miscTabButton = nullptr;
+  audioTabButton = nullptr;
+  displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
   miscTabText = nullptr;
+  audioTabText = nullptr;
+  displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
   bgaBrightnessInput = nullptr;
@@ -394,6 +440,23 @@ void SettingsScene::cleanupScene() {
   difficultyTableImportTableText = nullptr;
   difficultyTableImportProgressText = nullptr;
   difficultyTableImportCloseButton = nullptr;
+  audioDeviceDropdown = nullptr;
+  audioSampleRateDropdown = nullptr;
+  audioBufferDropdown = nullptr;
+  displayModeDropdown = nullptr;
+  displayIndexDropdown = nullptr;
+  displayResolutionDropdown = nullptr;
+  displayVsyncDropdown = nullptr;
+  displayFrameCapDropdown = nullptr;
+  masterVolumeInput = nullptr;
+  bgmVolumeInput = nullptr;
+  keysoundVolumeInput = nullptr;
+  audioEffectiveText = nullptr;
+  audioStatusText = nullptr;
+  displayStatusText = nullptr;
+  displayPreviewOverlayRoot = nullptr;
+  displayPreviewCountdownText = nullptr;
+  displayPreviewStatusText = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

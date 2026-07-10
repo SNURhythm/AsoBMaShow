@@ -7,6 +7,8 @@ target_sources(main PRIVATE
     SceneManager.cpp
     ResultScene.cpp
     SettingsScene.cpp
+    SettingsAudioVideoModel.cpp
+    SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp

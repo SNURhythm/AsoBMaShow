@@ -120,12 +120,16 @@ void SettingsScene::resetViewState() {
   visualTabButton = nullptr;
   laneTabButton = nullptr;
   miscTabButton = nullptr;
+  audioTabButton = nullptr;
+  displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
   miscTabText = nullptr;
+  audioTabText = nullptr;
+  displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
   bgaBrightnessInput = nullptr;
@@ -144,6 +148,23 @@ void SettingsScene::resetViewState() {
   difficultyTableImportTableText = nullptr;
   difficultyTableImportProgressText = nullptr;
   difficultyTableImportCloseButton = nullptr;
+  audioDeviceDropdown = nullptr;
+  audioSampleRateDropdown = nullptr;
+  audioBufferDropdown = nullptr;
+  displayModeDropdown = nullptr;
+  displayIndexDropdown = nullptr;
+  displayResolutionDropdown = nullptr;
+  displayVsyncDropdown = nullptr;
+  displayFrameCapDropdown = nullptr;
+  masterVolumeInput = nullptr;
+  bgmVolumeInput = nullptr;
+  keysoundVolumeInput = nullptr;
+  audioEffectiveText = nullptr;
+  audioStatusText = nullptr;
+  displayStatusText = nullptr;
+  displayPreviewOverlayRoot = nullptr;
+  displayPreviewCountdownText = nullptr;
+  displayPreviewStatusText = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -155,9 +176,8 @@ void SettingsScene::ensureLayoutUpToDate() {
     return;
   }
 
-  const bool preserveScroll =
-      rootLayout != nullptr && scrollView != nullptr &&
-      activeTab == lastLaidOutTab;
+  const bool preserveScroll = rootLayout != nullptr && scrollView != nullptr &&
+                              activeTab == lastLaidOutTab;
   const float preservedScrollOffset =
       preserveScroll ? scrollView->getScrollOffset() : 0.0f;
 
@@ -249,8 +269,8 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeValueControls->setFlexDirection(FlexDirection::Row);
   visibleTimeValueControls->setFlexWrap(YGWrapWrap);
   visibleTimeValueControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  visibleTimeValueControls->setAlignItems(compactAdjustments ? YGAlignCenter
-                                                             : YGAlignFlexStart);
+  visibleTimeValueControls->setAlignItems(
+      compactAdjustments ? YGAlignCenter : YGAlignFlexStart);
   if (compactAdjustments) {
     visibleTimeValueControls->setWidthPercent(100.0f);
     visibleTimeValueControls->setJustifyContent(YGJustifyCenter);
@@ -338,9 +358,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   const int panelWidth =
       resolvePreviewPanelWidth(metrics, foldButtonSize, previewPanelFolded);
   const int panelHeight = std::max(
-      foldButtonSize,
-      rendering::window_height - metrics.safe.top - metrics.safe.bottom -
-          metrics.verticalPadding * 2);
+      foldButtonSize, rendering::window_height - metrics.safe.top -
+                          metrics.safe.bottom - metrics.verticalPadding * 2);
   auto *previewPanel = new View();
   previewPanel->setWidth(static_cast<float>(panelWidth));
   previewPanel->setPadding(
@@ -395,10 +414,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewTabs->setWidthPercent(100.0f);
   previewTabs->setJustifyContent(YGJustifyCenter);
   const int previewTabGap = metrics.compact ? 8 : 10;
-  const int previewTabWidth = std::max(
-      0, (panelWidth - metrics.cardPadding * 2 -
-          previewTabGap * (previewPanelPageCount - 1)) /
-             previewPanelPageCount);
+  const int previewTabWidth =
+      std::max(0, (panelWidth - metrics.cardPadding * 2 -
+                   previewTabGap * (previewPanelPageCount - 1)) /
+                      previewPanelPageCount);
   auto makePreviewTab = [this, &metrics, previewTabWidth](int page,
                                                           const char *label) {
     auto *labelText =
@@ -540,8 +559,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     lengthControls->addView(resetLength);
     previewControls->addView(lengthControls);
 
-    previewControls->addView(makeSummaryRow(
-        metrics, "Beam Length", &summaryLaneBeamLengthValueText));
+    previewControls->addView(makeSummaryRow(metrics, "Beam Length",
+                                            &summaryLaneBeamLengthValueText));
     auto *beamControls = new View();
     beamControls->setFlexDirection(FlexDirection::Row);
     beamControls->setFlexWrap(YGWrapWrap);
@@ -625,13 +644,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       return row;
     };
 
-    previewControls->addView(makeSummaryRow(
-        metrics, "Judge Text Y", &summaryJudgementTextYValueText));
+    previewControls->addView(makeSummaryRow(metrics, "Judge Text Y",
+                                            &summaryJudgementTextYValueText));
     auto updateJudgementTextY = [this](int deltaPercent) {
       const int currentPercent =
           judgementTextYToPercent(context.settings.judgementTextY);
-      const int nextPercent =
-          std::clamp(currentPercent + deltaPercent, 0, 100);
+      const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
       context.settings.judgementTextY = judgementTextPercentToY(nextPercent);
       persistSettings();
     };
@@ -664,8 +682,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     judgementTimingFastSlowCriteriaButton =
-        makeControlButton(metrics.actionButtonWidth,
-                          metrics.actionButtonHeight,
+        makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementTimingFastSlowCriteriaText);
     judgementTimingFastSlowCriteriaButton->setOnClickListener([this]() {
       context.settings.judgementTimingFastSlowCriteria =
@@ -677,8 +694,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     previewControls->addView(timingFastSlowControls);
 
     previewControls->addView(makeSummaryRow(
-        metrics, "Milliseconds",
-        &summaryJudgementTimingMillisecondsValueText));
+        metrics, "Milliseconds", &summaryJudgementTimingMillisecondsValueText));
     auto *timingMillisecondsControls = new View();
     timingMillisecondsControls->setFlexDirection(FlexDirection::Row);
     timingMillisecondsControls->setFlexWrap(YGWrapWrap);
@@ -690,8 +706,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeText("", metrics.bodyTextSize, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     judgementTimingMillisecondsCriteriaButton =
-        makeControlButton(metrics.actionButtonWidth,
-                          metrics.actionButtonHeight,
+        makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementTimingMillisecondsCriteriaText);
     judgementTimingMillisecondsCriteriaButton->setOnClickListener([this]() {
       context.settings.judgementTimingMillisecondsCriteria =
@@ -703,9 +718,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         judgementTimingMillisecondsCriteriaButton);
     previewControls->addView(timingMillisecondsControls);
 
-    previewControls->addView(
-        makeText("Indicator", metrics.summaryValueSize,
-                 ui_theme::textSecondary()));
+    previewControls->addView(makeText("Indicator", metrics.summaryValueSize,
+                                      ui_theme::textSecondary()));
     auto *indicatorModeControls = new View();
     indicatorModeControls->setFlexDirection(FlexDirection::Row);
     indicatorModeControls->setFlexWrap(YGWrapWrap);
@@ -729,8 +743,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     judgementIndicatorRenderModeButton =
-        makeControlButton(metrics.actionButtonWidth,
-                          metrics.actionButtonHeight,
+        makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementIndicatorRenderModeText);
     judgementIndicatorRenderModeButton->setOnClickListener([this]() {
       context.settings.judgementIndicatorRenderMode =
@@ -746,8 +759,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     auto updateIndicatorY = [this](int deltaPercent) {
       const int currentPercent =
           judgementIndicatorYToPercent(context.settings.judgementIndicatorY);
-      const int nextPercent =
-          std::clamp(currentPercent + deltaPercent, 0, 100);
+      const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
       context.settings.judgementIndicatorY =
           judgementIndicatorPercentToY(nextPercent);
       persistSettings();
@@ -826,20 +838,18 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     judgementCounterPositionButton =
-        makeControlButton(metrics.actionButtonWidth,
-                          metrics.actionButtonHeight,
+        makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           judgementCounterPositionText);
     judgementCounterPositionButton->setOnClickListener([this]() {
-      context.settings.judgementCounterPosition =
-          nextJudgementCounterPosition(
-              context.settings.judgementCounterPosition);
+      context.settings.judgementCounterPosition = nextJudgementCounterPosition(
+          context.settings.judgementCounterPosition);
       persistSettings();
     });
     counterControls->addView(judgementCounterPositionButton);
     previewControls->addView(counterControls);
 
-    previewControls->addView(makeSummaryRow(
-        metrics, "Gauge", &summaryGaugeBarPositionValueText));
+    previewControls->addView(
+        makeSummaryRow(metrics, "Gauge", &summaryGaugeBarPositionValueText));
     auto *gaugeControls = new View();
     gaugeControls->setFlexDirection(FlexDirection::Row);
     gaugeControls->setFlexWrap(YGWrapWrap);
@@ -851,8 +861,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         makeText("", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     gaugeBarPositionButton =
-        makeControlButton(metrics.actionButtonWidth,
-                          metrics.actionButtonHeight,
+        makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           gaugeBarPositionText);
     gaugeBarPositionButton->setOnClickListener([this]() {
       context.settings.gaugeBarPosition =
@@ -1052,8 +1061,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
             "millisecond timing feedback appear.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
 
-  judgementFeedbackControls->addView(makeSummaryRow(
-      metrics, "Judge Text Y", &summaryJudgementTextYValueText));
+  judgementFeedbackControls->addView(
+      makeSummaryRow(metrics, "Judge Text Y", &summaryJudgementTextYValueText));
   auto *judgementTextYControls = new View();
   judgementTextYControls->setFlexDirection(FlexDirection::Row);
   judgementTextYControls->setFlexWrap(YGWrapWrap);
@@ -1519,8 +1528,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
                         judgementCounterPositionText);
   judgementCounterPositionButton->setOnClickListener([this]() {
     context.settings.judgementCounterPosition =
-        nextJudgementCounterPosition(
-            context.settings.judgementCounterPosition);
+        nextJudgementCounterPosition(context.settings.judgementCounterPosition);
     persistSettings();
   });
   judgementCounterModeControls->addView(judgementCounterPositionButton);
@@ -2307,7 +2315,8 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showAddFolderButton = true;
 #elif TARGET_OS_ANDROID
-  const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
+  const bool androidFullFileAccessBuild =
+      AndroidBuildHasManageExternalStorage();
   showAddFolderButton = true;
   importFolderByCopy = !androidFullFileAccessBuild;
   addFolderButtonLabel =
@@ -2620,9 +2629,8 @@ void SettingsScene::initView() {
       metrics.compact ? std::clamp(metrics.contentWidth / 4, 150, 190)
                       : std::clamp(metrics.contentWidth / 6, 220, 280));
   const int scrollRightPadding = metrics.compact ? 12 : 16;
-  metrics.cardsWidth =
-      std::max(0, metrics.contentWidth - tabColumnWidth - metrics.bodyGap -
-                      scrollRightPadding);
+  metrics.cardsWidth = std::max(0, metrics.contentWidth - tabColumnWidth -
+                                       metrics.bodyGap - scrollRightPadding);
   metrics.useDualCardRow = !metrics.compact && metrics.cardsWidth >= 980;
   metrics.secondaryCardWidth =
       metrics.useDualCardRow
@@ -2657,6 +2665,9 @@ void SettingsScene::initView() {
       if (activeTab == tab) {
         return;
       }
+      if (activeTab == SettingsTab::Display) {
+        cancelDisplayPreviewForTabExit();
+      }
       activeTab = tab;
       lastLayoutWidth = -1;
     });
@@ -2668,15 +2679,20 @@ void SettingsScene::initView() {
       makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
   miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
-  difficultyTablesTabButton = makeTabButton(
-      SettingsTab::DifficultyTables, "Difficulty Tables",
-      &difficultyTablesTabText);
-  bmsLibraryTabButton = makeTabButton(SettingsTab::BmsLibrary, "BMS Library",
-                                      &bmsLibraryTabText);
+  audioTabButton = makeTabButton(SettingsTab::Audio, "Audio", &audioTabText);
+  displayTabButton =
+      makeTabButton(SettingsTab::Display, "Display", &displayTabText);
+  difficultyTablesTabButton =
+      makeTabButton(SettingsTab::DifficultyTables, "Difficulty Tables",
+                    &difficultyTablesTabText);
+  bmsLibraryTabButton =
+      makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
   tabControls->addView(miscTabButton);
+  tabControls->addView(audioTabButton);
+  tabControls->addView(displayTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
   content->addView(tabControls);
@@ -2703,6 +2719,12 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::Misc:
     cardsColumn = buildMiscTab(metrics);
+    break;
+  case SettingsTab::Audio:
+    cardsColumn = buildAudioTab(metrics);
+    break;
+  case SettingsTab::Display:
+    cardsColumn = buildDisplayTab(metrics);
     break;
   case SettingsTab::DifficultyTables:
     cardsColumn = buildDifficultyTablesTab(metrics);
@@ -2733,6 +2755,7 @@ void SettingsScene::initView() {
   rootLayout->addView(content);
 
   buildDifficultyTableImportModal(metrics);
+  buildDisplayPreviewOverlay(metrics);
 
   rootLayout->applyYogaLayout();
   refreshDifficultyTableImportModal();
