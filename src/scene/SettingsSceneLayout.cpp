@@ -97,6 +97,11 @@ void SettingsScene::resetViewState() {
   uiThemeModeText = nullptr;
   archiveCacheCleanupButtonText = nullptr;
   archiveCacheCleanupStatusText = nullptr;
+  profileTabText = nullptr;
+  profileStatusText = nullptr;
+  profileDeleteReasonText = nullptr;
+  profileNameInput = nullptr;
+  profileArchivePathInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -117,6 +122,7 @@ void SettingsScene::resetViewState() {
   bgaDisplayModeButton = nullptr;
   uiThemeModeButton = nullptr;
   archiveCacheCleanupButton = nullptr;
+  profileTabButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
@@ -2616,9 +2622,9 @@ void SettingsScene::initView() {
       makeText("Settings", metrics.titleSize, ui_theme::textPrimary()));
   headerText->addView(makeWrappedText(
       metrics.compact
-          ? "Timing, keysound, and visual preferences."
-          : "Persistent player preferences for timing, keysounds, and visual "
-            "load.",
+          ? "Profiles, input, audio, and play preferences."
+          : "Portable player profiles and persistent play, input, audio, and "
+            "display preferences.",
       metrics.subtitleSize, ui_theme::textSecondary()));
   header->addView(headerText);
 
@@ -2629,8 +2635,28 @@ void SettingsScene::initView() {
       metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
       ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
       ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
+  const auto profilePhase =
+      profileController ? profileController->phase()
+                        : ProfileSettingsPhase::Idle;
+  const bool profilePipelineBusy =
+      profilePhase == ProfileSettingsPhase::PickingImport ||
+      profilePhase == ProfileSettingsPhase::Importing ||
+      profilePhase == ProfileSettingsPhase::PreparingExport ||
+      profilePhase == ProfileSettingsPhase::PickingExport;
+  backButton->setEnabled(!profilePipelineBusy);
   backButton->setOnClickListener(
-      [this]() { context.sceneManager->changeScene("MainMenu"); });
+      [this]() {
+        if (profileController != nullptr) {
+          const auto phase = profileController->phase();
+          if (phase == ProfileSettingsPhase::PickingImport ||
+              phase == ProfileSettingsPhase::Importing ||
+              phase == ProfileSettingsPhase::PreparingExport ||
+              phase == ProfileSettingsPhase::PickingExport) {
+            return;
+          }
+        }
+        context.sceneManager->changeScene("MainMenu");
+      });
   header->addView(backButton);
   rootLayout->addView(header);
 
@@ -2685,11 +2711,24 @@ void SettingsScene::initView() {
         inputViewRebuildGate.reset();
         inputLastViewSignature.clear();
       }
+      if (activeTab == SettingsTab::Profile &&
+          profileController != nullptr) {
+        const auto phase = profileController->phase();
+        if (phase == ProfileSettingsPhase::PickingImport ||
+            phase == ProfileSettingsPhase::Importing ||
+            phase == ProfileSettingsPhase::PreparingExport ||
+            phase == ProfileSettingsPhase::PickingExport) {
+          return;
+        }
+        profileController->cancelConfirmation();
+      }
       activeTab = tab;
       lastLayoutWidth = -1;
     });
     return button;
   };
+  profileTabButton =
+      makeTabButton(SettingsTab::Profile, "Profile", &profileTabText);
   timingTabButton =
       makeTabButton(SettingsTab::Timing, "Timing", &timingTabText);
   visualTabButton =
@@ -2705,6 +2744,7 @@ void SettingsScene::initView() {
                     &difficultyTablesTabText);
   bmsLibraryTabButton =
       makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
+  tabControls->addView(profileTabButton);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
@@ -2714,7 +2754,11 @@ void SettingsScene::initView() {
   tabControls->addView(displayTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
-  content->addView(tabControls);
+  auto *tabRail = new ScrollView();
+  tabRail->setWidth(static_cast<float>(tabColumnWidth));
+  tabRail->setFlexShrink(0.0f);
+  tabRail->setContentView(tabControls);
+  content->addView(tabRail);
 
   scrollView = new ScrollView();
   scrollView->setFlex(1.0f);
@@ -2727,6 +2771,9 @@ void SettingsScene::initView() {
 
   View *cardsColumn = nullptr;
   switch (activeTab) {
+  case SettingsTab::Profile:
+    cardsColumn = buildProfileTab(metrics);
+    break;
   case SettingsTab::Timing:
     cardsColumn = buildTimingTab(metrics);
     break;

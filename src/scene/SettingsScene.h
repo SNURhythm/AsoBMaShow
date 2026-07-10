@@ -2,6 +2,7 @@
 
 #include "../ChartDBHelper.h"
 #include "../ThreadCompat.h"
+#include "ProfileSettingsController.h"
 #include "SettingsAudioVideoModel.h"
 #include "Scene.h"
 #include "play/Judge.h"
@@ -32,6 +33,17 @@ namespace settings_scene {
 struct LayoutMetrics;
 }
 
+struct SettingsProfileArchiveCompletion {
+  ProfileArchiveTaskKind kind = ProfileArchiveTaskKind::Export;
+  std::uint64_t generation = 0;
+  ProfileArchiveResult result;
+};
+
+struct SettingsProfileArchiveMailbox {
+  std::mutex mutex;
+  std::optional<SettingsProfileArchiveCompletion> completion;
+};
+
 namespace bms_parser {
 class Chart;
 class Note;
@@ -59,6 +71,7 @@ public:
 
 private:
   enum class SettingsTab {
+    Profile,
     Timing,
     Visual,
     Lane,
@@ -119,6 +132,11 @@ private:
   TextView *uiThemeModeText = nullptr;
   TextView *archiveCacheCleanupButtonText = nullptr;
   TextView *archiveCacheCleanupStatusText = nullptr;
+  TextView *profileTabText = nullptr;
+  TextView *profileStatusText = nullptr;
+  TextView *profileDeleteReasonText = nullptr;
+  TextInputBox *profileNameInput = nullptr;
+  TextInputBox *profileArchivePathInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -139,6 +157,7 @@ private:
   Button *bgaDisplayModeButton = nullptr;
   Button *uiThemeModeButton = nullptr;
   Button *archiveCacheCleanupButton = nullptr;
+  Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
@@ -223,12 +242,18 @@ private:
   int previewScore = 0;
   int previewComboBreak = 0;
   std::map<Judgement, int> previewJudgeCount;
-  SettingsTab activeTab = SettingsTab::Timing;
+  SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
   std::jthread difficultyTableJobThread;
   std::jthread archiveCacheCleanupThread;
   std::jthread archiveCacheMeasureThread;
+  std::jthread profileArchiveThread;
+  std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
+  std::unique_ptr<ProfileSettingsController> profileController;
+  std::uint64_t profileArchiveGeneration = 0;
+  std::string profileNameText;
+  std::string profileArchivePathText;
   std::atomic_bool difficultyTableJobRunning = false;
   std::atomic_bool archiveCacheCleanupRunning = false;
   std::atomic_bool archiveCacheMeasureRunning = false;
@@ -276,7 +301,7 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
-  SettingsTab lastLaidOutTab = SettingsTab::Timing;
+  SettingsTab lastLaidOutTab = SettingsTab::Profile;
   std::uint64_t observedLibraryRevision = 0;
   std::unique_ptr<SettingsAudioVideoSession> audioVideoSession;
   player_settings::AudioSettings audioDraft;
@@ -302,6 +327,7 @@ private:
                                  bool compactAdjustments);
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
@@ -359,6 +385,12 @@ private:
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
+  void ensureProfileController();
+  void applyPendingProfileArchiveCompletion();
+  void startProfileArchiveTask(ProfileArchiveTask task);
+  void stopProfileArchiveWork();
+  void activateProfile(std::string_view profileId);
+  void invalidateProfileLayout();
   void persistSettings();
   void ensureAudioVideoSession();
   void refreshAudioVideoControls();

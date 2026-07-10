@@ -45,14 +45,11 @@ const std::string &ProfileSettingsController::selectedProfileId() const {
   return selectedProfileId_;
 }
 
-const std::string &
-ProfileSettingsController::confirmationProfileId() const {
+const std::string &ProfileSettingsController::confirmationProfileId() const {
   return confirmationProfileId_;
 }
 
-ProfileSettingsPhase ProfileSettingsController::phase() const {
-  return phase_;
-}
+ProfileSettingsPhase ProfileSettingsController::phase() const { return phase_; }
 
 const ProfileSettingsStatus &ProfileSettingsController::status() const {
   return status_;
@@ -82,8 +79,7 @@ bool ProfileSettingsController::refresh() {
                exceptionMessage(error, "Unable to read player profiles"), {});
     return false;
   } catch (...) {
-    setFailure(ProfileError::IoFailure, {},
-               "Unable to read player profiles.");
+    setFailure(ProfileError::IoFailure, {}, "Unable to read player profiles.");
     return false;
   }
   if (!result.ok()) {
@@ -97,8 +93,8 @@ bool ProfileSettingsController::refresh() {
                "kept visible.");
     return false;
   }
-  const bool activeExists = std::ranges::any_of(
-      result.profiles, [&](const PlayerProfile &profile) {
+  const bool activeExists =
+      std::ranges::any_of(result.profiles, [&](const PlayerProfile &profile) {
         return profile.id == result.activeProfileId;
       });
   if (!activeExists) {
@@ -111,14 +107,13 @@ bool ProfileSettingsController::refresh() {
   const std::string priorSelection = selectedProfileId_;
   profiles_ = std::move(result.profiles);
   activeProfileId_ = std::move(result.activeProfileId);
-  selectedProfileId_ =
-      !priorSelection.empty() && contains(priorSelection) ? priorSelection
-                                                         : activeProfileId_;
-  if (!confirmationProfileId_.empty() &&
-      !contains(confirmationProfileId_)) {
-    const auto priorStatus =
-        archivePipelinePriorStatus_ ? archivePipelinePriorStatus_
-                                    : confirmationPriorStatus_;
+  selectedProfileId_ = !priorSelection.empty() && contains(priorSelection)
+                           ? priorSelection
+                           : activeProfileId_;
+  if (!confirmationProfileId_.empty() && !contains(confirmationProfileId_)) {
+    const auto priorStatus = archivePipelinePriorStatus_
+                                 ? archivePipelinePriorStatus_
+                                 : confirmationPriorStatus_;
     clearTransientPhase();
     releaseArchivePipeline();
     status_ = priorStatus.value_or(ProfileSettingsStatus{});
@@ -130,11 +125,10 @@ bool ProfileSettingsController::select(std::string_view profileId) {
   if (!contains(profileId)) {
     return false;
   }
-  if (!confirmationProfileId_.empty() &&
-      confirmationProfileId_ != profileId) {
-    const auto priorStatus =
-        archivePipelinePriorStatus_ ? archivePipelinePriorStatus_
-                                    : confirmationPriorStatus_;
+  if (!confirmationProfileId_.empty() && confirmationProfileId_ != profileId) {
+    const auto priorStatus = archivePipelinePriorStatus_
+                                 ? archivePipelinePriorStatus_
+                                 : confirmationPriorStatus_;
     clearTransientPhase();
     releaseArchivePipeline();
     status_ = priorStatus.value_or(ProfileSettingsStatus{});
@@ -155,8 +149,8 @@ ProfileActionEligibility ProfileSettingsController::destructiveEligibility(
   }
   if (profiles_.size() <= 1) {
     return {.enabled = false,
-            .reason = "The last profile cannot be " + std::string(action) +
-                      "."};
+            .reason =
+                "The last profile cannot be " + std::string(action) + "."};
   }
   if (phase_ != ProfileSettingsPhase::Idle) {
     return {.enabled = false,
@@ -166,13 +160,11 @@ ProfileActionEligibility ProfileSettingsController::destructiveEligibility(
 }
 
 ProfileActionEligibility
-ProfileSettingsController::deleteEligibility(
-    std::string_view profileId) const {
+ProfileSettingsController::deleteEligibility(std::string_view profileId) const {
   return destructiveEligibility(profileId, "deleted");
 }
 
-ProfileActionEligibility
-ProfileSettingsController::overwriteEligibility(
+ProfileActionEligibility ProfileSettingsController::overwriteEligibility(
     std::string_view profileId) const {
   return destructiveEligibility(profileId, "overwritten");
 }
@@ -182,16 +174,16 @@ ProfileSettingsController::unavailableResult(std::string message) const {
   return profileFailure(ProfileError::SwitchBlocked, std::move(message));
 }
 
-ProfileArchiveResult ProfileSettingsController::unavailableArchiveResult(
-    std::string message) const {
+ProfileArchiveResult
+ProfileSettingsController::unavailableArchiveResult(std::string message) const {
   return archiveFailure(ProfileError::SwitchBlocked, std::move(message));
 }
 
 void ProfileSettingsController::setFailure(ProfileError, std::string message,
                                            std::string fallback) {
   status_ = {.kind = ProfileSettingsStatusKind::Error,
-             .message = message.empty() ? std::move(fallback)
-                                        : std::move(message)};
+             .message =
+                 message.empty() ? std::move(fallback) : std::move(message)};
 }
 
 void ProfileSettingsController::setSuccess(std::string message,
@@ -213,8 +205,8 @@ bool ProfileSettingsController::refreshAfterMutation(
     if (!operationError.empty()) {
       const std::string refreshError = status_.message;
       status_ = {.kind = ProfileSettingsStatusKind::Error,
-                 .message = operationError +
-                            (refreshError.empty() ? std::string{}
+                 .message = operationError + (refreshError.empty()
+                                                  ? std::string{}
                                                   : "; " + refreshError)};
     }
     return false;
@@ -347,9 +339,9 @@ ProfileResult ProfileSettingsController::create(std::string name) {
     return finishMutation(dependencies_.create(std::move(name)),
                           "Profile created.", std::nullopt);
   } catch (const std::exception &error) {
-    auto result = profileFailure(
-        ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to create profile"));
+    auto result =
+        profileFailure(ProfileError::IoFailure,
+                       exceptionMessage(error, "Unable to create profile"));
     if (refreshAfterMutation(std::nullopt, result.message)) {
       setFailure(result.error, result.message, {});
     }
@@ -381,9 +373,9 @@ ProfileResult ProfileSettingsController::rename(std::string_view profileId,
     return finishMutation(dependencies_.rename(profileId, std::move(name)),
                           "Profile renamed.", std::string(profileId));
   } catch (const std::exception &error) {
-    auto result = profileFailure(
-        ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to rename profile"));
+    auto result =
+        profileFailure(ProfileError::IoFailure,
+                       exceptionMessage(error, "Unable to rename profile"));
     if (refreshAfterMutation(std::nullopt, result.message)) {
       setFailure(result.error, result.message, {});
     }
@@ -398,8 +390,8 @@ ProfileResult ProfileSettingsController::rename(std::string_view profileId,
   }
 }
 
-ProfileResult ProfileSettingsController::duplicate(
-    std::string_view profileId, std::string name) {
+ProfileResult ProfileSettingsController::duplicate(std::string_view profileId,
+                                                   std::string name) {
   if (!actionsEnabled() || !dependencies_.duplicate) {
     auto result = unavailableResult("Profile duplication is unavailable.");
     setFailure(result.error, result.message, {});
@@ -421,20 +413,19 @@ ProfileResult ProfileSettingsController::duplicate(
     }
   }
   try {
-    return finishMutation(
-        dependencies_.duplicate(profileId, std::move(name)),
-        "Profile duplicated.", std::nullopt);
+    return finishMutation(dependencies_.duplicate(profileId, std::move(name)),
+                          "Profile duplicated.", std::nullopt);
   } catch (const std::exception &error) {
-    auto result = profileFailure(
-        ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to duplicate profile"));
+    auto result =
+        profileFailure(ProfileError::IoFailure,
+                       exceptionMessage(error, "Unable to duplicate profile"));
     if (refreshAfterMutation(std::nullopt, result.message)) {
       setFailure(result.error, result.message, {});
     }
     return result;
   } catch (...) {
-    auto result = profileFailure(ProfileError::IoFailure,
-                                 "Unable to duplicate profile.");
+    auto result =
+        profileFailure(ProfileError::IoFailure, "Unable to duplicate profile.");
     if (refreshAfterMutation(std::nullopt, result.message)) {
       setFailure(result.error, result.message, {});
     }
@@ -445,10 +436,10 @@ ProfileResult ProfileSettingsController::duplicate(
 ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
   const ProfileActionEligibility eligibility = deleteEligibility(profileId);
   if (!eligibility.enabled) {
-    auto result = profileFailure(
-        contains(profileId) ? ProfileError::SwitchBlocked
-                            : ProfileError::NotFound,
-        eligibility.reason);
+    auto result =
+        profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
+                                           : ProfileError::NotFound,
+                       eligibility.reason);
     setFailure(result.error, result.message, {});
     return result;
   }
@@ -461,9 +452,9 @@ ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
     return finishMutation(dependencies_.remove(profileId), "Profile deleted.",
                           std::nullopt);
   } catch (const std::exception &error) {
-    auto result = profileFailure(
-        ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to delete profile"));
+    auto result =
+        profileFailure(ProfileError::IoFailure,
+                       exceptionMessage(error, "Unable to delete profile"));
     if (refreshAfterMutation(std::nullopt, result.message)) {
       setFailure(result.error, result.message, {});
     }
@@ -492,25 +483,47 @@ ProfileSettingsController::activate(std::string_view profileId) {
     setFailure(result.error, result.message, {});
     return result;
   }
+  const std::string targetProfileId(profileId);
+  const std::string activeProfileIdBefore = activeProfileId_;
   ProfileSwitchResult result;
   try {
-    result = dependencies_.activate(profileId);
+    result = dependencies_.activate(targetProfileId);
   } catch (const std::exception &error) {
-    result = switchFailure(
-        ProfileError::IoFailure,
-        exceptionMessage(error, "Unable to activate profile"));
+    result =
+        switchFailure(ProfileError::IoFailure,
+                      exceptionMessage(error, "Unable to activate profile"));
   } catch (...) {
     result =
         switchFailure(ProfileError::IoFailure, "Unable to activate profile.");
   }
+  const bool refreshed = refreshAfterMutation(
+      result.ok() ? std::optional<std::string>(targetProfileId) : std::nullopt,
+      result.ok() ? std::string{} : result.message);
+  const bool authoritativeCommit =
+      refreshed && activeProfileId_ == targetProfileId &&
+      (result.ok() || activeProfileIdBefore != targetProfileId);
+  if (authoritativeCommit) {
+    if (!result.ok()) {
+      const std::string detail =
+          result.message.empty()
+              ? "the switch reported a follow-up error."
+              : "the switch reported a follow-up error: " + result.message;
+      result = {.message = "Profile activated, but " + detail};
+    }
+    setSuccess(result.message, "Profile activated.");
+    return result;
+  }
   if (!result.ok()) {
-    if (refreshAfterMutation(std::nullopt, result.message)) {
+    if (refreshed) {
       setFailure(result.error, result.message, "Profile activation failed.");
     }
     return result;
   }
-  if (refreshAfterMutation(std::string(profileId))) {
-    setSuccess(result.message, "Profile activated.");
+  if (refreshed) {
+    result = switchFailure(
+        ProfileError::IntegrityFailure,
+        "Profile activation did not make the selected profile active.");
+    setFailure(result.error, result.message, {});
   }
   return result;
 }
@@ -519,10 +532,10 @@ ProfileResult
 ProfileSettingsController::requestDelete(std::string_view profileId) {
   const auto eligibility = deleteEligibility(profileId);
   if (!eligibility.enabled) {
-    auto result = profileFailure(
-        contains(profileId) ? ProfileError::SwitchBlocked
-                            : ProfileError::NotFound,
-        eligibility.reason);
+    auto result =
+        profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
+                                           : ProfileError::NotFound,
+                       eligibility.reason);
     setFailure(result.error, result.message, {});
     return result;
   }
@@ -533,8 +546,8 @@ ProfileSettingsController::requestDelete(std::string_view profileId) {
   status_ = {.kind = ProfileSettingsStatusKind::Info,
              .message = "Choose Delete again to permanently remove this "
                         "profile."};
-  const auto found = std::ranges::find_if(
-      profiles_, [&](const PlayerProfile &candidate) {
+  const auto found =
+      std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
       });
   return {.profile = *found};
@@ -556,10 +569,10 @@ ProfileResult
 ProfileSettingsController::requestOverwrite(std::string_view profileId) {
   const auto eligibility = overwriteEligibility(profileId);
   if (!eligibility.enabled) {
-    auto result = profileFailure(
-        contains(profileId) ? ProfileError::SwitchBlocked
-                            : ProfileError::NotFound,
-        eligibility.reason);
+    auto result =
+        profileFailure(contains(profileId) ? ProfileError::SwitchBlocked
+                                           : ProfileError::NotFound,
+                       eligibility.reason);
     setFailure(result.error, result.message, {});
     return result;
   }
@@ -570,8 +583,8 @@ ProfileSettingsController::requestOverwrite(std::string_view profileId) {
   status_ = {.kind = ProfileSettingsStatusKind::Info,
              .message = "Choose Overwrite again to replace this profile from "
                         "the selected archive."};
-  const auto found = std::ranges::find_if(
-      profiles_, [&](const PlayerProfile &candidate) {
+  const auto found =
+      std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
       });
   return {.profile = *found};
@@ -602,8 +615,8 @@ bool ProfileSettingsController::beginImportPicker() {
 
 bool ProfileSettingsController::beginConfirmedOverwritePicker() {
   if (phase_ != ProfileSettingsPhase::ConfirmOverwrite ||
-      confirmationProfileId_.empty() ||
-      !contains(confirmationProfileId_) || !acquireArchivePipeline()) {
+      confirmationProfileId_.empty() || !contains(confirmationProfileId_) ||
+      !acquireArchivePipeline()) {
     return false;
   }
   archivePipelinePriorStatus_ =
@@ -633,6 +646,19 @@ void ProfileSettingsController::cancelPicker() {
     releaseArchivePipeline();
     status_ = priorStatus.value_or(ProfileSettingsStatus{});
   }
+}
+
+bool ProfileSettingsController::failPicker(std::string message) {
+  if (phase_ != ProfileSettingsPhase::PickingImport &&
+      phase_ != ProfileSettingsPhase::PickingExport) {
+    return false;
+  }
+  activeArchiveGeneration_ = 0;
+  clearTransientPhase();
+  releaseArchivePipeline();
+  setFailure(ProfileError::IoFailure, std::move(message),
+             "Unable to access the selected profile archive document.");
+  return true;
 }
 
 ProfileArchiveResult ProfileArchiveTask::execute() {
@@ -705,21 +731,19 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
       });
 }
 
-std::optional<ProfileArchiveTask> ProfileSettingsController::beginImport(
-    const std::filesystem::path &archive,
-    const ProfileImportOptions &options) {
+std::optional<ProfileArchiveTask>
+ProfileSettingsController::beginImport(const std::filesystem::path &archive,
+                                       const ProfileImportOptions &options) {
   const bool createImport = options.mode == ProfileImportMode::CreateWithNewId;
   const bool allowedCreate =
-      createImport &&
-      (phase_ == ProfileSettingsPhase::Idle ||
-       (phase_ == ProfileSettingsPhase::PickingImport &&
-        confirmationProfileId_.empty()));
+      createImport && (phase_ == ProfileSettingsPhase::Idle ||
+                       (phase_ == ProfileSettingsPhase::PickingImport &&
+                        confirmationProfileId_.empty()));
   bool allowedOverwrite = false;
   if (!createImport && options.overwriteProfileId) {
-    allowedOverwrite =
-        (phase_ == ProfileSettingsPhase::ConfirmOverwrite ||
-         phase_ == ProfileSettingsPhase::PickingImport) &&
-        confirmationProfileId_ == *options.overwriteProfileId;
+    allowedOverwrite = (phase_ == ProfileSettingsPhase::ConfirmOverwrite ||
+                        phase_ == ProfileSettingsPhase::PickingImport) &&
+                       confirmationProfileId_ == *options.overwriteProfileId;
   }
   if (!allowedCreate && !allowedOverwrite) {
     if (phase_ == ProfileSettingsPhase::PickingImport) {
@@ -808,10 +832,10 @@ bool ProfileSettingsController::completeArchive(
   const std::string preferred =
       result.profile ? result.profile->id : selectedProfileId_;
   const std::string operationError =
-      result.ok() ? std::string{}
-                  : (result.message.empty()
-                         ? "The profile archive action failed."
-                         : result.message);
+      result.ok()
+          ? std::string{}
+          : (result.message.empty() ? "The profile archive action failed."
+                                    : result.message);
   const bool refreshed = refreshAfterMutation(preferred, operationError);
   if (!result.ok()) {
     if (refreshed) {
@@ -840,9 +864,9 @@ ProfileArchiveResult ProfileSettingsController::exportProfile(
     std::string_view profileId, const std::filesystem::path &destination) {
   auto task = beginExport(profileId, destination);
   if (!task) {
-    return unavailableArchiveResult(
-        status_.message.empty() ? "Profile export could not start."
-                                : status_.message);
+    return unavailableArchiveResult(status_.message.empty()
+                                        ? "Profile export could not start."
+                                        : status_.message);
   }
   const auto kind = task->kind();
   const auto generation = task->generation();
@@ -851,14 +875,14 @@ ProfileArchiveResult ProfileSettingsController::exportProfile(
   return result;
 }
 
-ProfileArchiveResult ProfileSettingsController::importProfile(
-    const std::filesystem::path &archive,
-    const ProfileImportOptions &options) {
+ProfileArchiveResult
+ProfileSettingsController::importProfile(const std::filesystem::path &archive,
+                                         const ProfileImportOptions &options) {
   auto task = beginImport(archive, options);
   if (!task) {
-    return unavailableArchiveResult(
-        status_.message.empty() ? "Profile import could not start."
-                                : status_.message);
+    return unavailableArchiveResult(status_.message.empty()
+                                        ? "Profile import could not start."
+                                        : status_.message);
   }
   const auto kind = task->kind();
   const auto generation = task->generation();

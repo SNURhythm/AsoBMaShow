@@ -103,7 +103,7 @@ public:
   std::atomic<bool> profileGameplayActive{false};
   std::atomic<bool> profileArchiveOperationActive{false};
   std::atomic<std::uint64_t> profileCacheRevision{0};
-  std::function<std::optional<std::string>()> profileSwitchSceneBlocker;
+  ProfileSwitchBlockers profileSwitchBlockers;
   std::function<void()> refreshProfileCaches;
   InputDeviceRegistry inputDeviceRegistry;
   // ProfileSessionCoordinator injects the active profile's input.json save
@@ -183,8 +183,7 @@ public:
           if (replayVideoExportActive.load(std::memory_order_acquire)) {
             return "A replay export is active.";
           }
-          return profileSwitchSceneBlocker ? profileSwitchSceneBlocker()
-                                           : std::nullopt;
+          return profileSwitchBlockers.firstReason();
         },
         [this](const std::filesystem::path &path, std::string &error) {
           const InputProfileLoadResult loaded = InputProfileStore::load(path);

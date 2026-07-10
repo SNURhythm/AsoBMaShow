@@ -6,6 +6,7 @@ target_sources(main PRIVATE
     MusicPlayerScene.cpp
     ProfileSettingsController.cpp
     ProfileSettingsControllerContext.cpp
+    ProfileRuntimeReapply.cpp
     SceneManager.cpp
     ResultScene.cpp
     SettingsScene.cpp
@@ -15,6 +16,7 @@ target_sources(main PRIVATE
     SettingsSceneInput.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
+    SettingsSceneProfiles.cpp
     SettingsSceneTables.cpp
 )
 add_subdirectory(play)

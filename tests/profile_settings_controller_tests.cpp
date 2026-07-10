@@ -1,4 +1,5 @@
 #include "scene/ProfileSettingsController.h"
+#include "scene/ProfileRuntimeReapply.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -61,6 +62,7 @@ struct FakeServices {
   bool settingsFlushSucceeds = true;
   bool inputFlushSucceeds = true;
   bool failActivate = false;
+  bool failActivateAfterCommit = false;
   bool failDelete = false;
   bool failImport = false;
   std::string throwAfterMutation;
@@ -84,149 +86,190 @@ struct FakeServices {
 
   ProfileSettingsControllerDependencies dependencies() {
     return {
-        .listProfiles = [this]() {
-          ++listCalls;
-          return ProfileListResult{.error = listError,
-                                   .message = listMessage,
-                                   .profiles = profiles,
-                                   .activeProfileId = activeId};
-        },
-        .create = [this](std::string name) {
-          ++createCalls;
-          PlayerProfile created = profile("charlie", std::move(name));
-          profiles.push_back(created);
-          if (throwAfterMutation == "create") {
-            throw std::runtime_error("create callback failed after commit");
-          }
-          return profileSuccess(std::move(created));
-        },
-        .rename = [this](std::string_view id, std::string name) {
-          ++renameCalls;
-          if (auto *existing = find(id)) {
-            existing->displayName = std::move(name);
-            if (throwAfterMutation == "rename") {
-              throw std::runtime_error("rename callback failed after commit");
-            }
-            return profileSuccess(*existing);
-          }
-          return ProfileResult{.error = ProfileError::NotFound,
-                               .message = "profile disappeared"};
-        },
-        .duplicate = [this](std::string_view, std::string name) {
-          ++duplicateCalls;
-          PlayerProfile duplicated = profile("delta", std::move(name));
-          profiles.push_back(duplicated);
-          if (throwAfterMutation == "duplicate") {
-            throw std::runtime_error("duplicate callback failed after commit");
-          }
-          return profileSuccess(std::move(duplicated));
-        },
-        .remove = [this](std::string_view id) {
-          ++deleteCalls;
-          if (failDelete) {
-            return ProfileResult{.error = ProfileError::IoFailure,
-                                 .message = "delete failed"};
-          }
-          const auto before = profiles.size();
-          PlayerProfile removed;
-          for (const auto &candidate : profiles) {
-            if (candidate.id == id) {
-              removed = candidate;
-            }
-          }
-          std::erase_if(profiles, [id](const PlayerProfile &candidate) {
-            return candidate.id == id;
-          });
-          if (throwAfterMutation == "remove") {
-            throw std::runtime_error("remove callback failed after commit");
-          }
-          return profiles.size() == before
-                     ? ProfileResult{.error = ProfileError::NotFound,
-                                     .message = "profile disappeared"}
-                     : profileSuccess(std::move(removed));
-        },
-        .activate = [this](std::string_view id) {
-          ++activateCalls;
-          if (failActivate) {
-            return ProfileSwitchResult{.error = ProfileError::IoFailure,
-                                       .message = "switch failed"};
-          }
-          activeId = std::string(id);
-          if (auto *existing = find(id)) {
-            existing->lastUsedAt = "2026-07-11T00:00:00Z";
-          }
-          if (throwAfterMutation == "activate") {
-            throw std::runtime_error("activate callback failed after commit");
-          }
-          return ProfileSwitchResult{};
-        },
-        .exportProfile = [this](std::string_view id,
-                                const std::filesystem::path &) {
-          ++exportCalls;
-          const auto *existing = find(id);
-          if (existing == nullptr) {
-            return ProfileArchiveResult{.error = ProfileError::NotFound,
-                                        .message = "profile disappeared"};
-          }
-          return archiveSuccess(*existing, exportSuccessMessage);
-        },
-        .importProfile = [this](const std::filesystem::path &,
-                                const ProfileImportOptions &options) {
-          ++importCalls;
-          if (failImport) {
-            return ProfileArchiveResult{.error = ProfileError::IoFailure,
-                                        .message = "import failed"};
-          }
-          if (options.mode == ProfileImportMode::Overwrite) {
-            auto *target = options.overwriteProfileId
-                               ? find(*options.overwriteProfileId)
-                               : nullptr;
-            if (target == nullptr) {
-              return ProfileArchiveResult{.error = ProfileError::NotFound,
-                                          .message = "target disappeared"};
-            }
-            target->displayName = "Imported over " + target->displayName;
-            return archiveSuccess(*target, importSuccessMessage);
-          }
-          PlayerProfile imported = profile("echo", "Imported");
-          profiles.push_back(imported);
-          return archiveSuccess(std::move(imported), importSuccessMessage);
-        },
-        .flushSettings = [this](std::string &error) {
-          ++settingsFlushes;
-          if (throwSettingsNonStd) {
-            throw 17;
-          }
-          if (!settingsFlushSucceeds) {
-            error = "settings flush failed";
-          }
-          return settingsFlushSucceeds;
-        },
-        .flushInput = [this](std::string &error) {
-          ++inputFlushes;
-          if (throwInputNonStd) {
-            throw 23;
-          }
-          if (!inputFlushSucceeds) {
-            error = "input flush failed";
-          }
-          return inputFlushSucceeds;
-        },
-        .beginArchivePipeline = [this](std::string &error) {
-          ++archivePipelineBeginCalls;
-          if (!archivePipelineStarts || archivePipelineActive) {
-            error = "archive pipeline unavailable";
-            return false;
-          }
-          archivePipelineActive = true;
-          return true;
-        },
-        .endArchivePipeline = [this]() {
-          ++archivePipelineEndCalls;
-          archivePipelineActive = false;
-        }};
+        .listProfiles =
+            [this]() {
+              ++listCalls;
+              return ProfileListResult{.error = listError,
+                                       .message = listMessage,
+                                       .profiles = profiles,
+                                       .activeProfileId = activeId};
+            },
+        .create =
+            [this](std::string name) {
+              ++createCalls;
+              PlayerProfile created = profile("charlie", std::move(name));
+              profiles.push_back(created);
+              if (throwAfterMutation == "create") {
+                throw std::runtime_error("create callback failed after commit");
+              }
+              return profileSuccess(std::move(created));
+            },
+        .rename =
+            [this](std::string_view id, std::string name) {
+              ++renameCalls;
+              if (auto *existing = find(id)) {
+                existing->displayName = std::move(name);
+                if (throwAfterMutation == "rename") {
+                  throw std::runtime_error(
+                      "rename callback failed after commit");
+                }
+                return profileSuccess(*existing);
+              }
+              return ProfileResult{.error = ProfileError::NotFound,
+                                   .message = "profile disappeared"};
+            },
+        .duplicate =
+            [this](std::string_view, std::string name) {
+              ++duplicateCalls;
+              PlayerProfile duplicated = profile("delta", std::move(name));
+              profiles.push_back(duplicated);
+              if (throwAfterMutation == "duplicate") {
+                throw std::runtime_error(
+                    "duplicate callback failed after commit");
+              }
+              return profileSuccess(std::move(duplicated));
+            },
+        .remove =
+            [this](std::string_view id) {
+              ++deleteCalls;
+              if (failDelete) {
+                return ProfileResult{.error = ProfileError::IoFailure,
+                                     .message = "delete failed"};
+              }
+              const auto before = profiles.size();
+              PlayerProfile removed;
+              for (const auto &candidate : profiles) {
+                if (candidate.id == id) {
+                  removed = candidate;
+                }
+              }
+              std::erase_if(profiles, [id](const PlayerProfile &candidate) {
+                return candidate.id == id;
+              });
+              if (throwAfterMutation == "remove") {
+                throw std::runtime_error("remove callback failed after commit");
+              }
+              return profiles.size() == before
+                         ? ProfileResult{.error = ProfileError::NotFound,
+                                         .message = "profile disappeared"}
+                         : profileSuccess(std::move(removed));
+            },
+        .activate =
+            [this](std::string_view id) {
+              ++activateCalls;
+              if (failActivate) {
+                return ProfileSwitchResult{.error = ProfileError::IoFailure,
+                                           .message = "switch failed"};
+              }
+              activeId = std::string(id);
+              if (auto *existing = find(id)) {
+                existing->lastUsedAt = "2026-07-11T00:00:00Z";
+              }
+              if (failActivateAfterCommit) {
+                return ProfileSwitchResult{
+                    .error = ProfileError::IoFailure,
+                    .message = "switch reported failure after commit"};
+              }
+              if (throwAfterMutation == "activate") {
+                throw std::runtime_error(
+                    "activate callback failed after commit");
+              }
+              return ProfileSwitchResult{};
+            },
+        .exportProfile =
+            [this](std::string_view id, const std::filesystem::path &) {
+              ++exportCalls;
+              const auto *existing = find(id);
+              if (existing == nullptr) {
+                return ProfileArchiveResult{.error = ProfileError::NotFound,
+                                            .message = "profile disappeared"};
+              }
+              return archiveSuccess(*existing, exportSuccessMessage);
+            },
+        .importProfile =
+            [this](const std::filesystem::path &,
+                   const ProfileImportOptions &options) {
+              ++importCalls;
+              if (failImport) {
+                return ProfileArchiveResult{.error = ProfileError::IoFailure,
+                                            .message = "import failed"};
+              }
+              if (options.mode == ProfileImportMode::Overwrite) {
+                auto *target = options.overwriteProfileId
+                                   ? find(*options.overwriteProfileId)
+                                   : nullptr;
+                if (target == nullptr) {
+                  return ProfileArchiveResult{.error = ProfileError::NotFound,
+                                              .message = "target disappeared"};
+                }
+                target->displayName = "Imported over " + target->displayName;
+                return archiveSuccess(*target, importSuccessMessage);
+              }
+              PlayerProfile imported = profile("echo", "Imported");
+              profiles.push_back(imported);
+              return archiveSuccess(std::move(imported), importSuccessMessage);
+            },
+        .flushSettings =
+            [this](std::string &error) {
+              ++settingsFlushes;
+              if (throwSettingsNonStd) {
+                throw 17;
+              }
+              if (!settingsFlushSucceeds) {
+                error = "settings flush failed";
+              }
+              return settingsFlushSucceeds;
+            },
+        .flushInput =
+            [this](std::string &error) {
+              ++inputFlushes;
+              if (throwInputNonStd) {
+                throw 23;
+              }
+              if (!inputFlushSucceeds) {
+                error = "input flush failed";
+              }
+              return inputFlushSucceeds;
+            },
+        .beginArchivePipeline =
+            [this](std::string &error) {
+              ++archivePipelineBeginCalls;
+              if (!archivePipelineStarts || archivePipelineActive) {
+                error = "archive pipeline unavailable";
+                return false;
+              }
+              archivePipelineActive = true;
+              return true;
+            },
+        .endArchivePipeline =
+            [this]() {
+              ++archivePipelineEndCalls;
+              archivePipelineActive = false;
+            }};
   }
 };
+
+ProfileRuntimeReapplyCallbacks countingRuntimeCallbacks(int &calls) {
+  return {.sanitize = [&]() { ++calls; },
+          .applyTheme = [&]() { ++calls; },
+          .applyJukebox = [&]() { ++calls; },
+          .applyMetadata =
+              [&]() {
+                ++calls;
+                return std::string{};
+              },
+          .applyAudio =
+              [&]() {
+                ++calls;
+                return std::string{};
+              },
+          .refreshDrafts = [&]() { ++calls; },
+          .applyDisplay =
+              [&]() {
+                ++calls;
+                return ProfileDisplayRuntimeResult{};
+              }};
+}
 
 void testAuthoritativeRefreshKeepsStableUuidState() {
   FakeServices fake;
@@ -259,7 +302,7 @@ void testEligibilityAndConfirmationStayBoundToUuid() {
   ProfileSettingsController controller(fake.dependencies());
   REQUIRE(!controller.deleteEligibility("alpha").enabled);
   REQUIRE(controller.deleteEligibility("alpha").reason.find("active") !=
-         std::string::npos);
+          std::string::npos);
   REQUIRE(controller.deleteEligibility("bravo").enabled);
   REQUIRE(!controller.overwriteEligibility("alpha").enabled);
   REQUIRE(controller.overwriteEligibility("bravo").enabled);
@@ -285,7 +328,7 @@ void testEligibilityAndConfirmationStayBoundToUuid() {
   const auto last = controller.deleteEligibility("alpha");
   REQUIRE(!last.enabled);
   REQUIRE(last.reason.find("last") != std::string::npos ||
-         last.reason.find("active") != std::string::npos);
+          last.reason.find("active") != std::string::npos);
 }
 
 void testMutationResultsRefreshAndSelectWithoutActivating() {
@@ -303,7 +346,7 @@ void testMutationResultsRefreshAndSelectWithoutActivating() {
   REQUIRE(renamed.ok());
   REQUIRE(controller.selectedProfileId() == "bravo");
   REQUIRE(controller.profiles()[1].displayName == "New Bravo" ||
-         controller.profiles()[0].displayName == "New Bravo");
+          controller.profiles()[0].displayName == "New Bravo");
 
   REQUIRE(controller.select("alpha"));
   const auto duplicated = controller.duplicate("alpha", "Alpha Copy");
@@ -344,12 +387,37 @@ void testActivationRetainsSelectionOnFailureAndRefreshesOnSuccess() {
   REQUIRE(controller.activeProfileId() == "alpha");
   REQUIRE(controller.selectedProfileId() == "bravo");
   REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
+  int failedRuntimeCalls = 0;
+  const auto failedRuntime = ReapplyProfileRuntimeAfterSwitch(
+      failed, countingRuntimeCallbacks(failedRuntimeCalls));
+  REQUIRE(!failedRuntime.profileCommitted);
+  REQUIRE(failedRuntimeCalls == 0);
 
   fake.failActivate = false;
   const auto activated = controller.activate("bravo");
   REQUIRE(activated.ok());
   REQUIRE(controller.activeProfileId() == "bravo");
   REQUIRE(controller.selectedProfileId() == "bravo");
+}
+
+void testAuthoritativePostCommitFailureRunsRuntimeReapply() {
+  FakeServices fake;
+  fake.failActivateAfterCommit = true;
+  ProfileSettingsController controller(fake.dependencies());
+  REQUIRE(controller.select("bravo"));
+
+  const auto activated = controller.activate("bravo");
+  REQUIRE(activated.ok());
+  REQUIRE(controller.activeProfileId() == "bravo");
+  REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Warning);
+  REQUIRE(controller.status().message.find("after commit") !=
+          std::string::npos);
+
+  int runtimeCalls = 0;
+  const auto runtime = ReapplyProfileRuntimeAfterSwitch(
+      activated, countingRuntimeCallbacks(runtimeCalls));
+  REQUIRE(runtime.profileCommitted);
+  REQUIRE(runtimeCalls == 7);
 }
 
 void testSplitArchiveTaskIsSerializedAndMapsWarnings() {
@@ -384,7 +452,8 @@ void testSplitArchiveTaskIsSerializedAndMapsWarnings() {
   REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Warning);
   REQUIRE(controller.status().message == fake.exportSuccessMessage);
 
-  REQUIRE(!controller.completeArchive(task->kind(), task->generation(), result));
+  REQUIRE(
+      !controller.completeArchive(task->kind(), task->generation(), result));
 }
 
 void testImportCreateAndConfirmedOverwriteKeepUuidSemantics() {
@@ -396,14 +465,14 @@ void testImportCreateAndConfirmedOverwriteKeepUuidSemantics() {
       ProfileImportOptions{.mode = ProfileImportMode::CreateWithNewId});
   REQUIRE(createTask.has_value());
   auto created = createTask->execute();
-  REQUIRE(controller.completeArchive(createTask->kind(), createTask->generation(),
-                                    created));
+  REQUIRE(controller.completeArchive(createTask->kind(),
+                                     createTask->generation(), created));
   REQUIRE(controller.selectedProfileId() == "echo");
   REQUIRE(controller.activeProfileId() == "alpha");
 
-  const ProfileImportOptions overwrite{
-      .mode = ProfileImportMode::Overwrite,
-      .overwriteProfileId = std::string("bravo")};
+  const ProfileImportOptions overwrite{.mode = ProfileImportMode::Overwrite,
+                                       .overwriteProfileId =
+                                           std::string("bravo")};
   REQUIRE(!controller.beginImport("/tmp/overwrite.asobprofile", overwrite));
   REQUIRE(controller.requestOverwrite("bravo").ok());
   REQUIRE(controller.phase() == ProfileSettingsPhase::ConfirmOverwrite);
@@ -422,7 +491,7 @@ void testImportCreateAndConfirmedOverwriteKeepUuidSemantics() {
   REQUIRE(controller.phase() == ProfileSettingsPhase::Importing);
   auto overwritten = overwriteTask->execute();
   REQUIRE(controller.completeArchive(overwriteTask->kind(),
-                                    overwriteTask->generation(), overwritten));
+                                     overwriteTask->generation(), overwritten));
   REQUIRE(controller.selectedProfileId() == "bravo");
   REQUIRE(controller.activeProfileId() == "alpha");
 
@@ -459,7 +528,7 @@ void testPickerCancellationIsNeutralAndRuntimeWarningIsRetained() {
   controller.recordWarning("Profile switched, but audio restart failed.");
   REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Warning);
   REQUIRE(controller.status().message.find("audio restart failed") !=
-         std::string::npos);
+          std::string::npos);
 }
 
 void testMutationExceptionsStillRefreshAuthoritativeState() {
@@ -511,10 +580,18 @@ void testMutationExceptionsStillRefreshAuthoritativeState() {
     ProfileSettingsController controller(fake.dependencies());
     REQUIRE(controller.select("bravo"));
     const int before = fake.listCalls;
-    REQUIRE(!controller.activate("bravo").ok());
+    const auto activated = controller.activate("bravo");
+    REQUIRE(activated.ok());
     REQUIRE(fake.listCalls == before + 1);
     REQUIRE(controller.activeProfileId() == "bravo");
     REQUIRE(controller.selectedProfileId() == "bravo");
+    REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Warning);
+
+    int runtimeCalls = 0;
+    const auto runtime = ReapplyProfileRuntimeAfterSwitch(
+        activated, countingRuntimeCallbacks(runtimeCalls));
+    REQUIRE(runtime.profileCommitted);
+    REQUIRE(runtimeCalls == 7);
   }
 }
 
@@ -531,9 +608,8 @@ void testNonStandardFlushExceptionsAreMappedToFailures() {
     FakeServices fake;
     fake.throwInputNonStd = true;
     ProfileSettingsController controller(fake.dependencies());
-    REQUIRE(!controller
-                .exportProfile("alpha", "/tmp/never-created.asobprofile")
-                .ok());
+    REQUIRE(!controller.exportProfile("alpha", "/tmp/never-created.asobprofile")
+                 .ok());
     REQUIRE(fake.exportCalls == 0);
     REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
   }
@@ -579,9 +655,9 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
     ProfileSettingsController controller(fake.dependencies());
     REQUIRE(controller.requestOverwrite("bravo").ok());
     REQUIRE(controller.beginConfirmedOverwritePicker());
-    const ProfileImportOptions mismatched{
-        .mode = ProfileImportMode::Overwrite,
-        .overwriteProfileId = std::string("alpha")};
+    const ProfileImportOptions mismatched{.mode = ProfileImportMode::Overwrite,
+                                          .overwriteProfileId =
+                                              std::string("alpha")};
     REQUIRE(!controller.beginImport("/tmp/mismatch.asobprofile", mismatched));
     REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
     REQUIRE(!fake.archivePipelineActive);
@@ -597,8 +673,7 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
   {
     FakeServices fake;
     ProfileSettingsController controller(fake.dependencies());
-    auto task =
-        controller.beginExport("alpha", "/tmp/abandoned.asobprofile");
+    auto task = controller.beginExport("alpha", "/tmp/abandoned.asobprofile");
     REQUIRE(task.has_value());
     REQUIRE(fake.archivePipelineActive);
     controller.abandonArchive(task->generation());
@@ -613,6 +688,34 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
     REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
     REQUIRE(fake.archivePipelineEndCalls == 0);
   }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(controller.beginImportPicker());
+    REQUIRE(fake.archivePipelineActive);
+    REQUIRE(controller.failPicker("The document picker could not open."));
+    REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
+    REQUIRE(!fake.archivePipelineActive);
+    REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
+    REQUIRE(controller.status().message ==
+            "The document picker could not open.");
+    REQUIRE(!controller.failPicker("stale picker failure"));
+  }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    auto task =
+        controller.beginExport("alpha", "/tmp/prepared.asobprofile");
+    REQUIRE(task.has_value());
+    REQUIRE(task->execute().ok());
+    REQUIRE(controller.beginPreparedExportPicker(task->generation()));
+    REQUIRE(controller.failPicker({}));
+    REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
+    REQUIRE(!fake.archivePipelineActive);
+    REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
+    REQUIRE(controller.status().message ==
+            "Unable to access the selected profile archive document.");
+  }
 }
 } // namespace
 
@@ -622,6 +725,7 @@ int main() {
   testMutationResultsRefreshAndSelectWithoutActivating();
   testFlushFailureStopsDuplicateAndExport();
   testActivationRetainsSelectionOnFailureAndRefreshesOnSuccess();
+  testAuthoritativePostCommitFailureRunsRuntimeReapply();
   testSplitArchiveTaskIsSerializedAndMapsWarnings();
   testImportCreateAndConfirmedOverwriteKeepUuidSemantics();
   testPickerCancellationIsNeutralAndRuntimeWarningIsRetained();

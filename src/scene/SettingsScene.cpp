@@ -210,7 +210,23 @@ void SettingsScene::measureTemporaryArchiveCache() {
 
 void SettingsScene::init() {
   lastLayoutWidth = -1;
+  ensureProfileController();
   ensureAudioVideoSession();
+  context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
+    if (audioVideoSession != nullptr &&
+        audioVideoSession->hasDisplayPreview()) {
+      return "Confirm or revert the pending display preview before switching "
+             "profiles.";
+    }
+    if (difficultyTableJobRunning.load(std::memory_order_acquire)) {
+      return "A difficulty table library update is active.";
+    }
+    if (archiveCacheCleanupRunning.load(std::memory_order_acquire) ||
+        archiveCacheMeasureRunning.load(std::memory_order_acquire)) {
+      return "Archive cache maintenance is active.";
+    }
+    return std::nullopt;
+  };
   ensureInputCaptureController();
   inputProfileReplacementRegistration =
       context.inputProfileReplacementNotifier.subscribe([this]() {
@@ -256,6 +272,7 @@ void SettingsScene::update(float dt) {
   }
   applyPendingDifficultyTableUpdates();
   applyPendingArchiveCacheCleanupStatus();
+  applyPendingProfileArchiveCompletion();
   refreshTablesIfLibraryChanged();
   updateInputSettingsState();
   ensureLayoutUpToDate();
@@ -340,6 +357,8 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 }
 
 void SettingsScene::cleanupScene() {
+  context.profileSwitchBlockers.scene = nullptr;
+  stopProfileArchiveWork();
   if (audioVideoSession != nullptr) {
     const auto result = audioVideoSession->cleanup();
     if (!result.message.empty()) {
@@ -411,6 +430,11 @@ void SettingsScene::cleanupScene() {
   bgaDisplayModeText = nullptr;
   archiveCacheCleanupButtonText = nullptr;
   archiveCacheCleanupStatusText = nullptr;
+  profileTabText = nullptr;
+  profileStatusText = nullptr;
+  profileDeleteReasonText = nullptr;
+  profileNameInput = nullptr;
+  profileArchivePathInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -424,6 +448,7 @@ void SettingsScene::cleanupScene() {
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   archiveCacheCleanupButton = nullptr;
+  profileTabButton = nullptr;
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;

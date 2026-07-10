@@ -19,6 +19,22 @@ struct ProfileSwitchResult {
   [[nodiscard]] bool ok() const { return error == ProfileError::None; }
 };
 
+struct ProfileSwitchBlockers {
+  using Blocker = std::function<std::optional<std::string>()>;
+
+  Blocker background;
+  Blocker scene;
+
+  [[nodiscard]] std::optional<std::string> firstReason() const {
+    if (background) {
+      if (auto reason = background()) {
+        return reason;
+      }
+    }
+    return scene ? scene() : std::nullopt;
+  }
+};
+
 struct ProfileSessionDependencies {
   std::function<bool(const std::filesystem::path &, const AppSettings &,
                      std::string &)>

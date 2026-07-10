@@ -130,6 +130,7 @@ public:
   bool beginConfirmedOverwritePicker();
   bool beginPreparedExportPicker(std::uint64_t generation);
   void cancelPicker();
+  bool failPicker(std::string message);
 
   std::optional<ProfileArchiveTask>
   beginExport(std::string_view profileId,
