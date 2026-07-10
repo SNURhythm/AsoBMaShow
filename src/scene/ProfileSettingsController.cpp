@@ -891,6 +891,14 @@ ProfileSettingsController::importProfile(const std::filesystem::path &archive,
   return result;
 }
 
+void ProfileSettingsController::recordError(std::string message) {
+  if (message.empty()) {
+    message = "The profile action failed.";
+  }
+  status_ = {.kind = ProfileSettingsStatusKind::Error,
+             .message = std::move(message)};
+}
+
 void ProfileSettingsController::recordWarning(std::string message) {
   if (message.empty()) {
     return;

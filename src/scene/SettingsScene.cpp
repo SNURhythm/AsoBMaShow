@@ -273,6 +273,7 @@ void SettingsScene::update(float dt) {
   applyPendingDifficultyTableUpdates();
   applyPendingArchiveCacheCleanupStatus();
   applyPendingProfileArchiveCompletion();
+  applyPendingProfileDocumentHandoff();
   refreshTablesIfLibraryChanged();
   updateInputSettingsState();
   ensureLayoutUpToDate();
@@ -434,7 +435,6 @@ void SettingsScene::cleanupScene() {
   profileStatusText = nullptr;
   profileDeleteReasonText = nullptr;
   profileNameInput = nullptr;
-  profileArchivePathInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;

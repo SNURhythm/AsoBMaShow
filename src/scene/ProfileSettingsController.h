@@ -85,8 +85,8 @@ private:
   friend class ProfileSettingsController;
   ProfileArchiveTask(ProfileArchiveTaskKind kind, std::uint64_t generation,
                      std::function<ProfileArchiveResult()> operation)
-      : kind_(kind), generation_(generation),
-        operation_(std::move(operation)) {}
+      : kind_(kind), generation_(generation), operation_(std::move(operation)) {
+  }
 
   ProfileArchiveTaskKind kind_;
   std::uint64_t generation_;
@@ -142,20 +142,19 @@ public:
                        const ProfileArchiveResult &result);
   void abandonArchive(std::uint64_t generation);
 
-  ProfileArchiveResult
-  exportProfile(std::string_view profileId,
-                const std::filesystem::path &destination);
-  ProfileArchiveResult
-  importProfile(const std::filesystem::path &archive,
-                const ProfileImportOptions &options = {});
+  ProfileArchiveResult exportProfile(std::string_view profileId,
+                                     const std::filesystem::path &destination);
+  ProfileArchiveResult importProfile(const std::filesystem::path &archive,
+                                     const ProfileImportOptions &options = {});
 
+  void recordError(std::string message);
   void recordWarning(std::string message);
 
 private:
   [[nodiscard]] bool contains(std::string_view profileId) const;
   [[nodiscard]] ProfileActionEligibility
   destructiveEligibility(std::string_view profileId,
-                          std::string_view action) const;
+                         std::string_view action) const;
   [[nodiscard]] ProfileResult unavailableResult(std::string message) const;
   [[nodiscard]] ProfileArchiveResult
   unavailableArchiveResult(std::string message) const;

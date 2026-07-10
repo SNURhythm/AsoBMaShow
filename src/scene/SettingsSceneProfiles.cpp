@@ -1,13 +1,19 @@
 #include "SettingsSceneShared.h"
 #include "ProfileRuntimeReapply.h"
 
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
+#include "../ProfileExportStaging.h"
 #include "../audio/NativeMusicPlayer.h"
 #include "../view/ScrollView.h"
 
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 using namespace settings_scene;
@@ -69,16 +75,56 @@ bool archivePipelinePhase(ProfileSettingsPhase phase) {
          phase == ProfileSettingsPhase::PickingExport;
 }
 
-std::string defaultArchivePath(const ApplicationContext &context) {
-  std::filesystem::path directory = context.applicationDataRoot.parent_path();
-  if (directory.empty() || directory == context.applicationDataRoot) {
-    std::error_code error;
-    directory = std::filesystem::temp_directory_path(error);
-    if (error) {
-      directory = ".";
-    }
+constexpr std::string_view kProfileArchiveMimeType = "application/zip";
+constexpr std::string_view kProfileArchiveExportName =
+    profile_export_staging::kArchiveName;
+
+std::filesystem::path profileArchiveTemporaryRoot(std::string &errorMessage) {
+#if TARGET_OS_ANDROID
+  const std::string privateCache = GetAndroidCacheDir();
+  if (privateCache.empty()) {
+    errorMessage = "Android private storage is unavailable.";
+    return {};
   }
-  return (directory / "AsoBMaShow-profile.asobprofile").string();
+  return platform_document_handoff::detail::PathFromUtf8(privateCache);
+#else
+  std::error_code error;
+  auto root = std::filesystem::temp_directory_path(error);
+  if (error || root.empty()) {
+    errorMessage =
+        error ? "Unable to locate private temporary storage: " + error.message()
+              : "Private temporary storage is unavailable.";
+    return {};
+  }
+  return root;
+#endif
+}
+
+std::optional<profile_export_staging::Request>
+profileExportStagingRequest(ApplicationContext &context,
+                            std::string &errorMessage) {
+  auto temporaryRoot = profileArchiveTemporaryRoot(errorMessage);
+  if (temporaryRoot.empty()) {
+    return std::nullopt;
+  }
+  return profile_export_staging::Request{
+      .temporaryRoot = std::move(temporaryRoot),
+      .managedApplicationRoot = context.applicationDataRoot,
+      .reportWarning = [](const std::string &warning) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Profile export staging warning: %s", warning.c_str());
+      }};
+}
+
+bool cleanupProfileImportTemporaryDocument(
+    PlatformDocumentHandoffResult &temporaryDocument,
+    std::string_view contextMessage) {
+  if (platform_document_handoff::CleanupTemporaryDocument(temporaryDocument)) {
+    return true;
+  }
+  SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%.*s",
+              static_cast<int>(contextMessage.size()), contextMessage.data());
+  return false;
 }
 
 std::string joinWarnings(const std::vector<std::string> &warnings) {
@@ -97,42 +143,94 @@ std::string joinWarnings(const std::vector<std::string> &warnings) {
 } // namespace
 
 void SettingsScene::ensureProfileController() {
+  if (!profileExportStagingSwept) {
+    profileExportStagingSwept = true;
+    std::string requestError;
+    try {
+      auto request = profileExportStagingRequest(context, requestError);
+      if (request) {
+        const auto swept = profile_export_staging::Sweep(*request);
+        if (!swept.ok()) {
+          SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                      "Profile export staging sweep failed: %s",
+                      swept.errorMessage.c_str());
+        }
+      } else {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Profile export staging sweep skipped: %s",
+                    requestError.c_str());
+      }
+    } catch (const std::exception &error) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Profile export staging sweep failed: %s", error.what());
+    } catch (...) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Profile export staging sweep failed.");
+    }
+  }
   if (profileController == nullptr) {
     profileController = std::make_unique<ProfileSettingsController>(context);
   }
   if (profileArchiveMailbox == nullptr) {
     profileArchiveMailbox = std::make_shared<SettingsProfileArchiveMailbox>();
   }
-  if (profileArchivePathText.empty()) {
-    profileArchivePathText = defaultArchivePath(context);
-  }
 }
 
 void SettingsScene::invalidateProfileLayout() { lastLayoutWidth = -1; }
 
-void SettingsScene::startProfileArchiveTask(ProfileArchiveTask task) {
+bool SettingsScene::startProfileArchiveTask(
+    ProfileArchiveTask task,
+    std::optional<PlatformDocumentHandoffResult> temporaryDocument) {
   ensureProfileController();
   if (profileController == nullptr || profileArchiveMailbox == nullptr ||
       profileArchiveGeneration != 0 || profileArchiveThread.joinable()) {
+    if (temporaryDocument) {
+      cleanupProfileImportTemporaryDocument(
+          *temporaryDocument,
+          "Profile import temporary archive cleanup failed before the "
+          "archive worker could start; ownership cleanup will retry.");
+    }
     if (profileController != nullptr) {
       profileController->abandonArchive(task.generation());
-      profileController->recordWarning(
+      profileController->recordError(
           "The profile archive worker is already busy.");
     }
     invalidateProfileLayout();
-    return;
+    return false;
   }
 
   profileArchiveGeneration = task.generation();
   const auto mailbox = profileArchiveMailbox;
+  std::shared_ptr<PlatformDocumentHandoffResult> temporaryDocumentHolder;
   try {
+    if (temporaryDocument) {
+      temporaryDocumentHolder = std::make_shared<PlatformDocumentHandoffResult>(
+          std::move(*temporaryDocument));
+    }
     profileArchiveThread =
-        std::jthread([mailbox, task = std::move(task)](
+        std::jthread([mailbox, task = std::move(task),
+                      temporaryDocument = temporaryDocumentHolder](
                          const std::stop_token &stopToken) mutable {
           SettingsProfileArchiveCompletion completion{.kind = task.kind(),
                                                       .generation =
                                                           task.generation(),
                                                       .result = task.execute()};
+          const bool temporaryCleanupFailed =
+              temporaryDocument &&
+              !cleanupProfileImportTemporaryDocument(
+                  *temporaryDocument,
+                  "Profile import temporary archive cleanup is deferred; "
+                  "ownership cleanup will retry.");
+          if (temporaryCleanupFailed && completion.result.ok()) {
+            const std::string cleanupWarning =
+                "Profile imported, but cleanup of its private temporary "
+                "archive is deferred.";
+            if (completion.result.message.empty()) {
+              completion.result.message = cleanupWarning;
+            } else {
+              completion.result.message += "; " + cleanupWarning;
+            }
+          }
           if (stopToken.stop_requested()) {
             return;
           }
@@ -140,18 +238,126 @@ void SettingsScene::startProfileArchiveTask(ProfileArchiveTask task) {
           mailbox->completion = std::move(completion);
         });
   } catch (const std::exception &error) {
+    if (temporaryDocumentHolder) {
+      cleanupProfileImportTemporaryDocument(
+          *temporaryDocumentHolder,
+          "Profile import temporary archive cleanup failed after the archive "
+          "worker could not start; ownership cleanup will retry.");
+    } else if (temporaryDocument) {
+      cleanupProfileImportTemporaryDocument(
+          *temporaryDocument,
+          "Profile import temporary archive cleanup failed after the archive "
+          "worker could not start; ownership cleanup will retry.");
+    }
     profileController->abandonArchive(profileArchiveGeneration);
     profileArchiveGeneration = 0;
-    profileController->recordWarning(
+    profileController->recordError(
         "Unable to start the profile archive worker: " +
         std::string(error.what()));
+    invalidateProfileLayout();
+    return false;
   } catch (...) {
+    if (temporaryDocumentHolder) {
+      cleanupProfileImportTemporaryDocument(
+          *temporaryDocumentHolder,
+          "Profile import temporary archive cleanup failed after the archive "
+          "worker could not start; ownership cleanup will retry.");
+    } else if (temporaryDocument) {
+      cleanupProfileImportTemporaryDocument(
+          *temporaryDocument,
+          "Profile import temporary archive cleanup failed after the archive "
+          "worker could not start; ownership cleanup will retry.");
+    }
     profileController->abandonArchive(profileArchiveGeneration);
     profileArchiveGeneration = 0;
-    profileController->recordWarning(
+    profileController->recordError(
         "Unable to start the profile archive worker.");
+    invalidateProfileLayout();
+    return false;
   }
   invalidateProfileLayout();
+  return true;
+}
+
+void SettingsScene::startProfileImportDocumentPicker(
+    const ProfileImportOptions &options, bool confirmedOverwrite) {
+  ensureProfileController();
+  if (profileController == nullptr) {
+    return;
+  }
+  const bool began = confirmedOverwrite
+                         ? profileController->beginConfirmedOverwritePicker()
+                         : profileController->beginImportPicker();
+  if (!began) {
+    invalidateProfileLayout();
+    return;
+  }
+
+  pendingProfileImportOptions = options;
+  try {
+    profileDocumentHandoff = platform_document_handoff::ImportDocumentAsync(
+        {.mimeType = std::string(kProfileArchiveMimeType),
+         .maxBytes = ProfileArchiveSizePolicy::kMaximumExistingArchiveBytes});
+    if (!profileDocumentHandoff) {
+      throw std::runtime_error("The document picker did not start.");
+    }
+    profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::Import;
+  } catch (const std::exception &error) {
+    profileController->failPicker("Unable to open the profile import picker: " +
+                                  std::string(error.what()));
+    pendingProfileImportOptions = {};
+    profileDocumentHandoff.close();
+    profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
+  } catch (...) {
+    profileController->failPicker("Unable to open the profile import picker.");
+    pendingProfileImportOptions = {};
+    profileDocumentHandoff.close();
+    profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
+  }
+  invalidateProfileLayout();
+}
+
+void SettingsScene::startProfileExportPreparation(std::string_view profileId) {
+  ensureProfileController();
+  if (profileController == nullptr) {
+    return;
+  }
+
+  std::string errorMessage;
+  profile_export_staging::Result staging;
+  try {
+    auto request = profileExportStagingRequest(context, errorMessage);
+    if (request) {
+      staging = profile_export_staging::Create(*request);
+      if (!staging.ok()) {
+        errorMessage = std::move(staging.errorMessage);
+      }
+    }
+  } catch (const std::exception &error) {
+    errorMessage = "Unable to allocate private export storage: " +
+                   std::string(error.what());
+  } catch (...) {
+    errorMessage = "Unable to allocate private export storage.";
+  }
+  if (!staging.ok()) {
+    profileController->recordError(
+        errorMessage.empty() ? "Unable to allocate private export storage."
+                             : std::move(errorMessage));
+    invalidateProfileLayout();
+    return;
+  }
+
+  auto task = profileController->beginExport(profileId, staging.archivePath);
+  if (!task) {
+    invalidateProfileLayout();
+    return;
+  }
+  profileExportStagingFile = std::move(staging.archivePath);
+  profileExportSourceLifetime = std::move(staging.sourceLifetime);
+  if (!startProfileArchiveTask(std::move(*task))) {
+    profileExportSourceLifetime.reset();
+    profileExportStagingFile.clear();
+  }
 }
 
 void SettingsScene::applyPendingProfileArchiveCompletion() {
@@ -170,15 +376,141 @@ void SettingsScene::applyPendingProfileArchiveCompletion() {
   if (profileArchiveThread.joinable()) {
     profileArchiveThread.join();
   }
+
+  if (completion->kind == ProfileArchiveTaskKind::Export &&
+      completion->result.ok()) {
+    if (!profileController->beginPreparedExportPicker(completion->generation)) {
+      profileController->abandonArchive(completion->generation);
+      profileController->recordError(
+          "The profile archive was prepared, but the export picker could not "
+          "start.");
+      profileArchiveGeneration = 0;
+      profileExportSourceLifetime.reset();
+      profileExportStagingFile.clear();
+      invalidateProfileLayout();
+      return;
+    }
+
+    try {
+      PlatformDocumentExportRequest request{
+          .localPath = profileExportStagingFile,
+          .mimeType = std::string(kProfileArchiveMimeType),
+          .suggestedName = std::string(kProfileArchiveExportName),
+          .maxBytes = ProfileArchiveSizePolicy::kMaximumExistingArchiveBytes,
+          .sourceLifetime = profileExportSourceLifetime};
+      profileDocumentHandoff =
+          platform_document_handoff::ExportDocumentAsync(std::move(request));
+      if (!profileDocumentHandoff) {
+        throw std::runtime_error("The document picker did not start.");
+      }
+      preparedProfileExportResult = std::move(completion->result);
+      profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::Export;
+      // Detached native work now owns the temporary source lifetime. Releasing
+      // the scene's copy is safe even if the scene closes before that work.
+      profileExportSourceLifetime.reset();
+      profileExportStagingFile.clear();
+      invalidateProfileLayout();
+      return;
+    } catch (const std::exception &error) {
+      profileController->failPicker(
+          "Unable to open the profile export picker: " +
+          std::string(error.what()));
+    } catch (...) {
+      profileController->failPicker(
+          "Unable to open the profile export picker.");
+    }
+    profileDocumentHandoff.close();
+    profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
+    preparedProfileExportResult.reset();
+    profileArchiveGeneration = 0;
+    profileExportSourceLifetime.reset();
+    profileExportStagingFile.clear();
+    invalidateProfileLayout();
+    return;
+  }
+
   profileArchiveGeneration = 0;
   if (!profileController->completeArchive(
           completion->kind, completion->generation, completion->result)) {
     profileController->abandonArchive(completion->generation);
   }
+  if (completion->kind == ProfileArchiveTaskKind::Export) {
+    profileExportSourceLifetime.reset();
+    profileExportStagingFile.clear();
+  }
+  invalidateProfileLayout();
+}
+
+void SettingsScene::applyPendingProfileDocumentHandoff() {
+  if (!profileDocumentHandoff || !profileDocumentHandoff.ready()) {
+    return;
+  }
+
+  const auto kind = profileDocumentHandoffKind;
+  auto result = profileDocumentHandoff.takeResult();
+  profileDocumentHandoff.close();
+  profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
+  if (profileController == nullptr) {
+    return;
+  }
+
+  if (!result) {
+    profileController->failPicker(
+        "The profile document picker finished without a result.");
+  } else if (result->cancelled()) {
+    profileController->cancelPicker();
+  } else if (!result->ok()) {
+    std::string message = result->message;
+    if (kind == SettingsProfileDocumentHandoffKind::Export) {
+      message =
+          "The profile archive was prepared, but the selected destination "
+          "could not be confirmed." +
+          (message.empty() ? std::string{} : " " + message);
+    }
+    profileController->failPicker(std::move(message));
+  } else if (kind == SettingsProfileDocumentHandoffKind::Import) {
+    const ProfileImportOptions options = pendingProfileImportOptions;
+    pendingProfileImportOptions = {};
+    auto task = profileController->beginImport(result->localPath, options);
+    if (task) {
+      startProfileArchiveTask(std::move(*task), std::move(*result));
+    } else if (!platform_document_handoff::CleanupTemporaryDocument(*result)) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Rejected profile import temporary archive cleanup is "
+                  "deferred; ownership cleanup will retry.");
+    }
+    invalidateProfileLayout();
+    return;
+  } else if (kind == SettingsProfileDocumentHandoffKind::Export &&
+             preparedProfileExportResult && profileArchiveGeneration != 0) {
+    const std::uint64_t generation = profileArchiveGeneration;
+    profileArchiveGeneration = 0;
+    if (!profileController->completeArchive(ProfileArchiveTaskKind::Export,
+                                            generation,
+                                            *preparedProfileExportResult)) {
+      profileController->abandonArchive(generation);
+    }
+  } else {
+    profileController->failPicker(
+        "The profile document picker returned an unexpected result.");
+  }
+
+  pendingProfileImportOptions = {};
+  if (kind == SettingsProfileDocumentHandoffKind::Export) {
+    profileArchiveGeneration = 0;
+    preparedProfileExportResult.reset();
+  }
   invalidateProfileLayout();
 }
 
 void SettingsScene::stopProfileArchiveWork() {
+  profileDocumentHandoff.close();
+  profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
+  if (profileController != nullptr &&
+      (profileController->phase() == ProfileSettingsPhase::PickingImport ||
+       profileController->phase() == ProfileSettingsPhase::PickingExport)) {
+    profileController->cancelPicker();
+  }
   if (profileArchiveThread.joinable()) {
     profileArchiveThread.request_stop();
     profileArchiveThread.join();
@@ -187,6 +519,10 @@ void SettingsScene::stopProfileArchiveWork() {
     profileController->abandonArchive(profileArchiveGeneration);
   }
   profileArchiveGeneration = 0;
+  pendingProfileImportOptions = {};
+  preparedProfileExportResult.reset();
+  profileExportSourceLifetime.reset();
+  profileExportStagingFile.clear();
   if (profileArchiveMailbox != nullptr) {
     std::lock_guard<std::mutex> lock(profileArchiveMailbox->mutex);
     profileArchiveMailbox->completion.reset();
@@ -363,16 +699,9 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   auto *archiveBody = new View();
   archiveBody->setFlexDirection(FlexDirection::Column);
   archiveBody->setGap(metrics.compact ? 10.0f : 14.0f);
-  profileArchivePathInput =
-      makeTextInput(metrics, std::max(300, metrics.cardsWidth / 2));
-  profileArchivePathInput->setEditingText(profileArchivePathText);
-  profileArchivePathInput->onTextChanged(
-      [this](const std::string &text) { profileArchivePathText = text; });
-  archiveBody->addView(profileArchivePathInput);
   archiveBody->addView(makeWrappedText(
-      "Temporary path-based handoff for desktop/testing. Native document "
-      "pickers plug into the same Picking Import/Picking Export controller "
-      "states.",
+      "Choose an archive with the system document picker. Imported files are "
+      "copied into private temporary storage and removed after validation.",
       metrics.smallTextSize, ui_theme::textMuted()));
 
   auto *archiveActions = new View();
@@ -381,14 +710,8 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   archiveActions->setGap(metrics.compact ? 8.0f : 10.0f);
   archiveActions->addView(
       makeProfileActionButton(metrics, "Import New", idle, [this]() {
-        auto task = profileController->beginImport(
-            std::filesystem::path(profileArchivePathText),
+        startProfileImportDocumentPicker(
             {.mode = ProfileImportMode::CreateWithNewId});
-        if (task) {
-          startProfileArchiveTask(std::move(*task));
-        } else {
-          invalidateProfileLayout();
-        }
       }));
   archiveBody->addView(archiveActions);
 
@@ -463,15 +786,8 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           invalidateProfileLayout();
         }));
     actions->addView(makeProfileActionButton(
-        metrics, "Export", idle, [this, id = profile.id]() {
-          auto task = profileController->beginExport(
-              id, std::filesystem::path(profileArchivePathText));
-          if (task) {
-            startProfileArchiveTask(std::move(*task));
-          } else {
-            invalidateProfileLayout();
-          }
-        }));
+        metrics, "Export", idle,
+        [this, id = profile.id]() { startProfileExportPreparation(id); }));
     actions->addView(makeProfileActionButton(
         metrics,
         confirmingOverwrite ? "Confirm Overwrite" : "Overwrite from Archive",
@@ -482,14 +798,9 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
             invalidateProfileLayout();
             return;
           }
-          auto task = profileController->beginImport(
-              std::filesystem::path(profileArchivePathText),
-              {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id});
-          if (task) {
-            startProfileArchiveTask(std::move(*task));
-          } else {
-            invalidateProfileLayout();
-          }
+          startProfileImportDocumentPicker(
+              {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id},
+              true);
         }));
     body->addView(actions);
 

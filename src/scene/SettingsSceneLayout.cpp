@@ -101,7 +101,6 @@ void SettingsScene::resetViewState() {
   profileStatusText = nullptr;
   profileDeleteReasonText = nullptr;
   profileNameInput = nullptr;
-  profileArchivePathInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -2635,28 +2634,26 @@ void SettingsScene::initView() {
       metrics.backButtonWidth, metrics.backButtonHeight, backLabel,
       ui_theme::control(), ui_theme::controlHover(), ui_theme::controlPressed(),
       ui_theme::hairline(), ui_theme::cyan(), ui_theme::cyan());
-  const auto profilePhase =
-      profileController ? profileController->phase()
-                        : ProfileSettingsPhase::Idle;
+  const auto profilePhase = profileController ? profileController->phase()
+                                              : ProfileSettingsPhase::Idle;
   const bool profilePipelineBusy =
       profilePhase == ProfileSettingsPhase::PickingImport ||
       profilePhase == ProfileSettingsPhase::Importing ||
       profilePhase == ProfileSettingsPhase::PreparingExport ||
       profilePhase == ProfileSettingsPhase::PickingExport;
   backButton->setEnabled(!profilePipelineBusy);
-  backButton->setOnClickListener(
-      [this]() {
-        if (profileController != nullptr) {
-          const auto phase = profileController->phase();
-          if (phase == ProfileSettingsPhase::PickingImport ||
-              phase == ProfileSettingsPhase::Importing ||
-              phase == ProfileSettingsPhase::PreparingExport ||
-              phase == ProfileSettingsPhase::PickingExport) {
-            return;
-          }
-        }
-        context.sceneManager->changeScene("MainMenu");
-      });
+  backButton->setOnClickListener([this]() {
+    if (profileController != nullptr) {
+      const auto phase = profileController->phase();
+      if (phase == ProfileSettingsPhase::PickingImport ||
+          phase == ProfileSettingsPhase::Importing ||
+          phase == ProfileSettingsPhase::PreparingExport ||
+          phase == ProfileSettingsPhase::PickingExport) {
+        return;
+      }
+    }
+    context.sceneManager->changeScene("MainMenu");
+  });
   header->addView(backButton);
   rootLayout->addView(header);
 
@@ -2711,8 +2708,7 @@ void SettingsScene::initView() {
         inputViewRebuildGate.reset();
         inputLastViewSignature.clear();
       }
-      if (activeTab == SettingsTab::Profile &&
-          profileController != nullptr) {
+      if (activeTab == SettingsTab::Profile && profileController != nullptr) {
         const auto phase = profileController->phase();
         if (phase == ProfileSettingsPhase::PickingImport ||
             phase == ProfileSettingsPhase::Importing ||

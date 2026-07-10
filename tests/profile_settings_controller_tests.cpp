@@ -704,8 +704,7 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
   {
     FakeServices fake;
     ProfileSettingsController controller(fake.dependencies());
-    auto task =
-        controller.beginExport("alpha", "/tmp/prepared.asobprofile");
+    auto task = controller.beginExport("alpha", "/tmp/prepared.asobprofile");
     REQUIRE(task.has_value());
     REQUIRE(task->execute().ok());
     REQUIRE(controller.beginPreparedExportPicker(task->generation()));
@@ -715,6 +714,15 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
     REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
     REQUIRE(controller.status().message ==
             "Unable to access the selected profile archive document.");
+  }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    controller.recordError("Private profile archive storage is unavailable.");
+    REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
+    REQUIRE(controller.status().kind == ProfileSettingsStatusKind::Error);
+    REQUIRE(controller.status().message ==
+            "Private profile archive storage is unavailable.");
   }
 }
 } // namespace

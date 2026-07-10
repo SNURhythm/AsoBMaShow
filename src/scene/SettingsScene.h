@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ChartDBHelper.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
 #include "SettingsAudioVideoModel.h"
@@ -43,6 +44,8 @@ struct SettingsProfileArchiveMailbox {
   std::mutex mutex;
   std::optional<SettingsProfileArchiveCompletion> completion;
 };
+
+enum class SettingsProfileDocumentHandoffKind { None, Import, Export };
 
 namespace bms_parser {
 class Chart;
@@ -136,7 +139,6 @@ private:
   TextView *profileStatusText = nullptr;
   TextView *profileDeleteReasonText = nullptr;
   TextInputBox *profileNameInput = nullptr;
-  TextInputBox *profileArchivePathInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -251,9 +253,17 @@ private:
   std::jthread profileArchiveThread;
   std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
   std::unique_ptr<ProfileSettingsController> profileController;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      profileDocumentHandoff;
+  SettingsProfileDocumentHandoffKind profileDocumentHandoffKind =
+      SettingsProfileDocumentHandoffKind::None;
+  ProfileImportOptions pendingProfileImportOptions;
+  std::optional<ProfileArchiveResult> preparedProfileExportResult;
+  std::shared_ptr<void> profileExportSourceLifetime;
+  std::filesystem::path profileExportStagingFile;
   std::uint64_t profileArchiveGeneration = 0;
+  bool profileExportStagingSwept = false;
   std::string profileNameText;
-  std::string profileArchivePathText;
   std::atomic_bool difficultyTableJobRunning = false;
   std::atomic_bool archiveCacheCleanupRunning = false;
   std::atomic_bool archiveCacheMeasureRunning = false;
@@ -387,7 +397,13 @@ private:
   void refreshSettingsText();
   void ensureProfileController();
   void applyPendingProfileArchiveCompletion();
-  void startProfileArchiveTask(ProfileArchiveTask task);
+  void applyPendingProfileDocumentHandoff();
+  bool startProfileArchiveTask(ProfileArchiveTask task,
+                               std::optional<PlatformDocumentHandoffResult>
+                                   temporaryDocument = std::nullopt);
+  void startProfileImportDocumentPicker(const ProfileImportOptions &options,
+                                        bool confirmedOverwrite = false);
+  void startProfileExportPreparation(std::string_view profileId);
   void stopProfileArchiveWork();
   void activateProfile(std::string_view profileId);
   void invalidateProfileLayout();
