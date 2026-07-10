@@ -89,7 +89,9 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
 
 SettingsScene::SettingsScene(ApplicationContext &context) : Scene(context) {}
 
-SettingsScene::~SettingsScene() = default;
+SettingsScene::~SettingsScene() {
+  inputProfileReplacementRegistration.reset();
+}
 
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;

@@ -4,13 +4,18 @@
 #include "input/InputProfileReplacementNotifier.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -565,6 +570,86 @@ void testProfileReplacementCancelsPendingConflictAndRegistrationLifetime() {
   controller.cancel();
 }
 
+void testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier() {
+  InputProfileReplacementNotifier notifier;
+  InputProfileReplacementNotifier::Registration registration;
+  int calls = 0;
+  registration = notifier.subscribe([&]() {
+    ++calls;
+    auto nested = notifier.subscribe([]() {});
+    nested.reset();
+    registration.reset();
+  });
+  notifier.notifyBeforeReplacement();
+  notifier.notifyBeforeReplacement();
+  require(calls == 1,
+          "a callback can subscribe and unregister itself without deadlock");
+
+  std::mutex callbackMutex;
+  std::condition_variable callbackCondition;
+  bool callbackEntered = false;
+  bool releaseCallback = false;
+  bool resetStarted = false;
+  std::atomic<bool> resetFinished{false};
+  std::atomic<int> barrierCalls{0};
+  auto barrierRegistration = notifier.subscribe([&]() {
+    barrierCalls.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock lock(callbackMutex);
+    callbackEntered = true;
+    callbackCondition.notify_all();
+    callbackCondition.wait(lock, [&]() { return releaseCallback; });
+  });
+
+  std::thread notifying([&]() { notifier.notifyBeforeReplacement(); });
+  {
+    std::unique_lock lock(callbackMutex);
+    const bool entered = callbackCondition.wait_for(
+        lock, std::chrono::seconds(2), [&]() { return callbackEntered; });
+    if (!entered) {
+      releaseCallback = true;
+      callbackCondition.notify_all();
+      lock.unlock();
+      notifying.join();
+      require(false, "lifetime-barrier callback starts");
+    }
+  }
+
+  std::thread resetting(
+      [registration = std::move(barrierRegistration), &callbackMutex,
+       &callbackCondition, &resetStarted, &resetFinished]() mutable {
+        {
+          const std::lock_guard lock(callbackMutex);
+          resetStarted = true;
+        }
+        callbackCondition.notify_all();
+        registration.reset();
+        resetFinished.store(true, std::memory_order_release);
+      });
+  {
+    std::unique_lock lock(callbackMutex);
+    callbackCondition.wait(lock, [&]() { return resetStarted; });
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  const bool resetReturnedEarly =
+      resetFinished.load(std::memory_order_acquire);
+
+  {
+    const std::lock_guard lock(callbackMutex);
+    releaseCallback = true;
+  }
+  callbackCondition.notify_all();
+  notifying.join();
+  resetting.join();
+  require(!resetReturnedEarly,
+          "cross-thread reset waits for the in-flight callback");
+  require(resetFinished.load(std::memory_order_acquire),
+          "reset returns after the in-flight callback exits");
+
+  notifier.notifyBeforeReplacement();
+  require(barrierCalls.load(std::memory_order_relaxed) == 1,
+          "a completed reset prevents every later callback");
+}
+
 } // namespace
 
 int main() {
@@ -579,6 +664,7 @@ int main() {
     testDisconnectRearmsFirstCaptureAfterReconnect();
     testNegativeAxisHatAndMidiCapturePreserveControlIdentity();
     testProfileReplacementCancelsPendingConflictAndRegistrationLifetime();
+    testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier();
   } catch (const std::exception &error) {
     std::cerr << "input_capture_controller_tests: " << error.what() << '\n';
     return 1;
