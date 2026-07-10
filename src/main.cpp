@@ -34,6 +34,7 @@
 #include "rendering/UniformCache.h"
 #include "context.h"
 #include "audio/AudioWrapper.h"
+#include "video/SDLDisplayBackend.h"
 #ifdef _WIN32
 #include <windows.h>
 
@@ -69,6 +70,7 @@
 #include <filesystem>
 #include <mutex>
 #include <system_error>
+#include <thread>
 #include <vector>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -196,6 +198,30 @@ void getWindowDrawableSize(SDL_Window *window, int logicalW, int logicalH,
     renderH = scaledDimension(logicalH);
   }
 }
+
+class CallbackRendererDisplayTransaction final
+    : public display::IRendererDisplayTransaction {
+public:
+  using Synchronizer =
+      std::function<bool(std::uint32_t, std::string &errorMessage)>;
+
+  CallbackRendererDisplayTransaction(
+      std::shared_ptr<display::RendererAccessCoordinator::DisplayReservation>
+          reservationValue,
+      Synchronizer synchronizeValue)
+      : reservation(std::move(reservationValue)),
+        synchronizeCallback(std::move(synchronizeValue)) {}
+
+  bool synchronize(std::uint32_t resetFlags,
+                   std::string &errorMessage) override {
+    return synchronizeCallback(resetFlags, errorMessage);
+  }
+
+private:
+  std::shared_ptr<display::RendererAccessCoordinator::DisplayReservation>
+      reservation;
+  Synchronizer synchronizeCallback;
+};
 
 #if TARGET_OS_IPHONE
 void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
@@ -772,6 +798,66 @@ void run() {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+  context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
+      s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
+      [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
+      [&context, &activeBgfxResetFlags](std::uint32_t /*resetFlags*/,
+                                        std::string &errorMessage)
+          -> std::unique_ptr<display::IRendererDisplayTransaction> {
+        auto reservation =
+            context.rendererAccess.tryAcquireDisplay(errorMessage);
+        if (!reservation.has_value()) {
+          return nullptr;
+        }
+        auto lifetime = std::make_shared<
+            display::RendererAccessCoordinator::DisplayReservation>(
+            std::move(*reservation));
+        return std::make_unique<CallbackRendererDisplayTransaction>(
+            std::move(lifetime),
+            [&context, &activeBgfxResetFlags](std::uint32_t resetFlags,
+                                              std::string &syncError) {
+              int logicalWidth = 0;
+              int logicalHeight = 0;
+              int renderWidth = 0;
+              int renderHeight = 0;
+              SDL_GetWindowSize(s_window, &logicalWidth, &logicalHeight);
+              getWindowDrawableSize(s_window, logicalWidth, logicalHeight,
+                                    renderWidth, renderHeight);
+              if (logicalWidth <= 0 || logicalHeight <= 0 || renderWidth <= 0 ||
+                  renderHeight <= 0) {
+                syncError = "The display produced an invalid drawable size.";
+                return false;
+              }
+              rendering::widthScale = static_cast<float>(renderWidth) /
+                                      static_cast<float>(logicalWidth);
+              rendering::heightScale = static_cast<float>(renderHeight) /
+                                       static_cast<float>(logicalHeight);
+              rendering::updateUIScale(renderWidth, renderHeight);
+              activeBgfxResetFlags = resetFlags;
+              s_bgfxResetFlags = resetFlags;
+              context.bgfxResetFlags.store(resetFlags,
+                                           std::memory_order_relaxed);
+              bgfx::reset(rendering::render_width, rendering::render_height,
+                          resetFlags);
+              s_postProcess.resize(rendering::render_width,
+                                   rendering::render_height);
+              context.restoreGameplayRenderViews();
+              context.framePacer.reset(std::chrono::steady_clock::now());
+              return true;
+            });
+      });
+  context.displaySettingsManager =
+      std::make_unique<display::DisplaySettingsManager>(
+          *context.displayBackend, context.framePacer,
+          context.settings.audioVideo.video);
+  const auto startupDisplayResult =
+      context.displaySettingsManager->applySafeStartupIntent();
+  if (!startupDisplayResult.message.empty()) {
+    SDL_Log("%s", startupDisplayResult.message.c_str());
+  }
+  context.framePacer.reset(lastFrameTime);
+  bool pacingExportActive =
+      context.replayVideoExportActive.load(std::memory_order_acquire);
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return event.type == SDL_APP_WILLENTERBACKGROUND ||
@@ -790,6 +876,13 @@ void run() {
              event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
   };
   auto setAppBackground = [&](bool background) {
+    if (background && context.displaySettingsManager) {
+      if (const auto rollbackResult =
+              context.displaySettingsManager->onFocusLost();
+          rollbackResult.has_value() && !rollbackResult->message.empty()) {
+        SDL_Log("%s", rollbackResult->message.c_str());
+      }
+    }
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
     if (previous == background) {
@@ -798,6 +891,7 @@ void run() {
     context.jukebox.setVisualsSuspended(background);
     if (!background) {
       lastFrameTime = std::chrono::steady_clock::now();
+      context.framePacer.reset(lastFrameTime);
       context.jukebox.seekVisualsToSongTime(context.jukebox.getTimeMicros());
     }
   };
@@ -809,6 +903,20 @@ void run() {
   while (!context.quitFlag) {
 
     auto currentFrameTime = std::chrono::steady_clock::now();
+    const bool exportActiveForPacing =
+        context.replayVideoExportActive.load(std::memory_order_acquire);
+    if (exportActiveForPacing != pacingExportActive) {
+      pacingExportActive = exportActiveForPacing;
+      context.framePacer.reset(currentFrameTime);
+    }
+    if (context.displaySettingsManager) {
+      if (const auto previewResult =
+              context.displaySettingsManager->tick(currentFrameTime)) {
+        if (!previewResult->message.empty()) {
+          SDL_Log("%s", previewResult->message.c_str());
+        }
+      }
+    }
     float deltaTime =
         std::chrono::duration<float, std::chrono::seconds::period>(
             currentFrameTime - lastFrameTime)
@@ -900,6 +1008,7 @@ void run() {
                     logicalW, logicalH, s_renderScale);
       s_postProcess.resize(rendering::render_width, rendering::render_height);
       context.restoreGameplayRenderViews();
+      context.framePacer.reset(std::chrono::steady_clock::now());
       return true;
     };
 
@@ -1293,7 +1402,15 @@ void run() {
     //    bgfx::setState(BGFX_STATE_DEFAULT);
     //    bgfx::submit(rendering::main_view, program);
 
-    if (!renderedFrame) {
+    if (renderedFrame) {
+      const auto presentedAt = std::chrono::steady_clock::now();
+      context.framePacer.framePresented(presentedAt);
+      const auto waitDuration =
+          context.framePacer.remaining(std::chrono::steady_clock::now());
+      if (waitDuration > std::chrono::steady_clock::duration::zero()) {
+        std::this_thread::sleep_for(waitDuration);
+      }
+    } else {
       SDL_Delay(1);
     }
     sceneManager.handleDeferred();
@@ -1301,6 +1418,14 @@ void run() {
     //
   }
   sceneManager.cleanup();
+  if (context.displaySettingsManager) {
+    const auto shutdownResult = context.displaySettingsManager->shutdown();
+    if (!shutdownResult.message.empty()) {
+      SDL_Log("%s", shutdownResult.message.c_str());
+    }
+  }
+  context.displaySettingsManager.reset();
+  context.displayBackend.reset();
   s_postProcess.shutdown();
   // bgfx::destroy(vbh);
   // bgfx::destroy(ibh);

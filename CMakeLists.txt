@@ -736,6 +736,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
     endif()
 
+    add_executable(display_settings_manager_tests
+        tests/display_settings_manager_tests.cpp
+        src/video/DisplaySettingsManager.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(display_settings_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
+
+    add_executable(frame_pacer_tests
+        tests/frame_pacer_tests.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
+
+    add_executable(sdl_display_backend_tests
+        tests/sdl_display_backend_tests.cpp
+        src/video/DisplaySettingsManager.cpp
+        src/video/FramePacer.cpp
+        src/video/RendererAccessCoordinator.cpp
+        src/video/SDLDisplayBackend.cpp
+    )
+    target_include_directories(sdl_display_backend_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(sdl_display_backend_tests PRIVATE cxx_std_23)
+    target_link_libraries(sdl_display_backend_tests PRIVATE bgfx)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2)
+    endif()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -793,4 +830,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(display_settings_manager_tests foundation_av_display)
+    asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
 endif()

@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <iostream>
+#include <memory>
 #include <vector>
 #include <string>
 #include "AppSettings.h"
@@ -15,6 +16,9 @@
 #include "audio/MusicPlayerService.h"
 #include "input/InputDeviceRegistry.h"
 #include "input/InputProfile.h"
+#include "video/DisplaySettingsManager.h"
+#include "video/FramePacer.h"
+#include "video/RendererAccessCoordinator.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -29,12 +33,17 @@ public:
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
+  display::RendererAccessCoordinator rendererAccess{bgfxRenderMutex,
+                                                    replayVideoExportActive};
   std::atomic<bool> replayVideoExportUiFrameRequested{false};
   std::atomic<std::uint64_t> replayVideoExportUiFrameSerial{0};
   std::atomic<bool> appInBackground{false};
   std::atomic<bool> backgroundTasksPausedForForegroundScene{false};
   std::atomic<bool> ignoreBgaPostOptions{false};
   std::atomic<std::uint32_t> bgfxResetFlags{0};
+  FramePacer framePacer;
+  std::unique_ptr<display::IDisplayBackend> displayBackend;
+  std::unique_ptr<display::DisplaySettingsManager> displaySettingsManager;
   std::function<void()> restoreGameplayRenderViews;
   std::function<void()> requestAddChartFolderFromFiles;
   std::function<void()> requestRebuildChartLibrary;
