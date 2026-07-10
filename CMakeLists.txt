@@ -293,6 +293,11 @@ endif()
 # Targets
 # ------------------------------------------------------------------------------
 
+# Prefer the selected toolchain/vcpkg headers over stale host-wide installs.
+# This is portable CMake behavior and avoids architecture-mismatched SDL
+# headers on Apple Silicon without injecting compiler-specific -I flags.
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -711,6 +716,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(button_enabled_tests
+        tests/button_enabled_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
+    target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
@@ -908,6 +925,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(profile_archive_tests PRIVATE shell32 ole32 advapi32)
     endif()
 
+    add_executable(profile_settings_controller_tests
+        tests/profile_settings_controller_tests.cpp
+        src/scene/ProfileSettingsController.cpp
+        src/scene/ProfileRuntimeReapply.cpp
+    )
+    target_include_directories(profile_settings_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_settings_controller_tests PRIVATE cxx_std_23)
+
+    add_executable(profile_runtime_reapply_tests
+        tests/profile_runtime_reapply_tests.cpp
+        src/scene/ProfileRuntimeReapply.cpp
+    )
+    target_include_directories(profile_runtime_reapply_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_runtime_reapply_tests PRIVATE cxx_std_23)
+
     add_executable(input_device_registry_tests
         tests/input_device_registry_tests.cpp
         src/input/InputDeviceIdentity.cpp
@@ -1051,6 +1087,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_filter_sort_panel_view_tests
         dropdown_view_tests
         view_layout_tests
+        button_enabled_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()
@@ -1067,6 +1104,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive)
+    asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
+    asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)

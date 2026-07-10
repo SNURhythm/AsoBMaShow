@@ -482,6 +482,7 @@ void SettingsScene::refreshSettingsText() {
       applySemanticButtonStyle(button, text, SettingsButtonTone::Neutral);
     }
   };
+  applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);
   applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);

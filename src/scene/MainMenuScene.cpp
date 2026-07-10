@@ -1193,7 +1193,7 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 void MainMenuScene::init() {
   // Initialize the scene
   db = ChartDBHelper::GetInstance().Connect();
-  context.profileSwitchSceneBlocker = [this]() -> std::optional<std::string> {
+  auto profileOperationBlocker = [this]() -> std::optional<std::string> {
     if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
         androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
       return "A chart library scan or import is active.";
@@ -1214,6 +1214,8 @@ void MainMenuScene::init() {
     }
     return std::nullopt;
   };
+  context.profileSwitchBlockers.background = profileOperationBlocker;
+  context.profileSwitchBlockers.scene = std::move(profileOperationBlocker);
   context.refreshProfileCaches = [this]() {
     if (const auto error = reloadScoreClearRanks()) {
       throw std::runtime_error(*error);
@@ -1252,6 +1254,8 @@ void MainMenuScene::init() {
 void MainMenuScene::onPause() {}
 
 void MainMenuScene::onResume() {
+  context.profileSwitchBlockers.scene =
+      context.profileSwitchBlockers.background;
   applyThemeChange();
   if (!prepareScoreQueryDatabase().has_value()) {
     reloadProfileSelectionsFromSettings();
@@ -9774,7 +9778,8 @@ void MainMenuScene::renderScene() {
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   cancelActivePreviewLoading();
-  context.profileSwitchSceneBlocker = nullptr;
+  context.profileSwitchBlockers.scene = nullptr;
+  context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
   context.requestAddChartFolderFromFiles = nullptr;
   context.requestRebuildChartLibrary = nullptr;

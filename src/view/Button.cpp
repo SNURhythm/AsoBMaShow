@@ -127,6 +127,12 @@ void Button::renderImpl(RenderContext &context) {
     background = hoverBackgroundColor;
     border = hoverBorderColor;
   }
+  if (!enabled) {
+    background.a = static_cast<uint8_t>(
+        static_cast<unsigned int>(background.a) * 45U / 100U);
+    border.a = static_cast<uint8_t>(
+        static_cast<unsigned int>(border.a) * 45U / 100U);
+  }
 
   const float radius = getCornerRadius();
   if (hasStyledBorder && styleBorderWidth > 0) {
@@ -148,6 +154,15 @@ void Button::renderImpl(RenderContext &context) {
 
 void Button::setOnClickListener(std::function<void()> listener) {
   this->onClickListener = listener;
+}
+
+void Button::setEnabled(bool value) {
+  enabled = value;
+  if (!enabled) {
+    mousePressedInside = false;
+    isHovered = false;
+    activeTouchId = -1;
+  }
 }
 
 void Button::setContentView(View *view) {
@@ -270,6 +285,12 @@ void Button::onResize(int newWidth, int newHeight) {
 }
 
 bool Button::handleEventsImpl(SDL_Event &event) {
+  if (!enabled) {
+    mousePressedInside = false;
+    isHovered = false;
+    activeTouchId = -1;
+    return true;
+  }
   if (contentView) {
     if (!contentView->handleEvents(event)) {
       return false;

@@ -296,6 +296,7 @@ struct SwitchFixture {
   bool failInputApply = false;
   bool failRefreshOnce = false;
   std::optional<std::string> blocker;
+  ProfileSwitchBlockers operationBlockers;
   int refreshCount = 0;
   std::vector<std::string> inputReplacementEvents;
   std::function<void()> refreshAction;
@@ -315,7 +316,13 @@ struct SwitchFixture {
   SwitchFixture()
       : manager(temp.path(), makeManagerDependencies()), score(), replay(),
         coordinator(
-            manager, score, replay, [this]() { return blocker; },
+            manager, score, replay,
+            [this]() {
+              if (blocker) {
+                return blocker;
+              }
+              return operationBlockers.firstReason();
+            },
             [this](const std::filesystem::path &path, std::string &error) {
               return applyInput(path, error);
             },
@@ -624,6 +631,46 @@ void testEveryDeclaredBlockerRejectsWithoutMutation() {
   expect(fixture.refreshCount == 0,
          "active database write blocker performs no cache mutation");
   expectFirstProfileState(fixture, bootstrapBefore, "database write blocker");
+}
+
+void testBackgroundLibraryBlockerSurvivesSceneReplacement() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  bool libraryRebuildActive = true;
+  fixture.operationBlockers.background = [&]() -> std::optional<std::string> {
+    return libraryRebuildActive
+               ? std::optional<std::string>(
+                     "A chart library scan or import is active.")
+               : std::nullopt;
+  };
+  fixture.operationBlockers.scene = []() -> std::optional<std::string> {
+    return std::nullopt;
+  };
+
+  auto result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(result.error == ProfileError::SwitchBlocked &&
+             result.message.find("chart library") != std::string::npos,
+         "background chart rebuild blocks profile activation from Settings");
+
+  fixture.operationBlockers.scene = []() -> std::optional<std::string> {
+    return "Settings scene blocker replacement";
+  };
+  result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(result.error == ProfileError::SwitchBlocked &&
+             result.message.find("chart library") != std::string::npos,
+         "background chart blocker remains authoritative after scene blocker "
+         "replacement");
+
+  libraryRebuildActive = false;
+  fixture.operationBlockers.scene = {};
+  result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(result.ok(),
+         "profile activation proceeds after background rebuild completes");
 }
 
 enum class FailureStage {
@@ -1139,6 +1186,7 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testEveryDeclaredBlockerRejectsWithoutMutation();
+  testBackgroundLibraryBlockerSurvivesSceneReplacement();
   testEveryTransactionalFailureRollsBackAllVisibleState();
   testInvalidTargetFailsBeforeSavingOrBinding();
   testInputReplacementNotificationPrecedesApplyAndRollback();
