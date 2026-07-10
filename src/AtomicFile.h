@@ -19,6 +19,22 @@ struct Operations {
 
 Operations defaultOperations();
 
+// Flushes an existing file's data to stable storage. This is useful when a
+// file was produced by a subsystem that does not provide its own durability
+// guarantee (for example SQLite or a legacy atomic writer).
+bool syncFile(const std::filesystem::path &path, std::string &errorMessage);
+
+// Persists directory-entry metadata on POSIX. Windows directory handles do
+// not provide a portable fsync equivalent, so callers pair this with
+// renameDurably(), whose MoveFileExW operation is write-through there.
+bool syncDirectory(const std::filesystem::path &path,
+                   std::string &errorMessage);
+
+// Renames within a filesystem. Windows uses MOVEFILE_WRITE_THROUGH; POSIX
+// callers must sync the destination parent directory after this succeeds.
+bool renameDurably(const std::filesystem::path &from,
+                   const std::filesystem::path &to, std::string &errorMessage);
+
 bool writeWithBackup(const std::filesystem::path &path,
                      std::span<const std::byte> contents,
                      std::string &errorMessage,

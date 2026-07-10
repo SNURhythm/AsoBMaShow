@@ -1,4 +1,5 @@
 #include "../src/AppSettingsStore.h"
+#include "../src/AtomicFile.h"
 #include "../src/ChartDBHelper.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -135,6 +137,16 @@ stagingDirectories(const std::filesystem::path &root) {
     }
   }
   return result;
+}
+
+bool removeTree(const std::filesystem::path &path, std::string &errorMessage) {
+  std::error_code error;
+  std::filesystem::remove_all(path, error);
+  if (error) {
+    errorMessage = "unable to remove test tree: " + error.message();
+    return false;
+  }
+  return true;
 }
 
 struct LegacyData {
@@ -411,6 +423,256 @@ void testFinalizedOrphanRecoversAfterBootstrapFailure() {
          "orphan recovery recreates bootstrap");
 }
 
+void testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure() {
+  TempDirectory temp("profile-durability");
+  std::vector<std::string> operations;
+  auto dependencies = dependenciesFor();
+  dependencies.filesystem.syncFile = [&](const std::filesystem::path &path,
+                                         std::string &error) {
+    operations.push_back("file:" + path.filename().string());
+    return atomic_file::syncFile(path, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (path.filename().string().starts_with(".staging-")) {
+      operations.emplace_back("staging-directory");
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (path == temp.path() / "profiles") {
+      operations.emplace_back("profiles-directory");
+      error = "injected profiles directory sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    operations.emplace_back("rename-profile");
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.beforeMigrationPhase = [&](ProfileMigrationPhase phase,
+                                          std::string &) {
+    if (phase == ProfileMigrationPhase::WriteBootstrap) {
+      operations.emplace_back("bootstrap");
+    }
+    return true;
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  const ProfileResult failed = manager.Initialize();
+  expect(failed.error == ProfileError::MigrationFailure,
+         "parent sync failure reports migration failure");
+  expect(!std::filesystem::exists(temp.path() / "active-profile.json"),
+         "bootstrap is not written after parent sync failure");
+  expect(std::ranges::find(operations, "bootstrap") == operations.end(),
+         "bootstrap phase is never entered before durable finalize succeeds");
+
+  const auto stagingSync = std::ranges::find(operations, "staging-directory");
+  const auto rename = std::ranges::find(operations, "rename-profile");
+  const auto parentSync = std::ranges::find(operations, "profiles-directory");
+  expect(
+      stagingSync != operations.end() && rename != operations.end() &&
+          parentSync != operations.end() && stagingSync < rename &&
+          rename < parentSync,
+      "staging directory sync, rename, and profiles parent sync are ordered");
+  for (const std::string_view filename :
+       {"settings.json", "input.json", "scores.db", "replays.db",
+        "profile.json"}) {
+    const auto synced =
+        std::ranges::find(operations, "file:" + std::string(filename));
+    expect(synced != operations.end() && synced < stagingSync,
+           std::string(filename) + " is synced before the staging directory");
+  }
+
+  const auto finalized =
+      temp.path() / "profiles" / "11111111-1111-4111-8111-111111111111";
+  expect(std::filesystem::exists(finalized / "profile.json"),
+         "parent sync failure leaves a finalized orphan for recovery");
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("22222222-2222-4222-8222-222222222222"));
+  expect(recovered.Initialize().ok(),
+         "next initialization safely recovers finalized sync-failure orphan");
+  expect(recovered.activeProfile().id == "11111111-1111-4111-8111-111111111111",
+         "sync-failure recovery preserves the finalized profile ID");
+}
+
+void testProfilesRootSymlinkNeverEscapesApplicationRoot() {
+  TempDirectory temp("profile-confinement");
+  TempDirectory external("profile-external");
+  const auto sentinel = external.path() / "sentinel.txt";
+  writeFile(sentinel, "external-data");
+  std::filesystem::create_directories(external.path() / ".staging-malicious");
+  writeFile(external.path() / ".staging-malicious" / "keep.txt", "keep");
+
+  TempDirectory applicationParent("profile-root-ancestor");
+  const auto linkedApplicationRoot = applicationParent.path() / "linked-root";
+  std::error_code error;
+  std::filesystem::create_directory_symlink(external.path(),
+                                            linkedApplicationRoot, error);
+  expect(!error, "application-root symlink fixture creates");
+  if (!error) {
+    PlayerProfileManager linkedRoot(linkedApplicationRoot, dependenciesFor());
+    expect(linkedRoot.Initialize().error == ProfileError::IoFailure,
+           "Initialize rejects a symlinked application data root");
+    expect(readFile(sentinel) == "external-data",
+           "application-root rejection leaves external data untouched");
+  }
+
+  error.clear();
+  std::filesystem::create_directory_symlink(external.path(),
+                                            temp.path() / "profiles", error);
+  expect(!error, "profiles-root symlink fixture creates");
+  if (error) {
+    return;
+  }
+
+  PlayerProfileManager blocked(temp.path(), dependenciesFor());
+  expect(blocked.Initialize().error == ProfileError::IoFailure,
+         "Initialize rejects a symlinked profiles root");
+  expect(blocked.listProfiles().empty(),
+         "listProfiles does not traverse a symlinked profiles root");
+  expect(!blocked.validateProfile("11111111-1111-4111-8111-111111111111").ok(),
+         "validateProfile rejects a symlinked profiles root");
+  expect(readFile(sentinel) == "external-data" &&
+             readFile(external.path() / ".staging-malicious" / "keep.txt") ==
+                 "keep",
+         "Initialize and staging cleanup leave external data untouched");
+
+  std::filesystem::remove(temp.path() / "profiles", error);
+  PlayerProfileManager live(temp.path(), dependenciesFor());
+  expect(live.Initialize().ok(), "confinement CRUD fixture initializes");
+
+  const auto hostileStaging =
+      temp.path() / "profiles" / ".staging-external-target";
+  std::filesystem::create_directory_symlink(external.path(), hostileStaging,
+                                            error);
+  expect(!error, "staging symlink fixture creates");
+  PlayerProfileManager cleanupBlocked(temp.path(), dependenciesFor());
+  expect(cleanupBlocked.Initialize().error == ProfileError::IoFailure,
+         "initialization refuses a symlinked staging transaction");
+  expect(readFile(sentinel) == "external-data",
+         "staging cleanup never traverses an external symlink target");
+  std::filesystem::remove(hostileStaging, error);
+
+  const auto originalProfiles = temp.path() / "profiles-real";
+  std::filesystem::rename(temp.path() / "profiles", originalProfiles, error);
+  expect(!error, "real profiles directory moves aside");
+  std::filesystem::create_directory_symlink(external.path(),
+                                            temp.path() / "profiles", error);
+  expect(!error, "CRUD profiles-root symlink fixture creates");
+  if (error) {
+    return;
+  }
+
+  expect(live.createProfile("Escaped").error == ProfileError::IoFailure,
+         "createProfile rejects a symlinked profiles root");
+  expect(live.listProfiles().empty(),
+         "listProfiles remains fail-closed after profiles-root replacement");
+  expect(!live.validateProfile(live.activeProfile().id).ok(),
+         "validateProfile rejects profiles-root replacement");
+  expect(live.deleteProfile(live.activeProfile().id).error ==
+             ProfileError::IoFailure,
+         "deleteProfile rejects profiles-root replacement before traversal");
+  expect(readFile(sentinel) == "external-data" &&
+             readFile(external.path() / ".staging-malicious" / "keep.txt") ==
+                 "keep",
+         "CRUD operations never mutate external symlink targets");
+}
+
+void testPartialTombstoneCleanupNeverRestoresOrExposesProfile() {
+  TempDirectory temp("profile-delete-tombstone");
+  std::vector<std::string> uuids = {
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+  };
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  bool failDeletionCleanup = true;
+  dependencies.filesystem.removeTree = [&](const std::filesystem::path &path,
+                                           std::string &error) {
+    if (failDeletionCleanup &&
+        path.filename().string().starts_with(".deleting-")) {
+      failDeletionCleanup = false;
+      std::error_code removeError;
+      std::filesystem::remove(path / "profile.json", removeError);
+      error = "injected partial tombstone cleanup failure";
+      return false;
+    }
+    return removeTree(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "tombstone fixture initializes");
+  const auto created = manager.createProfile("Delete Me");
+  expect(created.ok() && created.profile,
+         "tombstone fixture creates an inactive profile");
+  if (!created.profile) {
+    return;
+  }
+  const std::string deletedId = created.profile->id;
+  const auto source = manager.pathsFor(deletedId).root;
+  const auto tombstone = temp.path() / "profiles" / (".deleting-" + deletedId);
+  expect(manager.deleteProfile(deletedId).error == ProfileError::IoFailure,
+         "partial physical cleanup reports an I/O failure");
+  expect(!std::filesystem::exists(source) && std::filesystem::exists(tombstone),
+         "logical deletion is never rolled back after partial cleanup");
+  expect(manager.listProfiles().size() == 1,
+         "partially deleted tombstone is not exposed as a profile");
+
+  auto blockedDependencies = dependenciesFor();
+  blockedDependencies.filesystem.removeTree =
+      [](const std::filesystem::path &path, std::string &error) {
+        if (path.filename().string().starts_with(".deleting-")) {
+          error = "injected restart tombstone cleanup failure";
+          return false;
+        }
+        return removeTree(path, error);
+      };
+  PlayerProfileManager blockedRestart(temp.path(),
+                                      std::move(blockedDependencies));
+  expect(blockedRestart.Initialize().error == ProfileError::IoFailure,
+         "restart fails safely when tombstone cleanup still cannot finish");
+  expect(!std::filesystem::exists(source) && std::filesystem::exists(tombstone),
+         "failed restart cleanup does not restore a partial profile");
+
+  PlayerProfileManager recovered(temp.path(), dependenciesFor());
+  expect(recovered.Initialize().ok(),
+         "later restart retries and completes tombstone cleanup");
+  expect(!std::filesystem::exists(tombstone) &&
+             recovered.listProfiles().size() == 1,
+         "successful restart removes tombstone without exposing deleted data");
+}
+
+void testFutureLegacyDatabaseVersionFailsClosedBeforeMigration() {
+  for (const bool scoreDatabase : {true, false}) {
+    TempDirectory temp(scoreDatabase ? "profile-future-score"
+                                     : "profile-future-replay");
+    std::filesystem::create_directories(temp.path() / "db");
+    const auto source =
+        temp.path() / "db" / (scoreDatabase ? "score.db" : "replay.db");
+    Database database = openDatabase(source);
+    expect(database != nullptr, "future legacy database fixture opens");
+    if (!database) {
+      continue;
+    }
+    expect(execute(database.get(), "PRAGMA user_version=999"),
+           "future legacy user_version is written");
+    database.reset();
+    const std::string sourceBefore = readFile(source);
+
+    PlayerProfileManager manager(temp.path(), dependenciesFor());
+    expect(manager.Initialize().error == ProfileError::FutureVersion,
+           "future legacy database version returns FutureVersion");
+    expect(readFile(source) == sourceBefore,
+           "future legacy database remains byte-for-byte untouched");
+    expect(stagingDirectories(temp.path()).empty() &&
+               !std::filesystem::exists(temp.path() / "active-profile.json"),
+           "future legacy preflight creates no staged or bootstrap state");
+  }
+}
+
 void testProfileCrudConstraintsAndDataIsolation() {
   TempDirectory temp("profile-crud");
   std::vector<std::string> uuids = {
@@ -531,6 +793,10 @@ int main() {
   testFirstRunMigrationIsLosslessAndIdempotent();
   testEveryPreFinalizeFailureCleansStaging();
   testFinalizedOrphanRecoversAfterBootstrapFailure();
+  testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure();
+  testProfilesRootSymlinkNeverEscapesApplicationRoot();
+  testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
+  testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
   testProfileCrudConstraintsAndDataIsolation();
   testFutureVersionsFailClosed();
 

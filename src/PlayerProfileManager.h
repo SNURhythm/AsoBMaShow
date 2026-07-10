@@ -45,6 +45,16 @@ enum class ProfileMigrationPhase {
   WriteBootstrap
 };
 
+struct PlayerProfileFilesystemOperations {
+  std::function<bool(const std::filesystem::path &, std::string &)> syncFile;
+  std::function<bool(const std::filesystem::path &, std::string &)>
+      syncDirectory;
+  std::function<bool(const std::filesystem::path &,
+                     const std::filesystem::path &, std::string &)>
+      durableRename;
+  std::function<bool(const std::filesystem::path &, std::string &)> removeTree;
+};
+
 struct PlayerProfileManagerDependencies {
   std::function<std::string()> generateUuid;
   std::function<std::string()> utcNow;
@@ -53,6 +63,7 @@ struct PlayerProfileManagerDependencies {
       snapshotDatabase;
   std::function<bool(ProfileMigrationPhase, std::string &)>
       beforeMigrationPhase;
+  PlayerProfileFilesystemOperations filesystem;
 };
 
 class PlayerProfileManager {
