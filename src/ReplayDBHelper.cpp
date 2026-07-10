@@ -20,7 +20,8 @@
 
 namespace {
 constexpr int kLegacyReplayDatabaseSchemaVersion = 2;
-constexpr int kReplayDatabaseSchemaVersion = 3;
+constexpr int kReplayDatabaseSchemaVersion =
+    ReplayDBHelper::kCurrentSchemaVersion;
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";

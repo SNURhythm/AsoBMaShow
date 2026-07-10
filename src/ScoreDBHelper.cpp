@@ -27,7 +27,8 @@
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
 constexpr int kLegacyScoreDatabaseSchemaVersion = 4;
-constexpr int kScoreDatabaseSchemaVersion = 5;
+constexpr int kScoreDatabaseSchemaVersion =
+    ScoreDBHelper::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"

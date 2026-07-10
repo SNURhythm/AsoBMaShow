@@ -159,21 +159,7 @@ bool syncDirectoryMetadata(const std::filesystem::path &path,
                                         ? std::filesystem::path(".")
                                         : path.parent_path();
   while (!directory.empty()) {
-    const int descriptor = ::open(directory.c_str(), O_RDONLY);
-    if (descriptor < 0) {
-      errorMessage = "open directory '" + directory.string() +
-                     "' failed: " + std::string(std::strerror(errno));
-      return false;
-    }
-    if (::fsync(descriptor) != 0) {
-      errorMessage = "directory fsync for '" + directory.string() +
-                     "' failed: " + std::string(std::strerror(errno));
-      ::close(descriptor);
-      return false;
-    }
-    if (::close(descriptor) != 0) {
-      errorMessage = "close directory '" + directory.string() +
-                     "' failed: " + std::string(std::strerror(errno));
+    if (!syncDirectory(directory, errorMessage)) {
       return false;
     }
     if (directory == syncRoot) {
@@ -203,6 +189,91 @@ void appendError(std::string &errorMessage, std::string_view prefix,
   errorMessage += std::string(prefix) + detail;
 }
 } // namespace
+
+bool syncFile(const std::filesystem::path &path, std::string &errorMessage) {
+  errorMessage.clear();
+#ifdef _WIN32
+  HANDLE handle =
+      CreateFileW(path.c_str(), GENERIC_WRITE,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    errorMessage =
+        "CreateFile for sync failed: " + std::to_string(GetLastError());
+    return false;
+  }
+  if (!FlushFileBuffers(handle)) {
+    errorMessage = "FlushFileBuffers failed: " + std::to_string(GetLastError());
+    CloseHandle(handle);
+    return false;
+  }
+  if (!CloseHandle(handle)) {
+    errorMessage = "CloseHandle failed: " + std::to_string(GetLastError());
+    return false;
+  }
+#else
+  const int descriptor = ::open(path.c_str(), O_RDONLY);
+  if (descriptor < 0) {
+    errorMessage = "open file '" + path.string() +
+                   "' for sync failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  if (::fsync(descriptor) != 0) {
+    errorMessage = "file fsync for '" + path.string() +
+                   "' failed: " + std::string(std::strerror(errno));
+    ::close(descriptor);
+    return false;
+  }
+  if (::close(descriptor) != 0) {
+    errorMessage = "close file '" + path.string() +
+                   "' failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+#endif
+  return true;
+}
+
+bool syncDirectory(const std::filesystem::path &path,
+                   std::string &errorMessage) {
+  errorMessage.clear();
+#ifdef _WIN32
+  // MoveFileExW(..., MOVEFILE_WRITE_THROUGH) is the supported write-through
+  // primitive used by renameDurably(). Windows has no portable directory
+  // fsync for application handles.
+  (void)path;
+  return true;
+#else
+#ifdef O_DIRECTORY
+  constexpr int directoryFlag = O_DIRECTORY;
+#else
+  constexpr int directoryFlag = 0;
+#endif
+  const int descriptor = ::open(path.c_str(), O_RDONLY | directoryFlag);
+  if (descriptor < 0) {
+    errorMessage = "open directory '" + path.string() +
+                   "' failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  if (::fsync(descriptor) != 0) {
+    errorMessage = "directory fsync for '" + path.string() +
+                   "' failed: " + std::string(std::strerror(errno));
+    ::close(descriptor);
+    return false;
+  }
+  if (::close(descriptor) != 0) {
+    errorMessage = "close directory '" + path.string() +
+                   "' failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  return true;
+#endif
+}
+
+bool renameDurably(const std::filesystem::path &from,
+                   const std::filesystem::path &to, std::string &errorMessage) {
+  errorMessage.clear();
+  return realReplace(from, to, errorMessage);
+}
 
 Operations defaultOperations() {
   return {.writeAndSync = realWriteAndSync,

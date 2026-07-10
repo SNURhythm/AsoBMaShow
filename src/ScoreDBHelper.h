@@ -88,6 +88,8 @@ struct CoursePlaySession;
 
 class ScoreDBHelper {
 public:
+  static constexpr int kCurrentSchemaVersion = 5;
+
   ScoreDBHelper() = default;
   explicit ScoreDBHelper(std::filesystem::path databasePath);
   ScoreDBHelper(const ScoreDBHelper &) = delete;
