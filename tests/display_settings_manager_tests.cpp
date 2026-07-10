@@ -178,6 +178,22 @@ void testApplyFailureRollsBackAndReportsRestoreFailure() {
 }
 
 void testUnsupportedFieldsRejectWithoutBackendCalls() {
+  FakeBackend invalidBackend;
+  display::DisplaySettingsManager invalidManager(invalidBackend,
+                                                 initialSettings());
+  auto invalid = initialSettings();
+  invalid.mode = static_cast<DisplayMode>(99);
+  require(invalidManager.beginPreview(invalid, Clock::time_point{}).status ==
+              display::ApplyStatus::Unsupported,
+          "invalid display mode is rejected");
+  invalid = initialSettings();
+  invalid.frameCap = 1;
+  require(invalidManager.beginPreview(invalid, Clock::time_point{}).status ==
+              display::ApplyStatus::Unsupported,
+          "invalid frame cap is rejected");
+  require(invalidBackend.captureCalls == 0 && invalidBackend.applyCalls == 0,
+          "invalid settings never reach the backend");
+
   FakeBackend backend;
   backend.exposedCapabilities = {
       .canSetFrameCap = true,

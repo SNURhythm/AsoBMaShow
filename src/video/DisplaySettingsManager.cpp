@@ -61,6 +61,25 @@ bool DisplaySettingsManager::displayFieldsEqual(
 
 std::optional<std::string> DisplaySettingsManager::unsupportedReason(
     const player_settings::VideoSettings &candidate) const {
+  switch (candidate.mode) {
+  case player_settings::DisplayMode::Windowed:
+  case player_settings::DisplayMode::BorderlessFullscreen:
+  case player_settings::DisplayMode::ExclusiveFullscreen:
+    break;
+  default:
+    return "The requested display mode is invalid.";
+  }
+  if (candidate.displayIndex < 0) {
+    return "The requested display index is invalid.";
+  }
+  if (candidate.width <= 0 || candidate.height <= 0) {
+    return "The requested display size is invalid.";
+  }
+  if (candidate.frameCap != 0 &&
+      (candidate.frameCap < 15 || candidate.frameCap > 1000)) {
+    return "The requested frame cap is outside the supported range.";
+  }
+
   const bool modeChanged = candidate.mode != confirmedSettings.mode;
   const bool displayChanged =
       candidate.displayIndex != confirmedSettings.displayIndex;
