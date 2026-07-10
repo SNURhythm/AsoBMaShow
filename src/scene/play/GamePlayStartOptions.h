@@ -41,7 +41,10 @@ collectPlayStartInputDeviceCategories(
     std::span<const input::DeviceClass> resolverDeviceClasses,
     PlayStartInputPlatform platform) {
   std::vector<InputDeviceCategory> categories;
-  categories.reserve(resolverDeviceClasses.size());
+  categories.reserve(resolverDeviceClasses.size() + 1);
+  if (platform == PlayStartInputPlatform::Mobile) {
+    categories.push_back(InputDeviceCategory::Touch);
+  }
   for (const auto deviceClass : resolverDeviceClasses) {
     categories.push_back(playStartInputDeviceCategory(deviceClass));
   }
@@ -49,9 +52,7 @@ collectPlayStartInputDeviceCategories(
   categories.erase(std::unique(categories.begin(), categories.end()),
                    categories.end());
   if (categories.empty()) {
-    categories.push_back(platform == PlayStartInputPlatform::Mobile
-                             ? InputDeviceCategory::Touch
-                             : InputDeviceCategory::Keyboard);
+    categories.push_back(InputDeviceCategory::Keyboard);
   }
   return categories;
 }

@@ -227,13 +227,14 @@ void testMobilePlayStartInputCategoriesPreserveResolverClasses() {
 
   const std::vector nonTouchResolverClasses = {
       input::DeviceClass::GameController, input::DeviceClass::Joystick};
-  assert(collectPlayStartInputDeviceCategories(
-             nonTouchResolverClasses, PlayStartInputPlatform::Mobile) ==
-         std::vector({InputDeviceCategory::GameController,
-                      InputDeviceCategory::Joystick}));
+  assert(
+      collectPlayStartInputDeviceCategories(nonTouchResolverClasses,
+                                            PlayStartInputPlatform::Mobile) ==
+      std::vector({InputDeviceCategory::GameController,
+                   InputDeviceCategory::Joystick, InputDeviceCategory::Touch}));
 }
 
-void testPlayStartInputFallbackIsUsedOnlyWhenResolverIsEmpty() {
+void testPlayStartInputPlatformDefaultsAreIncluded() {
   const std::vector<input::DeviceClass> noResolverClasses;
   assert(collectPlayStartInputDeviceCategories(
              noResolverClasses, PlayStartInputPlatform::Mobile) ==
@@ -245,7 +246,8 @@ void testPlayStartInputFallbackIsUsedOnlyWhenResolverIsEmpty() {
   const std::vector controllerOnly = {input::DeviceClass::GameController};
   assert(collectPlayStartInputDeviceCategories(
              controllerOnly, PlayStartInputPlatform::Mobile) ==
-         std::vector({InputDeviceCategory::GameController}));
+         std::vector({InputDeviceCategory::GameController,
+                      InputDeviceCategory::Touch}));
 }
 
 void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
@@ -334,7 +336,7 @@ int main() {
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();
-  testPlayStartInputFallbackIsUsedOnlyWhenResolverIsEmpty();
+  testPlayStartInputPlatformDefaultsAreIncluded();
   testConstrainedPlayCapturesEffectiveWindowsAsModified();
   testCourseSessionAggregatesRecordedStagesByIndex();
   std::cout << "score provenance tests passed\n";
