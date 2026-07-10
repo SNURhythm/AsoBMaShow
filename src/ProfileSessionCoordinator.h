@@ -30,6 +30,7 @@ struct ProfileSessionDependencies {
   std::function<bool(ReplayDBHelper &, const std::filesystem::path &,
                      std::string &)>
       bindReplay;
+  std::function<void()> beforeInputReplacement;
 };
 
 class ProfileSessionCoordinator {

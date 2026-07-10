@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
 #include "play/BMSRenderer.h"
@@ -88,7 +89,9 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
 
 SettingsScene::SettingsScene(ApplicationContext &context) : Scene(context) {}
 
-SettingsScene::~SettingsScene() = default;
+SettingsScene::~SettingsScene() {
+  inputProfileReplacementRegistration.reset();
+}
 
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;

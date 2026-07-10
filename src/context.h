@@ -29,6 +29,7 @@
 #include "audio/MusicPlayerService.h"
 #include "input/InputDeviceRegistry.h"
 #include "input/InputProfile.h"
+#include "input/InputProfileReplacementNotifier.h"
 #include "input/InputProfileStore.h"
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
@@ -97,6 +98,7 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
   std::atomic<bool> profileArchiveOperationActive{false};
@@ -104,6 +106,9 @@ public:
   std::function<std::optional<std::string>()> profileSwitchSceneBlocker;
   std::function<void()> refreshProfileCaches;
   InputDeviceRegistry inputDeviceRegistry;
+  // ProfileSessionCoordinator injects the active profile's input.json save
+  // operation. Keeping the path owner outside the settings scene prevents
+  // fallback to a machine-global legacy location.
   std::function<bool(const InputProfile &, std::string &)>
       saveActiveInputProfile = [](const InputProfile &, std::string &error) {
         error = "The active profile input path is not configured.";
@@ -215,6 +220,9 @@ public:
                 return false;
               }
               return saveActiveInputProfile(inputProfile, error);
+            },
+            .beforeInputReplacement = [this]() {
+              inputProfileReplacementNotifier.notifyBeforeReplacement();
             }});
 
     settings.sanitize();

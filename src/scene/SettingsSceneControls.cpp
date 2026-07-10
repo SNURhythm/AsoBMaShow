@@ -485,6 +485,7 @@ void SettingsScene::refreshSettingsText() {
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);
   applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
+  applyTabStyle(inputTabButton, inputTabText, SettingsTab::Input);
   applyTabStyle(miscTabButton, miscTabText, SettingsTab::Misc);
   applyTabStyle(audioTabButton, audioTabText, SettingsTab::Audio);
   applyTabStyle(displayTabButton, displayTabText, SettingsTab::Display);

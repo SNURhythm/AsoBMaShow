@@ -750,6 +750,29 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(input_binding_resolver_tests PRIVATE SDL2)
     endif()
 
+    add_executable(input_capture_controller_tests
+        tests/input_capture_controller_tests.cpp
+        src/input/InputCaptureController.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputDeviceIdentity.cpp
+        src/input/InputDeviceRegistry.cpp
+        src/input/InputProfile.cpp
+        src/input/SDLInputBackend.cpp
+    )
+    target_include_directories(input_capture_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(input_capture_controller_tests PRIVATE cxx_std_23)
+    asobmashow_add_midi_backend(input_capture_controller_tests)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2)
+    endif()
+
     add_executable(app_settings_store_tests
         tests/app_settings_store_tests.cpp
         src/AppSettingsStore.cpp
@@ -1008,6 +1031,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
+    asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
+    set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)

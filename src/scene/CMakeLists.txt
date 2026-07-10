@@ -10,6 +10,7 @@ target_sources(main PRIVATE
     SettingsAudioVideoModel.cpp
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
+    SettingsSceneInput.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
     SettingsSceneTables.cpp

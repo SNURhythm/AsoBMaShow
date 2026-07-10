@@ -124,6 +124,9 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
     currentSettings = oldSettings;
     if (inputApplyAttempted && restoreInput_) {
       try {
+        if (dependencies_.beforeInputReplacement) {
+          dependencies_.beforeInputReplacement();
+        }
         restoreInput_(oldPaths.inputJson);
       } catch (const std::exception &restoreError) {
         appendRollbackError(message, "unable to restore input profile",
@@ -192,6 +195,9 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
 
   inputApplyAttempted = true;
   try {
+    if (dependencies_.beforeInputReplacement) {
+      dependencies_.beforeInputReplacement();
+    }
     errorMessage.clear();
     if (!applyInput_ || !applyInput_(targetPaths.inputJson, errorMessage)) {
       return rollback(ProfileError::IoFailure,
