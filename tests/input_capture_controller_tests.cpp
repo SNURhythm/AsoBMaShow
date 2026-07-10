@@ -72,6 +72,14 @@ input::PhysicalControl midiNoteControl(std::string deviceId, int index) {
           .direction = input::ControlDirection::Any};
 }
 
+input::PhysicalControl midiControlControl(std::string deviceId, int index) {
+  return {.deviceId = std::move(deviceId),
+          .deviceClass = input::DeviceClass::Midi,
+          .kind = input::ControlKind::MidiControl,
+          .index = index,
+          .direction = input::ControlDirection::Any};
+}
+
 input::InputBinding binding(std::string id, input::InputScope scope,
                             input::LogicalAction action,
                             input::PhysicalControl control) {
@@ -172,13 +180,16 @@ void testMonitoringNoiseActivationRepeatsAndDuplicateIgnore() {
               profile.bindings.empty() && saves == 0,
           "axis noise does not become a binding or persist");
 
-  harness.input(event(axisControl("stick:one", 2), 0.49F, 11));
+  harness.input(event(axisControl("stick:one", 2), 0.19F, 11));
   require(profile.bindings.empty(),
-          "an axis remains unbound below the activation threshold");
-  harness.input(event(axisControl("stick:one", 2), 0.50F, 12));
+          "an axis remains unbound below the sensitive activation threshold");
+  harness.input(event(axisControl("stick:one", 2), 0.20F, 12));
   require(controller.state() == InputCaptureController::State::Idle &&
               profile.bindings.size() == 1 && saves == 1,
-          "an axis binds only when it crosses the activation threshold");
+          "an axis binds at the sensitive activation threshold");
+  require(profile.bindings.front().activationThreshold == 0.20F &&
+              profile.bindings.front().releaseThreshold == 0.10F,
+          "captured axes inherit the sensitive gameplay thresholds");
   require(profile.bindings.front().control.direction ==
               input::ControlDirection::Positive,
           "a positive axis capture persists its direction");
@@ -213,6 +224,37 @@ void testMonitoringNoiseActivationRepeatsAndDuplicateIgnore() {
               profile.bindings.size() == 2 && saves == 2,
           "an exact scoped action/control duplicate is ignored without save");
   controller.cancel();
+}
+
+void testAxisCaptureUsesSensitiveHysteresis() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+  const auto axis = axisControl("gyro:one", 1);
+
+  controller.begin({1, 7}, lane(0));
+  harness.input(event(axis, 0.20F));
+  require(profile.bindings.size() == 1 && saves == 1,
+          "light deliberate gyro motion creates a binding");
+
+  controller.begin({1, 7}, lane(1));
+  harness.input(event(axis, 0.15F));
+  harness.input(event(axis, 0.20F));
+  require(controller.state() == InputCaptureController::State::Listening &&
+              saves == 1,
+          "mid-band gyro noise does not re-arm an active direction");
+
+  harness.input(event(axis, 0.10F));
+  harness.input(event(axis, 0.20F));
+  require(controller.state() ==
+              InputCaptureController::State::AwaitingConflictConfirmation,
+          "returning to the release threshold re-arms the gyro direction");
+  controller.rejectReplace();
 }
 
 void testConflictConfirmationIsTransactionalAndScopeLimited() {
@@ -368,8 +410,8 @@ void testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges() {
   require(saves == 1 && savedProfiles.size() == 1,
           "a committed binding edit persists once");
   const auto &edited = profile.bindings.front();
-  require(edited.deadZone == 0.0F && edited.releaseThreshold == 0.35F &&
-              edited.activationThreshold == 0.5F && edited.inverted,
+  require(edited.deadZone == 0.0F && edited.releaseThreshold == 0.10F &&
+              edited.activationThreshold == 0.20F && edited.inverted,
           "invalid threshold edits are sanitized before persistence");
   require(sameBinding(profile.bindings[1], untouched),
           "sanitizing one edit does not rewrite an unrelated binding");
@@ -415,19 +457,19 @@ void testPartialBindingEditsComposeAgainstCurrentProfileState() {
                                       return true;
                                     });
 
-  controller.updateBinding("editable", {.deadZone = 0.1F});
+  controller.updateBinding("editable", {.deadZone = 0.05F});
   controller.toggleBindingInversion("editable");
-  require(profile.bindings.front().deadZone == 0.1F &&
+  require(profile.bindings.front().deadZone == 0.05F &&
               profile.bindings.front().inverted,
           "an inversion click composes with the threshold committed by "
           "pointer-down focus loss");
   controller.toggleBindingInversion("editable");
   controller.toggleBindingInversion("editable");
-  controller.updateBinding("editable", {.releaseThreshold = 0.3F});
+  controller.updateBinding("editable", {.releaseThreshold = 0.15F});
 
   const auto &edited = profile.bindings.front();
   require(saves == 5, "each committed partial edit persists exactly once");
-  require(edited.deadZone == 0.1F && edited.releaseThreshold == 0.3F &&
+  require(edited.deadZone == 0.05F && edited.releaseThreshold == 0.15F &&
               edited.activationThreshold == editable.activationThreshold &&
               edited.inverted,
           "sibling edits and two rapid inversion toggles compose against the "
@@ -502,10 +544,10 @@ void testNegativeAxisHatAndMidiCapturePreserveControlIdentity() {
                                     });
 
   controller.begin({1, 7}, lane(0));
-  harness.input(event(axisControl("stick:one", 2), -0.49F));
+  harness.input(event(axisControl("stick:one", 2), -0.19F));
   require(profile.bindings.empty(),
           "negative axis noise below the threshold remains unbound");
-  harness.input(event(axisControl("stick:one", 2), -0.5F));
+  harness.input(event(axisControl("stick:one", 2), -0.20F));
   require(profile.bindings.back().control.direction ==
               input::ControlDirection::Negative,
           "negative axis capture persists its sign-specific direction");
@@ -524,6 +566,24 @@ void testNegativeAxisHatAndMidiCapturePreserveControlIdentity() {
       profile.bindings.back().control.kind == input::ControlKind::MidiNote &&
           profile.bindings.back().control.index == 2 * 128 + 60 && saves == 3,
       "MIDI capture preserves channel-note identity and saves once");
+}
+
+void testNonAxisCaptureThresholdRemainsUnchanged() {
+  RegistryHarness harness;
+  InputProfile profile;
+  InputCaptureController controller(harness.registry, profile,
+                                    [](const InputProfile &, std::string &) {
+                                      return true;
+                                    });
+
+  controller.begin({1, 7}, lane(0));
+  harness.input(event(midiControlControl("midi:one", 7), 0.20F));
+  require(profile.bindings.empty() &&
+              controller.state() == InputCaptureController::State::Listening,
+          "MIDI control capture does not inherit the axis threshold");
+  harness.input(event(midiControlControl("midi:one", 7), 0.50F));
+  require(profile.bindings.size() == 1,
+          "MIDI control capture retains the existing threshold");
 }
 
 void testProfileReplacementCancelsPendingConflictAndRegistrationLifetime() {
@@ -655,6 +715,7 @@ void testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier() {
 int main() {
   try {
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
+    testAxisCaptureUsesSensitiveHysteresis();
     testConflictConfirmationIsTransactionalAndScopeLimited();
     testSaveFailureNeverCommitsProfileMutation();
     testMissingStableIdsRemainVisibleAcrossHotplug();
@@ -663,6 +724,7 @@ int main() {
     testAmbiguousBindingIdsFailClosed();
     testDisconnectRearmsFirstCaptureAfterReconnect();
     testNegativeAxisHatAndMidiCapturePreserveControlIdentity();
+    testNonAxisCaptureThresholdRemainsUnchanged();
     testProfileReplacementCancelsPendingConflictAndRegistrationLifetime();
     testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier();
   } catch (const std::exception &error) {

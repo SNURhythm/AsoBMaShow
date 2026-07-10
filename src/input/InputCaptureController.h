@@ -46,7 +46,9 @@ public:
   [[nodiscard]] std::string_view lastError() const;
 
 private:
-  static constexpr float kCaptureActivationThreshold = 0.5F;
+  static constexpr float kNonAxisCaptureActivationThreshold = 0.50F;
+  static constexpr float kAxisCaptureActivationThreshold = 0.20F;
+  static constexpr float kAxisCaptureReleaseThreshold = 0.10F;
 
   void observeDevice(const input::InputDeviceSnapshot &device);
   void observeSample(const input::PhysicalInputEvent &event);

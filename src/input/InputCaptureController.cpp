@@ -263,8 +263,12 @@ void InputCaptureController::considerCandidate(
 void InputCaptureController::considerControlActivation(
     const input::PhysicalInputEvent &, input::PhysicalControl control,
     float value) {
-  const bool active = value >= kCaptureActivationThreshold;
   const bool wasActive = activationStates_[control];
+  const bool active =
+      control.kind == input::ControlKind::Axis
+          ? (wasActive ? value > kAxisCaptureReleaseThreshold
+                       : value >= kAxisCaptureActivationThreshold)
+          : value >= kNonAxisCaptureActivationThreshold;
   activationStates_[control] = active;
   if (wasActive || !active || state_ != State::Listening) {
     return;
