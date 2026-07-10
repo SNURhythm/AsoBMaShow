@@ -568,6 +568,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(app_database_initializer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(app_database_initializer_tests PRIVATE cxx_std_23)
 
+    add_executable(audio_video_settings_tests
+        tests/audio_video_settings_tests.cpp
+        src/AppSettings.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/settings/AudioVideoSettings.cpp
+    )
+    target_include_directories(audio_video_settings_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_video_settings_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
         src/bms_parser.cpp
@@ -598,6 +620,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
+
+    add_test(NAME foundation_av_settings
+        COMMAND $<TARGET_FILE:audio_video_settings_tests>)
+    set_tests_properties(foundation_av_settings PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_video_settings_tests>
+    )
 
     foreach(test_target IN ITEMS
         prep_metronome_tests
