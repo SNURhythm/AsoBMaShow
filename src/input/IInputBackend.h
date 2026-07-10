@@ -21,6 +21,10 @@ class IInputBackend {
 public:
   virtual ~IInputBackend() = default;
 
+  // Registry lifecycle contract: one start() call is paired with one stop()
+  // call (immediately after failure or during registry shutdown).
+  // stop() must synchronously revoke/join native producers; retained sink
+  // functions are closable and become harmless no-ops during teardown.
   virtual bool start(std::string &errorMessage) = 0;
   virtual void stop() = 0;
   virtual void handleSdlEvent(const SDL_Event &) {}

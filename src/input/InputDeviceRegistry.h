@@ -3,10 +3,9 @@
 #include "IInputBackend.h"
 
 #include <cstdint>
-#include <deque>
 #include <functional>
+#include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -43,16 +42,20 @@ public:
 private:
   using QueuedEvent =
       std::variant<input::PhysicalInputEvent, input::InputDeviceSnapshot>;
+  struct QueueState;
+  struct BackendSinkGate;
 
   void enqueueInput(input::PhysicalInputEvent event);
   void enqueueDevice(input::InputDeviceSnapshot device);
 
-  mutable std::mutex queueMutex_;
-  std::deque<QueuedEvent> queue_;
+  std::shared_ptr<QueueState> queueState_;
   std::vector<std::unique_ptr<IInputBackend>> backends_;
+  std::vector<std::shared_ptr<BackendSinkGate>> backendSinkGates_;
   std::unordered_map<std::string, input::InputDeviceSnapshot> devices_;
-  std::unordered_map<std::uint64_t, InputListener> inputListeners_;
-  std::unordered_map<std::uint64_t, DeviceListener> deviceListeners_;
+  std::map<std::uint64_t, InputListener> inputListeners_;
+  std::map<std::uint64_t, DeviceListener> deviceListeners_;
   std::vector<std::string> diagnostics_;
   std::uint64_t nextSubscriptionToken_ = 1;
+  bool pumping_ = false;
+  bool repumpRequested_ = false;
 };

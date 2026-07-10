@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,14 +18,31 @@ struct SdlDeviceIdentityDescriptor {
 class InputDeviceIdentity {
 public:
   std::string connect(const SdlDeviceIdentityDescriptor &descriptor);
-  void disconnect(std::string_view stableId);
+  bool disconnect(std::string_view stableId);
+  [[nodiscard]] std::size_t activeOwnerCount(std::string_view stableId) const;
 
 private:
-  struct NameSlot {
-    std::string base;
-    std::size_t index = 0;
+  struct ActiveIdentity {
+    std::string evidence;
+    std::size_t owners = 1;
+    std::string ordinalPool;
+    std::size_t ordinalIndex = std::numeric_limits<std::size_t>::max();
   };
 
-  std::unordered_map<std::string, std::vector<bool>> nameSlots_;
-  std::unordered_map<std::string, NameSlot> assignedNameSlots_;
+  std::string connectWithEvidence(
+      std::string base, std::string evidence,
+      std::optional<std::string> duplicatePathHash = std::nullopt);
+  std::string connectDistinct(std::string base, std::string_view marker,
+                              std::size_t firstOrdinal);
+  std::string allocateOrdinal(std::string_view base, std::string_view marker,
+                              std::size_t firstOrdinal);
+  void
+  activate(std::string stableId, std::string evidence,
+           std::string ordinalPool = {},
+           std::size_t ordinalIndex = std::numeric_limits<std::size_t>::max());
+
+  std::unordered_map<std::string, ActiveIdentity> activeIdentities_;
+  std::unordered_map<std::string, std::string> preferredByEvidence_;
+  std::unordered_map<std::string, std::string> reservedEvidenceByStableId_;
+  std::unordered_map<std::string, std::vector<bool>> ordinalSlots_;
 };

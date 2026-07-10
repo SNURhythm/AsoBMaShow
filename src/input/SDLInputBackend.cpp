@@ -156,11 +156,17 @@ bool SDLInputBackend::start(std::string &errorMessage) {
   SDL_GameControllerEventState(SDL_ENABLE);
   const int count = provider_->deviceCount();
   if (count < 0) {
-    errorMessage = copySdlString(SDL_GetError());
-    if (errorMessage.empty()) {
-      errorMessage = "SDL could not enumerate input devices";
+    std::string enumerationError = copySdlString(SDL_GetError());
+    if (enumerationError.empty()) {
+      enumerationError = "unknown error";
     }
-    return false;
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "SDL input enumeration failed; keyboard and hotplug remain "
+                "active: %s",
+                enumerationError.c_str());
+    errorMessage.clear();
+    started_ = true;
+    return true;
   }
 
   started_ = true;
@@ -289,21 +295,29 @@ void SDLInputBackend::addDevice(int deviceIndex) {
   const input::DeviceClass deviceClass =
       info->gameController ? input::DeviceClass::GameController
                            : input::DeviceClass::Joystick;
-  DeviceRecord record{
-      .snapshot = {.stableId = stableId,
-                   .displayName = info->name.empty() ? (info->gameController
-                                                            ? "Game Controller"
-                                                            : "Joystick")
-                                                     : info->name,
-                   .deviceClass = deviceClass,
-                   .connected = true,
-                   .buttons = info->buttons,
-                   .axes = info->axes,
-                   .hats = info->hats},
-      .gameController = info->gameController,
-      .hatValues = std::vector<Uint8>(
-          static_cast<std::size_t>(std::max(0, info->hats)), SDL_HAT_CENTERED)};
-  publishDevice(record.snapshot);
+  const int advertisedButtons =
+      info->gameController ? SDL_CONTROLLER_BUTTON_MAX : info->buttons;
+  const int advertisedAxes =
+      info->gameController ? SDL_CONTROLLER_AXIS_MAX : info->axes;
+  const int advertisedHats = info->gameController ? 0 : info->hats;
+  DeviceRecord record{.snapshot = {.stableId = stableId,
+                                   .displayName = info->name.empty()
+                                                      ? (info->gameController
+                                                             ? "Game Controller"
+                                                             : "Joystick")
+                                                      : info->name,
+                                   .deviceClass = deviceClass,
+                                   .connected = true,
+                                   .buttons = advertisedButtons,
+                                   .axes = advertisedAxes,
+                                   .hats = advertisedHats},
+                      .gameController = info->gameController,
+                      .hatValues = std::vector<Uint8>(
+                          static_cast<std::size_t>(std::max(0, advertisedHats)),
+                          SDL_HAT_CENTERED)};
+  if (identity_.activeOwnerCount(stableId) == 1) {
+    publishDevice(record.snapshot);
+  }
   devices_.emplace(info->instanceId, std::move(record));
 }
 
@@ -314,8 +328,9 @@ void SDLInputBackend::removeDevice(SDL_JoystickID instanceId) {
   }
 
   found->second.snapshot.connected = false;
-  publishDevice(found->second.snapshot);
-  identity_.disconnect(found->second.snapshot.stableId);
+  if (identity_.disconnect(found->second.snapshot.stableId)) {
+    publishDevice(found->second.snapshot);
+  }
   provider_->closeDevice(instanceId);
   devices_.erase(found);
 }

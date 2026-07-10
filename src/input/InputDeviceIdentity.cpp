@@ -33,11 +33,43 @@ std::string normalizeGuid(std::string_view value) {
   return result.empty() ? "unknown" : result;
 }
 
+bool isUnreserved(unsigned char value) {
+  return value < 0x80U && (std::isalnum(value) || value == '-' ||
+                           value == '.' || value == '_' || value == '~');
+}
+
+void appendEscapedByte(std::string &result, unsigned char value) {
+  constexpr std::array hex = {'0', '1', '2', '3', '4', '5', '6', '7',
+                              '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+  result.push_back('%');
+  result.push_back(hex[value >> 4]);
+  result.push_back(hex[value & 0x0fU]);
+}
+
+std::string percentEncode(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const unsigned char byte : value) {
+    if (isUnreserved(byte)) {
+      result.push_back(static_cast<char>(byte));
+    } else {
+      appendEscapedByte(result, byte);
+    }
+  }
+  return result;
+}
+
 std::string normalizeName(std::string_view value) {
   std::string result;
   bool pendingSeparator = false;
   for (const unsigned char c : trim(value)) {
-    if (std::isalnum(c)) {
+    if (c >= 0x80U) {
+      if (pendingSeparator && !result.empty()) {
+        result.push_back('-');
+      }
+      appendEscapedByte(result, c);
+      pendingSeparator = false;
+    } else if (std::isalnum(c)) {
       if (pendingSeparator && !result.empty()) {
         result.push_back('-');
       }
@@ -152,16 +184,99 @@ InputDeviceIdentity::connect(const SdlDeviceIdentityDescriptor &descriptor) {
   const std::string prefix = "sdl:" + normalizeGuid(descriptor.guid) + ':';
   const std::string serial = trim(descriptor.serial);
   if (!serial.empty()) {
-    return prefix + "serial:" + serial;
+    const std::string base = prefix + "serial:" + percentEncode(serial);
+    if (descriptor.path.empty()) {
+      return connectDistinct(base, "ordinal", 2);
+    }
+    const std::string evidence = base + '\x1f' + descriptor.path;
+    return connectWithEvidence(base, evidence, sha256(descriptor.path));
   }
 
-  const std::string path = trim(descriptor.path);
-  if (!path.empty()) {
-    return prefix + "path:" + sha256(path);
+  if (!descriptor.path.empty()) {
+    const std::string base = prefix + "path:" + sha256(descriptor.path);
+    return connectWithEvidence(base, base + '\x1f' + descriptor.path);
   }
 
   const std::string base = prefix + "name:" + normalizeName(descriptor.name);
-  auto &slots = nameSlots_[base];
+  return allocateOrdinal(base, {}, 1);
+}
+
+std::string InputDeviceIdentity::connectWithEvidence(
+    std::string base, std::string evidence,
+    std::optional<std::string> duplicatePathHash) {
+  if (const auto preferred = preferredByEvidence_.find(evidence);
+      preferred != preferredByEvidence_.end()) {
+    const auto active = activeIdentities_.find(preferred->second);
+    if (active == activeIdentities_.end()) {
+      activate(preferred->second, evidence);
+      return preferred->second;
+    }
+    if (active->second.evidence == evidence) {
+      ++active->second.owners;
+      return preferred->second;
+    }
+  }
+
+  const auto baseReservation = reservedEvidenceByStableId_.find(base);
+  if (baseReservation == reservedEvidenceByStableId_.end() ||
+      baseReservation->second == evidence) {
+    if (const auto active = activeIdentities_.find(base);
+        active == activeIdentities_.end()) {
+      preferredByEvidence_[evidence] = base;
+      reservedEvidenceByStableId_[base] = evidence;
+      activate(base, evidence);
+      return base;
+    } else if (active->second.evidence == evidence) {
+      ++active->second.owners;
+      preferredByEvidence_[evidence] = base;
+      reservedEvidenceByStableId_[base] = evidence;
+      return base;
+    }
+  }
+
+  if (duplicatePathHash) {
+    const std::string candidate = base + ":path:" + *duplicatePathHash;
+    const auto reservation = reservedEvidenceByStableId_.find(candidate);
+    if (reservation == reservedEvidenceByStableId_.end() ||
+        reservation->second == evidence) {
+      const auto active = activeIdentities_.find(candidate);
+      if (active == activeIdentities_.end()) {
+        preferredByEvidence_[evidence] = candidate;
+        reservedEvidenceByStableId_[candidate] = evidence;
+        activate(candidate, evidence);
+        return candidate;
+      }
+      if (active->second.evidence == evidence) {
+        ++active->second.owners;
+        preferredByEvidence_[evidence] = candidate;
+        reservedEvidenceByStableId_[candidate] = evidence;
+        return candidate;
+      }
+    }
+  }
+
+  const std::string candidate = allocateOrdinal(base, "ordinal", 2);
+  preferredByEvidence_[evidence] = candidate;
+  activeIdentities_.at(candidate).evidence = std::move(evidence);
+  return candidate;
+}
+
+std::string InputDeviceIdentity::connectDistinct(std::string base,
+                                                 std::string_view marker,
+                                                 std::size_t firstOrdinal) {
+  if (!activeIdentities_.contains(base)) {
+    activate(base, {});
+    return base;
+  }
+  return allocateOrdinal(base, marker, firstOrdinal);
+}
+
+std::string InputDeviceIdentity::allocateOrdinal(std::string_view base,
+                                                 std::string_view marker,
+                                                 std::size_t firstOrdinal) {
+  const std::string pool = std::string(base) + '\x1f' + std::string(marker) +
+                           '\x1f' + std::to_string(firstOrdinal);
+  auto &slots = ordinalSlots_[pool];
   const auto available = std::ranges::find(slots, false);
   const std::size_t index = static_cast<std::size_t>(available - slots.begin());
   if (available == slots.end()) {
@@ -170,20 +285,50 @@ InputDeviceIdentity::connect(const SdlDeviceIdentityDescriptor &descriptor) {
     *available = true;
   }
 
-  const std::string stableId = base + ':' + std::to_string(index + 1);
-  assignedNameSlots_[stableId] = {.base = base, .index = index};
+  std::string stableId(base);
+  stableId.push_back(':');
+  if (!marker.empty()) {
+    stableId.append(marker);
+    stableId.push_back(':');
+  }
+  stableId.append(std::to_string(firstOrdinal + index));
+  activate(stableId, {}, pool, index);
   return stableId;
 }
 
-void InputDeviceIdentity::disconnect(std::string_view stableId) {
-  const auto assigned = assignedNameSlots_.find(std::string(stableId));
-  if (assigned == assignedNameSlots_.end()) {
-    return;
+bool InputDeviceIdentity::disconnect(std::string_view stableId) {
+  const auto active = activeIdentities_.find(std::string(stableId));
+  if (active == activeIdentities_.end()) {
+    return false;
   }
-  auto slots = nameSlots_.find(assigned->second.base);
-  if (slots != nameSlots_.end() &&
-      assigned->second.index < slots->second.size()) {
-    slots->second[assigned->second.index] = false;
+  if (active->second.owners > 1) {
+    --active->second.owners;
+    return false;
   }
-  assignedNameSlots_.erase(assigned);
+
+  if (!active->second.ordinalPool.empty()) {
+    auto slots = ordinalSlots_.find(active->second.ordinalPool);
+    if (slots != ordinalSlots_.end() &&
+        active->second.ordinalIndex < slots->second.size()) {
+      slots->second[active->second.ordinalIndex] = false;
+    }
+  }
+  activeIdentities_.erase(active);
+  return true;
+}
+
+std::size_t
+InputDeviceIdentity::activeOwnerCount(std::string_view stableId) const {
+  const auto active = activeIdentities_.find(std::string(stableId));
+  return active == activeIdentities_.end() ? 0 : active->second.owners;
+}
+
+void InputDeviceIdentity::activate(std::string stableId, std::string evidence,
+                                   std::string ordinalPool,
+                                   std::size_t ordinalIndex) {
+  activeIdentities_.insert_or_assign(
+      std::move(stableId), ActiveIdentity{.evidence = std::move(evidence),
+                                          .owners = 1,
+                                          .ordinalPool = std::move(ordinalPool),
+                                          .ordinalIndex = ordinalIndex});
 }

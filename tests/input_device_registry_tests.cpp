@@ -79,9 +79,44 @@ private:
   std::string startError_;
 };
 
+struct TrackedBackendState {
+  int startCalls = 0;
+  int stopCalls = 0;
+  int handledEvents = 0;
+  int pumpCalls = 0;
+};
+
+class FailedTrackedBackend final : public IInputBackend {
+public:
+  FailedTrackedBackend(input::InputBackendSink sink,
+                       std::shared_ptr<TrackedBackendState> state)
+      : IInputBackend(std::move(sink)), state_(std::move(state)) {}
+
+  bool start(std::string &errorMessage) override {
+    ++state_->startCalls;
+    publishInput({.control = {.deviceId = "failed:backend",
+                              .deviceClass = input::DeviceClass::Keyboard,
+                              .kind = input::ControlKind::Key,
+                              .index = 99},
+                  .rawValue = 1.0,
+                  .normalizedValue = 1.0F});
+    errorMessage = "tracked backend unavailable";
+    return false;
+  }
+
+  void stop() override { ++state_->stopCalls; }
+  void handleSdlEvent(const SDL_Event &) override { ++state_->handledEvents; }
+  void pump() override { ++state_->pumpCalls; }
+
+private:
+  std::shared_ptr<TrackedBackendState> state_;
+};
+
 class FakeSdlDeviceProvider final : public ISdlInputDeviceProvider {
 public:
-  int deviceCount() const override { return static_cast<int>(devices.size()); }
+  int deviceCount() const override {
+    return deviceCountOverride.value_or(static_cast<int>(devices.size()));
+  }
 
   bool isGameController(int deviceIndex) const override {
     return validIndex(deviceIndex) && devices[deviceIndex].gameController;
@@ -92,6 +127,11 @@ public:
              std::string &errorMessage) override {
     if (!validIndex(deviceIndex)) {
       errorMessage = "fake SDL device index is out of range";
+      return std::nullopt;
+    }
+    if (std::ranges::find(failingOpenIndices, deviceIndex) !=
+        failingOpenIndices.end()) {
+      errorMessage = "fake SDL device open failure";
       return std::nullopt;
     }
     SdlInputDeviceInfo result = devices[deviceIndex];
@@ -110,6 +150,8 @@ public:
   std::vector<SdlInputDeviceInfo> devices;
   std::vector<SDL_JoystickID> openedInstances;
   std::vector<SDL_JoystickID> closedInstances;
+  std::vector<int> failingOpenIndices;
+  std::optional<int> deviceCountOverride;
 
 private:
   bool validIndex(int deviceIndex) const {
@@ -157,6 +199,22 @@ void testIdentityPrecedenceAndNameOrdinals() {
              "410ff61f20015ad",
          "path identity uses an exact SHA-256 digest");
 
+  const std::string spacedPathId = identity.connect(
+      {.guid = "AABB", .path = " abc ", .name = "Path With Spaces"});
+  expect(spacedPathId ==
+             "sdl:aabb:path:3eaf1941003943dfaa935adecffcaaa217e290def6fb0181141"
+             "ced6c9daabaad",
+         "path identity hashes the exact reported path without trimming");
+
+  const std::string escapedSerialId = identity.connect(
+      {.guid = "AABB", .serial = " pad:/%\x01 ", .name = "Escaped Pad"});
+  expect(escapedSerialId == "sdl:aabb:serial:pad%3A%2F%25%01",
+         "serial identity percent-encodes reserved and control bytes");
+  const std::string utf8SerialId =
+      identity.connect({.guid = "BEEF", .serial = "패드"});
+  expect(utf8SerialId == "sdl:beef:serial:%ED%8C%A8%EB%93%9C",
+         "serial identity percent-encodes every non-ASCII UTF-8 byte");
+
   const SdlDeviceIdentityDescriptor unnamed{.guid = "AABB",
                                             .name = "  Twin PAD / Pro  "};
   const std::string first = identity.connect(unnamed);
@@ -168,6 +226,58 @@ void testIdentityPrecedenceAndNameOrdinals() {
   identity.disconnect(first);
   expect(identity.connect(unnamed) == first,
          "a reconnect reuses the disconnected stable ordinal");
+
+  const std::string utf8Name =
+      identity.connect({.guid = "CAFE", .name = "패드"});
+  expect(utf8Name == "sdl:cafe:name:%ED%8C%A8%EB%93%9C:1",
+         "UTF-8 name bytes remain distinct through canonical escaping");
+}
+
+void testIdentityDisambiguatesActiveDuplicateSerials() {
+  InputDeviceIdentity identity;
+
+  const SdlDeviceIdentityDescriptor firstDescriptor{.guid = "1111",
+                                                    .serial = "0",
+                                                    .path = "/dev/input/twin-a",
+                                                    .name = "Twin Pad"};
+  const SdlDeviceIdentityDescriptor secondDescriptor{.guid = "1111",
+                                                     .serial = "0",
+                                                     .path =
+                                                         "/dev/input/twin-b",
+                                                     .name = "Twin Pad"};
+  const std::string first = identity.connect(firstDescriptor);
+  const std::string second = identity.connect(secondDescriptor);
+  expect(first == "sdl:1111:serial:0",
+         "first active serial owner retains the serial-priority ID");
+  expect(second ==
+             "sdl:1111:serial:0:path:"
+             "0976e2d9ffd49c976c7c77e3645011e321da23d69b3be059f44bb1312d0a520e",
+         "duplicate serial uses exact path evidence for disambiguation");
+  expect(first != second,
+         "simultaneous devices with a default serial remain independent");
+  expect(identity.connect(secondDescriptor) == second,
+         "overlapping instances with identical path evidence share an ID");
+
+  identity.disconnect(first);
+  const SdlDeviceIdentityDescriptor thirdDescriptor{.guid = "1111",
+                                                    .serial = "0",
+                                                    .path = "/dev/input/twin-c",
+                                                    .name = "Twin Pad"};
+  const std::string third = identity.connect(thirdDescriptor);
+  expect(third != first && third != second,
+         "historical serial path assignments reserve their effective IDs");
+  expect(identity.connect(firstDescriptor) == first,
+         "serial owner reconnects to its reserved ID after an overlap gap");
+
+  InputDeviceIdentity noPathIdentity;
+  const SdlDeviceIdentityDescriptor noPath{
+      .guid = "2222", .serial = "0", .name = "No Path Pad"};
+  const std::string noPathFirst = noPathIdentity.connect(noPath);
+  const std::string noPathSecond = noPathIdentity.connect(noPath);
+  expect(noPathFirst == "sdl:2222:serial:0",
+         "first pathless duplicate retains the serial ID");
+  expect(noPathSecond == "sdl:2222:serial:0:ordinal:2",
+         "pathless active duplicate uses a deterministic ordinal");
 }
 
 void testRegistryQueuesCallbacksAndKeepsKeyboard() {
@@ -231,28 +341,556 @@ void testRegistryQueuesCallbacksAndKeepsKeyboard() {
          "registry forwards every SDL event to each backend");
 }
 
-void testBackendStartFailureIsDiagnosableAndKeyboardSurvives() {
-  FakeBackend *backend = nullptr;
-  auto registry =
-      makeRegistryWithFakeBackend(backend, false, "fake backend unavailable");
-  expect(backend != nullptr && backend->startCalls == 1,
-         "failing backend start is attempted once");
-  expect(containsText(registry.diagnostics(), "fake backend unavailable"),
-         "backend start failure remains diagnosable");
-  expect(registry.isConnected("keyboard"),
-         "backend start failure never disables keyboard");
+input::PhysicalInputEvent fakeKeyEvent(int index) {
+  return {.control = {.deviceId = "keyboard",
+                      .deviceClass = input::DeviceClass::Keyboard,
+                      .kind = input::ControlKind::Key,
+                      .index = index},
+          .rawValue = 1.0,
+          .normalizedValue = 1.0F};
 }
 
-SdlInputDeviceInfo controllerInfo(SDL_JoystickID instanceId) {
+void testInputSubscriptionsAreSafeDuringSamePumpMutation() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+
+  std::uint64_t firstToken = 0;
+  std::uint64_t secondToken = 0;
+  bool firstOwnerAlive = true;
+  bool secondOwnerAlive = true;
+  int callbacks = 0;
+  int callbacksAfterOwnerTeardown = 0;
+  firstToken = registry.subscribeInput([&](const auto &) {
+    ++callbacks;
+    if (!firstOwnerAlive) {
+      ++callbacksAfterOwnerTeardown;
+    }
+    secondOwnerAlive = false;
+    registry.unsubscribe(secondToken);
+  });
+  secondToken = registry.subscribeInput([&](const auto &) {
+    ++callbacks;
+    if (!secondOwnerAlive) {
+      ++callbacksAfterOwnerTeardown;
+    }
+    firstOwnerAlive = false;
+    registry.unsubscribe(firstToken);
+  });
+  backend->sendInput(fakeKeyEvent(10));
+  registry.pump();
+  expect(callbacks == 1,
+         "first input callback cancels the other within the same event");
+  expect(callbacksAfterOwnerTeardown == 0,
+         "canceled input callback never runs after owner teardown");
+
+  int selfCallbacks = 0;
+  std::uint64_t selfToken = 0;
+  selfToken = registry.subscribeInput([&](const auto &) {
+    ++selfCallbacks;
+    registry.unsubscribe(selfToken);
+  });
+  backend->sendInput(fakeKeyEvent(11));
+  backend->sendInput(fakeKeyEvent(12));
+  registry.pump();
+  expect(selfCallbacks == 1,
+         "self-unsubscribe suppresses later queued input in the same pump");
+
+  int lateCallbacks = 0;
+  std::uint64_t lateToken = 0;
+  const std::uint64_t installerToken =
+      registry.subscribeInput([&](const auto &) {
+        if (lateToken == 0) {
+          lateToken =
+              registry.subscribeInput([&](const auto &) { ++lateCallbacks; });
+        }
+      });
+  backend->sendInput(fakeKeyEvent(13));
+  registry.pump();
+  expect(lateCallbacks == 0,
+         "listener subscribed during input dispatch skips the current event");
+  backend->sendInput(fakeKeyEvent(14));
+  registry.pump();
+  expect(lateCallbacks == 1,
+         "listener subscribed during dispatch receives later input");
+  registry.unsubscribe(installerToken);
+  registry.unsubscribe(lateToken);
+}
+
+void testDeviceSubscriptionsAreSafeDuringSamePumpMutation() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+
+  std::uint64_t firstToken = 0;
+  std::uint64_t secondToken = 0;
+  bool firstOwnerAlive = true;
+  bool secondOwnerAlive = true;
+  int callbacks = 0;
+  int callbacksAfterOwnerTeardown = 0;
+  firstToken = registry.subscribeDevices([&](const auto &) {
+    ++callbacks;
+    if (!firstOwnerAlive) {
+      ++callbacksAfterOwnerTeardown;
+    }
+    secondOwnerAlive = false;
+    registry.unsubscribe(secondToken);
+  });
+  secondToken = registry.subscribeDevices([&](const auto &) {
+    ++callbacks;
+    if (!secondOwnerAlive) {
+      ++callbacksAfterOwnerTeardown;
+    }
+    firstOwnerAlive = false;
+    registry.unsubscribe(firstToken);
+  });
+  registry.pump();
+  expect(callbacks == 1,
+         "first device callback cancels the other within the same event");
+  expect(callbacksAfterOwnerTeardown == 0,
+         "canceled device callback never runs after owner teardown");
+
+  int selfCallbacks = 0;
+  std::uint64_t selfToken = 0;
+  selfToken = registry.subscribeDevices([&](const auto &) {
+    ++selfCallbacks;
+    registry.unsubscribe(selfToken);
+  });
+  backend->sendDevice({.stableId = "fake:self-first",
+                       .displayName = "Self First",
+                       .deviceClass = input::DeviceClass::Joystick,
+                       .connected = true});
+  backend->sendDevice({.stableId = "fake:self-second",
+                       .displayName = "Self Second",
+                       .deviceClass = input::DeviceClass::Joystick,
+                       .connected = true});
+  registry.pump();
+  expect(selfCallbacks == 1,
+         "self-unsubscribe suppresses later device events in the same pump");
+
+  int lateCallbacks = 0;
+  std::uint64_t lateToken = 0;
+  const std::uint64_t installerToken =
+      registry.subscribeDevices([&](const auto &) {
+        if (lateToken == 0) {
+          lateToken =
+              registry.subscribeDevices([&](const auto &) { ++lateCallbacks; });
+        }
+      });
+  backend->sendDevice({.stableId = "fake:first",
+                       .displayName = "First",
+                       .deviceClass = input::DeviceClass::Joystick,
+                       .connected = true});
+  registry.pump();
+  expect(lateCallbacks == 0,
+         "listener subscribed during device dispatch skips the current event");
+  backend->sendDevice({.stableId = "fake:second",
+                       .displayName = "Second",
+                       .deviceClass = input::DeviceClass::Joystick,
+                       .connected = true});
+  registry.pump();
+  expect(lateCallbacks == 1,
+         "listener subscribed during dispatch receives later device events");
+  registry.unsubscribe(installerToken);
+  registry.unsubscribe(lateToken);
+}
+
+void testReentrantPumpPreservesQueuedEventFifo() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  std::vector<int> eventOrder;
+  registry.subscribeInput([&](const auto &event) {
+    eventOrder.push_back(event.control.index);
+    if (event.control.index == 20) {
+      backend->sendInput(fakeKeyEvent(22));
+      registry.pump();
+    }
+  });
+
+  backend->sendInput(fakeKeyEvent(20));
+  backend->sendInput(fakeKeyEvent(21));
+  registry.pump();
+  expect(eventOrder == std::vector<int>({20, 21, 22}),
+         "nested pump appends new work after the outer pending FIFO");
+}
+
+void testFailedBackendIsCleanedAndNeverDispatched() {
+  const auto state = std::make_shared<TrackedBackendState>();
+  {
+    std::vector<InputDeviceRegistry::BackendFactory> factories;
+    factories.emplace_back([state](input::InputBackendSink sink)
+                               -> std::unique_ptr<IInputBackend> {
+      return std::make_unique<FailedTrackedBackend>(std::move(sink), state);
+    });
+    InputDeviceRegistry registry(std::move(factories));
+    expect(state->startCalls == 1, "failed backend start is attempted once");
+    expect(state->stopCalls == 1,
+           "failed backend receives immediate cleanup exactly once");
+
+    SDL_Event event{};
+    event.type = SDL_USEREVENT;
+    registry.handleSdlEvent(event);
+    int inputCallbacks = 0;
+    registry.subscribeInput(
+        [&](const input::PhysicalInputEvent &) { ++inputCallbacks; });
+    registry.pump();
+    expect(state->handledEvents == 0,
+           "failed backend receives no SDL events after rejected start");
+    expect(state->pumpCalls == 0,
+           "failed backend receives no pump after rejected start");
+    expect(inputCallbacks == 0,
+           "failed backend startup publications are discarded");
+    expect(containsText(registry.diagnostics(), "tracked backend unavailable"),
+           "failed backend cleanup retains its startup diagnostic");
+    expect(registry.isConnected("keyboard"),
+           "failed backend cleanup retains the built-in keyboard");
+  }
+  expect(state->stopCalls == 1,
+         "failed backend is not retained for destructor cleanup");
+}
+
+SdlInputDeviceInfo
+controllerInfo(SDL_JoystickID instanceId,
+               std::string path = "/dev/input/controller-main",
+               std::string serial = {}) {
   return {.instanceId = instanceId,
           .gameController = true,
           .guid = "03000000DEAD0000BEEF000000000000",
-          .serial = "",
-          .path = "/dev/input/controller-main",
+          .serial = std::move(serial),
+          .path = std::move(path),
           .name = "Arcade Controller",
           .buttons = 12,
           .axes = 6,
-          .hats = 0};
+          .hats = 2};
+}
+
+SdlInputDeviceInfo joystickInfo(SDL_JoystickID instanceId) {
+  return {.instanceId = instanceId,
+          .gameController = false,
+          .guid = "11110000222200003333000044440000",
+          .path = "/dev/input/raw-stick",
+          .name = "Raw Stick",
+          .buttons = 8,
+          .axes = 2,
+          .hats = 1};
+}
+
+void testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->deviceCountOverride = -1;
+  auto registry = makeRegistryWithSdlProvider(provider);
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+  SDL_Event key{};
+  key.type = SDL_KEYDOWN;
+  key.key.keysym.scancode = SDL_SCANCODE_A;
+  registry.handleSdlEvent(key);
+  registry.pump();
+  expect(inputEvents.size() == 1 &&
+             inputEvents.front().control.deviceId == "keyboard",
+         "SDL enumeration failure leaves keyboard publication operational");
+
+  provider->deviceCountOverride.reset();
+  provider->devices = {controllerInfo(88, "/dev/input/hotplug-after-fail")};
+  SDL_Event added{};
+  added.type = SDL_JOYDEVICEADDED;
+  added.jdevice.which = 0;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(std::ranges::any_of(registry.snapshot(),
+                             [](const auto &device) {
+                               return device.deviceClass ==
+                                          input::DeviceClass::GameController &&
+                                      device.connected;
+                             }),
+         "SDL enumeration failure leaves later hotplug operational");
+}
+
+void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+
+  SDL_Event down{};
+  down.type = SDL_KEYDOWN;
+  down.key.keysym.scancode = SDL_SCANCODE_Q;
+  down.key.timestamp = 7;
+  registry.handleSdlEvent(down);
+  SDL_Event repeat = down;
+  repeat.key.repeat = 1;
+  registry.handleSdlEvent(repeat);
+  SDL_Event up = down;
+  up.type = SDL_KEYUP;
+  up.key.timestamp = 8;
+  registry.handleSdlEvent(up);
+  registry.pump();
+
+  expect(inputEvents.size() == 2,
+         "keyboard repeat keydown is filtered between press and release");
+  expect(inputEvents.size() == 2 &&
+             inputEvents[0].control.deviceId == "keyboard" &&
+             inputEvents[0].control.index == SDL_SCANCODE_Q &&
+             inputEvents[0].normalizedValue == 1.0F &&
+             inputEvents[0].timestampMicros == 7000 &&
+             inputEvents[1].normalizedValue == 0.0F &&
+             inputEvents[1].timestampMicros == 8000,
+         "keyboard events publish physical scancode edges and microseconds");
+}
+
+void testSdlRawJoystickButtonsAxesAndHatEdges() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {joystickInfo(55)};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  registry.pump();
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+
+  SDL_Event button{};
+  button.type = SDL_JOYBUTTONDOWN;
+  button.jbutton.which = 55;
+  button.jbutton.button = 4;
+  registry.handleSdlEvent(button);
+  SDL_Event axis{};
+  axis.type = SDL_JOYAXISMOTION;
+  axis.jaxis.which = 55;
+  axis.jaxis.axis = 1;
+  axis.jaxis.value = 32767;
+  registry.handleSdlEvent(axis);
+  SDL_Event diagonal{};
+  diagonal.type = SDL_JOYHATMOTION;
+  diagonal.jhat.which = 55;
+  diagonal.jhat.hat = 0;
+  diagonal.jhat.value = SDL_HAT_UP | SDL_HAT_RIGHT;
+  registry.handleSdlEvent(diagonal);
+  SDL_Event centered = diagonal;
+  centered.jhat.value = SDL_HAT_CENTERED;
+  registry.handleSdlEvent(centered);
+  registry.pump();
+
+  expect(inputEvents.size() == 6,
+         "raw joystick publishes button, axis, and four hat edges");
+  expect(inputEvents.size() == 6 &&
+             inputEvents[0].control.kind == input::ControlKind::Button &&
+             inputEvents[0].control.index == 4 &&
+             inputEvents[1].control.kind == input::ControlKind::Axis &&
+             inputEvents[1].normalizedValue == 1.0F,
+         "raw joystick button and positive axis endpoint are preserved");
+  expect(
+      inputEvents.size() == 6 &&
+          inputEvents[2].control.direction == input::ControlDirection::Up &&
+          inputEvents[2].normalizedValue == 1.0F &&
+          inputEvents[3].control.direction == input::ControlDirection::Right &&
+          inputEvents[3].normalizedValue == 1.0F &&
+          inputEvents[4].control.direction == input::ControlDirection::Up &&
+          inputEvents[4].normalizedValue == 0.0F &&
+          inputEvents[5].control.direction == input::ControlDirection::Right &&
+          inputEvents[5].normalizedValue == 0.0F,
+      "diagonal hat press and centering publish directional edge pairs");
+}
+
+void testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {joystickInfo(56)};
+  provider->failingOpenIndices = {0};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  registry.pump();
+  expect(std::ranges::none_of(registry.snapshot(),
+                              [](const auto &device) {
+                                return device.deviceClass ==
+                                       input::DeviceClass::Joystick;
+                              }),
+         "provider open failure publishes no phantom joystick");
+
+  provider->failingOpenIndices.clear();
+  SDL_Event added{};
+  added.type = SDL_JOYDEVICEADDED;
+  added.jdevice.which = 0;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(std::ranges::any_of(registry.snapshot(),
+                             [](const auto &device) {
+                               return device.deviceClass ==
+                                          input::DeviceClass::Joystick &&
+                                      device.connected;
+                             }),
+         "a later successful hotplug recovers after open failure");
+}
+
+void testSdlBackendStartStopIsIdempotentAndClosesHandles() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {joystickInfo(57)};
+  SDLInputBackend backend({.enqueueInput = [](input::PhysicalInputEvent) {},
+                           .enqueueDevice = [](input::InputDeviceSnapshot) {}},
+                          provider);
+  std::string error;
+  expect(backend.start(error), "direct SDL backend starts successfully");
+  expect(backend.start(error), "repeated SDL backend start is idempotent");
+  expect(provider->openedInstances == std::vector<SDL_JoystickID>({57}),
+         "repeated start opens each attached handle only once");
+  backend.stop();
+  backend.stop();
+  expect(provider->closedInstances == std::vector<SDL_JoystickID>({57}),
+         "repeated stop closes each handle exactly once");
+
+  expect(backend.start(error), "SDL backend can restart after a clean stop");
+  backend.stop();
+  expect(provider->openedInstances == std::vector<SDL_JoystickID>({57, 57}) &&
+             provider->closedInstances == std::vector<SDL_JoystickID>({57, 57}),
+         "restart owns and closes a fresh handle exactly once");
+}
+
+void testNullBackendFactoryIsDiagnosableAndHarmless() {
+  std::vector<InputDeviceRegistry::BackendFactory> factories;
+  factories.emplace_back(
+      [](input::InputBackendSink) -> std::unique_ptr<IInputBackend> {
+        return {};
+      });
+  InputDeviceRegistry registry(std::move(factories));
+  expect(containsText(registry.diagnostics(), "factory returned null"),
+         "null backend factory is retained as a diagnostic");
+  expect(registry.isConnected("keyboard"),
+         "null backend factory leaves keyboard observable");
+  registry.pump();
+}
+
+void testRetainedBackendSinkIsClosedAfterRegistryDestruction() {
+  input::InputBackendSink retainedSink;
+  {
+    std::vector<InputDeviceRegistry::BackendFactory> factories;
+    factories.emplace_back(
+        [&](input::InputBackendSink sink) -> std::unique_ptr<IInputBackend> {
+          retainedSink = sink;
+          return std::make_unique<FakeBackend>(std::move(sink), true,
+                                               std::string{});
+        });
+    InputDeviceRegistry registry(std::move(factories));
+    registry.pump();
+  }
+  expect(static_cast<bool>(retainedSink.enqueueInput) &&
+             static_cast<bool>(retainedSink.enqueueDevice),
+         "backend may retain closable sink functions after registry teardown");
+  retainedSink.enqueueInput(fakeKeyEvent(77));
+  retainedSink.enqueueDevice({.stableId = "late:device",
+                              .displayName = "Late Device",
+                              .deviceClass = input::DeviceClass::Joystick,
+                              .connected = true});
+}
+
+void testSdlDuplicateSerialsKeepIndependentEffectiveIds() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {
+      controllerInfo(30, "/dev/input/twin-a", "0"),
+      controllerInfo(31, "/dev/input/twin-b", "0"),
+  };
+  auto registry = makeRegistryWithSdlProvider(provider);
+  registry.pump();
+
+  const auto devices = registry.snapshot();
+  std::vector<std::string> controllerIds;
+  for (const auto &device : devices) {
+    if (device.deviceClass == input::DeviceClass::GameController) {
+      controllerIds.push_back(device.stableId);
+    }
+  }
+  expect(controllerIds.size() == 2,
+         "both controllers with a duplicated serial remain observable");
+  expect(controllerIds.size() == 2 && controllerIds[0] != controllerIds[1],
+         "duplicated serial controllers receive independent effective IDs");
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+  for (const SDL_JoystickID instanceId : {30, 31}) {
+    SDL_Event button{};
+    button.type = SDL_CONTROLLERBUTTONDOWN;
+    button.cbutton.which = instanceId;
+    button.cbutton.button = 2;
+    registry.handleSdlEvent(button);
+  }
+  registry.pump();
+  std::vector<std::string> inputIds;
+  for (const auto &event : inputEvents) {
+    inputIds.push_back(event.control.deviceId);
+  }
+  std::ranges::sort(inputIds);
+  std::ranges::sort(controllerIds);
+  expect(inputIds == controllerIds,
+         "input records use each controller's effective stable ID");
+
+  SDL_Event removed{};
+  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.jdevice.which = 30;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  expect(!registry.isConnected("sdl:03000000dead0000beef000000000000:serial:0"),
+         "removed duplicate serial owner becomes disconnected independently");
+  expect(registry.isConnected(controllerIds.back()),
+         "removing one duplicated serial owner leaves the other connected");
+}
+
+void testSdlOverlappingReconnectWaitsForLastOwnerRemoval() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {controllerInfo(42)};
+  auto registry = makeRegistryWithSdlProvider(provider);
+
+  std::vector<input::InputDeviceSnapshot> deviceEvents;
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.deviceClass == input::DeviceClass::GameController) {
+      deviceEvents.push_back(device);
+    }
+  });
+  registry.pump();
+  expect(deviceEvents.size() == 1 && deviceEvents.front().connected,
+         "overlap test begins with one connected controller");
+  if (deviceEvents.empty()) {
+    return;
+  }
+  const std::string stableId = deviceEvents.front().stableId;
+  deviceEvents.clear();
+
+  provider->devices.push_back(controllerInfo(77));
+  SDL_Event added{};
+  added.type = SDL_JOYDEVICEADDED;
+  added.jdevice.which = 1;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(deviceEvents.empty(),
+         "overlapping instance does not republish an already-live device");
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+  SDL_Event button{};
+  button.type = SDL_CONTROLLERBUTTONDOWN;
+  button.cbutton.which = 77;
+  button.cbutton.button = 1;
+  registry.handleSdlEvent(button);
+  registry.pump();
+  expect(inputEvents.size() == 1 &&
+             inputEvents.front().control.deviceId == stableId,
+         "overlapping instance input uses the shared effective stable ID");
+
+  SDL_Event removed{};
+  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.jdevice.which = 42;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  expect(deviceEvents.empty(),
+         "removing an old overlapping instance emits no disconnect");
+  expect(registry.isConnected(stableId),
+         "stable device remains connected while a new owner is live");
+
+  removed.jdevice.which = 77;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  expect(deviceEvents.size() == 1 && !deviceEvents.front().connected,
+         "last live owner removal publishes connected=false exactly once");
+  expect(!registry.isConnected(stableId),
+         "stable device disconnects after its final owner is removed");
 }
 
 void testSdlReconnectRemovalDedupAndAxisNormalization() {
@@ -275,6 +913,10 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
   const std::string stableId = deviceEvents.front().stableId;
   expect(stableId.find("42") == std::string::npos,
          "volatile SDL instance ID is absent from stable persistence ID");
+  expect(deviceEvents.front().buttons == SDL_CONTROLLER_BUTTON_MAX &&
+             deviceEvents.front().axes == SDL_CONTROLLER_AXIS_MAX &&
+             deviceEvents.front().hats == 0,
+         "controller snapshot advertises only standardized controller inputs");
 
   std::vector<input::PhysicalInputEvent> inputEvents;
   registry.subscribeInput(
@@ -295,6 +937,12 @@ void testSdlReconnectRemovalDedupAndAxisNormalization() {
   duplicateRawButton.jbutton.state = SDL_PRESSED;
   duplicateRawButton.jbutton.timestamp = 9;
   registry.handleSdlEvent(duplicateRawButton);
+  SDL_Event suppressedRawHat{};
+  suppressedRawHat.type = SDL_JOYHATMOTION;
+  suppressedRawHat.jhat.which = 42;
+  suppressedRawHat.jhat.hat = 0;
+  suppressedRawHat.jhat.value = SDL_HAT_UP;
+  registry.handleSdlEvent(suppressedRawHat);
   expect(inputEvents.empty(), "SDL events enqueue without inline listeners");
   registry.pump();
   expect(inputEvents.size() == 1,
@@ -379,8 +1027,21 @@ void testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals() {
 
 int main() {
   testIdentityPrecedenceAndNameOrdinals();
+  testIdentityDisambiguatesActiveDuplicateSerials();
   testRegistryQueuesCallbacksAndKeepsKeyboard();
-  testBackendStartFailureIsDiagnosableAndKeyboardSurvives();
+  testInputSubscriptionsAreSafeDuringSamePumpMutation();
+  testDeviceSubscriptionsAreSafeDuringSamePumpMutation();
+  testReentrantPumpPreservesQueuedEventFifo();
+  testFailedBackendIsCleanedAndNeverDispatched();
+  testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
+  testSdlKeyboardFiltersRepeatAndUsesScancodes();
+  testSdlRawJoystickButtonsAxesAndHatEdges();
+  testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();
+  testSdlBackendStartStopIsIdempotentAndClosesHandles();
+  testNullBackendFactoryIsDiagnosableAndHarmless();
+  testRetainedBackendSinkIsClosedAfterRegistryDestruction();
+  testSdlDuplicateSerialsKeepIndependentEffectiveIds();
+  testSdlOverlappingReconnectWaitsForLastOwnerRemoval();
   testSdlReconnectRemovalDedupAndAxisNormalization();
   testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals();
 
