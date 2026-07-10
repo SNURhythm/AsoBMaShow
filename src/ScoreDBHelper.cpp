@@ -22,11 +22,16 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-constexpr int kScoreDatabaseSchemaVersion = 4;
+constexpr int kLegacyScoreDatabaseSchemaVersion = 4;
+constexpr int kScoreDatabaseSchemaVersion = 5;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
+constexpr const char *kLegacyProvenanceJson =
+    "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
+    "\"eligibility\":\"legacy-unverified\"}";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
@@ -54,23 +59,115 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                              "duplicate column name");
 }
 
-int databaseUserVersion(sqlite3 *db) {
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, "PRAGMA user_version", stmt,
-                                    "reading score database version",
-                                    logSqlErrorText)) {
-    return 0;
-  }
-  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
-    return 0;
-  }
-  return sqlite3_column_int(stmt.get(), 0);
-}
-
 bool setDatabaseUserVersion(sqlite3 *db, int version) {
   const std::string query =
       "PRAGMA user_version = " + std::to_string(std::max(0, version));
   return execSql(db, query.c_str(), "updating score database version");
+}
+
+bool rejectFutureScoreDatabase(sqlite3 *db) {
+  const char *filename =
+      db != nullptr ? sqlite3_db_filename(db, "main") : nullptr;
+  if (db != nullptr && sqlite3_get_autocommit(db) != 0 && filename != nullptr &&
+      filename[0] != '\0') {
+    std::string error;
+    if (!preflightSqliteUserVersion(filename, kScoreDatabaseSchemaVersion,
+                                    error)
+             .has_value()) {
+      SDL_Log("Refusing score database schema preflight: %s", error.c_str());
+      return true;
+    }
+    return false;
+  }
+  std::string error;
+  const auto version = readSqliteUserVersion(db, error);
+  if (!version.has_value()) {
+    SDL_Log("Refusing score database with unreadable version: %s",
+            error.c_str());
+    return true;
+  }
+  if (*version <= kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  SDL_Log("Refusing future score database version %d (supported: %d)", *version,
+          kScoreDatabaseSchemaVersion);
+  return true;
+}
+
+bool ensureScoreProvenanceColumns(sqlite3 *db, const char *tableName) {
+  const std::string table(tableName);
+  const std::string addRuleset =
+      "ALTER TABLE " + table +
+      " ADD COLUMN ruleset_version INTEGER NOT NULL DEFAULT 0";
+  const std::string addEligibility =
+      "ALTER TABLE " + table +
+      " ADD COLUMN eligibility INTEGER NOT NULL DEFAULT 2";
+  const std::string addProvenance =
+      "ALTER TABLE " + table +
+      " ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '" +
+      kLegacyProvenanceJson + "'";
+  return ensureSqliteTableColumnLogged(
+             db, tableName, "ruleset_version", addRuleset.c_str(),
+             "reading score provenance schema",
+             "adding score ruleset version column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, tableName, "eligibility", addEligibility.c_str(),
+             "reading score provenance schema",
+             "adding score eligibility column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, tableName, "provenance_json", addProvenance.c_str(),
+             "reading score provenance schema",
+             "adding score provenance JSON column", logSqlErrorText);
+}
+
+bool migrateScoreDatabaseToVersion5(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading score provenance migration version", versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreDatabaseSchemaVersion) {
+    return true;
+  }
+  if (*version < kLegacyScoreDatabaseSchemaVersion) {
+    SDL_Log("Score database must reach version %d before provenance migration",
+            kLegacyScoreDatabaseSchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_score_provenance_v5"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_score_provenance_v5"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_provenance_v5; RELEASE "
+            "asobmashow_score_provenance_v5"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting score provenance migration", transactionError);
+    return false;
+  }
+  if (!ensureScoreProvenanceColumns(db, "scores") ||
+      !ensureScoreProvenanceColumns(db, "course_scores") ||
+      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing score provenance migration", transactionError);
+    return false;
+  }
+  return true;
 }
 
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
@@ -169,8 +266,7 @@ bool scoreSha256ColumnIsNotNull(sqlite3 *db, bool &notNull) {
   notNull = false;
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, "PRAGMA table_info(\"scores\")", stmt,
-                                    "reading score schema",
-                                    logSqlErrorText)) {
+                                    "reading score schema", logSqlErrorText)) {
     return false;
   }
 
@@ -217,8 +313,7 @@ bool rebuildScoreTableWithRequiredSha256(sqlite3 *db) {
                  "copying scores into sha256 required table");
   }
   if (ok) {
-    ok = execSql(db, "DROP TABLE scores",
-                 "dropping nullable score table");
+    ok = execSql(db, "DROP TABLE scores", "dropping nullable score table");
   }
   if (ok) {
     ok = execSql(db, "ALTER TABLE scores_sha256_rebuild RENAME TO scores",
@@ -249,9 +344,8 @@ bool ensureScoreSha256Required(sqlite3 *db) {
 
 int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "reading score migration value",
-                                    logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "reading score migration value", logSqlErrorText)) {
     return fallback;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
@@ -287,9 +381,8 @@ struct ScoreChartMatch {
 
 ScoreChartMatch scoreChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   return {
-      .chartPath =
-          Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath,
-                                                       "BMS/"),
+      .chartPath = Utils::GetStoragePathUtf8RelativeToDocuments(
+          chartMeta.BmsPath, "BMS/"),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -398,18 +491,15 @@ void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
 std::string bestClearMarkRankExpr() {
   return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
          std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-         std::to_string(kClearTypeFullComboRank) +
-         " ELSE clear_type END)";
+         std::to_string(kClearTypeFullComboRank) + " ELSE clear_type END)";
 }
 
 void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
-  const char *query =
-      "SELECT chart_sha256, ln_mode, rank "
-      "FROM score_sha256_clear_rank_cache";
+  const char *query = "SELECT chart_sha256, ln_mode, rank "
+                      "FROM score_sha256_clear_rank_cache";
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "loading score clear ranks",
-                                    logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "loading score clear ranks", logSqlErrorText)) {
     return;
   }
 
@@ -427,9 +517,8 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
       "final_gauge, clear_type, created_at "
       "FROM score_sha256_best_score_cache";
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "loading score best scores",
-                                    logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "loading score best scores", logSqlErrorText)) {
     return;
   }
 
@@ -495,9 +584,8 @@ void detachChartDatabaseForScoreMigration(sqlite3 *db) {
 }
 
 bool chartDatabaseHasRowsForScoreMigration(sqlite3 *db) {
-  const std::string query =
-      std::string("SELECT COUNT(*) FROM ") + kScoreMigrationChartSchema +
-      ".chart_meta";
+  const std::string query = std::string("SELECT COUNT(*) FROM ") +
+                            kScoreMigrationChartSchema + ".chart_meta";
   return selectScalarInt(db, query, 0) > 0;
 }
 
@@ -585,20 +673,19 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   const std::string betterMatchRank =
       scoreMigrationChartMatchRankExpr("cm_better");
   const std::string sourcePriority = chartSourcePriorityExpr("cm");
-  const std::string betterSourcePriority =
-      chartSourcePriorityExpr("cm_better");
+  const std::string betterSourcePriority = chartSourcePriorityExpr("cm_better");
   const std::string sourceArchiveSize = chartSourceArchiveSizeExpr("cm");
   const std::string betterSourceArchiveSize =
       chartSourceArchiveSizeExpr("cm_better");
   const std::string betterMatchPredicate =
       "NOT EXISTS (SELECT 1 FROM " + chartTable + " cm_better WHERE " +
       scoreMigrationChartMatchPredicate("cm_better") + " AND (" +
-      betterMatchRank + " < " + matchRank + " OR (" + betterMatchRank +
-      " = " + matchRank + " AND (" + betterSourcePriority + " < " +
-      sourcePriority + " OR (" + betterSourcePriority + " = " +
-      sourcePriority + " AND (" + betterSourceArchiveSize + " < " +
-      sourceArchiveSize + " OR (" + betterSourceArchiveSize + " = " +
-      sourceArchiveSize + " AND cm_better.path < cm.path)))))))";
+      betterMatchRank + " < " + matchRank + " OR (" + betterMatchRank + " = " +
+      matchRank + " AND (" + betterSourcePriority + " < " + sourcePriority +
+      " OR (" + betterSourcePriority + " = " + sourcePriority + " AND (" +
+      betterSourceArchiveSize + " < " + sourceArchiveSize + " OR (" +
+      betterSourceArchiveSize + " = " + sourceArchiveSize +
+      " AND cm_better.path < cm.path)))))))";
   const std::string bestMatchPredicate =
       matchPredicate + " AND " + betterMatchPredicate;
   const std::string matchedLnModeExpr = "COALESCE(cm.ln_mode, 0)";
@@ -607,16 +694,14 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
       "COALESCE(cm.total_backspin_notes, 0) > 0 "
       "AND " +
       long_note_mode::sqlValidValuePredicate(matchedLnModeExpr) +
-      " THEN cm.ln_mode ELSE 0 END FROM " +
-      chartTable + " cm WHERE " + bestMatchPredicate +
-      " ORDER BY cm.path LIMIT 1)";
+      " THEN cm.ln_mode ELSE 0 END FROM " + chartTable + " cm WHERE " +
+      bestMatchPredicate + " ORDER BY cm.path LIMIT 1)";
   const std::string effectiveModeExpr =
       "CASE WHEN COALESCE(cm.total_long_notes, 0) + "
       "COALESCE(cm.total_backspin_notes, 0) <= 0 THEN 0 ELSE " +
       std::to_string(long_note_mode::kLnValue) + " END";
-  const std::string purgeQuery =
-      "DELETE FROM scores WHERE COALESCE(" + matchedForcedModeExpr +
-      ", 0) IN (2, 3)";
+  const std::string purgeQuery = "DELETE FROM scores WHERE COALESCE(" +
+                                 matchedForcedModeExpr + ", 0) IN (2, 3)";
   const std::string updateQuery =
       "UPDATE scores SET ln_mode = COALESCE((SELECT " + effectiveModeExpr +
       " FROM " + chartTable + " cm WHERE " + bestMatchPredicate +
@@ -678,7 +763,8 @@ private:
 bool migrateScoreDatabaseToVersion1(sqlite3 *db, bool &completed) {
   completed = false;
   if (!execSqlAllowDuplicateColumn(
-          db, "ALTER TABLE scores ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+          db,
+          "ALTER TABLE scores ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
           "migrating score long note mode")) {
     return false;
   }
@@ -708,10 +794,16 @@ bool migrateScoreDatabaseToVersion4(sqlite3 *db, bool &completed) {
   return true;
 }
 
-bool runScoreDatabaseMigrationPasses(
-    sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
-    std::size_t passCount, int latestVersion) {
-  int currentVersion = databaseUserVersion(db);
+bool runScoreDatabaseMigrationPasses(sqlite3 *db,
+                                     const ScoreDatabaseMigrationPass *passes,
+                                     std::size_t passCount, int latestVersion) {
+  std::string versionError;
+  const auto storedVersion = readSqliteUserVersion(db, versionError);
+  if (!storedVersion.has_value()) {
+    logSqlErrorText("reading score migration version", versionError);
+    return false;
+  }
+  int currentVersion = *storedVersion;
   if (currentVersion >= latestVersion) {
     return true;
   }
@@ -753,15 +845,15 @@ bool migrateScoreDatabaseSchema(sqlite3 *db) {
       {3, "normalize score chart hashes", migrateScoreDatabaseToVersion3},
       {4, "score identity summaries", migrateScoreDatabaseToVersion4},
   };
-  return runScoreDatabaseMigrationPasses(
-      db, kMigrationPasses,
-      sizeof(kMigrationPasses) / sizeof(kMigrationPasses[0]),
-      kScoreDatabaseSchemaVersion);
+  return runScoreDatabaseMigrationPasses(db, kMigrationPasses,
+                                         sizeof(kMigrationPasses) /
+                                             sizeof(kMigrationPasses[0]),
+                                         kLegacyScoreDatabaseSchemaVersion);
 }
 } // namespace
 
-std::size_t TransparentStringHash::operator()(std::string_view value) const
-    noexcept {
+std::size_t
+TransparentStringHash::operator()(std::string_view value) const noexcept {
   return std::hash<std::string_view>{}(value);
 }
 
@@ -794,13 +886,13 @@ int scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &chartMeta,
 int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
                                   int totalBackSpinNotes,
                                   int selectedLongNoteMode) {
-  return scoreLongNoteModeForClearLampValues(
-      chartLongNoteMode, totalLongNotes, totalBackSpinNotes,
-      selectedLongNoteMode);
+  return scoreLongNoteModeForClearLampValues(chartLongNoteMode, totalLongNotes,
+                                             totalBackSpinNotes,
+                                             selectedLongNoteMode);
 }
 
-int ScoreClearRankCache::bestRankFor(
-    const bms_parser::ChartMeta &chartMeta, int selectedLongNoteMode) const {
+int ScoreClearRankCache::bestRankFor(const bms_parser::ChartMeta &chartMeta,
+                                     int selectedLongNoteMode) const {
   return bestRankForHash(
       chartMeta.SHA256,
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
@@ -833,14 +925,12 @@ int ScoreClearRankCache::bestCourseRankForId(int courseId) const {
 std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
                         int selectedLongNoteMode) const {
-  return bestForHash(
-      chartMeta.SHA256,
-      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
+  return bestForHash(chartMeta.SHA256, scoreLongNoteModeForClearLamp(
+                                           chartMeta, selectedLongNoteMode));
 }
 
 std::optional<ScoreBestSnapshot>
-ScoreBestCache::bestForHash(const std::string &sha256,
-                            int longNoteMode) const {
+ScoreBestCache::bestForHash(const std::string &sha256, int longNoteMode) const {
   const std::string normalizedSha = normalizedHash(sha256);
   return bestForStoredKey(normalizedSha, longNoteMode);
 }
@@ -865,36 +955,49 @@ ScoreDBHelper &ScoreDBHelper::GetInstance() {
   return instance;
 }
 
+ScoreDBHelper::ScoreDBHelper(std::filesystem::path databasePath)
+    : databasePath_(std::move(databasePath)) {}
+
+void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
+  databasePath_ = std::move(databasePath);
+  gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+}
+
+const std::filesystem::path &ScoreDBHelper::GetDatabasePath() const {
+  return databasePath_;
+}
+
 sqlite3 *ScoreDBHelper::Connect() {
-  const std::filesystem::path directory = Utils::GetDocumentsPath("db");
+  const std::filesystem::path path =
+      databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
+                            : databasePath_;
+  const std::filesystem::path directory = path.parent_path();
   std::error_code directoryError;
-  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+  if (!directory.empty() &&
+      !Utils::EnsureDirectoryExists(directory, directoryError)) {
     SDL_Log("Can't create score database directory %s: %s",
             fspath_to_utf8(directory).c_str(),
             directoryError.message().c_str());
     return nullptr;
   }
-  const std::filesystem::path path = directory / "score.db";
 
   std::string openError;
-  sqlite3 *db = openSqliteDatabase(path, openError);
+  sqlite3 *db = openValidatedSqliteDatabase(path, kScoreDatabaseSchemaVersion,
+                                            false, openError);
   if (db == nullptr) {
-    SDL_Log("Can't open score database: %s", openError.c_str());
+    SDL_Log("Refusing to open score database %s: %s",
+            fspath_to_utf8(path).c_str(), openError.c_str());
     return nullptr;
-  }
-
-  if (const auto pragmaError = applySqlitePragmas(
-          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
-    SDL_Log("Could not configure score database: %s", pragmaError->c_str());
   }
   return db;
 }
 
-void ScoreDBHelper::Close(sqlite3 *db) {
-  closeSqliteDatabase(db);
-}
+void ScoreDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
 bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
+  if (db == nullptr || rejectFutureScoreDatabase(db)) {
+    return false;
+  }
   bool existingScoreTable = false;
   if (!sqliteTableExists(db, "scores", existingScoreTable,
                          "checking score table existence")) {
@@ -921,7 +1024,8 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   }
 
   const char *indexes[] = {
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256 ON scores(chart_sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256 ON "
+      "scores(chart_sha256)",
       "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5 ON scores(chart_md5)",
       "CREATE INDEX IF NOT EXISTS idx_scores_chart_path ON scores(chart_path)",
       "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256_clear_type ON "
@@ -957,44 +1061,46 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
     }
   }
   if (!existingScoreTable &&
-      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+      !setDatabaseUserVersion(db, kLegacyScoreDatabaseSchemaVersion)) {
     return false;
   }
   return true;
 }
 
 bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
-  const char *query =
-      "CREATE TABLE IF NOT EXISTS course_scores ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "course_id INTEGER,"
-      "course_key TEXT,"
-      "course_name TEXT,"
-      "course_group_name TEXT,"
-      "constraint_json TEXT,"
-      "gauge_type INTEGER NOT NULL,"
-      "gauge_profile INTEGER NOT NULL,"
-      "gauge_auto_shift INTEGER NOT NULL,"
-      "play_option TEXT,"
-      "assist_option TEXT,"
-      "completed_charts INTEGER NOT NULL,"
-      "total_charts INTEGER NOT NULL,"
-      "score INTEGER NOT NULL,"
-      "max_score INTEGER NOT NULL,"
-      "max_combo INTEGER NOT NULL,"
-      "combo_break INTEGER NOT NULL,"
-      "pgreat INTEGER NOT NULL,"
-      "great INTEGER NOT NULL,"
-      "good INTEGER NOT NULL,"
-      "bad INTEGER NOT NULL,"
-      "poor INTEGER NOT NULL,"
-      "kpoor INTEGER NOT NULL,"
-      "fast INTEGER NOT NULL,"
-      "slow INTEGER NOT NULL,"
-      "final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-      ")";
+  if (db == nullptr || rejectFutureScoreDatabase(db)) {
+    return false;
+  }
+  const char *query = "CREATE TABLE IF NOT EXISTS course_scores ("
+                      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      "course_id INTEGER,"
+                      "course_key TEXT,"
+                      "course_name TEXT,"
+                      "course_group_name TEXT,"
+                      "constraint_json TEXT,"
+                      "gauge_type INTEGER NOT NULL,"
+                      "gauge_profile INTEGER NOT NULL,"
+                      "gauge_auto_shift INTEGER NOT NULL,"
+                      "play_option TEXT,"
+                      "assist_option TEXT,"
+                      "completed_charts INTEGER NOT NULL,"
+                      "total_charts INTEGER NOT NULL,"
+                      "score INTEGER NOT NULL,"
+                      "max_score INTEGER NOT NULL,"
+                      "max_combo INTEGER NOT NULL,"
+                      "combo_break INTEGER NOT NULL,"
+                      "pgreat INTEGER NOT NULL,"
+                      "great INTEGER NOT NULL,"
+                      "good INTEGER NOT NULL,"
+                      "bad INTEGER NOT NULL,"
+                      "poor INTEGER NOT NULL,"
+                      "kpoor INTEGER NOT NULL,"
+                      "fast INTEGER NOT NULL,"
+                      "slow INTEGER NOT NULL,"
+                      "final_gauge REAL NOT NULL,"
+                      "clear_type INTEGER NOT NULL,"
+                      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                      ")";
   if (!execSql(db, query, "creating course score table")) {
     return false;
   }
@@ -1019,27 +1125,55 @@ bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
   return true;
 }
 
+bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
+  if (db == nullptr || rejectFutureScoreDatabase(db)) {
+    return false;
+  }
+  if (!CreateScoreTable(db) || !CreateCourseScoreTable(db)) {
+    return false;
+  }
+  return migrateScoreDatabaseToVersion5(db);
+}
+
+bool ScoreDBHelper::EnsureSchema() {
+  SqliteConnectionHandle connection(Connect());
+  return connection.get() != nullptr && EnsureSchema(connection.get());
+}
+
 bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
-                                const RhythmState &state) {
+                                const RhythmState &state,
+                                const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(provenance, provenanceError);
+  if (!provenanceJson.has_value()) {
+    SDL_Log("Refusing to save score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+  if (!EnsureSchema(db)) {
+    return false;
+  }
+
   const char *query =
       "INSERT INTO scores ("
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
       "chart_artist,"
       "score, max_score, max_combo, combo_break,"
       "pgreat, great, good, bad, poor, kpoor, fast, slow, final_gauge,"
-      "clear_type"
+      "clear_type, ruleset_version, eligibility, provenance_json"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @ln_mode, @chart_title, "
       "@chart_artist,"
       "@score, @max_score, @max_combo, @combo_break,"
       "@pgreat, @great, @good, @bad, @poor, @kpoor, @fast, @slow,"
-      "@final_gauge, @clear_type"
+      "@final_gauge, @clear_type, @ruleset_version, @eligibility,"
+      "@provenance_json"
       ")";
 
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing score insert",
+  if (!prepareSqliteStatementLogged(db, query, stmt, "preparing score insert",
                                     logSqlErrorText)) {
     return false;
   }
@@ -1075,6 +1209,10 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   sqlite3_bind_int(stmt.get(), bindIndex++, state.slowCount);
   sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getClearTypeRank());
+  sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   static_cast<int>(provenance.eligibility));
+  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1090,7 +1228,20 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
 bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       const CoursePlaySession &session,
                                       const RhythmState &state,
-                                      int completedCharts, int totalCharts) {
+                                      int completedCharts, int totalCharts,
+                                      const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(provenance, provenanceError);
+  if (!provenanceJson.has_value()) {
+    SDL_Log("Refusing to save course score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+  if (!EnsureSchema(db)) {
+    return false;
+  }
+
   const char *query =
       "INSERT INTO course_scores ("
       "course_id, course_key, course_name, course_group_name, constraint_json,"
@@ -1098,20 +1249,20 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
       "completed_charts, total_charts,"
       "score, max_score, max_combo, combo_break,"
       "pgreat, great, good, bad, poor, kpoor, fast, slow, final_gauge,"
-      "clear_type"
+      "clear_type, ruleset_version, eligibility, provenance_json"
       ") VALUES ("
       "@course_id, @course_key, @course_name, @course_group_name,"
       "@constraint_json, @gauge_type, @gauge_profile, @gauge_auto_shift,"
       "@play_option, @assist_option, @completed_charts, @total_charts,"
       "@score, @max_score, @max_combo, @combo_break,"
       "@pgreat, @great, @good, @bad, @poor, @kpoor, @fast, @slow,"
-      "@final_gauge, @clear_type"
+      "@final_gauge, @clear_type, @ruleset_version, @eligibility,"
+      "@provenance_json"
       ")";
 
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing course score insert",
-                                    logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "preparing course score insert", logSqlErrorText)) {
     return false;
   }
 
@@ -1126,8 +1277,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
   bindSqliteText(stmt.get(), bindIndex++, session.courseName);
   bindSqliteText(stmt.get(), bindIndex++, session.courseGroupName);
   bindSqliteText(stmt.get(), bindIndex++, session.constraintJson);
-  sqlite3_bind_int(stmt.get(), bindIndex++,
-                   gaugeTypeIndex(session.gaugeType));
+  sqlite3_bind_int(stmt.get(), bindIndex++, gaugeTypeIndex(session.gaugeType));
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(session.gaugeProfile));
   sqlite3_bind_int(stmt.get(), bindIndex++, session.gaugeAutoShift ? 1 : 0);
@@ -1156,6 +1306,10 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
     clearRank = kClearTypeFullComboRank;
   }
   sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
+  sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   static_cast<int>(provenance.eligibility));
+  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1166,15 +1320,23 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 }
 
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
-                              const RhythmState &state) {
+                              const RhythmState &state,
+                              const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
+           .has_value()) {
+    SDL_Log("Refusing to save score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return false;
   }
 
   const bool result =
-      CreateScoreTable(connection.get()) &&
-      InsertScore(connection.get(), chartMeta, state);
+      InsertScore(connection.get(), chartMeta, state, provenance);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -1183,16 +1345,24 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
 
 bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
-                                    int completedCharts, int totalCharts) {
+                                    int completedCharts, int totalCharts,
+                                    const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
+           .has_value()) {
+    SDL_Log("Refusing to save course score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return false;
   }
 
   const bool result =
-      CreateCourseScoreTable(connection.get()) &&
       InsertCourseScore(connection.get(), session, state, completedCharts,
-                        totalCharts);
+                        totalCharts, provenance);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -1207,7 +1377,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     return std::nullopt;
   }
 
-  if (!CreateScoreTable(connection.get())) {
+  if (!EnsureSchema(connection.get())) {
     return std::nullopt;
   }
 
@@ -1222,10 +1392,10 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
       "FROM scores WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
-      "AND (? = '' OR created_at < ?) "
-      "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
-      "score DESC, clear_type DESC, created_at DESC, id DESC "
-      "LIMIT 1";
+           "AND (? = '' OR created_at < ?) "
+           "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
+           "score DESC, clear_type DESC, created_at DESC, id DESC "
+           "LIMIT 1";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(connection.get(), query, stmt,
@@ -1236,8 +1406,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   int bindIndex = 1;
   bindIndex = bindScoreChartMatch(stmt.get(), bindIndex, match);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
-  sqlite3_bind_int(stmt.get(), bindIndex++,
-                   legacyLongNoteModeFallback ? 1 : 0);
+  sqlite3_bind_int(stmt.get(), bindIndex++, legacyLongNoteModeFallback ? 1 : 0);
   bindSqliteText(stmt.get(), bindIndex++, cutoff);
   bindSqliteText(stmt.get(), bindIndex++, cutoff);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
@@ -1251,7 +1420,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
   snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
   snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
-  snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
+  snapshot.finalGauge =
+      static_cast<float>(sqlite3_column_double(stmt.get(), 4));
   snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
   snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
   return snapshot;
@@ -1264,7 +1434,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
     return std::nullopt;
   }
 
-  if (!CreateCourseScoreTable(connection.get())) {
+  if (!EnsureSchema(connection.get())) {
     return std::nullopt;
   }
 
@@ -1299,7 +1469,8 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
   snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
-  snapshot.finalGauge = static_cast<float>(sqlite3_column_double(stmt.get(), 4));
+  snapshot.finalGauge =
+      static_cast<float>(sqlite3_column_double(stmt.get(), 4));
   snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
   snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
   return snapshot;
@@ -1312,10 +1483,8 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
     return cache;
   }
 
-  if (CreateScoreTable(connection.get())) {
+  if (EnsureSchema(connection.get())) {
     loadBestChartRanks(connection.get(), cache);
-  }
-  if (CreateCourseScoreTable(connection.get())) {
     loadBestCourseRanks(connection.get(), cache.rankByCourseId);
   }
   return cache;
@@ -1328,7 +1497,7 @@ ScoreBestCache ScoreDBHelper::LoadBestScores() {
     return cache;
   }
 
-  if (CreateScoreTable(connection.get())) {
+  if (EnsureSchema(connection.get())) {
     loadBestChartScores(connection.get(), cache);
   }
   return cache;

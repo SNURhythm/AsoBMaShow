@@ -528,6 +528,29 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
   }
 }
 
+std::optional<std::string>
+serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
+                                  std::string &error) {
+  error.clear();
+  try {
+    const std::string serialized = serializeScoreProvenance(provenance);
+    auto decoded = deserializeScoreProvenance(serialized, error);
+    if (!decoded.has_value()) {
+      return std::nullopt;
+    }
+
+    const std::string canonical = serializeScoreProvenance(*decoded);
+    if (canonical != serialized) {
+      error = "Score provenance did not produce canonical JSON.";
+      return std::nullopt;
+    }
+    return canonical;
+  } catch (const std::exception &exception) {
+    error = exception.what();
+    return std::nullopt;
+  }
+}
+
 ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   ScoreStageProvenance stage;
   stage.chartMd5 = input.chartMeta.MD5;
