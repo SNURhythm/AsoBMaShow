@@ -261,6 +261,18 @@ public class AsoBMaShowActivity extends SDLActivity {
         return getFilesDir().getAbsolutePath();
     }
 
+    public String getCacheDirPath() {
+        try {
+            File cacheDirectory = getCacheDir();
+            return cacheDirectory == null
+                    ? ERROR_PREFIX + "Android private cache is unavailable."
+                    : cacheDirectory.getCanonicalPath();
+        } catch (IOException e) {
+            return ERROR_PREFIX + messageForException(
+                    e, "Android private cache is unavailable.");
+        }
+    }
+
     public String hasManageExternalStorageBuildVariant() {
         return BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE ? "1" : "0";
     }
@@ -645,7 +657,12 @@ public class AsoBMaShowActivity extends SDLActivity {
 
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType(mimeType);
+        intent.setType(DocumentHandoffMimePolicy.importIntentType(mimeType));
+        String[] extraMimeTypes =
+                DocumentHandoffMimePolicy.importExtraMimeTypes(mimeType);
+        if (extraMimeTypes != null) {
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, extraMimeTypes);
+        }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         DocumentSelection selection = awaitDocumentSelection(
                 DocumentHandoffKind.IMPORT, operationToken, intent);

@@ -44,6 +44,7 @@ struct AndroidNativeMusicState {
 
 std::string GetAndroidExternalFilesDir();
 std::string GetAndroidInternalFilesDir();
+std::string GetAndroidCacheDir();
 bool AndroidBuildHasManageExternalStorage();
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
