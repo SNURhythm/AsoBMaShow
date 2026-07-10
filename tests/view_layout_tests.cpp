@@ -1,4 +1,5 @@
 #include "../src/view/View.h"
+#include "scene/SettingsSceneInputLayout.h"
 
 #include <cassert>
 #include <algorithm>
@@ -227,9 +228,33 @@ void testWrappedGridRowsKeepColumnMeasurements() {
   assertRowsAligned(row1, row3);
 }
 
+void testInputSettingsLayoutPolicy() {
+  const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
+  assert(!wide.stackSelectors);
+  assert(!wide.stackBindingEditor);
+  assert(wide.selectorWidth > 0 &&
+         wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
+
+  const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
+  assert(compact.stackSelectors);
+  assert(compact.stackBindingEditor);
+  assert(compact.selectorWidth == 520);
+  assert(compact.numericControlWidth > 0 && compact.numericControlWidth <= 520);
+
+  const auto narrow = settings_scene::resolveInputSettingsLayout(640, false);
+  assert(narrow.stackSelectors);
+  assert(narrow.stackBindingEditor);
+  assert(narrow.selectorWidth == 640);
+
+  const auto empty = settings_scene::resolveInputSettingsLayout(-50, true);
+  assert(empty.selectorWidth == 0);
+  assert(empty.numericControlWidth == 0);
+}
+
 } // namespace
 
 int main() {
+  testInputSettingsLayoutPolicy();
   bool deferredRan = false;
   View::deferAfterEvent([&]() { deferredRan = true; });
   assert(!deferredRan);

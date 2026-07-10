@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
+#include "../input/InputCaptureController.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
 
@@ -210,6 +211,7 @@ void SettingsScene::measureTemporaryArchiveCache() {
 
 void SettingsScene::init() {
   lastLayoutWidth = -1;
+  ensureInputCaptureController();
   observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
 }
@@ -228,6 +230,7 @@ void SettingsScene::update(float dt) {
   applyPendingDifficultyTableUpdates();
   applyPendingArchiveCacheCleanupStatus();
   refreshTablesIfLibraryChanged();
+  updateInputSettingsState();
   ensureLayoutUpToDate();
 }
 
@@ -315,6 +318,9 @@ void SettingsScene::cleanupScene() {
   difficultyTableImportSucceeded = false;
   destroyPreviewInputHandler();
   destroyPreviewRenderer();
+  inputCaptureController.reset();
+  inputCaptureAction.reset();
+  inputLastViewSignature.clear();
   previewLanePressed.clear();
   previewCombo = 0;
   previewScore = 0;
@@ -369,12 +375,14 @@ void SettingsScene::cleanupScene() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  inputTabButton = nullptr;
   miscTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
+  inputTabText = nullptr;
   miscTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
@@ -394,6 +402,12 @@ void SettingsScene::cleanupScene() {
   difficultyTableImportTableText = nullptr;
   difficultyTableImportProgressText = nullptr;
   difficultyTableImportCloseButton = nullptr;
+  inputPlayerDropdown = nullptr;
+  inputKeyModeDropdown = nullptr;
+  inputDeviceDropdown = nullptr;
+  inputMonitorText = nullptr;
+  inputCaptureStateText = nullptr;
+  inputErrorText = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

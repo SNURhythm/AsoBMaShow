@@ -31,6 +31,14 @@ public:
   AppSettings settings;
   InputProfile inputProfile;
   InputDeviceRegistry inputDeviceRegistry;
+  // ProfileSessionCoordinator injects the active profile's input.json save
+  // operation. Keeping the path owner outside the settings scene prevents
+  // fallback to a machine-global legacy location.
+  std::function<bool(const InputProfile &, std::string &)>
+      saveActiveInputProfile = [](const InputProfile &, std::string &error) {
+        error = "The active profile input path is not configured.";
+        return false;
+      };
   Jukebox jukebox;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;

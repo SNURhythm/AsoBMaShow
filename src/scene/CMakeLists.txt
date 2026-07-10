@@ -8,6 +8,7 @@ target_sources(main PRIVATE
     ResultScene.cpp
     SettingsScene.cpp
     SettingsSceneControls.cpp
+    SettingsSceneInput.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
     SettingsSceneTables.cpp

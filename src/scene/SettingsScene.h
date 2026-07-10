@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -22,6 +23,8 @@ class ScrollView;
 class BMSRenderer;
 class RhythmInputHandler;
 class RhythmLaneInputController;
+class DropdownView;
+class InputCaptureController;
 
 namespace settings_scene {
 struct LayoutMetrics;
@@ -33,6 +36,7 @@ class Note;
 } // namespace bms_parser
 
 #include "../input/IRhythmControl.h"
+#include "../input/InputTypes.h"
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
@@ -55,6 +59,7 @@ private:
     Timing,
     Visual,
     Lane,
+    Input,
     Misc,
     DifficultyTables,
     BmsLibrary,
@@ -132,12 +137,14 @@ private:
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
+  Button *inputTabButton = nullptr;
   Button *miscTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
+  TextView *inputTabText = nullptr;
   TextView *miscTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
@@ -158,6 +165,21 @@ private:
   TextView *difficultyTableImportProgressText = nullptr;
   Button *difficultyTableImportCloseButton = nullptr;
   ScrollView *scrollView = nullptr;
+  DropdownView *inputPlayerDropdown = nullptr;
+  DropdownView *inputKeyModeDropdown = nullptr;
+  DropdownView *inputDeviceDropdown = nullptr;
+  TextView *inputMonitorText = nullptr;
+  TextView *inputCaptureStateText = nullptr;
+  TextView *inputErrorText = nullptr;
+  std::unique_ptr<InputCaptureController> inputCaptureController;
+  int inputSelectedPlayer = 1;
+  int inputSelectedKeyMode = 7;
+  std::string inputSelectedDeviceId;
+  bool inputPlayerDropdownOpen = false;
+  bool inputKeyModeDropdownOpen = false;
+  bool inputDeviceDropdownOpen = false;
+  std::optional<input::LogicalAction> inputCaptureAction;
+  std::string inputLastViewSignature;
   bool previewActive = false;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
@@ -237,6 +259,7 @@ private:
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
   View *
   buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
@@ -249,6 +272,12 @@ private:
   void destroyPreviewRenderer();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
+  void ensureInputCaptureController();
+  void updateInputSettingsState();
+  void refreshInputMonitorText();
+  void refreshInputDropdowns();
+  void requestInputViewRebuild();
+  std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
   void resetPreviewHudSample();

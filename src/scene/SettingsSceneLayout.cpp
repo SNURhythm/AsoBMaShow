@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
@@ -119,12 +120,14 @@ void SettingsScene::resetViewState() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  inputTabButton = nullptr;
   miscTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
+  inputTabText = nullptr;
   miscTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
@@ -144,6 +147,12 @@ void SettingsScene::resetViewState() {
   difficultyTableImportTableText = nullptr;
   difficultyTableImportProgressText = nullptr;
   difficultyTableImportCloseButton = nullptr;
+  inputPlayerDropdown = nullptr;
+  inputKeyModeDropdown = nullptr;
+  inputDeviceDropdown = nullptr;
+  inputMonitorText = nullptr;
+  inputCaptureStateText = nullptr;
+  inputErrorText = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -2657,6 +2666,11 @@ void SettingsScene::initView() {
       if (activeTab == tab) {
         return;
       }
+      if (activeTab == SettingsTab::Input &&
+          inputCaptureController != nullptr) {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+      }
       activeTab = tab;
       lastLayoutWidth = -1;
     });
@@ -2667,6 +2681,7 @@ void SettingsScene::initView() {
   visualTabButton =
       makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
+  inputTabButton = makeTabButton(SettingsTab::Input, "Input", &inputTabText);
   miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
   difficultyTablesTabButton = makeTabButton(
       SettingsTab::DifficultyTables, "Difficulty Tables",
@@ -2676,6 +2691,7 @@ void SettingsScene::initView() {
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
+  tabControls->addView(inputTabButton);
   tabControls->addView(miscTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
@@ -2700,6 +2716,9 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::Lane:
     cardsColumn = buildLaneTab(metrics);
+    break;
+  case SettingsTab::Input:
+    cardsColumn = buildInputTab(metrics);
     break;
   case SettingsTab::Misc:
     cardsColumn = buildMiscTab(metrics);

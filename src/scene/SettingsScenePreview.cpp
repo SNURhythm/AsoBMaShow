@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
 #include "play/BMSRenderer.h"
