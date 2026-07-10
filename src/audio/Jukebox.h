@@ -81,7 +81,7 @@ makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
       .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
 }
 
-class Jukebox {
+class Jukebox : public audio::IPlaybackSession {
 public:
   struct PerformanceAnalytics {
     static const int BUFFER_SIZE = 10000;
@@ -96,6 +96,8 @@ public:
   PerformanceAnalytics performanceAnalytics;
 
   Jukebox(Stopwatch *stopwatch);
+  Jukebox(Stopwatch *stopwatch,
+          std::unique_ptr<audio::IBackendFactory> backendFactory);
   ~Jukebox();
 
   // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
@@ -144,6 +146,11 @@ public:
   void pause();
   void resume();
   bool isPaused();
+  [[nodiscard]] AudioWrapper &audioRuntime() { return audio; }
+  audio::PlaybackSnapshot suspendAndDrain() override;
+  bool restorePlayback(const audio::PlaybackSnapshot &snapshot,
+                       std::string &errorMessage) override;
+  void leavePlaybackStopped() override;
 
 private:
   bgfx::UniformHandle s_texColor;
@@ -216,6 +223,8 @@ private:
       std::atomic_bool &isCancelled);
   void scheduleAudioFromCursor();
   void playOverlappingAudioAt(long long micro);
+  audio::playback::BackendOperationResult
+  playWithClockState(long long startMicros, bool paused);
   void ensurePrepMetronomeSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
@@ -226,6 +235,7 @@ private:
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   bool activateVisualAt(int visualId, bgfx::ViewId viewId,
                         long long elapsedMicros);
+  void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {

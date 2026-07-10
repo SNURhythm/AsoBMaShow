@@ -620,6 +620,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(audio_wrapper_lifecycle_tests
         tests/audio_wrapper_lifecycle_tests.cpp
+        src/audio/AudioBackend.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
         src/path.cpp
@@ -630,6 +631,48 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
     target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+
+    add_executable(jukebox_restore_tests
+        tests/jukebox_restore_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/Utils.cpp
+        src/audio/AudioBackend.cpp
+        src/audio/AudioDeviceManager.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/audio/Jukebox.cpp
+        src/audio/decoder.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/utils/Stopwatch.cpp
+        src/video/VideoPlayer.cpp
+    )
+    target_include_directories(jukebox_restore_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(jukebox_restore_tests PRIVATE cxx_std_23)
+    target_compile_definitions(jukebox_restore_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(jukebox_restore_tests PRIVATE ${COMMON_LIBS} bgfx)
+    if(APPLE)
+        target_link_libraries(jukebox_restore_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(jukebox_restore_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(audio_device_manager_tests
+        tests/audio_device_manager_tests.cpp
+        src/audio/AudioDeviceManager.cpp
+    )
+    target_include_directories(audio_device_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_device_manager_tests PRIVATE cxx_std_23)
 
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
@@ -822,6 +865,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_wrapper_lifecycle_tests>
         TIMEOUT 15
+    )
+
+    add_test(NAME foundation_av_audio_device
+        COMMAND $<TARGET_FILE:audio_device_manager_tests>)
+    set_tests_properties(foundation_av_audio_device PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_device_manager_tests>
+    )
+
+    add_test(NAME foundation_av_jukebox_restore
+        COMMAND $<TARGET_FILE:jukebox_restore_tests>)
+    set_tests_properties(foundation_av_jukebox_restore PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:jukebox_restore_tests>
+        TIMEOUT 30
     )
 
     foreach(test_target IN ITEMS

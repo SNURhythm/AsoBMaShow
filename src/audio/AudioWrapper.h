@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioMix.h"
+#include "AudioDeviceManager.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <miniaudio.h>
@@ -105,9 +106,11 @@ struct UserData {
   PlateReverb *reverb;
   SoftKneeCompressor *compressor;
 };
-class AudioWrapper {
+class AudioWrapper : public audio::IAudioRuntime {
 public:
   AudioWrapper(Stopwatch *stopwatch);
+  AudioWrapper(Stopwatch *stopwatch,
+               std::unique_ptr<audio::IBackendFactory> injectedFactory);
   AudioWrapper(
       Stopwatch *stopwatch,
       std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend);
@@ -136,18 +139,25 @@ public:
   void setTrebleBoost(float db);
   void setReverbMix(float mix);
   void setCompressor(float threshold, float ratio);
-  void setVolumes(const audio::Volumes &volumes);
+  [[nodiscard]] audio::Capabilities capabilities() const override;
+  [[nodiscard]] audio::RuntimeState runtimeState() const override;
+  bool restart(const audio::StreamRequest &request,
+               std::string &errorMessage) override;
+  bool restore(const audio::RuntimeState &previous,
+               std::string &errorMessage) override;
+  void setVolumes(const audio::Volumes &volumes) override;
   void setVolumes(const player_settings::AudioSettings &settings);
 
   audio::playback::BackendOperationResult unloadSounds();
 
 private:
+  std::unique_ptr<audio::IBackendFactory> backendFactory;
   std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
   AudioCallbackState callbackState;
   std::atomic<uint64_t> scheduledSoundSequence{0};
-  std::mutex deviceLifecycleMutex;
+  mutable std::mutex deviceLifecycleMutex;
   std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
@@ -167,6 +177,7 @@ private:
   std::atomic<long long> audioClockAnchorEndMicros{0};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};
+  audio::RuntimeState runtimeState_;
 
   UserData userData;
   Stopwatch *stopwatch;
@@ -174,11 +185,10 @@ private:
   bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
-  bool appendScheduledSound(SoundData *soundData, long long startMicros,
-                            uint64_t sequence, audio::Bus bus,
-                            size_t startFrame = 0);
   void initializeUserData();
   void startBackendAfterConstruction();
+  audio::playback::BackendOperationResult
+  startDeviceWithLifecycleAndSoundLocked();
   audio::playback::BackendOperationResult
   stopSoundsWithLifecycleAndCommandLocked();
   void clearCallbackState();

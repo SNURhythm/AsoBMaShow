@@ -5,9 +5,11 @@
 #include "audio/decoder.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <concepts>
+#include <deque>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -141,6 +143,129 @@ public:
 
 private:
   std::shared_ptr<BackendControl> control;
+};
+
+struct FactoryControl {
+  audio::Capabilities capabilities{
+      .canSelectOutputDevice = true,
+      .canSelectSampleRate = true,
+      .canSelectBufferFrames = true,
+      .outputDevices = {{.id = "default",
+                         .name = "Default",
+                         .isDefault = true,
+                         .sampleRates = {44100, 48000},
+                         .bufferFrames = {0, 128}},
+                        {.id = "usb",
+                         .name = "USB",
+                         .sampleRates = {48000},
+                         .bufferFrames = {0, 64}}},
+  };
+  std::vector<audio::StreamRequest> opens;
+  std::vector<std::string> events;
+  std::deque<bool> openResults{true};
+  std::deque<bool> startResults{true};
+  bool rejectConcurrentStreams = false;
+  int liveStreams = 0;
+  std::optional<audio::playback::BackendRunState> authoritativeState;
+};
+
+class FakeConfigurableStream final : public audio::IBackend {
+public:
+  FakeConfigurableStream(std::shared_ptr<FactoryControl> control,
+                         audio::StreamRequest request)
+      : control_(std::move(control)) {
+    ++control_->liveStreams;
+    state_.request = std::move(request);
+    state_.effectiveSampleRate =
+        state_.request.sampleRate == 0 ? 44100 : state_.request.sampleRate;
+    state_.effectiveBufferFrames = state_.request.bufferFrames;
+  }
+
+  ~FakeConfigurableStream() override { --control_->liveStreams; }
+
+  bool start(std::string &errorMessage) override {
+    control_->events.push_back("start:" + state_.request.deviceId);
+    if (!pop(control_->startResults, true)) {
+      errorMessage = "fake configurable start failed";
+      return false;
+    }
+    started_ = true;
+    if (control_->authoritativeState.has_value()) {
+      control_->authoritativeState = audio::playback::BackendRunState::Running;
+    }
+    return true;
+  }
+
+  bool stop(std::string &) override {
+    control_->events.push_back("stop:" + state_.request.deviceId);
+    started_ = false;
+    if (control_->authoritativeState.has_value()) {
+      control_->authoritativeState = audio::playback::BackendRunState::Stopped;
+    }
+    return true;
+  }
+
+  [[nodiscard]] bool isStarted() const override { return started_; }
+  [[nodiscard]] audio::playback::BackendStateObservation
+  observeState() const override {
+    return {.state = control_->authoritativeState.value_or(
+                started_ ? audio::playback::BackendRunState::Running
+                         : audio::playback::BackendRunState::Stopped)};
+  }
+  [[nodiscard]] audio::RuntimeState runtimeState() const override {
+    return state_;
+  }
+
+private:
+  static bool pop(std::deque<bool> &values, bool fallback) {
+    if (values.empty()) {
+      return fallback;
+    }
+    const bool value = values.front();
+    values.pop_front();
+    return value;
+  }
+
+  std::shared_ptr<FactoryControl> control_;
+  audio::RuntimeState state_;
+  bool started_ = false;
+};
+
+class FakeConfigurableFactory final : public audio::IBackendFactory {
+public:
+  explicit FakeConfigurableFactory(std::shared_ptr<FactoryControl> control)
+      : control_(std::move(control)) {}
+
+  [[nodiscard]] audio::Capabilities capabilities() const override {
+    return control_->capabilities;
+  }
+
+  std::unique_ptr<audio::IBackend>
+  open(const audio::StreamRequest &request, audio::RenderCallback, void *,
+       std::string &errorMessage) override {
+    control_->opens.push_back(request);
+    if (control_->rejectConcurrentStreams && control_->liveStreams != 0) {
+      errorMessage = "fake factory permits only one live stream";
+      return nullptr;
+    }
+    if (!pop(control_->openResults, true)) {
+      errorMessage = "fake configurable open failed";
+      return nullptr;
+    }
+    return std::make_unique<FakeConfigurableStream>(control_, request);
+  }
+
+private:
+  static bool pop(std::deque<bool> &values, bool fallback) {
+    if (values.empty()) {
+      return fallback;
+    }
+    const bool value = values.front();
+    values.pop_front();
+    return value;
+  }
+
+  std::shared_ptr<FactoryControl> control_;
 };
 
 struct WrapperFixture {
@@ -1025,6 +1150,251 @@ void testJukeboxProductionStateTransitionsFailClosed() {
   }
 }
 
+void testPlaybackSnapshotClockModesRestoreWithoutPrematureEligibility() {
+  const jukebox_lifecycle::CursorPosition target{
+      .audio = 21, .bmp = 22, .bmpLayer = 23};
+
+  for (const bool paused : {true, false}) {
+    JukeboxStateFixture fixture;
+    fixture.isPlaying = false;
+    fixture.schedulerActive = false;
+    FakeJukeboxLifecycle lifecycle;
+    auto state = fixture.state();
+    bool audioBecameEligibleDuringCommit = false;
+    const auto result = jukebox_lifecycle::StartPlayback(
+        lifecycle, "Jukebox::restorePlayback", state, target,
+        [&] {
+          audioBecameEligibleDuringCommit = fixture.stopwatch.isRunning();
+        },
+        fixture.wakeScheduler(),
+        {.positionMicros = 654321, .running = !paused});
+
+    require(result.success && fixture.isPlaying && fixture.schedulerActive,
+            "active snapshot restoration republishes the active session");
+    require(
+        !audioBecameEligibleDuringCommit,
+        "active snapshot commits audio before the clock can become eligible");
+    require(fixture.stopwatch.isRunning() == !paused,
+            "active snapshot restores its exact paused/running mode");
+    if (paused) {
+      require(fixture.stopwatch.elapsedMicros() == 654321,
+              "active paused snapshot restores the exact frozen position");
+    } else {
+      require(fixture.stopwatch.elapsedMicros() >= 654321,
+              "active running snapshot resumes from the requested position");
+    }
+  }
+
+  for (const bool paused : {true, false}) {
+    JukeboxStateFixture fixture;
+    fixture.isPlaying = false;
+    fixture.schedulerActive = false;
+    auto state = fixture.state();
+    long long restoredAudioMicros = -1;
+    const auto result = jukebox_lifecycle::RestoreInactivePlayback(
+        state, {.positionMicros = 777777, .running = !paused},
+        [&] {
+          require(!fixture.stopwatch.isRunning(),
+                  "inactive audio position commits while the clock is frozen");
+          restoredAudioMicros = 777777;
+        },
+        fixture.wakeScheduler());
+
+    require(result.success && !fixture.isPlaying && !fixture.schedulerActive &&
+                restoredAudioMicros == 777777,
+            "inactive snapshot stays inactive while restoring its position");
+    require(fixture.stopwatch.isRunning() == !paused,
+            "inactive snapshot preserves its paused/running mode");
+    if (paused) {
+      require(fixture.stopwatch.elapsedMicros() == 777777,
+              "inactive paused snapshot restores the exact frozen position");
+    } else {
+      require(fixture.stopwatch.elapsedMicros() >= 777777,
+              "inactive running snapshot resumes from the requested position");
+    }
+  }
+}
+
+void testConfigurableWrapperRestartsAndRestoresRetainedPcm() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(
+      &stopwatch, std::make_unique<FakeConfigurableFactory>(control));
+  require(wrapper.capabilities() == control->capabilities,
+          "wrapper exposes injected runtime capabilities");
+  require(wrapper.runtimeState().effectiveSampleRate == 44100,
+          "wrapper publishes the initially effective sample rate");
+
+  const path_t sound = PATH("configurable-retained-pcm");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(44100, 123), 1,
+                                     44100),
+          "configurable wrapper retains one second of source PCM");
+  require(wrapper.getSoundDurationMicros(sound) == 1'000'000,
+          "initial PCM duration is one second");
+
+  require(wrapper.stopSounds().success,
+          "runtime is drained before a configurable restart");
+  std::string error;
+  require(wrapper.restart({.deviceId = "usb",
+                           .sampleRate = 48000,
+                           .bufferFrames = 64},
+                          error),
+          "wrapper opens and starts the requested stream");
+  require(wrapper.runtimeState().request.deviceId == "usb" &&
+              wrapper.runtimeState().effectiveSampleRate == 48000,
+          "wrapper commits candidate runtime state only after start");
+  require(wrapper.getSoundDurationMicros(sound) == 1'000'000,
+          "retained source PCM is regenerated without duration drift");
+
+  const audio::RuntimeState previous{
+      .request = {}, .effectiveSampleRate = 44100};
+  require(wrapper.stopSounds().success,
+          "candidate stream drains before restoration");
+  require(wrapper.restore(previous, error),
+          "wrapper can reopen the exact previous request");
+  require(wrapper.runtimeState().effectiveSampleRate == 44100 &&
+              wrapper.getSoundDurationMicros(sound) == 1'000'000,
+          "rollback regenerates PCM for the previous stream");
+
+  require(wrapper.stopSounds().success,
+          "restored stream drains before a failed candidate probe");
+  control->startResults = {false};
+  require(!wrapper.restart({.deviceId = "usb",
+                            .sampleRate = 48000,
+                            .bufferFrames = 64},
+                           error),
+          "candidate start failure is reported without replacing runtime");
+  require(wrapper.runtimeState().effectiveSampleRate == 44100,
+          "failed candidate does not replace published runtime state");
+  require(wrapper.restore(previous, error) &&
+              wrapper.getSoundDurationMicros(sound) == 1'000'000,
+          "post-failure rollback regenerates retained PCM for old runtime");
+
+  require(control->opens.size() == 5 && control->opens[0].deviceId.empty() &&
+              control->opens[1].deviceId == "usb" &&
+              control->opens[2].deviceId.empty() &&
+              control->opens[3].deviceId == "usb" &&
+              control->opens[4].deviceId.empty(),
+          "factory receives successful and failed transaction requests in order");
+}
+
+void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  control->rejectConcurrentStreams = true;
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  require(control->liveStreams == 1,
+          "initial construction owns exactly one configurable stream");
+
+  require(wrapper.stopSounds().success,
+          "single-stream fixture drains before reconfiguration");
+  std::string error;
+  require(
+      wrapper.restart(
+          {.deviceId = "usb", .sampleRate = 48000, .bufferFrames = 64}, error),
+      "restart releases the stopped working stream before candidate open");
+  require(control->liveStreams == 1 &&
+              wrapper.runtimeState().request.deviceId == "usb",
+          "successful replacement owns only the candidate stream");
+
+  const audio::RuntimeState previous = wrapper.runtimeState();
+  require(wrapper.stopSounds().success,
+          "replacement drains before a candidate open failure");
+  control->openResults = {false};
+  require(!wrapper.restart(
+              {.deviceId = "default", .sampleRate = 44100, .bufferFrames = 128},
+              error),
+          "candidate open failure remains visible to the transaction");
+  require(control->liveStreams == 0,
+          "failed open leaves the released device available for rollback");
+  require(wrapper.restore(previous, error),
+          "rollback reopens the previous request after an open failure");
+  require(control->liveStreams == 1 &&
+              wrapper.runtimeState().request == previous.request,
+          "open-failure rollback restores exactly one working stream");
+
+  require(wrapper.stopSounds().success,
+          "replacement drains before a candidate start failure");
+  control->startResults = {false};
+  require(!wrapper.restart(
+              {.deviceId = "default", .sampleRate = 44100, .bufferFrames = 128},
+              error),
+          "candidate start failure remains visible to the transaction");
+  require(control->liveStreams == 0,
+          "failed candidate closes before rollback reopens the old request");
+  require(wrapper.restore(previous, error),
+          "rollback reopens the previous request under one-stream ownership");
+  require(control->liveStreams == 1 &&
+              wrapper.runtimeState().request == previous.request,
+          "rollback leaves exactly one restored working stream");
+}
+
+void testBufferCapabilityProbePublishesOnlyVerifiedCandidates() {
+  constexpr std::array<std::uint32_t, 7> candidates{0,   64,   128, 256,
+                                                    512, 1024, 2048};
+  std::vector<std::uint32_t> attempted;
+  const auto supported =
+      audio::ProbeSupportedBufferFrames(candidates, [&](std::uint32_t frames) {
+        attempted.push_back(frames);
+        return frames == 0 || frames == 128 || frames == 512;
+      });
+
+  require(attempted ==
+              std::vector<std::uint32_t>(candidates.begin(), candidates.end()),
+          "buffer probing checks every required candidate exactly once");
+  require(supported == std::vector<std::uint32_t>({0, 128, 512}),
+          "capabilities publish only buffer candidates verified by the probe");
+}
+
+void testConfigurableWrapperRecoversFromAuthoritativeExternalStop() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  control->events.clear();
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+
+  const auto restarted = wrapper.startDevice();
+
+  require(restarted.success,
+          "authoritatively stopped stream can be restarted after device loss");
+  require(control->events == std::vector<std::string>{"start:"},
+          "wrapper consults native run state instead of a stale started flag");
+  require(control->authoritativeState ==
+              audio::playback::BackendRunState::Running,
+          "successful recovery republishes the authoritative running state");
+}
+
+void testSoundSubmissionsRecoverFromAuthoritativeExternalStop() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("authoritative-submission-recovery");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "submission recovery fixture retains production PCM");
+
+  control->events.clear();
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+  require(wrapper.playSound(sound, audio::Bus::Bgm),
+          "playSound recovers an authoritatively stopped stream");
+  require(control->events == std::vector<std::string>{"start:"} &&
+              control->authoritativeState ==
+                  audio::playback::BackendRunState::Running,
+          "playSound observes and restarts the native stream before submit");
+
+  control->events.clear();
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+  require(wrapper.scheduleSound(sound, audio::Bus::Keysound, 123456),
+          "scheduleSound recovers an authoritatively stopped stream");
+  require(
+      control->events == std::vector<std::string>{"start:"} &&
+          control->authoritativeState ==
+              audio::playback::BackendRunState::Running,
+      "scheduleSound observes and restarts the native stream before submit");
+}
+
 } // namespace
 
 int main() {
@@ -1043,6 +1413,12 @@ int main() {
     testPlayingSeekFailureLeavesSchedulerAndReadersStopped();
     testSeekTransitionSerializesConcurrentPlayAndStopEntry();
     testJukeboxProductionStateTransitionsFailClosed();
+    testPlaybackSnapshotClockModesRestoreWithoutPrematureEligibility();
+    testConfigurableWrapperRestartsAndRestoresRetainedPcm();
+    testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
+    testBufferCapabilityProbePublishesOnlyVerifiedCandidates();
+    testConfigurableWrapperRecoversFromAuthoritativeExternalStop();
+    testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';
