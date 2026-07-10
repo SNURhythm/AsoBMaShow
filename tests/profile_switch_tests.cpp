@@ -297,6 +297,7 @@ struct SwitchFixture {
   bool failRefreshOnce = false;
   std::optional<std::string> blocker;
   int refreshCount = 0;
+  std::vector<std::string> inputReplacementEvents;
   std::function<void()> refreshAction;
   std::filesystem::path appliedInputPath;
   InputProfile currentInput = makeDefaultInputProfile();
@@ -446,10 +447,14 @@ struct SwitchFixture {
       }
       return helper.BindDatabasePath(path, error);
     };
+    dependencies.beforeInputReplacement = [this]() {
+      inputReplacementEvents.emplace_back("before");
+    };
     return dependencies;
   }
 
   bool applyInput(const std::filesystem::path &path, std::string &error) {
+    inputReplacementEvents.emplace_back("apply");
     const auto loaded = InputProfileStore::load(path);
     if (loaded.status != InputProfileLoadStatus::Loaded) {
       error = "unable to apply input profile";
@@ -465,6 +470,7 @@ struct SwitchFixture {
   }
 
   void restoreInput(const std::filesystem::path &path) {
+    inputReplacementEvents.emplace_back("restore");
     const auto loaded = InputProfileStore::load(path);
     if (loaded.status == InputProfileLoadStatus::Loaded) {
       currentInput = loaded.profile;
@@ -719,6 +725,33 @@ void testInvalidTargetFailsBeforeSavingOrBinding() {
   expect(fixture.refreshCount == 0,
          "invalid target does not refresh or mutate caches");
   expectFirstProfileState(fixture, bootstrapBefore, "invalid target");
+}
+
+void testInputReplacementNotificationPrecedesApplyAndRollback() {
+  SwitchFixture successful;
+  if (successful.firstId.empty()) {
+    return;
+  }
+  const ProfileSwitchResult switched = successful.coordinator.switchTo(
+      successful.secondId, successful.currentSettings);
+  expect(switched.ok(),
+         "input replacement ordering test switches successfully");
+  expect(successful.inputReplacementEvents ==
+             std::vector<std::string>{"before", "apply"},
+         "successful switch cancels pending input work before applying B");
+
+  SwitchFixture rolledBack;
+  if (rolledBack.firstId.empty()) {
+    return;
+  }
+  rolledBack.failInputApply = true;
+  const ProfileSwitchResult failed = rolledBack.coordinator.switchTo(
+      rolledBack.secondId, rolledBack.currentSettings);
+  expect(!failed.ok(), "input replacement rollback test injects a failure");
+  expect(rolledBack.inputReplacementEvents ==
+             std::vector<std::string>{"before", "apply", "before",
+                                      "restore"},
+         "rollback cancels pending input work before restoring A");
 }
 
 void testPersistentScoreAttachmentFailureRollsBackToSource() {
@@ -1108,6 +1141,7 @@ int main() {
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testEveryTransactionalFailureRollsBackAllVisibleState();
   testInvalidTargetFailsBeforeSavingOrBinding();
+  testInputReplacementNotificationPrecedesApplyAndRollback();
   testPersistentScoreAttachmentFailureRollsBackToSource();
   testDatabasePathReadsAreIndependentSnapshots();
   testRetainedMainMenuSelectionsReloadWithoutProfileLeakage();

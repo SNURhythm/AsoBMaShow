@@ -1,6 +1,7 @@
 #include "input/IInputBackend.h"
 #include "input/InputCaptureController.h"
 #include "input/InputDeviceRegistry.h"
+#include "input/InputProfileReplacementNotifier.h"
 
 #include <algorithm>
 #include <cmath>
@@ -520,6 +521,50 @@ void testNegativeAxisHatAndMidiCapturePreserveControlIdentity() {
       "MIDI capture preserves channel-note identity and saves once");
 }
 
+void testProfileReplacementCancelsPendingConflictAndRegistrationLifetime() {
+  RegistryHarness harness;
+  const auto occupied =
+      binding("profile-a-binding", {1, 7}, lane(0), keyControl(30));
+  InputProfile profile{.bindings = {occupied}};
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+  InputProfileReplacementNotifier notifier;
+
+  {
+    auto registration = notifier.subscribe([&controller]() {
+      controller.cancel();
+    });
+    controller.begin({1, 7}, lane(1));
+    harness.input(event(keyControl(30), 1.0F));
+    require(controller.state() ==
+                InputCaptureController::State::AwaitingConflictConfirmation,
+            "profile A can stage a conflicting capture before a switch");
+
+    notifier.notifyBeforeReplacement();
+    require(controller.state() == InputCaptureController::State::Idle,
+            "the replacement notification cancels profile A's staged "
+            "capture");
+
+    const InputProfile profileB{
+        .bindings = {binding("profile-b-binding", {1, 7}, lane(2),
+                             keyControl(31))}};
+    profile = profileB;
+    controller.confirmReplace();
+    require(saves == 0 && sameProfile(profile, profileB),
+            "confirming after the switch cannot save or mutate profile B");
+  }
+
+  controller.begin({1, 7}, lane(3));
+  notifier.notifyBeforeReplacement();
+  require(controller.state() == InputCaptureController::State::Listening,
+          "destroying the scoped registration removes its callback");
+  controller.cancel();
+}
+
 } // namespace
 
 int main() {
@@ -533,6 +578,7 @@ int main() {
     testAmbiguousBindingIdsFailClosed();
     testDisconnectRearmsFirstCaptureAfterReconnect();
     testNegativeAxisHatAndMidiCapturePreserveControlIdentity();
+    testProfileReplacementCancelsPendingConflictAndRegistrationLifetime();
   } catch (const std::exception &error) {
     std::cerr << "input_capture_controller_tests: " << error.what() << '\n';
     return 1;

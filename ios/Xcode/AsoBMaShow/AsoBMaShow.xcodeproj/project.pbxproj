@@ -746,6 +746,7 @@
 				input/InputDefaults.cpp,
 				input/InputNormalizer.cpp,
 				input/InputProfile.cpp,
+				input/InputProfileReplacementNotifier.h,
 				input/InputProfileStore.cpp,
 				input/LogicalGameplayInputAdapter.cpp,
 				input/AndroidMidiInputBackend.cpp,

@@ -212,6 +212,15 @@ void SettingsScene::init() {
   lastLayoutWidth = -1;
   ensureAudioVideoSession();
   ensureInputCaptureController();
+  inputProfileReplacementRegistration =
+      context.inputProfileReplacementNotifier.subscribe([this]() {
+        if (inputCaptureController != nullptr) {
+          inputCaptureController->cancel();
+        }
+        inputCaptureAction.reset();
+        inputViewRebuildGate.reset();
+        inputLastViewSignature.clear();
+      });
   observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
 }
@@ -360,6 +369,7 @@ void SettingsScene::cleanupScene() {
   difficultyTableImportSucceeded = false;
   destroyPreviewInputHandler();
   destroyPreviewRenderer();
+  inputProfileReplacementRegistration.reset();
   inputCaptureController.reset();
   inputCaptureAction.reset();
   inputViewRebuildGate.reset();

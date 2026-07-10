@@ -199,6 +199,8 @@ private:
   TextView *inputCaptureStateText = nullptr;
   TextView *inputErrorText = nullptr;
   std::unique_ptr<InputCaptureController> inputCaptureController;
+  InputProfileReplacementNotifier::Registration
+      inputProfileReplacementRegistration;
   int inputSelectedPlayer = 1;
   int inputSelectedKeyMode = 7;
   std::string inputSelectedDeviceId;
