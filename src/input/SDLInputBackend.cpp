@@ -10,6 +10,8 @@
 
 namespace {
 
+constexpr float kIosAccelerometerTiltAxisGain = 2.5F;
+
 std::string copySdlString(const char *value) {
   return value == nullptr ? std::string{} : std::string(value);
 }
@@ -316,6 +318,9 @@ std::optional<SdlInputDeviceInfo> SDLInputBackend::openDevice(int deviceIndex) {
 void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                                      std::string stableId,
                                      bool publishConnection) {
+  const bool iosAccelerometer =
+      !info.gameController && info.name == "iOS Accelerometer" &&
+      info.buttons == 0 && info.axes == 3 && info.hats == 0;
   const input::DeviceClass deviceClass =
       info.gameController ? input::DeviceClass::GameController
                           : input::DeviceClass::Joystick;
@@ -336,6 +341,7 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                    .axes = advertisedAxes,
                    .hats = advertisedHats},
       .gameController = info.gameController,
+      .iosAccelerometer = iosAccelerometer,
       .hatValues = std::vector<Uint8>(
           static_cast<std::size_t>(std::max(0, advertisedHats)),
           SDL_HAT_CENTERED)};
@@ -420,12 +426,18 @@ void SDLInputBackend::publishButton(const DeviceRecord &device, int button,
 
 void SDLInputBackend::publishAxis(const DeviceRecord &device, int axis,
                                   Sint16 value, std::uint32_t timestamp) {
+  float normalizedValue = normalizeAxis(value);
+  if (device.iosAccelerometer && (axis == 0 || axis == 1)) {
+    normalizedValue = std::clamp(normalizedValue *
+                                     kIosAccelerometerTiltAxisGain,
+                                 -1.0F, 1.0F);
+  }
   publishInput({.control = {.deviceId = device.snapshot.stableId,
                             .deviceClass = device.snapshot.deviceClass,
                             .kind = input::ControlKind::Axis,
                             .index = axis},
                 .rawValue = static_cast<double>(value),
-                .normalizedValue = normalizeAxis(value),
+                .normalizedValue = normalizedValue,
                 .timestampMicros = toMicros(timestamp)});
 }
 

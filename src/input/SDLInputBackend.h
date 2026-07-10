@@ -51,6 +51,7 @@ private:
   struct DeviceRecord {
     input::InputDeviceSnapshot snapshot;
     bool gameController = false;
+    bool iosAccelerometer = false;
     std::vector<Uint8> hatValues;
   };
 

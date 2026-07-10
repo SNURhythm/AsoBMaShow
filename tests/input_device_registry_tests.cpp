@@ -6,6 +6,7 @@
 #include <SDL2/SDL_events.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -697,6 +698,15 @@ SdlInputDeviceInfo joystickInfo(SDL_JoystickID instanceId) {
           .hats = 1};
 }
 
+SdlInputDeviceInfo iosAccelerometerInfo(SDL_JoystickID instanceId) {
+  return {.instanceId = instanceId,
+          .gameController = false,
+          .name = "iOS Accelerometer",
+          .buttons = 0,
+          .axes = 3,
+          .hats = 0};
+}
+
 void testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->deviceCountOverride = -1;
@@ -814,6 +824,39 @@ void testSdlRawJoystickButtonsAxesAndHatEdges() {
           inputEvents[5].control.direction == input::ControlDirection::Right &&
           inputEvents[5].normalizedValue == 0.0F,
       "diagonal hat press and centering publish directional edge pairs");
+}
+
+void testSdlIosAccelerometerMakesTiltAxesMoreSensitive() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {iosAccelerometerInfo(58)};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  registry.pump();
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+
+  for (Uint8 axisIndex = 0; axisIndex < 3; ++axisIndex) {
+    SDL_Event axis{};
+    axis.type = SDL_JOYAXISMOTION;
+    axis.jaxis.which = 58;
+    axis.jaxis.axis = axisIndex;
+    axis.jaxis.value = 3277;
+    registry.handleSdlEvent(axis);
+  }
+  registry.pump();
+
+  const float original = 3277.0F / 32767.0F;
+  expect(inputEvents.size() == 3, "iOS accelerometer publishes all axes");
+  expect(inputEvents.size() == 3 &&
+             std::abs(inputEvents[0].normalizedValue - original * 2.5F) <
+                 0.0001F &&
+             std::abs(inputEvents[1].normalizedValue - original * 2.5F) <
+                 0.0001F,
+         "iOS accelerometer axes 0 and 1 use 2.5x gain");
+  expect(inputEvents.size() == 3 &&
+             std::abs(inputEvents[2].normalizedValue - original) < 0.0001F,
+         "iOS accelerometer axis 2 keeps its original sensitivity");
 }
 
 void testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug() {
@@ -1367,6 +1410,7 @@ int main() {
   testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
   testSdlKeyboardFiltersRepeatAndUsesScancodes();
   testSdlRawJoystickButtonsAxesAndHatEdges();
+  testSdlIosAccelerometerMakesTiltAxesMoreSensitive();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();
   testSdlBackendStartStopIsIdempotentAndClosesHandles();
   testNullBackendFactoryIsDiagnosableAndHarmless();
