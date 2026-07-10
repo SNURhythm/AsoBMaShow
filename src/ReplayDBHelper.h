@@ -4,6 +4,7 @@
 #include "bms_parser.hpp"
 #include "sqlite3.h"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,16 +32,22 @@ struct ReplaySummary {
   int completedCharts = 0;
   int totalCharts = 0;
   int stageCount = 0;
+  int rulesetVersion = 0;
+  ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
 };
 
 class ReplayDBHelper {
 public:
   ReplayDBHelper() = default;
+  explicit ReplayDBHelper(std::filesystem::path databasePath);
   ReplayDBHelper(const ReplayDBHelper &) = delete;
   ReplayDBHelper &operator=(const ReplayDBHelper &) = delete;
 
   static ReplayDBHelper &GetInstance();
 
+  void SetDatabasePath(std::filesystem::path databasePath);
+  [[nodiscard]] const std::filesystem::path &GetDatabasePath() const;
+  bool EnsureSchema();
   sqlite3 *Connect();
   void Close(sqlite3 *db);
   bool CreateReplayTables(sqlite3 *db);
@@ -49,11 +56,13 @@ public:
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);
-  std::vector<ReplaySummary> ListCourseReplays(int courseId,
-                                               int limit = 100);
+  std::vector<ReplaySummary> ListCourseReplays(int courseId, int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
   std::optional<CourseReplayData> LoadCourseReplay(int replayId);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
+
+private:
+  std::filesystem::path databasePath_;
 };

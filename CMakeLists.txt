@@ -490,6 +490,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gbattle_tests
         tests/gbattle_tests.cpp
         src/bms_parser.cpp
+        src/ScoreProvenance.cpp
     )
     target_include_directories(gbattle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(gbattle_tests PRIVATE cxx_std_23)
@@ -511,6 +512,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(replay_db_helper_tests
         tests/replay_db_helper_tests.cpp
         src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -523,6 +525,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(score_provenance_db_tests
+        tests/score_provenance_db_tests.cpp
+        src/ScoreDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
     endif()
 
     add_executable(chart_record_filters_tests
@@ -628,5 +648,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND $<TARGET_FILE:score_provenance_tests>)
     set_tests_properties(foundation_provenance_contract PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
+    )
+
+    add_test(NAME foundation_provenance_db
+        COMMAND $<TARGET_FILE:score_provenance_db_tests>)
+    set_tests_properties(foundation_provenance_db PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_db_tests>
     )
 endif()

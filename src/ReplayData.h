@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssistOptionUtils.h"
+#include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
@@ -73,6 +74,7 @@ struct ReplayData {
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
 };
 
 struct CourseReplayStageData {
@@ -100,4 +102,5 @@ struct CourseReplayData {
   int totalCharts = 0;
   std::string createdAt;
   std::vector<CourseReplayStageData> stages;
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
 };
