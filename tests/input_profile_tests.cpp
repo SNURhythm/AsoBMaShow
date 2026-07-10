@@ -143,6 +143,15 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
 int main() {
   try {
     const InputProfile defaults = makeDefaultInputProfile();
+    const input::InputBinding canonicalDefaults;
+    require(canonicalDefaults.activationThreshold == 0.20F &&
+                canonicalDefaults.releaseThreshold == 0.10F,
+            "new bindings use the sensitive threshold defaults");
+    for (const auto &binding : defaults.bindings) {
+      require(binding.activationThreshold == 0.20F &&
+                  binding.releaseThreshold == 0.10F,
+              "default profile bindings use the canonical thresholds");
+    }
     require(defaults.schemaVersion == InputProfile::kSchemaVersion,
             "defaults use the current schema");
     verifyCurrentKeyboardDefaults(defaults);
@@ -166,7 +175,21 @@ int main() {
                     invalidProfile.bindings.front().activationThreshold &&
                 invalidProfile.bindings.front().activationThreshold <= 1.0f,
             "sanitized thresholds are ordered and normalized");
+    require(invalidProfile.bindings.front().activationThreshold == 0.20F &&
+                invalidProfile.bindings.front().releaseThreshold == 0.10F,
+            "non-finite thresholds recover to the canonical defaults");
     require(!diagnostics.empty(), "sanitization describes repairs");
+
+    input::InputBinding invalidOrder = defaults.bindings.front();
+    invalidOrder.deadZone = 0.0F;
+    invalidOrder.releaseThreshold = 0.9F;
+    invalidOrder.activationThreshold = 0.2F;
+    InputProfile invalidOrderProfile{.bindings = {invalidOrder}};
+    diagnostics.clear();
+    invalidOrderProfile.sanitize(diagnostics);
+    require(invalidOrderProfile.bindings.front().activationThreshold == 0.20F &&
+                invalidOrderProfile.bindings.front().releaseThreshold == 0.10F,
+            "misordered thresholds recover to the canonical defaults");
 
     input::InputBinding missingDevice = defaults.bindings.front();
     missingDevice.id = "missing-device";
@@ -237,6 +260,10 @@ int main() {
     require(fixtureResult.profile.bindings.front().control.index ==
                 2 * 128 + 60,
             "MIDI indices use channel times 128 plus note");
+    require(
+        fixtureResult.profile.bindings.front().activationThreshold == 0.60F &&
+            fixtureResult.profile.bindings.front().releaseThreshold == 0.40F,
+        "valid explicit thresholds remain unchanged");
 
     const auto testRoot = std::filesystem::temp_directory_path() /
                           "asobmashow_input_profile_tests";
@@ -274,6 +301,11 @@ int main() {
                 hasNonemptyUniqueBindingIds(repairedIdsResult.profile),
             "load sanitization retains distinct bindings and repairs their "
             "IDs");
+    for (const auto &binding : repairedIdsResult.profile.bindings) {
+      require(binding.activationThreshold == 0.20F &&
+                  binding.releaseThreshold == 0.10F,
+              "missing threshold fields load with canonical defaults");
+    }
     require(!repairedIdsResult.diagnostics.empty(),
             "load reports binding ID repairs");
 

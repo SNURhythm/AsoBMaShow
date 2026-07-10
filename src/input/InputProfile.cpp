@@ -22,6 +22,12 @@ bool isExactDuplicate(const input::InputBinding &left,
          left.inverted == right.inverted;
 }
 
+void resetThresholdsToDefaults(input::InputBinding &binding) {
+  binding.deadZone = 0.0F;
+  binding.releaseThreshold = input::kDefaultBindingReleaseThreshold;
+  binding.activationThreshold = input::kDefaultBindingActivationThreshold;
+}
+
 bool hasValidThresholdOrder(const input::InputBinding &binding) {
   return binding.deadZone >= 0.0f &&
          binding.deadZone < binding.releaseThreshold &&
@@ -52,9 +58,7 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
     if (!std::isfinite(binding.deadZone) ||
         !std::isfinite(binding.releaseThreshold) ||
         !std::isfinite(binding.activationThreshold)) {
-      binding.deadZone = 0.0f;
-      binding.releaseThreshold = 0.35f;
-      binding.activationThreshold = 0.5f;
+      resetThresholdsToDefaults(binding);
       diagnostics.emplace_back("Reset non-finite input thresholds.");
     } else {
       binding.deadZone = std::clamp(binding.deadZone, 0.0f, 1.0f);
@@ -65,9 +69,7 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
     }
 
     if (!hasValidThresholdOrder(binding)) {
-      binding.deadZone = 0.0f;
-      binding.releaseThreshold = 0.35f;
-      binding.activationThreshold = 0.5f;
+      resetThresholdsToDefaults(binding);
       diagnostics.emplace_back(
           "Reset input thresholds to preserve hysteresis ordering.");
     }

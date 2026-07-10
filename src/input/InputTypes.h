@@ -50,14 +50,17 @@ struct PhysicalControl {
   auto operator<=>(const PhysicalControl &) const = default;
 };
 
+inline constexpr float kDefaultBindingActivationThreshold = 0.20F;
+inline constexpr float kDefaultBindingReleaseThreshold = 0.10F;
+
 struct InputBinding {
   std::string id;
   InputScope scope;
   LogicalAction action;
   PhysicalControl control;
   float deadZone = 0.0f;
-  float activationThreshold = 0.5f;
-  float releaseThreshold = 0.35f;
+  float activationThreshold = kDefaultBindingActivationThreshold;
+  float releaseThreshold = kDefaultBindingReleaseThreshold;
   bool inverted = false;
 };
 

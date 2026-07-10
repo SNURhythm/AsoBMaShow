@@ -222,8 +222,10 @@ input::InputBinding parseBinding(const Json &document) {
   binding.control.direction =
       parseControlDirection(control.value("direction", std::string("any")));
   binding.deadZone = document.value("deadZone", 0.0f);
-  binding.activationThreshold = document.value("activationThreshold", 0.5f);
-  binding.releaseThreshold = document.value("releaseThreshold", 0.35f);
+  binding.activationThreshold = document.value(
+      "activationThreshold", input::kDefaultBindingActivationThreshold);
+  binding.releaseThreshold = document.value(
+      "releaseThreshold", input::kDefaultBindingReleaseThreshold);
   binding.inverted = document.value("inverted", false);
   return binding;
 }
