@@ -1,5 +1,7 @@
 #pragma once
 
+#include "settings/AudioVideoSettings.h"
+
 #include <filesystem>
 #include <string>
 
@@ -97,6 +99,8 @@ public:
   static constexpr const char *kDefaultAssistOption = "OFF";
   static constexpr const char *kDefaultPacemakerTarget = "BEST";
 
+  player_settings::AudioVideoSettings audioVideo =
+      player_settings::defaultAudioVideoSettingsForPlatform();
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;

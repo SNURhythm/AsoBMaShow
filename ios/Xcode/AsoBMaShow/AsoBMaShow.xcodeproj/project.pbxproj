@@ -776,6 +776,7 @@
 				ReplayVideoExporter.cpp,
 				ResultImageExporter.cpp,
 				ScoreDBHelper.cpp,
+				settings/AudioVideoSettings.cpp,
 				skin/DefaultSkin.cpp,
 				sqlite3.c,
 				tinyfiledialogs.c,

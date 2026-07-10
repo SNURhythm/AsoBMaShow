@@ -402,6 +402,7 @@ std::filesystem::path AppSettings::configPath() {
 }
 
 void AppSettings::sanitize() {
+  audioVideo.sanitize();
   audioOffsetMs =
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
   visualOffsetMs =
