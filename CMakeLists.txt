@@ -592,6 +592,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(score_provenance_tests
+        tests/score_provenance_tests.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(score_provenance_tests PRIVATE cxx_std_23)
+
     function(asobmashow_register_test target_name)
         add_test(NAME ${target_name} COMMAND $<TARGET_FILE:${target_name}>)
         set_tests_properties(${target_name} PROPERTIES
@@ -616,4 +623,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+
+    add_test(NAME foundation_provenance_contract
+        COMMAND $<TARGET_FILE:score_provenance_tests>)
+    set_tests_properties(foundation_provenance_contract PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
+    )
 endif()
