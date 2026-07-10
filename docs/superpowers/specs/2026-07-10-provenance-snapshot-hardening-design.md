@@ -16,9 +16,9 @@ IR, server work, unrelated database helpers, and BMS parser behavior remain out 
 
 `SqliteRAII.h` captures the main, rollback-journal, WAL, and SHM family state before validation. Missing and zero-byte databases are accepted as version zero only when no sidecar exists. A rollback journal is conservatively rejected because recovery would be required.
 
-Every existing database is queried through a private temporary family. A clean database is copied completely so bundled SQLite can verify both `PRAGMA user_version` and `SELECT count(*) FROM sqlite_schema`. A WAL database uses a sparse main file containing the original first page plus the complete measured WAL; bundled SQLite then resolves the WAL-visible version in isolation. This also handles a committed WAL whose SHM file is absent without opening or rebuilding the original family.
+Every existing database is queried through a private temporary family. The complete measured main file is copied so bundled SQLite can verify both `PRAGMA user_version` and a terminally complete `SELECT count(*) FROM sqlite_schema`. A WAL database additionally copies the complete measured WAL, letting SQLite resolve and traverse the WAL-visible schema in isolation. This also handles a committed WAL whose SHM file is absent without opening or rebuilding the original family.
 
-Main bytes, WAL bytes, and a 64 KiB auxiliary reserve must total at most 512 MiB. Overflow-safe arithmetic rejects larger families before allocation or copy. Copy and comparison helpers process exactly the measured byte count, reject a short read or one extra byte, and never scan beyond the budget. The original first page, sidecar bytes, presence, sizes, and write times are checked around the isolated query.
+Main bytes, WAL bytes, and a 64 KiB auxiliary reserve must total at most 512 MiB. Overflow-safe arithmetic rejects larger families before allocation or copy. Copy and comparison helpers process exactly the measured byte count, reject a short read or one extra byte, and never scan beyond the budget. The original main and WAL bytes, sidecar presence, sizes, and write times are checked around the isolated query.
 
 ### Guarded owned open pair
 
@@ -54,7 +54,7 @@ Closing a validation connection and later opening production was also rejected b
 - Supported and future child-exit WAL fixtures, with and without SHM, preserve exact original bytes and sidecar presence.
 - A deterministic fork seam commits version 99 after isolated approval and proves guarded open rejects the exact post-writer family.
 - Header-shaped corrupt clean files and denied required pragmas return null without mutation.
-- Pure boundary predicates run on every platform; a POSIX sparse oversized fixture proves rejection before snapshot copying.
+- Pure boundary predicates run on every platform; a POSIX oversized fixture proves rejection before snapshot copying.
 - Negative and authorizer-denied version reads inside caller transactions leave schema and version state unchanged.
 - Malformed course fixtures cover empty identity, partial missing links, gaps, duplicates, mixed negative indexes, zero stages, and 257 stages for limited/unlimited summaries and full load.
 - An SQLite trace callback interrupts the stage query after its first row and proves all three public paths fail closed on terminal step error.

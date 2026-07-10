@@ -827,6 +827,46 @@ void testInvalidProvenanceRejectsReplayWrites(
   assertRejectedWithoutRows(invalidEnum, "invalid-enum");
 }
 
+void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-replay-shape-write" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto assertNoReplayRows = [&] {
+    auto db = openDatabase(path);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
+           0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_events") == 0);
+  };
+
+  ReplayData unmatchableReplay = sampleReplay(root, "unmatchable-chart");
+  unmatchableReplay.chartMeta.BmsPath.clear();
+  unmatchableReplay.chartMeta.MD5.clear();
+  unmatchableReplay.chartMeta.SHA256.clear();
+  assert(!helper.SaveReplay(unmatchableReplay).has_value());
+  assertNoReplayRows();
+
+  CourseReplayData unmatchableCourse;
+  unmatchableCourse.courseId = 63;
+  unmatchableCourse.provenance = sampleProvenance("unmatchable-course");
+  unmatchableCourse.stages.push_back({.replay = unmatchableReplay});
+  assert(!helper.SaveCourseReplay(unmatchableCourse).has_value());
+  assertNoReplayRows();
+
+  CourseReplayData oversizedCourse;
+  oversizedCourse.courseId = 64;
+  oversizedCourse.provenance = sampleProvenance("oversized-course");
+  const ReplayData validStage = sampleReplay(root, "oversized-stage");
+  oversizedCourse.stages.resize(
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
+      CourseReplayStageData{.replay = validStage});
+  assert(!helper.SaveCourseReplay(oversizedCourse).has_value());
+  assertNoReplayRows();
+}
+
 void testChartSummariesOmitInvalidProvenanceAndCountValidLimit(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-chart-summaries" / "replay.db";
@@ -1199,6 +1239,15 @@ int denyUserVersionAuthorizer(void *, int action, const char *first,
              : SQLITE_OK;
 }
 
+int denySchemaReadAuthorizer(void *, int action, const char *first,
+                             const char *, const char *, const char *) {
+  return action == SQLITE_READ && first != nullptr &&
+                 (std::string_view(first) == "sqlite_master" ||
+                  std::string_view(first) == "sqlite_schema")
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
 int installDenyJournalMode(sqlite3 *db, char **, const sqlite3_api_routines *) {
   return sqlite3_set_authorizer(db, denyJournalModeAuthorizer, nullptr);
 }
@@ -1213,20 +1262,37 @@ public:
   ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
 };
 
-struct InterruptCourseStageTrace {
+int installDenySchemaRead(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, denySchemaReadAuthorizer, nullptr);
+}
+
+class ScopedDenySchemaReadAutoExtension {
+public:
+  ScopedDenySchemaReadAutoExtension() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installDenySchemaRead)) == SQLITE_OK);
+  }
+  ~ScopedDenySchemaReadAutoExtension() { sqlite3_reset_auto_extension(); }
+};
+
+const char *interruptStatementFragment = nullptr;
+
+struct InterruptStatementTrace {
   sqlite3 *db = nullptr;
   sqlite3_stmt *target = nullptr;
+  std::string statementFragment;
   bool interrupted = false;
 };
 
-int interruptCourseStageTrace(unsigned traceType, void *rawContext,
-                              void *statement, void *) {
-  auto *context = static_cast<InterruptCourseStageTrace *>(rawContext);
+int interruptStatementTrace(unsigned traceType, void *rawContext,
+                            void *statement, void *) {
+  auto *context = static_cast<InterruptStatementTrace *>(rawContext);
   if (traceType == SQLITE_TRACE_STMT) {
     auto *stmt = static_cast<sqlite3_stmt *>(statement);
     const char *sql = sqlite3_sql(stmt);
     if (sql != nullptr &&
-        std::string_view(sql).find("FROM course_replay_stages s") !=
+        std::string_view(sql).find(context->statementFragment) !=
             std::string_view::npos) {
       context->target = stmt;
     }
@@ -1240,26 +1306,33 @@ int interruptCourseStageTrace(unsigned traceType, void *rawContext,
   return 0;
 }
 
-int installInterruptCourseStageTrace(sqlite3 *db, char **,
-                                     const sqlite3_api_routines *) {
-  auto *context = new InterruptCourseStageTrace{.db = db};
+int installInterruptStatementTrace(sqlite3 *db, char **,
+                                   const sqlite3_api_routines *) {
+  assert(interruptStatementFragment != nullptr);
+  auto *context = new InterruptStatementTrace{
+      .db = db, .statementFragment = interruptStatementFragment};
   const int rc = sqlite3_trace_v2(
       db, SQLITE_TRACE_STMT | SQLITE_TRACE_ROW | SQLITE_TRACE_CLOSE,
-      interruptCourseStageTrace, context);
+      interruptStatementTrace, context);
   if (rc != SQLITE_OK) {
     delete context;
   }
   return rc;
 }
 
-class ScopedInterruptCourseStageAutoExtension {
+class ScopedInterruptStatementAutoExtension {
 public:
-  ScopedInterruptCourseStageAutoExtension() {
+  explicit ScopedInterruptStatementAutoExtension(const char *fragment) {
+    assert(interruptStatementFragment == nullptr);
+    interruptStatementFragment = fragment;
     sqlite3_reset_auto_extension();
     assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
-               installInterruptCourseStageTrace)) == SQLITE_OK);
+               installInterruptStatementTrace)) == SQLITE_OK);
   }
-  ~ScopedInterruptCourseStageAutoExtension() { sqlite3_reset_auto_extension(); }
+  ~ScopedInterruptStatementAutoExtension() {
+    sqlite3_reset_auto_extension();
+    interruptStatementFragment = nullptr;
+  }
 };
 
 void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
@@ -1300,6 +1373,32 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     ReplayDBHelper helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "wal-schema-query-error" / "replay.db";
+    createWalDatabaseWithVersion(path, 3);
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScopedDenySchemaReadAutoExtension denySchemaRead;
+    std::string error;
+    assert(!preflightSqliteUserVersion(path, 3, error).has_value());
+    assert(!error.empty());
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "wal-schema-terminal-step-error" / "replay.db";
+    createWalDatabaseWithVersion(path, 3);
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScopedInterruptStatementAutoExtension interrupt(
+        "SELECT count(*) FROM sqlite_schema");
+    std::string error;
+    assert(!preflightSqliteUserVersion(path, 3, error).has_value());
+    assert(!error.empty());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 #endif
@@ -1378,16 +1477,78 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
   assert(courseReplayId.has_value());
 
   {
-    ScopedInterruptCourseStageAutoExtension interrupt;
+    ScopedInterruptStatementAutoExtension interrupt(
+        "FROM course_replay_stages s");
     assert(helper.ListCourseReplays(course.courseId, 1).empty());
   }
   {
-    ScopedInterruptCourseStageAutoExtension interrupt;
+    ScopedInterruptStatementAutoExtension interrupt(
+        "FROM course_replay_stages s");
     assert(helper.ListCourseReplays(course.courseId, 0).empty());
   }
   {
-    ScopedInterruptCourseStageAutoExtension interrupt;
+    ScopedInterruptStatementAutoExtension interrupt(
+        "FROM course_replay_stages s");
     assert(!helper.LoadCourseReplay(*courseReplayId).has_value());
+  }
+}
+
+void testReplayHydrationStepErrorsFailWholeLoad(
+    const std::filesystem::path &root) {
+  const auto path = root / "replay-hydration-step-error" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  ReplayData chartReplay = sampleReplay(root, "interrupted-hydration-chart");
+  chartReplay.events.push_back(chartReplay.events.front());
+  chartReplay.events.back().songTimeMicros += 1;
+  chartReplay.touchSamples = {
+      {.action = ReplayTouchAction::Down,
+       .fingerId = 1,
+       .songTimeMicros = 200000,
+       .x = 0.25f,
+       .y = 0.5f},
+      {.action = ReplayTouchAction::Move,
+       .fingerId = 1,
+       .songTimeMicros = 200001,
+       .x = 0.5f,
+       .y = 0.75f},
+  };
+  chartReplay.laneCoverEvents = {
+      {.songTimeMicros = 300000,
+       .noteStartPositionPercent = 20,
+       .resetVisibleTimeReference = false},
+      {.songTimeMicros = 300001,
+       .noteStartPositionPercent = 30,
+       .resetVisibleTimeReference = true},
+  };
+  const auto chartReplayId = helper.SaveReplay(chartReplay);
+  assert(chartReplayId.has_value());
+
+  CourseReplayData course;
+  course.courseId = 73;
+  course.courseName = "Interrupted hydration course";
+  course.completedCharts = 1;
+  course.totalCharts = 1;
+  course.provenance = sampleProvenance("interrupted-hydration-course");
+  course.stages.push_back({.replay = chartReplay});
+  const auto courseReplayId = helper.SaveCourseReplay(course);
+  assert(courseReplayId.has_value());
+
+  for (const char *queryFragment : {
+           "FROM replay_events WHERE replay_id",
+           "FROM replay_touch_samples WHERE replay_id",
+           "FROM replay_lane_cover_events WHERE replay_id",
+       }) {
+    {
+      ScopedInterruptStatementAutoExtension interrupt(queryFragment);
+      assert(!helper.LoadReplay(*chartReplayId, chartReplay.chartMeta)
+                  .has_value());
+    }
+    {
+      ScopedInterruptStatementAutoExtension interrupt(queryFragment);
+      assert(!helper.LoadCourseReplay(*courseReplayId).has_value());
+    }
   }
 }
 
@@ -1716,6 +1877,7 @@ int main() {
   testChartAndCourseRoundTripAndPathIsolation(root);
   testInvalidNewProvenanceFailsLoad(root);
   testInvalidProvenanceRejectsReplayWrites(root);
+  testUnmatchableAndOversizedReplayWritesLeaveNoRows(root);
   testChartSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidLinkedStages(root);
@@ -1726,6 +1888,7 @@ int main() {
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
   testCourseStageStepErrorsFailListsAndFullLoad(root);
+  testReplayHydrationStepErrorsFailWholeLoad(root);
   testLargeWalReplayPreflightPreservesFamily(root);
   testChartSummaryValidationAndDetailsShareWalSnapshot(root);
   testCourseSummaryValidationAndDetailsShareWalSnapshot(root);

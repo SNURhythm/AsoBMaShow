@@ -60,7 +60,7 @@ Expected: child-exit WAL fixtures show the main file checkpointed and WAL/SHM re
 
 - [x] **Step 3: Add shared preflight**
 
-Implement a clean raw-header fast path and isolated WAL snapshot path in `SqliteRAII.h`. Reject rollback journals as ambiguous. For WAL state, write only page 1 into a sparse logical-size main snapshot, copy the WAL to a unique private temporary directory, recover/query the copy with bundled SQLite, clean it on every exit, and require unchanged original WAL bytes, page 1, and family presence/size/write-time state. Bound the Windows non-sparse fallback and reject an active writer after schema support is established. Return no approved version for malformed/negative headers, copy/query errors, changing family state, or a visible version above the caller's maximum.
+Implement a clean raw-header fast path and isolated WAL snapshot path in `SqliteRAII.h`. Reject rollback journals as ambiguous. Copy the complete bounded main file and, for WAL state, the complete WAL into a unique private temporary directory; recover/query the family with bundled SQLite, clean it on every exit, and require unchanged original main/WAL bytes and family presence/size/write-time state. Reject an active writer after schema support is established. Return no approved version for malformed/negative headers, copy/query errors, changing family state, or a visible version above the caller's maximum.
 
 Update both `Connect()` methods:
 

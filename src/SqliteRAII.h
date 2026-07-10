@@ -15,7 +15,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <vector>
 
 using SqliteConnectionHandle = UniqueResource<sqlite3, sqlite3_close>;
 
@@ -413,25 +412,6 @@ readRawSqliteUserVersion(const std::filesystem::path &path,
   return static_cast<int>(signedVersion);
 }
 
-inline std::optional<std::size_t>
-readRawSqlitePageSize(const std::filesystem::path &path,
-                      std::string &errorMessage) {
-  std::array<unsigned char, 18> header{};
-  std::ifstream input(path, std::ios::binary);
-  if (!input.read(reinterpret_cast<char *>(header.data()), header.size())) {
-    errorMessage = "could not read SQLite page size";
-    return std::nullopt;
-  }
-  const unsigned int encodedPageSize =
-      (static_cast<unsigned int>(header[16]) << 8U) | header[17];
-  const unsigned int pageSize = encodedPageSize == 1 ? 65536 : encodedPageSize;
-  if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1U)) != 0) {
-    errorMessage = "database file has an invalid SQLite page size";
-    return std::nullopt;
-  }
-  return pageSize;
-}
-
 inline constexpr std::uintmax_t kMaximumSqliteSnapshotBytes =
     512ULL * 1024ULL * 1024ULL;
 inline constexpr std::uintmax_t kSqliteSnapshotAuxiliaryReserveBytes =
@@ -528,41 +508,6 @@ inline bool sqliteFilesHaveEqualBytes(const std::filesystem::path &left,
   return true;
 }
 
-inline bool
-writeSqliteFirstPageSnapshot(const std::filesystem::path &sourcePath,
-                             const std::filesystem::path &snapshotPath,
-                             std::size_t pageSize, std::uintmax_t logicalSize,
-                             std::string &errorMessage) {
-  if (logicalSize < pageSize) {
-    errorMessage = "database is shorter than its first SQLite page";
-    return false;
-  }
-  std::vector<char> firstPage(pageSize);
-  std::ifstream mainInput(sourcePath, std::ios::binary);
-  if (!mainInput.read(firstPage.data(), firstPage.size())) {
-    errorMessage = "could not read first database page for WAL preflight";
-    return false;
-  }
-  std::ofstream snapshotMain(snapshotPath, std::ios::binary | std::ios::trunc);
-  if (!snapshotMain.write(firstPage.data(), firstPage.size())) {
-    errorMessage = "could not write sparse database preflight snapshot";
-    return false;
-  }
-  snapshotMain.close();
-  if (!snapshotMain) {
-    errorMessage = "could not close sparse database preflight snapshot";
-    return false;
-  }
-  std::error_code resizeError;
-  std::filesystem::resize_file(snapshotPath, logicalSize, resizeError);
-  if (resizeError) {
-    errorMessage = "could not size sparse database preflight snapshot: " +
-                   resizeError.message();
-    return false;
-  }
-  return true;
-}
-
 inline std::optional<int> readSqliteUserVersion(sqlite3 *db,
                                                 std::string &errorMessage) {
   SqliteStatementHandle stmt;
@@ -591,6 +536,10 @@ inline bool validateSqliteSchemaUsability(sqlite3 *db,
     return false;
   }
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
     errorMessage = sqliteDatabaseError(db);
     return false;
   }
@@ -657,27 +606,8 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
 
   const std::filesystem::path snapshotPath =
       snapshotDirectory / path.filename();
-  const auto pageSize = readRawSqlitePageSize(path, errorMessage);
-  if (!pageSize.has_value() || expectedFamily[0].size < *pageSize) {
-    if (errorMessage.empty()) {
-      errorMessage = "database is shorter than its first SQLite page";
-    }
-    return std::nullopt;
-  }
-  if (hasWal) {
-    if (!writeSqliteFirstPageSnapshot(path, snapshotPath, *pageSize,
-                                      expectedFamily[0].size, errorMessage)) {
-      return std::nullopt;
-    }
-  } else if (!copySqliteFileExactly(path, snapshotPath, expectedFamily[0].size,
-                                    errorMessage)) {
-    return std::nullopt;
-  }
-
-  std::vector<char> firstPage(*pageSize);
-  std::ifstream snapshotMain(snapshotPath, std::ios::binary);
-  if (!snapshotMain.read(firstPage.data(), firstPage.size())) {
-    errorMessage = "could not verify first database page for preflight";
+  if (!copySqliteFileExactly(path, snapshotPath, expectedFamily[0].size,
+                             errorMessage)) {
     return std::nullopt;
   }
 
@@ -693,11 +623,8 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
       return std::nullopt;
     }
   }
-  std::vector<char> verifiedFirstPage(*pageSize);
-  std::ifstream verifyMain(path, std::ios::binary);
-  if (!verifyMain.read(verifiedFirstPage.data(), verifiedFirstPage.size()) ||
-      verifiedFirstPage != firstPage) {
-    errorMessage = "database first page changed during schema snapshot";
+  if (!sqliteFilesHaveEqualBytes(path, snapshotPath, expectedFamily[0].size,
+                                 errorMessage)) {
     return std::nullopt;
   }
 
@@ -722,26 +649,20 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
 
   const auto version = readSqliteUserVersion(db.get(), errorMessage);
   if (!version.has_value() ||
-      (!hasWal && !validateSqliteSchemaUsability(db.get(), errorMessage))) {
+      !validateSqliteSchemaUsability(db.get(), errorMessage)) {
     return std::nullopt;
   }
   db.reset();
 
+  if (!sqliteFilesHaveEqualBytes(path, snapshotPath, expectedFamily[0].size,
+                                 errorMessage)) {
+    return std::nullopt;
+  }
   if (hasWal) {
     if (!sqliteFilesHaveEqualBytes(walPath, snapshotWalPath, walBytes,
                                    errorMessage)) {
       return std::nullopt;
     }
-  } else if (!sqliteFilesHaveEqualBytes(path, snapshotPath,
-                                        expectedFamily[0].size, errorMessage)) {
-    return std::nullopt;
-  }
-  std::vector<char> finalFirstPage(*pageSize);
-  std::ifstream finalMain(path, std::ios::binary);
-  if (!finalMain.read(finalFirstPage.data(), finalFirstPage.size()) ||
-      finalFirstPage != firstPage) {
-    errorMessage = "database first page changed while querying snapshot";
-    return std::nullopt;
   }
 
   auto afterSnapshot = readSqliteDatabaseFamilyState(path, errorMessage);

@@ -16,7 +16,6 @@
 #include <vector>
 
 #if !TARGET_OS_WINDOWS
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -1158,52 +1157,8 @@ void testScoreTransactionalVersionErrorsDoNotMutateSchema(
   }
 }
 
-void testLargeWalPreflightUsesOnlySparseFirstPage(
-    const std::filesystem::path &root) {
+void testLargeWalPreflightPreservesFamily(const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
-  const auto sourcePath = root / "preflight-sparse-source" / "score.db";
-  {
-    auto db = openDatabase(sourcePath);
-    execOrAbort(db.get(), "CREATE TABLE padding(payload BLOB)");
-    execOrAbort(db.get(),
-                "WITH RECURSIVE counter(value) AS (VALUES(1) UNION ALL "
-                "SELECT value + 1 FROM counter WHERE value < 512) "
-                "INSERT INTO padding SELECT randomblob(4096) FROM counter");
-  }
-  const auto sourceSize = std::filesystem::file_size(sourcePath);
-  assert(sourceSize > 2 * 1024 * 1024);
-  std::string error;
-  const auto pageSize = readRawSqlitePageSize(sourcePath, error);
-  assert(pageSize.has_value());
-
-  const auto snapshotPath = root / "preflight-sparse-copy" / "score.db";
-  std::filesystem::create_directories(snapshotPath.parent_path());
-  assert(writeSqliteFirstPageSnapshot(sourcePath, snapshotPath, *pageSize,
-                                      sourceSize, error));
-  assert(std::filesystem::file_size(snapshotPath) == sourceSize);
-
-  std::vector<char> sourceFirstPage(*pageSize);
-  std::vector<char> snapshotFirstPage(*pageSize);
-  std::vector<char> sourceSecondPage(*pageSize);
-  std::vector<char> snapshotSecondPage(*pageSize);
-  std::ifstream source(sourcePath, std::ios::binary);
-  std::ifstream snapshot(snapshotPath, std::ios::binary);
-  assert(source.read(sourceFirstPage.data(), sourceFirstPage.size()));
-  assert(snapshot.read(snapshotFirstPage.data(), snapshotFirstPage.size()));
-  assert(sourceFirstPage == snapshotFirstPage);
-  assert(source.read(sourceSecondPage.data(), sourceSecondPage.size()));
-  assert(snapshot.read(snapshotSecondPage.data(), snapshotSecondPage.size()));
-  assert(std::any_of(sourceSecondPage.begin(), sourceSecondPage.end(),
-                     [](char value) { return value != 0; }));
-  assert(std::all_of(snapshotSecondPage.begin(), snapshotSecondPage.end(),
-                     [](char value) { return value == 0; }));
-
-  struct stat snapshotStat{};
-  assert(stat(snapshotPath.c_str(), &snapshotStat) == 0);
-  const auto physicalBytes =
-      static_cast<std::uintmax_t>(snapshotStat.st_blocks) * 512U;
-  assert(physicalBytes < sourceSize / 8U);
-
   const auto walPath = root / "preflight-large-wal" / "score.db";
   createLargeFutureWalDatabase(walPath);
   const auto before = rawDatabaseFamilySnapshot(walPath);
@@ -1238,7 +1193,7 @@ int main() {
   testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
   testScoreTransactionalVersionErrorsDoNotMutateSchema(root);
-  testLargeWalPreflightUsesOnlySparseFirstPage(root);
+  testLargeWalPreflightPreservesFamily(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

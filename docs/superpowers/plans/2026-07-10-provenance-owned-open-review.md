@@ -35,7 +35,7 @@
 
 - [x] **Step 1: Add WAL-without-SHM, clean-corrupt, budget, and pragma-error tests**
 
-Create supported/future child-exit WAL fixtures, remove SHM without opening SQLite, and assert exact raw families for successful guarded open/close, future rejection, active writer, and injected no-checkpoint failure. Add a 4096-byte header-shaped corrupt clean file and assert both Connect methods return null without mutation. Add pure and sparse-file boundary tests for main+WAL+reserve at 512 MiB. Install a SQLite auto-extension authorizer that denies `journal_mode` and assert Connect returns null.
+Create supported/future child-exit WAL fixtures, remove SHM without opening SQLite, and assert exact raw families for successful guarded open/close, future rejection, active writer, and injected no-checkpoint failure. Add a 4096-byte header-shaped corrupt clean file and assert both Connect methods return null without mutation. Add pure and oversized-file boundary tests for main+WAL+reserve at 512 MiB. Install a SQLite auto-extension authorizer that denies `journal_mode` and assert Connect returns null.
 
 - [x] **Step 2: Run RED**
 
@@ -50,7 +50,7 @@ Expected: supported WAL-without-SHM creates SHM/current preflight fails; corrupt
 
 - [x] **Step 3: Add bounded exact-copy and usability validation**
 
-Replace unbounded `copy_file`/EOF comparison with helpers that copy/compare exactly the measured size and reject an extra byte. Enforce overflow-safe `main + wal + 64 KiB <= 512 MiB`. For clean existing databases copy the complete main file; for WAL keep first-page sparse main. Query both `PRAGMA user_version` and `SELECT count(*) FROM sqlite_schema` on the isolated family.
+Replace unbounded `copy_file`/EOF comparison with helpers that copy/compare exactly the measured size and reject an extra byte. Enforce overflow-safe `main + wal + 64 KiB <= 512 MiB`. Copy the complete measured main file for every existing database and the complete measured WAL when present. Query both `PRAGMA user_version` and `SELECT count(*) FROM sqlite_schema` through terminal completion on the isolated family.
 
 - [x] **Step 4: Add guarded open pair**
 

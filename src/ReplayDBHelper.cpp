@@ -208,6 +208,12 @@ ReplayChartMatch replayChartMatchFor(const bms_parser::ChartMeta &chartMeta) {
   };
 }
 
+bool hasMatchableReplayChartIdentity(const ReplayData &replay) {
+  const ReplayChartMatch match = replayChartMatchFor(replay.chartMeta);
+  return !trimCopy(match.chartPath).empty() || !match.sha256.empty() ||
+         !match.md5.empty();
+}
+
 int bindReplayChartMatch(sqlite3_stmt *stmt, int bindIndex,
                          const ReplayChartMatch &match) {
   bindSqliteText(stmt, bindIndex++, match.sha256);
@@ -1012,6 +1018,10 @@ bool ReplayDBHelper::EnsureSchema() {
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
+  if (!hasMatchableReplayChartIdentity(replay)) {
+    SDL_Log("Refusing to save replay without a matchable chart identity");
+    return std::nullopt;
+  }
   const auto provenanceJson =
       validatedProvenanceJson(replay.provenance, "replay");
   if (!provenanceJson.has_value()) {
@@ -1051,7 +1061,17 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
 
 std::optional<int>
 ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
-  if (replay.stages.empty()) {
+  if (replay.stages.empty() ||
+      replay.stages.size() >
+          static_cast<std::size_t>(
+              replay_summary_scan::kMaxCourseStagesPerCandidate)) {
+    return std::nullopt;
+  }
+  if (std::any_of(replay.stages.begin(), replay.stages.end(),
+                  [](const CourseReplayStageData &stage) {
+                    return !hasMatchableReplayChartIdentity(stage.replay);
+                  })) {
+    SDL_Log("Refusing to save course replay with an unmatchable stage");
     return std::nullopt;
   }
 
@@ -1609,7 +1629,8 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
   }
   sqlite3_bind_int(eventStmt.get(), 1, replay->id);
 
-  while (sqlite3_step(eventStmt.get()) == SQLITE_ROW) {
+  int eventRc = SQLITE_OK;
+  while ((eventRc = sqlite3_step(eventStmt.get())) == SQLITE_ROW) {
     ReplayEvent event;
     event.action = actionFromInt(sqlite3_column_int(eventStmt.get(), 0));
     event.lane = sqlite3_column_int(eventStmt.get(), 1);
@@ -1624,6 +1645,10 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     event.score = sqlite3_column_int(eventStmt.get(), 10);
     replay->events.push_back(event);
   }
+  if (eventRc != SQLITE_DONE) {
+    logSqlError("loading replay events", db);
+    return std::nullopt;
+  }
   eventStmt.reset();
 
   const char *touchSampleQuery =
@@ -1637,7 +1662,8 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
   }
   sqlite3_bind_int(touchSampleStmt.get(), 1, replay->id);
 
-  while (sqlite3_step(touchSampleStmt.get()) == SQLITE_ROW) {
+  int touchSampleRc = SQLITE_OK;
+  while ((touchSampleRc = sqlite3_step(touchSampleStmt.get())) == SQLITE_ROW) {
     ReplayTouchSample sample;
     sample.action =
         touchActionFromInt(sqlite3_column_int(touchSampleStmt.get(), 0));
@@ -1648,6 +1674,10 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     sample.y =
         static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 4));
     replay->touchSamples.push_back(sample);
+  }
+  if (touchSampleRc != SQLITE_DONE) {
+    logSqlError("loading replay touch samples", db);
+    return std::nullopt;
   }
   touchSampleStmt.reset();
 
@@ -1664,7 +1694,9 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
   }
   sqlite3_bind_int(laneCoverEventStmt.get(), 1, replay->id);
 
-  while (sqlite3_step(laneCoverEventStmt.get()) == SQLITE_ROW) {
+  int laneCoverEventRc = SQLITE_OK;
+  while ((laneCoverEventRc = sqlite3_step(laneCoverEventStmt.get())) ==
+         SQLITE_ROW) {
     ReplayLaneCoverEvent event;
     event.songTimeMicros = sqlite3_column_int64(laneCoverEventStmt.get(), 0);
     event.noteStartPositionPercent =
@@ -1672,6 +1704,10 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     event.resetVisibleTimeReference =
         sqlite3_column_int(laneCoverEventStmt.get(), 2) != 0;
     replay->laneCoverEvents.push_back(event);
+  }
+  if (laneCoverEventRc != SQLITE_DONE) {
+    logSqlError("loading replay lane cover events", db);
+    return std::nullopt;
   }
 
   return replay;

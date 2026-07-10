@@ -37,11 +37,11 @@ Required production-handle options use non-I/O APIs while the guard is held: bus
 
 ## Snapshot validation and bounded I/O
 
-All nonempty existing databases use an isolated SQLite family for usability validation. Clean databases copy the bounded main file in full so `SELECT count(*) FROM sqlite_schema` can traverse the real schema b-tree. WAL databases retain the first-page sparse-main optimization and copy the complete WAL. The temporary connection reads `user_version`, traverses `sqlite_schema`, and never checkpoints on close.
+All nonempty existing databases use an isolated SQLite family for usability validation. Both clean and WAL databases copy the bounded main file in full so `SELECT count(*) FROM sqlite_schema` can traverse the real schema b-tree; WAL databases additionally copy the complete measured WAL. The temporary connection reads `user_version`, traverses `sqlite_schema` through terminal `SQLITE_DONE`, and never checkpoints on close.
 
 One overflow-safe 512 MiB budget covers logical main bytes, WAL bytes, and a fixed temporary-SHM reserve on every platform. Copy and compare helpers read exactly the previously measured size and reject an extra byte, so a racing source cannot cause unbounded copy/verification I/O. Files beyond the budget fail closed before allocation or copying.
 
-Original WAL bytes are compared to the isolated copy before and after its query, original page 1 is reread, and full family presence/size/write-time state is rechecked. Rollback journals remain rejected. WAL-without-SHM is accepted only through the proven exclusive guard; supported, future, active-writer, and injected guard-configuration error paths all get exact-family tests.
+Original main and WAL bytes are compared to their isolated copies before and after the query, and full family presence/size/write-time state is rechecked. Rollback journals remain rejected. WAL-without-SHM is accepted only through the proven exclusive guard; supported, future, active-writer, and injected guard-configuration error paths all get exact-family tests.
 
 ## Error-aware version ownership
 
