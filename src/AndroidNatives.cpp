@@ -761,6 +761,17 @@ std::string GetAndroidInternalFilesDir() {
   return GetAndroidExternalFilesDir();
 }
 
+std::string GetAndroidCacheDir() {
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "getCacheDirPath", "()Ljava/lang/String;", nullptr, callError);
+  if (callError.empty() && !result.empty() &&
+      result.rfind(kErrorPrefix, 0) != 0) {
+    return result;
+  }
+  return {};
+}
+
 bool AndroidBuildHasManageExternalStorage() {
   std::string callError;
   const std::string result = callActivityStringMethod(

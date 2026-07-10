@@ -261,6 +261,18 @@ public class AsoBMaShowActivity extends SDLActivity {
         return getFilesDir().getAbsolutePath();
     }
 
+    public String getCacheDirPath() {
+        try {
+            File cacheDirectory = getCacheDir();
+            return cacheDirectory == null
+                    ? ERROR_PREFIX + "Android private cache is unavailable."
+                    : cacheDirectory.getCanonicalPath();
+        } catch (IOException e) {
+            return ERROR_PREFIX + messageForException(
+                    e, "Android private cache is unavailable.");
+        }
+    }
+
     public String hasManageExternalStorageBuildVariant() {
         return BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE ? "1" : "0";
     }
