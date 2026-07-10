@@ -17,6 +17,7 @@ import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Environment;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
@@ -29,18 +30,27 @@ import org.libsdl.app.SDLActivity;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
@@ -48,7 +58,16 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
     private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 0x41534f45;
     private static final int REQUEST_OPEN_IMPORT_FOLDER = 0x41534f46;
+    private static final int FIRST_DOCUMENT_HANDOFF_REQUEST = 0x5300;
+    private static final int LAST_DOCUMENT_HANDOFF_REQUEST = 0xffff;
+    private static final DocumentHandoffRequestCodeAllocator
+            DOCUMENT_HANDOFF_REQUEST_CODES =
+            new DocumentHandoffRequestCodeAllocator(
+                    FIRST_DOCUMENT_HANDOFF_REQUEST,
+                    LAST_DOCUMENT_HANDOFF_REQUEST);
     private static final String ERROR_PREFIX = "__ERROR__:";
+    private static final String CANCELLED_RESULT = "__CANCELLED__";
+    private static final String SUCCESS_RESULT = "__OK__";
     private static final String PENDING_IMPORT_RESULT = "__PENDING_ARCHIVE_IMPORT__";
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
     private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
@@ -62,6 +81,22 @@ public class AsoBMaShowActivity extends SDLActivity {
     private final AtomicReference<String> archivePickerName = new AtomicReference<>("");
     private final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
     private final AtomicReference<String> archivePickerError = new AtomicReference<>("");
+    private final Object documentHandoffLock = new Object();
+    private DocumentHandoffOperation documentHandoffOperation;
+    private static final DocumentHandoffTokenRegistry DOCUMENT_HANDOFF_TOKENS =
+            new DocumentHandoffTokenRegistry();
+    private static final DocumentHandoffRestoreRegistry DOCUMENT_HANDOFF_RESTORES =
+            new DocumentHandoffRestoreRegistry();
+    private static final Executor DOCUMENT_HANDOFF_ROLLBACK_EXECUTOR =
+            new ThreadPoolExecutor(
+                    1, 1, 0L, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(8), runnable -> {
+                        Thread thread = new Thread(
+                                runnable, "AsoBMaShow-document-rollback");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+    private boolean documentHandoffDestroyed = false;
     private final Object manageStorageLock = new Object();
     private CountDownLatch manageStorageLatch;
     private final Object pendingArchiveImportLock = new Object();
@@ -98,6 +133,50 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    private enum DocumentHandoffKind {
+        IMPORT,
+        EXPORT
+    }
+
+    private static class DocumentHandoffOperation {
+        final DocumentHandoffKind kind;
+        final String operationToken;
+        final int requestCode;
+        final CountDownLatch selectionLatch = new CountDownLatch(1);
+        volatile boolean cancelled = false;
+        volatile CancellationSignal providerCancellation;
+        volatile ParcelFileDescriptor providerDescriptor;
+        boolean pickerLaunched = false;
+        boolean selectionCompleted = false;
+        Uri uri;
+        String result = "";
+
+        DocumentHandoffOperation(DocumentHandoffKind kind, String operationToken,
+                                 int requestCode) {
+            this.kind = kind;
+            this.operationToken = operationToken;
+            this.requestCode = requestCode;
+        }
+    }
+
+    private static class DocumentSelection {
+        final DocumentHandoffOperation operation;
+        final Uri uri;
+        final String result;
+
+        DocumentSelection(DocumentHandoffOperation operation, Uri uri, String result) {
+            this.operation = operation;
+            this.uri = uri;
+            this.result = result;
+        }
+    }
+
+    private static class DocumentHandoffCancelledException extends IOException {
+        DocumentHandoffCancelledException() {
+            super("Document handoff was cancelled.");
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
@@ -121,6 +200,17 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        DocumentHandoffOperation operation;
+        synchronized (documentHandoffLock) {
+            documentHandoffDestroyed = true;
+            operation = documentHandoffOperation;
+            if (operation != null) {
+                DOCUMENT_HANDOFF_TOKENS.cancel(operation.operationToken);
+            }
+            cancelDocumentHandoffLocked(operation);
+        }
+        interruptDocumentHandoffIo(operation);
+        dismissDocumentHandoffPicker(operation);
         stopMidiInput();
         synchronized (nativeMusicLock) {
             releaseNativeMusicPlayerLocked();
@@ -146,6 +236,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long downloadedBytes,
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
+    private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
 
     public String startMidiInput() {
@@ -266,6 +357,23 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        synchronized (documentHandoffLock) {
+            if (DOCUMENT_HANDOFF_REQUEST_CODES.wasIssued(requestCode)) {
+                DocumentHandoffOperation operation = documentHandoffOperation;
+                if (operation != null && operation.requestCode == requestCode) {
+                    if (resultCode == Activity.RESULT_OK && data != null &&
+                            data.getData() != null) {
+                        completeDocumentSelectionLocked(operation, data.getData(), "");
+                    } else {
+                        completeDocumentSelectionLocked(
+                                operation, null, CANCELLED_RESULT);
+                    }
+                }
+                // Request codes are unique for this Activity lifetime. A callback for a
+                // completed operation must never be forwarded into, or complete, a later one.
+                return;
+            }
+        }
         if (requestCode == REQUEST_OPEN_TREE) {
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
                 Uri treeUri = data.getData();
@@ -522,6 +630,279 @@ public class AsoBMaShowActivity extends SDLActivity {
                 return pendingArchiveImportResults.removeFirst();
             }
             return "";
+        }
+    }
+
+    public String importDocument(String operationToken, String mimeType,
+                                 long maxBytes) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Document import cannot block the UI thread.";
+        }
+        if (operationToken == null || operationToken.isEmpty() ||
+                !isValidMimeType(mimeType) || maxBytes <= 0) {
+            return ERROR_PREFIX + "Invalid document import request.";
+        }
+
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mimeType);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        DocumentSelection selection = awaitDocumentSelection(
+                DocumentHandoffKind.IMPORT, operationToken, intent);
+        if (!selection.result.isEmpty()) {
+            return finishDocumentHandoffOperation(selection.operation)
+                    ? selection.result
+                    : CANCELLED_RESULT;
+        }
+        if (selection.uri == null) {
+            if (!finishDocumentHandoffOperation(selection.operation)) {
+                return CANCELLED_RESULT;
+            }
+            return ERROR_PREFIX + "Document import returned no content URI.";
+        }
+        if (!ContentResolver.SCHEME_CONTENT.equals(selection.uri.getScheme()) ||
+                !DocumentsContract.isDocumentUri(this, selection.uri)) {
+            finishDocumentHandoffOperation(selection.operation);
+            return ERROR_PREFIX +
+                    "Import source is not a DocumentsProvider document.";
+        }
+        String importedPath;
+        try {
+            importedPath = copyDocumentUriToPrivateTemp(
+                    selection.uri, maxBytes, selection.operation);
+        } catch (DocumentHandoffCancelledException e) {
+            finishDocumentHandoffOperation(selection.operation);
+            return CANCELLED_RESULT;
+        } catch (Exception e) {
+            if (!finishDocumentHandoffOperation(selection.operation)) {
+                return CANCELLED_RESULT;
+            }
+            return ERROR_PREFIX + messageForException(
+                    e, "Could not copy the selected document.");
+        }
+        if (!finishDocumentHandoffOperation(selection.operation)) {
+            deleteRecursively(new File(importedPath).getParentFile());
+            return CANCELLED_RESULT;
+        }
+        return importedPath;
+    }
+
+    public String exportDocument(String operationToken, String localPath,
+                                 String mimeType, String suggestedName,
+                                 long maxBytes) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return ERROR_PREFIX + "Document export cannot block the UI thread.";
+        }
+        if (operationToken == null || operationToken.isEmpty() ||
+                !isValidMimeType(mimeType) ||
+                !isValidSuggestedFileName(suggestedName) || maxBytes <= 0) {
+            return ERROR_PREFIX + "Invalid document export request.";
+        }
+        File source = new File(localPath);
+        if (!source.isAbsolute() || !source.isFile() || source.length() > maxBytes) {
+            return ERROR_PREFIX + "Export source is unavailable or exceeds the maximum size.";
+        }
+
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mimeType);
+        intent.putExtra(Intent.EXTRA_TITLE, suggestedName);
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        DocumentSelection selection = awaitDocumentSelection(
+                DocumentHandoffKind.EXPORT, operationToken, intent);
+        if (!selection.result.isEmpty()) {
+            return finishDocumentHandoffOperation(selection.operation)
+                    ? selection.result
+                    : CANCELLED_RESULT;
+        }
+        if (selection.uri == null) {
+            if (!finishDocumentHandoffOperation(selection.operation)) {
+                return CANCELLED_RESULT;
+            }
+            return ERROR_PREFIX + "Document export returned no content URI.";
+        }
+        if (!ContentResolver.SCHEME_CONTENT.equals(selection.uri.getScheme()) ||
+                !DocumentsContract.isDocumentUri(this, selection.uri)) {
+            finishDocumentHandoffOperation(selection.operation);
+            return ERROR_PREFIX +
+                    "Export destination is not a DocumentsProvider document.";
+        }
+        final String destinationKey;
+        try {
+            destinationKey = DocumentHandoffUriKeyPolicy.key(
+                    selection.uri.getAuthority(),
+                    DocumentsContract.getDocumentId(selection.uri));
+        } catch (Exception e) {
+            finishDocumentHandoffOperation(selection.operation);
+            return ERROR_PREFIX + "Export destination identity is invalid.";
+        }
+
+        CancellationSignal cancellation = new CancellationSignal();
+        ParcelFileDescriptor descriptor = null;
+        DocumentHandoffExportPolicy.Decision destinationDecision = null;
+        boolean destinationTouched = false;
+        boolean restoreEmpty = false;
+        DocumentHandoffRestoreRegistry.Ticket uriWriteTicket = null;
+        String operationResult = SUCCESS_RESULT;
+        try {
+            if (!registerDocumentHandoffIo(
+                    selection.operation, cancellation, null)) {
+                throw new DocumentHandoffCancelledException();
+            }
+            uriWriteTicket = DOCUMENT_HANDOFF_RESTORES.acquire(
+                    destinationKey,
+                    () -> selection.operation.cancelled);
+            if (uriWriteTicket == null) {
+                throw new DocumentHandoffCancelledException();
+            }
+            throwIfDocumentHandoffCancelled(selection.operation);
+            long existingSize = queryDocumentSize(selection.uri, cancellation);
+            throwIfDocumentHandoffCancelled(selection.operation);
+            destinationDecision = DocumentHandoffExportPolicy.decide(existingSize);
+            if (destinationDecision ==
+                    DocumentHandoffExportPolicy.Decision.REFUSE_UNKNOWN) {
+                throw new IOException(
+                        "Export destination size could not be verified.");
+            }
+            if (destinationDecision ==
+                    DocumentHandoffExportPolicy.Decision.REFUSE_NONEMPTY) {
+                throw new IOException(
+                        "Refusing to overwrite a non-empty export destination.");
+            }
+            descriptor = getContentResolver().openFileDescriptor(
+                    selection.uri, "rwt", cancellation);
+            destinationTouched = descriptor != null;
+            if (descriptor == null || !registerDocumentHandoffIo(
+                    selection.operation, cancellation, descriptor)) {
+                throw new DocumentHandoffCancelledException();
+            }
+            try (InputStream input = new FileInputStream(source);
+                 OutputStream output = new FileOutputStream(
+                         descriptor.getFileDescriptor())) {
+                copyStreamBounded(
+                        input, output, maxBytes, selection.operation);
+                output.flush();
+                throwIfDocumentHandoffCancelled(selection.operation);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            restoreEmpty = DocumentHandoffExportPolicy.shouldRestoreEmpty(
+                    destinationDecision, destinationTouched);
+            operationResult = CANCELLED_RESULT;
+        } catch (DocumentHandoffCancelledException e) {
+            restoreEmpty = DocumentHandoffExportPolicy.shouldRestoreEmpty(
+                    destinationDecision, destinationTouched);
+            operationResult = CANCELLED_RESULT;
+        } catch (Exception e) {
+            restoreEmpty = DocumentHandoffExportPolicy.shouldRestoreEmpty(
+                    destinationDecision, destinationTouched);
+            operationResult = ERROR_PREFIX + messageForException(
+                    e, "Could not write the exported document.");
+        } finally {
+            clearDocumentHandoffIo(selection.operation, cancellation, descriptor);
+            if (descriptor != null) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        if (SUCCESS_RESULT.equals(operationResult) &&
+                nativeCommitDocumentHandoff(operationToken) &&
+                commitDocumentHandoffOperation(selection.operation)) {
+            if (uriWriteTicket != null) {
+                DOCUMENT_HANDOFF_RESTORES.complete(uriWriteTicket);
+            }
+            return SUCCESS_RESULT;
+        }
+        if (SUCCESS_RESULT.equals(operationResult)) {
+            operationResult = CANCELLED_RESULT;
+            restoreEmpty = DocumentHandoffExportPolicy.shouldRestoreEmpty(
+                    destinationDecision, destinationTouched);
+        }
+
+        if (restoreEmpty && uriWriteTicket != null &&
+                restoreEmptyDocumentAsync(selection.uri, uriWriteTicket)) {
+            uriWriteTicket = null;
+        }
+        if (uriWriteTicket != null) {
+            DOCUMENT_HANDOFF_RESTORES.complete(uriWriteTicket);
+        }
+        if (!finishDocumentHandoffOperation(selection.operation)) {
+            return CANCELLED_RESULT;
+        }
+        return operationResult;
+    }
+
+    public String registerDocumentHandoff(String operationToken) {
+        synchronized (documentHandoffLock) {
+            if (documentHandoffDestroyed) {
+                return CANCELLED_RESULT;
+            }
+            return DOCUMENT_HANDOFF_TOKENS.register(operationToken)
+                    ? SUCCESS_RESULT
+                    : ERROR_PREFIX + "Document handoff token is invalid or duplicated.";
+        }
+    }
+
+    public String retireDocumentHandoff(String operationToken) {
+        synchronized (documentHandoffLock) {
+            DOCUMENT_HANDOFF_TOKENS.retire(operationToken);
+        }
+        return SUCCESS_RESULT;
+    }
+
+    public String cancelDocumentHandoff(String operationToken) {
+        if (operationToken == null || operationToken.isEmpty()) {
+            return ERROR_PREFIX + "Document handoff token is invalid.";
+        }
+        DocumentHandoffOperation operation;
+        synchronized (documentHandoffLock) {
+            operation = documentHandoffOperation;
+            if (!DOCUMENT_HANDOFF_TOKENS.cancel(operationToken) ||
+                    operation == null ||
+                    !operation.operationToken.equals(operationToken)) {
+                operation = null;
+            } else {
+                cancelDocumentHandoffLocked(operation);
+            }
+        }
+        interruptDocumentHandoffIo(operation);
+        dismissDocumentHandoffPicker(operation);
+        return SUCCESS_RESULT;
+    }
+
+    public String validateDocumentHandoffImport(String localPath) {
+        try {
+            validatedDocumentHandoffImport(localPath, false, false);
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(
+                    e, "Temporary document ownership could not be verified.");
+        }
+    }
+
+    public String cleanupDocumentHandoffImport(String localPath) {
+        try {
+            File owned = validatedDocumentHandoffImport(localPath, true, true);
+            Files.deleteIfExists(owned.toPath());
+
+            File base = new File(getCacheDir(), "document-handoff")
+                    .getCanonicalFile();
+            File parent = owned.getParentFile();
+            if (parent != null && parent.getCanonicalFile().getParentFile() != null &&
+                    parent.getCanonicalFile().getParentFile().equals(base)) {
+                try {
+                    Files.deleteIfExists(parent.toPath());
+                } catch (IOException ignored) {
+                    // The owned file is gone; a non-empty staging directory is harmless.
+                }
+            }
+            return SUCCESS_RESULT;
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(
+                    e, "Temporary document cleanup failed.");
         }
     }
 
@@ -1127,6 +1508,456 @@ public class AsoBMaShowActivity extends SDLActivity {
         return message == null || message.isEmpty()
                 ? fallback
                 : message;
+    }
+
+    private DocumentSelection awaitDocumentSelection(DocumentHandoffKind kind,
+                                                      String operationToken,
+                                                      Intent intent) {
+        DocumentHandoffOperation operation;
+        synchronized (documentHandoffLock) {
+            if (documentHandoffDestroyed) {
+                return new DocumentSelection(null, null, CANCELLED_RESULT);
+            }
+            DocumentHandoffTokenRegistry.Activation activation =
+                    DOCUMENT_HANDOFF_TOKENS.activate(operationToken);
+            if (activation == DocumentHandoffTokenRegistry.Activation.CANCELLED) {
+                return new DocumentSelection(null, null, CANCELLED_RESULT);
+            }
+            if (activation != DocumentHandoffTokenRegistry.Activation.ACTIVE) {
+                return new DocumentSelection(
+                        null, null,
+                        ERROR_PREFIX + "Document handoff token was not registered.");
+            }
+            if (documentHandoffOperation != null) {
+                return new DocumentSelection(
+                        null, null,
+                        ERROR_PREFIX + "Another document picker is already open.");
+            }
+            int requestCode = DOCUMENT_HANDOFF_REQUEST_CODES.allocate();
+            if (requestCode < 0) {
+                return new DocumentSelection(
+                        null, null,
+                        ERROR_PREFIX + "No document picker request codes remain.");
+            }
+            operation = new DocumentHandoffOperation(
+                    kind, operationToken, requestCode);
+            documentHandoffOperation = operation;
+        }
+
+        runOnUiThread(() -> {
+            synchronized (documentHandoffLock) {
+                if (documentHandoffDestroyed ||
+                        documentHandoffOperation != operation || operation.cancelled) {
+                    cancelDocumentHandoffLocked(operation);
+                    return;
+                }
+                operation.pickerLaunched = true;
+            }
+            try {
+                startActivityForResult(intent, operation.requestCode);
+            } catch (Exception e) {
+                synchronized (documentHandoffLock) {
+                    completeDocumentSelectionLocked(
+                            operation, null, ERROR_PREFIX + messageForException(
+                                    e, "Could not open the document picker."));
+                }
+            }
+        });
+
+        try {
+            operation.selectionLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            synchronized (documentHandoffLock) {
+                cancelDocumentHandoffLocked(operation);
+            }
+            interruptDocumentHandoffIo(operation);
+            dismissDocumentHandoffPicker(operation);
+        }
+
+        synchronized (documentHandoffLock) {
+            if (documentHandoffOperation != operation) {
+                return new DocumentSelection(
+                        operation, null,
+                        ERROR_PREFIX + "Document picker state was replaced.");
+            }
+            return new DocumentSelection(operation, operation.uri, operation.result);
+        }
+    }
+
+    private void completeDocumentSelectionLocked(DocumentHandoffOperation operation,
+                                                 Uri uri, String result) {
+        if (operation == null || documentHandoffOperation != operation ||
+                operation.selectionCompleted) {
+            return;
+        }
+        operation.uri = uri;
+        operation.result = result == null ? "" : result;
+        operation.selectionCompleted = true;
+        operation.selectionLatch.countDown();
+    }
+
+    private void cancelDocumentHandoffLocked(DocumentHandoffOperation operation) {
+        if (operation == null || documentHandoffOperation != operation) {
+            return;
+        }
+        operation.cancelled = true;
+        operation.uri = null;
+        operation.result = CANCELLED_RESULT;
+        if (!operation.selectionCompleted) {
+            operation.selectionCompleted = true;
+            operation.selectionLatch.countDown();
+        }
+    }
+
+    private boolean registerDocumentHandoffIo(DocumentHandoffOperation operation,
+                                              CancellationSignal cancellation,
+                                              ParcelFileDescriptor descriptor) {
+        synchronized (documentHandoffLock) {
+            if (operation == null || documentHandoffOperation != operation ||
+                    operation.cancelled) {
+                return false;
+            }
+            operation.providerCancellation = cancellation;
+            operation.providerDescriptor = descriptor;
+            return true;
+        }
+    }
+
+    private void clearDocumentHandoffIo(DocumentHandoffOperation operation,
+                                        CancellationSignal cancellation,
+                                        ParcelFileDescriptor descriptor) {
+        synchronized (documentHandoffLock) {
+            if (operation == null) {
+                return;
+            }
+            if (operation.providerCancellation == cancellation) {
+                operation.providerCancellation = null;
+            }
+            if (operation.providerDescriptor == descriptor) {
+                operation.providerDescriptor = null;
+            }
+        }
+    }
+
+    private void interruptDocumentHandoffIo(DocumentHandoffOperation operation) {
+        if (operation == null) {
+            return;
+        }
+        CancellationSignal cancellation = operation.providerCancellation;
+        ParcelFileDescriptor descriptor = operation.providerDescriptor;
+        if (cancellation == null && descriptor == null) {
+            return;
+        }
+        Thread closer = new Thread(() -> {
+            if (cancellation != null) {
+                try {
+                    cancellation.cancel();
+                } catch (Exception ignored) {
+                }
+            }
+            if (descriptor != null) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }, "AsoBMaShow-document-cancel");
+        closer.setDaemon(true);
+        closer.start();
+    }
+
+    private void dismissDocumentHandoffPicker(DocumentHandoffOperation operation) {
+        if (operation == null || !operation.pickerLaunched) {
+            return;
+        }
+        runOnUiThread(() -> {
+            try {
+                finishActivity(operation.requestCode);
+            } catch (Exception ignored) {
+                // Some document providers do not expose a finishable child Activity.
+            }
+        });
+    }
+
+    private boolean finishDocumentHandoffOperation(DocumentHandoffOperation operation) {
+        if (operation == null) {
+            return true;
+        }
+        synchronized (documentHandoffLock) {
+            if (documentHandoffOperation != operation) {
+                return false;
+            }
+            boolean completed = !operation.cancelled;
+            documentHandoffOperation = null;
+            DOCUMENT_HANDOFF_TOKENS.finish(operation.operationToken);
+            return completed;
+        }
+    }
+
+    private boolean commitDocumentHandoffOperation(
+            DocumentHandoffOperation operation) {
+        if (operation == null) {
+            return true;
+        }
+        synchronized (documentHandoffLock) {
+            if (documentHandoffOperation != operation || operation.cancelled) {
+                return false;
+            }
+            documentHandoffOperation = null;
+            DOCUMENT_HANDOFF_TOKENS.finish(operation.operationToken);
+            return true;
+        }
+    }
+
+    private void throwIfDocumentHandoffCancelled(DocumentHandoffOperation operation)
+            throws DocumentHandoffCancelledException {
+        if (operation != null && operation.cancelled) {
+            throw new DocumentHandoffCancelledException();
+        }
+    }
+
+    private boolean isValidMimeType(String mimeType) {
+        if (mimeType == null || mimeType.isEmpty() || !mimeType.contains("/")) {
+            return false;
+        }
+        for (int i = 0; i < mimeType.length(); i++) {
+            if (Character.isWhitespace(mimeType.charAt(i)) ||
+                    Character.isISOControl(mimeType.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isValidSuggestedFileName(String name) {
+        if (name == null || name.isEmpty() || ".".equals(name) || "..".equals(name)
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
+            return false;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            if (Character.isISOControl(name.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String copyDocumentUriToPrivateTemp(Uri uri, long maxBytes,
+                                                 DocumentHandoffOperation operation)
+            throws Exception {
+        throwIfDocumentHandoffCancelled(operation);
+        CancellationSignal cancellation = new CancellationSignal();
+        ParcelFileDescriptor descriptor = null;
+        File base = createPrivateDocumentHandoffBase();
+        File directory = new File(base, UUID.randomUUID().toString());
+        if (!directory.mkdir()) {
+            throw new IOException("Could not create private document storage.");
+        }
+        File output = new File(directory, "imported-document.zip");
+        boolean copied = false;
+        try {
+            if (!registerDocumentHandoffIo(operation, cancellation, null)) {
+                throw new DocumentHandoffCancelledException();
+            }
+            long declaredSize = queryDocumentSize(uri, cancellation);
+            throwIfDocumentHandoffCancelled(operation);
+            if (declaredSize > maxBytes) {
+                throw new IOException(
+                        "The selected document exceeds the maximum size.");
+            }
+            descriptor = getContentResolver().openFileDescriptor(
+                    uri, "r", cancellation);
+            if (descriptor == null) {
+                throw new IOException("Could not open the selected document.");
+            }
+            if (!registerDocumentHandoffIo(operation, cancellation, descriptor)) {
+                throw new DocumentHandoffCancelledException();
+            }
+            try (InputStream input = new FileInputStream(
+                         descriptor.getFileDescriptor());
+                 FileOutputStream outputStream = new FileOutputStream(output)) {
+                copyStreamBounded(input, outputStream, maxBytes, operation);
+                outputStream.flush();
+                outputStream.getFD().sync();
+                throwIfDocumentHandoffCancelled(operation);
+            }
+            copied = true;
+        } catch (Exception e) {
+            if (operation != null && operation.cancelled &&
+                    !(e instanceof DocumentHandoffCancelledException)) {
+                throw new DocumentHandoffCancelledException();
+            }
+            throw e;
+        } finally {
+            clearDocumentHandoffIo(operation, cancellation, descriptor);
+            if (descriptor != null) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                }
+            }
+            if (!copied) {
+                deleteRecursively(directory);
+            }
+        }
+        output.setReadable(false, false);
+        output.setWritable(false, false);
+        output.setReadable(true, true);
+        output.setWritable(true, true);
+        return output.getAbsolutePath();
+    }
+
+    private File createPrivateDocumentHandoffBase() throws IOException {
+        File cache = getCacheDir().getCanonicalFile();
+        File base = new File(cache, "document-handoff");
+        Path basePath = base.toPath();
+        if (Files.isSymbolicLink(basePath)) {
+            throw new IOException(
+                    "Private document storage cannot be a symbolic link.");
+        }
+        if (!Files.exists(basePath, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createDirectory(basePath);
+        }
+        if (Files.isSymbolicLink(basePath) || !Files.isDirectory(
+                basePath, LinkOption.NOFOLLOW_LINKS) ||
+                !base.getCanonicalFile().getParentFile().equals(cache)) {
+            throw new IOException("Private document storage is not trustworthy.");
+        }
+        return base;
+    }
+
+    private File validatedDocumentHandoffImport(String localPath,
+                                                boolean allowMissing,
+                                                boolean allowFinalSymlink)
+            throws IOException {
+        if (localPath == null || localPath.isEmpty()) {
+            throw new IOException("Temporary document path is empty.");
+        }
+        File candidate = new File(localPath);
+        if (!candidate.isAbsolute() || candidate.getParentFile() == null) {
+            throw new IOException("Temporary document path is invalid.");
+        }
+
+        File baseFile = new File(getCacheDir(), "document-handoff");
+        Path basePath = baseFile.toPath().toAbsolutePath().normalize();
+        Path candidatePath = candidate.toPath().toAbsolutePath().normalize();
+        Path parentPath = candidatePath.getParent();
+        if (parentPath == null ||
+                !DocumentHandoffImportPathPolicy.isIssuedPath(
+                        basePath, candidatePath)) {
+            throw new IOException("Temporary document is outside private storage.");
+        }
+        if (Files.isSymbolicLink(basePath)) {
+            throw new IOException("Private document storage cannot be a symbolic link.");
+        }
+        for (Path ancestor = parentPath; !ancestor.equals(basePath);
+             ancestor = ancestor.getParent()) {
+            if (ancestor == null || Files.isSymbolicLink(ancestor)) {
+                throw new IOException(
+                        "Temporary document has an unsafe symbolic-link ancestor.");
+            }
+        }
+
+        Path canonicalBase = baseFile.getCanonicalFile().toPath();
+        Path canonicalParent = candidate.getParentFile().getCanonicalFile().toPath();
+        if (!canonicalParent.startsWith(canonicalBase) ||
+                canonicalParent.equals(canonicalBase)) {
+            throw new IOException("Temporary document escaped private storage.");
+        }
+
+        boolean existsWithoutFollowing = Files.exists(
+                candidatePath, LinkOption.NOFOLLOW_LINKS);
+        boolean finalSymlink = Files.isSymbolicLink(candidatePath);
+        if (!existsWithoutFollowing && !finalSymlink) {
+            if (allowMissing) {
+                return candidatePath.toFile();
+            }
+            throw new IOException("Temporary document no longer exists.");
+        }
+        if ((!allowFinalSymlink && finalSymlink) ||
+                (!finalSymlink && !Files.isRegularFile(
+                        candidatePath, LinkOption.NOFOLLOW_LINKS))) {
+            throw new IOException("Temporary document is not a regular file.");
+        }
+        return candidatePath.toFile();
+    }
+
+    private long queryDocumentSize(Uri uri, CancellationSignal cancellation) {
+        try (Cursor cursor = getContentResolver().query(
+                uri, new String[] { OpenableColumns.SIZE }, null, null, null,
+                cancellation)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int column = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (column >= 0 && !cursor.isNull(column)) {
+                    return cursor.getLong(column);
+                }
+            }
+        } catch (Exception e) {
+            if (cancellation != null && cancellation.isCanceled()) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private void copyStreamBounded(InputStream input, OutputStream output,
+                                   long maxBytes,
+                                   DocumentHandoffOperation operation)
+            throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        long copied = 0;
+        while (true) {
+            throwIfDocumentHandoffCancelled(operation);
+            int read = input.read(buffer);
+            throwIfDocumentHandoffCancelled(operation);
+            if (read < 0) {
+                return;
+            }
+            if (read == 0) {
+                int oneByte = input.read();
+                throwIfDocumentHandoffCancelled(operation);
+                if (oneByte < 0) {
+                    return;
+                }
+                if (copied >= maxBytes) {
+                    throw new IOException("The document exceeds the maximum size.");
+                }
+                output.write(oneByte);
+                copied++;
+                throwIfDocumentHandoffCancelled(operation);
+                continue;
+            }
+            if (read > maxBytes - copied) {
+                throw new IOException("The document exceeds the maximum size.");
+            }
+            output.write(buffer, 0, read);
+            copied += read;
+            throwIfDocumentHandoffCancelled(operation);
+        }
+    }
+
+    private boolean restoreEmptyDocumentAsync(
+            Uri uri, DocumentHandoffRestoreRegistry.Ticket ticket) {
+        ContentResolver resolver =
+                getApplicationContext().getContentResolver();
+        try {
+            DOCUMENT_HANDOFF_ROLLBACK_EXECUTOR.execute(() -> {
+                try (OutputStream output =
+                             resolver.openOutputStream(uri, "wt")) {
+                    if (output != null) {
+                        output.flush();
+                    }
+                } catch (Exception ignored) {
+                    // The only accepted pre-state was empty; preserve it when possible.
+                } finally {
+                    DOCUMENT_HANDOFF_RESTORES.complete(ticket);
+                }
+            });
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void finishPicker() {
