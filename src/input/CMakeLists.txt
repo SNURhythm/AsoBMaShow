@@ -6,4 +6,5 @@ target_sources(main PRIVATE
     InputProfile.cpp
     InputDefaults.cpp
     InputProfileStore.cpp
+    InputBindingResolver.cpp
 )

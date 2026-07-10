@@ -609,6 +609,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(input_profile_tests PRIVATE SDL2)
     endif()
 
+    add_executable(input_binding_resolver_tests
+        tests/input_binding_resolver_tests.cpp
+        src/input/InputBindingResolver.cpp
+    )
+    target_include_directories(input_binding_resolver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(input_binding_resolver_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2)
+    endif()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -638,4 +652,5 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         asobmashow_register_test(${test_target})
     endforeach()
     asobmashow_register_test(input_profile_tests foundation_input_profile)
+    asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
 endif()
