@@ -680,6 +680,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(app_settings_store_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(display_settings_manager_tests
+        tests/display_settings_manager_tests.cpp
+        src/video/DisplaySettingsManager.cpp
+    )
+    target_include_directories(display_settings_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
+
+    add_executable(frame_pacer_tests
+        tests/frame_pacer_tests.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -722,4 +738,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(display_settings_manager_tests foundation_av_display)
+    asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
 endif()

@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <iostream>
+#include <memory>
 #include <vector>
 #include <string>
 #include "AppSettings.h"
@@ -13,6 +14,8 @@
 #include "audio/Jukebox.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
+#include "video/DisplaySettingsManager.h"
+#include "video/FramePacer.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -31,6 +34,9 @@ public:
   std::atomic<bool> backgroundTasksPausedForForegroundScene{false};
   std::atomic<bool> ignoreBgaPostOptions{false};
   std::atomic<std::uint32_t> bgfxResetFlags{0};
+  std::unique_ptr<display::IDisplayBackend> displayBackend;
+  std::unique_ptr<display::DisplaySettingsManager> displaySettingsManager;
+  FramePacer framePacer;
   std::function<void()> restoreGameplayRenderViews;
   std::function<void()> requestAddChartFolderFromFiles;
   std::function<void()> requestRebuildChartLibrary;
