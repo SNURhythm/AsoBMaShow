@@ -1366,6 +1366,35 @@ void testConfigurableWrapperRecoversFromAuthoritativeExternalStop() {
           "successful recovery republishes the authoritative running state");
 }
 
+void testSoundSubmissionsRecoverFromAuthoritativeExternalStop() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("authoritative-submission-recovery");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "submission recovery fixture retains production PCM");
+
+  control->events.clear();
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+  require(wrapper.playSound(sound, audio::Bus::Bgm),
+          "playSound recovers an authoritatively stopped stream");
+  require(control->events == std::vector<std::string>{"start:"} &&
+              control->authoritativeState ==
+                  audio::playback::BackendRunState::Running,
+          "playSound observes and restarts the native stream before submit");
+
+  control->events.clear();
+  control->authoritativeState = audio::playback::BackendRunState::Stopped;
+  require(wrapper.scheduleSound(sound, audio::Bus::Keysound, 123456),
+          "scheduleSound recovers an authoritatively stopped stream");
+  require(
+      control->events == std::vector<std::string>{"start:"} &&
+          control->authoritativeState ==
+              audio::playback::BackendRunState::Running,
+      "scheduleSound observes and restarts the native stream before submit");
+}
+
 } // namespace
 
 int main() {
@@ -1389,6 +1418,7 @@ int main() {
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
     testBufferCapabilityProbePublishesOnlyVerifiedCandidates();
     testConfigurableWrapperRecoversFromAuthoritativeExternalStop();
+    testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

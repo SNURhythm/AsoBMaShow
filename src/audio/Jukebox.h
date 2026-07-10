@@ -96,6 +96,8 @@ public:
   PerformanceAnalytics performanceAnalytics;
 
   Jukebox(Stopwatch *stopwatch);
+  Jukebox(Stopwatch *stopwatch,
+          std::unique_ptr<audio::IBackendFactory> backendFactory);
   ~Jukebox();
 
   // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
@@ -233,6 +235,7 @@ private:
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   bool activateVisualAt(int visualId, bgfx::ViewId viewId,
                         long long elapsedMicros);
+  void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {

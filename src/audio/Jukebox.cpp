@@ -664,7 +664,11 @@ void replaceImageLocked(std::unordered_map<int, ImageData> &table, int id,
 } // namespace
 
 Jukebox::Jukebox(Stopwatch *stopwatch)
-    : audio(stopwatch), stopwatch(stopwatch) {
+    : Jukebox(stopwatch, audio::CreatePlatformBackendFactory()) {}
+
+Jukebox::Jukebox(Stopwatch *stopwatch,
+                 std::unique_ptr<audio::IBackendFactory> backendFactory)
+    : audio(stopwatch, std::move(backendFactory)), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
 }
 
@@ -2928,6 +2932,42 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
   return false;
 }
 
+void Jukebox::restoreVisualsAtTimelineMicrosLocked(
+    long long bgaTimelineMicros) {
+  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
+  currentBga.store(-1, std::memory_order_relaxed);
+  currentBmpLayer.store(-1, std::memory_order_relaxed);
+  bmpCursor = 0;
+  bmpLayerCursor = 0;
+  {
+    std::lock_guard<std::mutex> videoLock(videoPlayerTableMutex);
+    for (auto &videoPlayer : videoPlayerTable) {
+      videoPlayer.second->stop();
+    }
+  }
+
+  while (bmpCursor < bmpList.size() &&
+         bmpList[bmpCursor].first <= bgaTimelineMicros) {
+    const auto &target = bmpList[bmpCursor];
+    const long long elapsedMicros = bgaTimelineMicros - target.first;
+    if (activateVisualAt(target.second, rendering::bga_view, elapsedMicros)) {
+      currentBga.store(target.second, std::memory_order_relaxed);
+    }
+    ++bmpCursor;
+  }
+  while (bmpLayerCursor < bmpLayerList.size() &&
+         bmpLayerList[bmpLayerCursor].first <= bgaTimelineMicros) {
+    const auto &target = bmpLayerList[bmpLayerCursor];
+    const long long elapsedMicros = bgaTimelineMicros - target.first;
+    if (activateVisualAt(target.second, rendering::bga_layer_view,
+                         elapsedMicros)) {
+      currentBmpLayer.store(target.second, std::memory_order_relaxed);
+    }
+    ++bmpLayerCursor;
+  }
+  lastVisualTimelineMicros = bgaTimelineMicros;
+}
+
 void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
   bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
 
@@ -3044,10 +3084,15 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
   };
   const auto started = jukebox_lifecycle::StartPlayback(
       audio, "Jukebox::play", lifecycleState, target,
-      [this, startMicros] {
+      [this, startMicros, bgaTimelineMicro] {
         audio.seekClock(startMicros);
         scheduleAudioFromCursor();
         playOverlappingAudioAt(startMicros);
+        if (visualsEnabled.load(std::memory_order_relaxed) &&
+            !visualsSuspended.load(std::memory_order_acquire)) {
+          stopwatch->seek(bgaTimelineMicro);
+          restoreVisualsAtTimelineMicrosLocked(bgaTimelineMicro);
+        }
       },
       [this] { wakeScheduler(); },
       {.positionMicros = bgaTimelineMicro, .running = !paused});

@@ -185,11 +185,10 @@ private:
   bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
-  bool appendScheduledSound(SoundData *soundData, long long startMicros,
-                            uint64_t sequence, audio::Bus bus,
-                            size_t startFrame = 0);
   void initializeUserData();
   void startBackendAfterConstruction();
+  audio::playback::BackendOperationResult
+  startDeviceWithLifecycleAndSoundLocked();
   audio::playback::BackendOperationResult
   stopSoundsWithLifecycleAndCommandLocked();
   void clearCallbackState();
