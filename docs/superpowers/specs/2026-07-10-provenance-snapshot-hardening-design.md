@@ -1,67 +1,70 @@
 # Provenance Snapshot Hardening Design
 
-**Date:** 2026-07-10  
-**Branch:** `feature/foundation-provenance`  
+**Date:** 2026-07-10
+**Branch:** `feature/foundation-provenance`
 **Reviewed base:** `4fa37944e038b0d19898b741a4b324ca6dd9e9c7`
 
 ## Purpose
 
-Close the three remaining fail-closed boundaries from the final provenance review: determine a WAL-visible schema version without opening or normalizing the original database, keep replay summary validation and hydration on one coherent SQLite snapshot, and never advertise a course aggregate that cannot load a linked stage.
+Make every score and replay schema open fail closed without changing an unsupported or ambiguous SQLite family. Validation must include WAL-visible state, remain bounded, retain ownership until the production connection is ready, and reject every unreadable or negative schema version. Replay summaries and full course hydration must also share one loadability contract and one SQLite snapshot.
 
-The parent task explicitly approves this scope and asks for autonomous implementation while the user is away. IR, server work, unrelated database helpers, and parser behavior remain out of scope.
+IR, server work, unrelated database helpers, and BMS parser behavior remain out of scope.
+
+## Selected Architecture
+
+### Bounded isolated validation
+
+`SqliteRAII.h` captures the main, rollback-journal, WAL, and SHM family state before validation. Missing and zero-byte databases are accepted as version zero only when no sidecar exists. A rollback journal is conservatively rejected because recovery would be required.
+
+Every existing database is queried through a private temporary family. A clean database is copied completely so bundled SQLite can verify both `PRAGMA user_version` and `SELECT count(*) FROM sqlite_schema`. A WAL database uses a sparse main file containing the original first page plus the complete measured WAL; bundled SQLite then resolves the WAL-visible version in isolation. This also handles a committed WAL whose SHM file is absent without opening or rebuilding the original family.
+
+Main bytes, WAL bytes, and a 64 KiB auxiliary reserve must total at most 512 MiB. Overflow-safe arithmetic rejects larger families before allocation or copy. Copy and comparison helpers process exactly the measured byte count, reject a short read or one extra byte, and never scan beyond the budget. The original first page, sidecar bytes, presence, sizes, and write times are checked around the isolated query.
+
+### Guarded owned open pair
+
+Isolated approval is followed by one guarded ownership operation:
+
+1. Open a guard connection with checkpoint-on-close disabled and zero busy timeout.
+2. Enter exclusive locking mode and acquire `BEGIN EXCLUSIVE`.
+3. Reread `user_version`, require `0 <= version <= maximum`, and require it to equal the isolated snapshot version.
+4. Roll back the read transaction while retaining exclusive connection ownership, then require `journal_mode=WAL` to succeed.
+5. Open a second, still-lazy production handle and configure checkpoint-on-close, optional foreign keys, and its busy timeout through SQLite C APIs.
+6. Close the guard only after the production handle is ready, then return the production handle.
+
+The second handle avoids an unlocked validation-to-production-open gap while allowing the exclusive guard to be closed before normal use. Any open, lock, version, journal-mode, or configuration error closes both handles and returns null. Exact-family tests cover supported and future WAL-without-SHM states, an active writer, a writer committing immediately after isolated approval, and injected configuration failures.
+
+### Error-aware schema guards
+
+The shared in-connection version reader returns `std::optional<int>` plus a diagnostic. Caller-owned score and replay schema entry points accept only a successful nonnegative version at or below the supported maximum. When a caller transaction is active, the check uses that same transaction snapshot; query denial, malformed results, and negative versions are rejected before any schema delta. Autocommit entry points retain isolated validation.
+
+### Coherent replay reads
+
+`ListReplays()` and `ListCourseReplays()` hold an explicit deferred read transaction across candidate validation and detail/count hydration. The existing 64-row chunks, `limit + 512` candidate budget, aggregate diagnostics, and bounded scans remain unchanged.
+
+Course summaries and full loads use the same ordered stage descriptor query. It requires 1..256 exact contiguous stage indexes, a present positive linked replay id, a matchable path/MD5/SHA-256 identity, valid provenance, and a terminal `SQLITE_DONE`. Full course hydration keeps the aggregate, descriptors, and every replay/event/touch/lane-cover read on one connection and one deferred snapshot. It appends only fully loaded ordered stages and returns null on any structural, query, or hydration error.
 
 ## Alternatives Considered
 
-### Open the original read-only
+Opening the original read-only was rejected because ordinary read-only WAL access can create or change SHM, while `immutable=1` intentionally ignores WAL. A normal-locking writer probe was rejected for the same SHM mutation. Manual WAL and rollback-journal parsing was rejected because recovery, salts, commit frames, and rolling checksums would duplicate SQLite correctness logic.
 
-Rejected. A local production-SQLite probe showed `mode=ro` reads the WAL-visible version but changes bytes in `-shm`. Adding `immutable=1` preserves the files but deliberately bypasses WAL discovery and returns the stale main-file version. Neither satisfies both correctness and immutability.
+Closing a validation connection and later opening production was also rejected because a writer can commit a future schema in that gap. The exclusive guard plus pre-opened lazy production handle retains the required ownership boundary without exposing the returned connection to exclusive-locking behavior.
 
-### Parse SQLite WAL and rollback-journal formats manually
+## Verification Coverage
 
-Rejected. Reading `user_version` from the main header is simple, but finding the last committed page-1 WAL frame requires salt and rolling-checksum validation, and rollback-journal recovery adds another file format. Reimplementing recovery would be a fragile security boundary tied to SQLite internals.
-
-### Raw clean-header fast path plus isolated WAL recovery snapshot
-
-Selected. A database without a WAL or rollback journal is inspected as raw bytes: validate the SQLite header and read the big-endian `user_version` at offset 60. If a WAL exists, build a private temporary family from the first main-database page plus the complete WAL and let the bundled SQLite recover/query that isolated copy. Raw original-family bytes and metadata must remain stable around the copy query. A rollback journal is conservatively ambiguous and fails closed without SQLite open. Any changing, malformed, negative-version, copy, or query failure also fails closed.
-
-The implementation copies the first SQLite page, extends the temporary main file sparsely to the original logical size, and copies the WAL in full. Only page 1 is required to answer `PRAGMA user_version`; WAL frames supply a newer page 1 when present. POSIX sparse allocation is verified by a multi-page physical-block test. Because `std::filesystem::resize_file()` does not guarantee sparse allocation on Windows, the non-sparse fallback fails closed above 256 MiB instead of risking an unbounded temporary allocation. The original WAL is compared byte-for-byte with the snapshot both before and after the temporary query, the original first page is reread, and every family member's presence/size/write-time is rechecked.
-
-This keeps the common clean-connect path bounded to two 100-byte header reads and pays full-copy cost only for the exceptional WAL. Ordinary `mode=ro` changed `-shm`; `immutable=1` ignored WAL; and bundled SQLite 3.43.1 explicitly rejects WAL when its pager uses the no-lock VFS. Read-only exclusive locking also failed because the read-only descriptor cannot take SQLite's write-style exclusive lock. Isolated recovery is therefore the smallest cross-platform mechanism that delegates WAL correctness to the bundled SQLite without touching the original.
-
-An ordinary SQLite close may leave a derived `-shm` file after the WAL itself is gone, so SHM alone is not treated as authoritative recovery state. In that case the raw main-header path is used and the entire family still must remain unchanged. Rollback journals remain ambiguous and are rejected. After a WAL-visible version is proven supported, a zero-timeout `BEGIN IMMEDIATE` probe on the original, configured with `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`, rejects an active writer before the normal connection path proceeds. Future databases never reach this read-write probe.
-
-## Components
-
-### Shared schema preflight
-
-`SqliteRAII.h` will expose a small header-only preflight used by both score and replay helpers. It accepts the database path and maximum supported `user_version`, and returns one of: new/supported, unsupported future, or unreadable/ambiguous with a diagnostic.
-
-For a missing or zero-byte file, version 0 is supported so the normal open may create/initialize it. For a clean existing file, the preflight validates the SQLite magic, page-size encoding, read/write format bytes, minimum header size, and signed big-endian user version. A present rollback journal is rejected as ambiguous. WAL state is copied to a private temporary sibling family, recovered/queried there, and approved only if the original WAL bytes, page 1, and family metadata remain unchanged and no active writer exists.
-
-`ScoreDBHelper::Connect()` and `ReplayDBHelper::Connect()` run preflight before `openSqliteDatabase()`. Future or ambiguous databases return `nullptr`; supported/new databases then take the existing read-write open and pragma path. Public methods that receive a caller-owned `sqlite3*` retain their current in-connection future-version guard.
-
-### Coherent replay summary snapshot
-
-After schema initialization, `ListReplays()` and `ListCourseReplays()` start an explicit deferred read transaction. The first candidate step pins a WAL snapshot; candidate JSON/index validation, linked-stage validation, bounded keyset chunks, and detail/count hydration all use that same snapshot. Success commits the read transaction; every early return rolls it back through the existing RAII handle.
-
-The scan budget, 64-row keyset chunks, aggregate diagnostics, and deferred event/touch counts remain unchanged. A concurrent writer may commit invalid values, but the in-flight list either returns the previously validated coherent snapshot or rejects the value on a later call; it never mixes validation from one snapshot with details from another.
-
-### Loadable course summaries
-
-Linked-stage validation returns false for zero rows, a missing replay, malformed/future/index-mismatched provenance, more than 256 stages, or a SQLite step error. Limited and unlimited course summaries apply the same rule. Full load already rejects empty/missing/invalid stages, so the summary and load contracts become consistent.
-
-## Testing
-
-- Raw snapshots read bytes and sidecar presence without opening the original.
-- Forked child fixtures use the repository SQLite build and `_exit()` to leave committed future WAL state and a hot rollback journal. WAL state is copied/recovered away from the original; rollback-journal state is rejected as ambiguous without SQLite open.
-- Score and replay tests cover direct `Connect`, high-level chart/course saves, and caller-owned direct insert/schema entry points without original-family mutation.
-- A deterministic POSIX two-process WAL fixture detects the list reader's WAL lock, commits an indexed-version mismatch while a large candidate scan is active, and proves chart/course summaries return only the original coherent snapshot or omit the record.
-- Course tests cover zero-stage, missing-stage, malformed JSON, future ruleset, and indexed mismatch in limited and unlimited scans while preserving bounded-log behavior.
+- Supported and future child-exit WAL fixtures, with and without SHM, preserve exact original bytes and sidecar presence.
+- A deterministic fork seam commits version 99 after isolated approval and proves guarded open rejects the exact post-writer family.
+- Header-shaped corrupt clean files and denied required pragmas return null without mutation.
+- Pure boundary predicates run on every platform; a POSIX sparse oversized fixture proves rejection before snapshot copying.
+- Negative and authorizer-denied version reads inside caller transactions leave schema and version state unchanged.
+- Malformed course fixtures cover empty identity, partial missing links, gaps, duplicates, mixed negative indexes, zero stages, and 257 stages for limited/unlimited summaries and full load.
+- An SQLite trace callback interrupts the stage query after its first row and proves all three public paths fail closed on terminal step error.
+- Concurrent WAL writers prove replay summary validation/detail hydration and full course hydration do not mix snapshots.
+- Focused and full verification are registered and run through CTest.
 
 ## Failure Semantics
 
-- Missing database: allow normal creation as schema version 0.
-- Clean valid supported database: open normally after raw-header approval.
-- Future database, including a version present only in WAL, or any rollback-journal state: return `nullptr` without changing original bytes or sidecar presence.
-- Unreadable, malformed, racing, or ambiguous preflight: log once and return `nullptr`.
-- Summary transaction start/commit failure: log and return no summaries; RAII releases any active transaction.
+- Missing or empty database without sidecars: allow normal creation as version zero.
+- Supported usable database: return a configured production connection only after guarded revalidation.
+- Future, negative, malformed, racing, oversized, recovery-dependent, or query/configuration-error state: log and return null.
+- Caller-owned transaction version error: return false before schema mutation and leave rollback ownership with the caller.
+- Summary or full-load transaction/query/structure error: return no summaries or no course; RAII releases the active read transaction.

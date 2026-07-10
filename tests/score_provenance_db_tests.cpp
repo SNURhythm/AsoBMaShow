@@ -1069,7 +1069,32 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
       0));
   static_assert(!sqliteSnapshotFitsBudget(kMaximumSqliteSnapshotBytes / 2,
                                           kMaximumSqliteSnapshotBytes / 2));
+  static_assert(sqliteSnapshotFitsBudget(
+      kMaximumSqliteSnapshotBytes / 2 - kSqliteSnapshotAuxiliaryReserveBytes,
+      kMaximumSqliteSnapshotBytes / 2));
+  static_assert(!sqliteSnapshotFitsBudget(
+      kMaximumSqliteSnapshotBytes / 2 - kSqliteSnapshotAuxiliaryReserveBytes,
+      kMaximumSqliteSnapshotBytes / 2 + 1));
 #if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "snapshot-budget-overflow" / "score.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
+    db.reset();
+    std::filesystem::resize_file(path,
+                                 kMaximumSqliteSnapshotBytes -
+                                     kSqliteSnapshotAuxiliaryReserveBytes + 1);
+
+    std::string stateError;
+    const auto before = readSqliteDatabaseFamilyState(path, stateError);
+    assert(before.has_value());
+    std::string preflightError;
+    assert(!preflightSqliteUserVersion(path, 5, preflightError).has_value());
+    assert(preflightError.find("snapshot budget") != std::string::npos);
+    const auto after = readSqliteDatabaseFamilyState(path, stateError);
+    assert(after == before);
+  }
+
   {
     const auto path = root / "owned-open-race" / "score.db";
     createWalDatabaseWithVersion(path, 5);

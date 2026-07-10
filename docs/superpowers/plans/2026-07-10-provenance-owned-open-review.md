@@ -132,11 +132,11 @@ Run focused tests plus the existing 600-corrupt-row budget fixture. Confirm one 
 - Modify: `docs/superpowers/specs/2026-07-10-provenance-snapshot-hardening-design.md`
 - Modify outside branch: `.superpowers/sdd/provenance-task-2-snapshot-fix-report.md`
 
-- [ ] **Step 1: Remove trailing whitespace and update architecture text**
+- [x] **Step 1: Remove trailing whitespace and update architecture text**
 
 Remove Markdown hard-break spaces and document the guarded open pair, clean isolated usability validation, 512 MiB aggregate budget, and shared course loader.
 
-- [ ] **Step 2: Run focused stress and requested build**
+- [x] **Step 2: Run focused stress and requested build**
 
 ```sh
 cmake --build cmake-build-debug --target \
@@ -147,7 +147,7 @@ ctest --test-dir cmake-build-debug \
   --repeat until-fail:3 --output-on-failure
 ```
 
-- [ ] **Step 3: Run full verification**
+- [x] **Step 3: Run full verification**
 
 ```sh
 ctest --test-dir cmake-build-debug --output-on-failure -j 6
