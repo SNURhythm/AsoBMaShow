@@ -81,7 +81,7 @@ makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
       .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
 }
 
-class Jukebox {
+class Jukebox : public audio::IPlaybackSession {
 public:
   struct PerformanceAnalytics {
     static const int BUFFER_SIZE = 10000;
@@ -144,6 +144,11 @@ public:
   void pause();
   void resume();
   bool isPaused();
+  [[nodiscard]] AudioWrapper &audioRuntime() { return audio; }
+  audio::PlaybackSnapshot suspendAndDrain() override;
+  bool restorePlayback(const audio::PlaybackSnapshot &snapshot,
+                       std::string &errorMessage) override;
+  void leavePlaybackStopped() override;
 
 private:
   bgfx::UniformHandle s_texColor;

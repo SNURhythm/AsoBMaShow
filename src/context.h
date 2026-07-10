@@ -12,6 +12,7 @@
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
 #include "audio/Jukebox.h"
+#include "audio/AudioDeviceManager.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
 #include "input/InputDeviceRegistry.h"
@@ -30,6 +31,7 @@ public:
   InputProfile inputProfile;
   InputDeviceRegistry inputDeviceRegistry;
   Jukebox jukebox;
+  audio::AudioDeviceManager audioDeviceManager;
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
@@ -54,8 +56,11 @@ public:
 
   ApplicationContext()
       : quitFlag(false), settings(AppSettings::load()),
-        inputProfile(makeDefaultInputProfile()), jukebox(&gameStopwatch) {
+        inputProfile(makeDefaultInputProfile()), jukebox(&gameStopwatch),
+        audioDeviceManager(jukebox.audioRuntime(), jukebox,
+                           settings.audioVideo.audio) {
     settings.sanitize();
+    (void)audioDeviceManager.apply(settings.audioVideo.audio);
     ui_theme::setActiveMode(settings.uiThemeMode == AppSettings::UiThemeMode::Light
                                 ? ui_theme::ThemeMode::Light
                                 : ui_theme::ThemeMode::Dark);

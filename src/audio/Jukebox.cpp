@@ -3305,6 +3305,56 @@ void Jukebox::resume() {
   wakeScheduler();
 }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
+
+audio::PlaybackSnapshot Jukebox::suspendAndDrain() {
+  audio::PlaybackSnapshot snapshot{
+      .valid = true,
+      .active = isPlaying.load(std::memory_order_acquire),
+      .paused = !stopwatch->isRunning(),
+      .positionMicros = getTimeMicros(),
+  };
+  const auto stopped = stop();
+  if (!stopped.success) {
+    snapshot.valid = false;
+  }
+  return snapshot;
+}
+
+bool Jukebox::restorePlayback(const audio::PlaybackSnapshot &snapshot,
+                              std::string &errorMessage) {
+  errorMessage.clear();
+  if (!snapshot.valid) {
+    errorMessage = "Invalid playback snapshot";
+    return false;
+  }
+  if (!snapshot.active) {
+    audio.seekClock(snapshot.positionMicros);
+    stopwatch->seek(snapshot.positionMicros);
+    stopwatch->pause();
+    return true;
+  }
+  const auto started = play(snapshot.positionMicros);
+  if (!started.success) {
+    errorMessage = started.diagnostic.empty()
+                       ? "Jukebox playback could not resume"
+                       : started.diagnostic;
+    return false;
+  }
+  if (snapshot.paused) {
+    pause();
+  }
+  return true;
+}
+
+void Jukebox::leavePlaybackStopped() {
+  const auto stopped = stop();
+  if (!stopped.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Jukebox could not confirm stopped playback: %s",
+                 stopped.diagnostic.c_str());
+  }
+}
+
 audio::playback::BackendOperationResult Jukebox::stop() {
   std::lock_guard<std::mutex> playGuard(playThreadLock);
   jukebox_lifecycle::SessionState lifecycleState{
