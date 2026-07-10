@@ -24,6 +24,7 @@ The milestone includes:
 - Multiple profiles with isolated settings, scores, and replays while keeping the chart/library database shared.
 - Versioned profile export and import without chart assets or credentials.
 - Lossless migration of current single-profile data into the default profile.
+- Registration of every project test executable with CTest so one canonical command runs the complete baseline and all new foundation tests.
 
 The milestone does not include:
 
@@ -202,9 +203,11 @@ Focused test executables cover:
 - Default-profile migration, row-count validation, idempotency, failed-staging recovery, profile isolation, and cache refresh on switch.
 - Export/import round trip, UUID collision, overwrite rollback, traversal rejection, checksum rejection, future-version rejection, and SQLite corruption rejection.
 
+The root build enables CTest and registers each existing lightweight test executable plus every new foundation test. Test registration is conditional on `ASOBMASHOW_BUILD_TESTS`; configuration with tests disabled does not build or register them. The canonical local command is `ctest --test-dir cmake-build-debug --output-on-failure -j 6`.
+
 Integration verification includes:
 
-- The existing CTest suite.
+- The complete CTest suite, including the migrated existing executables and Yoga tests.
 - `cmake --build cmake-build-debug --target main -j 6` from the primary checkout after integration.
 - Manual desktop smoke tests for keyboard defaults, controller hot-plug, binding capture, audio rollback, display rollback, profile switching, and export/import.
 - `scripts/ios_firebase_deploy.sh --build-only` for iOS without upload.
