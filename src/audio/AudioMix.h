@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace player_settings {
@@ -100,6 +101,41 @@ struct OutputRateTransition {
   int targetSampleRate = 0;
   std::vector<OutputRateCandidate> candidates;
 };
+
+enum class BackendRunState : std::uint8_t { Stopped, Running, Unknown };
+
+struct BackendStateObservation {
+  BackendRunState state = BackendRunState::Unknown;
+  std::string diagnostic;
+};
+
+struct BackendOperationResult {
+  bool success = false;
+  std::string diagnostic;
+};
+
+class IBackendLifecycle {
+public:
+  virtual ~IBackendLifecycle() = default;
+  virtual BackendStateObservation observeState() const = 0;
+  virtual int outputSampleRate() const = 0;
+  virtual BackendOperationResult stopAndDrain() = 0;
+  virtual BackendOperationResult start() = 0;
+};
+
+BackendStateObservation InterpretStoppedQueryResult(int result,
+                                                    std::string diagnostic);
+bool CanMutateCallbackStateDirectly(BackendRunState state) noexcept;
+BackendOperationResult EnsureBackendStartedAtOutputRate(
+    IBackendLifecycle &backend, std::span<SoundData *const> sounds,
+    AudioCallbackState &callbackState, int targetSampleRate,
+    std::atomic<int> &currentSampleRate,
+    std::atomic<int64_t> &audioClockFrameCursor,
+    std::atomic<BackendRunState> &backendState);
+BackendOperationResult
+StopBackendAndClearCallbackState(IBackendLifecycle &backend,
+                                 AudioCallbackState &callbackState,
+                                 std::atomic<BackendRunState> &backendState);
 
 size_t RemapFramePosition(size_t frame, int previousSampleRate,
                           int targetSampleRate);

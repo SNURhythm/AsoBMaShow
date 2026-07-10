@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <concepts>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,49 @@
 #include <vector>
 
 namespace {
+
+class FakeBackendLifecycle final : public audio::playback::IBackendLifecycle {
+public:
+  std::vector<audio::playback::BackendStateObservation> observations;
+  audio::playback::BackendOperationResult stopResult{.success = true};
+  audio::playback::BackendOperationResult startResult{.success = true};
+  mutable size_t observationIndex = 0;
+  mutable int observeCalls = 0;
+  int stopCalls = 0;
+  int startCalls = 0;
+  int sampleRate = 48000;
+  std::function<void()> onStopAndDrain;
+  std::function<void()> onStart;
+
+  audio::playback::BackendStateObservation observeState() const override {
+    ++observeCalls;
+    if (observations.empty()) {
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "fake has no state observation"};
+    }
+    const size_t index = std::min(observationIndex, observations.size() - 1);
+    ++observationIndex;
+    return observations[index];
+  }
+
+  int outputSampleRate() const override { return sampleRate; }
+
+  audio::playback::BackendOperationResult stopAndDrain() override {
+    ++stopCalls;
+    if (onStopAndDrain) {
+      onStopAndDrain();
+    }
+    return stopResult;
+  }
+
+  audio::playback::BackendOperationResult start() override {
+    ++startCalls;
+    if (onStart) {
+      onStart();
+    }
+    return startResult;
+  }
+};
 
 void require(bool condition, std::string_view message) {
   if (!condition) {
@@ -28,6 +72,10 @@ using ScheduleSoundSignature = bool (AudioWrapper::*)(const path_t &,
 using SetVolumesSignature = void (AudioWrapper::*)(const audio::Volumes &);
 using SetSettingsVolumesSignature =
     void (AudioWrapper::*)(const player_settings::AudioSettings &);
+using StartDeviceSignature =
+    audio::playback::BackendOperationResult (AudioWrapper::*)();
+using StopSoundsSignature =
+    audio::playback::BackendOperationResult (AudioWrapper::*)();
 
 static_assert(std::same_as<decltype(std::declval<SoundData>().sourceData),
                            std::vector<short>>);
@@ -57,6 +105,12 @@ static_assert(std::same_as<decltype(static_cast<SetVolumesSignature>(
 static_assert(std::same_as<decltype(static_cast<SetSettingsVolumesSignature>(
                                &AudioWrapper::setVolumes)),
                            SetSettingsVolumesSignature>);
+static_assert(std::same_as<decltype(static_cast<StartDeviceSignature>(
+                               &AudioWrapper::startDevice)),
+                           StartDeviceSignature>);
+static_assert(std::same_as<decltype(static_cast<StopSoundsSignature>(
+                               &AudioWrapper::stopSounds)),
+                           StopSoundsSignature>);
 
 std::vector<short> stereoRamp(size_t frameCount) {
   std::vector<short> result;
@@ -70,6 +124,326 @@ std::vector<short> stereoRamp(size_t frameCount) {
 
 void requireNear(float actual, float expected, std::string_view message) {
   require(std::fabs(actual - expected) < 0.0001f, message);
+}
+
+void testStoppedQueryInterpretationPreservesErrors() {
+  const auto stopped =
+      audio::playback::InterpretStoppedQueryResult(1, "unused");
+  const auto running =
+      audio::playback::InterpretStoppedQueryResult(0, "unused");
+  const auto failed = audio::playback::InterpretStoppedQueryResult(
+      -9988, "PortAudio state query failed");
+
+  require(stopped.state == audio::playback::BackendRunState::Stopped &&
+              running.state == audio::playback::BackendRunState::Running,
+          "binary native states map to stopped and running");
+  require(failed.state == audio::playback::BackendRunState::Unknown &&
+              failed.diagnostic == "PortAudio state query failed",
+          "a negative native state-query error remains explicit and unknown");
+}
+
+void testUnknownBackendStateCannotPublishRateTransition() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData = {100, 200, 300, 400};
+  sound.sourceFrameCount = sound.sourceData.size();
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{441};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Unknown,
+       .diagnostic = "PortAudio state query failed"},
+  };
+  std::array<SoundData *, 1> sounds{&sound};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 48000, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("PortAudio state query failed") !=
+                  std::string::npos,
+          "an unknown backend state fails with the native diagnostic");
+  require(sound.outputData == sound.sourceData &&
+              sound.outputFrameCount == sound.sourceFrameCount &&
+              sampleRate.load() == 44100 && audioClockFrameCursor.load() == 441,
+          "an unknown backend state publishes no PCM, rate, or clock changes");
+  require(
+      backendState.load() != audio::playback::BackendRunState::Stopped &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "unknown callback quiescence is never published as directly mutable");
+  require(backend.stopCalls == 0 && backend.startCalls == 0,
+          "an unknown backend state performs no lifecycle operation");
+}
+
+void testStopDrainFailureCannotPublishRateTransition() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData = {100, 200, 300, 400};
+  sound.sourceFrameCount = sound.sourceData.size();
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{441};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+  };
+  backend.stopResult = {.success = false,
+                        .diagnostic = "PortAudio stop timed out"};
+  std::array<SoundData *, 1> sounds{&sound};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 48000, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("PortAudio stop timed out") !=
+                  std::string::npos,
+          "a stop-and-drain failure propagates the native diagnostic");
+  require(sound.outputData == sound.sourceData &&
+              sound.outputFrameCount == sound.sourceFrameCount &&
+              sampleRate.load() == 44100 && audioClockFrameCursor.load() == 441,
+          "a failed drain publishes no PCM, rate, or clock changes");
+  require(
+      backendState.load() != audio::playback::BackendRunState::Stopped &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "a failed drain never makes callback state directly mutable");
+  require(backend.stopCalls == 1 && backend.startCalls == 0,
+          "a failed drain is attempted once and never followed by start");
+}
+
+void testPostStopStateErrorCannotPublishRateTransition() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData = {100, 200, 300, 400};
+  sound.sourceFrameCount = sound.sourceData.size();
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{441};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+      {.state = audio::playback::BackendRunState::Unknown,
+       .diagnostic = "post-stop state unavailable"},
+  };
+  std::array<SoundData *, 1> sounds{&sound};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 48000, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("post-stop state unavailable") !=
+                  std::string::npos,
+          "rate publication requires positive stopped-state confirmation");
+  require(sound.outputData == sound.sourceData &&
+              sound.outputFrameCount == sound.sourceFrameCount &&
+              sampleRate.load() == 44100 && audioClockFrameCursor.load() == 441,
+          "an unconfirmed successful stop still publishes no transition");
+  require(
+      backendState.load() == audio::playback::BackendRunState::Unknown &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "a post-stop state error remains fail-closed");
+  require(backend.observeCalls == 2 && backend.stopCalls == 1 &&
+              backend.startCalls == 0,
+          "the backend is re-observed after draining and never restarted on "
+          "uncertainty");
+}
+
+void testConfirmedDrainPublishesThenRestartsAtNewRate() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData.resize(441);
+  for (size_t frame = 0; frame < sound.sourceData.size(); ++frame) {
+    sound.sourceData[frame] = static_cast<short>(frame);
+  }
+  sound.sourceFrameCount = sound.sourceData.size();
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState callbackState;
+  callbackState.playingSounds[0] = {.soundData = &sound, .currentFrame = 220};
+  callbackState.playingSoundCount = 1;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{441};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+      {.state = audio::playback::BackendRunState::Stopped},
+      {.state = audio::playback::BackendRunState::Running},
+  };
+  backend.onStopAndDrain = [&] {
+    require(sound.outputFrameCount == 441 && sampleRate.load() == 44100,
+            "draining happens before any callback-visible publication");
+  };
+  backend.onStart = [&] {
+    require(
+        sound.outputFrameCount == 480 && sampleRate.load() == 48000 &&
+            callbackState.playingSounds[0].currentFrame == 239 &&
+            audioClockFrameCursor.load() == 480,
+        "restart happens only after PCM, positions, clock, and rate publish");
+  };
+  std::array<SoundData *, 1> sounds{&sound};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 48000, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(result.success && result.diagnostic.empty(),
+          "a confirmed drain, transition, and restart succeeds");
+  require(sound.outputFrameCount == 480 && sampleRate.load() == 48000 &&
+              audioClockFrameCursor.load() == 480 &&
+              backendState.load() == audio::playback::BackendRunState::Running,
+          "the successful lifecycle publishes a coherent running state");
+  require(backend.observeCalls == 3 && backend.stopCalls == 1 &&
+              backend.startCalls == 1,
+          "the successful lifecycle confirms stop and start exactly once");
+}
+
+void testAlreadyRunningAtTargetRateDoesNotRestart() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData = {100, 200};
+  sound.sourceFrameCount = sound.sourceData.size();
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.outputData.size();
+  const auto originalOutput = sound.outputData;
+
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{441};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Unknown};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+  };
+  std::array<SoundData *, 1> sounds{&sound};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 44100, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(result.success &&
+              backendState.load() == audio::playback::BackendRunState::Running,
+          "an already-running target-rate backend remains ready");
+  require(backend.stopCalls == 0 && backend.startCalls == 0 &&
+              backend.observeCalls == 1,
+          "an already-running target-rate backend is not restarted");
+  require(sound.outputData == originalOutput && sampleRate.load() == 44100 &&
+              audioClockFrameCursor.load() == 441,
+          "a no-op start publishes no audio state changes");
+}
+
+void testStopFailureCannotClearCallbackState() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = sound.outputData.size();
+  sound.playing = true;
+
+  AudioCallbackState callbackState;
+  callbackState.playingSounds[0] = {.soundData = &sound};
+  callbackState.playingSoundCount = 1;
+  callbackState.scheduledSounds[0] = {.soundData = &sound};
+  callbackState.scheduledSoundCount = 1;
+  callbackState.commandQueue[0] = {.type = AudioCommandType::PlayNow,
+                                   .soundData = &sound};
+  callbackState.commandWriteCursor.store(1);
+
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+  };
+  backend.stopResult = {.success = false,
+                        .diagnostic = "drain could not complete"};
+
+  const auto result = audio::playback::StopBackendAndClearCallbackState(
+      backend, callbackState, backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("drain could not complete") !=
+                  std::string::npos,
+          "stop-all propagates a failed drain diagnostic");
+  require(callbackState.playingSoundCount == 1 &&
+              callbackState.scheduledSoundCount == 1 &&
+              callbackState.commandReadCursor.load() == 0 &&
+              callbackState.commandWriteCursor.load() == 1 && sound.playing,
+          "a failed drain cannot mutate any callback-visible playback state");
+  require(
+      backendState.load() != audio::playback::BackendRunState::Stopped &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "failed stop-all keeps direct callback mutation disabled");
+}
+
+void testConfirmedStopClearsCallbackStateAfterDrain() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = sound.outputData.size();
+  sound.playing = true;
+
+  AudioCallbackState callbackState;
+  callbackState.playingSounds[0] = {.soundData = &sound};
+  callbackState.playingSoundCount = 1;
+  callbackState.scheduledSounds[0] = {.soundData = &sound};
+  callbackState.scheduledSoundCount = 1;
+  callbackState.commandQueue[0] = {.type = AudioCommandType::PlayNow,
+                                   .soundData = &sound};
+  callbackState.commandWriteCursor.store(1);
+
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Running};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Running},
+      {.state = audio::playback::BackendRunState::Stopped},
+  };
+  backend.onStopAndDrain = [&] {
+    require(callbackState.playingSoundCount == 1 &&
+                callbackState.scheduledSoundCount == 1 && sound.playing,
+            "callback state remains intact until the drain completes");
+  };
+
+  const auto result = audio::playback::StopBackendAndClearCallbackState(
+      backend, callbackState, backendState);
+
+  require(result.success && result.diagnostic.empty(),
+          "a positively confirmed drain permits stop-all");
+  require(callbackState.playingSoundCount == 0 &&
+              callbackState.scheduledSoundCount == 0 &&
+              callbackState.commandReadCursor.load() == 0 &&
+              callbackState.commandWriteCursor.load() == 0 && !sound.playing,
+          "stop-all clears callback state only after positive quiescence");
+  require(
+      backendState.load() == audio::playback::BackendRunState::Stopped &&
+          audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "positive drain confirmation is the only directly mutable state");
 }
 
 void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
@@ -315,6 +689,14 @@ int main() {
             "scheduled audio retains explicit keysound classification");
 
     testRateTransitionRegeneratesAndRemapsEveryFrameDomain();
+    testStoppedQueryInterpretationPreservesErrors();
+    testUnknownBackendStateCannotPublishRateTransition();
+    testStopDrainFailureCannotPublishRateTransition();
+    testPostStopStateErrorCannotPublishRateTransition();
+    testConfirmedDrainPublishesThenRestartsAtNewRate();
+    testAlreadyRunningAtTargetRateDoesNotRestart();
+    testStopFailureCannotClearCallbackState();
+    testConfirmedStopClearsCallbackStateAfterDrain();
     testBusFlowAndMixing();
     testJukeboxSourceClassificationAndSeekOverlap();
 

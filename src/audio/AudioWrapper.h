@@ -123,8 +123,8 @@ public:
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   void seekClock(long long micros);
-  void startDevice();
-  void stopSounds();
+  audio::playback::BackendOperationResult startDevice();
+  audio::playback::BackendOperationResult stopSounds();
   void unloadSound(const path_t &path);
 
   void setBassBoost(float db);
@@ -136,10 +136,8 @@ public:
 
   void unloadSounds();
 
-  struct IAudioBackend; // Forward declaration
-
 private:
-  std::unique_ptr<IAudioBackend> backend;
+  std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
   AudioCallbackState callbackState;
@@ -155,7 +153,8 @@ private:
   PlateReverb reverb;
   SoftKneeCompressor compressor;
   std::atomic<int> currentSampleRate{44100};
-  std::atomic<bool> backendRunning{false};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Unknown};
   std::atomic<long long> audioClockBaseMicros{0};
   std::atomic<int64_t> audioClockFrameCursor{0};
   std::atomic<long long> audioClockAnchorMicros{0};
@@ -167,7 +166,6 @@ private:
   UserData userData;
   Stopwatch *stopwatch;
 
-  bool commitOutputSampleRateWhileStopped(int targetSampleRate);
   bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);

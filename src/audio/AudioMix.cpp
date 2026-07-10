@@ -147,6 +147,154 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
 }
 
 namespace playback {
+namespace {
+
+BackendOperationResult
+ConfirmBackendStopped(IBackendLifecycle &backend,
+                      const BackendStateObservation &initialState,
+                      std::atomic<BackendRunState> &backendState) {
+  backendState.store(initialState.state, std::memory_order_release);
+  if (initialState.state == BackendRunState::Unknown) {
+    return {.success = false,
+            .diagnostic = initialState.diagnostic.empty()
+                              ? "Unable to determine audio backend state"
+                              : initialState.diagnostic};
+  }
+  if (initialState.state == BackendRunState::Stopped) {
+    return {.success = true};
+  }
+
+  const BackendOperationResult stopped = backend.stopAndDrain();
+  if (!stopped.success) {
+    backendState.store(BackendRunState::Unknown, std::memory_order_release);
+    return {.success = false,
+            .diagnostic = stopped.diagnostic.empty()
+                              ? "Unable to stop and drain audio backend"
+                              : stopped.diagnostic};
+  }
+
+  const BackendStateObservation afterStop = backend.observeState();
+  backendState.store(afterStop.state, std::memory_order_release);
+  if (afterStop.state != BackendRunState::Stopped) {
+    return {
+        .success = false,
+        .diagnostic =
+            afterStop.diagnostic.empty()
+                ? "Audio backend did not confirm a stopped state after drain"
+                : afterStop.diagnostic,
+    };
+  }
+  return {.success = true};
+}
+
+} // namespace
+
+BackendStateObservation InterpretStoppedQueryResult(int result,
+                                                    std::string diagnostic) {
+  if (result == 1) {
+    return {.state = BackendRunState::Stopped};
+  }
+  if (result == 0) {
+    return {.state = BackendRunState::Running};
+  }
+  return {.state = BackendRunState::Unknown,
+          .diagnostic = diagnostic.empty() ? "Audio backend state query failed"
+                                           : std::move(diagnostic)};
+}
+
+bool CanMutateCallbackStateDirectly(BackendRunState state) noexcept {
+  return state == BackendRunState::Stopped;
+}
+
+BackendOperationResult EnsureBackendStartedAtOutputRate(
+    IBackendLifecycle &backend, std::span<SoundData *const> sounds,
+    AudioCallbackState &callbackState, int targetSampleRate,
+    std::atomic<int> &currentSampleRate,
+    std::atomic<int64_t> &audioClockFrameCursor,
+    std::atomic<BackendRunState> &backendState) {
+  const BackendStateObservation observed = backend.observeState();
+  if (observed.state == BackendRunState::Unknown) {
+    return ConfirmBackendStopped(backend, observed, backendState);
+  }
+
+  backendState.store(observed.state, std::memory_order_release);
+  if (targetSampleRate <= 0) {
+    targetSampleRate = 44100;
+  }
+  const int previousSampleRate =
+      currentSampleRate.load(std::memory_order_acquire);
+  if (observed.state == BackendRunState::Running &&
+      previousSampleRate == targetSampleRate) {
+    return {.success = true};
+  }
+
+  const BackendOperationResult stopped =
+      ConfirmBackendStopped(backend, observed, backendState);
+  if (!stopped.success) {
+    return stopped;
+  }
+
+  if (previousSampleRate != targetSampleRate) {
+    auto transition = PrepareOutputRateTransition(sounds, previousSampleRate,
+                                                  targetSampleRate);
+    if (!transition.has_value()) {
+      return {.success = false,
+              .diagnostic = "Unable to prepare PCM for output-rate change"};
+    }
+
+    CommitOutputRateTransition(std::move(*transition), callbackState);
+    const int64_t clockFrame =
+        audioClockFrameCursor.load(std::memory_order_acquire);
+    if (clockFrame > 0) {
+      const size_t remappedClockFrame =
+          RemapFramePosition(static_cast<size_t>(clockFrame),
+                             previousSampleRate, targetSampleRate);
+      audioClockFrameCursor.store(
+          static_cast<int64_t>(std::min<size_t>(
+              remappedClockFrame,
+              static_cast<size_t>(std::numeric_limits<int64_t>::max()))),
+          std::memory_order_release);
+    }
+    currentSampleRate.store(targetSampleRate, std::memory_order_release);
+  }
+
+  const BackendOperationResult started = backend.start();
+  if (!started.success) {
+    backendState.store(BackendRunState::Unknown, std::memory_order_release);
+    return {.success = false,
+            .diagnostic = started.diagnostic.empty()
+                              ? "Unable to start audio backend"
+                              : started.diagnostic};
+  }
+
+  const BackendStateObservation afterStart = backend.observeState();
+  backendState.store(afterStart.state, std::memory_order_release);
+  if (afterStart.state != BackendRunState::Running) {
+    return {
+        .success = false,
+        .diagnostic =
+            afterStart.diagnostic.empty()
+                ? "Audio backend did not confirm a running state after start"
+                : afterStart.diagnostic,
+    };
+  }
+  return {.success = true};
+}
+
+BackendOperationResult
+StopBackendAndClearCallbackState(IBackendLifecycle &backend,
+                                 AudioCallbackState &callbackState,
+                                 std::atomic<BackendRunState> &backendState) {
+  const BackendOperationResult stopped =
+      ConfirmBackendStopped(backend, backend.observeState(), backendState);
+  if (!stopped.success) {
+    return stopped;
+  }
+  ClearCallbackSounds(callbackState);
+  callbackState.commandReadCursor.store(0, std::memory_order_release);
+  callbackState.commandWriteCursor.store(0, std::memory_order_release);
+  return {.success = true};
+}
 
 size_t RemapFramePosition(size_t frame, int previousSampleRate,
                           int targetSampleRate) {
