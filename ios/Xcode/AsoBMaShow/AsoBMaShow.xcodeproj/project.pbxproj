@@ -705,7 +705,9 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppSettings.cpp,
+				AppSettingsStore.cpp,
 				ArchiveFile.cpp,
+				AtomicFile.cpp,
 				audio/AudioWrapper.cpp,
 				audio/ChartAudioRenderer.cpp,
 				audio/ChartMusicCache.cpp,
@@ -787,6 +789,7 @@
 				Utils.cpp,
 				utils/SpriteLoader.cpp,
 				utils/Stopwatch.cpp,
+				VersionedJson.cpp,
 				video/VideoPlayer.cpp,
 				view/Button.cpp,
 				view/ChartListItemView.cpp,

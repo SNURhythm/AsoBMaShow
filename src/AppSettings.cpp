@@ -685,8 +685,13 @@ bool AppSettings::save() const {
 }
 
 AppSettings AppSettings::load() {
+  return loadLegacyCfg(configPath());
+}
+
+AppSettings AppSettings::loadLegacyCfg(
+    const std::filesystem::path &path,
+    std::vector<std::string> *diagnostics) {
   AppSettings settings;
-  const auto path = configPath();
   std::ifstream file(path);
   if (!file.is_open()) {
     settings.sanitize();
@@ -867,6 +872,10 @@ AppSettings AppSettings::load() {
     } catch (const std::exception &e) {
       SDL_Log("Ignoring malformed settings line '%s': %s", line.c_str(),
               e.what());
+      if (diagnostics != nullptr) {
+        diagnostics->push_back("Ignoring malformed settings line '" + line +
+                               "': " + e.what());
+      }
     }
   }
 
