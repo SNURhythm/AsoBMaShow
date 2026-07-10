@@ -46,19 +46,16 @@ class Button;
 
 class ResultScene : public Scene {
 public:
-  ResultScene(ApplicationContext &context, const bms_parser::ChartMeta &meta,
-              const RhythmState &state, const ReplayData *replay = nullptr,
-              bool shouldSaveScore = true,
-              const ReplayData *retrySource = nullptr,
-              ResultPracticeOptions practiceOptions = {},
-              bool autoPlayResult = false,
-              ResultCourseOptions courseOptions = {},
-              std::string pacemakerTarget = {},
-              std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart =
-                  nullptr,
-              bms_parser::Chart *reusableRetryChart = nullptr,
-              std::optional<ResultPacemakerData> pacemakerOverride =
-                  std::nullopt);
+  ResultScene(
+      ApplicationContext &context, const bms_parser::ChartMeta &meta,
+      const RhythmState &state, const ScoreProvenance &attemptProvenance,
+      const ReplayData *replay = nullptr, bool shouldSaveScore = true,
+      const ReplayData *retrySource = nullptr,
+      ResultPracticeOptions practiceOptions = {}, bool autoPlayResult = false,
+      ResultCourseOptions courseOptions = {}, std::string pacemakerTarget = {},
+      std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
+      bms_parser::Chart *reusableRetryChart = nullptr,
+      std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt);
   ~ResultScene() override = default;
 
   void init() override;
@@ -92,6 +89,7 @@ private:
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
+  const ScoreProvenance attemptProvenance;
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
   std::optional<ResultPreviousBestData> previousBest;

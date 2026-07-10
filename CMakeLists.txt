@@ -658,6 +658,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_provenance_tests PRIVATE cxx_std_23)

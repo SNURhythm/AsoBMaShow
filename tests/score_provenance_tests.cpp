@@ -1,4 +1,6 @@
 #include "ScoreProvenance.h"
+#include "input/InputTypes.h"
+#include "scene/play/GamePlayStartOptions.h"
 
 #include <array>
 #include <cassert>
@@ -159,6 +161,170 @@ void testCourseMergePreservesStagesAndWorstEligibility() {
          ScoreEligibility::Modified);
 }
 
+void testPlayStartCaptureIsImmutableAndShared() {
+  bms_parser::ChartMeta meta;
+  meta.MD5 = "attempt-md5";
+  meta.SHA256 = "attempt-sha256";
+  meta.Rank = 1;
+  meta.RandomSeed = 91U;
+  meta.RandomPrng = "mt19937";
+  meta.RandomValues = {4, 2, 7};
+
+  StartOptions options;
+  options.gaugeType = GaugeType::Hard;
+  options.gaugeProfile = GaugeProfile::Standard;
+  options.gaugeAutoShift = true;
+  options.playOption = "RANDOM";
+  options.playOptionSeed = 1234;
+  options.playOption2 = "MIRROR";
+  options.longNoteMode = 2;
+  options.inputDeviceCategories = {InputDeviceCategory::Keyboard,
+                                   InputDeviceCategory::Midi};
+  options.rulesetDescriptor = RulesetDescriptor::Current();
+
+  Judge effectiveJudge(meta.Rank);
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      options, meta, effectiveJudge.timingWindows);
+  const std::string capturedJson = serializeScoreProvenance(captured);
+
+  options.gaugeType = GaugeType::Easy;
+  options.playOption = "NORMAL";
+  options.playOptionSeed.reset();
+  options.inputDeviceCategories = {InputDeviceCategory::Touch};
+  options.rulesetDescriptor = RulesetDescriptor::Legacy();
+  meta.MD5 = "mutated-md5";
+  meta.SHA256 = "mutated-sha256";
+  meta.RandomValues = {99};
+  effectiveJudge.timingWindows[PGreat] = {-1, 1};
+
+  assert(serializeScoreProvenance(captured) == capturedJson);
+  assert(captured.stages.size() == 1);
+  assert(captured.stages.front().chartSha256 == "attempt-sha256");
+  assert(captured.stages.front().longNoteMode == 2);
+  assert(captured.player1 ==
+         PlayerOptionProvenance("RANDOM", std::int64_t{1234}));
+  assert(captured.player2 == PlayerOptionProvenance("MIRROR", std::nullopt));
+  assert(captured.eligibility == ScoreEligibility::Verified);
+
+  const ScoreProvenance scoreProvenance = captured;
+  ReplayData replay;
+  replay.provenance = captured;
+  assert(scoreProvenance == replay.provenance);
+}
+
+void testMobilePlayStartInputCategoriesPreserveResolverClasses() {
+  const std::vector resolverClasses = {
+      input::DeviceClass::Joystick, input::DeviceClass::GameController,
+      input::DeviceClass::Joystick, input::DeviceClass::Touch,
+      input::DeviceClass::GameController};
+
+  const auto categories = collectPlayStartInputDeviceCategories(
+      resolverClasses, PlayStartInputPlatform::Mobile);
+
+  assert(categories == std::vector({InputDeviceCategory::GameController,
+                                    InputDeviceCategory::Joystick,
+                                    InputDeviceCategory::Touch}));
+
+  const std::vector nonTouchResolverClasses = {
+      input::DeviceClass::GameController, input::DeviceClass::Joystick};
+  assert(
+      collectPlayStartInputDeviceCategories(nonTouchResolverClasses,
+                                            PlayStartInputPlatform::Mobile) ==
+      std::vector({InputDeviceCategory::GameController,
+                   InputDeviceCategory::Joystick, InputDeviceCategory::Touch}));
+}
+
+void testPlayStartInputPlatformDefaultsAreIncluded() {
+  const std::vector<input::DeviceClass> noResolverClasses;
+  assert(collectPlayStartInputDeviceCategories(
+             noResolverClasses, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::Touch}));
+  assert(collectPlayStartInputDeviceCategories(
+             noResolverClasses, PlayStartInputPlatform::Desktop) ==
+         std::vector({InputDeviceCategory::Keyboard}));
+
+  const std::vector controllerOnly = {input::DeviceClass::GameController};
+  assert(collectPlayStartInputDeviceCategories(
+             controllerOnly, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::GameController,
+                      InputDeviceCategory::Touch}));
+}
+
+void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
+  bms_parser::ChartMeta meta;
+  meta.MD5 = "constrained-md5";
+  meta.SHA256 = "constrained-sha256";
+  meta.Rank = 2;
+
+  StartOptions options;
+  options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
+  options.courseConstraints.judgement = CourseJudgementConstraint::NoGood;
+
+  Judge effectiveJudge(meta.Rank);
+  const auto originalGood = effectiveJudge.timingWindows.at(Good);
+  effectiveJudge.applyCourseJudgementConstraint(
+      options.courseConstraints.judgement);
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      options, meta, effectiveJudge.timingWindows);
+
+  assert(captured.eligibility == ScoreEligibility::Modified);
+  assert(captured.stages.size() == 1);
+  const auto &stage = captured.stages.front();
+  assert(stage.judgeRankSource == JudgeRankSource::CourseConstraint);
+  assert(stage.sourceJudgeRank == meta.Rank);
+  const auto good = std::ranges::find_if(
+      stage.effectiveJudgeWindows, [](const JudgeWindowProvenance &window) {
+        return window.judgement == Good;
+      });
+  const auto great = std::ranges::find_if(
+      stage.effectiveJudgeWindows, [](const JudgeWindowProvenance &window) {
+        return window.judgement == Great;
+      });
+  assert(good != stage.effectiveJudgeWindows.end());
+  assert(great != stage.effectiveJudgeWindows.end());
+  assert(std::pair(good->earlyMicros, good->lateMicros) != originalGood);
+  assert(good->earlyMicros == great->earlyMicros);
+  assert(good->lateMicros == great->lateMicros);
+}
+
+void testCourseSessionAggregatesRecordedStagesByIndex() {
+  CoursePlaySession session;
+  session.rulesetDescriptor = RulesetDescriptor::Current();
+
+  ScoreProvenance first = sampleVerifiedProvenance("course-first");
+  ScoreProvenance second = sampleVerifiedProvenance("course-second");
+  second.eligibility = ScoreEligibility::Modified;
+
+  CoursePlaySession sparseSession;
+  sparseSession.recordStageProvenance(1, second);
+  assert(sparseSession.aggregateProvenance().eligibility ==
+         ScoreEligibility::LegacyUnverified);
+
+  session.recordStageProvenance(1, second);
+  session.recordStageProvenance(0, first);
+
+  const ScoreProvenance aggregate = session.aggregateProvenance();
+  assert(aggregate.stages.size() == 2);
+  assert(aggregate.stages[0].chartSha256 == "sha256-course-first");
+  assert(aggregate.stages[1].chartSha256 == "sha256-course-second");
+  assert(aggregate.eligibility == ScoreEligibility::Modified);
+
+  StartOptions options;
+  options.courseSession = std::make_shared<CoursePlaySession>();
+  options.courseSession->rulesetDescriptor = RulesetDescriptor::Current();
+  options.courseSession->rulesetDescriptor.scoringModel = "course-override";
+  options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
+  bms_parser::ChartMeta meta;
+  meta.MD5 = "course-md5";
+  meta.SHA256 = "course-sha256";
+  meta.Rank = 1;
+  Judge judge(meta.Rank);
+  const ScoreProvenance captured =
+      captureScoreProvenanceAtPlayStart(options, meta, judge.timingWindows);
+  assert(captured.ruleset == options.courseSession->rulesetDescriptor);
+  assert(captured.eligibility == ScoreEligibility::Modified);
+}
+
 } // namespace
 
 int main() {
@@ -168,6 +334,11 @@ int main() {
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
   testCourseMergePreservesStagesAndWorstEligibility();
+  testPlayStartCaptureIsImmutableAndShared();
+  testMobilePlayStartInputCategoriesPreserveResolverClasses();
+  testPlayStartInputPlatformDefaultsAreIncluded();
+  testConstrainedPlayCapturesEffectiveWindowsAsModified();
+  testCourseSessionAggregatesRecordedStagesByIndex();
   std::cout << "score provenance tests passed\n";
   return 0;
 }
