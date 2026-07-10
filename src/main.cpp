@@ -1046,12 +1046,14 @@ void run() {
       SDL_Event waitEvent{};
       if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
         ++rawEventsInWindow;
+        context.inputDeviceRegistry.handleSdlEvent(waitEvent);
         processEvent(waitEvent);
       }
     };
 
     while (SDL_PollEvent(&e)) {
       ++rawEventsInWindow;
+      context.inputDeviceRegistry.handleSdlEvent(e);
 
       if (e.type == SDL_MOUSEMOTION) {
         pendingMouseMotion = e;
@@ -1120,6 +1122,7 @@ void run() {
       } else {
         SDL_Delay(16);
       }
+      context.inputDeviceRegistry.pump();
       context.currentFrame++;
       continue;
     }
@@ -1140,9 +1143,11 @@ void run() {
     if (context.appInBackground.load(std::memory_order_acquire) &&
         !context.replayVideoExportActive.load(std::memory_order_acquire)) {
       waitForBackgroundEvent();
+      context.inputDeviceRegistry.pump();
       context.currentFrame++;
       continue;
     }
+    context.inputDeviceRegistry.pump();
     sceneManager.update(deltaTime);
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
