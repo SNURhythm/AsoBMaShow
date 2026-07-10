@@ -26,10 +26,6 @@
 #include <utility>
 #include <vector>
 
-ChartDBHelper::ChartDBHelper() = default;
-sqlite3 *ChartDBHelper::Connect() { return nullptr; }
-bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
-
 namespace {
 int failures = 0;
 
@@ -480,9 +476,9 @@ struct SwitchFixture {
       refreshAction();
     }
     if (persistentChartDatabase) {
-      const auto error = score_cache_queries::prepareScoreQueryDatabase(
-          persistentChartDatabase.get(), score.GetResolvedDatabasePath());
-      if (error.has_value()) {
+      auto prepared =
+          score.PrepareScoreQueryDatabase(persistentChartDatabase.get());
+      if (const auto &error = prepared.error()) {
         throw std::runtime_error(*error);
       }
     }
@@ -894,6 +890,211 @@ void testRealScoreReadBlocksSwitchUntilQueryCompletes() {
            "post-read switch exposes profile B score data");
   }
 }
+
+void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+
+  ScopedBlockingStatementTrace blockedPrepare("PRAGMA database_list");
+  expect(blockedPrepare.installed(),
+         "score attachment preparation trace installs");
+  fixture.persistentChartDatabase = openDatabase(":memory:");
+  expect(fixture.persistentChartDatabase != nullptr,
+         "guarded score attachment chart connection opens");
+  if (!fixture.persistentChartDatabase) {
+    return;
+  }
+
+  std::optional<std::string> prepareError;
+  std::thread preparer([&]() {
+    auto prepared = fixture.score.PrepareScoreQueryDatabase(
+        fixture.persistentChartDatabase.get());
+    prepareError = prepared.error();
+  });
+  const bool prepareEntered = blockedPrepare.waitUntilEntered();
+  expect(prepareEntered,
+         "guarded score attachment reaches deterministic query gate");
+  if (!prepareEntered) {
+    blockedPrepare.release();
+    preparer.join();
+    return;
+  }
+
+  expect(ScoreDBHelper::HasActiveWrites() && ReplayDBHelper::HasActiveWrites(),
+         "active-path snapshot and attachment preparation publish one "
+         "database operation");
+  const ProfileSwitchResult duringPrepare =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(duringPrepare.error == ProfileError::SwitchBlocked,
+         "profile switch cannot interleave after the active score path is "
+         "selected but before attachment preparation completes");
+
+  blockedPrepare.release();
+  preparer.join();
+  expect(!prepareError.has_value(),
+         "guarded profile A score attachment preparation succeeds");
+  expect(std::filesystem::canonical(attachedDatabasePath(
+             fixture.persistentChartDatabase.get(), "score_db")) ==
+             std::filesystem::canonical(fixture.firstPaths.scoresDb),
+         "blocked switch leaves the retained connection attached to profile "
+         "A");
+
+  const ProfileSwitchResult afterPrepare =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(afterPrepare.ok(),
+         "profile switch succeeds after guarded attachment preparation");
+  expect(std::filesystem::canonical(attachedDatabasePath(
+             fixture.persistentChartDatabase.get(), "score_db")) ==
+             std::filesystem::canonical(fixture.secondPaths.scoresDb),
+         "successful switch reattaches the retained connection to profile B");
+  fixture.persistentChartDatabase.reset();
+}
+
+void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+
+  ScopedBlockingStatementTrace blockedQuery(
+      "FROM score_db.score_sha256_clear_rank_cache");
+  expect(blockedQuery.installed(), "score-backed query trace installs");
+  fixture.persistentChartDatabase = openDatabase(":memory:");
+  expect(fixture.persistentChartDatabase != nullptr,
+         "score-backed query chart connection opens");
+  if (!fixture.persistentChartDatabase) {
+    return;
+  }
+
+  std::optional<std::string> prepareError;
+  int queryRank = kNoClearTypeRank;
+  std::thread query([&]() {
+    auto prepared = fixture.score.PrepareScoreQueryDatabase(
+        fixture.persistentChartDatabase.get());
+    prepareError = prepared.error();
+    if (!prepareError.has_value()) {
+      queryRank =
+          queryInt(fixture.persistentChartDatabase.get(),
+                   "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                   "'" + std::string(kChartSha) + "'", "0"));
+    }
+  });
+  const bool queryEntered = blockedQuery.waitUntilEntered();
+  expect(queryEntered,
+         "dependent score-backed query reaches deterministic gate");
+  if (!queryEntered) {
+    blockedQuery.release();
+    query.join();
+    return;
+  }
+
+  expect(ScoreDBHelper::HasActiveWrites(),
+         "prepared score query retains its write-classified operation guard");
+  const ProfileSwitchResult duringQuery =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(duringQuery.error == ProfileError::SwitchBlocked,
+         "profile switch cannot interleave between attachment preparation and "
+         "its dependent query");
+
+  blockedQuery.release();
+  query.join();
+  expect(!prepareError.has_value(),
+         "profile A score-backed query preparation succeeds");
+  expect(queryRank == kClearTypeEasyClearRank,
+         "in-flight dependent query completes with profile A data");
+
+  const ProfileSwitchResult afterQuery =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(afterQuery.ok(),
+         "profile switch succeeds after the dependent query releases its "
+         "guard");
+  auto prepared = fixture.score.PrepareScoreQueryDatabase(
+      fixture.persistentChartDatabase.get());
+  expect(!prepared.error().has_value(),
+         "profile B score-backed query preparation succeeds");
+  expect(queryInt(fixture.persistentChartDatabase.get(),
+                  "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                  "'" + std::string(kChartSha) + "'", "0")) ==
+             kClearTypeHardClearRank,
+         "post-switch dependent query reads profile B data");
+  fixture.persistentChartDatabase.reset();
+}
+
+void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty()) {
+    return;
+  }
+
+  ScoreDBHelper &activeScore = ScoreDBHelper::GetInstance();
+  const std::filesystem::path previousScorePath = activeScore.GetDatabasePath();
+  activeScore.SetDatabasePath(fixture.firstPaths.scoresDb);
+
+  ScopedBlockingStatementTrace blockedQuery(
+      "FROM score_db.score_sha256_clear_rank_cache");
+  expect(blockedQuery.installed(), "real ChartDB score query trace installs");
+  Database chartDatabase = openDatabase(":memory:");
+  expect(chartDatabase != nullptr, "real ChartDB score query connection opens");
+  if (!chartDatabase) {
+    activeScore.SetDatabasePath(previousScorePath);
+    return;
+  }
+  expect(ChartDBHelper::GetInstance().CreateChartMetaTable(chartDatabase.get()),
+         "real ChartDB score query schema creates");
+  expect(execute(chartDatabase.get(),
+                 "INSERT INTO chart_meta "
+                 "(path, md5, sha256, title, ln_mode, total_long_notes, "
+                 "total_backspin_notes, source_priority, source_archive_size) "
+                 "VALUES ('chart.bms', '" +
+                     std::string(kChartMd5) + "', '" + std::string(kChartSha) +
+                     "', 'Chart', 0, 0, 0, 0, 0)"),
+         "real ChartDB score query row inserts");
+
+  ChartMetaQuery firstQuery;
+  firstQuery.clearMarkFilter = true;
+  firstQuery.clearMarkRank = kClearTypeEasyClearRank;
+  int firstCount = -1;
+  std::thread query([&]() {
+    firstCount = ChartDBHelper::GetInstance().CountChartMeta(
+        chartDatabase.get(), firstQuery);
+  });
+  const bool queryEntered = blockedQuery.waitUntilEntered();
+  expect(queryEntered,
+         "real ChartDB score-backed count reaches deterministic gate");
+  if (!queryEntered) {
+    blockedQuery.release();
+    query.join();
+    activeScore.SetDatabasePath(previousScorePath);
+    return;
+  }
+
+  profile_database_activity::SwitchGuard duringQuery;
+  expect(!duringQuery.ownsLock(),
+         "real ChartDB score-backed count prevents a concurrent profile "
+         "switch");
+  blockedQuery.release();
+  query.join();
+  expect(firstCount == 1,
+         "real ChartDB score-backed count completes with profile A data");
+
+  {
+    profile_database_activity::SwitchGuard switchToSecond;
+    expect(switchToSecond.ownsLock(),
+           "profile switch gate opens after real ChartDB count completes");
+    if (switchToSecond.ownsLock()) {
+      activeScore.SetDatabasePath(fixture.secondPaths.scoresDb);
+    }
+  }
+  ChartMetaQuery secondQuery = firstQuery;
+  secondQuery.clearMarkRank = kClearTypeHardClearRank;
+  expect(ChartDBHelper::GetInstance().CountChartMeta(chartDatabase.get(),
+                                                     secondQuery) == 1,
+         "next real ChartDB score-backed count reattaches and reads profile "
+         "B");
+  activeScore.SetDatabasePath(previousScorePath);
+}
 } // namespace
 
 int main() {
@@ -905,6 +1106,9 @@ int main() {
   testDatabasePathReadsAreIndependentSnapshots();
   testRetainedMainMenuSelectionsReloadWithoutProfileLeakage();
   testRealScoreReadBlocksSwitchUntilQueryCompletes();
+  testScoreAttachmentPreparationOwnsActivePathSnapshot();
+  testPreparedScoreQueryGuardLivesThroughDependentQuery();
+  testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
 
   if (failures != 0) {
     std::cerr << failures << " profile switch test(s) failed.\n";

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -91,6 +92,29 @@ class ScoreDBHelper {
 public:
   static constexpr int kCurrentSchemaVersion = 5;
 
+  class [[nodiscard]] PreparedScoreQueryDatabase {
+  public:
+    ~PreparedScoreQueryDatabase();
+    PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) noexcept;
+    PreparedScoreQueryDatabase &
+    operator=(PreparedScoreQueryDatabase &&) noexcept;
+
+    PreparedScoreQueryDatabase(const PreparedScoreQueryDatabase &) = delete;
+    PreparedScoreQueryDatabase &
+    operator=(const PreparedScoreQueryDatabase &) = delete;
+
+    [[nodiscard]] const std::optional<std::string> &error() const;
+
+  private:
+    struct State;
+
+    PreparedScoreQueryDatabase(const ScoreDBHelper &, sqlite3 *chartDatabase);
+
+    std::unique_ptr<State> state_;
+
+    friend class ScoreDBHelper;
+  };
+
   ScoreDBHelper() = default;
   explicit ScoreDBHelper(std::filesystem::path databasePath);
   ScoreDBHelper(const ScoreDBHelper &) = delete;
@@ -101,6 +125,8 @@ public:
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
+  [[nodiscard]] PreparedScoreQueryDatabase
+  PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
   [[nodiscard]] static bool HasActiveReads();

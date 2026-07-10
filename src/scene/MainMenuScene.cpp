@@ -4167,7 +4167,13 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
 }
 
 std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
-  if (const auto error = prepareScoreQueryDatabase()) {
+  if (db == nullptr) {
+    return "chart database is unavailable";
+  }
+  auto prepared = ScoreDBHelper::GetInstance().PrepareScoreQueryDatabase(db);
+  if (const auto &error = prepared.error()) {
+    SDL_Log("SQL error while preparing score query database: %s",
+            error->c_str());
     return error;
   }
   scoreClearRanks = ScoreDBHelper::GetInstance().LoadBestClearRanks(
@@ -4185,10 +4191,8 @@ std::optional<std::string> MainMenuScene::prepareScoreQueryDatabase() {
     return "chart database is unavailable";
   }
 
-  const std::filesystem::path scoreDbPath =
-      ScoreDBHelper::GetInstance().GetResolvedDatabasePath();
-  if (const auto error =
-          score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
+  auto prepared = ScoreDBHelper::GetInstance().PrepareScoreQueryDatabase(db);
+  if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
     return error;

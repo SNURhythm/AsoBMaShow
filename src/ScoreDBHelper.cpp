@@ -992,6 +992,40 @@ std::filesystem::path ScoreDBHelper::GetResolvedDatabasePath() const {
                                : databasePath_;
 }
 
+struct ScoreDBHelper::PreparedScoreQueryDatabase::State {
+  State(const ScoreDBHelper &helper, sqlite3 *chartDatabase) {
+    const std::filesystem::path path = helper.GetResolvedDatabasePath();
+    error = score_cache_queries::prepareScoreQueryDatabase(chartDatabase, path);
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::optional<std::string> error;
+};
+
+ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
+    const ScoreDBHelper &helper, sqlite3 *chartDatabase)
+    : state_(std::make_unique<State>(helper, chartDatabase)) {}
+
+ScoreDBHelper::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
+    default;
+
+ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
+    PreparedScoreQueryDatabase &&) noexcept = default;
+
+ScoreDBHelper::PreparedScoreQueryDatabase &
+ScoreDBHelper::PreparedScoreQueryDatabase::operator=(
+    PreparedScoreQueryDatabase &&) noexcept = default;
+
+const std::optional<std::string> &
+ScoreDBHelper::PreparedScoreQueryDatabase::error() const {
+  return state_->error;
+}
+
+ScoreDBHelper::PreparedScoreQueryDatabase
+ScoreDBHelper::PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const {
+  return PreparedScoreQueryDatabase(*this, chartDatabase);
+}
+
 bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
                                      std::string &errorMessage) {
   profile_database_activity::WriteGuard operation;

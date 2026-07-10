@@ -1597,14 +1597,14 @@ bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
          chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
 }
 
-bool ensureScoreQueryDatabase(sqlite3 *db, const ChartMetaQuery &chartQuery) {
+bool ensureScoreQueryDatabase(
+    sqlite3 *db, const ChartMetaQuery &chartQuery,
+    std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> &prepared) {
   if (!chartMetaQueryNeedsScoreCache(chartQuery)) {
     return true;
   }
-  const std::filesystem::path scoreDbPath =
-      ScoreDBHelper::GetInstance().GetResolvedDatabasePath();
-  if (const auto error =
-          score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
+  prepared.emplace(ScoreDBHelper::GetInstance().PrepareScoreQueryDatabase(db));
+  if (const auto &error = prepared->error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
     return false;
@@ -3765,6 +3765,7 @@ int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
 void ChartDBHelper::QueryChartMeta(
     sqlite3 *db, const ChartMetaQuery &chartQuery,
     std::vector<ChartMetaRecord> &chartMetas) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return;
   }
@@ -3772,7 +3773,7 @@ void ChartDBHelper::QueryChartMeta(
       !CreateDifficultyTableTables(db)) {
     return;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -3935,6 +3936,7 @@ void ChartDBHelper::QueryChartMeta(
 
 int ChartDBHelper::CountChartMeta(sqlite3 *db,
                                   const ChartMetaQuery &chartQuery) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return 0;
   }
@@ -3942,7 +3944,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return 0;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return 0;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -4049,6 +4051,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
 int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
                                       const ChartMetaQuery &chartQuery,
                                       const std::filesystem::path &path) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (db == nullptr || path.empty() || !CreateFavoritesTable(db)) {
     return -1;
   }
@@ -4056,7 +4059,7 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return -1;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return -1;
   }
 

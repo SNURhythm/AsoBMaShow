@@ -812,6 +812,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/ChartDBHelper.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
         src/ScoreProvenance.cpp
@@ -829,6 +833,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(profile_switch_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
         target_link_libraries(profile_switch_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(profile_switch_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(profile_switch_tests PRIVATE iconv)
     endif()
     if(WIN32)
         target_link_libraries(profile_switch_tests PRIVATE shell32 ole32)
