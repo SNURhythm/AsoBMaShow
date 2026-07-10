@@ -732,6 +732,7 @@
 				game/GameObject.cpp,
 				game/GameState.cpp,
 				game/SpriteObject.cpp,
+				input/InputBindingResolver.cpp,
 				input/InputDefaults.cpp,
 				input/InputNormalizer.cpp,
 				input/InputProfile.cpp,
