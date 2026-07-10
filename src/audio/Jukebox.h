@@ -31,6 +31,12 @@ struct ImageData {
 
 using ChartResourceTable = std::unordered_map<int, std::string>;
 
+struct ScheduledAudioEvent {
+  long long timeMicros = 0;
+  int wav = bms_parser::Parser::NoWav;
+  audio::Bus bus = audio::Bus::Bgm;
+};
+
 class Jukebox {
 public:
   struct PerformanceAnalytics {
@@ -187,7 +193,7 @@ private:
   std::thread playThread;
   Stopwatch *stopwatch;
   AudioWrapper audio;
-  std::vector<std::pair<long long, int>> audioList;
+  std::vector<ScheduledAudioEvent> audioList;
   size_t audioCursor = 0;
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "AudioMix.h"
+#include "../settings/AudioVideoSettings.h"
+
 #include <miniaudio.h>
 #include <memory>
 #include <string>
@@ -87,39 +90,30 @@ struct SoftKneeCompressor {
 
 // Custom data structure to hold PCM data and playback state
 struct SoundData {
-
-  ~SoundData() { releaseResampler(); }
-
   SoundData() = default;
   SoundData(const SoundData &) = delete;
   SoundData &operator=(const SoundData &) = delete;
 
-  void releaseResampler() {
-    if (resamplerInitialized) {
-      ma_resampler_uninit(&resampler, nullptr);
-      resamplerInitialized = false;
-    }
-  }
-
   size_t currentFrame = 0;
   int channels = 0;
-  int originalSampleRate = 0;
+  int sourceSampleRate = 0;
   bool playing = false;
-  bool isResampled = false;
-  ma_resampler resampler{};
-  bool resamplerInitialized = false;
-  std::vector<short> resampledData;
-  size_t resampledFrameCount = 0;
+  std::vector<short> sourceData;
+  std::vector<short> outputData;
+  size_t sourceFrameCount = 0;
+  size_t outputFrameCount = 0;
 };
 
 struct PlayingSound {
   SoundData *soundData;
+  audio::Bus bus = audio::Bus::Bgm;
   size_t currentFrame;
   ma_uint32 outputOffsetFrames;
 };
 
 struct ScheduledSound {
   SoundData *soundData;
+  audio::Bus bus = audio::Bus::Bgm;
   long long startMicros;
   uint64_t sequence;
   size_t startFrame;
@@ -130,6 +124,7 @@ enum class AudioCommandType : uint8_t { PlayNow, Schedule, StopAll };
 struct AudioCommand {
   AudioCommandType type = AudioCommandType::StopAll;
   SoundData *soundData = nullptr;
+  audio::Bus bus = audio::Bus::Bgm;
   long long startMicros = 0;
   uint64_t sequence = 0;
   size_t startFrame = 0;
@@ -160,6 +155,8 @@ struct UserData {
   std::atomic<long long> *audioClockAnchorMicros;
   std::atomic<long long> *audioClockAnchorWallMicros;
   std::atomic<long long> *audioClockAnchorEndMicros;
+  std::atomic<float> *bgmGain;
+  std::atomic<float> *keysoundGain;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -178,8 +175,9 @@ public:
                           int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
-  bool playSound(const path_t &path, long long startOffsetMicros = 0);
-  bool scheduleSound(const path_t &path, long long startMicros);
+  bool playSound(const path_t &path, audio::Bus bus,
+                 long long startOffsetMicros = 0);
+  bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   void seekClock(long long micros);
@@ -191,6 +189,8 @@ public:
   void setTrebleBoost(float db);
   void setReverbMix(float mix);
   void setCompressor(float threshold, float ratio);
+  void setVolumes(const audio::Volumes &volumes);
+  void setVolumes(const player_settings::AudioSettings &settings);
 
   void unloadSounds();
 
@@ -217,6 +217,8 @@ private:
   std::atomic<long long> audioClockAnchorMicros{0};
   std::atomic<long long> audioClockAnchorWallMicros{0};
   std::atomic<long long> audioClockAnchorEndMicros{0};
+  std::atomic<float> bgmGain{1.0f};
+  std::atomic<float> keysoundGain{1.0f};
 
   UserData userData;
   Stopwatch *stopwatch;
@@ -226,6 +228,8 @@ private:
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
   bool appendScheduledSound(SoundData *soundData, long long startMicros,
-                            uint64_t sequence, size_t startFrame = 0);
+                            uint64_t sequence, audio::Bus bus,
+                            size_t startFrame = 0);
+  void regenerateOutputData(int targetSampleRate);
   void clearCallbackState();
 };

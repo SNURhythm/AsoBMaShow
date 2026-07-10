@@ -370,14 +370,16 @@ void removeActiveSoundAt(AudioCallbackState &state, size_t index) {
 }
 
 bool appendActiveSound(AudioCallbackState &state, SoundData *soundData,
-                       ma_uint32 outputOffsetFrames, size_t startFrame = 0) {
-  if (soundData == nullptr || startFrame >= soundData->resampledFrameCount ||
+                       audio::Bus bus, ma_uint32 outputOffsetFrames,
+                       size_t startFrame = 0) {
+  if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
       state.playingSoundCount >= kMaxActiveSounds) {
     return false;
   }
   soundData->playing = true;
   state.playingSounds[state.playingSoundCount++] = {
       .soundData = soundData,
+      .bus = bus,
       .currentFrame = startFrame,
       .outputOffsetFrames = outputOffsetFrames,
   };
@@ -435,10 +437,12 @@ void drainAudioCommands(AudioCallbackState &state) {
         state.commandQueue[readCursor % kAudioCommandQueueSize];
     switch (command.type) {
     case AudioCommandType::PlayNow:
-      appendActiveSound(state, command.soundData, 0, command.startFrame);
+      appendActiveSound(state, command.soundData, command.bus, 0,
+                        command.startFrame);
       break;
     case AudioCommandType::Schedule:
       insertScheduledSound(state, {.soundData = command.soundData,
+                                   .bus = command.bus,
                                    .startMicros = command.startMicros,
                                    .sequence = command.sequence,
                                    .startFrame = command.startFrame});
@@ -483,8 +487,8 @@ void activateScheduledSounds(AudioCallbackState &state,
     if (!isDue) {
       break;
     }
-    appendActiveSound(state, scheduledSound.soundData, outputOffsetFrames,
-                      scheduledSound.startFrame);
+    appendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
+                      outputOffsetFrames, scheduledSound.startFrame);
   }
 
   if (scheduledSoundsToRemove == 0) {
@@ -501,14 +505,15 @@ void activateScheduledSounds(AudioCallbackState &state,
 }
 
 void mixActiveSounds(AudioCallbackState &state, float *mixBuffer,
-                     ma_uint32 frameCount, int outputChannels) {
-  constexpr float gain = 0.9f;
+                     ma_uint32 frameCount, int outputChannels, float bgmGain,
+                     float keysoundGain) {
+  constexpr float kMixHeadroom = 0.9f;
   size_t soundIndex = 0;
   while (soundIndex < state.playingSoundCount) {
     PlayingSound &playingSound = state.playingSounds[soundIndex];
     SoundData *soundData = playingSound.soundData;
     if (soundData == nullptr ||
-        playingSound.currentFrame >= soundData->resampledFrameCount) {
+        playingSound.currentFrame >= soundData->outputFrameCount) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }
@@ -517,14 +522,17 @@ void mixActiveSounds(AudioCallbackState &state, float *mixBuffer,
         std::min(playingSound.outputOffsetFrames, frameCount);
     ma_uint32 framesToRead = frameCount - outputOffsetFrames;
     ma_uint32 framesAvailable =
-        soundData->resampledFrameCount - playingSound.currentFrame;
+        soundData->outputFrameCount - playingSound.currentFrame;
     if (framesToRead > framesAvailable) {
       framesToRead = framesAvailable;
     }
 
-    const short *src = soundData->resampledData.data();
+    const short *src = soundData->outputData.data();
     const size_t currentFrame = playingSound.currentFrame;
     const int channels = soundData->channels;
+    const float gain =
+        kMixHeadroom *
+        (playingSound.bus == audio::Bus::Bgm ? bgmGain : keysoundGain);
 
     for (ma_uint32 frame = 0; frame < framesToRead; ++frame) {
       const size_t sourceFrameOffset = (currentFrame + frame) * channels;
@@ -550,7 +558,7 @@ void mixActiveSounds(AudioCallbackState &state, float *mixBuffer,
 
     playingSound.currentFrame += framesToRead;
     playingSound.outputOffsetFrames = 0;
-    if (playingSound.currentFrame >= soundData->resampledFrameCount) {
+    if (playingSound.currentFrame >= soundData->outputFrameCount) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }
@@ -598,7 +606,15 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
             userData->mixBuffer->begin() + requiredSamples, 0.0f);
   float *mixBuffer = userData->mixBuffer->data();
 
-  mixActiveSounds(state, mixBuffer, frameCount, outputChannels);
+  const float bgmGain = userData->bgmGain
+                            ? userData->bgmGain->load(std::memory_order_acquire)
+                            : 1.0f;
+  const float keysoundGain =
+      userData->keysoundGain
+          ? userData->keysoundGain->load(std::memory_order_acquire)
+          : 1.0f;
+  mixActiveSounds(state, mixBuffer, frameCount, outputChannels, bgmGain,
+                  keysoundGain);
 
   // Apply Effects
   if (userData->bassFilter) {
@@ -813,6 +829,8 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   userData.audioClockAnchorMicros = &audioClockAnchorMicros;
   userData.audioClockAnchorWallMicros = &audioClockAnchorWallMicros;
   userData.audioClockAnchorEndMicros = &audioClockAnchorEndMicros;
+  userData.bgmGain = &bgmGain;
+  userData.keysoundGain = &keysoundGain;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
   userData.bassFilter = &bassFilter;
@@ -869,7 +887,29 @@ void AudioWrapper::updateCurrentSampleRate() {
   if (rate <= 0) {
     rate = 44100;
   }
-  currentSampleRate.store(rate, std::memory_order_release);
+  const int previousRate =
+      currentSampleRate.exchange(rate, std::memory_order_acq_rel);
+  if (previousRate != rate) {
+    regenerateOutputData(rate);
+  }
+}
+
+void AudioWrapper::regenerateOutputData(int targetSampleRate) {
+  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  for (auto &soundData : soundDataList) {
+    if (soundData == nullptr) {
+      continue;
+    }
+    soundData->outputData =
+        audio::ResamplePcm(soundData->sourceData, soundData->channels,
+                           soundData->sourceSampleRate, targetSampleRate);
+    soundData->outputFrameCount =
+        soundData->channels > 0 ? soundData->outputData.size() /
+                                      static_cast<size_t>(soundData->channels)
+                                : 0;
+    soundData->currentFrame = 0;
+    soundData->playing = false;
+  }
 }
 
 long long AudioWrapper::getTimeMicros() const {
@@ -969,63 +1009,36 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   if (isCancelled) {
     return false;
   }
+  if (channels <= 0 || sampleRate <= 0 ||
+      pcmData.size() % static_cast<size_t>(channels) != 0) {
+    SDL_Log("Invalid decoded PCM format for %s", path_t_to_utf8(path).c_str());
+    return false;
+  }
 
   auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
   soundData->channels = channels;
-  soundData->originalSampleRate = sampleRate;
+  soundData->sourceSampleRate = sampleRate;
   soundData->playing = false;
+  soundData->sourceData = std::move(pcmData);
+  soundData->sourceFrameCount =
+      soundData->sourceData.size() / static_cast<size_t>(channels);
 
   updateCurrentSampleRate();
-  int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
+  const int targetSampleRate =
+      currentSampleRate.load(std::memory_order_acquire);
   SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
                  "Target sample rate: %d, File sample rate: %d",
                  targetSampleRate, sampleRate);
 
-  if (targetSampleRate == sampleRate) {
-    // Optimization: Skip resampling
-    soundData->isResampled = false;
-    soundData->resampledData = std::move(pcmData);
-    soundData->resampledFrameCount =
-        soundData->resampledData.size() / soundData->channels;
-    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                   "Loaded sound without resampling (Rate: %d)",
-                   targetSampleRate);
-  } else {
-    // Initialize the resampler
-    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                   "Resampling audio data from %d Hz to %d Hz", sampleRate,
-                   targetSampleRate);
-    ma_resampler_config resamplerConfig = ma_resampler_config_init(
-        ma_format_s16, channels, sampleRate, targetSampleRate,
-        ma_resample_algorithm_linear);
-    if (ma_resampler_init(&resamplerConfig, nullptr, &soundData->resampler) !=
-        MA_SUCCESS) {
-      SDL_Log("Failed to initialize resampler.");
-      return false;
-    }
-    soundData->resamplerInitialized = true;
-    soundData->isResampled = true;
-    if (isCancelled)
-      return false;
-
-    // Resample the audio data to target rate
-
-    ma_uint64 resampledFrameCount =
-        (ma_uint64)((double)pcmData.size() / channels * targetSampleRate /
-                    sampleRate);
-    soundData->resampledData.resize(resampledFrameCount * channels);
-    ma_uint64 size = (ma_uint64)pcmData.size();
-    if (isCancelled)
-      return false;
-    ma_resampler_process_pcm_frames(&soundData->resampler, pcmData.data(),
-                                    &size, soundData->resampledData.data(),
-                                    &resampledFrameCount);
-    if (isCancelled)
-      return false;
-    soundData->resampledFrameCount = resampledFrameCount;
+  soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
+                                             sampleRate, targetSampleRate);
+  if (isCancelled) {
+    return false;
   }
+  soundData->outputFrameCount =
+      soundData->outputData.size() / static_cast<size_t>(channels);
 
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
@@ -1047,9 +1060,10 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
 
 bool AudioWrapper::appendScheduledSound(SoundData *soundData,
                                         long long startMicros,
-                                        uint64_t sequence,
+                                        uint64_t sequence, audio::Bus bus,
                                         size_t startFrame) {
   return insertScheduledSound(callbackState, {.soundData = soundData,
+                                              .bus = bus,
                                               .startMicros = startMicros,
                                               .sequence = sequence,
                                               .startFrame = startFrame});
@@ -1061,7 +1075,8 @@ void AudioWrapper::clearCallbackState() {
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
 }
 
-bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
+bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
+                             long long startOffsetMicros) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
   const auto indexIt = soundDataIndexMap.find(path);
@@ -1073,13 +1088,12 @@ bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
   auto &soundData = soundDataList[indexIt->second];
   const long long clampedOffsetMicros = std::max(0LL, startOffsetMicros);
   const size_t startFrame = static_cast<size_t>(
-      std::min<long long>(
-          static_cast<long long>(soundData->resampledFrameCount),
-          clampedOffsetMicros *
-              static_cast<long long>(
-                  currentSampleRate.load(std::memory_order_acquire)) /
-              1000000LL));
-  if (startFrame >= soundData->resampledFrameCount) {
+      std::min<long long>(static_cast<long long>(soundData->outputFrameCount),
+                          clampedOffsetMicros *
+                              static_cast<long long>(currentSampleRate.load(
+                                  std::memory_order_acquire)) /
+                              1000000LL));
+  if (startFrame >= soundData->outputFrameCount) {
     return false;
   }
 
@@ -1087,16 +1101,18 @@ bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     if (backend && !backend->isStarted()) {
-      if (!appendActiveSound(callbackState, soundData.get(), 0, startFrame)) {
+      if (!appendActiveSound(callbackState, soundData.get(), bus, 0,
+                             startFrame)) {
         SDL_Log("Too many active sounds; dropping %s",
                 path_t_to_utf8(path).c_str());
         return false;
       }
       shouldStartBackend = true;
-    } else if (!enqueueCallbackCommand(
-                   callbackState, {.type = AudioCommandType::PlayNow,
-                                   .soundData = soundData.get(),
-                                   .startFrame = startFrame})) {
+    } else if (!enqueueCallbackCommand(callbackState,
+                                       {.type = AudioCommandType::PlayNow,
+                                        .soundData = soundData.get(),
+                                        .bus = bus,
+                                        .startFrame = startFrame})) {
       SDL_Log("Audio command queue full; dropping %s",
               path_t_to_utf8(path).c_str());
       return false;
@@ -1125,11 +1141,12 @@ AudioWrapper::getSoundDurationMicros(const path_t &path) const {
     return std::nullopt;
   }
   return static_cast<long long>(
-      static_cast<double>(soundData->resampledFrameCount) * 1000000.0 /
+      static_cast<double>(soundData->outputFrameCount) * 1000000.0 /
       static_cast<double>(sampleRate));
 }
 
-bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {
+bool AudioWrapper::scheduleSound(const path_t &path, audio::Bus bus,
+                                 long long startMicros) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
   const auto indexIt = soundDataIndexMap.find(path);
@@ -1145,16 +1162,17 @@ bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     if (backend && !backend->isStarted()) {
-      if (!appendScheduledSound(soundData.get(), startMicros, sequence)) {
+      if (!appendScheduledSound(soundData.get(), startMicros, sequence, bus)) {
         SDL_Log("Too many scheduled sounds; dropping %s",
                 path_t_to_utf8(path).c_str());
         return false;
       }
-    } else if (!enqueueCallbackCommand(
-                   callbackState, {.type = AudioCommandType::Schedule,
-                                   .soundData = soundData.get(),
-                                   .startMicros = startMicros,
-                                   .sequence = sequence})) {
+    } else if (!enqueueCallbackCommand(callbackState,
+                                       {.type = AudioCommandType::Schedule,
+                                        .soundData = soundData.get(),
+                                        .bus = bus,
+                                        .startMicros = startMicros,
+                                        .sequence = sequence})) {
       SDL_Log("Audio command queue full; dropping scheduled %s",
               path_t_to_utf8(path).c_str());
       return false;
@@ -1187,9 +1205,6 @@ void AudioWrapper::unloadSound(const path_t &path) {
   if (const auto indexIt = soundDataIndexMap.find(path);
       indexIt != soundDataIndexMap.end()) {
     const size_t index = indexIt->second;
-    auto &soundData = soundDataList[index];
-
-    soundData->releaseResampler();
 
     soundDataList.erase(soundDataList.begin() + index);
     soundDataIndexMap.erase(indexIt);
@@ -1207,9 +1222,6 @@ void AudioWrapper::unloadSounds() {
   stopSounds();
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
-    for (auto &soundData : soundDataList) {
-      soundData->releaseResampler();
-    }
     soundDataList.clear();
     soundDataIndexMap.clear();
   }
@@ -1270,4 +1282,17 @@ void AudioWrapper::setCompressor(float threshold, float ratio) {
     compressor.setParams(threshold, ratio, 0.01f,
                          0.1f); // Default attack/release
   }
+}
+
+void AudioWrapper::setVolumes(const audio::Volumes &volumes) {
+  bgmGain.store(audio::EffectiveGain(audio::Bus::Bgm, volumes),
+                std::memory_order_release);
+  keysoundGain.store(audio::EffectiveGain(audio::Bus::Keysound, volumes),
+                     std::memory_order_release);
+}
+
+void AudioWrapper::setVolumes(const player_settings::AudioSettings &settings) {
+  setVolumes({.master = settings.masterVolume,
+              .bgm = settings.bgmVolume,
+              .keysound = settings.keysoundVolume});
 }

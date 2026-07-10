@@ -50,6 +50,18 @@ constexpr int kPrepMetronomeChannels = 2;
 constexpr double kPrepMetronomeClickSeconds = 0.045;
 constexpr double kPrepMetronomePi = 3.14159265358979323846;
 
+bool scheduledAudioEventLess(const ScheduledAudioEvent &left,
+                             const ScheduledAudioEvent &right) {
+  if (left.timeMicros != right.timeMicros) {
+    return left.timeMicros < right.timeMicros;
+  }
+  if (left.wav != right.wav) {
+    return left.wav < right.wav;
+  }
+  return static_cast<std::uint8_t>(left.bus) <
+         static_cast<std::uint8_t>(right.bus);
+}
+
 std::vector<short> makePrepMetronomeClick(double frequency, double amplitude) {
   const int frames = static_cast<int>(std::lround(
       static_cast<double>(kPrepMetronomeSampleRate) *
@@ -736,8 +748,8 @@ bool Jukebox::hasActiveVisuals() const {
 
 long long Jukebox::getScheduledAudioEndMicros() {
   long long endMicros = 0;
-  for (const auto &[eventMicros, wav] : audioList) {
-    const auto wavIt = wavTableAbs.find(wav);
+  for (const auto &event : audioList) {
+    const auto wavIt = wavTableAbs.find(event.wav);
     if (wavIt == wavTableAbs.end()) {
       continue;
     }
@@ -745,7 +757,7 @@ long long Jukebox::getScheduledAudioEndMicros() {
     if (!durationMicros.has_value()) {
       continue;
     }
-    endMicros = std::max(endMicros, eventMicros + *durationMicros);
+    endMicros = std::max(endMicros, event.timeMicros + *durationMicros);
   }
   return endMicros;
 }
@@ -2648,7 +2660,7 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
     for (auto &timeline : measure->TimeLines) {
       if (isCancelled)
         return;
-      std::vector<std::pair<long long, int>> notes;
+      std::vector<ScheduledAudioEvent> notes;
       const bool includeTimelineNotes =
           scheduleNotes ||
           (noteScheduleCutoffMicros.has_value() &&
@@ -2663,7 +2675,9 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
             continue;
           if (!wavTableAbs.contains(note->Wav))
             continue;
-          notes.emplace_back(timeline->Timing, note->Wav);
+          notes.push_back({.timeMicros = timeline->Timing,
+                           .wav = note->Wav,
+                           .bus = audio::Bus::Keysound});
         }
       }
       for (auto &bgNote : timeline->BackgroundNotes) {
@@ -2673,9 +2687,11 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
           continue;
         if (!wavTableAbs.contains(bgNote->Wav))
           continue;
-        notes.emplace_back(timeline->Timing, bgNote->Wav);
+        notes.push_back({.timeMicros = timeline->Timing,
+                         .wav = bgNote->Wav,
+                         .bus = audio::Bus::Bgm});
       }
-      std::sort(notes.begin(), notes.end());
+      std::sort(notes.begin(), notes.end(), scheduledAudioEventLess);
       for (auto &note : notes) {
         if (isCancelled)
           return;
@@ -2686,58 +2702,63 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   if (prepMetronomePlan != nullptr && prepMetronomePlan->enabled) {
     ensurePrepMetronomeSoundsLoaded();
     for (const auto &click : prepMetronomePlan->clicks) {
-      audioList.emplace_back(click.timeMicros,
-                             click.accent ? kPrepMetronomeAccentWav
-                                          : kPrepMetronomeRegularWav);
+      audioList.push_back({.timeMicros = click.timeMicros,
+                           .wav = click.accent ? kPrepMetronomeAccentWav
+                                               : kPrepMetronomeRegularWav,
+                           .bus = audio::Bus::Keysound});
     }
   }
-  std::sort(audioList.begin(), audioList.end());
+  std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
 }
 void Jukebox::playKeySound(int wav) {
   if (!isPlaying) {
     return;
   }
   if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
-    audio.playSound(it->second.c_str());
+    audio.playSound(it->second.c_str(), audio::Bus::Keysound);
   }
 }
 
 void Jukebox::scheduleAudioFromCursor() {
   while (audioCursor < audioList.size()) {
     const auto &target = audioList[audioCursor];
-    if (const auto it = wavTableAbs.find(target.second);
-        it != wavTableAbs.end()) {
-      audio.scheduleSound(it->second, target.first);
+    if (const auto it = wavTableAbs.find(target.wav); it != wavTableAbs.end()) {
+      audio.scheduleSound(it->second, target.bus, target.timeMicros);
     }
     audioCursor++;
   }
 }
 
 void Jukebox::playOverlappingAudioAt(long long micro) {
-  std::vector<std::pair<path_t, long long>> overlapping;
-  const auto seekIt =
-      std::lower_bound(audioList.begin(), audioList.end(), micro,
-                       [](const std::pair<long long, int> &entry,
-                          long long targetMicros) {
-                         return entry.first < targetMicros;
-                       });
+  struct OverlappingAudio {
+    path_t path;
+    long long offsetMicros = 0;
+    audio::Bus bus = audio::Bus::Bgm;
+  };
+  std::vector<OverlappingAudio> overlapping;
+  const auto seekIt = std::lower_bound(
+      audioList.begin(), audioList.end(), micro,
+      [](const ScheduledAudioEvent &entry, long long targetMicros) {
+        return entry.timeMicros < targetMicros;
+      });
   for (auto it = std::make_reverse_iterator(seekIt); it != audioList.rend();
        ++it) {
     const auto &target = *it;
-    const auto wavIt = wavTableAbs.find(target.second);
+    const auto wavIt = wavTableAbs.find(target.wav);
     if (wavIt == wavTableAbs.end()) {
       continue;
     }
-    const long long elapsed = micro - target.first;
+    const long long elapsed = micro - target.timeMicros;
     const auto duration = audio.getSoundDurationMicros(wavIt->second);
     if (!duration.has_value() || elapsed >= *duration) {
       continue;
     }
-    overlapping.emplace_back(wavIt->second, elapsed);
+    overlapping.push_back(
+        {.path = wavIt->second, .offsetMicros = elapsed, .bus = target.bus});
   }
 
   for (auto it = overlapping.rbegin(); it != overlapping.rend(); ++it) {
-    audio.playSound(it->first, it->second);
+    audio.playSound(it->path, it->bus, it->offsetMicros);
   }
 }
 
@@ -2883,7 +2904,7 @@ void Jukebox::play(long long startMicros) {
     bmpLayerCursor = 0;
     const long long bgaTimelineMicro = getBgaTimelineMicros(startMicros);
     while (audioCursor < audioList.size() &&
-           audioList[audioCursor].first < startMicros) {
+           audioList[audioCursor].timeMicros < startMicros) {
       audioCursor++;
     }
     scheduleAudioFromCursor();
@@ -3152,7 +3173,7 @@ void Jukebox::seek(long long micro) {
   bmpCursor = 0;
   bmpLayerCursor = 0;
   while (audioCursor < audioList.size() &&
-         audioList[audioCursor].first < micro) {
+         audioList[audioCursor].timeMicros < micro) {
     audioCursor++;
   }
   scheduleAudioFromCursor();
