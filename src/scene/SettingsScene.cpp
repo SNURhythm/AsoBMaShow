@@ -457,6 +457,7 @@ void SettingsScene::cleanupScene() {
   displayPreviewOverlayRoot = nullptr;
   displayPreviewCountdownText = nullptr;
   displayPreviewStatusText = nullptr;
+  displayPreviewKeepButton = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

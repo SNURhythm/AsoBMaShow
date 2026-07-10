@@ -2,6 +2,7 @@
 
 #include "../AppSettings.h"
 #include "../audio/AudioDeviceManager.h"
+#include "../path.h"
 #include "../video/DisplaySettingsManager.h"
 
 #include <chrono>
@@ -64,6 +65,17 @@ DisplayControlModel
 BuildDisplayControlModel(const player_settings::VideoSettings &intent,
                          const display::Capabilities &capabilities);
 
+struct SettingsTestSoundAssetCallbacks {
+  std::function<std::optional<std::vector<unsigned char>>(const path_t &)>
+      readAssetBytes;
+  std::function<bool(const path_t &, const std::vector<unsigned char> &)>
+      loadSoundFromMemory;
+  std::function<bool(const path_t &)> playKeysound;
+};
+
+bool PlaySettingsTestSoundAsset(
+    const path_t &path, const SettingsTestSoundAssetCallbacks &callbacks);
+
 class SettingsAudioVideoSession {
 public:
   struct Callbacks {
@@ -109,4 +121,5 @@ private:
   Callbacks callbacks_;
   std::optional<player_settings::VideoSettings> displayPreviewCandidate_;
   std::chrono::steady_clock::time_point displayPreviewDeadline_{};
+  bool displayPreviewBlocking_ = false;
 };

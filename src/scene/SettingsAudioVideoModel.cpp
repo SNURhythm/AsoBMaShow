@@ -317,6 +317,20 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   return model;
 }
 
+bool PlaySettingsTestSoundAsset(
+    const path_t &path, const SettingsTestSoundAssetCallbacks &callbacks) {
+  if (!callbacks.readAssetBytes || !callbacks.loadSoundFromMemory ||
+      !callbacks.playKeysound) {
+    return false;
+  }
+  const auto bytes = callbacks.readAssetBytes(path);
+  if (!bytes.has_value() || bytes->empty() ||
+      !callbacks.loadSoundFromMemory(path, *bytes)) {
+    return false;
+  }
+  return callbacks.playKeysound(path);
+}
+
 SettingsAudioVideoSession::SettingsAudioVideoSession(
     AppSettings &settings, audio::AudioDeviceManager &audioManager,
     display::DisplaySettingsManager &displayManager, Callbacks callbacks)
@@ -420,10 +434,14 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
     displayPreviewCandidate_ = persistedCandidate;
     displayPreviewDeadline_ =
         now + display::DisplaySettingsManager::kConfirmationTimeout;
-  } else if (result.status == display::ApplyStatus::Applied) {
-    settings_.audioVideo.video = persistedCandidate;
+    displayPreviewBlocking_ = true;
+  } else {
     displayPreviewCandidate_.reset();
-    persist();
+    displayPreviewBlocking_ = displayManager_.hasPendingPreview();
+    if (result.status == display::ApplyStatus::Applied) {
+      settings_.audioVideo.video = persistedCandidate;
+      persist();
+    }
   }
   return result;
 }
@@ -436,6 +454,7 @@ display::ApplyResult SettingsAudioVideoSession::keepDisplayPreview() {
     displayPreviewCandidate_.reset();
     persist();
   }
+  finishDisplayPreviewIfResolved();
   return result;
 }
 
@@ -470,13 +489,13 @@ std::optional<display::ApplyResult> SettingsAudioVideoSession::onFocusLost() {
 }
 
 bool SettingsAudioVideoSession::reconcileDisplayPreview() {
-  const bool hadPreview = displayPreviewCandidate_.has_value();
+  const bool hadPreview = displayPreviewBlocking_;
   finishDisplayPreviewIfResolved();
-  return hadPreview && !displayPreviewCandidate_.has_value();
+  return hadPreview && !displayPreviewBlocking_;
 }
 
 bool SettingsAudioVideoSession::hasDisplayPreview() const {
-  return displayPreviewCandidate_.has_value();
+  return displayPreviewBlocking_;
 }
 
 int SettingsAudioVideoSession::displayPreviewSecondsRemaining(
@@ -502,7 +521,10 @@ void SettingsAudioVideoSession::persist() {
 }
 
 void SettingsAudioVideoSession::finishDisplayPreviewIfResolved() {
-  if (!displayManager_.hasPendingPreview()) {
-    displayPreviewCandidate_.reset();
+  if (displayManager_.hasPendingPreview()) {
+    displayPreviewBlocking_ = true;
+    return;
   }
+  displayPreviewCandidate_.reset();
+  displayPreviewBlocking_ = false;
 }

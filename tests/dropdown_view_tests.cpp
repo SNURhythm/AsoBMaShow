@@ -21,6 +21,7 @@ static_assert(std::is_same_v<decltype(DropdownView::State{}.options),
 static_assert(
     std::is_same_v<decltype(DropdownView::State{}.selectedId), std::string>);
 static_assert(std::is_same_v<decltype(DropdownView::State{}.enabled), bool>);
+static_assert(std::is_same_v<decltype(DropdownView::Option{}.available), bool>);
 static_assert(std::is_same_v<decltype(DropdownView::Callbacks{}.onOpenChanged),
                              std::function<void(bool)>>);
 static_assert(DropdownView::kDefaultWidth == 160.0f);
@@ -28,19 +29,36 @@ static_assert(std::is_same_v<decltype(DropdownView::refreshIndicator(
                                  std::declval<View *>(),
                                  std::declval<const std::optional<Color> &>())),
                              bool>);
+static_assert(
+    std::is_same_v<decltype(std::declval<DropdownView &>().pendingRefresh),
+                   std::optional<DropdownView::State>>);
 static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
-                                           .pendingRefresh),
-                             std::optional<DropdownView::State>>);
-static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
-                                           .dispatchingOptionCallback),
+                                          .dispatchingOptionCallback),
                              bool>);
-static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
-                                           .deferredRefreshScheduled),
-                             bool>);
-static_assert(std::is_same_v<decltype(std::declval<DropdownView &>()
-                                           .optionsMatch(
-                                               std::declval<const std::vector<
-                                                   DropdownView::Option> &>())),
-                             bool>);
+static_assert(std::is_same_v<
+              decltype(std::declval<DropdownView &>().deferredRefreshScheduled),
+              bool>);
+static_assert(std::is_same_v<
+              decltype(std::declval<DropdownView &>().optionsMatch(
+                  std::declval<const std::vector<DropdownView::Option> &>())),
+              bool>);
 
-int main() { return 0; }
+int main() {
+  DropdownView::State state{.enabled = true};
+  const DropdownView::Option unavailable{
+      .id = "missing", .label = "Missing (Unavailable)", .available = false};
+  if (DropdownView::optionSelectable(state, unavailable)) {
+    return 1;
+  }
+
+  const DropdownView::Option available{
+      .id = "working", .label = "Working", .available = true};
+  if (!DropdownView::optionSelectable(state, available)) {
+    return 2;
+  }
+  state.enabled = false;
+  if (DropdownView::optionSelectable(state, available)) {
+    return 3;
+  }
+  return 0;
+}

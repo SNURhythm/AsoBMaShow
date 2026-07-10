@@ -182,6 +182,7 @@ private:
   View *displayPreviewOverlayRoot = nullptr;
   TextView *displayPreviewCountdownText = nullptr;
   TextView *displayPreviewStatusText = nullptr;
+  Button *displayPreviewKeepButton = nullptr;
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;

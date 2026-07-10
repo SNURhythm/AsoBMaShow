@@ -165,6 +165,7 @@ void SettingsScene::resetViewState() {
   displayPreviewOverlayRoot = nullptr;
   displayPreviewCountdownText = nullptr;
   displayPreviewStatusText = nullptr;
+  displayPreviewKeepButton = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {

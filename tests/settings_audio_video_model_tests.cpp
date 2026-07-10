@@ -169,6 +169,7 @@ public:
   display::Capabilities exposedCapabilities = desktopDisplayCapabilities();
   display::RuntimeState state{.settings = {}};
   std::deque<display::RestoreStatus> restoreStatuses;
+  bool applySucceeds = true;
   int applyCalls = 0;
   int restoreCalls = 0;
 
@@ -179,9 +180,13 @@ public:
   display::RuntimeState capture() const override { return state; }
 
   bool apply(const player_settings::VideoSettings &settings,
-             std::string &) override {
+             std::string &errorMessage) override {
     ++applyCalls;
     state.settings = settings;
+    if (!applySucceeds) {
+      errorMessage = "injected display apply failure";
+      return false;
+    }
     return true;
   }
 
@@ -411,6 +416,45 @@ void testSettingsTestSoundUsesInjectedKeysoundPath() {
           "settings session routes test sound through its keysound callback");
 }
 
+void testSettingsTestSoundLoadsPlatformAssetBytes() {
+  const path_t soundPath = PATH("assets/audio/sample.wav");
+  const std::vector<unsigned char> assetBytes = {0x52, 0x49, 0x46, 0x46};
+  int step = 0;
+
+  const bool played = PlaySettingsTestSoundAsset(
+      soundPath,
+      {.readAssetBytes =
+           [&](const path_t &requested) {
+             require(requested == soundPath,
+                     "platform reader receives asset path");
+             require(step == 0, "asset bytes are read before decoding");
+             step = 1;
+             return std::optional{assetBytes};
+           },
+       .loadSoundFromMemory =
+           [&](const path_t &requested,
+               const std::vector<unsigned char> &bytes) {
+             require(requested == soundPath,
+                     "memory decoder keeps the sound cache key");
+             require(bytes == assetBytes,
+                     "platform asset bytes are passed to memory decoding");
+             require(step == 1, "memory decoding follows platform asset read");
+             step = 2;
+             return true;
+           },
+       .playKeysound =
+           [&](const path_t &requested) {
+             require(requested == soundPath,
+                     "playback uses the decoded cache key");
+             require(step == 2, "playback starts only after memory decoding");
+             step = 3;
+             return true;
+           }});
+
+  require(played && step == 3,
+          "settings test sound uses platform bytes and memory decoding");
+}
+
 void testDisplayPreviewPersistsOnlyWhenKept() {
   SessionFixture fixture;
   const auto candidate = riskyDisplayCandidate();
@@ -587,6 +631,44 @@ void testCleanupDrainsRetryableDisplayRollback() {
               !fixture.session.hasDisplayPreview() && fixture.saves == 0,
           "cleanup retries until runtime is restored and never saves preview");
 }
+
+void testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes() {
+  SessionFixture fixture;
+  fixture.displayBackend.applySucceeds = false;
+  fixture.displayBackend.restoreStatuses = {
+      display::RestoreStatus::RetryableFailure,
+      display::RestoreStatus::Restored,
+  };
+  const auto now = Clock::time_point{};
+
+  const auto failed =
+      fixture.session.beginDisplayPreview(riskyDisplayCandidate(), now);
+  require(failed.status == display::ApplyStatus::RollbackPending,
+          "partial display failure reports pending recovery");
+  require(fixture.session.hasDisplayPreview(),
+          "pending recovery keeps the blocking overlay state active");
+  require(!fixture.session.displayPreviewCandidate().has_value(),
+          "pending recovery is not a confirmable display candidate");
+  require(!fixture.session.reconcileDisplayPreview() &&
+              fixture.session.hasDisplayPreview(),
+          "reconciliation retains blocking state while rollback is pending");
+  require(fixture.saves == 0,
+          "failed display candidate is never persisted during recovery");
+
+  const auto keep = fixture.session.keepDisplayPreview();
+  require(keep.status == display::ApplyStatus::RollbackPending &&
+              fixture.displayBackend.restoreCalls == 1,
+          "Keep cannot confirm or interfere with rollback recovery");
+
+  const auto recovered = fixture.session.tick(now);
+  require(recovered.has_value() &&
+              recovered->status == display::ApplyStatus::FailedRolledBack,
+          "session tick retries and completes the pending rollback");
+  require(!fixture.session.hasDisplayPreview() && fixture.saves == 0 &&
+              fixture.displayBackend.state.settings ==
+                  player_settings::VideoSettings{},
+          "blocking state ends only after runtime restoration without saving");
+}
 } // namespace
 
 int main() {
@@ -596,11 +678,13 @@ int main() {
   testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent();
   testStreamIntentPersistsOnlyAfterSuccessfulApply();
   testSettingsTestSoundUsesInjectedKeysoundPath();
+  testSettingsTestSoundLoadsPlatformAssetBytes();
   testDisplayPreviewPersistsOnlyWhenKept();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();
   testBorderlessPreviewIgnoresStaleWindowedResolutionIntent();
   testDisplayTimeoutFocusLossAndTabExitRevertWithoutSaving();
   testCleanupDrainsRetryableDisplayRollback();
+  testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes();
   return 0;
 }

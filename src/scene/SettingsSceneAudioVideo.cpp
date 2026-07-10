@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 
+#include "../RAII.h"
 #include "../path.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
@@ -30,7 +31,9 @@ dropdownOptions(const ChoiceControlModel &control) {
   std::vector<DropdownView::Option> options;
   options.reserve(control.options.size());
   for (const auto &option : control.options) {
-    options.push_back({.id = option.persistedValue, .label = option.label});
+    options.push_back({.id = option.persistedValue,
+                       .label = option.label,
+                       .available = option.available});
   }
   return options;
 }
@@ -168,6 +171,19 @@ SDL_Color displayApplyColor(display::ApplyStatus status) {
 
 int volumePercent(float value) {
   return static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 100.0F));
+}
+
+std::optional<std::vector<unsigned char>>
+readPlatformAssetBytes(const path_t &path) {
+  const std::string assetPath = path_t_to_utf8(path);
+  size_t size = 0;
+  UniqueResource<void, SDL_free> data(
+      SDL_LoadFile_RW(SDL_RWFromFile(assetPath.c_str(), "rb"), &size, 1));
+  if (!data || size == 0) {
+    return std::nullopt;
+  }
+  const auto *begin = static_cast<const unsigned char *>(data.get());
+  return std::vector<unsigned char>(begin, begin + size);
 }
 } // namespace
 
@@ -566,13 +582,14 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
       ui_theme::coral());
   revertButton->setOnClickListener([this]() { revertDisplayPreview(); });
   actions->addView(revertButton);
-  auto *keepButton = makeAccentButton(
+  displayPreviewKeepButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText("Keep", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
-  keepButton->setOnClickListener([this]() { keepDisplayPreview(); });
-  actions->addView(keepButton);
+  displayPreviewKeepButton->setOnClickListener(
+      [this]() { keepDisplayPreview(); });
+  actions->addView(displayPreviewKeepButton);
   panel->addView(actions);
   displayPreviewOverlayRoot->addView(panel);
   rootLayout->addView(displayPreviewOverlayRoot);
@@ -659,12 +676,18 @@ void SettingsScene::updateDisplayPreviewUi() {
   if (!visible) {
     return;
   }
+  const bool confirmable =
+      audioVideoSession->displayPreviewCandidate().has_value();
+  if (displayPreviewKeepButton != nullptr) {
+    displayPreviewKeepButton->setVisible(confirmable);
+  }
   const int seconds = audioVideoSession->displayPreviewSecondsRemaining(
       std::chrono::steady_clock::now());
   if (displayPreviewCountdownText != nullptr) {
     displayPreviewCountdownText->setText(
-        "Reverting in " + std::to_string(seconds) +
-        (seconds == 1 ? " second" : " seconds"));
+        confirmable ? "Reverting in " + std::to_string(seconds) +
+                          (seconds == 1 ? " second" : " seconds")
+                    : "Restoring the previous display settings...");
   }
 }
 
@@ -818,10 +841,17 @@ bool SettingsScene::playSettingsTestSound() {
   static const path_t kTestSoundPath = PATH("assets/audio/sample.wav");
   std::atomic_bool cancelled = false;
   auto &runtime = context.jukebox.audioRuntime();
-  if (!runtime.loadSound(kTestSoundPath, cancelled)) {
-    return false;
-  }
-  return runtime.playSound(
+  return PlaySettingsTestSoundAsset(
       kTestSoundPath,
-      audioBusForJukeboxSource(JukeboxAudioSource::SettingsTestTone));
+      {.readAssetBytes = readPlatformAssetBytes,
+       .loadSoundFromMemory =
+           [&](const path_t &path, const std::vector<unsigned char> &bytes) {
+             return runtime.loadSoundFromMemory(path, bytes, cancelled);
+           },
+       .playKeysound =
+           [&](const path_t &path) {
+             return runtime.playSound(
+                 path, audioBusForJukeboxSource(
+                           JukeboxAudioSource::SettingsTestTone));
+           }});
 }
