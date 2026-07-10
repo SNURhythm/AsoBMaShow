@@ -471,6 +471,16 @@ inline bool sqliteFilesHaveEqualBytes(const std::filesystem::path &left,
 // storage there.
 inline constexpr std::uintmax_t kMaximumWindowsWalSnapshotMainBytes =
     256ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+inline constexpr bool kSqliteWalSnapshotResizeIsSparse = false;
+#else
+inline constexpr bool kSqliteWalSnapshotResizeIsSparse = true;
+#endif
+
+inline constexpr bool sqliteWalSnapshotSizeIsBounded(std::uintmax_t logicalSize,
+                                                     bool resizeIsSparse) {
+  return resizeIsSparse || logicalSize <= kMaximumWindowsWalSnapshotMainBytes;
+}
 
 inline bool
 writeSqliteFirstPageSnapshot(const std::filesystem::path &sourcePath,
@@ -481,13 +491,12 @@ writeSqliteFirstPageSnapshot(const std::filesystem::path &sourcePath,
     errorMessage = "database is shorter than its first SQLite page";
     return false;
   }
-#if TARGET_OS_WINDOWS
-  if (logicalSize > kMaximumWindowsWalSnapshotMainBytes) {
+  if (!sqliteWalSnapshotSizeIsBounded(logicalSize,
+                                      kSqliteWalSnapshotResizeIsSparse)) {
     errorMessage =
         "database is too large for a bounded Windows WAL preflight snapshot";
     return false;
   }
-#endif
 
   std::vector<char> firstPage(pageSize);
   std::ifstream mainInput(sourcePath, std::ios::binary);

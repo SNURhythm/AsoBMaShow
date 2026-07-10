@@ -922,6 +922,12 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
 
 void testLargeWalPreflightUsesOnlySparseFirstPage(
     const std::filesystem::path &root) {
+  static_assert(sqliteWalSnapshotSizeIsBounded(
+      kMaximumWindowsWalSnapshotMainBytes, false));
+  static_assert(!sqliteWalSnapshotSizeIsBounded(
+      kMaximumWindowsWalSnapshotMainBytes + 1, false));
+  static_assert(sqliteWalSnapshotSizeIsBounded(
+      kMaximumWindowsWalSnapshotMainBytes + 1, true));
 #if !TARGET_OS_WINDOWS
   const auto sourcePath = root / "preflight-sparse-source" / "score.db";
   {
