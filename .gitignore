@@ -12,6 +12,7 @@ android/.env.local
 /build*
 .metals/
 cmake-build-*/
+/.worktrees/
 /.cache
 android/.gradle/
 android/app/.cxx/
