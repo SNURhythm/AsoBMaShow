@@ -766,6 +766,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if (WIN32)
             target_link_libraries(platform_document_handoff_tests PRIVATE advapi32)
         endif()
+
+        add_executable(profile_export_staging_tests
+            tests/profile_export_staging_tests.cpp
+            src/ProfileExportStaging.cpp
+            src/PlatformDocumentHandoff.cpp
+        )
+        target_include_directories(profile_export_staging_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(profile_export_staging_tests PRIVATE cxx_std_23)
+        target_link_libraries(profile_export_staging_tests PRIVATE TinyFileDialogs)
+        if (WIN32)
+            target_link_libraries(profile_export_staging_tests PRIVATE advapi32)
+        endif()
     endif()
 
     add_executable(input_binding_resolver_tests
@@ -1114,6 +1128,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     if (NOT IOS AND NOT PLATFORM_ANDROID)
         asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)
+        asobmashow_register_test(profile_export_staging_tests foundation_profile_export_staging)
     endif()
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
