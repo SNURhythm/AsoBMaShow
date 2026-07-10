@@ -37,6 +37,50 @@ struct ScheduledAudioEvent {
   audio::Bus bus = audio::Bus::Bgm;
 };
 
+enum class JukeboxAudioSource : std::uint8_t {
+  BackgroundNote,
+  ChartNote,
+  DirectKeysound,
+  ReplayKeysound,
+  PrepMetronome,
+  SettingsTestTone,
+};
+
+constexpr audio::Bus
+audioBusForJukeboxSource(JukeboxAudioSource source) noexcept {
+  return source == JukeboxAudioSource::BackgroundNote ? audio::Bus::Bgm
+                                                      : audio::Bus::Keysound;
+}
+
+constexpr ScheduledAudioEvent
+makeScheduledAudioEvent(long long timeMicros, int wav,
+                        JukeboxAudioSource source) noexcept {
+  return {.timeMicros = timeMicros,
+          .wav = wav,
+          .bus = audioBusForJukeboxSource(source)};
+}
+
+struct OverlappingAudioRequest {
+  int wav = bms_parser::Parser::NoWav;
+  long long offsetMicros = 0;
+  audio::Bus bus = audio::Bus::Bgm;
+};
+
+inline std::optional<OverlappingAudioRequest>
+makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
+                            long long seekMicros,
+                            long long durationMicros) noexcept {
+  if (seekMicros < event.timeMicros || durationMicros <= 0) {
+    return std::nullopt;
+  }
+  const long long offsetMicros = seekMicros - event.timeMicros;
+  if (offsetMicros >= durationMicros) {
+    return std::nullopt;
+  }
+  return OverlappingAudioRequest{
+      .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
+}
+
 class Jukebox {
 public:
   struct PerformanceAnalytics {

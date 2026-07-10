@@ -2,6 +2,7 @@
 #include "audio/AudioWrapper.h"
 #include "audio/Jukebox.h"
 
+#include <array>
 #include <cmath>
 #include <concepts>
 #include <iostream>
@@ -67,6 +68,164 @@ std::vector<short> stereoRamp(size_t frameCount) {
   return result;
 }
 
+void requireNear(float actual, float expected, std::string_view message) {
+  require(std::fabs(actual - expected) < 0.0001f, message);
+}
+
+void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceFrameCount = 88200;
+  sound.sourceData.resize(sound.sourceFrameCount);
+  for (size_t frame = 0; frame < sound.sourceFrameCount; ++frame) {
+    sound.sourceData[frame] = static_cast<short>(frame % 30000);
+  }
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = sound.sourceFrameCount;
+  sound.currentFrame = 4410;
+
+  AudioCallbackState state;
+  state.playingSounds[0] = {.soundData = &sound,
+                            .bus = audio::Bus::Bgm,
+                            .currentFrame = 44100,
+                            .outputOffsetFrames = 441};
+  state.playingSoundCount = 1;
+  state.scheduledSounds[0] = {.soundData = &sound,
+                              .bus = audio::Bus::Keysound,
+                              .startMicros = 2000000,
+                              .sequence = 1,
+                              .startFrame = 22050};
+  state.scheduledSoundCount = 1;
+  state.commandQueue[0] = {.type = AudioCommandType::PlayNow,
+                           .soundData = &sound,
+                           .bus = audio::Bus::Keysound,
+                           .startFrame = 11025};
+  state.commandWriteCursor.store(1);
+
+  std::array<SoundData *, 1> sounds{&sound};
+  auto transition =
+      audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(transition.has_value(),
+          "a valid retained PCM set prepares a new output-rate candidate");
+  require(sound.outputFrameCount == 88200 &&
+              state.playingSounds[0].currentFrame == 44100 &&
+              state.scheduledSounds[0].startFrame == 22050 &&
+              state.commandQueue[0].startFrame == 11025,
+          "preparing a rate transition does not publish mixed-rate state");
+
+  audio::playback::CommitOutputRateTransition(std::move(*transition), state);
+  require(sound.outputFrameCount == 96000 && sound.currentFrame == 4800,
+          "committing regenerates output from retained PCM at 48 kHz");
+  require(state.playingSounds[0].currentFrame == 48000 &&
+              state.playingSounds[0].outputOffsetFrames == 480,
+          "active playback offsets retain their elapsed time at 48 kHz");
+  require(state.scheduledSounds[0].startFrame == 24000,
+          "scheduled offsets retain their elapsed time at 48 kHz");
+  require(state.commandQueue[0].startFrame == 12000,
+          "queued offsets retain their elapsed time at 48 kHz");
+
+  auto restored =
+      audio::playback::PrepareOutputRateTransition(sounds, 48000, 44100);
+  require(restored.has_value(),
+          "the retained source can prepare a reverse rate transition");
+  audio::playback::CommitOutputRateTransition(std::move(*restored), state);
+  require(
+      sound.outputFrameCount == 88200 && sound.outputData == sound.sourceData,
+      "returning to the source rate regenerates from source, not prior output");
+  require(state.playingSounds[0].currentFrame == 44100 &&
+              state.playingSounds[0].outputOffsetFrames == 441 &&
+              state.scheduledSounds[0].startFrame == 22050 &&
+              state.commandQueue[0].startFrame == 11025,
+          "all nonzero frame domains remain time-correct after 48 to 44.1 kHz");
+}
+
+void testBusFlowAndMixing() {
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {16384, 16384};
+  bgm.outputFrameCount = 2;
+  SoundData keysound;
+  keysound.channels = 1;
+  keysound.outputData = {16384, 16384};
+  keysound.outputFrameCount = 2;
+
+  AudioCallbackState state;
+  require(
+      audio::playback::EnqueueCommand(state, {.type = AudioCommandType::PlayNow,
+                                              .soundData = &bgm,
+                                              .bus = audio::Bus::Bgm}),
+      "BGM play command enters the callback queue");
+  require(audio::playback::EnqueueCommand(state,
+                                          {.type = AudioCommandType::Schedule,
+                                           .soundData = &keysound,
+                                           .bus = audio::Bus::Keysound,
+                                           .startMicros = 0,
+                                           .sequence = 1}),
+          "keysound schedule command enters the callback queue");
+
+  audio::playback::DrainCommands(state);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].bus == audio::Bus::Bgm,
+          "play commands preserve the BGM bus in active state");
+  require(state.scheduledSoundCount == 1 &&
+              state.scheduledSounds[0].bus == audio::Bus::Keysound,
+          "schedule commands preserve the keysound bus in scheduled state");
+
+  audio::playback::ActivateScheduledSounds(state, 0, 48000, 1);
+  require(state.playingSoundCount == 2 &&
+              state.playingSounds[1].bus == audio::Bus::Keysound,
+          "scheduled activation preserves the keysound bus in active state");
+
+  const player_settings::AudioSettings settings{
+      .masterVolume = 0.5f, .bgmVolume = 0.5f, .keysoundVolume = 1.0f};
+  const auto mappedVolumes = audio::VolumesFromSettings(settings);
+  const float bgmGain = audio::EffectiveGain(audio::Bus::Bgm, mappedVolumes);
+  const float keysoundGain =
+      audio::EffectiveGain(audio::Bus::Keysound, mappedVolumes);
+  requireNear(bgmGain, 0.25f, "settings map master and BGM volumes correctly");
+  requireNear(keysoundGain, 0.5f,
+              "settings map master and keysound volumes correctly");
+
+  std::vector<float> mixBuffer(2, 0.0f);
+  audio::playback::MixActiveSounds(state, mixBuffer, 1, 2, bgmGain,
+                                   keysoundGain);
+  requireNear(mixBuffer[0], 0.3375f,
+              "the left channel mixes each voice with its own bus gain");
+  requireNear(mixBuffer[1], 0.3375f,
+              "the right channel mixes each voice with its own bus gain");
+}
+
+void testJukeboxSourceClassificationAndSeekOverlap() {
+  const auto chartNote =
+      makeScheduledAudioEvent(1000, 10, JukeboxAudioSource::ChartNote);
+  const auto background =
+      makeScheduledAudioEvent(1000, 11, JukeboxAudioSource::BackgroundNote);
+  const auto metronome =
+      makeScheduledAudioEvent(1000, 12, JukeboxAudioSource::PrepMetronome);
+  require(chartNote.bus == audio::Bus::Keysound,
+          "chart notes classify as keysounds");
+  require(background.bus == audio::Bus::Bgm,
+          "background notes classify as BGM");
+  require(metronome.bus == audio::Bus::Keysound,
+          "preparation metronome clicks classify as keysounds");
+  require(audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound) ==
+                  audio::Bus::Keysound &&
+              audioBusForJukeboxSource(JukeboxAudioSource::ReplayKeysound) ==
+                  audio::Bus::Keysound &&
+              audioBusForJukeboxSource(JukeboxAudioSource::SettingsTestTone) ==
+                  audio::Bus::Keysound,
+          "direct, replay, and settings test sounds classify as keysounds");
+
+  const auto overlapping = makeOverlappingAudioRequest(background, 1250, 1000);
+  require(overlapping.has_value() && overlapping->wav == background.wav &&
+              overlapping->offsetMicros == 250 &&
+              overlapping->bus == audio::Bus::Bgm,
+          "seek overlap preserves the scheduled event bus and elapsed time");
+  require(!makeOverlappingAudioRequest(background, 2000, 1000).has_value(),
+          "seek overlap excludes audio at the end of its duration");
+}
+
 } // namespace
 
 int main() {
@@ -116,6 +275,18 @@ int main() {
     require(downsampled.front() == source48.front(),
             "downsampling preserves the first frame");
 
+    const std::vector<short> oneStereoFrame{1234, -2345};
+    const auto oneFrameDownsampled =
+        audio::ResamplePcm(oneStereoFrame, 2, 48000, 44100);
+    require(oneFrameDownsampled == oneStereoFrame,
+            "a valid one-frame buffer survives downsampling");
+
+    const std::vector<short> fractionalMonoFrames{1000, 2000};
+    const auto fractionalUpsampled =
+        audio::ResamplePcm(fractionalMonoFrames, 1, 44100, 48000);
+    require(fractionalUpsampled.size() == 3,
+            "fractional output duration retains its final frame interval");
+
     require(audio::ResamplePcm({}, 2, 44100, 48000).empty(),
             "empty PCM remains empty");
     require(audio::ResamplePcm(source48, 0, 44100, 48000).empty(),
@@ -124,6 +295,11 @@ int main() {
             "invalid source rate is rejected");
     require(audio::ResamplePcm(source48, 2, 48000, 0).empty(),
             "invalid target rate is rejected");
+    const std::vector<short> partialStereoFrame{1, 2, 3};
+    require(audio::ResamplePcm(partialStereoFrame, 2, 48000, 48000).empty(),
+            "same-rate conversion rejects partial interleaved PCM");
+    require(audio::ResamplePcm(partialStereoFrame, 2, 44100, 48000).empty(),
+            "rate conversion rejects partial interleaved PCM");
 
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&
@@ -137,6 +313,10 @@ int main() {
     require(keysoundEvent.timeMicros == 123 && keysoundEvent.wav == 42 &&
                 keysoundEvent.bus == audio::Bus::Keysound,
             "scheduled audio retains explicit keysound classification");
+
+    testRateTransitionRegeneratesAndRemapsEveryFrameDomain();
+    testBusFlowAndMixing();
+    testJukeboxSourceClassificationAndSeekOverlap();
 
     return 0;
   } catch (const std::exception &error) {

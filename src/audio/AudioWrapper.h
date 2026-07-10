@@ -88,64 +88,6 @@ struct SoftKneeCompressor {
   void setParams(float threshold, float ratio, float attack, float release);
 };
 
-// Custom data structure to hold PCM data and playback state
-struct SoundData {
-  SoundData() = default;
-  SoundData(const SoundData &) = delete;
-  SoundData &operator=(const SoundData &) = delete;
-
-  size_t currentFrame = 0;
-  int channels = 0;
-  int sourceSampleRate = 0;
-  bool playing = false;
-  std::vector<short> sourceData;
-  std::vector<short> outputData;
-  size_t sourceFrameCount = 0;
-  size_t outputFrameCount = 0;
-};
-
-struct PlayingSound {
-  SoundData *soundData;
-  audio::Bus bus = audio::Bus::Bgm;
-  size_t currentFrame;
-  ma_uint32 outputOffsetFrames;
-};
-
-struct ScheduledSound {
-  SoundData *soundData;
-  audio::Bus bus = audio::Bus::Bgm;
-  long long startMicros;
-  uint64_t sequence;
-  size_t startFrame;
-};
-
-enum class AudioCommandType : uint8_t { PlayNow, Schedule, StopAll };
-
-struct AudioCommand {
-  AudioCommandType type = AudioCommandType::StopAll;
-  SoundData *soundData = nullptr;
-  audio::Bus bus = audio::Bus::Bgm;
-  long long startMicros = 0;
-  uint64_t sequence = 0;
-  size_t startFrame = 0;
-};
-
-constexpr size_t kMaxActiveSounds = 512;
-constexpr size_t kMaxScheduledSounds = 65536;
-constexpr size_t kAudioCommandQueueSize = 4096;
-
-struct AudioCallbackState {
-  AudioCallbackState();
-
-  std::unique_ptr<PlayingSound[]> playingSounds;
-  size_t playingSoundCount = 0;
-  std::unique_ptr<ScheduledSound[]> scheduledSounds;
-  size_t scheduledSoundCount = 0;
-  std::unique_ptr<AudioCommand[]> commandQueue;
-  std::atomic<uint32_t> commandReadCursor{0};
-  std::atomic<uint32_t> commandWriteCursor{0};
-};
-
 struct UserData {
   Stopwatch *stopwatch;
   AudioCallbackState *callbackState;
@@ -202,6 +144,7 @@ private:
   std::vector<std::shared_ptr<SoundData>> soundDataList;
   AudioCallbackState callbackState;
   std::atomic<uint64_t> scheduledSoundSequence{0};
+  std::mutex deviceLifecycleMutex;
   std::mutex audioCommandMutex;
   std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
@@ -212,6 +155,7 @@ private:
   PlateReverb reverb;
   SoftKneeCompressor compressor;
   std::atomic<int> currentSampleRate{44100};
+  std::atomic<bool> backendRunning{false};
   std::atomic<long long> audioClockBaseMicros{0};
   std::atomic<int64_t> audioClockFrameCursor{0};
   std::atomic<long long> audioClockAnchorMicros{0};
@@ -223,13 +167,12 @@ private:
   UserData userData;
   Stopwatch *stopwatch;
 
-  void updateCurrentSampleRate();
+  bool commitOutputSampleRateWhileStopped(int targetSampleRate);
   bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled);
   bool appendScheduledSound(SoundData *soundData, long long startMicros,
                             uint64_t sequence, audio::Bus bus,
                             size_t startFrame = 0);
-  void regenerateOutputData(int targetSampleRate);
   void clearCallbackState();
 };
