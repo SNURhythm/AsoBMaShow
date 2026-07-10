@@ -385,7 +385,7 @@ if (PLATFORM_MACOS)
 endif()
 
 if (WIN32)
-    target_link_libraries(main PRIVATE shell32 ole32)
+    target_link_libraries(main PRIVATE shell32 ole32 advapi32)
 endif()
 
 # Platform specific system libs for macOS
@@ -799,6 +799,36 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(player_profile_manager_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(profile_archive_tests
+        tests/profile_archive_tests.cpp
+        src/ProfileArchive.cpp
+        src/FileChecksum.cpp
+        src/PlayerProfileManager.cpp
+        src/ProfileDatabaseTools.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+        src/ScoreDBHelper.cpp
+        src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(profile_archive_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_archive_tests PRIVATE cxx_std_23)
+    target_link_libraries(profile_archive_tests PRIVATE ${COMMON_LIBS})
+    if(WIN32)
+        target_link_libraries(profile_archive_tests PRIVATE shell32 ole32 advapi32)
+    endif()
+
     add_executable(input_device_registry_tests
         tests/input_device_registry_tests.cpp
         src/input/InputDeviceIdentity.cpp
@@ -954,6 +984,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)

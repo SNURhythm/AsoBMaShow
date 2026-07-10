@@ -66,6 +66,9 @@ struct PlayerProfileManagerDependencies {
   PlayerProfileFilesystemOperations filesystem;
 };
 
+using ProfileStagingWriter =
+    std::function<bool(const PlayerProfilePaths &, std::string &errorMessage)>;
+
 class PlayerProfileManager {
 public:
   explicit PlayerProfileManager(
@@ -74,6 +77,7 @@ public:
 
   ProfileResult Initialize();
   [[nodiscard]] const PlayerProfile &activeProfile() const;
+  [[nodiscard]] const std::filesystem::path &applicationDataRoot() const;
   [[nodiscard]] PlayerProfilePaths activePaths() const;
   [[nodiscard]] PlayerProfilePaths pathsFor(std::string_view id) const;
   [[nodiscard]] std::vector<PlayerProfile> listProfiles() const;
@@ -84,6 +88,9 @@ public:
   ProfileResult deleteProfile(std::string_view id);
   [[nodiscard]] ProfileResult validateProfile(std::string_view id) const;
   ProfileResult commitActiveProfile(std::string_view id);
+  ProfileResult installProfile(PlayerProfile sourceProfile,
+                               std::optional<std::string> overwriteProfileId,
+                               ProfileStagingWriter writeStaging);
 
 private:
   std::filesystem::path applicationDataRoot_;

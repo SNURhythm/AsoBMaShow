@@ -282,7 +282,7 @@ InputProfileStore::load(const std::filesystem::path &path) {
       return defaultsResult(InputProfileLoadStatus::FutureVersion,
                             "Input profile uses a future schema version.");
     }
-    if (schemaVersion != InputProfile::kSchemaVersion) {
+    if (schemaVersion < 0 || schemaVersion > InputProfile::kSchemaVersion) {
       return defaultsResult(InputProfileLoadStatus::InvalidDocument,
                             "Input profile schema version is unsupported.");
     }
@@ -295,7 +295,7 @@ InputProfileStore::load(const std::filesystem::path &path) {
 
     InputProfileLoadResult result;
     result.status = InputProfileLoadStatus::Loaded;
-    result.profile.schemaVersion = schemaVersion;
+    result.profile.schemaVersion = InputProfile::kSchemaVersion;
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
