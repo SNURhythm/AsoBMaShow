@@ -1,4 +1,5 @@
 #include "input/MidiMessageParser.h"
+#include "input/QueuedMidiInputBackend.h"
 
 #include <array>
 #include <cmath>
@@ -6,9 +7,43 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
+
+class TestMidiBackend final : public QueuedMidiInputBackend {
+public:
+  explicit TestMidiBackend(input::InputBackendSink sink)
+      : QueuedMidiInputBackend(std::move(sink)) {}
+
+  bool start(std::string &errorMessage) override {
+    errorMessage.clear();
+    openQueue();
+    return true;
+  }
+
+  void stop() override { closeQueue(); }
+
+  void connect(std::string stableId, std::string displayName) {
+    enqueueDevice({.stableId = std::move(stableId),
+                   .displayName = std::move(displayName),
+                   .deviceClass = input::DeviceClass::Midi,
+                   .connected = true});
+  }
+
+  void disconnect(std::string stableId, std::string displayName) {
+    enqueueDevice({.stableId = std::move(stableId),
+                   .displayName = std::move(displayName),
+                   .deviceClass = input::DeviceClass::Midi,
+                   .connected = false});
+  }
+
+  void packet(std::string stableId, std::vector<std::uint8_t> bytes,
+              std::uint64_t timestampMicros) {
+    enqueuePacket(std::move(stableId), std::move(bytes), timestampMicros);
+  }
+};
 
 void require(bool condition, std::string_view message) {
   if (!condition) {
@@ -236,6 +271,155 @@ void testMalformedBytesRecoverAtNextValidStatus() {
                    15 * 128 + 127, 127.0, 1.0F, 101);
 }
 
+void testBackendQueuesNativePacketsUntilMainThreadPump() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  std::vector<input::InputDeviceSnapshot> devices;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            devices.push_back(std::move(device));
+          },
+  });
+  std::string error;
+  require(backend.start(error), "test MIDI backend starts");
+  backend.connect("midi:test", "Test keyboard");
+  backend.packet("midi:test", {0x90, 60, 127}, 110);
+  require(inputs.empty() && devices.empty(),
+          "native callbacks only enqueue before main-thread pump");
+  backend.pump();
+  require(devices.size() == 1 && devices.front().connected,
+          "pump publishes the queued MIDI connection");
+  require(inputs.size() == 1, "pump parses and publishes the queued packet");
+  requireMidiEvent(inputs.front(), "midi:test", input::ControlKind::MidiNote,
+                   60, 127.0, 1.0F, 110);
+  backend.stop();
+}
+
+void testBackendIsolatesParsersAndDropsPacketsAfterDisconnect() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  std::vector<input::InputDeviceSnapshot> devices;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            devices.push_back(std::move(device));
+          },
+  });
+  std::string error;
+  require(backend.start(error), "isolated MIDI backend starts");
+  backend.connect("midi:a", "A");
+  backend.connect("midi:b", "B");
+  backend.packet("midi:a", {0x90, 60}, 120);
+  backend.packet("midi:b", {0x91, 61, 127}, 121);
+  backend.packet("midi:a", {127}, 122);
+  backend.pump();
+  require(inputs.size() == 2,
+          "each connected device retains independent parser state");
+  requireMidiEvent(inputs[0], "midi:b", input::ControlKind::MidiNote, 128 + 61,
+                   127.0, 1.0F, 121);
+  requireMidiEvent(inputs[1], "midi:a", input::ControlKind::MidiNote, 60, 127.0,
+                   1.0F, 122);
+
+  backend.disconnect("midi:a", "A");
+  backend.packet("midi:a", {0x90, 62, 127}, 123);
+  backend.pump();
+  require(inputs.size() == 2,
+          "packets queued after disconnect are not published");
+  require(devices.size() == 3 && !devices.back().connected,
+          "disconnect reaches the registry sink in queue order");
+  backend.stop();
+}
+
+void testBackendCloseRevokesQueuedNativeWork() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  std::vector<input::InputDeviceSnapshot> devices;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            devices.push_back(std::move(device));
+          },
+  });
+  std::string error;
+  require(backend.start(error), "revocation MIDI backend starts");
+  backend.connect("midi:late", "Late");
+  backend.packet("midi:late", {0x90, 60, 127}, 130);
+  backend.stop();
+  backend.packet("midi:late", {0x90, 61, 127}, 131);
+  backend.pump();
+  require(inputs.empty() && devices.empty(),
+          "stop clears queued work and rejects late native callbacks");
+}
+
+void testBackendOverflowForcesAReleaseBoundary() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  std::vector<input::InputDeviceSnapshot> devices;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            devices.push_back(std::move(device));
+          },
+  });
+  std::string error;
+  require(backend.start(error), "overflow MIDI backend starts");
+  backend.connect("midi:overflow", "Overflow");
+  backend.packet("midi:overflow", std::vector<std::uint8_t>(64 * 1024 + 1),
+                 140);
+  backend.pump();
+  require(inputs.empty(), "oversized native packets are never parsed");
+  require(devices.size() == 3 && devices[0].connected &&
+              !devices[1].connected && devices[2].connected,
+          "queue overflow emits a disconnect/reconnect release boundary");
+  backend.stop();
+}
+
+void testBackendAcceptsConcurrentNativeProducers() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice = [](input::InputDeviceSnapshot) {},
+  });
+  std::string error;
+  require(backend.start(error), "concurrent MIDI backend starts");
+  for (int producer = 0; producer < 4; ++producer) {
+    backend.connect("midi:thread-" + std::to_string(producer), "Thread");
+  }
+  backend.pump();
+
+  std::vector<std::jthread> producers;
+  for (int producer = 0; producer < 4; ++producer) {
+    producers.emplace_back([&, producer] {
+      for (int message = 0; message < 100; ++message) {
+        backend.packet("midi:thread-" + std::to_string(producer),
+                       {0x90, static_cast<std::uint8_t>(message % 128), 127},
+                       static_cast<std::uint64_t>(150 + message));
+      }
+    });
+  }
+  producers.clear();
+  backend.pump();
+  require(inputs.size() == 400,
+          "concurrent native callbacks enqueue every bounded packet safely");
+  backend.stop();
+}
+
 } // namespace
 
 int main() {
@@ -250,5 +434,10 @@ int main() {
   testIgnoredChannelMessagesConsumeCorrectLengths();
   testResetAndDeviceSwitchClearPartialState();
   testMalformedBytesRecoverAtNextValidStatus();
+  testBackendQueuesNativePacketsUntilMainThreadPump();
+  testBackendIsolatesParsersAndDropsPacketsAfterDisconnect();
+  testBackendCloseRevokesQueuedNativeWork();
+  testBackendOverflowForcesAReleaseBoundary();
+  testBackendAcceptsConcurrentNativeProducers();
   return 0;
 }
