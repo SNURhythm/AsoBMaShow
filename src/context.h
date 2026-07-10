@@ -14,6 +14,7 @@
 #include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
 #include "input/InputDeviceRegistry.h"
+#include "input/InputProfile.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -22,6 +23,7 @@ public:
   SceneManager *sceneManager = nullptr;
   Uint64 currentFrame = 0;
   AppSettings settings;
+  InputProfile inputProfile;
   InputDeviceRegistry inputDeviceRegistry;
   Jukebox jukebox;
   music_player::MusicPlayerService musicPlayer;
@@ -43,7 +45,7 @@ public:
 
   ApplicationContext()
       : quitFlag(false), settings(AppSettings::load()),
-        jukebox(&gameStopwatch) {
+        inputProfile(makeDefaultInputProfile()), jukebox(&gameStopwatch) {
     settings.sanitize();
     ui_theme::setActiveMode(settings.uiThemeMode == AppSettings::UiThemeMode::Light
                                 ? ui_theme::ThemeMode::Light

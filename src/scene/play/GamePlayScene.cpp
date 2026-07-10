@@ -404,8 +404,17 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback() && !options.autoPlay) {
+    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto gameplayInputProfile =
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
+                                                   activeInputScopes);
+    escapeHandledByInputPipeline = true;
     ownedInputHandler = std::make_unique<RhythmInputHandler>(
-        this, chart->Meta,
+        this, chart->Meta, context.inputDeviceRegistry, gameplayInputProfile,
+        activeInputScopes,
+        [this](const input::LogicalInputTransition &transition) {
+          handleLogicalInputCommand(transition);
+        },
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
@@ -712,6 +721,71 @@ void GamePlayScene::closePauseMenu() {
     pauseButton->setVisible(true);
   }
   resetCoursePauseHold();
+}
+
+void GamePlayScene::togglePauseMenuFromInput() {
+  if (isCoursePlayback()) {
+    if (pauseLayout != nullptr && pauseLayout->getVisible()) {
+      closePauseMenu();
+    } else {
+      showPauseMenu(false);
+    }
+  } else if (context.jukebox.isPaused()) {
+    closePauseMenu();
+  } else {
+    showPauseMenu(true);
+  }
+}
+
+void GamePlayScene::handleLogicalInputCommand(
+    const input::LogicalInputTransition &transition) {
+  if (!transition.pressed) {
+    return;
+  }
+  switch (transition.action.kind) {
+  case input::LogicalActionKind::Pause:
+    togglePauseMenuFromInput();
+    break;
+  case input::LogicalActionKind::Retry:
+    if (isCoursePlayback()) {
+      (void)restartCourseFromBeginning();
+    } else {
+      restartCurrentPattern();
+    }
+    break;
+  case input::LogicalActionKind::LaneCoverIncrease:
+    adjustLaneCoverFromInput(1);
+    break;
+  case input::LogicalActionKind::LaneCoverDecrease:
+    adjustLaneCoverFromInput(-1);
+    break;
+  case input::LogicalActionKind::Start:
+  case input::LogicalActionKind::Select:
+  case input::LogicalActionKind::Lane:
+  case input::LogicalActionKind::ScratchClockwise:
+  case input::LogicalActionKind::ScratchCounterClockwise:
+    break;
+  }
+}
+
+void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
+  if (renderer == nullptr || courseNoSpeed() ||
+      !context.settings.floatingLaneCoverEnabled || deltaPercent == 0) {
+    return;
+  }
+  const int previous = context.settings.noteStartPositionPercent;
+  const int next = std::clamp(previous + deltaPercent,
+                              AppSettings::kMinNoteStartPositionPercent,
+                              AppSettings::kMaxNoteStartPositionPercent);
+  if (next == previous) {
+    return;
+  }
+  context.settings.noteStartPositionPercent = next;
+  renderer->applyLaneCoverState(next, true);
+  floatingLaneCoverSettingsDirty = true;
+  appendReplayLaneCoverEvent(
+      next, getGameplayTimeMicros(context.jukebox.getTimeMicros()), true);
+  persistFloatingLaneCoverSettings();
 }
 
 void GamePlayScene::restartCurrentPattern() {
@@ -2437,18 +2511,9 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
 
   Scene::handleEvents(event);
   if (event.type == SDL_KEYDOWN) {
-    if (event.key.keysym.sym == SDLK_ESCAPE) {
-      if (isCoursePlayback()) {
-        if (pauseLayout != nullptr && pauseLayout->getVisible()) {
-          closePauseMenu();
-        } else {
-          showPauseMenu(false);
-        }
-      } else if (context.jukebox.isPaused()) {
-        closePauseMenu();
-      } else {
-        showPauseMenu(true);
-      }
+    if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE &&
+        !escapeHandledByInputPipeline) {
+      togglePauseMenuFromInput();
     }
   }
   return {};

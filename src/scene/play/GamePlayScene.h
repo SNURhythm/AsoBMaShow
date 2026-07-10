@@ -11,6 +11,7 @@
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
+#include "../../input/InputTypes.h"
 #include "../../view/TextView.h"
 #include <atomic>
 #include <functional>
@@ -84,6 +85,7 @@ private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
   bool isGamePaused = false;
+  bool escapeHandledByInputPipeline = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
 
@@ -115,6 +117,10 @@ private:
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void showPauseMenu(bool pausePlayback);
   void closePauseMenu();
+  void togglePauseMenuFromInput();
+  void
+  handleLogicalInputCommand(const input::LogicalInputTransition &transition);
+  void adjustLaneCoverFromInput(int deltaPercent);
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();

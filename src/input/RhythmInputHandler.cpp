@@ -3,7 +3,6 @@
 //
 
 #include "RhythmInputHandler.h"
-#include "SDLInputSource.h"
 #include "SDLTouchInputSource.h"
 #include "../rendering/common.h"
 #include "bx/math.h"
@@ -47,20 +46,19 @@ bool RhythmInputHandler::notifyTouchEvent(SDL_FingerID fingerIndex,
 }
 
 void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
-
-  auto normalizedKeyCode = InputNormalizer::normalize(keyCode, keySource);
-  SDL_Log("KeyDown: %d (%d)", keyCode, normalizedKeyCode);
-  if (keyMap.contains(normalizedKeyCode)) {
-    auto lane = keyMap[normalizedKeyCode];
-    control->pressLane(lane);
+  const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
+  SDL_Log("KeyDown: %d (%d)", keyCode, scancode);
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
+                                                true);
   }
 }
 void RhythmInputHandler::onKeyUp(int keyCode, KeySource keySource) {
   SDL_Log("KeyUp: %d", keyCode);
-  auto normalizedKeyCode = InputNormalizer::normalize(keyCode, keySource);
-  if (keyMap.contains(normalizedKeyCode)) {
-    auto lane = keyMap[normalizedKeyCode];
-    control->releaseLane(lane);
+  const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
+                                                false);
   }
 }
 
@@ -291,12 +289,23 @@ void RhythmInputHandler::releaseExpiredCancelledTouches() {
 }
 
 bool RhythmInputHandler::startListenSDL() {
-  if (sdlInputSource != nullptr) {
+  if (inputDeviceRegistry == nullptr || inputSubscriptionToken != 0 ||
+      deviceSubscriptionToken != 0) {
     return false;
   }
-  sdlInputSource = std::make_unique<SDLInputSource>();
-  sdlInputSource->setHandler(this);
-  return sdlInputSource->startListen();
+  inputSubscriptionToken = inputDeviceRegistry->subscribeInput(
+      [this](const input::PhysicalInputEvent &event) {
+        if (logicalInputPipeline != nullptr) {
+          logicalInputPipeline->consumeRegistryEvent(event);
+        }
+      });
+  deviceSubscriptionToken = inputDeviceRegistry->subscribeDevices(
+      [this](const input::InputDeviceSnapshot &device) {
+        if (!device.connected && logicalInputPipeline != nullptr) {
+          logicalInputPipeline->disconnectDevice(device.stableId);
+        }
+      });
+  return true;
 }
 bool RhythmInputHandler::startListenTouch() {
   if (touchInputSource != nullptr) {
@@ -307,9 +316,18 @@ bool RhythmInputHandler::startListenTouch() {
   return touchInputSource->startListen();
 }
 void RhythmInputHandler::stopListen() {
-  if (sdlInputSource != nullptr) {
-    sdlInputSource->stopListen();
-    sdlInputSource.reset();
+  if (inputDeviceRegistry != nullptr) {
+    if (inputSubscriptionToken != 0) {
+      inputDeviceRegistry->unsubscribe(inputSubscriptionToken);
+      inputSubscriptionToken = 0;
+    }
+    if (deviceSubscriptionToken != 0) {
+      inputDeviceRegistry->unsubscribe(deviceSubscriptionToken);
+      deviceSubscriptionToken = 0;
+    }
+  }
+  if (logicalInputPipeline != nullptr) {
+    logicalInputPipeline->reset();
   }
   if (touchInputSource != nullptr) {
     touchInputSource->stopListen();
@@ -438,94 +456,16 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
 void RhythmInputHandler::setDragModeEnabled(bool enabled) {
   dragModeEnabled = enabled;
 }
-RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
-                                       const bms_parser::ChartMeta &meta,
-                                       float configuredPlayAreaWidth)
-    : control(control) {
-  std::map<int, std::map<SDL_Keycode, int>> DefaultKeyMap = {
-      {7,
-       {// keys: SDF, SPACE, JKL
-        {SDL_KeyCode::SDLK_s, 0},
-        {SDL_KeyCode::SDLK_d, 1},
-        {SDL_KeyCode::SDLK_f, 2},
-        {SDL_KeyCode::SDLK_SPACE, 3},
-        {SDL_KeyCode::SDLK_j, 4},
-        {SDL_KeyCode::SDLK_k, 5},
-        {SDL_KeyCode::SDLK_l, 6},
-        // scratch: LShift, RShift
-        {SDL_KeyCode::SDLK_LSHIFT, 7},
-        {SDL_KeyCode::SDLK_RSHIFT, 7}}},
-      {8,
-       {// keys: ASDF, JKL;
-        {SDL_KeyCode::SDLK_a, 0},
-        {SDL_KeyCode::SDLK_s, 1},
-        {SDL_KeyCode::SDLK_d, 2},
-        {SDL_KeyCode::SDLK_f, 3},
-        {SDL_KeyCode::SDLK_j, 4},
-        {SDL_KeyCode::SDLK_k, 5},
-        {SDL_KeyCode::SDLK_l, 6},
-        {SDL_KeyCode::SDLK_SEMICOLON, 7}}},
-      {6,
-       {// keys: SDF, JKL
-        {SDL_KeyCode::SDLK_s, 0},
-        {SDL_KeyCode::SDLK_d, 1},
-        {SDL_KeyCode::SDLK_f, 2},
-        {SDL_KeyCode::SDLK_j, 3},
-        {SDL_KeyCode::SDLK_k, 4},
-        {SDL_KeyCode::SDLK_l, 5}}},
-      {5,
-       {// keys: DF, SPACE, JK
-        {SDL_KeyCode::SDLK_d, 0},
-        {SDL_KeyCode::SDLK_f, 1},
-        {SDL_KeyCode::SDLK_SPACE, 2},
-        {SDL_KeyCode::SDLK_j, 3},
-        {SDL_KeyCode::SDLK_k, 4},
-        // scratch: LShift, RShift
-        {SDL_KeyCode::SDLK_LSHIFT, 7},
-        {SDL_KeyCode::SDLK_RSHIFT, 7}}},
-      {4,
-       {// keys: DF, JK
-        {SDL_KeyCode::SDLK_d, 0},
-        {SDL_KeyCode::SDLK_f, 1},
-        {SDL_KeyCode::SDLK_j, 2},
-        {SDL_KeyCode::SDLK_k, 3}}},
-      {14,
-       {// keys: ZSXDCFV and MK,L.;/
-        {SDL_KeyCode::SDLK_z, 0},
-        {SDL_KeyCode::SDLK_s, 1},
-        {SDL_KeyCode::SDLK_x, 2},
-        {SDL_KeyCode::SDLK_d, 3},
-        {SDL_KeyCode::SDLK_c, 4},
-        {SDL_KeyCode::SDLK_f, 5},
-        {SDL_KeyCode::SDLK_v, 6},
-        {SDL_KeyCode::SDLK_m, 8},
-        {SDL_KeyCode::SDLK_k, 9},
-        {SDL_KeyCode::SDLK_COMMA, 10},
-        {SDL_KeyCode::SDLK_l, 11},
-        {SDL_KeyCode::SDLK_PERIOD, 12},
-        {SDL_KeyCode::SDLK_SEMICOLON, 13},
-        {SDL_KeyCode::SDLK_SLASH, 14},
-        // Lscratch: LShift
-        {SDL_KeyCode::SDLK_LSHIFT, 7},
-        // Rscratch: RShift
-        {SDL_KeyCode::SDLK_RSHIFT, 15}}},
-      {10,
-       {// keys: ZSXDC and ,l.;/
-        {SDL_KeyCode::SDLK_z, 0},
-        {SDL_KeyCode::SDLK_s, 1},
-        {SDL_KeyCode::SDLK_x, 2},
-        {SDL_KeyCode::SDLK_d, 3},
-        {SDL_KeyCode::SDLK_c, 4},
-        {SDL_KeyCode::SDLK_COMMA, 8},
-        {SDL_KeyCode::SDLK_l, 9},
-        {SDL_KeyCode::SDLK_PERIOD, 10},
-        {SDL_KeyCode::SDLK_SEMICOLON, 11},
-        {SDL_KeyCode::SDLK_SLASH, 12},
-        // Lscratch: LShift
-        {SDL_KeyCode::SDLK_LSHIFT, 7},
-        // Rscratch: RShift
-        {SDL_KeyCode::SDLK_RSHIFT, 15}}}};
-  keyMap = DefaultKeyMap[meta.KeyMode];
+RhythmInputHandler::RhythmInputHandler(
+    IRhythmControl *control, const bms_parser::ChartMeta &meta,
+    InputDeviceRegistry &registry, const InputProfile &profile,
+    std::vector<input::InputScope> activeScopes,
+    LogicalGameplayInputAdapter::CommandCallback commandCallback,
+    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy)
+    : inputDeviceRegistry(&registry), control(control) {
+  logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
+      *control, profile, std::move(activeScopes), std::move(commandCallback),
+      registryPolicy);
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
@@ -536,3 +476,5 @@ RhythmInputHandler::RhythmInputHandler(IRhythmControl *control,
   playAreaWidth = configuredPlayAreaWidth;
   playAreaLeftX = gameplay_geometry::playAreaLeft(playAreaWidth);
 }
+
+RhythmInputHandler::~RhythmInputHandler() { stopListen(); }

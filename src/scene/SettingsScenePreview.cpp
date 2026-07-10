@@ -165,9 +165,14 @@ void SettingsScene::ensurePreviewInputHandler() {
   }
   if (previewInputHandler == nullptr) {
     previewInputHandler = std::make_unique<RhythmInputHandler>(
-        this, previewChart->Meta,
-        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+        this, previewChart->Meta, context.inputDeviceRegistry,
+        context.inputProfile,
+        makeGameplayInputScopes(previewChart->Meta.KeyMode),
+        LogicalGameplayInputAdapter::CommandCallback{},
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode),
+        LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
+    previewInputHandler->startListenSDL();
   }
 }
 

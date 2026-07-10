@@ -10,4 +10,5 @@ target_sources(main PRIVATE
     InputDeviceIdentity.cpp
     InputDeviceRegistry.cpp
     SDLInputBackend.cpp
+    LogicalGameplayInputAdapter.cpp
 )

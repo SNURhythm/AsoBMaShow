@@ -1046,14 +1046,14 @@ void run() {
       SDL_Event waitEvent{};
       if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
         ++rawEventsInWindow;
-        context.inputDeviceRegistry.handleSdlEvent(waitEvent);
+        context.inputDeviceRegistry.handleSdlEventAndDispatch(waitEvent);
         processEvent(waitEvent);
       }
     };
 
     while (SDL_PollEvent(&e)) {
       ++rawEventsInWindow;
-      context.inputDeviceRegistry.handleSdlEvent(e);
+      context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
       if (e.type == SDL_MOUSEMOTION) {
         pendingMouseMotion = e;
