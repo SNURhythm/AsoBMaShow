@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
@@ -119,6 +120,7 @@ void SettingsScene::resetViewState() {
   timingTabButton = nullptr;
   visualTabButton = nullptr;
   laneTabButton = nullptr;
+  inputTabButton = nullptr;
   miscTabButton = nullptr;
   audioTabButton = nullptr;
   displayTabButton = nullptr;
@@ -127,6 +129,7 @@ void SettingsScene::resetViewState() {
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
+  inputTabText = nullptr;
   miscTabText = nullptr;
   audioTabText = nullptr;
   displayTabText = nullptr;
@@ -166,6 +169,12 @@ void SettingsScene::resetViewState() {
   displayPreviewCountdownText = nullptr;
   displayPreviewStatusText = nullptr;
   displayPreviewKeepButton = nullptr;
+  inputPlayerDropdown = nullptr;
+  inputKeyModeDropdown = nullptr;
+  inputDeviceDropdown = nullptr;
+  inputMonitorText = nullptr;
+  inputCaptureStateText = nullptr;
+  inputErrorText = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -2669,6 +2678,13 @@ void SettingsScene::initView() {
       if (activeTab == SettingsTab::Display) {
         cancelDisplayPreviewForTabExit();
       }
+      if (activeTab == SettingsTab::Input &&
+          inputCaptureController != nullptr) {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+        inputViewRebuildGate.reset();
+        inputLastViewSignature.clear();
+      }
       activeTab = tab;
       lastLayoutWidth = -1;
     });
@@ -2679,6 +2695,7 @@ void SettingsScene::initView() {
   visualTabButton =
       makeTabButton(SettingsTab::Visual, "Visual", &visualTabText);
   laneTabButton = makeTabButton(SettingsTab::Lane, "Lane", &laneTabText);
+  inputTabButton = makeTabButton(SettingsTab::Input, "Input", &inputTabText);
   miscTabButton = makeTabButton(SettingsTab::Misc, "Misc", &miscTabText);
   audioTabButton = makeTabButton(SettingsTab::Audio, "Audio", &audioTabText);
   displayTabButton =
@@ -2691,6 +2708,7 @@ void SettingsScene::initView() {
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
   tabControls->addView(laneTabButton);
+  tabControls->addView(inputTabButton);
   tabControls->addView(miscTabButton);
   tabControls->addView(audioTabButton);
   tabControls->addView(displayTabButton);
@@ -2717,6 +2735,9 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::Lane:
     cardsColumn = buildLaneTab(metrics);
+    break;
+  case SettingsTab::Input:
+    cardsColumn = buildInputTab(metrics);
     break;
   case SettingsTab::Misc:
     cardsColumn = buildMiscTab(metrics);

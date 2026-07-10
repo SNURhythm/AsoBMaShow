@@ -7,6 +7,7 @@ target_sources(main PRIVATE
     InputDefaults.cpp
     InputProfileStore.cpp
     InputBindingResolver.cpp
+    InputCaptureController.cpp
     InputDeviceIdentity.cpp
     InputDeviceRegistry.cpp
     SDLInputBackend.cpp

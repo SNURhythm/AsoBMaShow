@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,6 +48,25 @@ bool sameBinding(const input::InputBinding &left,
          left.activationThreshold == right.activationThreshold &&
          left.releaseThreshold == right.releaseThreshold &&
          left.inverted == right.inverted;
+}
+
+bool hasNonemptyUniqueBindingIds(const InputProfile &profile) {
+  std::set<std::string> ids;
+  for (const auto &binding : profile.bindings) {
+    if (binding.id.empty() || !ids.insert(binding.id).second) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<std::string> bindingIds(const InputProfile &profile) {
+  std::vector<std::string> ids;
+  ids.reserve(profile.bindings.size());
+  for (const auto &binding : profile.bindings) {
+    ids.push_back(binding.id);
+  }
+  return ids;
 }
 
 struct ExpectedKeyBinding {
@@ -163,6 +183,29 @@ int main() {
     require(duplicateProfile.bindings.front().control.deviceId.empty(),
             "missing device IDs are retained");
 
+    input::InputBinding blankId = defaults.bindings[0];
+    blankId.id.clear();
+    input::InputBinding duplicateIdA = defaults.bindings[1];
+    duplicateIdA.id = "collision";
+    input::InputBinding duplicateIdB = defaults.bindings[2];
+    duplicateIdB.id = "collision";
+    input::InputBinding reservedSuffix = defaults.bindings[3];
+    reservedSuffix.id = "collision-2";
+    InputProfile idRepairProfile{
+        .bindings = {blankId, duplicateIdA, duplicateIdB, reservedSuffix}};
+    InputProfile repeatRepair = idRepairProfile;
+    diagnostics.clear();
+    idRepairProfile.sanitize(diagnostics);
+    std::vector<std::string> repeatDiagnostics;
+    repeatRepair.sanitize(repeatDiagnostics);
+    require(idRepairProfile.bindings.size() == 4,
+            "ID repair preserves every non-exact binding");
+    require(hasNonemptyUniqueBindingIds(idRepairProfile),
+            "sanitization repairs blank and colliding binding IDs");
+    require(bindingIds(idRepairProfile) == bindingIds(repeatRepair),
+            "binding ID collision repair is deterministic");
+    require(!diagnostics.empty(), "binding ID repairs emit diagnostics");
+
     input::InputBinding occupied = defaults.bindings.front();
     input::InputBinding otherScope = occupied;
     otherScope.id = "other-scope";
@@ -199,6 +242,40 @@ int main() {
                           "asobmashow_input_profile_tests";
     std::filesystem::remove_all(testRoot);
     std::filesystem::create_directories(testRoot);
+
+    const auto repairedIdsPath = testRoot / "repaired-ids.json";
+    writeFile(repairedIdsPath, R"json({
+  "schemaVersion": 1,
+  "bindings": [
+    {
+      "id": "",
+      "scope": {"player": 1, "keyMode": 7},
+      "action": {"kind": "lane", "lane": 0},
+      "control": {"deviceId": "pad:one", "deviceClass": "gameController", "kind": "button", "index": 0, "direction": "any"}
+    },
+    {
+      "id": "imported-collision",
+      "scope": {"player": 1, "keyMode": 7},
+      "action": {"kind": "lane", "lane": 1},
+      "control": {"deviceId": "pad:one", "deviceClass": "gameController", "kind": "button", "index": 1, "direction": "any"}
+    },
+    {
+      "id": "imported-collision",
+      "scope": {"player": 1, "keyMode": 7},
+      "action": {"kind": "lane", "lane": 2},
+      "control": {"deviceId": "pad:one", "deviceClass": "gameController", "kind": "button", "index": 2, "direction": "any"}
+    }
+  ]
+})json");
+    const auto repairedIdsResult = InputProfileStore::load(repairedIdsPath);
+    require(repairedIdsResult.status == InputProfileLoadStatus::Loaded,
+            "an imported profile with repairable IDs still loads");
+    require(repairedIdsResult.profile.bindings.size() == 3 &&
+                hasNonemptyUniqueBindingIds(repairedIdsResult.profile),
+            "load sanitization retains distinct bindings and repairs their "
+            "IDs");
+    require(!repairedIdsResult.diagnostics.empty(),
+            "load reports binding ID repairs");
 
     const auto missingPath = testRoot / "missing-input.json";
     const auto missingResult = InputProfileStore::load(missingPath);

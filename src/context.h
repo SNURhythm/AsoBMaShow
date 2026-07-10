@@ -104,6 +104,13 @@ public:
   std::function<std::optional<std::string>()> profileSwitchSceneBlocker;
   std::function<void()> refreshProfileCaches;
   InputDeviceRegistry inputDeviceRegistry;
+  // Before replacing inputProfile, the profile-session owner must cancel or
+  // destroy any InputCaptureController that references it. This prevents a
+  // candidate staged from the prior profile from being confirmed into the
+  // newly active profile.
+  // ProfileSessionCoordinator injects the active profile's input.json save
+  // operation. Keeping the path owner outside the settings scene prevents
+  // fallback to a machine-global legacy location.
   std::function<bool(const InputProfile &, std::string &)>
       saveActiveInputProfile = [](const InputProfile &, std::string &error) {
         error = "The active profile input path is not configured.";
