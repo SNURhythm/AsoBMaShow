@@ -16,6 +16,7 @@ target_sources(main PRIVATE
 function(asobmashow_add_midi_backend target_name)
     target_sources(${target_name} PRIVATE
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MidiMessageParser.cpp
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/NativeCallbackLifetime.cpp
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/QueuedMidiInputBackend.cpp
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MidiInputBackendFactory.cpp
     )

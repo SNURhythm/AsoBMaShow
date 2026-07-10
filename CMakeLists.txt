@@ -777,6 +777,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(midi_input_tests
         tests/midi_input_tests.cpp
         src/input/MidiMessageParser.cpp
+        src/input/NativeCallbackLifetime.cpp
         src/input/QueuedMidiInputBackend.cpp
     )
     target_include_directories(midi_input_tests PRIVATE

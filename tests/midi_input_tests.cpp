@@ -1,9 +1,14 @@
 #include "input/MidiMessageParser.h"
+#include "input/NativeCallbackLifetime.h"
 #include "input/QueuedMidiInputBackend.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <optional>
+#include <semaphore>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -420,6 +425,63 @@ void testBackendAcceptsConcurrentNativeProducers() {
   backend.stop();
 }
 
+void testNativeCallbackLifetimeWaitsForActiveLease() {
+  int owner = 7;
+  NativeCallbackLifetime lifetime(&owner);
+  const void *token = lifetime.token();
+  std::optional<NativeCallbackLifetime::Lease> lease(
+      NativeCallbackLifetime::acquire(const_cast<void *>(token)));
+  require(*lease && lease->ownerAs<int>() == &owner,
+          "callback lease retains its registered owner");
+
+  std::binary_semaphore closeStarted(0);
+  std::binary_semaphore closeFinished(0);
+  std::jthread closer([&] {
+    closeStarted.release();
+    lifetime.closeAndWait();
+    closeFinished.release();
+  });
+  closeStarted.acquire();
+  require(!closeFinished.try_acquire_for(std::chrono::milliseconds(20)),
+          "callback close waits while an acquired lease is active");
+  lease.reset();
+  closeFinished.acquire();
+  closer.join();
+  require(!NativeCallbackLifetime::acquire(const_cast<void *>(token)),
+          "closed callback token cannot be acquired again");
+}
+
+void testNativeCallbackLifetimeRejectsDelayedEntryAfterClose() {
+  int owner = 11;
+  NativeCallbackLifetime lifetime(&owner);
+  void *token = lifetime.token();
+  lifetime.closeAndWait();
+
+  auto delayedEntry = NativeCallbackLifetime::acquire(token);
+  require(!delayedEntry,
+          "callback delayed before token lookup cannot enter after close");
+}
+
+void testNativeCallbackLifetimeNeverReusesStaleTokens() {
+  int firstOwner = 1;
+  NativeCallbackLifetime first(&firstOwner);
+  void *staleToken = first.token();
+  first.closeAndWait();
+
+  int secondOwner = 2;
+  NativeCallbackLifetime second(&secondOwner);
+  require(second.token() != staleToken,
+          "new callback lifetime receives a non-reused opaque token");
+  require(!NativeCallbackLifetime::acquire(staleToken),
+          "stale token cannot alias a newly registered callback owner");
+  {
+    auto current = NativeCallbackLifetime::acquire(second.token());
+    require(current && current.ownerAs<int>() == &secondOwner,
+            "current opaque token resolves to the current owner");
+  }
+  second.closeAndWait();
+}
+
 } // namespace
 
 int main() {
@@ -439,5 +501,8 @@ int main() {
   testBackendCloseRevokesQueuedNativeWork();
   testBackendOverflowForcesAReleaseBoundary();
   testBackendAcceptsConcurrentNativeProducers();
+  testNativeCallbackLifetimeWaitsForActiveLease();
+  testNativeCallbackLifetimeRejectsDelayedEntryAfterClose();
+  testNativeCallbackLifetimeNeverReusesStaleTokens();
   return 0;
 }

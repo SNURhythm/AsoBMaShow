@@ -749,6 +749,7 @@
 				input/CoreMidiInputBackend.mm,
 				input/MidiInputBackendFactory.cpp,
 				input/MidiMessageParser.cpp,
+				input/NativeCallbackLifetime.cpp,
 				input/QueuedMidiInputBackend.cpp,
 				input/UnsupportedMidiInputBackend.cpp,
 				input/WinMidiInputBackend.cpp,
