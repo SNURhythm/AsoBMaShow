@@ -2,6 +2,7 @@
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -22,6 +23,14 @@ void expect(bool condition, const std::string &message) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
   }
+}
+
+bool hasDiagnostic(const std::vector<std::string> &diagnostics,
+                   std::string_view key, std::string_view detail) {
+  return std::ranges::any_of(diagnostics, [&](const std::string &diagnostic) {
+    return diagnostic.find(key) != std::string::npos &&
+           diagnostic.find(detail) != std::string::npos;
+  });
 }
 
 std::filesystem::path fixture(std::string_view name) {
@@ -275,8 +284,16 @@ void testOversizedVersionsAndSettingsFailClosed() {
          "oversized unsigned setting falls back without wrapping");
   expect(values.settings.audioVideo.audio.requestedBufferFrames == 0,
          "negative unsigned setting falls back without wrapping");
-  expect(values.diagnostics.size() >= 4,
-         "every unrepresentable numeric setting emits a diagnostic");
+  expect(hasDiagnostic(values.diagnostics, "audioOffsetMs", "out of range"),
+         "oversized signed setting emits a key-specific range diagnostic");
+  expect(hasDiagnostic(values.diagnostics, "visualOffsetMs", "out of range"),
+         "undersized signed setting emits a key-specific range diagnostic");
+  expect(
+      hasDiagnostic(values.diagnostics, "requestedSampleRate", "out of range"),
+      "oversized unsigned setting emits a key-specific range diagnostic");
+  expect(hasDiagnostic(values.diagnostics, "requestedBufferFrames",
+                       "out of range"),
+         "negative unsigned setting emits a key-specific range diagnostic");
 }
 
 class FailingReadBuffer final : public std::streambuf {
@@ -311,6 +328,20 @@ void testLegacyIoFailuresAreInvalid() {
   const auto openFailure = AppSettingsStore::LoadLegacyCfg(directoryAtFilePath);
   expect(openFailure.status == AppSettingsLoadStatus::Invalid,
          "legacy open failure is not reported as loaded defaults");
+
+#ifndef _WIN32
+  const auto unreadablePath = temp.path() / "unreadable.cfg";
+  writeFile(unreadablePath, "audio_offset_ms=17\n");
+  std::filesystem::permissions(unreadablePath, std::filesystem::perms::none);
+  const auto actualOpenFailure =
+      AppSettingsStore::LoadLegacyCfg(unreadablePath);
+  std::filesystem::permissions(unreadablePath,
+                               std::filesystem::perms::owner_all);
+  expect(actualOpenFailure.status == AppSettingsLoadStatus::Invalid,
+         "regular legacy file open failure is reported as invalid");
+  expect(hasDiagnostic(actualOpenFailure.diagnostics, "Unable to open", ""),
+         "regular legacy file open failure emits an opener diagnostic");
+#endif
 
   FailingReadBuffer buffer("audio_offset_ms=17\nvisual_offset_ms=29\n", 25);
   std::istream failingStream(&buffer);
