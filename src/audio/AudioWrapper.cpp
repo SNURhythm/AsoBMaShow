@@ -612,7 +612,7 @@ private:
 
 // AudioWrapper Implementation
 
-AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
+void AudioWrapper::initializeUserData() {
   userData.callbackState = &callbackState;
   userData.sampleRate = &currentSampleRate;
   userData.audioClockBaseMicros = &audioClockBaseMicros;
@@ -628,6 +628,18 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   userData.trebleFilter = &trebleFilter;
   userData.reverb = &reverb;
   userData.compressor = &compressor;
+}
+
+void AudioWrapper::startBackendAfterConstruction() {
+  const auto started = startDevice();
+  if (!started.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio startup failed: %s",
+                 started.diagnostic.c_str());
+  }
+}
+
+AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
+  initializeUserData();
 
 #if TARGET_OS_DESKTOP
   // Default to PortAudio on Desktop
@@ -647,11 +659,7 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   SDL_Log("Initialized Miniaudio backend.");
 #endif
 
-  const auto started = startDevice();
-  if (!started.success) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio startup failed: %s",
-                 started.diagnostic.c_str());
-  }
+  startBackendAfterConstruction();
 
   // //
   // setBassBoost(3.0f);   // Warmth
@@ -667,19 +675,30 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   // compressor.setParams(-8.0f, 2.5f, 0.03f, 0.15f);
 }
 
+AudioWrapper::AudioWrapper(
+    Stopwatch *stopwatch,
+    std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend)
+    : backend(std::move(injectedBackend)), stopwatch(stopwatch) {
+  initializeUserData();
+  startBackendAfterConstruction();
+}
+
 AudioWrapper::~AudioWrapper() {
-  const auto stopped = stopSounds();
-  if (!stopped.success) {
+  const auto unloaded = unloadSounds();
+  if (!unloaded.success) {
     SDL_LogCritical(SDL_LOG_CATEGORY_AUDIO,
                     "Audio shutdown could not confirm callback drain: %s",
-                    stopped.diagnostic.c_str());
+                    unloaded.diagnostic.c_str());
+    std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+    std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     backend.reset();
     backendState.store(audio::playback::BackendRunState::Stopped,
                        std::memory_order_release);
+    clearCallbackState();
+    soundDataList.clear();
+    soundDataIndexMap.clear();
   }
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
-  soundDataList.clear();
-  soundDataIndexMap.clear();
 }
 
 long long AudioWrapper::getTimeMicros() const {
@@ -987,6 +1006,11 @@ audio::playback::BackendOperationResult AudioWrapper::startDevice() {
 audio::playback::BackendOperationResult AudioWrapper::stopSounds() {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  return stopSoundsWithLifecycleAndCommandLocked();
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::stopSoundsWithLifecycleAndCommandLocked() {
   if (!backend) {
     backendState.store(audio::playback::BackendRunState::Stopped,
                        std::memory_order_release);
@@ -1002,12 +1026,16 @@ audio::playback::BackendOperationResult AudioWrapper::stopSounds() {
   return stopped;
 }
 
-void AudioWrapper::unloadSound(const path_t &path) {
-  if (!stopSounds().success) {
-    return;
+audio::playback::BackendOperationResult
+AudioWrapper::unloadSound(const path_t &path) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
+  if (!stopped.success) {
+    return stopped;
   }
 
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
   if (const auto indexIt = soundDataIndexMap.find(path);
       indexIt != soundDataIndexMap.end()) {
     const size_t index = indexIt->second;
@@ -1022,17 +1050,20 @@ void AudioWrapper::unloadSound(const path_t &path) {
       }
     }
   }
+  return {.success = true};
 }
 
-void AudioWrapper::unloadSounds() {
-  if (!stopSounds().success) {
-    return;
+audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
+  if (!stopped.success) {
+    return stopped;
   }
-  {
-    std::lock_guard<std::mutex> lock(soundDataListMutex);
-    soundDataList.clear();
-    soundDataIndexMap.clear();
-  }
+  soundDataList.clear();
+  soundDataIndexMap.clear();
+  return {.success = true};
 }
 
 void AudioWrapper::setBassBoost(float db) {

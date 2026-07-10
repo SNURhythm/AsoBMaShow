@@ -108,6 +108,9 @@ struct UserData {
 class AudioWrapper {
 public:
   AudioWrapper(Stopwatch *stopwatch);
+  AudioWrapper(
+      Stopwatch *stopwatch,
+      std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend);
   ~AudioWrapper();
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
   bool loadSoundFromMemory(const path_t &path,
@@ -125,7 +128,7 @@ public:
   void seekClock(long long micros);
   audio::playback::BackendOperationResult startDevice();
   audio::playback::BackendOperationResult stopSounds();
-  void unloadSound(const path_t &path);
+  audio::playback::BackendOperationResult unloadSound(const path_t &path);
 
   void setBassBoost(float db);
   void setTrebleBoost(float db);
@@ -134,7 +137,7 @@ public:
   void setVolumes(const audio::Volumes &volumes);
   void setVolumes(const player_settings::AudioSettings &settings);
 
-  void unloadSounds();
+  audio::playback::BackendOperationResult unloadSounds();
 
 private:
   std::unique_ptr<audio::playback::IBackendLifecycle> backend;
@@ -172,5 +175,9 @@ private:
   bool appendScheduledSound(SoundData *soundData, long long startMicros,
                             uint64_t sequence, audio::Bus bus,
                             size_t startFrame = 0);
+  void initializeUserData();
+  void startBackendAfterConstruction();
+  audio::playback::BackendOperationResult
+  stopSoundsWithLifecycleAndCommandLocked();
   void clearCallbackState();
 };

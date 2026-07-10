@@ -101,10 +101,12 @@ public:
   // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
   double getAvgDeltaTime();
 
-  void loadChart(bms_parser::Chart &chart, bool scheduleNotes,
-                 std::atomic_bool &isCancelled);
-  void reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
-                            std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  loadChart(bms_parser::Chart &chart, bool scheduleNotes,
+            std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
+                       std::atomic_bool &isCancelled);
   bool hasLoadedResources() const;
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
@@ -117,8 +119,8 @@ public:
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
-  void play(long long startMicros = 0);
-  void stop();
+  audio::playback::BackendOperationResult play(long long startMicros = 0);
+  audio::playback::BackendOperationResult stop();
   void render();
   bool hasActiveVisuals() const;
   long long getScheduledAudioEndMicros();
@@ -132,7 +134,7 @@ public:
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
   long long getTimeMicros();
-  void seek(long long micro);
+  audio::playback::BackendOperationResult seek(long long micro);
   std::function<void(long long)> onTickCb;
   void onTick(const std::function<void(long long)> &cb) {
     assert(!isPlaying && "onTick callback should be set before playing");
@@ -157,11 +159,11 @@ private:
   bool loadArchivedSounds(bms_parser::Chart &chart,
                           const ChartResourceTable &wavTable,
                           std::atomic_bool &isCancelled);
-  bool loadArchivedChartAssets(bms_parser::Chart &chart,
-                               const ChartResourceTable &wavTable,
-                               const ChartResourceTable &bmpTable,
-                               bool loadVisualAssets,
-                               std::atomic_bool &isCancelled);
+  bool loadArchivedChartAssets(
+      bms_parser::Chart &chart, const ChartResourceTable &wavTable,
+      const ChartResourceTable &bmpTable, bool loadVisualAssets,
+      std::atomic_bool &isCancelled,
+      audio::playback::BackendOperationResult &lifecycleResult);
   void loadBMPs(bms_parser::Chart &chart,
                 const ChartResourceTable &bmpTable,
                 std::atomic_bool &isCancelled);
@@ -201,14 +203,14 @@ private:
   resolveVisualAssets(bms_parser::Chart &chart,
                       const ChartResourceTable &bmpTable,
                       std::atomic_bool &isCancelled);
-  void loadResolvedChartResources(bms_parser::Chart &chart,
-                                  const ChartResourceTable &wavTable,
-                                  const ChartResourceTable &bmpTable,
-                                  bool loadVisualAssets,
-                                  std::atomic_bool &isCancelled);
-  void reconcileSoundResources(
-      bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
+  audio::playback::BackendOperationResult loadResolvedChartResources(
+      bms_parser::Chart &chart, const ChartResourceTable &wavTable,
+      const ChartResourceTable &bmpTable, bool loadVisualAssets,
       std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  reconcileSoundResources(bms_parser::Chart &chart,
+                          const std::vector<ResolvedSoundAsset> &assets,
+                          std::atomic_bool &isCancelled);
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);

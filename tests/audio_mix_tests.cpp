@@ -358,6 +358,66 @@ void testAlreadyRunningAtTargetRateDoesNotRestart() {
           "a no-op start publishes no audio state changes");
 }
 
+void testStartFailureCannotPublishRunningState() {
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{0};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Stopped};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Stopped},
+  };
+  backend.startResult = {.success = false,
+                         .diagnostic = "PortAudio start was rejected"};
+  const std::array<SoundData *, 0> sounds{};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 44100, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("PortAudio start was rejected") !=
+                  std::string::npos,
+          "a native start failure is surfaced to the wrapper caller");
+  require(
+      backendState.load() == audio::playback::BackendRunState::Unknown &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "a failed start cannot publish either running or mutable state");
+  require(backend.startCalls == 1 && backend.observeCalls == 1,
+          "a failed start is not followed by a false running observation");
+}
+
+void testPostStartQueryFailureCannotPublishRunningState() {
+  AudioCallbackState callbackState;
+  std::atomic<int> sampleRate{44100};
+  std::atomic<int64_t> audioClockFrameCursor{0};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Stopped};
+  FakeBackendLifecycle backend;
+  backend.observations = {
+      {.state = audio::playback::BackendRunState::Stopped},
+      {.state = audio::playback::BackendRunState::Unknown,
+       .diagnostic = "post-start state query failed"},
+  };
+  const std::array<SoundData *, 0> sounds{};
+
+  const auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      backend, sounds, callbackState, 44100, sampleRate, audioClockFrameCursor,
+      backendState);
+
+  require(!result.success &&
+              result.diagnostic.find("post-start state query failed") !=
+                  std::string::npos,
+          "nominal start still requires a positive running observation");
+  require(
+      backendState.load() == audio::playback::BackendRunState::Unknown &&
+          !audio::playback::CanMutateCallbackStateDirectly(backendState.load()),
+      "post-start query uncertainty remains fail-closed");
+  require(backend.startCalls == 1 && backend.observeCalls == 2,
+          "the post-start state is observed exactly once before failure");
+}
+
 void testStopFailureCannotClearCallbackState() {
   SoundData sound;
   sound.channels = 1;
@@ -695,6 +755,8 @@ int main() {
     testPostStopStateErrorCannotPublishRateTransition();
     testConfirmedDrainPublishesThenRestartsAtNewRate();
     testAlreadyRunningAtTargetRateDoesNotRestart();
+    testStartFailureCannotPublishRunningState();
+    testPostStartQueryFailureCannotPublishRunningState();
     testStopFailureCannotClearCallbackState();
     testConfirmedStopClearsCallbackStateAfterDrain();
     testBusFlowAndMixing();
