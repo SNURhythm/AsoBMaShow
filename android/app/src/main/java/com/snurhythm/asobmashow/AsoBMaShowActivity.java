@@ -72,6 +72,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
     private final Object nativeMusicLock = new Object();
+    private final Object midiInputLock = new Object();
+    private AsoBMaShowMidiManager midiInputManager;
     private MediaPlayer nativeMusicPlayer;
     private MediaSession nativeMusicSession;
     private String nativeMusicTitle = "AsoBMaShow";
@@ -119,6 +121,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        stopMidiInput();
         synchronized (nativeMusicLock) {
             releaseNativeMusicPlayerLocked();
         }
@@ -144,6 +147,24 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
     static native void nativeMusicControlEvent(String eventName);
+
+    public String startMidiInput() {
+        synchronized (midiInputLock) {
+            if (midiInputManager == null) {
+                midiInputManager = new AsoBMaShowMidiManager(this);
+            }
+            return midiInputManager.start();
+        }
+    }
+
+    public void stopMidiInput() {
+        synchronized (midiInputLock) {
+            if (midiInputManager != null) {
+                midiInputManager.stop();
+                midiInputManager = null;
+            }
+        }
+    }
 
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();

@@ -1,5 +1,6 @@
 #include "InputDeviceRegistry.h"
 
+#include "MidiInputBackendFactory.h"
 #include "SDLInputBackend.h"
 
 #include <SDL2/SDL_log.h>
@@ -106,8 +107,12 @@ struct InputDeviceRegistry::BackendSinkGate {
 
 InputDeviceRegistry::InputDeviceRegistry()
     : InputDeviceRegistry({[](input::InputBackendSink sink) {
-        return std::make_unique<SDLInputBackend>(std::move(sink));
-      }}) {}
+                             return std::make_unique<SDLInputBackend>(
+                                 std::move(sink));
+                           },
+                           [](input::InputBackendSink sink) {
+                             return makeMidiInputBackend(std::move(sink));
+                           }}) {}
 
 InputDeviceRegistry::InputDeviceRegistry(
     std::vector<BackendFactory> backendFactories)
