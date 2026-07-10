@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -11,12 +12,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -27,46 +26,12 @@ namespace {
 
 class WinMidiInputBackend;
 
-struct WinMidiCallbackGate {
-  WinMidiInputBackend *acquire() {
-    const std::lock_guard lock(mutex);
-    if (closed || backend == nullptr) {
-      return nullptr;
-    }
-    ++activeCallbacks;
-    return backend;
-  }
-
-  void release() {
-    const std::lock_guard lock(mutex);
-    if (activeCallbacks > 0) {
-      --activeCallbacks;
-    }
-    if (activeCallbacks == 0) {
-      condition.notify_all();
-    }
-  }
-
-  void close() {
-    const std::lock_guard lock(mutex);
-    closed = true;
-    backend = nullptr;
-  }
-
-  void waitForCallbacks() {
-    std::unique_lock lock(mutex);
-    condition.wait(lock, [&] { return activeCallbacks == 0; });
-  }
-
-  std::mutex mutex;
-  std::condition_variable condition;
-  WinMidiInputBackend *backend = nullptr;
-  std::size_t activeCallbacks = 0;
-  bool closed = false;
-};
-
 struct WinMidiConnection {
-  std::shared_ptr<WinMidiCallbackGate> callbackGate;
+  explicit WinMidiConnection(WinMidiInputBackend *connectionBackend)
+      : backend(connectionBackend), callbackLifetime(this) {}
+
+  WinMidiInputBackend *backend = nullptr;
+  NativeCallbackLifetime callbackLifetime;
   HMIDIIN handle = nullptr;
   UINT deviceId = 0;
   std::string stableId;
@@ -208,8 +173,6 @@ public:
       return true;
     }
     openQueue();
-    callbackGate_ = std::make_shared<WinMidiCallbackGate>();
-    callbackGate_->backend = this;
     started_ = true;
     refreshDevices();
     nextRefresh_ = std::chrono::steady_clock::now() + kRefreshInterval;
@@ -217,24 +180,16 @@ public:
   }
 
   void stop() override {
-    if (!started_ && !callbackGate_) {
+    if (!started_) {
       closeQueue();
       return;
     }
     started_ = false;
-    if (callbackGate_) {
-      callbackGate_->close();
-    }
     for (auto &[stableId, connection] : connections_) {
       (void)stableId;
       closeConnection(std::move(connection), false);
     }
     connections_.clear();
-    if (callbackGate_) {
-      callbackGate_->waitForCallbacks();
-    }
-    retiredConnections_.clear();
-    callbackGate_.reset();
     refreshRequested_.store(false);
     closeQueue();
   }
@@ -277,22 +232,19 @@ private:
   static void CALLBACK midiCallback(HMIDIIN, UINT message, DWORD_PTR instance,
                                     DWORD_PTR parameter1,
                                     DWORD_PTR parameter2) {
-    auto *connection = reinterpret_cast<WinMidiConnection *>(instance);
+    auto lease = NativeCallbackLifetime::acquire(
+        reinterpret_cast<void *>(instance));
+    auto *connection = lease.ownerAs<WinMidiConnection>();
     if (connection == nullptr || !connection->connected.load()) {
       return;
     }
-    const auto gate = connection->callbackGate;
-    WinMidiInputBackend *backend = gate != nullptr ? gate->acquire() : nullptr;
-    if (backend == nullptr) {
-      return;
-    }
     if (message == MIM_DATA) {
-      backend->acceptShortMessage(*connection, static_cast<DWORD>(parameter1),
-                                  static_cast<DWORD>(parameter2));
+      connection->backend->acceptShortMessage(
+          *connection, static_cast<DWORD>(parameter1),
+          static_cast<DWORD>(parameter2));
     } else if (message == MIM_ERROR || message == MIM_CLOSE) {
-      backend->requestRefresh();
+      connection->backend->requestRefresh();
     }
-    gate->release();
   }
 
   void refreshDevices() {
@@ -304,31 +256,34 @@ private:
         continue;
       }
 
-      auto connection = std::make_unique<WinMidiConnection>();
-      connection->callbackGate = callbackGate_;
+      auto connection = std::make_unique<WinMidiConnection>(this);
       connection->deviceId = device.deviceId;
       connection->stableId = device.stableId;
       connection->displayName = device.displayName;
       MMRESULT result = midiInOpen(
           &connection->handle, device.deviceId,
           reinterpret_cast<DWORD_PTR>(&WinMidiInputBackend::midiCallback),
-          reinterpret_cast<DWORD_PTR>(connection.get()), CALLBACK_FUNCTION);
+          reinterpret_cast<DWORD_PTR>(connection->callbackLifetime.token()),
+          CALLBACK_FUNCTION);
       if (result != MMSYSERR_NOERROR) {
         connection->connected.store(false);
         continue;
       }
       connection->startedAtMicros = monotonicMicros();
+      auto activation = beginDeviceActivation(
+          {.stableId = connection->stableId,
+           .displayName = connection->displayName,
+           .deviceClass = input::DeviceClass::Midi,
+           .connected = true});
       result = midiInStart(connection->handle);
       if (result != MMSYSERR_NOERROR) {
         connection->connected.store(false);
+        connection->callbackLifetime.closeAndWait();
         (void)midiInClose(connection->handle);
         connection->handle = nullptr;
         continue;
       }
-      enqueueDevice({.stableId = connection->stableId,
-                     .displayName = connection->displayName,
-                     .deviceClass = input::DeviceClass::Midi,
-                     .connected = true});
+      activation.commit();
       connections_.emplace(connection->stableId, std::move(connection));
     }
 
@@ -350,6 +305,7 @@ private:
       return;
     }
     connection->connected.store(false);
+    connection->callbackLifetime.closeAndWait();
     if (connection->handle != nullptr) {
       (void)midiInStop(connection->handle);
       (void)midiInReset(connection->handle);
@@ -362,12 +318,9 @@ private:
                      .deviceClass = input::DeviceClass::Midi,
                      .connected = false});
     }
-    retiredConnections_.push_back(std::move(connection));
   }
 
-  std::shared_ptr<WinMidiCallbackGate> callbackGate_;
   std::map<std::string, std::unique_ptr<WinMidiConnection>> connections_;
-  std::vector<std::unique_ptr<WinMidiConnection>> retiredConnections_;
   std::atomic_bool refreshRequested_ = false;
   std::chrono::steady_clock::time_point nextRefresh_{};
   bool started_ = false;

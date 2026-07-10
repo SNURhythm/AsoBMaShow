@@ -2,13 +2,15 @@
 
 #if defined(__APPLE__)
 
+#include "LiveMidiDeviceIdAllocator.h"
+#include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
 
 #include <CoreMIDI/CoreMIDI.h>
 #include <mach/mach_time.h>
 
+#include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -24,50 +26,70 @@ namespace {
 
 class CoreMidiInputBackend;
 
-struct CoreMidiCallbackGate {
-  CoreMidiInputBackend *acquire() {
-    const std::lock_guard lock(mutex);
-    if (closed || backend == nullptr) {
-      return nullptr;
-    }
-    ++activeCallbacks;
-    return backend;
-  }
-
-  void release() {
-    const std::lock_guard lock(mutex);
-    if (activeCallbacks > 0) {
-      --activeCallbacks;
-    }
-    if (activeCallbacks == 0) {
-      condition.notify_all();
-    }
-  }
-
-  void close() {
-    const std::lock_guard lock(mutex);
-    closed = true;
-    backend = nullptr;
-  }
-
-  void waitForCallbacks() {
-    std::unique_lock lock(mutex);
-    condition.wait(lock, [&] { return activeCallbacks == 0; });
-  }
-
-  std::mutex mutex;
-  std::condition_variable condition;
-  CoreMidiInputBackend *backend = nullptr;
-  std::size_t activeCallbacks = 0;
-  bool closed = false;
-};
-
 struct CoreMidiConnection {
-  std::shared_ptr<CoreMidiCallbackGate> callbackGate;
+  explicit CoreMidiConnection(CoreMidiInputBackend *connectionBackend)
+      : backend(connectionBackend), callbackLifetime(this) {}
+
+  CoreMidiInputBackend *backend = nullptr;
+  NativeCallbackLifetime callbackLifetime;
   MIDIEndpointRef endpoint = 0;
   std::string stableId;
   std::string displayName;
   std::atomic_bool connected = true;
+};
+
+class CoreMidiClientService {
+public:
+  static CoreMidiClientService &instance() {
+    // CoreMIDI explicitly recommends keeping an application's last client
+    // alive. The service and its callback refCon therefore have process
+    // lifetime; backend ports and subscriptions remain independently owned.
+    static CoreMidiClientService *service = new CoreMidiClientService();
+    return *service;
+  }
+
+  OSStatus client(MIDIClientRef &client) {
+    const std::lock_guard lock(clientMutex_);
+    if (client_ == 0) {
+      const OSStatus result =
+          MIDIClientCreate(CFSTR("AsoBMaShow MIDI Input"),
+                           &CoreMidiClientService::notify, this, &client_);
+      if (result != noErr) {
+        client_ = 0;
+        client = 0;
+        return result;
+      }
+    }
+    client = client_;
+    return noErr;
+  }
+
+  void subscribe(void *token) {
+    const std::lock_guard lock(tokensMutex_);
+    if (token != nullptr &&
+        std::find(tokens_.begin(), tokens_.end(), token) == tokens_.end()) {
+      tokens_.push_back(token);
+    }
+  }
+
+  void unsubscribe(void *token) {
+    const std::lock_guard lock(tokensMutex_);
+    std::erase(tokens_, token);
+  }
+
+  void dispatch();
+
+private:
+  static void notify(const MIDINotification *, void *refCon) {
+    if (refCon != nullptr) {
+      static_cast<CoreMidiClientService *>(refCon)->dispatch();
+    }
+  }
+
+  std::mutex clientMutex_;
+  std::mutex tokensMutex_;
+  MIDIClientRef client_ = 0;
+  std::vector<void *> tokens_;
 };
 
 struct CoreMidiSourceDescriptor {
@@ -235,14 +257,13 @@ public:
     }
 
     openQueue();
-    callbackGate_ = std::make_shared<CoreMidiCallbackGate>();
-    callbackGate_->backend = this;
-    OSStatus result = MIDIClientCreate(CFSTR("AsoBMaShow MIDI Input"),
-                                       &CoreMidiInputBackend::notify,
-                                       callbackGate_.get(), &client_);
+    notificationLifetime_ = std::make_unique<NativeCallbackLifetime>(this);
+    OSStatus result = CoreMidiClientService::instance().client(client_);
     if (result == noErr) {
+      CoreMidiClientService::instance().subscribe(notificationLifetime_->token());
+      notificationSubscribed_ = true;
       result = MIDIInputPortCreate(client_, CFSTR("AsoBMaShow MIDI Port"),
-                                   &CoreMidiInputBackend::read, this, &port_);
+                                   &CoreMidiInputBackend::read, nullptr, &port_);
     }
     if (result != noErr) {
       errorMessage = "CoreMIDI initialization failed (" +
@@ -258,7 +279,7 @@ public:
   }
 
   void stop() override {
-    if (!started_ && client_ == 0 && port_ == 0 && !callbackGate_) {
+    if (!started_ && port_ == 0 && !notificationLifetime_) {
       closeQueue();
       return;
     }
@@ -295,31 +316,15 @@ public:
   }
 
 private:
-  static void notify(const MIDINotification *, void *refCon) {
-    auto *gate = static_cast<CoreMidiCallbackGate *>(refCon);
-    if (gate == nullptr) {
-      return;
-    }
-    CoreMidiInputBackend *backend = gate->acquire();
-    if (backend != nullptr) {
-      backend->requestRefresh();
-      gate->release();
-    }
-  }
-
   static void read(const MIDIPacketList *packetList, void *,
                    void *sourceConnectionRefCon) {
-    auto *connection =
-        static_cast<CoreMidiConnection *>(sourceConnectionRefCon);
-    if (packetList == nullptr || connection == nullptr ||
-        !connection->connected.load()) {
+    if (packetList == nullptr) {
       return;
     }
-    const auto gate = connection->callbackGate;
-    CoreMidiInputBackend *backend = gate != nullptr ? gate->acquire() : nullptr;
-    if (backend != nullptr) {
-      backend->acceptPackets(*connection, *packetList);
-      gate->release();
+    auto lease = NativeCallbackLifetime::acquire(sourceConnectionRefCon);
+    auto *connection = lease.ownerAs<CoreMidiConnection>();
+    if (connection != nullptr && connection->connected.load()) {
+      connection->backend->acceptPackets(*connection, *packetList);
     }
   }
 
@@ -332,19 +337,24 @@ private:
         continue;
       }
 
-      auto connection = std::make_unique<CoreMidiConnection>();
-      connection->callbackGate = callbackGate_;
+      auto connection = std::make_unique<CoreMidiConnection>(this);
       connection->endpoint = endpoint;
-      connection->stableId = source.stableId;
+      const auto endpointKey = static_cast<std::uintptr_t>(endpoint);
+      connection->stableId = liveIds_.claim(endpointKey, source.stableId);
       connection->displayName = source.displayName;
-      if (MIDIPortConnectSource(port_, endpoint, connection.get()) != noErr) {
+      auto activation = beginDeviceActivation(
+          {.stableId = connection->stableId,
+           .displayName = connection->displayName,
+           .deviceClass = input::DeviceClass::Midi,
+           .connected = true});
+      if (MIDIPortConnectSource(port_, endpoint,
+                               connection->callbackLifetime.token()) != noErr) {
         connection->connected.store(false);
+        connection->callbackLifetime.closeAndWait();
+        liveIds_.release(endpointKey);
         continue;
       }
-      enqueueDevice({.stableId = connection->stableId,
-                     .displayName = connection->displayName,
-                     .deviceClass = input::DeviceClass::Midi,
-                     .connected = true});
+      activation.commit();
       connections_.emplace(endpoint, std::move(connection));
     }
 
@@ -358,51 +368,66 @@ private:
       iterator = connections_.erase(iterator);
       connection->connected.store(false);
       (void)MIDIPortDisconnectSource(port_, connection->endpoint);
+      connection->callbackLifetime.closeAndWait();
       enqueueDevice({.stableId = connection->stableId,
                      .displayName = connection->displayName,
                      .deviceClass = input::DeviceClass::Midi,
                      .connected = false});
-      retiredConnections_.push_back(std::move(connection));
+      liveIds_.release(static_cast<std::uintptr_t>(connection->endpoint));
     }
   }
 
   void shutdownNative() {
-    if (callbackGate_) {
-      callbackGate_->close();
+    if (notificationSubscribed_ && notificationLifetime_) {
+      CoreMidiClientService::instance().unsubscribe(
+          notificationLifetime_->token());
+      notificationSubscribed_ = false;
+    }
+    if (notificationLifetime_) {
+      notificationLifetime_->closeAndWait();
+      notificationLifetime_.reset();
     }
     for (auto &[endpoint, connection] : connections_) {
-      (void)endpoint;
       connection->connected.store(false);
       if (port_ != 0) {
         (void)MIDIPortDisconnectSource(port_, connection->endpoint);
       }
-      retiredConnections_.push_back(std::move(connection));
+      connection->callbackLifetime.closeAndWait();
+      liveIds_.release(static_cast<std::uintptr_t>(endpoint));
     }
     connections_.clear();
     if (port_ != 0) {
       (void)MIDIPortDispose(port_);
       port_ = 0;
     }
-    if (client_ != 0) {
-      (void)MIDIClientDispose(client_);
-      client_ = 0;
-    }
-    if (callbackGate_) {
-      callbackGate_->waitForCallbacks();
-    }
-    retiredConnections_.clear();
-    callbackGate_.reset();
+    client_ = 0;
+    liveIds_.clear();
     refreshRequested_.store(false);
   }
 
   MIDIClientRef client_ = 0;
   MIDIPortRef port_ = 0;
-  std::shared_ptr<CoreMidiCallbackGate> callbackGate_;
+  std::unique_ptr<NativeCallbackLifetime> notificationLifetime_;
   std::map<MIDIEndpointRef, std::unique_ptr<CoreMidiConnection>> connections_;
-  std::vector<std::unique_ptr<CoreMidiConnection>> retiredConnections_;
+  LiveMidiDeviceIdAllocator liveIds_;
   std::atomic_bool refreshRequested_ = false;
+  bool notificationSubscribed_ = false;
   bool started_ = false;
 };
+
+void CoreMidiClientService::dispatch() {
+  std::vector<void *> tokens;
+  {
+    const std::lock_guard lock(tokensMutex_);
+    tokens = tokens_;
+  }
+  for (void *token : tokens) {
+    auto lease = NativeCallbackLifetime::acquire(token);
+    if (auto *backend = lease.ownerAs<CoreMidiInputBackend>()) {
+      backend->requestRefresh();
+    }
+  }
+}
 
 } // namespace
 
