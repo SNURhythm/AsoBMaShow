@@ -4,7 +4,7 @@
 
 **Goal:** Preserve CoreMIDI binding identity across coalesced endpoint replacement and make removed Android devices immune to already-posted retry work.
 
-**Architecture:** A portable refresh-plan seam will emit all removals before additions and will be the only ordering source used by CoreMIDI refresh. Android retry scheduling markers will move into `MidiOpenRetryPolicy`, where consuming a scheduled attempt is atomic with attempt-budget reservation and removal invalidates both.
+**Architecture:** A portable refresh-plan seam will emit all removals before additions and will be the only ordering source used by CoreMIDI refresh. Android retry scheduling tokens will move into `MidiOpenRetryPolicy`, where consuming the exact posted token is atomic with attempt-budget reservation and removal invalidates it without allowing stale work to alias a later retry.
 
 **Tech Stack:** C++20, CoreMIDI Objective-C++, CTest, Java, Android Gradle, JUnit 4.
 
@@ -82,12 +82,12 @@ Commit message: `fix(input): preserve CoreMIDI IDs on replacement`.
 - Test: `android/app/src/test/java/com/snurhythm/asobmashow/MidiOpenRetryPolicyTest.java`
 
 **Interfaces:**
-- Produces: `scheduleRetry(int)`, `isRetryScheduled(int)`, and `beginScheduledAttempt(int)`.
-- `remove(int)` and `clear()` invalidate scheduled markers as well as attempt budgets.
+- Produces: `long scheduleRetry(int)`, `isRetryScheduled(int)`, and `beginScheduledAttempt(int, long)`.
+- `remove(int)` and `clear()` invalidate scheduled tokens as well as attempt budgets.
 
 - [ ] **Step 1: Write failing scheduling/removal tests**
 
-Add one test that schedules device 40, removes it, and asserts `beginScheduledAttempt(40)` is false. Add another that models one immediate attempt plus scheduled attempts and asserts only three attempts are admitted for a trigger.
+Add one test that schedules device 40, removes it, schedules a replacement retry for the same framework ID, and asserts the old token cannot consume the replacement token. Add another that models one immediate attempt plus scheduled attempts and asserts only three attempts are admitted for a trigger.
 
 - [ ] **Step 2: Run Android unit tests and verify red**
 
@@ -106,11 +106,11 @@ Expected: compilation fails because the scheduling-policy methods do not exist.
 
 - [ ] **Step 3: Implement atomic scheduled-attempt admission**
 
-Store scheduled device IDs inside `MidiOpenRetryPolicy`. `scheduleRetry` inserts a marker; `beginScheduledAttempt` returns false unless it removes a live marker and then delegates to the existing capped `beginAttempt`; removal/clear erase markers.
+Store a monotonically allocated token per scheduled device inside `MidiOpenRetryPolicy`. `scheduleRetry` returns that token; `beginScheduledAttempt` returns false unless the supplied token exactly matches the current token, then removes it and delegates to the existing capped `beginAttempt`; removal/clear erase tokens.
 
 - [ ] **Step 4: Route the manager through the policy**
 
-Remove the manager-owned retry set. Check `isRetryScheduled` in `requestOpen`, call `scheduleRetry` before posting, and require `beginScheduledAttempt` before opening from the delayed runnable. Extract the native open call into a helper so immediate and scheduled paths reserve exactly one budget unit.
+Remove the manager-owned retry set. Check `isRetryScheduled` in `requestOpen`, capture the token from `scheduleRetry` in the posted runnable, and require `beginScheduledAttempt(deviceId, token)` before opening. Extract the native open call into a helper so immediate and scheduled paths reserve exactly one budget unit.
 
 - [ ] **Step 5: Verify green and commit**
 

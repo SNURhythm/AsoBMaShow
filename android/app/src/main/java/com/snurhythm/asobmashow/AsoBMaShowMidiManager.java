@@ -31,7 +31,6 @@ final class AsoBMaShowMidiManager {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, DeviceConnection> connections = new HashMap<>();
     private final Set<Integer> pendingDeviceIds = new HashSet<>();
-    private final Set<Integer> retryScheduledDeviceIds = new HashSet<>();
     private final MidiOpenRetryPolicy retryPolicy = new MidiOpenRetryPolicy();
 
     private MidiManager midiManager;
@@ -102,7 +101,6 @@ final class AsoBMaShowMidiManager {
         }
         deviceCallback = null;
         pendingDeviceIds.clear();
-        retryScheduledDeviceIds.clear();
         retryPolicy.clear();
         for (DeviceConnection connection : new ArrayList<>(connections.values())) {
             connection.close(false);
@@ -116,7 +114,7 @@ final class AsoBMaShowMidiManager {
         if (!started || generation != callbackGeneration || midiManager == null
                 || !hasOutputPort(info) || connections.containsKey(info.getId())
                 || pendingDeviceIds.contains(info.getId())
-                || retryScheduledDeviceIds.contains(info.getId())) {
+                || retryPolicy.isRetryScheduled(info.getId())) {
             return;
         }
         if (resetRetryBudget) {
@@ -132,6 +130,10 @@ final class AsoBMaShowMidiManager {
                 || !retryPolicy.beginAttempt(info.getId())) {
             return;
         }
+        openAfterAttemptReserved(info, callbackGeneration);
+    }
+
+    private void openAfterAttemptReserved(MidiDeviceInfo info, long callbackGeneration) {
         pendingDeviceIds.add(info.getId());
         try {
             midiManager.openDevice(info,
@@ -146,22 +148,28 @@ final class AsoBMaShowMidiManager {
     private synchronized void scheduleRetry(MidiDeviceInfo info, long callbackGeneration) {
         if (!started || generation != callbackGeneration || midiManager == null
                 || connections.containsKey(info.getId())
-                || pendingDeviceIds.contains(info.getId())
-                || !retryScheduledDeviceIds.add(info.getId())) {
+                || pendingDeviceIds.contains(info.getId())) {
+            return;
+        }
+        long retryToken = retryPolicy.scheduleRetry(info.getId());
+        if (retryToken == 0) {
             return;
         }
         mainHandler.postDelayed(
-                () -> runScheduledRetry(info, callbackGeneration),
+                () -> runScheduledRetry(info, callbackGeneration, retryToken),
                 OPEN_RETRY_DELAY_MILLIS);
     }
 
     private synchronized void runScheduledRetry(MidiDeviceInfo info,
-                                                long callbackGeneration) {
-        if (!started || generation != callbackGeneration) {
+                                                long callbackGeneration,
+                                                long retryToken) {
+        if (!started || generation != callbackGeneration || midiManager == null
+                || connections.containsKey(info.getId())
+                || pendingDeviceIds.contains(info.getId())
+                || !retryPolicy.beginScheduledAttempt(info.getId(), retryToken)) {
             return;
         }
-        retryScheduledDeviceIds.remove(info.getId());
-        attemptOpen(info, callbackGeneration);
+        openAfterAttemptReserved(info, callbackGeneration);
     }
 
     private synchronized void completeOpen(MidiDeviceInfo info, MidiDevice device,
@@ -214,7 +222,6 @@ final class AsoBMaShowMidiManager {
             return;
         }
         connections.put(info.getId(), connection);
-        retryScheduledDeviceIds.remove(info.getId());
         retryPolicy.remove(info.getId());
     }
 
@@ -224,7 +231,6 @@ final class AsoBMaShowMidiManager {
             return;
         }
         pendingDeviceIds.remove(deviceId);
-        retryScheduledDeviceIds.remove(deviceId);
         retryPolicy.remove(deviceId);
         DeviceConnection connection = connections.remove(deviceId);
         if (connection != null) {
