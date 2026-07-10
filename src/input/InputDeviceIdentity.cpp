@@ -6,8 +6,11 @@
 #include <cctype>
 #include <cstdint>
 #include <iomanip>
+#include <map>
 #include <ranges>
+#include <set>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -179,101 +182,188 @@ std::string sha256(std::string_view value) {
 
 } // namespace
 
-std::string
-InputDeviceIdentity::connect(const SdlDeviceIdentityDescriptor &descriptor) {
+InputDeviceIdentity::ClassifiedIdentity InputDeviceIdentity::classify(
+    const SdlDeviceIdentityDescriptor &descriptor) const {
   const std::string prefix = "sdl:" + normalizeGuid(descriptor.guid) + ':';
   const std::string serial = trim(descriptor.serial);
   if (!serial.empty()) {
     const std::string base = prefix + "serial:" + percentEncode(serial);
-    if (descriptor.path.empty()) {
-      return connectDistinct(base, "ordinal", 2);
-    }
-    const std::string evidence = base + '\x1f' + descriptor.path;
-    return connectWithEvidence(base, evidence, sha256(descriptor.path));
+    return {.kind = IdentityKind::Serial,
+            .base = base,
+            .evidence = descriptor.path.empty()
+                            ? std::string{}
+                            : base + '\x1f' + descriptor.path,
+            .exactPath = descriptor.path};
   }
-
   if (!descriptor.path.empty()) {
     const std::string base = prefix + "path:" + sha256(descriptor.path);
-    return connectWithEvidence(base, base + '\x1f' + descriptor.path);
+    return {.kind = IdentityKind::Path,
+            .base = base,
+            .evidence = base + '\x1f' + descriptor.path,
+            .exactPath = descriptor.path};
   }
-
-  const std::string base = prefix + "name:" + normalizeName(descriptor.name);
-  return allocateOrdinal(base, {}, 1);
+  return {.kind = IdentityKind::Name,
+          .base = prefix + "name:" + normalizeName(descriptor.name)};
 }
 
-std::string InputDeviceIdentity::connectWithEvidence(
-    std::string base, std::string evidence,
-    std::optional<std::string> duplicatePathHash) {
-  if (const auto preferred = preferredByEvidence_.find(evidence);
-      preferred != preferredByEvidence_.end()) {
-    const auto active = activeIdentities_.find(preferred->second);
-    if (active == activeIdentities_.end()) {
-      activate(preferred->second, evidence);
-      return preferred->second;
-    }
-    if (active->second.evidence == evidence) {
-      ++active->second.owners;
-      return preferred->second;
-    }
-  }
+std::string
+InputDeviceIdentity::connect(const SdlDeviceIdentityDescriptor &descriptor) {
+  pendingRemappings_.clear();
+  return connectClassified(classify(descriptor));
+}
 
-  const auto baseReservation = reservedEvidenceByStableId_.find(base);
-  if (baseReservation == reservedEvidenceByStableId_.end() ||
-      baseReservation->second == evidence) {
-    if (const auto active = activeIdentities_.find(base);
-        active == activeIdentities_.end()) {
-      preferredByEvidence_[evidence] = base;
-      reservedEvidenceByStableId_[base] = evidence;
-      activate(base, evidence);
-      return base;
-    } else if (active->second.evidence == evidence) {
-      ++active->second.owners;
-      preferredByEvidence_[evidence] = base;
-      reservedEvidenceByStableId_[base] = evidence;
-      return base;
-    }
-  }
+std::vector<std::string> InputDeviceIdentity::connectBatch(
+    std::span<const SdlDeviceIdentityDescriptor> descriptors) {
+  pendingRemappings_.clear();
+  std::vector<ClassifiedIdentity> identities;
+  identities.reserve(descriptors.size());
 
-  if (duplicatePathHash) {
-    const std::string candidate = base + ":path:" + *duplicatePathHash;
-    const auto reservation = reservedEvidenceByStableId_.find(candidate);
-    if (reservation == reservedEvidenceByStableId_.end() ||
-        reservation->second == evidence) {
-      const auto active = activeIdentities_.find(candidate);
-      if (active == activeIdentities_.end()) {
-        preferredByEvidence_[evidence] = candidate;
-        reservedEvidenceByStableId_[candidate] = evidence;
-        activate(candidate, evidence);
-        return candidate;
+  struct SerialGroup {
+    std::set<std::string> exactPaths;
+    std::size_t pathlessDevices = 0;
+  };
+  std::map<std::string, SerialGroup> serialGroups;
+  for (const auto &descriptor : descriptors) {
+    auto identity = classify(descriptor);
+    if (identity.kind == IdentityKind::Serial) {
+      auto &group = serialGroups[identity.base];
+      if (identity.exactPath.empty()) {
+        ++group.pathlessDevices;
+      } else {
+        group.exactPaths.insert(identity.exactPath);
       }
-      if (active->second.evidence == evidence) {
+    }
+    identities.push_back(std::move(identity));
+  }
+  for (const auto &[base, group] : serialGroups) {
+    if (group.exactPaths.size() + group.pathlessDevices > 1) {
+      serialLedgers_[base].collisionKnown = true;
+    }
+  }
+
+  std::vector<std::string> result;
+  result.reserve(identities.size());
+  for (const auto &identity : identities) {
+    result.push_back(connectClassified(identity));
+  }
+  return result;
+}
+
+std::vector<InputDeviceIdentityRemap> InputDeviceIdentity::takeRemappings() {
+  return std::exchange(pendingRemappings_, {});
+}
+
+std::string
+InputDeviceIdentity::connectClassified(const ClassifiedIdentity &identity) {
+  if (identity.kind == IdentityKind::Name) {
+    const auto ordinal = reserveOrdinal(identity.base, {}, 1);
+    activate(ordinal.stableId, identity, ordinal.pool, ordinal.index);
+    return ordinal.stableId;
+  }
+
+  if (identity.kind == IdentityKind::Path) {
+    if (const auto active = activeIdentities_.find(identity.base);
+        active != activeIdentities_.end()) {
+      if (active->second.evidence == identity.evidence) {
         ++active->second.owners;
-        preferredByEvidence_[evidence] = candidate;
-        reservedEvidenceByStableId_[candidate] = evidence;
-        return candidate;
+        return identity.base;
       }
+      const auto ordinal = reserveOrdinal(identity.base, "ordinal", 2);
+      activate(ordinal.stableId, identity, ordinal.pool, ordinal.index);
+      return ordinal.stableId;
+    }
+    activate(identity.base, identity);
+    return identity.base;
+  }
+
+  auto &ledger = serialLedgers_[identity.base];
+  if (ledger.collisionKnown) {
+    return connectKnownSerialCollision(identity);
+  }
+
+  ActiveIdentity *activeSerial = nullptr;
+  for (auto &[stableId, active] : activeIdentities_) {
+    (void)stableId;
+    if (active.kind == IdentityKind::Serial && active.base == identity.base) {
+      activeSerial = &active;
+      break;
     }
   }
-
-  const std::string candidate = allocateOrdinal(base, "ordinal", 2);
-  preferredByEvidence_[evidence] = candidate;
-  activeIdentities_.at(candidate).evidence = std::move(evidence);
-  return candidate;
-}
-
-std::string InputDeviceIdentity::connectDistinct(std::string base,
-                                                 std::string_view marker,
-                                                 std::size_t firstOrdinal) {
-  if (!activeIdentities_.contains(base)) {
-    activate(base, {});
-    return base;
+  if (activeSerial == nullptr) {
+    activate(identity.base, identity);
+    return identity.base;
   }
-  return allocateOrdinal(base, marker, firstOrdinal);
+  if (!identity.evidence.empty() &&
+      activeSerial->evidence == identity.evidence) {
+    ++activeSerial->owners;
+    return identity.base;
+  }
+
+  establishSerialCollision(identity.base);
+  return connectKnownSerialCollision(identity);
 }
 
-std::string InputDeviceIdentity::allocateOrdinal(std::string_view base,
-                                                 std::string_view marker,
-                                                 std::size_t firstOrdinal) {
+std::string InputDeviceIdentity::connectKnownSerialCollision(
+    const ClassifiedIdentity &identity) {
+  if (!identity.exactPath.empty()) {
+    const std::string stableId =
+        identity.base + ":path:" + sha256(identity.exactPath);
+    if (const auto active = activeIdentities_.find(stableId);
+        active != activeIdentities_.end()) {
+      if (active->second.evidence == identity.evidence) {
+        ++active->second.owners;
+        return stableId;
+      }
+      const auto ordinal = reserveOrdinal(stableId, "ordinal", 2);
+      activate(ordinal.stableId, identity, ordinal.pool, ordinal.index);
+      return ordinal.stableId;
+    }
+    activate(stableId, identity);
+    return stableId;
+  }
+
+  // Pathless devices with the same serialized descriptor are physically
+  // indistinguishable. Runtime ordinals prevent aliasing, but cannot promise
+  // that a persisted ordinal follows the same physical unit after reconnect.
+  const auto ordinal = reserveOrdinal(identity.base, "ordinal", 1);
+  activate(ordinal.stableId, identity, ordinal.pool, ordinal.index);
+  return ordinal.stableId;
+}
+
+void InputDeviceIdentity::establishSerialCollision(
+    std::string_view serialBase) {
+  serialLedgers_[std::string(serialBase)].collisionKnown = true;
+  std::vector<std::string> activeStableIds;
+  for (const auto &[stableId, active] : activeIdentities_) {
+    if (active.kind == IdentityKind::Serial && active.base == serialBase) {
+      activeStableIds.push_back(stableId);
+    }
+  }
+  std::ranges::sort(activeStableIds);
+
+  for (const auto &oldStableId : activeStableIds) {
+    auto node = activeIdentities_.extract(oldStableId);
+    ActiveIdentity &active = node.mapped();
+    std::string newStableId;
+    if (!active.exactPath.empty()) {
+      newStableId = active.base + ":path:" + sha256(active.exactPath);
+      active.ordinalPool.clear();
+      active.ordinalIndex = std::numeric_limits<std::size_t>::max();
+    } else {
+      const auto ordinal = reserveOrdinal(active.base, "ordinal", 1);
+      newStableId = ordinal.stableId;
+      active.ordinalPool = ordinal.pool;
+      active.ordinalIndex = ordinal.index;
+    }
+    node.key() = newStableId;
+    activeIdentities_.insert(std::move(node));
+    pendingRemappings_.push_back(
+        {.fromStableId = oldStableId, .toStableId = newStableId});
+  }
+}
+
+InputDeviceIdentity::ReservedOrdinal InputDeviceIdentity::reserveOrdinal(
+    std::string_view base, std::string_view marker, std::size_t firstOrdinal) {
   const std::string pool = std::string(base) + '\x1f' + std::string(marker) +
                            '\x1f' + std::to_string(firstOrdinal);
   auto &slots = ordinalSlots_[pool];
@@ -292,8 +382,7 @@ std::string InputDeviceIdentity::allocateOrdinal(std::string_view base,
     stableId.push_back(':');
   }
   stableId.append(std::to_string(firstOrdinal + index));
-  activate(stableId, {}, pool, index);
-  return stableId;
+  return {.stableId = std::move(stableId), .pool = pool, .index = index};
 }
 
 bool InputDeviceIdentity::disconnect(std::string_view stableId) {
@@ -323,11 +412,15 @@ InputDeviceIdentity::activeOwnerCount(std::string_view stableId) const {
   return active == activeIdentities_.end() ? 0 : active->second.owners;
 }
 
-void InputDeviceIdentity::activate(std::string stableId, std::string evidence,
+void InputDeviceIdentity::activate(std::string stableId,
+                                   const ClassifiedIdentity &identity,
                                    std::string ordinalPool,
                                    std::size_t ordinalIndex) {
   activeIdentities_.insert_or_assign(
-      std::move(stableId), ActiveIdentity{.evidence = std::move(evidence),
+      std::move(stableId), ActiveIdentity{.kind = identity.kind,
+                                          .base = identity.base,
+                                          .evidence = identity.evidence,
+                                          .exactPath = identity.exactPath,
                                           .owners = 1,
                                           .ordinalPool = std::move(ordinalPool),
                                           .ordinalIndex = ordinalIndex});

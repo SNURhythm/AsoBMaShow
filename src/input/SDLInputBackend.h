@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -53,6 +54,11 @@ private:
     std::vector<Uint8> hatValues;
   };
 
+  std::optional<SdlInputDeviceInfo> openDevice(int deviceIndex);
+  void registerDevice(SdlInputDeviceInfo info, std::string stableId,
+                      bool publishConnection);
+  void
+  applyIdentityRemaps(std::span<const InputDeviceIdentityRemap> remappings);
   void addDevice(int deviceIndex);
   void removeDevice(SDL_JoystickID instanceId);
   void publishButton(const DeviceRecord &device, int button, bool pressed,

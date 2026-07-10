@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -170,8 +171,38 @@ bool SDLInputBackend::start(std::string &errorMessage) {
   }
 
   started_ = true;
+  std::vector<SdlInputDeviceInfo> openedDevices;
+  std::unordered_set<SDL_JoystickID> openedInstanceIds;
   for (int deviceIndex = 0; deviceIndex < count; ++deviceIndex) {
-    addDevice(deviceIndex);
+    auto info = openDevice(deviceIndex);
+    if (!info) {
+      continue;
+    }
+    if (!openedInstanceIds.insert(info->instanceId).second) {
+      provider_->closeDevice(info->instanceId);
+      SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                  "Ignoring duplicate SDL input instance %d",
+                  static_cast<int>(info->instanceId));
+      continue;
+    }
+    openedDevices.push_back(std::move(*info));
+  }
+
+  std::vector<SdlDeviceIdentityDescriptor> descriptors;
+  descriptors.reserve(openedDevices.size());
+  for (const auto &info : openedDevices) {
+    descriptors.push_back({.guid = info.guid,
+                           .serial = info.serial,
+                           .path = info.path,
+                           .name = info.name});
+  }
+  const auto stableIds = identity_.connectBatch(descriptors);
+  std::unordered_set<std::string> publishedStableIds;
+  for (std::size_t index = 0; index < openedDevices.size(); ++index) {
+    const bool publishConnection =
+        publishedStableIds.insert(stableIds[index]).second;
+    registerDevice(std::move(openedDevices[index]), stableIds[index],
+                   publishConnection);
   }
   return true;
 }
@@ -269,15 +300,80 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
 
 void SDLInputBackend::pump() {}
 
-void SDLInputBackend::addDevice(int deviceIndex) {
+std::optional<SdlInputDeviceInfo> SDLInputBackend::openDevice(int deviceIndex) {
   const bool gameController = provider_->isGameController(deviceIndex);
   std::string errorMessage;
-  const auto info =
-      provider_->openDevice(deviceIndex, gameController, errorMessage);
+  auto info = provider_->openDevice(deviceIndex, gameController, errorMessage);
   if (!info) {
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Could not open SDL input device %d: %s", deviceIndex,
                 errorMessage.empty() ? "unknown error" : errorMessage.c_str());
+    return std::nullopt;
+  }
+  return info;
+}
+
+void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
+                                     std::string stableId,
+                                     bool publishConnection) {
+  const input::DeviceClass deviceClass =
+      info.gameController ? input::DeviceClass::GameController
+                          : input::DeviceClass::Joystick;
+  const int advertisedButtons =
+      info.gameController ? SDL_CONTROLLER_BUTTON_MAX : info.buttons;
+  const int advertisedAxes =
+      info.gameController ? SDL_CONTROLLER_AXIS_MAX : info.axes;
+  const int advertisedHats = info.gameController ? 0 : info.hats;
+  DeviceRecord record{
+      .snapshot = {.stableId = std::move(stableId),
+                   .displayName = info.name.empty()
+                                      ? (info.gameController ? "Game Controller"
+                                                             : "Joystick")
+                                      : std::move(info.name),
+                   .deviceClass = deviceClass,
+                   .connected = true,
+                   .buttons = advertisedButtons,
+                   .axes = advertisedAxes,
+                   .hats = advertisedHats},
+      .gameController = info.gameController,
+      .hatValues = std::vector<Uint8>(
+          static_cast<std::size_t>(std::max(0, advertisedHats)),
+          SDL_HAT_CENTERED)};
+  if (publishConnection) {
+    publishDevice(record.snapshot);
+  }
+  devices_.emplace(info.instanceId, std::move(record));
+}
+
+void SDLInputBackend::applyIdentityRemaps(
+    std::span<const InputDeviceIdentityRemap> remappings) {
+  for (const auto &remapping : remappings) {
+    std::optional<input::InputDeviceSnapshot> oldSnapshot;
+    std::optional<input::InputDeviceSnapshot> newSnapshot;
+    for (auto &[instanceId, device] : devices_) {
+      (void)instanceId;
+      if (device.snapshot.stableId != remapping.fromStableId) {
+        continue;
+      }
+      if (!oldSnapshot) {
+        oldSnapshot = device.snapshot;
+        oldSnapshot->connected = false;
+      }
+      device.snapshot.stableId = remapping.toStableId;
+      if (!newSnapshot) {
+        newSnapshot = device.snapshot;
+      }
+    }
+    if (oldSnapshot && newSnapshot) {
+      publishDevice(std::move(*oldSnapshot));
+      publishDevice(std::move(*newSnapshot));
+    }
+  }
+}
+
+void SDLInputBackend::addDevice(int deviceIndex) {
+  auto info = openDevice(deviceIndex);
+  if (!info) {
     return;
   }
   if (devices_.contains(info->instanceId)) {
@@ -292,33 +388,9 @@ void SDLInputBackend::addDevice(int deviceIndex) {
                                                   .serial = info->serial,
                                                   .path = info->path,
                                                   .name = info->name});
-  const input::DeviceClass deviceClass =
-      info->gameController ? input::DeviceClass::GameController
-                           : input::DeviceClass::Joystick;
-  const int advertisedButtons =
-      info->gameController ? SDL_CONTROLLER_BUTTON_MAX : info->buttons;
-  const int advertisedAxes =
-      info->gameController ? SDL_CONTROLLER_AXIS_MAX : info->axes;
-  const int advertisedHats = info->gameController ? 0 : info->hats;
-  DeviceRecord record{.snapshot = {.stableId = stableId,
-                                   .displayName = info->name.empty()
-                                                      ? (info->gameController
-                                                             ? "Game Controller"
-                                                             : "Joystick")
-                                                      : info->name,
-                                   .deviceClass = deviceClass,
-                                   .connected = true,
-                                   .buttons = advertisedButtons,
-                                   .axes = advertisedAxes,
-                                   .hats = advertisedHats},
-                      .gameController = info->gameController,
-                      .hatValues = std::vector<Uint8>(
-                          static_cast<std::size_t>(std::max(0, advertisedHats)),
-                          SDL_HAT_CENTERED)};
-  if (identity_.activeOwnerCount(stableId) == 1) {
-    publishDevice(record.snapshot);
-  }
-  devices_.emplace(info->instanceId, std::move(record));
+  applyIdentityRemaps(identity_.takeRemappings());
+  const bool publishConnection = identity_.activeOwnerCount(stableId) == 1;
+  registerDevice(std::move(*info), stableId, publishConnection);
 }
 
 void SDLInputBackend::removeDevice(SDL_JoystickID instanceId) {

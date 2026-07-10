@@ -247,18 +247,25 @@ void testIdentityDisambiguatesActiveDuplicateSerials() {
                                                      .name = "Twin Pad"};
   const std::string first = identity.connect(firstDescriptor);
   const std::string second = identity.connect(secondDescriptor);
+  const auto remappings = identity.takeRemappings();
+  const std::string effectiveFirst =
+      "sdl:1111:serial:0:path:"
+      "2c3fa667b7a12e8a8b88e3fa26dc3b9b6f618d4550fb62661de2398c2370637e";
   expect(first == "sdl:1111:serial:0",
-         "first active serial owner retains the serial-priority ID");
+         "a serialized device begins on its serial-priority ID");
   expect(second ==
              "sdl:1111:serial:0:path:"
              "0976e2d9ffd49c976c7c77e3645011e321da23d69b3be059f44bb1312d0a520e",
          "duplicate serial uses exact path evidence for disambiguation");
   expect(first != second,
          "simultaneous devices with a default serial remain independent");
+  expect(remappings.size() == 1 && remappings.front().fromStableId == first &&
+             remappings.front().toStableId == effectiveFirst,
+         "first hotplug collision explicitly remaps the prior base owner");
   expect(identity.connect(secondDescriptor) == second,
          "overlapping instances with identical path evidence share an ID");
 
-  identity.disconnect(first);
+  identity.disconnect(effectiveFirst);
   const SdlDeviceIdentityDescriptor thirdDescriptor{.guid = "1111",
                                                     .serial = "0",
                                                     .path = "/dev/input/twin-c",
@@ -266,18 +273,24 @@ void testIdentityDisambiguatesActiveDuplicateSerials() {
   const std::string third = identity.connect(thirdDescriptor);
   expect(third != first && third != second,
          "historical serial path assignments reserve their effective IDs");
-  expect(identity.connect(firstDescriptor) == first,
-         "serial owner reconnects to its reserved ID after an overlap gap");
+  expect(identity.connect(firstDescriptor) == effectiveFirst,
+         "known collision owner reconnects to deterministic path ID");
 
   InputDeviceIdentity noPathIdentity;
   const SdlDeviceIdentityDescriptor noPath{
       .guid = "2222", .serial = "0", .name = "No Path Pad"};
   const std::string noPathFirst = noPathIdentity.connect(noPath);
   const std::string noPathSecond = noPathIdentity.connect(noPath);
+  const auto noPathRemappings = noPathIdentity.takeRemappings();
   expect(noPathFirst == "sdl:2222:serial:0",
-         "first pathless duplicate retains the serial ID");
+         "first pathless serialized device begins on the base ID");
   expect(noPathSecond == "sdl:2222:serial:0:ordinal:2",
          "pathless active duplicate uses a deterministic ordinal");
+  expect(noPathRemappings.size() == 1 &&
+             noPathRemappings.front().fromStableId == noPathFirst &&
+             noPathRemappings.front().toStableId ==
+                 "sdl:2222:serial:0:ordinal:1",
+         "pathless collision moves the first owner to a runtime ordinal");
 }
 
 void testRegistryQueuesCallbacksAndKeepsKeyboard() {
@@ -780,6 +793,199 @@ void testRetainedBackendSinkIsClosedAfterRegistryDestruction() {
                               .connected = true});
 }
 
+struct DuplicateSerialStartupResult {
+  std::string pathAId;
+  std::string pathBId;
+  std::vector<input::InputDeviceSnapshot> deviceEvents;
+};
+
+DuplicateSerialStartupResult
+collectDuplicateSerialStartup(std::vector<SdlInputDeviceInfo> devices) {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = std::move(devices);
+  auto registry = makeRegistryWithSdlProvider(provider);
+  DuplicateSerialStartupResult result;
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.deviceClass == input::DeviceClass::GameController) {
+      result.deviceEvents.push_back(device);
+    }
+  });
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+  registry.pump();
+
+  for (const auto &device : provider->devices) {
+    SDL_Event button{};
+    button.type = SDL_CONTROLLERBUTTONDOWN;
+    button.cbutton.which = device.instanceId;
+    button.cbutton.button = device.path.ends_with("twin-a") ? 0 : 1;
+    registry.handleSdlEvent(button);
+  }
+  registry.pump();
+  for (const auto &event : inputEvents) {
+    if (event.control.index == 0) {
+      result.pathAId = event.control.deviceId;
+    } else if (event.control.index == 1) {
+      result.pathBId = event.control.deviceId;
+    }
+  }
+  return result;
+}
+
+void testSdlStartupDuplicateSerialMappingIgnoresEnumerationOrder() {
+  const auto forward = collectDuplicateSerialStartup(
+      {controllerInfo(30, "/dev/input/twin-a", "0"),
+       controllerInfo(31, "/dev/input/twin-b", "0")});
+  const auto reverse = collectDuplicateSerialStartup(
+      {controllerInfo(41, "/dev/input/twin-b", "0"),
+       controllerInfo(40, "/dev/input/twin-a", "0")});
+
+  const std::string base = "sdl:03000000dead0000beef000000000000:serial:0";
+  const std::string expectedA =
+      base + ":path:"
+             "2c3fa667b7a12e8a8b88e3fa26dc3b9b6f618d4550fb62661de2398c2370637e";
+  const std::string expectedB =
+      base + ":path:"
+             "0976e2d9ffd49c976c7c77e3645011e321da23d69b3be059f44bb1312d0a520e";
+  expect(forward.pathAId == expectedA && reverse.pathAId == expectedA,
+         "path A keeps one effective ID across fresh reverse enumeration");
+  expect(forward.pathBId == expectedB && reverse.pathBId == expectedB,
+         "path B keeps one effective ID across fresh reverse enumeration");
+  expect(forward.deviceEvents.size() == 2 && reverse.deviceEvents.size() == 2 &&
+             std::ranges::none_of(
+                 forward.deviceEvents,
+                 [&](const auto &event) { return event.stableId == base; }) &&
+             std::ranges::none_of(
+                 reverse.deviceEvents,
+                 [&](const auto &event) { return event.stableId == base; }),
+         "staged startup publishes only final collision IDs, never a base ID");
+}
+
+void testSdlSoleSerializedDevicePathChurnKeepsBaseId() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {
+      controllerInfo(50, "/dev/input/serial-old-port", "SERIAL-CHURN")};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::vector<input::InputDeviceSnapshot> deviceEvents;
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.deviceClass == input::DeviceClass::GameController) {
+      deviceEvents.push_back(device);
+    }
+  });
+  registry.pump();
+  const std::string base =
+      "sdl:03000000dead0000beef000000000000:serial:SERIAL-CHURN";
+  expect(deviceEvents.size() == 1 && deviceEvents.front().stableId == base,
+         "sole serialized device starts on its serial-priority base ID");
+
+  SDL_Event removed{};
+  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.jdevice.which = 50;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  deviceEvents.clear();
+
+  provider->devices[0] =
+      controllerInfo(51, "/dev/input/serial-new-port", "SERIAL-CHURN");
+  SDL_Event added{};
+  added.type = SDL_JOYDEVICEADDED;
+  added.jdevice.which = 0;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(deviceEvents.size() == 1 && deviceEvents.front().connected &&
+             deviceEvents.front().stableId == base,
+         "sole serialized reconnect reuses base ID after exact path changes");
+  expect(registry.isConnected(base),
+         "path churn leaves the serial-priority binding target connected");
+}
+
+void testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {controllerInfo(60, "/dev/input/twin-a", "0")};
+  auto registry = makeRegistryWithSdlProvider(provider);
+  std::vector<input::InputDeviceSnapshot> deviceEvents;
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.deviceClass == input::DeviceClass::GameController) {
+      deviceEvents.push_back(device);
+    }
+  });
+  registry.pump();
+  const std::string base = "sdl:03000000dead0000beef000000000000:serial:0";
+  const std::string pathAId =
+      base + ":path:"
+             "2c3fa667b7a12e8a8b88e3fa26dc3b9b6f618d4550fb62661de2398c2370637e";
+  const std::string pathBId =
+      base + ":path:"
+             "0976e2d9ffd49c976c7c77e3645011e321da23d69b3be059f44bb1312d0a520e";
+  expect(deviceEvents.size() == 1 && deviceEvents.front().stableId == base,
+         "unique serialized hotplug baseline starts on base ID");
+  deviceEvents.clear();
+
+  provider->devices.push_back(controllerInfo(61, "/dev/input/twin-b", "0"));
+  SDL_Event added{};
+  added.type = SDL_JOYDEVICEADDED;
+  added.jdevice.which = 1;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(
+      deviceEvents.size() == 3 && deviceEvents[0].stableId == base &&
+          !deviceEvents[0].connected && deviceEvents[1].stableId == pathAId &&
+          deviceEvents[1].connected && deviceEvents[2].stableId == pathBId &&
+          deviceEvents[2].connected,
+      "first hotplug collision atomically retires base then publishes paths");
+
+  std::vector<input::PhysicalInputEvent> inputEvents;
+  registry.subscribeInput(
+      [&](const auto &event) { inputEvents.push_back(event); });
+  for (const auto [instanceId, buttonIndex] :
+       {std::pair<SDL_JoystickID, Uint8>{60, 0},
+        std::pair<SDL_JoystickID, Uint8>{61, 1}}) {
+    SDL_Event button{};
+    button.type = SDL_CONTROLLERBUTTONDOWN;
+    button.cbutton.which = instanceId;
+    button.cbutton.button = buttonIndex;
+    registry.handleSdlEvent(button);
+  }
+  registry.pump();
+  expect(inputEvents.size() == 2 &&
+             inputEvents[0].control.deviceId == pathAId &&
+             inputEvents[1].control.deviceId == pathBId,
+         "hotplug collision remaps every live input record to final path ID");
+
+  deviceEvents.clear();
+  SDL_Event removed{};
+  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.jdevice.which = 61;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  expect(deviceEvents.size() == 1 && deviceEvents.front().stableId == pathBId &&
+             !deviceEvents.front().connected && registry.isConnected(pathAId),
+         "duplicate removal leaves the other deterministic path owner live");
+
+  provider->devices.push_back(controllerInfo(62, "/dev/input/twin-b", "0"));
+  added.jdevice.which = 2;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(deviceEvents.size() == 2 && deviceEvents.back().stableId == pathBId &&
+             deviceEvents.back().connected,
+         "duplicate re-add after a gap reuses its deterministic path ID");
+
+  deviceEvents.clear();
+  removed.jdevice.which = 60;
+  registry.handleSdlEvent(removed);
+  removed.jdevice.which = 62;
+  registry.handleSdlEvent(removed);
+  registry.pump();
+  provider->devices.push_back(controllerInfo(63, "/dev/input/twin-a", "0"));
+  added.jdevice.which = 3;
+  registry.handleSdlEvent(added);
+  registry.pump();
+  expect(deviceEvents.size() == 3 && deviceEvents.back().stableId == pathAId &&
+             deviceEvents.back().connected,
+         "known collision ledger prevents base reuse after all owners gap");
+}
+
 void testSdlDuplicateSerialsKeepIndependentEffectiveIds() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {
@@ -826,9 +1032,19 @@ void testSdlDuplicateSerialsKeepIndependentEffectiveIds() {
   removed.jdevice.which = 30;
   registry.handleSdlEvent(removed);
   registry.pump();
-  expect(!registry.isConnected("sdl:03000000dead0000beef000000000000:serial:0"),
+  const std::string serialBase =
+      "sdl:03000000dead0000beef000000000000:serial:0";
+  const std::string pathAId =
+      serialBase +
+      ":path:"
+      "2c3fa667b7a12e8a8b88e3fa26dc3b9b6f618d4550fb62661de2398c2370637e";
+  const std::string pathBId =
+      serialBase +
+      ":path:"
+      "0976e2d9ffd49c976c7c77e3645011e321da23d69b3be059f44bb1312d0a520e";
+  expect(!registry.isConnected(pathAId),
          "removed duplicate serial owner becomes disconnected independently");
-  expect(registry.isConnected(controllerIds.back()),
+  expect(registry.isConnected(pathBId),
          "removing one duplicated serial owner leaves the other connected");
 }
 
@@ -1040,6 +1256,9 @@ int main() {
   testSdlBackendStartStopIsIdempotentAndClosesHandles();
   testNullBackendFactoryIsDiagnosableAndHarmless();
   testRetainedBackendSinkIsClosedAfterRegistryDestruction();
+  testSdlStartupDuplicateSerialMappingIgnoresEnumerationOrder();
+  testSdlSoleSerializedDevicePathChurnKeepsBaseId();
+  testSdlHotplugCollisionRemapsAndRetainsDeterministicLedger();
   testSdlDuplicateSerialsKeepIndependentEffectiveIds();
   testSdlOverlappingReconnectWaitsForLastOwnerRemoval();
   testSdlReconnectRemovalDedupAndAxisNormalization();
