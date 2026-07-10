@@ -2,6 +2,50 @@
 
 #include <utility>
 
+QueuedMidiInputBackend::DeviceActivation::DeviceActivation(
+    QueuedMidiInputBackend &backend, input::InputDeviceSnapshot device)
+    : backend_(&backend), device_(std::move(device)) {
+  device_.connected = true;
+  backend_->enqueueDevice(device_);
+}
+
+QueuedMidiInputBackend::DeviceActivation::DeviceActivation(
+    DeviceActivation &&other) noexcept
+    : backend_(std::exchange(other.backend_, nullptr)),
+      device_(std::move(other.device_)) {}
+
+QueuedMidiInputBackend::DeviceActivation &
+QueuedMidiInputBackend::DeviceActivation::operator=(
+    DeviceActivation &&other) noexcept {
+  if (this != &other) {
+    rollback();
+    backend_ = std::exchange(other.backend_, nullptr);
+    device_ = std::move(other.device_);
+  }
+  return *this;
+}
+
+QueuedMidiInputBackend::DeviceActivation::~DeviceActivation() { rollback(); }
+
+void QueuedMidiInputBackend::DeviceActivation::commit() noexcept {
+  backend_ = nullptr;
+}
+
+void QueuedMidiInputBackend::DeviceActivation::rollback() {
+  if (backend_ == nullptr) {
+    return;
+  }
+  device_.connected = false;
+  backend_->enqueueDevice(std::move(device_));
+  backend_ = nullptr;
+}
+
+QueuedMidiInputBackend::DeviceActivation
+QueuedMidiInputBackend::beginDeviceActivation(
+    input::InputDeviceSnapshot connectedDevice) {
+  return DeviceActivation(*this, std::move(connectedDevice));
+}
+
 void QueuedMidiInputBackend::pump() {
   std::deque<QueuedEvent> pending;
   std::set<std::string> overflowedDevices;

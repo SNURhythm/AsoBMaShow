@@ -1,3 +1,4 @@
+#include "input/LiveMidiDeviceIdAllocator.h"
 #include "input/MidiMessageParser.h"
 #include "input/NativeCallbackLifetime.h"
 #include "input/QueuedMidiInputBackend.h"
@@ -47,6 +48,21 @@ public:
   void packet(std::string stableId, std::vector<std::uint8_t> bytes,
               std::uint64_t timestampMicros) {
     enqueuePacket(std::move(stableId), std::move(bytes), timestampMicros);
+  }
+
+  void activate(std::string stableId, bool success, bool emitPacket) {
+    const std::string packetDeviceId = stableId;
+    auto activation = beginDeviceActivation(
+        {.stableId = std::move(stableId),
+         .displayName = "Activation",
+         .deviceClass = input::DeviceClass::Midi,
+         .connected = true});
+    if (emitPacket) {
+      packet(packetDeviceId, {0x90, 60, 127}, 200);
+    }
+    if (success) {
+      activation.commit();
+    }
   }
 };
 
@@ -482,6 +498,75 @@ void testNativeCallbackLifetimeNeverReusesStaleTokens() {
   second.closeAndWait();
 }
 
+void testBackendPublishesConnectBeforeSynchronousActivationPacket() {
+  std::vector<std::string> publicationOrder;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent) {
+            publicationOrder.emplace_back("input");
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            publicationOrder.emplace_back(device.connected ? "connect"
+                                                            : "disconnect");
+          },
+  });
+  std::string error;
+  require(backend.start(error), "activation-order MIDI backend starts");
+  backend.activate("midi:activation", true, true);
+  backend.pump();
+  require(publicationOrder == std::vector<std::string>{"connect", "input"},
+          "device connect publishes before a synchronous activation packet");
+  backend.stop();
+}
+
+void testBackendRollsBackFailedActivationBeforeLaterPackets() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  std::vector<bool> connectionStates;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            connectionStates.push_back(device.connected);
+          },
+  });
+  std::string error;
+  require(backend.start(error), "activation-rollback MIDI backend starts");
+  backend.activate("midi:failed-activation", false, false);
+  backend.packet("midi:failed-activation", {0x90, 61, 127}, 201);
+  backend.pump();
+  require(connectionStates == std::vector<bool>{true, false},
+          "failed activation publishes a compensating disconnect");
+  require(inputs.empty(),
+          "packets after activation rollback remain disconnected and drop");
+  backend.stop();
+}
+
+void testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd() {
+  LiveMidiDeviceIdAllocator ids;
+  require(ids.claim(1, "midi:core:base") == "midi:core:base",
+          "first live CoreMIDI source claims its preferred ID");
+  const std::string deviceB =
+      ids.claim(2, "midi:core:base:identical:2");
+  ids.release(1);
+  const std::string readdedDeviceA =
+      ids.claim(3, "midi:core:base:identical:2");
+  require(readdedDeviceA != deviceB,
+          "re-added identical source cannot collide with a live source");
+  require(ids.claim(2, "midi:core:changed-preference") == deviceB,
+          "an existing live source preserves its claimed stable ID");
+
+  ids.release(2);
+  require(ids.claim(4, deviceB) == deviceB,
+          "released stable ID can be reclaimed by a later source");
+  ids.clear();
+  require(ids.claim(5, "midi:core:base") == "midi:core:base",
+          "clearing a stopped backend releases every live ID");
+}
+
 } // namespace
 
 int main() {
@@ -504,5 +589,8 @@ int main() {
   testNativeCallbackLifetimeWaitsForActiveLease();
   testNativeCallbackLifetimeRejectsDelayedEntryAfterClose();
   testNativeCallbackLifetimeNeverReusesStaleTokens();
+  testBackendPublishesConnectBeforeSynchronousActivationPacket();
+  testBackendRollsBackFailedActivationBeforeLaterPackets();
+  testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd();
   return 0;
 }

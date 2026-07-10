@@ -776,6 +776,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(midi_input_tests
         tests/midi_input_tests.cpp
+        src/input/LiveMidiDeviceIdAllocator.cpp
         src/input/MidiMessageParser.cpp
         src/input/NativeCallbackLifetime.cpp
         src/input/QueuedMidiInputBackend.cpp

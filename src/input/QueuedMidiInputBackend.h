@@ -19,9 +19,31 @@ public:
   void pump() override;
 
 protected:
+  class DeviceActivation {
+  public:
+    DeviceActivation(const DeviceActivation &) = delete;
+    DeviceActivation &operator=(const DeviceActivation &) = delete;
+    DeviceActivation(DeviceActivation &&other) noexcept;
+    DeviceActivation &operator=(DeviceActivation &&other) noexcept;
+    ~DeviceActivation();
+
+    void commit() noexcept;
+
+  private:
+    friend class QueuedMidiInputBackend;
+    DeviceActivation(QueuedMidiInputBackend &backend,
+                     input::InputDeviceSnapshot device);
+    void rollback();
+
+    QueuedMidiInputBackend *backend_ = nullptr;
+    input::InputDeviceSnapshot device_;
+  };
+
   explicit QueuedMidiInputBackend(input::InputBackendSink sink)
       : IInputBackend(std::move(sink)) {}
 
+  DeviceActivation
+  beginDeviceActivation(input::InputDeviceSnapshot connectedDevice);
   void openQueue();
   void closeQueue();
   void enqueuePacket(std::string stableId, std::vector<std::uint8_t> bytes,

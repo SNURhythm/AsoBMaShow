@@ -747,6 +747,7 @@
 				input/LogicalGameplayInputAdapter.cpp,
 				input/AndroidMidiInputBackend.cpp,
 				input/CoreMidiInputBackend.mm,
+				input/LiveMidiDeviceIdAllocator.cpp,
 				input/MidiInputBackendFactory.cpp,
 				input/MidiMessageParser.cpp,
 				input/NativeCallbackLifetime.cpp,
