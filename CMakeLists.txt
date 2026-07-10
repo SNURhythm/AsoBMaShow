@@ -773,6 +773,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(input_device_registry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(input_device_registry_tests PRIVATE cxx_std_23)
+    asobmashow_add_midi_backend(input_device_registry_tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -836,6 +837,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(sdl_display_backend_tests PRIVATE SDL2)
     endif()
+
+    add_executable(midi_input_tests
+        tests/midi_input_tests.cpp
+        src/input/LiveMidiDeviceIdAllocator.cpp
+        src/input/MidiMessageParser.cpp
+        src/input/NativeCallbackLifetime.cpp
+        src/input/QueuedMidiInputBackend.cpp
+        src/input/Utf16ToUtf8.cpp
+    )
+    target_include_directories(midi_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(midi_input_tests PRIVATE cxx_std_23)
 
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
@@ -910,10 +924,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
-
     add_test(NAME foundation_provenance_db
         COMMAND $<TARGET_FILE:score_provenance_db_tests>)
     set_tests_properties(foundation_provenance_db PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_db_tests>
     )
+    asobmashow_register_test(midi_input_tests foundation_input_midi)
 endif()
