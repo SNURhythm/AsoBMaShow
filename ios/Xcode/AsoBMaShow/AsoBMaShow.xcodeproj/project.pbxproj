@@ -775,6 +775,7 @@
 				PlatformDocumentHandoff.cpp,
 				PrepMetronome.cpp,
 				ProfileArchive.cpp,
+				ProfileExportStaging.cpp,
 				ProfileDatabaseTools.cpp,
 				ProfileSessionCoordinator.cpp,
 				rendering/BlurPass.cpp,
