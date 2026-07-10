@@ -1243,6 +1243,10 @@ void testChartSummaryValidationAndDetailsShareWalSnapshot(
   assert(queryInt(mutated.get(), "SELECT COUNT(*) FROM replay_events WHERE "
                                  "replay_id=" +
                                      std::to_string(targetId)) == 1);
+  mutated.reset();
+  const auto laterSummaries = helper.ListReplays(meta, 0);
+  assert(std::none_of(laterSummaries.begin(), laterSummaries.end(),
+                      [&](const auto &value) { return value.id == targetId; }));
 #else
   (void)root;
 #endif
@@ -1296,6 +1300,10 @@ void testCourseSummaryValidationAndDetailsShareWalSnapshot(
   assert(queryInt(mutated.get(), "SELECT ruleset_version FROM replays WHERE "
                                  "id=" +
                                      std::to_string(stageReplayId)) == 99);
+  mutated.reset();
+  const auto laterSummaries = helper.ListCourseReplays(kCourseId, 0);
+  assert(std::none_of(laterSummaries.begin(), laterSummaries.end(),
+                      [&](const auto &value) { return value.id == targetId; }));
 #else
   (void)root;
 #endif
