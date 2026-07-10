@@ -592,9 +592,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(input_profile_tests
+        tests/input_profile_tests.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+    )
+    target_include_directories(input_profile_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(input_profile_tests PRIVATE cxx_std_23)
+    target_compile_definitions(input_profile_tests PRIVATE INPUT_PROFILE_STORE_TESTING)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_profile_tests PRIVATE SDL2)
+    endif()
+
     function(asobmashow_register_test target_name)
-        add_test(NAME ${target_name} COMMAND $<TARGET_FILE:${target_name}>)
-        set_tests_properties(${target_name} PROPERTIES
+        set(test_name ${target_name})
+        if(ARGC GREATER 1)
+            set(test_name ${ARGV1})
+        endif()
+        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}>)
+        set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
@@ -616,4 +637,5 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    asobmashow_register_test(input_profile_tests foundation_input_profile)
 endif()
