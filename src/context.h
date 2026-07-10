@@ -13,6 +13,7 @@
 #include "audio/Jukebox.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
+#include "input/InputDeviceRegistry.h"
 #include "view/UiTheme.h"
 class ApplicationContext {
 
@@ -21,6 +22,7 @@ public:
   SceneManager *sceneManager = nullptr;
   Uint64 currentFrame = 0;
   AppSettings settings;
+  InputDeviceRegistry inputDeviceRegistry;
   Jukebox jukebox;
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
