@@ -401,6 +401,131 @@ void testInvalidNewProvenanceFailsLoad(const std::filesystem::path &root) {
   assert(!helper.LoadCourseReplay(*courseId).has_value());
 }
 
+void testInvalidProvenanceRejectsReplayWrites(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-provenance-write" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto assertRejectedWithoutRows = [&](const ScoreProvenance &value,
+                                             const std::string &label) {
+    ReplayData chartReplay = sampleReplay(root, "invalid-chart-" + label);
+    chartReplay.provenance = value;
+    assert(!helper.SaveReplay(chartReplay).has_value());
+
+    CourseReplayData invalidCourse;
+    invalidCourse.courseId = 60;
+    invalidCourse.courseName = "Invalid course provenance";
+    invalidCourse.provenance = value;
+    invalidCourse.stages.push_back(
+        {.replay = sampleReplay(root, "valid-stage-" + label)});
+    assert(!helper.SaveCourseReplay(invalidCourse).has_value());
+
+    CourseReplayData invalidStage;
+    invalidStage.courseId = 61;
+    invalidStage.courseName = "Invalid stage provenance";
+    invalidStage.provenance = sampleProvenance("valid-course-" + label);
+    invalidStage.stages.push_back(
+        {.replay = sampleReplay(root, "invalid-stage-" + label)});
+    invalidStage.stages.front().replay.provenance = value;
+    assert(!helper.SaveCourseReplay(invalidStage).has_value());
+
+    auto db = openDatabase(path);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
+           0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_events") == 0);
+  };
+
+  auto futureSchema = sampleProvenance("future-schema");
+  futureSchema.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
+  assertRejectedWithoutRows(futureSchema, "future-schema");
+
+  auto futureRuleset = sampleProvenance("future-ruleset");
+  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
+  assertRejectedWithoutRows(futureRuleset, "future-ruleset");
+
+  auto invalidEnum = sampleProvenance("invalid-enum");
+  invalidEnum.eligibility = static_cast<ScoreEligibility>(999);
+  assertRejectedWithoutRows(invalidEnum, "invalid-enum");
+}
+
+void testChartSummariesOmitInvalidProvenanceAndCountValidLimit(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-chart-summaries" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  ReplayData replay = sampleReplay(root, "summary-chart");
+  std::vector<int> replayIds;
+  for (int i = 0; i < 4; ++i) {
+    replay.finalScore = 100 + i;
+    const auto id = helper.SaveReplay(replay);
+    assert(id.has_value());
+    replayIds.push_back(*id);
+  }
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET ruleset_version=99 WHERE id=" +
+                            std::to_string(replayIds[2]));
+  execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(replayIds[3]));
+  db.reset();
+
+  const auto limited = helper.ListReplays(replay.chartMeta, 2);
+  assert(limited.size() == 2);
+  assert(limited[0].id == replayIds[1]);
+  assert(limited[1].id == replayIds[0]);
+
+  const auto all = helper.ListReplays(replay.chartMeta, 0);
+  assert(all.size() == 2);
+  assert(all[0].id == replayIds[1]);
+  assert(all[1].id == replayIds[0]);
+}
+
+void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-course-summaries" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  CourseReplayData course;
+  course.courseId = 62;
+  course.courseName = "Summary course";
+  course.completedCharts = 1;
+  course.totalCharts = 1;
+  course.provenance = sampleProvenance("summary-course");
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "summary-course-stage")});
+
+  std::vector<int> courseReplayIds;
+  for (int i = 0; i < 4; ++i) {
+    course.finalScore = 200 + i;
+    const auto id = helper.SaveCourseReplay(course);
+    assert(id.has_value());
+    courseReplayIds.push_back(*id);
+  }
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE course_replays SET eligibility=2 WHERE id=" +
+                            std::to_string(courseReplayIds[2]));
+  execOrAbort(db.get(),
+              "UPDATE course_replays SET provenance_json='{' WHERE id=" +
+                  std::to_string(courseReplayIds[3]));
+  db.reset();
+
+  const auto limited = helper.ListCourseReplays(course.courseId, 2);
+  assert(limited.size() == 2);
+  assert(limited[0].id == courseReplayIds[1]);
+  assert(limited[1].id == courseReplayIds[0]);
+
+  const auto all = helper.ListCourseReplays(course.courseId, 0);
+  assert(all.size() == 2);
+  assert(all[0].id == courseReplayIds[1]);
+  assert(all[1].id == courseReplayIds[0]);
+}
+
 void testFutureVersionRejectsWithoutSchemaMutation(
     const std::filesystem::path &root) {
   const auto path = root / "future" / "replay.db";
@@ -490,6 +615,9 @@ int main() {
   testVersion2MigrationPreservesOutcomesAndRows(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testInvalidNewProvenanceFailsLoad(root);
+  testInvalidProvenanceRejectsReplayWrites(root);
+  testChartSummariesOmitInvalidProvenanceAndCountValidLimit(root);
+  testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testExistingListLimits(root);
 

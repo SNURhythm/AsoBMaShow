@@ -338,6 +338,114 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   assert(!tableExists(after.get(), "course_scores"));
 }
 
+void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
+    const std::filesystem::path &root) {
+  const auto path = root / "legacy-public-api" / "score.db";
+  ScoreDBHelper helper(path);
+  SqliteConnectionHandle db(helper.Connect());
+  assert(db);
+  assert(helper.CreateScoreTable(db.get()));
+  assert(helper.CreateCourseScoreTable(db.get()));
+
+  const auto meta = sampleMeta(root, "legacy-public-api");
+  const auto state = sampleState(12, 3);
+  CoursePlaySession session;
+  session.courseId = 51;
+  session.courseName = "Legacy public API course";
+  session.entries.push_back({.meta = meta});
+
+  assert(helper.InsertScore(db.get(), meta, state));
+  assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+}
+
+void testFutureVersionRejectsDirectScoreWrites(
+    const std::filesystem::path &root) {
+  const auto path = root / "future-direct-write" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  SqliteConnectionHandle db(helper.Connect());
+  assert(db);
+  execOrAbort(db.get(), "PRAGMA user_version = 99");
+  const std::string schemaBefore = schemaSnapshot(db.get());
+
+  const auto meta = sampleMeta(root, "future-direct-write");
+  const auto state = sampleState(9, 1);
+  CoursePlaySession session;
+  session.courseId = 52;
+  session.courseName = "Future direct write course";
+  session.entries.push_back({.meta = meta});
+
+  assert(!helper.InsertScore(db.get(), meta, state));
+  assert(!helper.InsertCourseScore(db.get(), session, state, 1, 1));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 99);
+  assert(schemaSnapshot(db.get()) == schemaBefore);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 0);
+}
+
+void testInvalidProvenanceRejectsScoreWrites(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-provenance-write" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto meta = sampleMeta(root, "invalid-provenance-write");
+  const auto state = sampleState(11, 2);
+  CoursePlaySession session;
+  session.courseId = 53;
+  session.courseName = "Invalid provenance course";
+  session.entries.push_back({.meta = meta});
+
+  const auto assertRejectedWithoutRows = [&](const ScoreProvenance &value) {
+    const std::uint64_t revisionBefore = helper.GetRevision();
+    assert(!helper.SaveScore(meta, state, value));
+    assert(!helper.SaveCourseScore(session, state, 1, 1, value));
+    assert(helper.GetRevision() == revisionBefore);
+
+    auto db = openDatabase(path);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 0);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 0);
+  };
+
+  auto futureSchema = sampleProvenance("future-schema");
+  futureSchema.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
+  assertRejectedWithoutRows(futureSchema);
+
+  auto futureRuleset = sampleProvenance("future-ruleset");
+  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
+  assertRejectedWithoutRows(futureRuleset);
+
+  auto invalidEnum = sampleProvenance("invalid-enum");
+  invalidEnum.gaugeType = static_cast<GaugeType>(999);
+  assertRejectedWithoutRows(invalidEnum);
+}
+
+void testInvalidProvenanceDoesNotCreateScoreDatabase(
+    const std::filesystem::path &root) {
+  auto invalid = sampleProvenance("no-database");
+  invalid.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
+  const auto meta = sampleMeta(root, "no-database");
+  const auto state = sampleState(7, 1);
+
+  const auto chartPath = root / "invalid-chart-no-database" / "score.db";
+  ScoreDBHelper chartHelper(chartPath);
+  assert(!chartHelper.SaveScore(meta, state, invalid));
+  assert(!std::filesystem::exists(chartPath));
+
+  CoursePlaySession session;
+  session.courseId = 54;
+  session.courseName = "Invalid provenance no database";
+  session.entries.push_back({.meta = meta});
+  const auto coursePath = root / "invalid-course-no-database" / "score.db";
+  ScoreDBHelper courseHelper(coursePath);
+  assert(!courseHelper.SaveCourseScore(session, state, 1, 1, invalid));
+  assert(!std::filesystem::exists(coursePath));
+}
+
 } // namespace
 
 int main() {
@@ -349,6 +457,10 @@ int main() {
   testVersion4MigrationPreservesOutcomesAndRows(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
+  testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(root);
+  testFutureVersionRejectsDirectScoreWrites(root);
+  testInvalidProvenanceRejectsScoreWrites(root);
+  testInvalidProvenanceDoesNotCreateScoreDatabase(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

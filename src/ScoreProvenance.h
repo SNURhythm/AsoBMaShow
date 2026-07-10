@@ -122,6 +122,10 @@ struct ScoreProvenanceBuildInput {
 [[nodiscard]] std::string
 serializeScoreProvenance(const ScoreProvenance &provenance);
 
+[[nodiscard]] std::optional<std::string>
+serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
+                                  std::string &error);
+
 [[nodiscard]] std::optional<ScoreProvenance>
 deserializeScoreProvenance(std::string_view serialized, std::string &error);
 

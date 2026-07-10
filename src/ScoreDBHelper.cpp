@@ -1118,6 +1118,18 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 const RhythmState &state,
                                 const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(provenance, provenanceError);
+  if (!provenanceJson.has_value()) {
+    SDL_Log("Refusing to save score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+  if (!EnsureSchema(db)) {
+    return false;
+  }
+
   const char *query =
       "INSERT INTO scores ("
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
@@ -1174,7 +1186,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(provenance.eligibility));
-  bindSqliteText(stmt.get(), bindIndex++, serializeScoreProvenance(provenance));
+  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1192,6 +1204,18 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       const RhythmState &state,
                                       int completedCharts, int totalCharts,
                                       const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(provenance, provenanceError);
+  if (!provenanceJson.has_value()) {
+    SDL_Log("Refusing to save course score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+  if (!EnsureSchema(db)) {
+    return false;
+  }
+
   const char *query =
       "INSERT INTO course_scores ("
       "course_id, course_key, course_name, course_group_name, constraint_json,"
@@ -1259,7 +1283,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(provenance.eligibility));
-  bindSqliteText(stmt.get(), bindIndex++, serializeScoreProvenance(provenance));
+  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1272,13 +1296,20 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state,
                               const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
+           .has_value()) {
+    SDL_Log("Refusing to save score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return false;
   }
 
   const bool result =
-      EnsureSchema(connection.get()) &&
       InsertScore(connection.get(), chartMeta, state, provenance);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
@@ -1290,13 +1321,20 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
+  std::string provenanceError;
+  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
+           .has_value()) {
+    SDL_Log("Refusing to save course score with invalid provenance: %s",
+            provenanceError.c_str());
+    return false;
+  }
+
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return false;
   }
 
   const bool result =
-      EnsureSchema(connection.get()) &&
       InsertCourseScore(connection.get(), session, state, completedCharts,
                         totalCharts, provenance);
   if (result) {

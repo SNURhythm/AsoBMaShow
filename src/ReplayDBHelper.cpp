@@ -441,7 +441,20 @@ std::optional<ScoreProvenance> readStoredProvenance(sqlite3_stmt *stmt,
   return provenance;
 }
 
-std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
+std::optional<std::string>
+validatedProvenanceJson(const ScoreProvenance &provenance,
+                        const char *context) {
+  std::string error;
+  auto serialized = serializeValidatedScoreProvenance(provenance, error);
+  if (!serialized.has_value()) {
+    SDL_Log("Refusing to save %s with invalid provenance: %s", context,
+            error.c_str());
+  }
+  return serialized;
+}
+
+std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
+                                    const std::string &provenanceJson) {
   const char *replayInsert =
       "INSERT INTO replays ("
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
@@ -512,8 +525,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay) {
                    replay.provenance.ruleset.version);
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    static_cast<int>(replay.provenance.eligibility));
-  bindSqliteText(replayStmt.get(), bindIndex++,
-                 serializeScoreProvenance(replay.provenance));
+  bindSqliteText(replayStmt.get(), bindIndex++, provenanceJson);
 
   int rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -857,6 +869,12 @@ bool ReplayDBHelper::EnsureSchema() {
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
+  const auto provenanceJson =
+      validatedProvenanceJson(replay.provenance, "replay");
+  if (!provenanceJson.has_value()) {
+    return std::nullopt;
+  }
+
   SqliteConnectionHandle dbHandle(Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
@@ -875,7 +893,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const auto replayId = insertReplayRows(db, replay);
+  const auto replayId = insertReplayRows(db, replay, *provenanceJson);
   if (!replayId.has_value()) {
     return std::nullopt;
   }
@@ -892,6 +910,22 @@ std::optional<int>
 ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   if (replay.stages.empty()) {
     return std::nullopt;
+  }
+
+  const auto courseProvenanceJson =
+      validatedProvenanceJson(replay.provenance, "course replay");
+  if (!courseProvenanceJson.has_value()) {
+    return std::nullopt;
+  }
+  std::vector<std::string> stageProvenanceJson;
+  stageProvenanceJson.reserve(replay.stages.size());
+  for (const auto &stage : replay.stages) {
+    auto serialized =
+        validatedProvenanceJson(stage.replay.provenance, "course replay stage");
+    if (!serialized.has_value()) {
+      return std::nullopt;
+    }
+    stageProvenanceJson.push_back(std::move(*serialized));
   }
 
   SqliteConnectionHandle dbHandle(Connect());
@@ -955,8 +989,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
                    replay.provenance.ruleset.version);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    static_cast<int>(replay.provenance.eligibility));
-  bindSqliteText(courseStmt.get(), bindIndex++,
-                 serializeScoreProvenance(replay.provenance));
+  bindSqliteText(courseStmt.get(), bindIndex++, *courseProvenanceJson);
 
   int rc = sqlite3_step(courseStmt.get());
   courseStmt.reset();
@@ -979,7 +1012,8 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   }
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
-    auto stageReplayId = insertReplayRows(db, replay.stages[i].replay);
+    auto stageReplayId =
+        insertReplayRows(db, replay.stages[i].replay, stageProvenanceJson[i]);
     if (!stageReplayId.has_value()) {
       return std::nullopt;
     }
@@ -1029,32 +1063,32 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "r.play_option2_seed, r.assist_option, r.max_combo,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id),"
-      "r.ruleset_version, r.eligibility "
+      "r.ruleset_version, r.eligibility, r.provenance_json "
       "FROM replays r WHERE ";
   query += replayChartMatchPredicate("r");
   query += " AND NOT EXISTS ("
            "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
            ") ORDER BY r.id DESC";
-  if (hasLimit) {
-    query += " LIMIT ?";
-  }
-
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "preparing replay list",
                                     logSqlErrorText)) {
     return replays;
   }
 
-  int bindIndex = bindReplayChartMatch(stmt.get(), 1, match);
-  if (hasLimit) {
-    sqlite3_bind_int(stmt.get(), bindIndex++, limit);
-  }
+  bindReplayChartMatch(stmt.get(), 1, match);
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (!readStoredProvenance(stmt.get(), 20, 21, 22, "replay summary")
+             .has_value()) {
+      continue;
+    }
     ReplaySummary summary = readReplaySummary(stmt.get(), 17, 18, 19, 20, 21);
     summary.maxScore = maxScore;
     summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));
+    if (hasLimit && static_cast<int>(replays.size()) >= limit) {
+      break;
+    }
   }
   return replays;
 }
@@ -1087,13 +1121,10 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
       "(SELECT COUNT(*) FROM replay_touch_samples t "
       "JOIN course_replay_stages s ON s.replay_id = t.replay_id "
       "WHERE s.course_replay_id = cr.id),"
-      "cr.ruleset_version, cr.eligibility "
+      "cr.ruleset_version, cr.eligibility, cr.provenance_json "
       "FROM course_replays cr "
       "WHERE cr.course_id = ? "
       "ORDER BY cr.id DESC";
-  if (hasLimit) {
-    query += " LIMIT ?";
-  }
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
@@ -1102,11 +1133,12 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   }
 
   sqlite3_bind_int(stmt.get(), 1, courseId);
-  if (hasLimit) {
-    sqlite3_bind_int(stmt.get(), 2, limit);
-  }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (!readStoredProvenance(stmt.get(), 15, 16, 17, "course replay summary")
+             .has_value()) {
+      continue;
+    }
     ReplaySummary summary;
     summary.id = sqlite3_column_int(stmt.get(), 0);
     summary.courseReplay = true;
@@ -1137,6 +1169,9 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
       summary.eligibility = static_cast<ScoreEligibility>(eligibility);
     }
     replays.push_back(std::move(summary));
+    if (hasLimit && static_cast<int>(replays.size()) >= limit) {
+      break;
+    }
   }
   return replays;
 }
