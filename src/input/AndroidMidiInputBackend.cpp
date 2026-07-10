@@ -3,6 +3,7 @@
 #if defined(__ANDROID__)
 
 #include "QueuedMidiInputBackend.h"
+#include "Utf16ToUtf8.h"
 
 #include <SDL2/SDL_system.h>
 #include <jni.h>
@@ -74,13 +75,27 @@ std::string jstringToUtf8(JNIEnv *env, jstring value) {
   if (env == nullptr || value == nullptr) {
     return {};
   }
-  const char *characters = env->GetStringUTFChars(value, nullptr);
+  const jsize length = env->GetStringLength(value);
+  const jchar *characters = env->GetStringChars(value, nullptr);
   if (characters == nullptr) {
     return {};
   }
-  std::string result(characters);
-  env->ReleaseStringUTFChars(value, characters);
-  return result;
+  std::u16string utf16;
+  try {
+    utf16.reserve(static_cast<std::size_t>(length));
+    for (jsize index = 0; index < length; ++index) {
+      utf16.push_back(static_cast<char16_t>(characters[index]));
+    }
+  } catch (...) {
+    env->ReleaseStringChars(value, characters);
+    return {};
+  }
+  env->ReleaseStringChars(value, characters);
+  try {
+    return utf16ToUtf8(utf16);
+  } catch (...) {
+    return {};
+  }
 }
 
 bool clearJavaException(JNIEnv *env, std::string &errorMessage) {

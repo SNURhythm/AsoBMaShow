@@ -25,10 +25,14 @@ import java.util.Map;
 import java.util.Set;
 
 final class AsoBMaShowMidiManager {
+    private static final long OPEN_RETRY_DELAY_MILLIS = 250;
+
     private final Activity activity;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, DeviceConnection> connections = new HashMap<>();
     private final Set<Integer> pendingDeviceIds = new HashSet<>();
+    private final Set<Integer> retryScheduledDeviceIds = new HashSet<>();
+    private final MidiOpenRetryPolicy retryPolicy = new MidiOpenRetryPolicy();
 
     private MidiManager midiManager;
     private MidiManager.DeviceCallback deviceCallback;
@@ -54,23 +58,23 @@ final class AsoBMaShowMidiManager {
         deviceCallback = new MidiManager.DeviceCallback() {
             @Override
             public void onDeviceAdded(MidiDeviceInfo info) {
-                scheduleOpen(info, callbackGeneration);
+                requestOpen(info, callbackGeneration, true);
             }
 
             @Override
             public void onDeviceRemoved(MidiDeviceInfo info) {
-                removeDevice(info.getId(), true);
+                removeDevice(info.getId(), true, callbackGeneration);
             }
 
             @Override
             public void onDeviceStatusChanged(MidiDeviceStatus status) {
-                // Port availability is represented by device add/remove and open callbacks.
+                requestOpen(status.getDeviceInfo(), callbackGeneration, true);
             }
         };
         try {
             midiManager.registerDeviceCallback(deviceCallback, mainHandler);
             for (MidiDeviceInfo info : midiManager.getDevices()) {
-                scheduleOpen(info, callbackGeneration);
+                requestOpen(info, callbackGeneration, true);
             }
         } catch (RuntimeException exception) {
             stopLocked();
@@ -98,6 +102,8 @@ final class AsoBMaShowMidiManager {
         }
         deviceCallback = null;
         pendingDeviceIds.clear();
+        retryScheduledDeviceIds.clear();
+        retryPolicy.clear();
         for (DeviceConnection connection : new ArrayList<>(connections.values())) {
             connection.close(false);
         }
@@ -105,26 +111,68 @@ final class AsoBMaShowMidiManager {
         midiManager = null;
     }
 
-    private synchronized void scheduleOpen(MidiDeviceInfo info, long callbackGeneration) {
+    private synchronized void requestOpen(MidiDeviceInfo info, long callbackGeneration,
+                                          boolean resetRetryBudget) {
         if (!started || generation != callbackGeneration || midiManager == null
                 || !hasOutputPort(info) || connections.containsKey(info.getId())
-                || !pendingDeviceIds.add(info.getId())) {
+                || pendingDeviceIds.contains(info.getId())
+                || retryScheduledDeviceIds.contains(info.getId())) {
             return;
         }
+        if (resetRetryBudget) {
+            retryPolicy.reset(info.getId());
+        }
+        attemptOpen(info, callbackGeneration);
+    }
+
+    private synchronized void attemptOpen(MidiDeviceInfo info, long callbackGeneration) {
+        if (!started || generation != callbackGeneration || midiManager == null
+                || connections.containsKey(info.getId())
+                || pendingDeviceIds.contains(info.getId())
+                || !retryPolicy.beginAttempt(info.getId())) {
+            return;
+        }
+        pendingDeviceIds.add(info.getId());
         try {
             midiManager.openDevice(info,
                     device -> completeOpen(info, device, callbackGeneration),
                     mainHandler);
         } catch (RuntimeException exception) {
             pendingDeviceIds.remove(info.getId());
+            scheduleRetry(info, callbackGeneration);
         }
+    }
+
+    private synchronized void scheduleRetry(MidiDeviceInfo info, long callbackGeneration) {
+        if (!started || generation != callbackGeneration || midiManager == null
+                || connections.containsKey(info.getId())
+                || pendingDeviceIds.contains(info.getId())
+                || !retryScheduledDeviceIds.add(info.getId())) {
+            return;
+        }
+        mainHandler.postDelayed(
+                () -> runScheduledRetry(info, callbackGeneration),
+                OPEN_RETRY_DELAY_MILLIS);
+    }
+
+    private synchronized void runScheduledRetry(MidiDeviceInfo info,
+                                                long callbackGeneration) {
+        if (!started || generation != callbackGeneration) {
+            return;
+        }
+        retryScheduledDeviceIds.remove(info.getId());
+        attemptOpen(info, callbackGeneration);
     }
 
     private synchronized void completeOpen(MidiDeviceInfo info, MidiDevice device,
                                            long callbackGeneration) {
         boolean expected = pendingDeviceIds.remove(info.getId());
-        if (!expected || !started || generation != callbackGeneration || device == null) {
+        if (!expected || !started || generation != callbackGeneration) {
             closeDevice(device);
+            return;
+        }
+        if (device == null) {
+            scheduleRetry(info, callbackGeneration);
             return;
         }
 
@@ -145,25 +193,39 @@ final class AsoBMaShowMidiManager {
                     ? baseDisplayName
                     : baseDisplayName + " — " + portName.trim();
             PortReceiver receiver = new PortReceiver(stableId);
+            boolean published = false;
             try {
+                nativeMidiDevice(stableId, portDisplayName, true);
+                published = true;
                 outputPort.connect(receiver);
                 connection.ports.add(new PortConnection(
                         outputPort, receiver, stableId, portDisplayName));
-                nativeMidiDevice(stableId, portDisplayName, true);
             } catch (RuntimeException exception) {
                 receiver.closeReceiver();
                 closePort(outputPort);
+                if (published) {
+                    nativeMidiDevice(stableId, portDisplayName, false);
+                }
             }
         }
         if (connection.ports.isEmpty()) {
             connection.close(false);
+            scheduleRetry(info, callbackGeneration);
             return;
         }
         connections.put(info.getId(), connection);
+        retryScheduledDeviceIds.remove(info.getId());
+        retryPolicy.remove(info.getId());
     }
 
-    private synchronized void removeDevice(int deviceId, boolean notifyNative) {
+    private synchronized void removeDevice(int deviceId, boolean notifyNative,
+                                           long callbackGeneration) {
+        if (!started || generation != callbackGeneration) {
+            return;
+        }
         pendingDeviceIds.remove(deviceId);
+        retryScheduledDeviceIds.remove(deviceId);
+        retryPolicy.remove(deviceId);
         DeviceConnection connection = connections.remove(deviceId);
         if (connection != null) {
             connection.close(notifyNative);
