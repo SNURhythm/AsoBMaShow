@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -90,6 +92,26 @@ class ScoreDBHelper {
 public:
   static constexpr int kCurrentSchemaVersion = 5;
 
+  class [[nodiscard]] PreparedScoreQueryDatabase {
+  public:
+    PreparedScoreQueryDatabase(const ScoreDBHelper &, sqlite3 *chartDatabase);
+    ~PreparedScoreQueryDatabase();
+    PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) = delete;
+    PreparedScoreQueryDatabase &
+    operator=(PreparedScoreQueryDatabase &&) noexcept = delete;
+
+    PreparedScoreQueryDatabase(const PreparedScoreQueryDatabase &) = delete;
+    PreparedScoreQueryDatabase &
+    operator=(const PreparedScoreQueryDatabase &) = delete;
+
+    [[nodiscard]] const std::optional<std::string> &error() const;
+
+  private:
+    struct State;
+
+    std::unique_ptr<State> state_;
+  };
+
   ScoreDBHelper() = default;
   explicit ScoreDBHelper(std::filesystem::path databasePath);
   ScoreDBHelper(const ScoreDBHelper &) = delete;
@@ -98,7 +120,14 @@ public:
   static ScoreDBHelper &GetInstance();
 
   void SetDatabasePath(std::filesystem::path databasePath);
-  [[nodiscard]] const std::filesystem::path &GetDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
+  [[nodiscard]] PreparedScoreQueryDatabase
+  PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const;
+  bool BindDatabasePath(std::filesystem::path databasePath,
+                        std::string &errorMessage);
+  [[nodiscard]] static bool HasActiveReads();
+  [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   sqlite3 *Connect();
   void Close(sqlite3 *db);
@@ -125,10 +154,13 @@ public:
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
   ScoreClearRankCache LoadBestClearRanks();
+  ScoreClearRankCache LoadBestClearRanks(sqlite3 *db, std::string_view schema);
   ScoreBestCache LoadBestScores();
+  ScoreBestCache LoadBestScores(sqlite3 *db, std::string_view schema);
   [[nodiscard]] std::uint64_t GetRevision() const;
 
 private:
   bool EnsureSchema(sqlite3 *db);
+  mutable std::shared_mutex databasePathMutex_;
   std::filesystem::path databasePath_;
 };

@@ -1355,7 +1355,9 @@ ProfileResult PlayerProfileManager::commitActiveProfile(std::string_view id) {
     return failure(ProfileError::IoFailure,
                    "unable to update profile metadata: " + errorMessage);
   }
-  if (!writeBootstrap(applicationDataRoot_, id, errorMessage)) {
+  if (!runPhase(dependencies_, ProfileMigrationPhase::WriteBootstrap,
+                errorMessage) ||
+      !writeBootstrap(applicationDataRoot_, id, errorMessage)) {
     std::string restoreError;
     if (!writeProfileMetadata(pathsFor(id).profileJson, previousMetadata,
                               restoreError)) {

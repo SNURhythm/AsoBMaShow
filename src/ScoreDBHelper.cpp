@@ -5,6 +5,7 @@
 #include "ChartSqlExpressions.h"
 #include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
+#include "ProfileDatabaseActivity.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -495,9 +496,17 @@ std::string bestClearMarkRankExpr() {
          std::to_string(kClearTypeFullComboRank) + " ELSE clear_type END)";
 }
 
-void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
-  const char *query = "SELECT chart_sha256, ln_mode, rank "
-                      "FROM score_sha256_clear_rank_cache";
+std::string qualifiedScoreTable(std::string_view schema,
+                                std::string_view table) {
+  return schema.empty() ? std::string(table)
+                        : std::string(schema) + "." + std::string(table);
+}
+
+void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
+                        std::string_view schema = {}) {
+  const std::string query =
+      "SELECT chart_sha256, ln_mode, rank FROM " +
+      qualifiedScoreTable(schema, "score_sha256_clear_rank_cache");
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "loading score clear ranks", logSqlErrorText)) {
@@ -512,11 +521,13 @@ void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache) {
   }
 }
 
-void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
-  const char *query =
+void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
+                         std::string_view schema = {}) {
+  const std::string query =
       "SELECT chart_sha256, ln_mode, score, max_score, max_combo, combo_break, "
       "final_gauge, clear_type, created_at "
-      "FROM score_sha256_best_score_cache";
+      "FROM " +
+      qualifiedScoreTable(schema, "score_sha256_best_score_cache");
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "loading score best scores", logSqlErrorText)) {
@@ -539,11 +550,13 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache) {
   }
 }
 
-void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks) {
-  const std::string query =
-      "SELECT course_id, " + bestClearMarkRankExpr() +
-      " FROM course_scores WHERE course_id IS NOT NULL AND course_id > 0 "
-      "GROUP BY course_id";
+void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks,
+                         std::string_view schema = {}) {
+  const std::string query = "SELECT course_id, " + bestClearMarkRankExpr() +
+                            " FROM " +
+                            qualifiedScoreTable(schema, "course_scores") +
+                            " WHERE course_id IS NOT NULL AND course_id > 0 "
+                            "GROUP BY course_id";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading course score clear ranks",
@@ -960,18 +973,78 @@ ScoreDBHelper::ScoreDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
 void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
-  databasePath_ = std::move(databasePath);
+  profile_database_activity::WriteGuard operation;
+  {
+    std::unique_lock lock(databasePathMutex_);
+    databasePath_ = std::move(databasePath);
+  }
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
-const std::filesystem::path &ScoreDBHelper::GetDatabasePath() const {
+std::filesystem::path ScoreDBHelper::GetDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
   return databasePath_;
 }
 
+std::filesystem::path ScoreDBHelper::GetResolvedDatabasePath() const {
+  std::shared_lock lock(databasePathMutex_);
+  return databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
+                               : databasePath_;
+}
+
+struct ScoreDBHelper::PreparedScoreQueryDatabase::State {
+  State(const ScoreDBHelper &helper, sqlite3 *chartDatabase) {
+    const std::filesystem::path path = helper.GetResolvedDatabasePath();
+    error = score_cache_queries::prepareScoreQueryDatabase(chartDatabase, path);
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::optional<std::string> error;
+};
+
+ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
+    const ScoreDBHelper &helper, sqlite3 *chartDatabase)
+    : state_(std::make_unique<State>(helper, chartDatabase)) {}
+
+ScoreDBHelper::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
+    default;
+
+const std::optional<std::string> &
+ScoreDBHelper::PreparedScoreQueryDatabase::error() const {
+  return state_->error;
+}
+
+ScoreDBHelper::PreparedScoreQueryDatabase
+ScoreDBHelper::PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const {
+  return PreparedScoreQueryDatabase(*this, chartDatabase);
+}
+
+bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
+                                     std::string &errorMessage) {
+  profile_database_activity::WriteGuard operation;
+  if (databasePath.empty()) {
+    errorMessage = "score database path is empty";
+    return false;
+  }
+  ScoreDBHelper candidate(databasePath);
+  if (!candidate.EnsureSchema()) {
+    errorMessage = "score database validation failed";
+    return false;
+  }
+  SetDatabasePath(std::move(databasePath));
+  return true;
+}
+
+bool ScoreDBHelper::HasActiveReads() {
+  return profile_database_activity::readsActive();
+}
+
+bool ScoreDBHelper::HasActiveWrites() {
+  return profile_database_activity::writesActive();
+}
+
 sqlite3 *ScoreDBHelper::Connect() {
-  const std::filesystem::path path =
-      databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
-                            : databasePath_;
+  const std::filesystem::path path = GetResolvedDatabasePath();
   const std::filesystem::path directory = path.parent_path();
   std::error_code directoryError;
   if (!directory.empty() &&
@@ -996,6 +1069,7 @@ sqlite3 *ScoreDBHelper::Connect() {
 void ScoreDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
 bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
+  profile_database_activity::WriteGuard operation;
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -1069,6 +1143,7 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
 }
 
 bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
+  profile_database_activity::WriteGuard operation;
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -1127,6 +1202,7 @@ bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
 }
 
 bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
+  profile_database_activity::WriteGuard operation;
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -1137,6 +1213,7 @@ bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
 }
 
 bool ScoreDBHelper::EnsureSchema() {
+  profile_database_activity::WriteGuard operation;
   SqliteConnectionHandle connection(Connect());
   return connection.get() != nullptr && EnsureSchema(connection.get());
 }
@@ -1145,6 +1222,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 const RhythmState &state,
                                 const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   const auto provenanceJson =
       serializeValidatedScoreProvenance(provenance, provenanceError);
@@ -1231,6 +1309,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       const RhythmState &state,
                                       int completedCharts, int totalCharts,
                                       const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   const auto provenanceJson =
       serializeValidatedScoreProvenance(provenance, provenanceError);
@@ -1323,6 +1402,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
 bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state,
                               const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   if (!serializeValidatedScoreProvenance(provenance, provenanceError)
            .has_value()) {
@@ -1348,6 +1428,7 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
+  profile_database_activity::WriteGuard writeGuard;
   std::string provenanceError;
   if (!serializeValidatedScoreProvenance(provenance, provenanceError)
            .has_value()) {
@@ -1373,6 +1454,7 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
 std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt) {
+  profile_database_activity::ReadGuard operation;
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return std::nullopt;
@@ -1430,6 +1512,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
 
 std::optional<ScoreBestSnapshot>
 ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
+  profile_database_activity::ReadGuard operation;
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
     return std::nullopt;
@@ -1478,6 +1561,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
 }
 
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
+  profile_database_activity::ReadGuard operation;
   ScoreClearRankCache cache;
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
@@ -1491,7 +1575,19 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   return cache;
 }
 
+ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks(sqlite3 *db,
+                                                      std::string_view schema) {
+  profile_database_activity::ReadGuard operation;
+  ScoreClearRankCache cache;
+  if (db != nullptr) {
+    loadBestChartRanks(db, cache, schema);
+    loadBestCourseRanks(db, cache.rankByCourseId, schema);
+  }
+  return cache;
+}
+
 ScoreBestCache ScoreDBHelper::LoadBestScores() {
+  profile_database_activity::ReadGuard operation;
   ScoreBestCache cache;
   SqliteConnectionHandle connection(Connect());
   if (connection.get() == nullptr) {
@@ -1500,6 +1596,16 @@ ScoreBestCache ScoreDBHelper::LoadBestScores() {
 
   if (EnsureSchema(connection.get())) {
     loadBestChartScores(connection.get(), cache);
+  }
+  return cache;
+}
+
+ScoreBestCache ScoreDBHelper::LoadBestScores(sqlite3 *db,
+                                             std::string_view schema) {
+  profile_database_activity::ReadGuard operation;
+  ScoreBestCache cache;
+  if (db != nullptr) {
+    loadBestChartScores(db, cache, schema);
   }
   return cache;
 }

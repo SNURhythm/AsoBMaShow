@@ -709,6 +709,12 @@ int main(int argv, char **args) {
 
 void run() {
   ApplicationContext context;
+  if (!context.profileReady()) {
+    SDL_Log("Application startup stopped because the active player profile "
+            "could not be initialized: %s",
+            context.profileInitializationResult.message.c_str());
+    return;
+  }
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
   const auto databaseStatus =
       app_database_initializer::initializeApplicationDatabases();

@@ -30,6 +30,7 @@ private:
   bms_parser::Chart *chart = nullptr;
   bool isGamePaused = false;
   bool escapeHandledByInputPipeline = false;
+  bool profileGameplayBlockerActive = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
 

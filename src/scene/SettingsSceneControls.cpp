@@ -510,7 +510,7 @@ void SettingsScene::persistSettings() {
           : ui_theme::ThemeMode::Dark;
   ui_theme::setActiveMode(nextMode);
   const bool themeChanged = previousMode != nextMode;
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save settings");
   }
   context.jukebox.setVisualsEnabled(context.settings.bgaEnabled);

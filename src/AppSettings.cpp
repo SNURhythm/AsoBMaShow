@@ -1,7 +1,5 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
-#include "Utils.h"
-#include "path.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -394,10 +392,6 @@ float sanitizePlayAreaWidth(float width) {
 }
 } // namespace
 
-std::filesystem::path AppSettings::configPath() {
-  return Utils::GetDocumentsPath("settings.cfg");
-}
-
 void AppSettings::sanitize() {
   audioVideo.sanitize();
   audioOffsetMs =
@@ -571,118 +565,6 @@ void AppSettings::setPlayAreaWidthForKeyMode(int keyMode, float width) {
   default:
     break;
   }
-}
-
-bool AppSettings::save() const {
-  AppSettings sanitized = *this;
-  sanitized.sanitize();
-
-  const auto path = configPath();
-  std::error_code ec;
-  std::filesystem::create_directories(path.parent_path(), ec);
-  if (ec) {
-    SDL_Log("Failed to create settings directory: %s", ec.message().c_str());
-    return false;
-  }
-
-  std::ofstream file(path, std::ios::trunc);
-  if (!file.is_open()) {
-    SDL_Log("Failed to open settings file for writing: %s",
-            fspath_to_utf8(path).c_str());
-    return false;
-  }
-
-  file << "# AsoBMaShow settings\n";
-  file << "audio_offset_ms=" << sanitized.audioOffsetMs << "\n";
-  file << "visual_offset_ms=" << sanitized.visualOffsetMs << "\n";
-  file << "visible_time_green_number=" << sanitized.visibleTimeGreenNumber
-       << "\n";
-  file << "visible_time_use_milliseconds="
-       << (sanitized.visibleTimeUseMilliseconds ? 1 : 0) << "\n";
-  file << "visible_time_bpm_strategy="
-       << visibleTimeBpmStrategyToString(sanitized.visibleTimeBpmStrategy)
-       << "\n";
-  file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
-       << "\n";
-  file << "prep_metronome_enabled=" << (sanitized.prepMetronomeEnabled ? 1 : 0)
-       << "\n";
-  file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
-       << "\n";
-  file << "touch_visualization_enabled="
-       << (sanitized.touchVisualizationEnabled ? 1 : 0) << "\n";
-  file << "archive_chart_preview_enabled="
-       << (sanitized.archiveChartPreviewEnabled ? 1 : 0) << "\n";
-  file << "bga_enabled=" << (sanitized.bgaEnabled ? 1 : 0) << "\n";
-  file << "bga_brightness_percent=" << sanitized.bgaBrightnessPercent << "\n";
-  file << "bga_blur_strength=" << sanitized.bgaBlurStrength << "\n";
-  file << "bga_display_mode="
-       << bgaDisplayModeToString(sanitized.bgaDisplayMode) << "\n";
-  file << "lane_angle_degrees=" << sanitized.laneAngleDegrees << "\n";
-  file << "lane_length=" << sanitized.laneLength << "\n";
-  file << "lane_beam_length_percent=" << sanitized.laneBeamLengthPercent
-       << "\n";
-  file << "note_start_position_percent=" << sanitized.noteStartPositionPercent
-       << "\n";
-  file << "floating_lane_cover_enabled="
-       << (sanitized.floatingLaneCoverEnabled ? 1 : 0) << "\n";
-  file << "play_area_width_4k=" << sanitized.playAreaWidth4K << "\n";
-  file << "play_area_width_5k=" << sanitized.playAreaWidth5K << "\n";
-  file << "play_area_width_6k=" << sanitized.playAreaWidth6K << "\n";
-  file << "play_area_width_7k=" << sanitized.playAreaWidth7K << "\n";
-  file << "play_area_width_8k=" << sanitized.playAreaWidth8K << "\n";
-  file << "play_area_width_10k=" << sanitized.playAreaWidth10K << "\n";
-  file << "play_area_width_14k=" << sanitized.playAreaWidth14K << "\n";
-  file << "note_priority_mode="
-       << notePriorityModeToString(sanitized.notePriorityMode) << "\n";
-  file << "judgement_indicator_enabled="
-       << (sanitized.judgementIndicatorEnabled ? 1 : 0) << "\n";
-  file << "judgement_indicator_y=" << sanitized.judgementIndicatorY << "\n";
-  file << "judgement_indicator_width_scale="
-       << sanitized.judgementIndicatorWidthScale << "\n";
-  file << "judgement_indicator_render_mode="
-       << judgementIndicatorRenderModeToString(
-              sanitized.judgementIndicatorRenderMode)
-       << "\n";
-  file << "judgement_text_y=" << sanitized.judgementTextY << "\n";
-  file << "judgement_counter_enabled="
-       << (sanitized.judgementCounterEnabled ? 1 : 0) << "\n";
-  file << "judgement_counter_position="
-       << judgementCounterPositionToString(sanitized.judgementCounterPosition)
-       << "\n";
-  file << "judgement_timing_fast_slow_criteria="
-       << judgementTimingDisplayCriteriaToString(
-              sanitized.judgementTimingFastSlowCriteria)
-       << "\n";
-  file << "judgement_timing_milliseconds_criteria="
-       << judgementTimingDisplayCriteriaToString(
-              sanitized.judgementTimingMillisecondsCriteria)
-       << "\n";
-  file << "gauge_bar_position="
-       << gaugeBarPositionToString(sanitized.gaugeBarPosition) << "\n";
-  file << "ui_theme_mode=" << uiThemeModeToString(sanitized.uiThemeMode)
-       << "\n";
-  file << "system_playback_show_jacket="
-       << (sanitized.systemPlaybackShowJacket ? 1 : 0) << "\n";
-  file << "system_playback_show_title="
-       << (sanitized.systemPlaybackShowTitle ? 1 : 0) << "\n";
-  file << "system_playback_show_artist="
-       << (sanitized.systemPlaybackShowArtist ? 1 : 0) << "\n";
-  file << "selected_gauge_type=" << sanitized.selectedGaugeType << "\n";
-  file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
-  file << "selected_ln_mode=" << sanitized.selectedLnMode << "\n";
-  file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
-  file << "selected_pacemaker_target=" << sanitized.selectedPacemakerTarget
-       << "\n";
-  file << "default_difficulty_tables_seeded="
-       << (sanitized.defaultDifficultyTablesSeeded ? 1 : 0) << "\n";
-  return file.good();
-}
-
-AppSettings AppSettings::load() {
-  AppSettings settings;
-  loadLegacyCfg(configPath(), settings);
-  settings.sanitize();
-  return settings;
 }
 
 bool AppSettings::loadLegacyCfg(const std::filesystem::path &path,
