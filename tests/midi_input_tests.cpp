@@ -568,6 +568,44 @@ void testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd() {
           "clearing a stopped backend releases every live ID");
 }
 
+void testLiveMidiRefreshReleasesReplacementBeforeNewClaims() {
+  constexpr std::string_view canonicalId = "midi:core:42";
+  LiveMidiDeviceIdAllocator ids;
+  require(ids.claim(1, std::string(canonicalId)) == canonicalId,
+          "old CoreMIDI endpoint initially owns the canonical ID");
+
+  constexpr std::array<std::uintptr_t, 1> existingKeys{1};
+  constexpr std::array<std::uintptr_t, 2> currentKeys{2, 3};
+  std::string replacementId;
+  std::string duplicateId;
+  std::vector<LiveMidiDeviceRefreshActionKind> actionKinds;
+  for (const auto action :
+       planLiveMidiDeviceRefresh(existingKeys, currentKeys)) {
+    actionKinds.push_back(action.kind);
+    if (action.kind == LiveMidiDeviceRefreshActionKind::Remove) {
+      ids.release(action.key);
+      continue;
+    }
+    const std::string claimed = ids.claim(action.key, std::string(canonicalId));
+    if (action.key == 2) {
+      replacementId = claimed;
+    } else if (action.key == 3) {
+      duplicateId = claimed;
+    }
+  }
+
+  require(actionKinds ==
+              std::vector<LiveMidiDeviceRefreshActionKind>{
+                  LiveMidiDeviceRefreshActionKind::Remove,
+                  LiveMidiDeviceRefreshActionKind::Add,
+                  LiveMidiDeviceRefreshActionKind::Add},
+          "same-refresh reconciliation removes stale endpoints before additions");
+  require(replacementId == canonicalId,
+          "replacement endpoint retains the saved canonical CoreMIDI ID");
+  require(!duplicateId.empty() && duplicateId != replacementId,
+          "simultaneously live duplicate CoreMIDI endpoints remain distinct");
+}
+
 void testUtf16MidiNamesConvertToCanonicalUtf8() {
   require(utf16ToUtf8(u"MIDI \u00e9") == "MIDI \xC3\xA9",
           "BMP MIDI device names convert to canonical UTF-8");
@@ -611,6 +649,7 @@ int main() {
   testBackendPublishesConnectBeforeSynchronousActivationPacket();
   testBackendRollsBackFailedActivationBeforeLaterPackets();
   testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd();
+  testLiveMidiRefreshReleasesReplacementBeforeNewClaims();
   testUtf16MidiNamesConvertToCanonicalUtf8();
   testUtf16MidiNamesReplaceMalformedSurrogates();
   return 0;

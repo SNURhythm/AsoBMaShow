@@ -3,6 +3,31 @@
 #include <cstddef>
 #include <utility>
 
+std::vector<LiveMidiDeviceRefreshAction>
+planLiveMidiDeviceRefresh(std::span<const std::uintptr_t> existingKeys,
+                          std::span<const std::uintptr_t> currentKeys) {
+  const std::unordered_set<std::uintptr_t> current(currentKeys.begin(),
+                                                   currentKeys.end());
+  std::vector<LiveMidiDeviceRefreshAction> actions;
+  actions.reserve(existingKeys.size() + currentKeys.size());
+  for (const std::uintptr_t key : existingKeys) {
+    if (!current.contains(key)) {
+      actions.push_back(
+          {.kind = LiveMidiDeviceRefreshActionKind::Remove, .key = key});
+    }
+  }
+
+  const std::unordered_set<std::uintptr_t> existing(existingKeys.begin(),
+                                                    existingKeys.end());
+  for (const std::uintptr_t key : currentKeys) {
+    if (!existing.contains(key)) {
+      actions.push_back(
+          {.kind = LiveMidiDeviceRefreshActionKind::Add, .key = key});
+    }
+  }
+  return actions;
+}
+
 std::string LiveMidiDeviceIdAllocator::claim(std::uintptr_t key,
                                              std::string preferredId) {
   const auto existing = claimedByKey_.find(key);

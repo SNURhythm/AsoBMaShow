@@ -16,7 +16,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -329,19 +328,51 @@ private:
   }
 
   void refreshSources() {
-    std::set<MIDIEndpointRef> currentEndpoints;
-    for (const auto &source : enumerateSources()) {
-      const MIDIEndpointRef endpoint = source.endpoint;
-      currentEndpoints.insert(endpoint);
-      if (connections_.contains(endpoint)) {
+    const auto sources = enumerateSources();
+    std::vector<std::uintptr_t> existingKeys;
+    existingKeys.reserve(connections_.size());
+    for (const auto &[endpoint, connection] : connections_) {
+      (void)connection;
+      existingKeys.push_back(static_cast<std::uintptr_t>(endpoint));
+    }
+    std::vector<std::uintptr_t> currentKeys;
+    currentKeys.reserve(sources.size());
+    for (const auto &source : sources) {
+      currentKeys.push_back(static_cast<std::uintptr_t>(source.endpoint));
+    }
+
+    for (const auto action :
+         planLiveMidiDeviceRefresh(existingKeys, currentKeys)) {
+      const auto endpoint = static_cast<MIDIEndpointRef>(action.key);
+      if (action.kind == LiveMidiDeviceRefreshActionKind::Remove) {
+        auto iterator = connections_.find(endpoint);
+        if (iterator == connections_.end()) {
+          continue;
+        }
+        auto connection = std::move(iterator->second);
+        connections_.erase(iterator);
+        connection->connected.store(false);
+        (void)MIDIPortDisconnectSource(port_, connection->endpoint);
+        connection->callbackLifetime.closeAndWait();
+        enqueueDevice({.stableId = connection->stableId,
+                       .displayName = connection->displayName,
+                       .deviceClass = input::DeviceClass::Midi,
+                       .connected = false});
+        liveIds_.release(action.key);
         continue;
       }
 
+      const auto source =
+          std::find_if(sources.begin(), sources.end(), [&](const auto &value) {
+            return value.endpoint == endpoint;
+          });
+      if (source == sources.end() || connections_.contains(endpoint)) {
+        continue;
+      }
       auto connection = std::make_unique<CoreMidiConnection>(this);
       connection->endpoint = endpoint;
-      const auto endpointKey = static_cast<std::uintptr_t>(endpoint);
-      connection->stableId = liveIds_.claim(endpointKey, source.stableId);
-      connection->displayName = source.displayName;
+      connection->stableId = liveIds_.claim(action.key, source->stableId);
+      connection->displayName = source->displayName;
       auto activation = beginDeviceActivation(
           {.stableId = connection->stableId,
            .displayName = connection->displayName,
@@ -351,29 +382,11 @@ private:
                                connection->callbackLifetime.token()) != noErr) {
         connection->connected.store(false);
         connection->callbackLifetime.closeAndWait();
-        liveIds_.release(endpointKey);
+        liveIds_.release(action.key);
         continue;
       }
       activation.commit();
       connections_.emplace(endpoint, std::move(connection));
-    }
-
-    for (auto iterator = connections_.begin();
-         iterator != connections_.end();) {
-      if (currentEndpoints.contains(iterator->first)) {
-        ++iterator;
-        continue;
-      }
-      auto connection = std::move(iterator->second);
-      iterator = connections_.erase(iterator);
-      connection->connected.store(false);
-      (void)MIDIPortDisconnectSource(port_, connection->endpoint);
-      connection->callbackLifetime.closeAndWait();
-      enqueueDevice({.stableId = connection->stableId,
-                     .displayName = connection->displayName,
-                     .deviceClass = input::DeviceClass::Midi,
-                     .connected = false});
-      liveIds_.release(static_cast<std::uintptr_t>(connection->endpoint));
     }
   }
 

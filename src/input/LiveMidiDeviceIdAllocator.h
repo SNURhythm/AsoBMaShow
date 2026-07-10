@@ -1,9 +1,25 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
+
+enum class LiveMidiDeviceRefreshActionKind {
+  Remove,
+  Add,
+};
+
+struct LiveMidiDeviceRefreshAction {
+  LiveMidiDeviceRefreshActionKind kind;
+  std::uintptr_t key;
+};
+
+[[nodiscard]] std::vector<LiveMidiDeviceRefreshAction>
+planLiveMidiDeviceRefresh(std::span<const std::uintptr_t> existingKeys,
+                          std::span<const std::uintptr_t> currentKeys);
 
 class LiveMidiDeviceIdAllocator {
 public:
