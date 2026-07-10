@@ -286,8 +286,42 @@ int main() {
     require(!std::filesystem::exists(missingPath),
             "loading a missing file does not create it");
 
-    const auto roundTripPath = testRoot / "round-trip.json";
+    const auto versionZeroPath = testRoot / "input-v0.json";
+    std::string versionZero = readFile(fixturePath("input-v1.json"));
+    const std::string currentVersion = "\"schemaVersion\": 1";
+    const auto versionPosition = versionZero.find(currentVersion);
+    require(versionPosition != std::string::npos,
+            "version-zero fixture source contains a schema version");
+    versionZero.replace(versionPosition, currentVersion.size(),
+                        "\"schemaVersion\": 0");
+    writeFile(versionZeroPath, versionZero);
+    const auto versionZeroResult = InputProfileStore::load(versionZeroPath);
+    require(versionZeroResult.status == InputProfileLoadStatus::Loaded &&
+                versionZeroResult.profile.schemaVersion ==
+                    InputProfile::kSchemaVersion &&
+                versionZeroResult.profile.bindings.size() == 1 &&
+                sameBinding(versionZeroResult.profile.bindings.front(),
+                            fixtureResult.profile.bindings.front()),
+            "version-zero input migrates in memory to the current schema");
+    require(readFile(versionZeroPath) == versionZero,
+            "loading version zero does not rewrite source bytes");
+    const auto migratedVersionZeroPath = testRoot / "migrated-input-v0.json";
     std::string errorMessage;
+    require(
+        InputProfileStore::saveAtomic(
+            migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 1") !=
+                std::string::npos,
+        "saving migrated version zero persists the current schema");
+
+    const auto negativeVersionPath = testRoot / "negative-version.json";
+    writeFile(negativeVersionPath, "{\"schemaVersion\":-1,\"bindings\":[]}\n");
+    require(InputProfileStore::load(negativeVersionPath).status ==
+                InputProfileLoadStatus::InvalidDocument,
+            "negative input schema versions fail closed");
+
+    const auto roundTripPath = testRoot / "round-trip.json";
+    errorMessage.clear();
     require(InputProfileStore::saveAtomic(roundTripPath, fixtureResult.profile,
                                           errorMessage),
             "valid profile saves atomically");
