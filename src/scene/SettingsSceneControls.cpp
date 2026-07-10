@@ -339,8 +339,7 @@ void SettingsScene::refreshSettingsText() {
     judgementCounterModeText->setText(judgementCounterModeLabel);
   }
   if (judgementTimingFastSlowCriteriaText != nullptr) {
-    judgementTimingFastSlowCriteriaText->setText(
-        judgementTimingFastSlowLabel);
+    judgementTimingFastSlowCriteriaText->setText(judgementTimingFastSlowLabel);
   }
   if (judgementTimingMillisecondsCriteriaText != nullptr) {
     judgementTimingMillisecondsCriteriaText->setText(
@@ -416,10 +415,10 @@ void SettingsScene::refreshSettingsText() {
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      judgementCounterModeButton, judgementCounterModeText,
-      context.settings.judgementCounterEnabled ? SettingsButtonTone::Success
-                                               : SettingsButtonTone::Danger);
+  applySemanticButtonStyle(judgementCounterModeButton, judgementCounterModeText,
+                           context.settings.judgementCounterEnabled
+                               ? SettingsButtonTone::Success
+                               : SettingsButtonTone::Danger);
   SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
   if (context.settings.judgementCounterEnabled) {
     judgementCounterPositionTone =
@@ -428,9 +427,9 @@ void SettingsScene::refreshSettingsText() {
             ? SettingsButtonTone::Info
             : SettingsButtonTone::Success;
   }
-  applySemanticButtonStyle(
-      judgementCounterPositionButton, judgementCounterPositionText,
-      judgementCounterPositionTone);
+  applySemanticButtonStyle(judgementCounterPositionButton,
+                           judgementCounterPositionText,
+                           judgementCounterPositionTone);
   auto judgementTimingCriteriaTone =
       [](AppSettings::JudgementTimingDisplayCriteria criteria) {
         if (criteria == AppSettings::JudgementTimingDisplayCriteria::Off) {
@@ -458,11 +457,11 @@ void SettingsScene::refreshSettingsText() {
       judgementTimingMillisecondsCriteriaText,
       judgementTimingCriteriaTone(
           context.settings.judgementTimingMillisecondsCriteria));
-  applySemanticButtonStyle(
-      gaugeBarPositionButton, gaugeBarPositionText,
-      context.settings.gaugeBarPosition == AppSettings::GaugeBarPosition::World
-          ? SettingsButtonTone::Info
-          : SettingsButtonTone::Success);
+  applySemanticButtonStyle(gaugeBarPositionButton, gaugeBarPositionText,
+                           context.settings.gaugeBarPosition ==
+                                   AppSettings::GaugeBarPosition::World
+                               ? SettingsButtonTone::Info
+                               : SettingsButtonTone::Success);
   applySemanticButtonStyle(bgaModeButton, bgaModeText,
                            context.settings.bgaEnabled
                                ? SettingsButtonTone::Success
@@ -487,6 +486,8 @@ void SettingsScene::refreshSettingsText() {
   applyTabStyle(visualTabButton, visualTabText, SettingsTab::Visual);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
   applyTabStyle(miscTabButton, miscTabText, SettingsTab::Misc);
+  applyTabStyle(audioTabButton, audioTabText, SettingsTab::Audio);
+  applyTabStyle(displayTabButton, displayTabText, SettingsTab::Display);
   applyTabStyle(difficultyTablesTabButton, difficultyTablesTabText,
                 SettingsTab::DifficultyTables);
   applyTabStyle(bmsLibraryTabButton, bmsLibraryTabText,

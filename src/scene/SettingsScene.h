@@ -2,6 +2,7 @@
 
 #include "../ChartDBHelper.h"
 #include "../ThreadCompat.h"
+#include "SettingsAudioVideoModel.h"
 #include "Scene.h"
 #include "play/Judge.h"
 #include <atomic>
@@ -19,6 +20,7 @@ class TextView;
 class TextInputBox;
 class Button;
 class ScrollView;
+class DropdownView;
 class BMSRenderer;
 class RhythmInputHandler;
 class RhythmLaneInputController;
@@ -56,6 +58,8 @@ private:
     Visual,
     Lane,
     Misc,
+    Audio,
+    Display,
     DifficultyTables,
     BmsLibrary,
   };
@@ -133,12 +137,16 @@ private:
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *miscTabButton = nullptr;
+  Button *audioTabButton = nullptr;
+  Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *miscTabText = nullptr;
+  TextView *audioTabText = nullptr;
+  TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
@@ -157,6 +165,24 @@ private:
   TextView *difficultyTableImportTableText = nullptr;
   TextView *difficultyTableImportProgressText = nullptr;
   Button *difficultyTableImportCloseButton = nullptr;
+  DropdownView *audioDeviceDropdown = nullptr;
+  DropdownView *audioSampleRateDropdown = nullptr;
+  DropdownView *audioBufferDropdown = nullptr;
+  DropdownView *displayModeDropdown = nullptr;
+  DropdownView *displayIndexDropdown = nullptr;
+  DropdownView *displayResolutionDropdown = nullptr;
+  DropdownView *displayVsyncDropdown = nullptr;
+  DropdownView *displayFrameCapDropdown = nullptr;
+  TextInputBox *masterVolumeInput = nullptr;
+  TextInputBox *bgmVolumeInput = nullptr;
+  TextInputBox *keysoundVolumeInput = nullptr;
+  TextView *audioEffectiveText = nullptr;
+  TextView *audioStatusText = nullptr;
+  TextView *displayStatusText = nullptr;
+  View *displayPreviewOverlayRoot = nullptr;
+  TextView *displayPreviewCountdownText = nullptr;
+  TextView *displayPreviewStatusText = nullptr;
+  Button *displayPreviewKeepButton = nullptr;
   ScrollView *scrollView = nullptr;
   bool previewActive = false;
   bool previewPanelFolded = false;
@@ -226,6 +252,21 @@ private:
   int lastSafeRight = -1;
   SettingsTab lastLaidOutTab = SettingsTab::Timing;
   std::uint64_t observedLibraryRevision = 0;
+  std::unique_ptr<SettingsAudioVideoSession> audioVideoSession;
+  player_settings::AudioSettings audioDraft;
+  player_settings::VideoSettings displayDraft;
+  std::string audioStatusMessage;
+  std::string displayStatusMessage;
+  SDL_Color audioStatusColor{157, 177, 200, 255};
+  SDL_Color displayStatusColor{157, 177, 200, 255};
+  bool audioDeviceDropdownOpen = false;
+  bool audioSampleRateDropdownOpen = false;
+  bool audioBufferDropdownOpen = false;
+  bool displayModeDropdownOpen = false;
+  bool displayIndexDropdownOpen = false;
+  bool displayResolutionDropdownOpen = false;
+  bool displayVsyncDropdownOpen = false;
+  bool displayFrameCapDropdownOpen = false;
 
   void initView();
   void resetViewState();
@@ -238,11 +279,13 @@ private:
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
-  View *
-  buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
+  void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
   void stopLanePreview();
   void ensurePreviewRenderer();
@@ -259,8 +302,7 @@ private:
   void requestDifficultyTableStatus(const std::string &text,
                                     const SDL_Color &color,
                                     bool reloadTables = false);
-  void requestChartFolderStatus(const std::string &text,
-                                const SDL_Color &color,
+  void requestChartFolderStatus(const std::string &text, const SDL_Color &color,
                                 bool reloadTables = false);
   void requestDifficultyTableImportProgress(int current, int total,
                                             const std::string &tableName,
@@ -285,6 +327,20 @@ private:
   void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
   void persistSettings();
+  void ensureAudioVideoSession();
+  void refreshAudioVideoControls();
+  void updateDisplayPreviewUi();
+  void applyAudioStreamDraft();
+  void applyDisplayDraft();
+  void keepDisplayPreview();
+  void revertDisplayPreview();
+  void cancelDisplayPreviewForTabExit();
+  void setAudioStatus(const std::string &message, const SDL_Color &color);
+  void setDisplayStatus(const std::string &message, const SDL_Color &color);
+  void syncVolumeInputText(bool force = false);
+  void commitVolumeInput(TextInputBox *input, int busIndex);
+  void adjustVolume(int busIndex, int deltaPercent);
+  bool playSettingsTestSound();
   void syncOffsetInputText(bool force = false);
   void syncVisualOffsetInputText(bool force = false);
   void syncVisibleTimeInputText(bool force = false);

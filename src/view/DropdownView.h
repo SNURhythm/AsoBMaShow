@@ -20,6 +20,7 @@ public:
   struct Option {
     std::string id;
     std::string label;
+    bool available = true;
     std::optional<Color> leadingColor;
   };
 
@@ -50,6 +51,7 @@ private:
     View *indicator = nullptr;
     TextView *text = nullptr;
     std::string id;
+    bool available = true;
     std::optional<Color> leadingColor;
   };
 
@@ -79,6 +81,10 @@ private:
   [[nodiscard]] bool optionsMatch(const std::vector<Option> &options) const;
   [[nodiscard]] bool refreshRequiresOptionRebuild(const State &state) const;
   [[nodiscard]] bool pointInsideOpenArea(float uiX, float uiY) const;
+  [[nodiscard]] static bool optionSelectable(const State &state,
+                                             const Option &option) {
+    return state.enabled && option.available;
+  }
   static bool refreshIndicator(View *indicator,
                                const std::optional<Color> &color);
   bool handleEventsImpl(SDL_Event &event) override;
