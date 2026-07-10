@@ -33,11 +33,11 @@
 - Produces: `openValidatedSqliteDatabase(path, maximumVersion, enableForeignKeys, error, hooks) -> sqlite3 *`.
 - Consumes: raw family state and isolated-copy helpers already in `SqliteRAII.h`.
 
-- [ ] **Step 1: Add WAL-without-SHM, clean-corrupt, budget, and pragma-error tests**
+- [x] **Step 1: Add WAL-without-SHM, clean-corrupt, budget, and pragma-error tests**
 
 Create supported/future child-exit WAL fixtures, remove SHM without opening SQLite, and assert exact raw families for successful guarded open/close, future rejection, active writer, and injected no-checkpoint failure. Add a 4096-byte header-shaped corrupt clean file and assert both Connect methods return null without mutation. Add pure and sparse-file boundary tests for main+WAL+reserve at 512 MiB. Install a SQLite auto-extension authorizer that denies `journal_mode` and assert Connect returns null.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```sh
 cmake --build cmake-build-debug --target score_provenance_db_tests replay_db_helper_tests -j 6
@@ -48,15 +48,15 @@ ctest --test-dir cmake-build-debug \
 
 Expected: supported WAL-without-SHM creates SHM/current preflight fails; corrupt clean header passes preflight; denied pragma still returns a connection; unbounded budget helpers do not exist.
 
-- [ ] **Step 3: Add bounded exact-copy and usability validation**
+- [x] **Step 3: Add bounded exact-copy and usability validation**
 
 Replace unbounded `copy_file`/EOF comparison with helpers that copy/compare exactly the measured size and reject an extra byte. Enforce overflow-safe `main + wal + 64 KiB <= 512 MiB`. For clean existing databases copy the complete main file; for WAL keep first-page sparse main. Query both `PRAGMA user_version` and `SELECT count(*) FROM sqlite_schema` on the isolated family.
 
-- [ ] **Step 4: Add guarded open pair**
+- [x] **Step 4: Add guarded open pair**
 
 After isolated approval and the test hook, open a no-checkpoint guard, run `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE`, reread/range-check the visible version, roll back while retaining exclusive ownership, and set `journal_mode=WAL`. Open a second lazy production handle while the guard remains open; configure no-checkpoint, busy timeout, and optional foreign keys through C APIs. Close the guard only after the production handle is ready. On any failure, close all handles and return null.
 
-- [ ] **Step 5: Route both Connect methods and run GREEN**
+- [x] **Step 5: Route both Connect methods and run GREEN**
 
 Replace separate preflight/open/pragma sequences with `openValidatedSqliteDatabase`. Run the focused command until both targets pass, then commit Task 1.
 

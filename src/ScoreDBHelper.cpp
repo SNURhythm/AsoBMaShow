@@ -977,25 +977,13 @@ sqlite3 *ScoreDBHelper::Connect() {
     return nullptr;
   }
 
-  std::string preflightError;
-  if (!preflightSqliteUserVersion(path, kScoreDatabaseSchemaVersion,
-                                  preflightError)
-           .has_value()) {
-    SDL_Log("Refusing to open score database %s: %s",
-            fspath_to_utf8(path).c_str(), preflightError.c_str());
-    return nullptr;
-  }
-
   std::string openError;
-  sqlite3 *db = openSqliteDatabase(path, openError);
+  sqlite3 *db = openValidatedSqliteDatabase(path, kScoreDatabaseSchemaVersion,
+                                            false, openError);
   if (db == nullptr) {
-    SDL_Log("Can't open score database: %s", openError.c_str());
+    SDL_Log("Refusing to open score database %s: %s",
+            fspath_to_utf8(path).c_str(), openError.c_str());
     return nullptr;
-  }
-
-  if (const auto pragmaError = applySqlitePragmas(
-          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
-    SDL_Log("Could not configure score database: %s", pragmaError->c_str());
   }
   return db;
 }

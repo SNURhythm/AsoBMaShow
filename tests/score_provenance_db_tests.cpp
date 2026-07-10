@@ -255,6 +255,25 @@ void createFutureDatabaseState(const std::filesystem::path &path,
   }
 }
 
+void createWalDatabaseWithVersion(const std::filesystem::path &path,
+                                  int userVersion) {
+  std::filesystem::create_directories(path.parent_path());
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    const std::string sql =
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+        "CREATE TABLE sentinel(value TEXT);"
+        "INSERT INTO sentinel VALUES('unchanged');"
+        "PRAGMA user_version=" +
+        std::to_string(userVersion);
+    executeChildSqlAndExit(path, sql.c_str());
+  }
+  waitForSuccessfulChild(child);
+  assert(std::filesystem::exists(path.string() + "-wal"));
+  assert(std::filesystem::exists(path.string() + "-shm"));
+}
+
 void createLargeFutureWalDatabase(const std::filesystem::path &path) {
   {
     auto db = openDatabase(path);
@@ -920,14 +939,164 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
 #endif
 }
 
+int denyJournalModeAuthorizer(void *, int action, const char *first,
+                              const char *, const char *, const char *) {
+  return action == SQLITE_PRAGMA && first != nullptr &&
+                 std::string_view(first) == "journal_mode"
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
+int installDenyJournalMode(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, denyJournalModeAuthorizer, nullptr);
+}
+
+class ScopedDenyJournalModeAutoExtension {
+public:
+  ScopedDenyJournalModeAutoExtension() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installDenyJournalMode)) == SQLITE_OK);
+  }
+  ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
+};
+
+void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
+  std::filesystem::create_directories(path.parent_path());
+  std::string bytes(4096, '\0');
+  constexpr std::string_view magic("SQLite format 3\0", 16);
+  std::copy(magic.begin(), magic.end(), bytes.begin());
+  bytes[16] = 0x10;
+  bytes[17] = 0;
+  bytes[18] = 1;
+  bytes[19] = 1;
+  std::ofstream output(path, std::ios::binary);
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  assert(output);
+}
+
+void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "wal-without-shm-supported" / "score.db";
+    createWalDatabaseWithVersion(path, 5);
+    assert(std::filesystem::remove(path.string() + "-shm"));
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(connection);
+    connection.reset();
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "wal-without-shm-future" / "score.db";
+    createWalDatabaseWithVersion(path, 99);
+    assert(std::filesystem::remove(path.string() + "-shm"));
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+#endif
+
+  {
+    const auto path = root / "header-shaped-corrupt" / "score.db";
+    writeHeaderShapedCorruptDatabase(path);
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "required-pragma-error" / "score.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
+    execOrAbort(db.get(), "PRAGMA user_version=5");
+    db.reset();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    ScoreDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+}
+
+#if !TARGET_OS_WINDOWS
+struct OwnedOpenRaceContext {
+  std::filesystem::path path;
+  std::optional<RawDatabaseFamilySnapshot> afterWriter;
+};
+
+void commitFutureVersionAfterSnapshot(void *rawContext) {
+  auto &context = *static_cast<OwnedOpenRaceContext *>(rawContext);
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    executeChildSqlAndExit(context.path, "PRAGMA wal_autocheckpoint=0;"
+                                         "PRAGMA user_version=99;");
+  }
+  waitForSuccessfulChild(child);
+  context.afterWriter = rawDatabaseFamilySnapshot(context.path);
+}
+
+bool failNoCheckpointConfiguration(sqlite3 *, void *, std::string &error) {
+  error = "injected no-checkpoint failure";
+  return false;
+}
+#endif
+
+void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
+    const std::filesystem::path &root) {
+  static_assert(sqliteSnapshotFitsBudget(
+      kMaximumSqliteSnapshotBytes - kSqliteSnapshotAuxiliaryReserveBytes, 0));
+  static_assert(!sqliteSnapshotFitsBudget(
+      kMaximumSqliteSnapshotBytes - kSqliteSnapshotAuxiliaryReserveBytes + 1,
+      0));
+  static_assert(!sqliteSnapshotFitsBudget(kMaximumSqliteSnapshotBytes / 2,
+                                          kMaximumSqliteSnapshotBytes / 2));
+#if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "owned-open-race" / "score.db";
+    createWalDatabaseWithVersion(path, 5);
+    OwnedOpenRaceContext context{.path = path};
+    SqliteValidatedOpenHooks hooks;
+    hooks.context = &context;
+    hooks.afterSnapshotValidated = commitFutureVersionAfterSnapshot;
+    std::string error;
+    SqliteConnectionHandle connection(
+        openValidatedSqliteDatabase(path, 5, false, error, hooks));
+    assert(!connection);
+    assert(context.afterWriter.has_value());
+    assert(rawDatabaseFamilySnapshot(path) == *context.afterWriter);
+  }
+
+  {
+    const auto path = root / "wal-without-shm-config-error" / "score.db";
+    createWalDatabaseWithVersion(path, 5);
+    assert(std::filesystem::remove(path.string() + "-shm"));
+    const auto before = rawDatabaseFamilySnapshot(path);
+    SqliteValidatedOpenHooks hooks;
+    hooks.configureNoCheckpoint = failNoCheckpointConfiguration;
+    std::string error;
+    SqliteConnectionHandle connection(
+        openValidatedSqliteDatabase(path, 5, false, error, hooks));
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+#else
+  (void)root;
+#endif
+}
+
 void testLargeWalPreflightUsesOnlySparseFirstPage(
     const std::filesystem::path &root) {
-  static_assert(sqliteWalSnapshotSizeIsBounded(
-      kMaximumWindowsWalSnapshotMainBytes, false));
-  static_assert(!sqliteWalSnapshotSizeIsBounded(
-      kMaximumWindowsWalSnapshotMainBytes + 1, false));
-  static_assert(sqliteWalSnapshotSizeIsBounded(
-      kMaximumWindowsWalSnapshotMainBytes + 1, true));
 #if !TARGET_OS_WINDOWS
   const auto sourcePath = root / "preflight-sparse-source" / "score.db";
   {
@@ -1003,6 +1172,8 @@ int main() {
   testFutureScoreWritesPreservePersistentDatabaseState(root);
   testFutureScorePreflightPreservesRawDatabaseFamily(root);
   testScorePreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
+  testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
   testLargeWalPreflightUsesOnlySparseFirstPage(root);
 
   std::filesystem::remove_all(root);

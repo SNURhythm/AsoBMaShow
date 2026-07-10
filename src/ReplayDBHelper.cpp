@@ -732,26 +732,13 @@ sqlite3 *ReplayDBHelper::Connect() {
     return nullptr;
   }
 
-  std::string preflightError;
-  if (!preflightSqliteUserVersion(path, kReplayDatabaseSchemaVersion,
-                                  preflightError)
-           .has_value()) {
-    SDL_Log("Refusing to open replay database %s: %s",
-            fspath_to_utf8(path).c_str(), preflightError.c_str());
-    return nullptr;
-  }
-
   std::string openError;
-  sqlite3 *db = openSqliteDatabase(path, openError);
+  sqlite3 *db = openValidatedSqliteDatabase(path, kReplayDatabaseSchemaVersion,
+                                            true, openError);
   if (db == nullptr) {
-    SDL_Log("Can't open replay database: %s", openError.c_str());
+    SDL_Log("Refusing to open replay database %s: %s",
+            fspath_to_utf8(path).c_str(), openError.c_str());
     return nullptr;
-  }
-
-  if (const auto pragmaError = applySqlitePragmas(
-          db, {"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL",
-               "PRAGMA synchronous=NORMAL"})) {
-    SDL_Log("Could not configure replay database: %s", pragmaError->c_str());
   }
   return db;
 }

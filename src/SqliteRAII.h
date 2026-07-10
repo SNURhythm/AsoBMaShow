@@ -432,8 +432,66 @@ readRawSqlitePageSize(const std::filesystem::path &path,
   return pageSize;
 }
 
+inline constexpr std::uintmax_t kMaximumSqliteSnapshotBytes =
+    512ULL * 1024ULL * 1024ULL;
+inline constexpr std::uintmax_t kSqliteSnapshotAuxiliaryReserveBytes =
+    64ULL * 1024ULL;
+
+inline constexpr bool sqliteSnapshotFitsBudget(std::uintmax_t mainBytes,
+                                               std::uintmax_t walBytes) {
+  if (mainBytes >
+      kMaximumSqliteSnapshotBytes - kSqliteSnapshotAuxiliaryReserveBytes) {
+    return false;
+  }
+  return walBytes <= kMaximumSqliteSnapshotBytes -
+                         kSqliteSnapshotAuxiliaryReserveBytes - mainBytes;
+}
+
+inline bool copySqliteFileExactly(const std::filesystem::path &source,
+                                  const std::filesystem::path &destination,
+                                  std::uintmax_t expectedBytes,
+                                  std::string &errorMessage) {
+  std::ifstream input(source, std::ios::binary);
+  std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+  if (!input || !output) {
+    errorMessage = "could not open schema preflight copy files";
+    return false;
+  }
+
+  std::array<char, 64 * 1024> buffer{};
+  std::uintmax_t remaining = expectedBytes;
+  while (remaining > 0) {
+    const auto requested = static_cast<std::streamsize>(
+        std::min<std::uintmax_t>(remaining, buffer.size()));
+    input.read(buffer.data(), requested);
+    if (input.gcount() != requested) {
+      errorMessage = "schema preflight source changed while copying";
+      return false;
+    }
+    if (!output.write(buffer.data(), requested)) {
+      errorMessage = "could not write schema preflight copy";
+      return false;
+    }
+    remaining -= static_cast<std::uintmax_t>(requested);
+  }
+
+  char extra = 0;
+  input.read(&extra, 1);
+  if (input.gcount() != 0 || input.bad()) {
+    errorMessage = "schema preflight source grew while copying";
+    return false;
+  }
+  output.close();
+  if (!output) {
+    errorMessage = "could not finish schema preflight copy";
+    return false;
+  }
+  return true;
+}
+
 inline bool sqliteFilesHaveEqualBytes(const std::filesystem::path &left,
                                       const std::filesystem::path &right,
+                                      std::uintmax_t expectedBytes,
                                       std::string &errorMessage) {
   std::ifstream leftInput(left, std::ios::binary);
   std::ifstream rightInput(right, std::ios::binary);
@@ -443,43 +501,31 @@ inline bool sqliteFilesHaveEqualBytes(const std::filesystem::path &left,
   }
   std::array<char, 64 * 1024> leftBytes{};
   std::array<char, 64 * 1024> rightBytes{};
-  while (true) {
-    leftInput.read(leftBytes.data(), leftBytes.size());
-    rightInput.read(rightBytes.data(), rightBytes.size());
-    const auto leftCount = leftInput.gcount();
-    const auto rightCount = rightInput.gcount();
-    if (leftCount != rightCount ||
-        !std::equal(leftBytes.begin(), leftBytes.begin() + leftCount,
+  std::uintmax_t remaining = expectedBytes;
+  while (remaining > 0) {
+    const auto requested = static_cast<std::streamsize>(
+        std::min<std::uintmax_t>(remaining, leftBytes.size()));
+    leftInput.read(leftBytes.data(), requested);
+    rightInput.read(rightBytes.data(), requested);
+    if (leftInput.gcount() != requested || rightInput.gcount() != requested ||
+        !std::equal(leftBytes.begin(), leftBytes.begin() + requested,
                     rightBytes.begin())) {
-      errorMessage = "database family changed while copying WAL snapshot";
+      errorMessage = "database family changed while comparing snapshot";
       return false;
     }
-    if (leftCount == 0) {
-      if (leftInput.bad() || rightInput.bad()) {
-        errorMessage = "could not finish comparing schema preflight files";
-        return false;
-      }
-      return true;
-    }
+    remaining -= static_cast<std::uintmax_t>(requested);
   }
-}
 
-// std::filesystem::resize_file() creates sparse extensions on the POSIX file
-// systems used by the desktop and mobile builds. Windows does not guarantee
-// sparse allocation through resize_file(), so fail closed before a malformed
-// or unusually large database can consume an unbounded amount of temporary
-// storage there.
-inline constexpr std::uintmax_t kMaximumWindowsWalSnapshotMainBytes =
-    256ULL * 1024ULL * 1024ULL;
-#ifdef _WIN32
-inline constexpr bool kSqliteWalSnapshotResizeIsSparse = false;
-#else
-inline constexpr bool kSqliteWalSnapshotResizeIsSparse = true;
-#endif
-
-inline constexpr bool sqliteWalSnapshotSizeIsBounded(std::uintmax_t logicalSize,
-                                                     bool resizeIsSparse) {
-  return resizeIsSparse || logicalSize <= kMaximumWindowsWalSnapshotMainBytes;
+  char leftExtra = 0;
+  char rightExtra = 0;
+  leftInput.read(&leftExtra, 1);
+  rightInput.read(&rightExtra, 1);
+  if (leftInput.gcount() != 0 || rightInput.gcount() != 0 || leftInput.bad() ||
+      rightInput.bad()) {
+    errorMessage = "schema preflight file size changed while comparing";
+    return false;
+  }
+  return true;
 }
 
 inline bool
@@ -491,13 +537,6 @@ writeSqliteFirstPageSnapshot(const std::filesystem::path &sourcePath,
     errorMessage = "database is shorter than its first SQLite page";
     return false;
   }
-  if (!sqliteWalSnapshotSizeIsBounded(logicalSize,
-                                      kSqliteWalSnapshotResizeIsSparse)) {
-    errorMessage =
-        "database is too large for a bounded Windows WAL preflight snapshot";
-    return false;
-  }
-
   std::vector<char> firstPage(pageSize);
   std::ifstream mainInput(sourcePath, std::ios::binary);
   if (!mainInput.read(firstPage.data(), firstPage.size())) {
@@ -524,10 +563,51 @@ writeSqliteFirstPageSnapshot(const std::filesystem::path &sourcePath,
   return true;
 }
 
-inline std::optional<int> readSqliteUserVersionFromIsolatedWalSnapshot(
+inline std::optional<int> readSqliteUserVersion(sqlite3 *db,
+                                                std::string &errorMessage) {
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, "PRAGMA user_version", stmt) != SQLITE_OK) {
+    errorMessage = sqliteDatabaseError(db);
+    return std::nullopt;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    errorMessage = sqliteDatabaseError(db);
+    return std::nullopt;
+  }
+  const int version = sqlite3_column_int(stmt.get(), 0);
+  if (version < 0) {
+    errorMessage = "database schema version is negative";
+    return std::nullopt;
+  }
+  return version;
+}
+
+inline bool validateSqliteSchemaUsability(sqlite3 *db,
+                                          std::string &errorMessage) {
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, "SELECT count(*) FROM sqlite_schema", stmt) !=
+      SQLITE_OK) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  return true;
+}
+
+inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
     const std::filesystem::path &path,
     const SqliteDatabaseFamilyState &expectedFamily,
     std::string &errorMessage) {
+  const bool hasWal = expectedFamily[2].exists;
+  const std::uintmax_t walBytes = hasWal ? expectedFamily[2].size : 0;
+  if (!sqliteSnapshotFitsBudget(expectedFamily[0].size, walBytes)) {
+    errorMessage = "database family exceeds schema preflight snapshot budget";
+    return std::nullopt;
+  }
+
   std::error_code temporaryRootError;
   const std::filesystem::path temporaryRoot =
       std::filesystem::temp_directory_path(temporaryRootError);
@@ -584,15 +664,20 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedWalSnapshot(
     }
     return std::nullopt;
   }
-  if (!writeSqliteFirstPageSnapshot(path, snapshotPath, *pageSize,
-                                    expectedFamily[0].size, errorMessage)) {
+  if (hasWal) {
+    if (!writeSqliteFirstPageSnapshot(path, snapshotPath, *pageSize,
+                                      expectedFamily[0].size, errorMessage)) {
+      return std::nullopt;
+    }
+  } else if (!copySqliteFileExactly(path, snapshotPath, expectedFamily[0].size,
+                                    errorMessage)) {
     return std::nullopt;
   }
 
   std::vector<char> firstPage(*pageSize);
   std::ifstream snapshotMain(snapshotPath, std::ios::binary);
   if (!snapshotMain.read(firstPage.data(), firstPage.size())) {
-    errorMessage = "could not verify first database page for WAL preflight";
+    errorMessage = "could not verify first database page for preflight";
     return std::nullopt;
   }
 
@@ -600,22 +685,19 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedWalSnapshot(
   walPath += "-wal";
   std::filesystem::path snapshotWalPath = snapshotPath;
   snapshotWalPath += "-wal";
-  std::error_code copyError;
-  if (!std::filesystem::copy_file(walPath, snapshotWalPath,
-                                  std::filesystem::copy_options::none,
-                                  copyError)) {
-    errorMessage =
-        "could not copy WAL for schema preflight: " + copyError.message();
-    return std::nullopt;
-  }
-  if (!sqliteFilesHaveEqualBytes(walPath, snapshotWalPath, errorMessage)) {
-    return std::nullopt;
+  if (hasWal) {
+    if (!copySqliteFileExactly(walPath, snapshotWalPath, walBytes,
+                               errorMessage) ||
+        !sqliteFilesHaveEqualBytes(walPath, snapshotWalPath, walBytes,
+                                   errorMessage)) {
+      return std::nullopt;
+    }
   }
   std::vector<char> verifiedFirstPage(*pageSize);
   std::ifstream verifyMain(path, std::ios::binary);
   if (!verifyMain.read(verifiedFirstPage.data(), verifiedFirstPage.size()) ||
       verifiedFirstPage != firstPage) {
-    errorMessage = "database first page changed during WAL snapshot";
+    errorMessage = "database first page changed during schema snapshot";
     return std::nullopt;
   }
 
@@ -627,7 +709,7 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedWalSnapshot(
   SqliteConnectionHandle db(rawDb);
   if (openRc != SQLITE_OK || !db) {
     errorMessage = rawDb != nullptr ? sqlite3_errmsg(rawDb)
-                                    : "could not open WAL schema snapshot";
+                                    : "could not open SQLite schema snapshot";
     return std::nullopt;
   }
   int noCheckpointOnClose = 0;
@@ -638,89 +720,44 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedWalSnapshot(
     return std::nullopt;
   }
 
-  SqliteStatementHandle stmt;
-  if (prepareSqliteStatement(db.get(), "PRAGMA user_version", stmt) !=
-      SQLITE_OK) {
-    errorMessage = sqliteDatabaseError(db.get());
+  const auto version = readSqliteUserVersion(db.get(), errorMessage);
+  if (!version.has_value() ||
+      (!hasWal && !validateSqliteSchemaUsability(db.get(), errorMessage))) {
     return std::nullopt;
   }
-  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
-    errorMessage = sqliteDatabaseError(db.get());
-    return std::nullopt;
-  }
-  const int version = sqlite3_column_int(stmt.get(), 0);
-  stmt.reset();
   db.reset();
 
-  if (!sqliteFilesHaveEqualBytes(walPath, snapshotWalPath, errorMessage)) {
+  if (hasWal) {
+    if (!sqliteFilesHaveEqualBytes(walPath, snapshotWalPath, walBytes,
+                                   errorMessage)) {
+      return std::nullopt;
+    }
+  } else if (!sqliteFilesHaveEqualBytes(path, snapshotPath,
+                                        expectedFamily[0].size, errorMessage)) {
     return std::nullopt;
   }
   std::vector<char> finalFirstPage(*pageSize);
   std::ifstream finalMain(path, std::ios::binary);
   if (!finalMain.read(finalFirstPage.data(), finalFirstPage.size()) ||
       finalFirstPage != firstPage) {
-    errorMessage = "database first page changed while querying WAL snapshot";
+    errorMessage = "database first page changed while querying snapshot";
     return std::nullopt;
   }
 
   auto afterSnapshot = readSqliteDatabaseFamilyState(path, errorMessage);
   if (!afterSnapshot.has_value() || *afterSnapshot != expectedFamily) {
     if (errorMessage.empty()) {
-      errorMessage = "database family changed during WAL snapshot";
+      errorMessage = "database family changed during schema snapshot";
     }
     return std::nullopt;
   }
-  return version;
-}
-
-inline bool sqliteWalHasNoActiveWriter(const std::filesystem::path &path,
-                                       std::string &errorMessage) {
-  sqlite3 *rawDb = nullptr;
-  const std::string pathText = fspath_to_utf8(path);
-  const int openRc = sqlite3_open_v2(
-      pathText.c_str(), &rawDb,
-      SQLITE_OPEN_READWRITE | SQLITE_OPEN_PRIVATECACHE, nullptr);
-  SqliteConnectionHandle db(rawDb);
-  if (openRc != SQLITE_OK || !db) {
-    errorMessage = rawDb != nullptr ? sqlite3_errmsg(rawDb)
-                                    : "could not probe WAL writer state";
-    return false;
-  }
-  int noCheckpointOnClose = 0;
-  if (sqlite3_db_config(db.get(), SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1,
-                        &noCheckpointOnClose) != SQLITE_OK ||
-      noCheckpointOnClose != 1) {
-    errorMessage = "could not disable writer-probe checkpoint-on-close";
-    return false;
-  }
-  sqlite3_busy_timeout(db.get(), 0);
-
-  SqliteErrorMessageHandle sqliteError;
-  const int beginRc = sqlite3_exec(db.get(), "BEGIN IMMEDIATE", nullptr,
-                                   nullptr, sqliteError.out());
-  if (beginRc != SQLITE_OK) {
-    const int primaryError = sqlite3_extended_errcode(db.get()) & 0xff;
-    if (primaryError == SQLITE_BUSY || primaryError == SQLITE_LOCKED) {
-      errorMessage = "database has an active WAL writer";
-    } else {
-      errorMessage = sqliteError.get() != nullptr
-                         ? sqliteError.get()
-                         : "could not probe WAL writer state";
-    }
-    return false;
-  }
-  if (const auto rollbackError = executeSqlite(db.get(), "ROLLBACK")) {
-    errorMessage = "could not finish WAL writer probe: " + *rollbackError;
-    return false;
-  }
-  return true;
+  return *version;
 }
 
 // Determines the WAL-visible schema version without opening the original
-// database read-write. Clean databases use a bounded raw-header read. WAL
-// databases are copied with their WAL to an isolated temporary directory and
-// recovered there. Rollback-journal recovery is intentionally treated as
-// ambiguous and fails closed.
+// database read-write. Existing databases are queried through a bounded
+// isolated family. Rollback-journal recovery is intentionally ambiguous and
+// fails closed.
 inline std::optional<int>
 preflightSqliteUserVersion(const std::filesystem::path &path,
                            int maximumSupportedVersion,
@@ -737,11 +774,17 @@ preflightSqliteUserVersion(const std::filesystem::path &path,
     }
     return 0;
   }
+  if ((*before)[0].size == 0) {
+    if ((*before)[1].exists || (*before)[2].exists || (*before)[3].exists) {
+      errorMessage = "database sidecar exists beside an empty main database";
+      return std::nullopt;
+    }
+    return 0;
+  }
   if ((*before)[1].exists) {
     errorMessage = "database has a rollback journal requiring recovery";
     return std::nullopt;
   }
-  std::optional<int> version;
   if (!(*before)[2].exists) {
     const auto first =
         readRawSqliteUserVersion(path, (*before)[0].size, errorMessage);
@@ -754,13 +797,25 @@ preflightSqliteUserVersion(const std::filesystem::path &path,
       errorMessage = "database header changed during schema preflight";
       return std::nullopt;
     }
-    version = *first;
-  } else {
-    version = readSqliteUserVersionFromIsolatedWalSnapshot(path, *before,
-                                                           errorMessage);
-    if (!version.has_value()) {
+    if (*first < 0) {
+      errorMessage = "database schema version is negative";
       return std::nullopt;
     }
+    if (*first > maximumSupportedVersion) {
+      errorMessage = "database schema version " + std::to_string(*first) +
+                     " is newer than supported version " +
+                     std::to_string(maximumSupportedVersion);
+      return std::nullopt;
+    }
+  } else if (!readRawSqliteUserVersion(path, (*before)[0].size, errorMessage)
+                  .has_value()) {
+    return std::nullopt;
+  }
+
+  const auto version =
+      readSqliteUserVersionFromIsolatedSnapshot(path, *before, errorMessage);
+  if (!version.has_value()) {
+    return std::nullopt;
   }
 
   auto after = readSqliteDatabaseFamilyState(path, errorMessage);
@@ -771,29 +826,149 @@ preflightSqliteUserVersion(const std::filesystem::path &path,
     errorMessage = "database family changed during schema preflight";
     return std::nullopt;
   }
-  if (*version < 0) {
-    errorMessage = "database schema version is negative";
-    return std::nullopt;
-  }
   if (*version > maximumSupportedVersion) {
     errorMessage = "database schema version " + std::to_string(*version) +
                    " is newer than supported version " +
                    std::to_string(maximumSupportedVersion);
     return std::nullopt;
   }
-  if ((*before)[2].exists) {
-    if (!sqliteWalHasNoActiveWriter(path, errorMessage)) {
-      return std::nullopt;
+  return version;
+}
+
+struct SqliteValidatedOpenHooks {
+  void *context = nullptr;
+  void (*afterSnapshotValidated)(void *) = nullptr;
+  bool (*configureNoCheckpoint)(sqlite3 *, void *, std::string &) = nullptr;
+};
+
+inline bool configureSqliteNoCheckpoint(sqlite3 *db,
+                                        const SqliteValidatedOpenHooks &hooks,
+                                        std::string &errorMessage) {
+  if (hooks.configureNoCheckpoint != nullptr) {
+    return hooks.configureNoCheckpoint(db, hooks.context, errorMessage);
+  }
+  int enabled = 0;
+  if (sqlite3_db_config(db, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, &enabled) !=
+          SQLITE_OK ||
+      enabled != 1) {
+    errorMessage = "could not disable checkpoint-on-close";
+    return false;
+  }
+  return true;
+}
+
+inline bool setSqliteJournalModeWal(sqlite3 *db, std::string &errorMessage) {
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, "PRAGMA journal_mode=WAL", stmt) !=
+      SQLITE_OK) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW ||
+      sqliteColumnString(stmt.get(), 0) != "wal") {
+    errorMessage = sqliteDatabaseError(db);
+    if (errorMessage == "not an error") {
+      errorMessage = "SQLite did not enter WAL journal mode";
     }
-    auto afterWriterProbe = readSqliteDatabaseFamilyState(path, errorMessage);
-    if (!afterWriterProbe.has_value() || *afterWriterProbe != *before) {
-      if (errorMessage.empty()) {
-        errorMessage = "database family changed during WAL writer probe";
-      }
-      return std::nullopt;
+    return false;
+  }
+  return true;
+}
+
+inline sqlite3 *
+openValidatedSqliteDatabase(const std::filesystem::path &path,
+                            int maximumSupportedVersion, bool enableForeignKeys,
+                            std::string &errorMessage,
+                            const SqliteValidatedOpenHooks &hooks = {}) {
+  const auto snapshotVersion =
+      preflightSqliteUserVersion(path, maximumSupportedVersion, errorMessage);
+  if (!snapshotVersion.has_value()) {
+    return nullptr;
+  }
+  if (hooks.afterSnapshotValidated != nullptr) {
+    hooks.afterSnapshotValidated(hooks.context);
+  }
+
+  const std::string pathText = fspath_to_utf8(path);
+  sqlite3 *rawGuard = nullptr;
+  const int guardOpenRc = sqlite3_open_v2(
+      pathText.c_str(), &rawGuard,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_PRIVATECACHE,
+      nullptr);
+  SqliteConnectionHandle guard(rawGuard);
+  if (guardOpenRc != SQLITE_OK || !guard) {
+    errorMessage = rawGuard != nullptr ? sqlite3_errmsg(rawGuard)
+                                       : "could not open database guard";
+    return nullptr;
+  }
+  sqlite3_busy_timeout(guard.get(), 0);
+  if (!configureSqliteNoCheckpoint(guard.get(), hooks, errorMessage)) {
+    return nullptr;
+  }
+  if (const auto lockError = executeSqlite(
+          guard.get(), "PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE")) {
+    const int primaryError = sqlite3_extended_errcode(guard.get()) & 0xff;
+    errorMessage = primaryError == SQLITE_BUSY || primaryError == SQLITE_LOCKED
+                       ? "database has an active writer"
+                       : *lockError;
+    return nullptr;
+  }
+
+  const auto ownedVersion = readSqliteUserVersion(guard.get(), errorMessage);
+  if (!ownedVersion.has_value() || *ownedVersion > maximumSupportedVersion) {
+    if (ownedVersion.has_value()) {
+      errorMessage = "database schema version " +
+                     std::to_string(*ownedVersion) +
+                     " is newer than supported version " +
+                     std::to_string(maximumSupportedVersion);
+    }
+    executeSqlite(guard.get(), "ROLLBACK");
+    return nullptr;
+  }
+  if (*ownedVersion != *snapshotVersion) {
+    errorMessage = "database schema version changed while acquiring ownership";
+    executeSqlite(guard.get(), "ROLLBACK");
+    return nullptr;
+  }
+  if (const auto rollbackError = executeSqlite(guard.get(), "ROLLBACK")) {
+    errorMessage =
+        "could not finish database ownership check: " + *rollbackError;
+    return nullptr;
+  }
+  if (!setSqliteJournalModeWal(guard.get(), errorMessage)) {
+    return nullptr;
+  }
+
+  sqlite3 *rawProduction = nullptr;
+  const int productionOpenRc = sqlite3_open_v2(
+      pathText.c_str(), &rawProduction,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_PRIVATECACHE,
+      nullptr);
+  SqliteConnectionHandle production(rawProduction);
+  if (productionOpenRc != SQLITE_OK || !production) {
+    errorMessage = rawProduction != nullptr ? sqlite3_errmsg(rawProduction)
+                                            : "could not open database";
+    return nullptr;
+  }
+  int noCheckpointOnClose = 0;
+  if (sqlite3_db_config(production.get(), SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1,
+                        &noCheckpointOnClose) != SQLITE_OK ||
+      noCheckpointOnClose != 1) {
+    errorMessage = "could not configure production checkpoint-on-close";
+    return nullptr;
+  }
+  if (enableForeignKeys) {
+    int foreignKeysEnabled = 0;
+    if (sqlite3_db_config(production.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
+                          &foreignKeysEnabled) != SQLITE_OK ||
+        foreignKeysEnabled != 1) {
+      errorMessage = "could not enable foreign keys";
+      return nullptr;
     }
   }
-  return version;
+  sqlite3_busy_timeout(production.get(), 1000);
+  guard.reset();
+  return production.release();
 }
 
 inline std::optional<std::string>

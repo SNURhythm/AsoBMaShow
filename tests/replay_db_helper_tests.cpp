@@ -250,6 +250,25 @@ void createFutureDatabaseState(const std::filesystem::path &path,
   }
 }
 
+void createWalDatabaseWithVersion(const std::filesystem::path &path,
+                                  int userVersion) {
+  std::filesystem::create_directories(path.parent_path());
+  const pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    const std::string sql =
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+        "CREATE TABLE sentinel(value TEXT);"
+        "INSERT INTO sentinel VALUES('unchanged');"
+        "PRAGMA user_version=" +
+        std::to_string(userVersion);
+    executeChildSqlAndExit(path, sql.c_str());
+  }
+  waitForSuccessfulChild(child);
+  assert(std::filesystem::exists(path.string() + "-wal"));
+  assert(std::filesystem::exists(path.string() + "-shm"));
+}
+
 void createLargeFutureWalDatabase(const std::filesystem::path &path) {
   {
     auto db = openDatabase(path);
@@ -1130,6 +1149,95 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
 #endif
 }
 
+int denyJournalModeAuthorizer(void *, int action, const char *first,
+                              const char *, const char *, const char *) {
+  return action == SQLITE_PRAGMA && first != nullptr &&
+                 std::string_view(first) == "journal_mode"
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
+int installDenyJournalMode(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, denyJournalModeAuthorizer, nullptr);
+}
+
+class ScopedDenyJournalModeAutoExtension {
+public:
+  ScopedDenyJournalModeAutoExtension() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installDenyJournalMode)) == SQLITE_OK);
+  }
+  ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
+};
+
+void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
+  std::filesystem::create_directories(path.parent_path());
+  std::string bytes(4096, '\0');
+  constexpr std::string_view magic("SQLite format 3\0", 16);
+  std::copy(magic.begin(), magic.end(), bytes.begin());
+  bytes[16] = 0x10;
+  bytes[17] = 0;
+  bytes[18] = 1;
+  bytes[19] = 1;
+  std::ofstream output(path, std::ios::binary);
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  assert(output);
+}
+
+void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  {
+    const auto path = root / "wal-without-shm-supported" / "replay.db";
+    createWalDatabaseWithVersion(path, 3);
+    assert(std::filesystem::remove(path.string() + "-shm"));
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(connection);
+    connection.reset();
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "wal-without-shm-future" / "replay.db";
+    createWalDatabaseWithVersion(path, 99);
+    assert(std::filesystem::remove(path.string() + "-shm"));
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+#endif
+
+  {
+    const auto path = root / "header-shaped-corrupt" / "replay.db";
+    writeHeaderShapedCorruptDatabase(path);
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+
+  {
+    const auto path = root / "required-pragma-error" / "replay.db";
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
+    execOrAbort(db.get(), "PRAGMA user_version=3");
+    db.reset();
+    const auto before = rawDatabaseFamilySnapshot(path);
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    ReplayDBHelper helper(path);
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(rawDatabaseFamilySnapshot(path) == before);
+  }
+}
+
 void testLargeWalReplayPreflightPreservesFamily(
     const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
@@ -1462,6 +1570,7 @@ int main() {
   testFutureReplayWritesPreservePersistentDatabaseState(root);
   testFutureReplayPreflightPreservesRawDatabaseFamily(root);
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testLargeWalReplayPreflightPreservesFamily(root);
   testChartSummaryValidationAndDetailsShareWalSnapshot(root);
   testCourseSummaryValidationAndDetailsShareWalSnapshot(root);
