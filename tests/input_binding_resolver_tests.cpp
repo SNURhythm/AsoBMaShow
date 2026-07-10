@@ -164,14 +164,14 @@ void requireTransition(const input::LogicalInputTransition &transition,
 }
 
 void testScopeFilteringAndDigitalTransitions() {
-  InputProfile profile{.bindings = {
-                           binding("p1-7", {1, 7}, lane(0),
-                                   keyControl("keyboard", SDL_SCANCODE_S)),
-                           binding("p2-7", {2, 7}, lane(1),
-                                   keyControl("keyboard", SDL_SCANCODE_S)),
-                           binding("p1-5", {1, 5}, lane(2),
-                                   keyControl("keyboard", SDL_SCANCODE_S)),
-                       }};
+  InputProfile profile{
+      .bindings = {
+          binding("p1-7", {1, 7}, lane(0),
+                  keyControl("keyboard", SDL_SCANCODE_S)),
+          binding("p2-7", {2, 7}, lane(1), buttonControl("inactive-pad", 0)),
+          binding("p1-5", {1, 5}, lane(2),
+                  keyControl("keyboard", SDL_SCANCODE_S)),
+      }};
   Recorder recorder;
   InputBindingResolver resolver(profile, {{1, 7}}, recorder.callbacks());
 
@@ -352,6 +352,70 @@ void testHatDirections() {
                     "centered hat right release");
 }
 
+void testAnyHatBindingTracksEveryHeldDirection() {
+  InputProfile profile{
+      .bindings = {
+          binding("hat-any", {1, 7}, lane(4),
+                  hatControl("pad:any-hat", 0, input::ControlDirection::Any))}};
+  Recorder recorder;
+  InputBindingResolver resolver(profile, {{1, 7}}, recorder.callbacks());
+
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Up, true));
+  require(recorder.batches.size() == 1,
+          "first any-hat direction presses its logical action");
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Right, true));
+  require(recorder.batches.size() == 1,
+          "second any-hat direction does not repeat the logical press");
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Right, false));
+  require(recorder.batches.size() == 1,
+          "releasing one diagonal direction preserves the any-hat hold");
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Up, false));
+  require(recorder.batches.size() == 2 && recorder.batches.back().size() == 1,
+          "last any-hat direction releases its logical action");
+  requireTransition(recorder.batches.back().front(), {1, 7}, lane(4), false,
+                    0.0f, "any-hat final release");
+
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Up, true));
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Right, true));
+  resolver.consume(
+      hatEvent("pad:any-hat", 0, input::ControlDirection::Any, false));
+  require(recorder.batches.size() == 4,
+          "centered any-hat sample releases all held directions once");
+  requireTransition(recorder.batches.back().front(), {1, 7}, lane(4), false,
+                    0.0f, "any-hat centered release");
+}
+
+void testNegativeAxisDeadZoneAndHysteresis() {
+  InputProfile profile{
+      .bindings = {binding(
+          "negative-axis-detailed", {1, 7}, scratchCounterClockwise(),
+          axisControl("stick:negative", 3, input::ControlDirection::Negative),
+          0.2f, 0.5f, 0.3f)}};
+  Recorder recorder;
+  InputBindingResolver resolver(profile, {{1, 7}}, recorder.callbacks());
+
+  resolver.consume(axisEvent("stick:negative", 3, -0.59f));
+  require(recorder.batches.empty(),
+          "negative axis stays inactive below rescaled activation");
+  resolver.consume(axisEvent("stick:negative", 3, -0.6f));
+  require(recorder.batches.size() == 1,
+          "negative axis activates at rescaled threshold");
+  requireTransition(recorder.batches[0][0], {1, 7}, scratchCounterClockwise(),
+                    true, 0.5f, "negative dead-zone-rescaled press");
+  resolver.consume(axisEvent("stick:negative", 3, -0.52f));
+  require(recorder.batches.size() == 1,
+          "negative axis remains active inside hysteresis band");
+  resolver.consume(axisEvent("stick:negative", 3, -0.43f));
+  require(recorder.batches.size() == 2,
+          "negative axis releases at rescaled release boundary");
+}
+
 void testMidiControlThresholdAndHysteresis() {
   constexpr int midiIndex = 3 * 128 + 74;
   InputProfile profile{.bindings = {binding("midi-cc", {1, 7}, lane(6),
@@ -442,6 +506,26 @@ void testCaptureModeAndReset() {
               std::set{input::DeviceClass::Keyboard},
           "reset preserves active-scope category provenance");
 }
+
+void testCaptureModeReleasesAndReentryAcceptsNextPress() {
+  InputProfile profile{
+      .bindings = {binding("capture-reentry", {1, 7}, lane(5),
+                           keyControl("keyboard", SDL_SCANCODE_K))}};
+  Recorder recorder;
+  InputBindingResolver resolver(profile, {{1, 7}}, recorder.callbacks());
+
+  resolver.consume(keyEvent("keyboard", SDL_SCANCODE_K, true));
+  require(recorder.batches.size() == 1 && recorder.batches.back()[0].pressed,
+          "gameplay press is active before capture");
+  resolver.setMode(InputBindingResolver::Mode::Capture);
+  require(recorder.batches.size() == 2 && !recorder.batches.back()[0].pressed,
+          "entering capture releases gameplay-owned logical state");
+  resolver.consume(keyEvent("keyboard", SDL_SCANCODE_K, false));
+  resolver.setMode(InputBindingResolver::Mode::Gameplay);
+  resolver.consume(keyEvent("keyboard", SDL_SCANCODE_K, true));
+  require(recorder.batches.size() == 3 && recorder.batches.back()[0].pressed,
+          "first post-capture press is not suppressed by stale state");
+}
 } // namespace
 
 int main() {
@@ -452,9 +536,12 @@ int main() {
     testAxisInversion();
     testAxisDirectionsReverseInOneBatch();
     testHatDirections();
+    testAnyHatBindingTracksEveryHeldDirection();
+    testNegativeAxisDeadZoneAndHysteresis();
     testMidiControlThresholdAndHysteresis();
     testDisconnectReleasesOnlyUnreferencedActions();
     testCaptureModeAndReset();
+    testCaptureModeReleasesAndReentryAcceptsNextPress();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "input_binding_resolver_tests: " << error.what() << '\n';

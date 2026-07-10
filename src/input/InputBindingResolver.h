@@ -33,6 +33,7 @@ public:
 private:
   struct PhysicalBindingState {
     bool active = false;
+    std::set<input::ControlDirection> activeHatDirections;
   };
 
   struct LogicalStateKey {

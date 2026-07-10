@@ -80,7 +80,13 @@ InputBindingResolver::InputBindingResolver(
       callbacks_(std::move(callbacks)),
       physicalStates_(profile_.bindings.size()) {}
 
-void InputBindingResolver::setMode(Mode mode) { mode_ = mode; }
+void InputBindingResolver::setMode(Mode mode) {
+  if (mode_ == mode) {
+    return;
+  }
+  reset();
+  mode_ = mode;
+}
 
 void InputBindingResolver::consume(const input::PhysicalInputEvent &event) {
   if (mode_ == Mode::Capture) {
@@ -102,9 +108,32 @@ void InputBindingResolver::consume(const input::PhysicalInputEvent &event) {
     }
 
     const float value = bindingValue(binding, event);
-    const bool active = physicalStates_[index].active
-                            ? value > binding.releaseThreshold
-                            : value >= binding.activationThreshold;
+    auto &physicalState = physicalStates_[index];
+    bool active = physicalState.active ? value > binding.releaseThreshold
+                                       : value >= binding.activationThreshold;
+    if (binding.control.kind == input::ControlKind::Hat &&
+        binding.control.direction == input::ControlDirection::Any) {
+      if (event.control.direction == input::ControlDirection::Any) {
+        if (active) {
+          physicalState.activeHatDirections.insert(
+              input::ControlDirection::Any);
+        } else {
+          physicalState.activeHatDirections.clear();
+        }
+      } else {
+        const bool directionWasActive =
+            physicalState.activeHatDirections.contains(event.control.direction);
+        const bool directionIsActive =
+            directionWasActive ? value > binding.releaseThreshold
+                               : value >= binding.activationThreshold;
+        if (directionIsActive) {
+          physicalState.activeHatDirections.insert(event.control.direction);
+        } else {
+          physicalState.activeHatDirections.erase(event.control.direction);
+        }
+      }
+      active = !physicalState.activeHatDirections.empty();
+    }
     evaluations.push_back(
         {.bindingIndex = index, .active = active, .value = value});
   }
@@ -157,6 +186,9 @@ void InputBindingResolver::applyEvaluations(
 
   for (const auto &evaluation : evaluations) {
     auto &physicalState = physicalStates_[evaluation.bindingIndex];
+    if (!evaluation.active) {
+      physicalState.activeHatDirections.clear();
+    }
     if (physicalState.active == evaluation.active) {
       continue;
     }
