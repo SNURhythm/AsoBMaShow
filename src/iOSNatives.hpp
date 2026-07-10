@@ -2,8 +2,11 @@
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include <SDL2/SDL.h>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -90,6 +93,22 @@ int GetIOSNativeTextEditorHeight();
 std::vector<std::string> ListDocumentFilesRecursively();
 bool PickIOSFolder(std::string &path, std::string &bookmark,
                    std::string &errorMessage);
+std::string ImportIOSDocument(std::uint64_t operationToken,
+                              const std::string &mimeType,
+                              std::uint64_t maxBytes,
+                              const std::atomic_bool *cancellationRequested);
+std::string ExportIOSDocument(std::uint64_t operationToken,
+                              const std::filesystem::path &localPath,
+                              const std::string &mimeType,
+                              const std::string &suggestedName,
+                              std::uint64_t maxBytes,
+                              const std::atomic_bool *cancellationRequested,
+                              std::function<bool()> commitHandler);
+void CancelIOSDocument(std::uint64_t operationToken);
+bool ValidateIOSTemporaryDocument(const std::filesystem::path &localPath,
+                                  std::string &errorMessage);
+bool CleanupIOSTemporaryDocument(const std::filesystem::path &localPath,
+                                 std::string &errorMessage);
 void *StartIOSSecurityScopedResource(const std::string &path,
                                       const std::string &bookmark,
                                       std::string &resolvedPath,

@@ -54,6 +54,25 @@ bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
                                 std::string &errorMessage);
 std::optional<std::filesystem::path>
 ConsumePendingAndroidArchiveImport(std::string &errorMessage);
+bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
+                                    std::string &errorMessage);
+void RetireAndroidDocumentHandoff(std::uint64_t operationToken);
+bool RegisterAndroidDocumentCommit(std::uint64_t operationToken,
+                                   std::function<bool()> commitHandler);
+void UnregisterAndroidDocumentCommit(std::uint64_t operationToken);
+std::string ImportAndroidDocument(std::uint64_t operationToken,
+                                  const std::string &mimeType,
+                                  std::uint64_t maxBytes);
+std::string ExportAndroidDocument(std::uint64_t operationToken,
+                                  const std::filesystem::path &localPath,
+                                  const std::string &mimeType,
+                                  const std::string &suggestedName,
+                                  std::uint64_t maxBytes);
+void CancelAndroidDocument(std::uint64_t operationToken);
+bool ValidateAndroidTemporaryDocument(const std::filesystem::path &localPath,
+                                      std::string &errorMessage);
+bool CleanupAndroidTemporaryDocument(const std::filesystem::path &localPath,
+                                     std::string &errorMessage);
 void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,
                                 const std::string &treeUri);
 bool IsAndroidTreePath(const std::filesystem::path &path);

@@ -753,6 +753,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(input_profile_tests PRIVATE SDL2)
     endif()
 
+    if (NOT IOS AND NOT PLATFORM_ANDROID)
+        add_executable(platform_document_handoff_tests
+            tests/platform_document_handoff_tests.cpp
+            src/PlatformDocumentHandoff.cpp
+        )
+        target_include_directories(platform_document_handoff_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(platform_document_handoff_tests PRIVATE cxx_std_23)
+        target_link_libraries(platform_document_handoff_tests PRIVATE TinyFileDialogs)
+        if (WIN32)
+            target_link_libraries(platform_document_handoff_tests PRIVATE advapi32)
+        endif()
+    endif()
+
     add_executable(input_binding_resolver_tests
         tests/input_binding_resolver_tests.cpp
         src/input/InputBindingResolver.cpp
@@ -1097,6 +1112,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
     )
     asobmashow_register_test(input_profile_tests foundation_input_profile)
+    if (NOT IOS AND NOT PLATFORM_ANDROID)
+        asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)
+    endif()
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
