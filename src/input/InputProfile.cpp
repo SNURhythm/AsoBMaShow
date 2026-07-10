@@ -102,8 +102,9 @@ std::vector<input::InputBinding>
 InputProfile::conflictsWith(const input::InputBinding &candidate) const {
   std::vector<input::InputBinding> conflicts;
   for (const auto &binding : bindings) {
-    if (binding.id != candidate.id && binding.scope == candidate.scope &&
-        binding.control == candidate.control) {
+    if (binding.scope == candidate.scope &&
+        binding.control == candidate.control &&
+        binding.action != candidate.action) {
       conflicts.push_back(binding);
     }
   }

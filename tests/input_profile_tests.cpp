@@ -168,12 +168,17 @@ int main() {
     otherScope.id = "other-scope";
     otherScope.scope.player = 2;
     InputProfile conflictProfile{.bindings = {occupied, otherScope}};
+
     input::InputBinding candidate = occupied;
-    candidate.id = "candidate";
+    candidate.id = "same-action-candidate";
+    require(conflictProfile.conflictsWith(candidate).empty(),
+            "the same scoped control and action is not a conflict");
+
+    candidate = occupied;
     candidate.action.lane = 99;
     const auto conflicts = conflictProfile.conflictsWith(candidate);
     require(conflicts.size() == 1 && sameBinding(conflicts.front(), occupied),
-            "conflicts match the same scoped physical control");
+            "conflicts are independent of binding IDs");
     candidate.control.index = SDL_SCANCODE_UNKNOWN;
     require(conflictProfile.conflictsWith(candidate).empty(),
             "different physical controls do not conflict");
