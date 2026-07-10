@@ -780,6 +780,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/MidiMessageParser.cpp
         src/input/NativeCallbackLifetime.cpp
         src/input/QueuedMidiInputBackend.cpp
+        src/input/Utf16ToUtf8.cpp
     )
     target_include_directories(midi_input_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

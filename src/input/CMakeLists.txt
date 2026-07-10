@@ -19,6 +19,7 @@ function(asobmashow_add_midi_backend target_name)
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MidiMessageParser.cpp
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/NativeCallbackLifetime.cpp
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/QueuedMidiInputBackend.cpp
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Utf16ToUtf8.cpp
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MidiInputBackendFactory.cpp
     )
 

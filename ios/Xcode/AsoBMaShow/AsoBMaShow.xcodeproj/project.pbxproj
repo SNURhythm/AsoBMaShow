@@ -753,6 +753,7 @@
 				input/NativeCallbackLifetime.cpp,
 				input/QueuedMidiInputBackend.cpp,
 				input/UnsupportedMidiInputBackend.cpp,
+				input/Utf16ToUtf8.cpp,
 				input/WinMidiInputBackend.cpp,
 				input/RhythmInputHandler.cpp,
 				input/SDLInputBackend.cpp,

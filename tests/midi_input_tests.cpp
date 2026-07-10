@@ -2,6 +2,7 @@
 #include "input/MidiMessageParser.h"
 #include "input/NativeCallbackLifetime.h"
 #include "input/QueuedMidiInputBackend.h"
+#include "input/Utf16ToUtf8.h"
 
 #include <array>
 #include <atomic>
@@ -567,6 +568,24 @@ void testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd() {
           "clearing a stopped backend releases every live ID");
 }
 
+void testUtf16MidiNamesConvertToCanonicalUtf8() {
+  require(utf16ToUtf8(u"MIDI \u00e9") == "MIDI \xC3\xA9",
+          "BMP MIDI device names convert to canonical UTF-8");
+  require(utf16ToUtf8(std::u16string{static_cast<char16_t>(0xD83C),
+                                    static_cast<char16_t>(0xDFB9)}) ==
+              "\xF0\x9F\x8E\xB9",
+          "supplementary MIDI name characters combine surrogate pairs");
+}
+
+void testUtf16MidiNamesReplaceMalformedSurrogates() {
+  const std::u16string malformed{static_cast<char16_t>(0xD83C), u'A',
+                                 static_cast<char16_t>(0xDFB9)};
+  require(utf16ToUtf8(malformed) == "\xEF\xBF\xBD"
+                                      "A"
+                                      "\xEF\xBF\xBD",
+          "unpaired MIDI name surrogates become replacement characters");
+}
+
 } // namespace
 
 int main() {
@@ -592,5 +611,7 @@ int main() {
   testBackendPublishesConnectBeforeSynchronousActivationPacket();
   testBackendRollsBackFailedActivationBeforeLaterPackets();
   testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd();
+  testUtf16MidiNamesConvertToCanonicalUtf8();
+  testUtf16MidiNamesReplaceMalformedSurrogates();
   return 0;
 }
