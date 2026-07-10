@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 1.0 LANGUAGES C CXX)
+include(CTest)
+option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set C++ standard
@@ -470,10 +472,13 @@ install(DIRECTORY assets DESTINATION bin)
 # Subdirectories
 add_subdirectory(bgfx)
 add_subdirectory(src)
-add_subdirectory(yoga)
+if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_subdirectory(yoga)
+else()
+    add_subdirectory(yoga/yoga)
+endif()
 
-option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
-if (ASOBMASHOW_BUILD_TESTS)
+if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(prep_metronome_tests
         tests/prep_metronome_tests.cpp
         src/PrepMetronome.cpp
@@ -586,4 +591,29 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(view_layout_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
+    function(asobmashow_register_test target_name)
+        add_test(NAME ${target_name} COMMAND $<TARGET_FILE:${target_name}>)
+        set_tests_properties(${target_name} PROPERTIES
+            WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
+        )
+    endfunction()
+
+    foreach(test_target IN ITEMS
+        prep_metronome_tests
+        gbattle_tests
+        replay_summary_list_tests
+        replay_record_filters_tests
+        replay_db_helper_tests
+        chart_record_filters_tests
+        main_menu_library_tests
+        chart_meta_index_order_tests
+        score_cache_query_tests
+        app_database_initializer_tests
+        chart_filter_sort_panel_view_tests
+        dropdown_view_tests
+        view_layout_tests
+    )
+        asobmashow_register_test(${test_target})
+    endforeach()
 endif()
