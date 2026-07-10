@@ -6,7 +6,9 @@
 
 #include <cassert>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
 
@@ -95,6 +97,48 @@ std::string schemaSnapshot(sqlite3 *db) {
     result.push_back('\n');
   }
   return result;
+}
+
+std::string readFileBytes(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+}
+
+struct PersistentDatabaseSnapshot {
+  int userVersion = 0;
+  std::string journalMode;
+  std::string schema;
+  std::string sentinel;
+  std::string bytes;
+  bool journalSidecar = false;
+  bool walSidecar = false;
+  bool shmSidecar = false;
+
+  bool operator==(const PersistentDatabaseSnapshot &) const = default;
+};
+
+PersistentDatabaseSnapshot
+persistentDatabaseSnapshot(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  PersistentDatabaseSnapshot result;
+  result.userVersion = queryInt(db.get(), "PRAGMA user_version");
+  result.journalMode = queryText(db.get(), "PRAGMA journal_mode");
+  result.schema = schemaSnapshot(db.get());
+  result.sentinel = queryText(db.get(), "SELECT value FROM sentinel");
+  db.reset();
+  result.bytes = readFileBytes(path);
+  result.journalSidecar = std::filesystem::exists(path.string() + "-journal");
+  result.walSidecar = std::filesystem::exists(path.string() + "-wal");
+  result.shmSidecar = std::filesystem::exists(path.string() + "-shm");
+  return result;
+}
+
+void createFutureSentinelDatabase(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(db.get(), "PRAGMA user_version = 99");
 }
 
 void createVersion4ScoreFixture(const std::filesystem::path &path) {
@@ -446,6 +490,121 @@ void testInvalidProvenanceDoesNotCreateScoreDatabase(
   assert(!std::filesystem::exists(coursePath));
 }
 
+void testPublicWritesNestInsideCallerTransactions(
+    const std::filesystem::path &root) {
+  const auto meta = sampleMeta(root, "nested-public-write");
+  const auto state = sampleState(13, 2);
+  CoursePlaySession session;
+  session.courseId = 55;
+  session.courseName = "Nested public write course";
+  session.entries.push_back({.meta = meta});
+
+  const auto prepareLegacySchema = [](ScoreDBHelper &helper) {
+    SqliteConnectionHandle db(helper.Connect());
+    assert(db);
+    assert(helper.CreateScoreTable(db.get()));
+    assert(helper.CreateCourseScoreTable(db.get()));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
+    return db;
+  };
+
+  {
+    ScoreDBHelper helper(root / "nested-chart-commit" / "score.db");
+    auto db = prepareLegacySchema(helper);
+    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+    assert(helper.InsertScore(db.get(), meta, state));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+    execOrAbort(db.get(), "COMMIT");
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+  }
+
+  {
+    ScoreDBHelper helper(root / "nested-chart-rollback" / "score.db");
+    auto db = prepareLegacySchema(helper);
+    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+    assert(helper.InsertScore(db.get(), meta, state));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+    execOrAbort(db.get(), "ROLLBACK");
+    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 0);
+    assert(!columnExists(db.get(), "scores", "provenance_json"));
+  }
+
+  {
+    ScoreDBHelper helper(root / "nested-course-commit" / "score.db");
+    auto db = prepareLegacySchema(helper);
+    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+    assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+    execOrAbort(db.get(), "COMMIT");
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+  }
+
+  {
+    ScoreDBHelper helper(root / "nested-course-rollback" / "score.db");
+    auto db = prepareLegacySchema(helper);
+    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+    assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+    execOrAbort(db.get(), "ROLLBACK");
+    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 0);
+    assert(!columnExists(db.get(), "course_scores", "provenance_json"));
+  }
+}
+
+void testFutureScoreWritesPreservePersistentDatabaseState(
+    const std::filesystem::path &root) {
+  const auto meta = sampleMeta(root, "future-persistent-state");
+  const auto state = sampleState(8, 2);
+  const auto provenance = sampleProvenance("future-persistent-state");
+  CoursePlaySession session;
+  session.courseId = 56;
+  session.courseName = "Future persistent state course";
+  session.entries.push_back({.meta = meta});
+
+  const auto assertUnchanged = [&](const std::filesystem::path &path,
+                                   const auto &operation) {
+    createFutureSentinelDatabase(path);
+    const auto before = persistentDatabaseSnapshot(path);
+    operation(path);
+    const auto after = persistentDatabaseSnapshot(path);
+    assert(after == before);
+  };
+
+  assertUnchanged(root / "future-save-score" / "score.db",
+                  [&](const auto &path) {
+                    ScoreDBHelper helper(path);
+                    assert(!helper.SaveScore(meta, state, provenance));
+                  });
+  assertUnchanged(
+      root / "future-save-course-score" / "score.db", [&](const auto &path) {
+        ScoreDBHelper helper(path);
+        assert(!helper.SaveCourseScore(session, state, 1, 1, provenance));
+      });
+  assertUnchanged(
+      root / "future-direct-score" / "score.db", [&](const auto &path) {
+        ScoreDBHelper helper(path);
+        SqliteConnectionHandle db(helper.Connect());
+        assert(db);
+        assert(!helper.InsertScore(db.get(), meta, state, provenance));
+      });
+  assertUnchanged(root / "future-direct-course-score" / "score.db",
+                  [&](const auto &path) {
+                    ScoreDBHelper helper(path);
+                    SqliteConnectionHandle db(helper.Connect());
+                    assert(db);
+                    assert(!helper.InsertCourseScore(db.get(), session, state,
+                                                     1, 1, provenance));
+                  });
+}
+
 } // namespace
 
 int main() {
@@ -461,6 +620,8 @@ int main() {
   testFutureVersionRejectsDirectScoreWrites(root);
   testInvalidProvenanceRejectsScoreWrites(root);
   testInvalidProvenanceDoesNotCreateScoreDatabase(root);
+  testPublicWritesNestInsideCallerTransactions(root);
+  testFutureScoreWritesPreservePersistentDatabaseState(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

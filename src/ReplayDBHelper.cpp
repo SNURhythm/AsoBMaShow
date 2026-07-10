@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -418,27 +419,70 @@ ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int maxComboColumn,
   return summary;
 }
 
+std::optional<ScoreProvenance> decodeStoredProvenance(sqlite3_stmt *stmt,
+                                                      int rulesetVersionColumn,
+                                                      int eligibilityColumn,
+                                                      int provenanceJsonColumn,
+                                                      std::string &error) {
+  const int rulesetVersion = sqlite3_column_int(stmt, rulesetVersionColumn);
+  const int eligibilityValue = sqlite3_column_int(stmt, eligibilityColumn);
+  const std::string serialized = readText(stmt, provenanceJsonColumn);
+  auto provenance = deserializeScoreProvenance(serialized, error);
+  if (!provenance.has_value()) {
+    return std::nullopt;
+  }
+  if (provenance->ruleset.version != rulesetVersion ||
+      static_cast<int>(provenance->eligibility) != eligibilityValue) {
+    error = "indexed values disagree with JSON";
+    return std::nullopt;
+  }
+  return provenance;
+}
+
 std::optional<ScoreProvenance> readStoredProvenance(sqlite3_stmt *stmt,
                                                     int rulesetVersionColumn,
                                                     int eligibilityColumn,
                                                     int provenanceJsonColumn,
                                                     const char *context) {
-  const int rulesetVersion = sqlite3_column_int(stmt, rulesetVersionColumn);
-  const int eligibilityValue = sqlite3_column_int(stmt, eligibilityColumn);
-  const std::string serialized = readText(stmt, provenanceJsonColumn);
   std::string error;
-  auto provenance = deserializeScoreProvenance(serialized, error);
+  auto provenance =
+      decodeStoredProvenance(stmt, rulesetVersionColumn, eligibilityColumn,
+                             provenanceJsonColumn, error);
   if (!provenance.has_value()) {
     SDL_Log("Failed to load %s provenance: %s", context, error.c_str());
-    return std::nullopt;
-  }
-  if (provenance->ruleset.version != rulesetVersion ||
-      static_cast<int>(provenance->eligibility) != eligibilityValue) {
-    SDL_Log("Failed to load %s provenance: indexed values disagree with JSON",
-            context);
-    return std::nullopt;
   }
   return provenance;
+}
+
+std::size_t replaySummaryCandidateBudget(int limit) {
+  if (limit <= 0) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  const std::size_t requested = static_cast<std::size_t>(limit);
+  constexpr std::size_t allowance =
+      replay_summary_scan::kCorruptCandidateAllowance;
+  if (requested > std::numeric_limits<std::size_t>::max() - allowance) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  return requested + allowance;
+}
+
+void logReplaySummaryScan(const char *label, std::size_t inspected,
+                          std::size_t rejected, bool limited,
+                          std::size_t budget, bool budgetReached) {
+  if (rejected == 0 && !budgetReached) {
+    return;
+  }
+  if (limited) {
+    SDL_Log("%s summary provenance scan: inspected=%zu rejected=%zu "
+            "budget=%zu%s",
+            label, inspected, rejected, budget,
+            budgetReached ? " exhausted" : "");
+  } else {
+    SDL_Log("%s summary provenance scan: inspected=%zu rejected=%zu "
+            "budget=unlimited",
+            label, inspected, rejected);
+  }
 }
 
 std::optional<std::string>
@@ -451,6 +495,38 @@ validatedProvenanceJson(const ScoreProvenance &provenance,
             error.c_str());
   }
   return serialized;
+}
+
+bool courseReplayStagesHaveValidProvenance(sqlite3_stmt *stmt,
+                                           int courseReplayId,
+                                           std::string &error) {
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  sqlite3_bind_int(stmt, 1, courseReplayId);
+  sqlite3_bind_int(stmt, 2,
+                   replay_summary_scan::kMaxCourseStagesPerCandidate + 1);
+
+  int stageCount = 0;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    ++stageCount;
+    if (stageCount > replay_summary_scan::kMaxCourseStagesPerCandidate) {
+      error = "course replay has too many stages";
+      return false;
+    }
+    if (sqlite3_column_type(stmt, 0) == SQLITE_NULL) {
+      error = "course replay references a missing stage replay";
+      return false;
+    }
+    if (!decodeStoredProvenance(stmt, 1, 2, 3, error).has_value()) {
+      return false;
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
+    return false;
+  }
+  return true;
 }
 
 std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
@@ -640,6 +716,10 @@ sqlite3 *ReplayDBHelper::Connect() {
   if (db == nullptr) {
     SDL_Log("Can't open replay database: %s", openError.c_str());
     return nullptr;
+  }
+
+  if (databaseUserVersion(db) > kReplayDatabaseSchemaVersion) {
+    return db;
   }
 
   if (const auto pragmaError = applySqlitePragmas(
@@ -1053,9 +1133,84 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
 
   const auto match = replayChartMatchFor(chartMeta);
   const bool hasLimit = limit > 0;
+  const std::size_t requestedCount =
+      hasLimit ? static_cast<std::size_t>(limit)
+               : std::numeric_limits<std::size_t>::max();
+  const std::size_t candidateBudget = replaySummaryCandidateBudget(limit);
   const int maxScore = std::max(0, chartMeta.TotalNotes) * 2;
 
-  std::string query =
+  std::string candidateQuery =
+      "SELECT r.id, r.ruleset_version, r.eligibility, r.provenance_json "
+      "FROM replays r WHERE ";
+  candidateQuery += replayChartMatchPredicate("r");
+  candidateQuery +=
+      " AND NOT EXISTS ("
+      "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
+      ") AND r.id < ? ORDER BY r.id DESC LIMIT ?";
+  SqliteStatementHandle candidateStmt;
+  if (!prepareSqliteStatementLogged(db, candidateQuery, candidateStmt,
+                                    "preparing replay provenance scan",
+                                    logSqlErrorText)) {
+    return replays;
+  }
+
+  std::vector<int> validIds;
+  sqlite3_int64 beforeId = std::numeric_limits<sqlite3_int64>::max();
+  std::size_t inspected = 0;
+  std::size_t rejected = 0;
+  bool reachedEnd = false;
+  bool scanFailed = false;
+  while (validIds.size() < requestedCount && inspected < candidateBudget) {
+    const std::size_t chunkSize = std::min<std::size_t>(
+        replay_summary_scan::kChunkSize, candidateBudget - inspected);
+    sqlite3_reset(candidateStmt.get());
+    sqlite3_clear_bindings(candidateStmt.get());
+    int bindIndex = bindReplayChartMatch(candidateStmt.get(), 1, match);
+    sqlite3_bind_int64(candidateStmt.get(), bindIndex++, beforeId);
+    sqlite3_bind_int(candidateStmt.get(), bindIndex++,
+                     static_cast<int>(chunkSize));
+
+    std::size_t rowsInChunk = 0;
+    int rc = SQLITE_OK;
+    while ((rc = sqlite3_step(candidateStmt.get())) == SQLITE_ROW) {
+      ++rowsInChunk;
+      ++inspected;
+      beforeId = sqlite3_column_int64(candidateStmt.get(), 0);
+      std::string provenanceError;
+      if (!decodeStoredProvenance(candidateStmt.get(), 1, 2, 3, provenanceError)
+               .has_value()) {
+        ++rejected;
+        continue;
+      }
+      validIds.push_back(sqlite3_column_int(candidateStmt.get(), 0));
+      if (validIds.size() >= requestedCount) {
+        break;
+      }
+    }
+    if (validIds.size() >= requestedCount) {
+      break;
+    }
+    if (rc != SQLITE_DONE) {
+      logSqlError("scanning replay provenance", db);
+      scanFailed = true;
+      break;
+    }
+    if (rowsInChunk < chunkSize) {
+      reachedEnd = true;
+      break;
+    }
+  }
+  candidateStmt.reset();
+
+  const bool budgetReached = hasLimit && validIds.size() < requestedCount &&
+                             !reachedEnd && inspected >= candidateBudget;
+  logReplaySummaryScan("Replay", inspected, rejected, hasLimit, candidateBudget,
+                       budgetReached);
+  if (scanFailed) {
+    return replays;
+  }
+
+  const char *detailQuery =
       "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
       "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
@@ -1063,32 +1218,32 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
       "r.play_option2_seed, r.assist_option, r.max_combo,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id),"
-      "r.ruleset_version, r.eligibility, r.provenance_json "
-      "FROM replays r WHERE ";
-  query += replayChartMatchPredicate("r");
-  query += " AND NOT EXISTS ("
-           "SELECT 1 FROM course_replay_stages crs WHERE crs.replay_id = r.id"
-           ") ORDER BY r.id DESC";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt, "preparing replay list",
-                                    logSqlErrorText)) {
+      "r.ruleset_version, r.eligibility "
+      "FROM replays r WHERE r.id = ?";
+  SqliteStatementHandle detailStmt;
+  if (!prepareSqliteStatementLogged(db, detailQuery, detailStmt,
+                                    "preparing replay list", logSqlErrorText)) {
     return replays;
   }
 
-  bindReplayChartMatch(stmt.get(), 1, match);
-
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    if (!readStoredProvenance(stmt.get(), 20, 21, 22, "replay summary")
-             .has_value()) {
+  replays.reserve(validIds.size());
+  for (const int replayId : validIds) {
+    sqlite3_reset(detailStmt.get());
+    sqlite3_clear_bindings(detailStmt.get());
+    sqlite3_bind_int(detailStmt.get(), 1, replayId);
+    const int rc = sqlite3_step(detailStmt.get());
+    if (rc == SQLITE_DONE) {
       continue;
     }
-    ReplaySummary summary = readReplaySummary(stmt.get(), 17, 18, 19, 20, 21);
+    if (rc != SQLITE_ROW) {
+      logSqlError("loading replay summary details", db);
+      return {};
+    }
+    ReplaySummary summary =
+        readReplaySummary(detailStmt.get(), 17, 18, 19, 20, 21);
     summary.maxScore = maxScore;
     summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));
-    if (hasLimit && static_cast<int>(replays.size()) >= limit) {
-      break;
-    }
   }
   return replays;
 }
@@ -1107,7 +1262,98 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
   }
 
   const bool hasLimit = limit > 0;
-  std::string query =
+  const std::size_t requestedCount =
+      hasLimit ? static_cast<std::size_t>(limit)
+               : std::numeric_limits<std::size_t>::max();
+  const std::size_t candidateBudget = replaySummaryCandidateBudget(limit);
+  const char *candidateQuery =
+      "SELECT cr.id, cr.ruleset_version, cr.eligibility, cr.provenance_json "
+      "FROM course_replays cr "
+      "WHERE cr.course_id = ? AND cr.id < ? "
+      "ORDER BY cr.id DESC LIMIT ?";
+  SqliteStatementHandle candidateStmt;
+  if (!prepareSqliteStatementLogged(db, candidateQuery, candidateStmt,
+                                    "preparing course replay provenance scan",
+                                    logSqlErrorText)) {
+    return replays;
+  }
+
+  const char *stageProvenanceQuery =
+      "SELECT r.id, r.ruleset_version, r.eligibility, r.provenance_json "
+      "FROM course_replay_stages s "
+      "LEFT JOIN replays r ON r.id = s.replay_id "
+      "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
+  SqliteStatementHandle stageProvenanceStmt;
+  if (!prepareSqliteStatementLogged(
+          db, stageProvenanceQuery, stageProvenanceStmt,
+          "preparing course replay stage provenance scan", logSqlErrorText)) {
+    return replays;
+  }
+
+  std::vector<int> validIds;
+  sqlite3_int64 beforeId = std::numeric_limits<sqlite3_int64>::max();
+  std::size_t inspected = 0;
+  std::size_t rejected = 0;
+  bool reachedEnd = false;
+  bool scanFailed = false;
+  while (validIds.size() < requestedCount && inspected < candidateBudget) {
+    const std::size_t chunkSize = std::min<std::size_t>(
+        replay_summary_scan::kChunkSize, candidateBudget - inspected);
+    sqlite3_reset(candidateStmt.get());
+    sqlite3_clear_bindings(candidateStmt.get());
+    sqlite3_bind_int(candidateStmt.get(), 1, courseId);
+    sqlite3_bind_int64(candidateStmt.get(), 2, beforeId);
+    sqlite3_bind_int(candidateStmt.get(), 3, static_cast<int>(chunkSize));
+
+    std::size_t rowsInChunk = 0;
+    int rc = SQLITE_OK;
+    while ((rc = sqlite3_step(candidateStmt.get())) == SQLITE_ROW) {
+      ++rowsInChunk;
+      ++inspected;
+      beforeId = sqlite3_column_int64(candidateStmt.get(), 0);
+      std::string provenanceError;
+      const bool aggregateValid =
+          decodeStoredProvenance(candidateStmt.get(), 1, 2, 3, provenanceError)
+              .has_value();
+      const bool stagesValid =
+          aggregateValid &&
+          courseReplayStagesHaveValidProvenance(
+              stageProvenanceStmt.get(),
+              sqlite3_column_int(candidateStmt.get(), 0), provenanceError);
+      if (!aggregateValid || !stagesValid) {
+        ++rejected;
+        continue;
+      }
+      validIds.push_back(sqlite3_column_int(candidateStmt.get(), 0));
+      if (validIds.size() >= requestedCount) {
+        break;
+      }
+    }
+    if (validIds.size() >= requestedCount) {
+      break;
+    }
+    if (rc != SQLITE_DONE) {
+      logSqlError("scanning course replay provenance", db);
+      scanFailed = true;
+      break;
+    }
+    if (rowsInChunk < chunkSize) {
+      reachedEnd = true;
+      break;
+    }
+  }
+  candidateStmt.reset();
+  stageProvenanceStmt.reset();
+
+  const bool budgetReached = hasLimit && validIds.size() < requestedCount &&
+                             !reachedEnd && inspected >= candidateBudget;
+  logReplaySummaryScan("Course replay", inspected, rejected, hasLimit,
+                       candidateBudget, budgetReached);
+  if (scanFailed) {
+    return replays;
+  }
+
+  const char *detailQuery =
       "SELECT cr.id, cr.gauge_type, cr.gauge_auto_shift, cr.final_score,"
       "cr.final_gauge, cr.clear_type, cr.created_at,"
       "cr.requested_play_option, cr.assist_option, cr.completed_charts,"
@@ -1121,57 +1367,61 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
       "(SELECT COUNT(*) FROM replay_touch_samples t "
       "JOIN course_replay_stages s ON s.replay_id = t.replay_id "
       "WHERE s.course_replay_id = cr.id),"
-      "cr.ruleset_version, cr.eligibility, cr.provenance_json "
+      "cr.ruleset_version, cr.eligibility "
       "FROM course_replays cr "
-      "WHERE cr.course_id = ? "
-      "ORDER BY cr.id DESC";
+      "WHERE cr.id = ?";
 
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(
-          db, query, stmt, "preparing course replay list", logSqlErrorText)) {
+  SqliteStatementHandle detailStmt;
+  if (!prepareSqliteStatementLogged(db, detailQuery, detailStmt,
+                                    "preparing course replay list",
+                                    logSqlErrorText)) {
     return replays;
   }
 
-  sqlite3_bind_int(stmt.get(), 1, courseId);
-
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    if (!readStoredProvenance(stmt.get(), 15, 16, 17, "course replay summary")
-             .has_value()) {
+  replays.reserve(validIds.size());
+  for (const int replayId : validIds) {
+    sqlite3_reset(detailStmt.get());
+    sqlite3_clear_bindings(detailStmt.get());
+    sqlite3_bind_int(detailStmt.get(), 1, replayId);
+    const int rc = sqlite3_step(detailStmt.get());
+    if (rc == SQLITE_DONE) {
       continue;
     }
+    if (rc != SQLITE_ROW) {
+      logSqlError("loading course replay summary details", db);
+      return {};
+    }
     ReplaySummary summary;
-    summary.id = sqlite3_column_int(stmt.get(), 0);
+    summary.id = sqlite3_column_int(detailStmt.get(), 0);
     summary.courseReplay = true;
     summary.initialGaugeType =
-        gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 1));
-    summary.gaugeAutoShift = sqlite3_column_int(stmt.get(), 2) != 0;
-    summary.finalScore = sqlite3_column_int(stmt.get(), 3);
+        gaugeTypeFromInt(sqlite3_column_int(detailStmt.get(), 1));
+    summary.gaugeAutoShift = sqlite3_column_int(detailStmt.get(), 2) != 0;
+    summary.finalScore = sqlite3_column_int(detailStmt.get(), 3);
     summary.finalGauge =
-        static_cast<float>(sqlite3_column_double(stmt.get(), 4));
-    summary.clearType = sqlite3_column_int(stmt.get(), 5);
-    summary.createdAt = readText(stmt.get(), 6);
-    if (sqlite3_column_type(stmt.get(), 7) != SQLITE_NULL) {
-      summary.playOption = readText(stmt.get(), 7);
+        static_cast<float>(sqlite3_column_double(detailStmt.get(), 4));
+    summary.clearType = sqlite3_column_int(detailStmt.get(), 5);
+    summary.createdAt = readText(detailStmt.get(), 6);
+    if (sqlite3_column_type(detailStmt.get(), 7) != SQLITE_NULL) {
+      summary.playOption = readText(detailStmt.get(), 7);
     }
-    if (sqlite3_column_type(stmt.get(), 8) != SQLITE_NULL) {
-      summary.assistOption = assist_options::normalize(readText(stmt.get(), 8));
+    if (sqlite3_column_type(detailStmt.get(), 8) != SQLITE_NULL) {
+      summary.assistOption =
+          assist_options::normalize(readText(detailStmt.get(), 8));
     }
-    summary.completedCharts = sqlite3_column_int(stmt.get(), 9);
-    summary.totalCharts = sqlite3_column_int(stmt.get(), 10);
-    summary.stageCount = sqlite3_column_int(stmt.get(), 11);
-    summary.maxCombo = sqlite3_column_int(stmt.get(), 12);
-    summary.eventCount = sqlite3_column_int(stmt.get(), 13);
-    summary.touchSampleCount = sqlite3_column_int(stmt.get(), 14);
-    summary.rulesetVersion = sqlite3_column_int(stmt.get(), 15);
-    const int eligibility = sqlite3_column_int(stmt.get(), 16);
+    summary.completedCharts = sqlite3_column_int(detailStmt.get(), 9);
+    summary.totalCharts = sqlite3_column_int(detailStmt.get(), 10);
+    summary.stageCount = sqlite3_column_int(detailStmt.get(), 11);
+    summary.maxCombo = sqlite3_column_int(detailStmt.get(), 12);
+    summary.eventCount = sqlite3_column_int(detailStmt.get(), 13);
+    summary.touchSampleCount = sqlite3_column_int(detailStmt.get(), 14);
+    summary.rulesetVersion = sqlite3_column_int(detailStmt.get(), 15);
+    const int eligibility = sqlite3_column_int(detailStmt.get(), 16);
     if (eligibility >= static_cast<int>(ScoreEligibility::Verified) &&
         eligibility <= static_cast<int>(ScoreEligibility::LegacyUnverified)) {
       summary.eligibility = static_cast<ScoreEligibility>(eligibility);
     }
     replays.push_back(std::move(summary));
-    if (hasLimit && static_cast<int>(replays.size()) >= limit) {
-      break;
-    }
   }
   return replays;
 }

@@ -4,11 +4,17 @@
 #include "../src/Utils.h"
 #include "../src/targets.h"
 
+#include <SDL2/SDL.h>
+
+#include <algorithm>
 #include <cassert>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -89,6 +95,86 @@ std::string schemaSnapshot(sqlite3 *db) {
   }
   return result;
 }
+
+std::string readFileBytes(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+}
+
+struct PersistentDatabaseSnapshot {
+  int userVersion = 0;
+  std::string journalMode;
+  std::string schema;
+  std::string sentinel;
+  std::string bytes;
+  bool journalSidecar = false;
+  bool walSidecar = false;
+  bool shmSidecar = false;
+
+  bool operator==(const PersistentDatabaseSnapshot &) const = default;
+};
+
+PersistentDatabaseSnapshot
+persistentDatabaseSnapshot(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  PersistentDatabaseSnapshot result;
+  result.userVersion = queryInt(db.get(), "PRAGMA user_version");
+  result.journalMode = queryText(db.get(), "PRAGMA journal_mode");
+  result.schema = schemaSnapshot(db.get());
+  result.sentinel = queryText(db.get(), "SELECT value FROM sentinel");
+  db.reset();
+  result.bytes = readFileBytes(path);
+  result.journalSidecar = std::filesystem::exists(path.string() + "-journal");
+  result.walSidecar = std::filesystem::exists(path.string() + "-wal");
+  result.shmSidecar = std::filesystem::exists(path.string() + "-shm");
+  return result;
+}
+
+void createFutureSentinelDatabase(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(db.get(), "PRAGMA user_version = 99");
+}
+
+class ScopedLogCapture {
+public:
+  ScopedLogCapture() {
+    SDL_LogGetOutputFunction(&previous_, &previousUserdata_);
+    SDL_LogSetOutputFunction(capture, this);
+  }
+
+  ScopedLogCapture(const ScopedLogCapture &) = delete;
+  ScopedLogCapture &operator=(const ScopedLogCapture &) = delete;
+
+  ~ScopedLogCapture() {
+    SDL_LogSetOutputFunction(previous_, previousUserdata_);
+  }
+
+  [[nodiscard]] int countContaining(const std::string &needle) const {
+    return static_cast<int>(
+        std::count_if(messages.begin(), messages.end(), [&](const auto &value) {
+          return value.find(needle) != std::string::npos;
+        }));
+  }
+
+  [[nodiscard]] bool anyContains(const std::string &needle) const {
+    return countContaining(needle) > 0;
+  }
+
+  std::vector<std::string> messages;
+
+private:
+  static void SDLCALL capture(void *userdata, int, SDL_LogPriority,
+                              const char *message) {
+    auto *self = static_cast<ScopedLogCapture *>(userdata);
+    self->messages.emplace_back(message != nullptr ? message : "");
+  }
+
+  SDL_LogOutputFunction previous_ = nullptr;
+  void *previousUserdata_ = nullptr;
+};
 
 void createVersion2ReplayFixture(const std::filesystem::path &path) {
   auto db = openDatabase(path);
@@ -526,6 +612,57 @@ void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
   assert(all[1].id == courseReplayIds[0]);
 }
 
+void testCourseSummariesOmitInvalidLinkedStages(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-course-summary-stages" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  CourseReplayData course;
+  course.courseId = 64;
+  course.courseName = "Summary stage course";
+  course.completedCharts = 2;
+  course.totalCharts = 2;
+  course.provenance = sampleProvenance("summary-stage-course");
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "summary-stage-course-a")});
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "summary-stage-course-b")});
+
+  std::vector<int> courseReplayIds;
+  for (int i = 0; i < 3; ++i) {
+    course.finalScore = 300 + i;
+    const auto id = helper.SaveCourseReplay(course);
+    assert(id.has_value());
+    courseReplayIds.push_back(*id);
+  }
+
+  auto db = openDatabase(path);
+  const int mismatchedStageId = queryInt(
+      db.get(),
+      "SELECT replay_id FROM course_replay_stages WHERE course_replay_id=" +
+          std::to_string(courseReplayIds[1]) + " ORDER BY stage_index LIMIT 1");
+  const int malformedStageId = queryInt(
+      db.get(),
+      "SELECT replay_id FROM course_replay_stages WHERE course_replay_id=" +
+          std::to_string(courseReplayIds[2]) +
+          " ORDER BY stage_index DESC LIMIT 1");
+  execOrAbort(db.get(), "UPDATE replays SET ruleset_version=99 WHERE id=" +
+                            std::to_string(mismatchedStageId));
+  execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(malformedStageId));
+  db.reset();
+
+  const auto limited = helper.ListCourseReplays(course.courseId, 1);
+  assert(limited.size() == 1);
+  assert(limited.front().id == courseReplayIds[0]);
+  const auto all = helper.ListCourseReplays(course.courseId, 0);
+  assert(all.size() == 1);
+  assert(all.front().id == courseReplayIds[0]);
+  assert(!helper.LoadCourseReplay(courseReplayIds[1]).has_value());
+  assert(!helper.LoadCourseReplay(courseReplayIds[2]).has_value());
+}
+
 void testFutureVersionRejectsWithoutSchemaMutation(
     const std::filesystem::path &root) {
   const auto path = root / "future" / "replay.db";
@@ -545,6 +682,44 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   assert(queryText(after.get(), "SELECT value FROM sentinel") == "unchanged");
   assert(!tableExists(after.get(), "replays"));
   assert(!tableExists(after.get(), "course_replays"));
+}
+
+void testFutureReplayWritesPreservePersistentDatabaseState(
+    const std::filesystem::path &root) {
+  ReplayData replay = sampleReplay(root, "future-persistent-state");
+  CourseReplayData course;
+  course.courseId = 63;
+  course.courseName = "Future persistent state course";
+  course.provenance = replay.provenance;
+  course.stages.push_back(
+      {.replay = sampleReplay(root, "future-persistent-state-stage")});
+
+  const auto assertUnchanged = [&](const std::filesystem::path &path,
+                                   const auto &operation) {
+    createFutureSentinelDatabase(path);
+    const auto before = persistentDatabaseSnapshot(path);
+    operation(path);
+    const auto after = persistentDatabaseSnapshot(path);
+    assert(after == before);
+  };
+
+  assertUnchanged(root / "future-save-replay" / "replay.db",
+                  [&](const auto &path) {
+                    ReplayDBHelper helper(path);
+                    assert(!helper.SaveReplay(replay).has_value());
+                  });
+  assertUnchanged(root / "future-save-course-replay" / "replay.db",
+                  [&](const auto &path) {
+                    ReplayDBHelper helper(path);
+                    assert(!helper.SaveCourseReplay(course).has_value());
+                  });
+  assertUnchanged(root / "future-direct-replay" / "replay.db",
+                  [&](const auto &path) {
+                    ReplayDBHelper helper(path);
+                    SqliteConnectionHandle db(helper.Connect());
+                    assert(db);
+                    assert(!helper.CreateReplayTables(db.get()));
+                  });
 }
 
 void insertChartReplays(sqlite3 *db, int count) {
@@ -571,6 +746,110 @@ void insertCourseReplays(sqlite3 *db, int courseId, int count) {
                 ",'Course','Group','{}',0,0,0,0,'NORMAL','OFF'," +
                 std::to_string(i) + "," + std::to_string(i) +
                 ",100.0,300,1,1)");
+  }
+}
+
+void insertCorruptChartSummaryRows(sqlite3 *db, const ReplayData &replay,
+                                   int count) {
+  execOrAbort(db, "BEGIN IMMEDIATE TRANSACTION");
+  const char *query =
+      "INSERT INTO replays (chart_path, chart_md5, chart_sha256, chart_title,"
+      "chart_artist, gauge_type, gauge_auto_shift, final_score, max_combo,"
+      "final_gauge, clear_type, ruleset_version, eligibility, provenance_json) "
+      "VALUES ('BMS/budget.bms', ?, ?, 'Budget', 'Artist', 0, 0, ?, 0, "
+      "100.0, 300, 1, 0, '{')";
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(db, query, stmt) == SQLITE_OK);
+  for (int i = 0; i < count; ++i) {
+    sqlite3_reset(stmt.get());
+    sqlite3_clear_bindings(stmt.get());
+    bindSqliteText(stmt.get(), 1, replay.chartMeta.MD5);
+    bindSqliteText(stmt.get(), 2, replay.chartMeta.SHA256);
+    sqlite3_bind_int(stmt.get(), 3, 1000 + i);
+    assert(sqlite3_step(stmt.get()) == SQLITE_DONE);
+  }
+  stmt.reset();
+  execOrAbort(db, "COMMIT");
+}
+
+void insertCorruptCourseSummaryRows(sqlite3 *db, int courseId, int count) {
+  execOrAbort(db, "BEGIN IMMEDIATE TRANSACTION");
+  const char *query =
+      "INSERT INTO course_replays (course_id, course_name, course_group_name,"
+      "constraint_json, gauge_type, gauge_profile, gauge_auto_shift, ln_mode,"
+      "requested_play_option, assist_option, final_score, max_combo,"
+      "final_gauge, clear_type, completed_charts, total_charts,"
+      "ruleset_version, eligibility, provenance_json) "
+      "VALUES (?, 'Budget course', 'Group', '{}', 0, 0, 0, 0, 'NORMAL', "
+      "'OFF', ?, 0, 100.0, 300, 1, 1, 1, 0, '{')";
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(db, query, stmt) == SQLITE_OK);
+  for (int i = 0; i < count; ++i) {
+    sqlite3_reset(stmt.get());
+    sqlite3_clear_bindings(stmt.get());
+    sqlite3_bind_int(stmt.get(), 1, courseId);
+    sqlite3_bind_int(stmt.get(), 2, 2000 + i);
+    assert(sqlite3_step(stmt.get()) == SQLITE_DONE);
+  }
+  stmt.reset();
+  execOrAbort(db, "COMMIT");
+}
+
+void testLimitedSummaryScansHaveFiniteCorruptBudget(
+    const std::filesystem::path &root) {
+  constexpr int kRequestedLimit = 1;
+  constexpr int kExpectedCandidateBudget =
+      kRequestedLimit + replay_summary_scan::kCorruptCandidateAllowance;
+  constexpr int kCorruptPrefix = 600;
+  const std::string inspectedText =
+      "inspected=" + std::to_string(kExpectedCandidateBudget);
+  const std::string budgetText =
+      "budget=" + std::to_string(kExpectedCandidateBudget);
+
+  {
+    const auto path = root / "bounded-chart-summary" / "replay.db";
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    ReplayData valid = sampleReplay(root, "bounded-chart-summary");
+    assert(helper.SaveReplay(valid).has_value());
+    auto db = openDatabase(path);
+    insertCorruptChartSummaryRows(db.get(), valid, kCorruptPrefix);
+    db.reset();
+
+    ScopedLogCapture logs;
+    const auto summaries = helper.ListReplays(valid.chartMeta, kRequestedLimit);
+    assert(summaries.empty());
+    assert(logs.countContaining("Replay summary provenance scan") == 1);
+    assert(logs.anyContains(inspectedText));
+    assert(logs.anyContains(budgetText));
+    assert(logs.countContaining("Failed to load replay summary provenance") ==
+           0);
+  }
+
+  {
+    const auto path = root / "bounded-course-summary" / "replay.db";
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    CourseReplayData valid;
+    valid.courseId = 65;
+    valid.courseName = "Bounded summary course";
+    valid.provenance = sampleProvenance("bounded-course-summary");
+    valid.stages.push_back(
+        {.replay = sampleReplay(root, "bounded-course-summary-stage")});
+    assert(helper.SaveCourseReplay(valid).has_value());
+    auto db = openDatabase(path);
+    insertCorruptCourseSummaryRows(db.get(), valid.courseId, kCorruptPrefix);
+    db.reset();
+
+    ScopedLogCapture logs;
+    const auto summaries =
+        helper.ListCourseReplays(valid.courseId, kRequestedLimit);
+    assert(summaries.empty());
+    assert(logs.countContaining("Course replay summary provenance scan") == 1);
+    assert(logs.anyContains(inspectedText));
+    assert(logs.anyContains(budgetText));
+    assert(logs.countContaining(
+               "Failed to load course replay summary provenance") == 0);
   }
 }
 
@@ -618,8 +897,11 @@ int main() {
   testInvalidProvenanceRejectsReplayWrites(root);
   testChartSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
+  testCourseSummariesOmitInvalidLinkedStages(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
+  testFutureReplayWritesPreservePersistentDatabaseState(root);
   testExistingListLimits(root);
+  testLimitedSummaryScansHaveFiniteCorruptBudget(root);
 
   std::filesystem::remove_all(root);
   std::cout << "replay database helper tests passed\n";

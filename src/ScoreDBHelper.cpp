@@ -128,9 +128,21 @@ bool migrateScoreDatabaseToVersion5(sqlite3 *db) {
     return false;
   }
 
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_score_provenance_v5"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_score_provenance_v5"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_provenance_v5; RELEASE "
+            "asobmashow_score_provenance_v5"
+          : "ROLLBACK";
   std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
   if (!transaction.active()) {
     logSqlErrorText("starting score provenance migration", transactionError);
     return false;
@@ -957,6 +969,10 @@ sqlite3 *ScoreDBHelper::Connect() {
   if (db == nullptr) {
     SDL_Log("Can't open score database: %s", openError.c_str());
     return nullptr;
+  }
+
+  if (databaseUserVersion(db) > kScoreDatabaseSchemaVersion) {
+    return db;
   }
 
   if (const auto pragmaError = applySqlitePragmas(

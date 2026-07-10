@@ -9,6 +9,16 @@
 #include <string>
 #include <vector>
 
+namespace replay_summary_scan {
+// Positive-limit summary reads inspect at most the requested rows plus this
+// corruption allowance. If the budget is exhausted, the API fails closed and
+// returns fewer rows with one aggregate diagnostic. limit <= 0 remains the
+// explicit unbounded/all-valid-rows mode.
+inline constexpr int kChunkSize = 64;
+inline constexpr int kCorruptCandidateAllowance = 512;
+inline constexpr int kMaxCourseStagesPerCandidate = 256;
+} // namespace replay_summary_scan
+
 struct ReplaySummary {
   int id = 0;
   bool courseReplay = false;

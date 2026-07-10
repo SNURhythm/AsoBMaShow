@@ -134,8 +134,8 @@ inline bool sqliteMessageContains(const char *message, const char *needle) {
   const auto lowerChar = [](unsigned char ch) {
     return static_cast<char>(std::tolower(ch));
   };
-  std::transform(lowerMessage.begin(), lowerMessage.end(),
-                 lowerMessage.begin(), lowerChar);
+  std::transform(lowerMessage.begin(), lowerMessage.end(), lowerMessage.begin(),
+                 lowerChar);
   std::transform(lowerNeedle.begin(), lowerNeedle.end(), lowerNeedle.begin(),
                  lowerChar);
   return lowerMessage.find(lowerNeedle) != std::string::npos;
@@ -313,8 +313,10 @@ applySqlitePragmas(sqlite3 *db, std::initializer_list<const char *> pragmas) {
 class SqliteTransactionHandle {
 public:
   SqliteTransactionHandle(sqlite3 *db, const char *beginQuery,
-                          std::string &errorMessage)
-      : db_(db) {
+                          std::string &errorMessage,
+                          const char *commitQuery = "COMMIT",
+                          const char *rollbackQuery = "ROLLBACK")
+      : db_(db), commitQuery_(commitQuery), rollbackQuery_(rollbackQuery) {
     if (db_ == nullptr) {
       errorMessage = "database is not open";
       return;
@@ -327,12 +329,11 @@ public:
   }
 
   SqliteTransactionHandle(const SqliteTransactionHandle &) = delete;
-  SqliteTransactionHandle &
-  operator=(const SqliteTransactionHandle &) = delete;
+  SqliteTransactionHandle &operator=(const SqliteTransactionHandle &) = delete;
 
   ~SqliteTransactionHandle() {
     if (active_) {
-      sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+      sqlite3_exec(db_, rollbackQuery_.c_str(), nullptr, nullptr, nullptr);
     }
   }
 
@@ -343,7 +344,7 @@ public:
       errorMessage = "transaction is not active";
       return false;
     }
-    if (const auto error = executeSqlite(db_, "COMMIT")) {
+    if (const auto error = executeSqlite(db_, commitQuery_.c_str())) {
       errorMessage = *error;
       return false;
     }
@@ -353,5 +354,7 @@ public:
 
 private:
   sqlite3 *db_ = nullptr;
+  std::string commitQuery_;
+  std::string rollbackQuery_;
   bool active_ = false;
 };
