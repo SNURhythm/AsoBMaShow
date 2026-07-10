@@ -23,6 +23,14 @@ public:
     eligible_ = true;
   }
 
+  void prepareForProfileReplacement() {
+    // A profile replacement invalidates every binding-backed control.
+    // Preserve the old signature and rebuild as soon as any current pointer
+    // transaction ends so profile-A controls cannot remain alive for B.
+    requested_ = true;
+    eligible_ = true;
+  }
+
   [[nodiscard]] bool consume(bool pointerTransactionActive) {
     if (!requested_ || !eligible_ || pointerTransactionActive) {
       return false;

@@ -266,6 +266,11 @@ void testInputSettingsRebuildWaitsForPointerTransaction() {
   gate.markEventComplete();
   gate.noticeStateChange();
   assert(gate.consume(false));
+
+  gate.reset();
+  gate.prepareForProfileReplacement();
+  assert(!gate.consume(true));
+  assert(gate.consume(false));
 }
 
 } // namespace

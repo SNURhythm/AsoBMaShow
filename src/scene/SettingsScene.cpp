@@ -218,8 +218,7 @@ void SettingsScene::init() {
           inputCaptureController->cancel();
         }
         inputCaptureAction.reset();
-        inputViewRebuildGate.reset();
-        inputLastViewSignature.clear();
+        inputViewRebuildGate.prepareForProfileReplacement();
       });
   observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
   ensureLayoutUpToDate();
