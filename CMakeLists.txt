@@ -590,6 +590,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(audio_mix_tests
+        tests/audio_mix_tests.cpp
+        src/audio/AudioMix.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_mix_tests PRIVATE cxx_std_23)
+
+    add_executable(audio_wrapper_lifecycle_tests
+        tests/audio_wrapper_lifecycle_tests.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/path.cpp
+        src/utils/Stopwatch.cpp
+    )
+    target_include_directories(audio_wrapper_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
+    target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
         src/bms_parser.cpp
@@ -711,6 +732,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)
     set_tests_properties(foundation_av_settings PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_video_settings_tests>
+    )
+
+    add_test(NAME foundation_av_audio_mix
+        COMMAND $<TARGET_FILE:audio_mix_tests>)
+    set_tests_properties(foundation_av_audio_mix PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_mix_tests>
+    )
+
+    add_test(NAME foundation_av_audio_wrapper_lifecycle
+        COMMAND $<TARGET_FILE:audio_wrapper_lifecycle_tests>)
+    set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_wrapper_lifecycle_tests>
+        TIMEOUT 15
     )
 
     foreach(test_target IN ITEMS

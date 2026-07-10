@@ -708,6 +708,7 @@
 				AppSettingsStore.cpp,
 				ArchiveFile.cpp,
 				AtomicFile.cpp,
+				audio/AudioMix.cpp,
 				audio/AudioWrapper.cpp,
 				audio/ChartAudioRenderer.cpp,
 				audio/ChartMusicCache.cpp,
