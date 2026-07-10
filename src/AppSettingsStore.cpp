@@ -3,25 +3,100 @@
 #include "VersionedJson.h"
 
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 
 namespace {
 using nlohmann::json;
 
+void invalidValue(std::string_view key, std::string_view reason,
+                  std::vector<std::string> &diagnostics) {
+  diagnostics.push_back("Invalid setting '" + std::string(key) +
+                        "': " + std::string(reason));
+}
+
 template <typename Value>
-void readValue(const json &document, std::string_view key, Value &destination,
+bool readValue(const json &document, std::string_view key, Value &destination,
                std::vector<std::string> &diagnostics) {
   const auto found = document.find(std::string(key));
   if (found == document.end()) {
-    return;
+    return false;
   }
   try {
-    destination = found->get<Value>();
+    if constexpr (std::is_same_v<Value, bool>) {
+      if (!found->is_boolean()) {
+        invalidValue(key, "expected boolean", diagnostics);
+        return false;
+      }
+      destination = found->get<bool>();
+    } else if constexpr (std::is_integral_v<Value>) {
+      if (found->is_number_unsigned()) {
+        const std::uint64_t encoded = found->get<std::uint64_t>();
+        if (encoded >
+            static_cast<std::uint64_t>(std::numeric_limits<Value>::max())) {
+          invalidValue(key, "integer is out of range", diagnostics);
+          return false;
+        }
+        destination = static_cast<Value>(encoded);
+      } else if (found->is_number_integer()) {
+        const std::int64_t encoded = found->get<std::int64_t>();
+        if constexpr (std::is_unsigned_v<Value>) {
+          if (encoded < 0 || static_cast<std::uint64_t>(encoded) >
+                                 static_cast<std::uint64_t>(
+                                     std::numeric_limits<Value>::max())) {
+            invalidValue(key, "integer is out of range", diagnostics);
+            return false;
+          }
+        } else if (encoded < static_cast<std::int64_t>(
+                                 std::numeric_limits<Value>::lowest()) ||
+                   encoded > static_cast<std::int64_t>(
+                                 std::numeric_limits<Value>::max())) {
+          invalidValue(key, "integer is out of range", diagnostics);
+          return false;
+        }
+        destination = static_cast<Value>(encoded);
+      } else {
+        invalidValue(key, "expected integer", diagnostics);
+        return false;
+      }
+    } else if constexpr (std::is_floating_point_v<Value>) {
+      if (!found->is_number()) {
+        invalidValue(key, "expected number", diagnostics);
+        return false;
+      }
+      const long double encoded =
+          found->is_number_unsigned()
+              ? static_cast<long double>(found->get<std::uint64_t>())
+          : found->is_number_integer()
+              ? static_cast<long double>(found->get<std::int64_t>())
+              : static_cast<long double>(found->get<double>());
+      if (!std::isfinite(encoded) ||
+          encoded <
+              static_cast<long double>(std::numeric_limits<Value>::lowest()) ||
+          encoded >
+              static_cast<long double>(std::numeric_limits<Value>::max())) {
+        invalidValue(key, "number is out of range", diagnostics);
+        return false;
+      }
+      destination = static_cast<Value>(encoded);
+    } else if constexpr (std::is_same_v<Value, std::string>) {
+      if (!found->is_string()) {
+        invalidValue(key, "expected string", diagnostics);
+        return false;
+      }
+      destination = found->get<std::string>();
+    } else {
+      destination = found->get<Value>();
+    }
   } catch (const json::exception &error) {
-    diagnostics.push_back("Invalid setting '" + std::string(key) + "': " +
-                          error.what());
+    invalidValue(key, error.what(), diagnostics);
+    return false;
   }
+  return true;
 }
 
 template <typename Enum>
@@ -29,8 +104,9 @@ void readEnum(const json &document, std::string_view key, Enum &destination,
               std::vector<std::string> &diagnostics) {
   static_assert(std::is_enum_v<Enum>);
   int encoded = static_cast<int>(destination);
-  readValue(document, key, encoded, diagnostics);
-  destination = static_cast<Enum>(encoded);
+  if (readValue(document, key, encoded, diagnostics)) {
+    destination = static_cast<Enum>(encoded);
+  }
 }
 
 json settingsToJson(const AppSettings &settings) {
@@ -66,8 +142,7 @@ json settingsToJson(const AppSettings &settings) {
       {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
-      {"judgementIndicatorWidthScale",
-       settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
       {"judgementTextY", settings.judgementTextY},
       {"judgementIndicatorRenderMode",
        static_cast<int>(settings.judgementIndicatorRenderMode)},
@@ -88,12 +163,10 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
-      {"defaultDifficultyTablesSeeded",
-       settings.defaultDifficultyTablesSeeded},
+      {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
-        {"requestedSampleRate",
-         settings.audioVideo.audio.requestedSampleRate},
+        {"requestedSampleRate", settings.audioVideo.audio.requestedSampleRate},
         {"requestedBufferFrames",
          settings.audioVideo.audio.requestedBufferFrames},
         {"masterVolume", settings.audioVideo.audio.masterVolume},
@@ -114,12 +187,12 @@ AppSettings settingsFromJson(const json &document,
   AppSettings settings;
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
-  readValue(document, "visibleTimeGreenNumber",
-            settings.visibleTimeGreenNumber, diagnostics);
+  readValue(document, "visibleTimeGreenNumber", settings.visibleTimeGreenNumber,
+            diagnostics);
   readValue(document, "visibleTimeUseMilliseconds",
             settings.visibleTimeUseMilliseconds, diagnostics);
-  readEnum(document, "visibleTimeBpmStrategy",
-           settings.visibleTimeBpmStrategy, diagnostics);
+  readEnum(document, "visibleTimeBpmStrategy", settings.visibleTimeBpmStrategy,
+           diagnostics);
   readValue(document, "inputKeysoundEnabled", settings.inputKeysoundEnabled,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
@@ -133,8 +206,7 @@ AppSettings settingsFromJson(const json &document,
   readValue(document, "bgaEnabled", settings.bgaEnabled, diagnostics);
   readValue(document, "bgaBrightnessPercent", settings.bgaBrightnessPercent,
             diagnostics);
-  readValue(document, "bgaBlurStrength", settings.bgaBlurStrength,
-            diagnostics);
+  readValue(document, "bgaBlurStrength", settings.bgaBlurStrength, diagnostics);
   readEnum(document, "bgaDisplayMode", settings.bgaDisplayMode, diagnostics);
   readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
             diagnostics);
@@ -145,16 +217,11 @@ AppSettings settingsFromJson(const json &document,
             settings.noteStartPositionPercent, diagnostics);
   readValue(document, "floatingLaneCoverEnabled",
             settings.floatingLaneCoverEnabled, diagnostics);
-  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K,
-            diagnostics);
-  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K,
-            diagnostics);
-  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K,
-            diagnostics);
-  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K,
-            diagnostics);
-  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K,
-            diagnostics);
+  readValue(document, "playAreaWidth4K", settings.playAreaWidth4K, diagnostics);
+  readValue(document, "playAreaWidth5K", settings.playAreaWidth5K, diagnostics);
+  readValue(document, "playAreaWidth6K", settings.playAreaWidth6K, diagnostics);
+  readValue(document, "playAreaWidth7K", settings.playAreaWidth7K, diagnostics);
+  readValue(document, "playAreaWidth8K", settings.playAreaWidth8K, diagnostics);
   readValue(document, "playAreaWidth10K", settings.playAreaWidth10K,
             diagnostics);
   readValue(document, "playAreaWidth14K", settings.playAreaWidth14K,
@@ -167,8 +234,7 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "judgementIndicatorWidthScale",
             settings.judgementIndicatorWidthScale, diagnostics);
-  readValue(document, "judgementTextY", settings.judgementTextY,
-            diagnostics);
+  readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
   readEnum(document, "judgementIndicatorRenderMode",
            settings.judgementIndicatorRenderMode, diagnostics);
   readValue(document, "judgementCounterEnabled",
@@ -211,8 +277,8 @@ AppSettings settingsFromJson(const json &document,
                 settings.audioVideo.audio.requestedSampleRate, diagnostics);
       readValue(*audio, "requestedBufferFrames",
                 settings.audioVideo.audio.requestedBufferFrames, diagnostics);
-      readValue(*audio, "masterVolume",
-                settings.audioVideo.audio.masterVolume, diagnostics);
+      readValue(*audio, "masterVolume", settings.audioVideo.audio.masterVolume,
+                diagnostics);
       readValue(*audio, "bgmVolume", settings.audioVideo.audio.bgmVolume,
                 diagnostics);
       readValue(*audio, "keysoundVolume",
@@ -296,8 +362,22 @@ AppSettingsStore::LoadLegacyCfg(const std::filesystem::path &settingsCfg) {
     result.settings.sanitize();
     return result;
   }
-  result.settings =
-      AppSettings::loadLegacyCfg(settingsCfg, &result.diagnostics);
+  ec.clear();
+  if (!std::filesystem::is_regular_file(settingsCfg, ec) || ec) {
+    result.status = AppSettingsLoadStatus::Invalid;
+    result.diagnostics.push_back(
+        ec ? "Legacy settings type check failed: " + ec.message()
+           : "Legacy settings path is not a regular file");
+    result.settings.sanitize();
+    return result;
+  }
+  AppSettings parsed;
+  if (!AppSettings::loadLegacyCfg(settingsCfg, parsed, &result.diagnostics)) {
+    result.status = AppSettingsLoadStatus::Invalid;
+    result.settings.sanitize();
+    return result;
+  }
+  result.settings = std::move(parsed);
   result.status = AppSettingsLoadStatus::Loaded;
   return result;
 }
@@ -310,3 +390,19 @@ bool AppSettingsStore::Save(const std::filesystem::path &settingsJson,
   return versioned_json::saveAtomic(settingsJson, settingsToJson(sanitized),
                                     errorMessage);
 }
+
+#ifdef APP_SETTINGS_STORE_TESTING
+AppSettingsLoadResult
+AppSettingsStore::LoadLegacyCfgStreamForTesting(std::istream &input) {
+  AppSettingsLoadResult result;
+  AppSettings parsed;
+  if (!AppSettings::parseLegacyCfg(input, parsed, &result.diagnostics)) {
+    result.status = AppSettingsLoadStatus::Invalid;
+    result.settings.sanitize();
+    return result;
+  }
+  result.settings = std::move(parsed);
+  result.status = AppSettingsLoadStatus::Loaded;
+  return result;
+}
+#endif

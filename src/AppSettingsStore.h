@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -18,10 +19,13 @@ class AppSettingsStore {
 public:
   static constexpr int kCurrentSchemaVersion = 1;
 
-  static AppSettingsLoadResult Load(
-      const std::filesystem::path &settingsJson);
-  static AppSettingsLoadResult LoadLegacyCfg(
-      const std::filesystem::path &settingsCfg);
+  static AppSettingsLoadResult Load(const std::filesystem::path &settingsJson);
+  static AppSettingsLoadResult
+  LoadLegacyCfg(const std::filesystem::path &settingsCfg);
   static bool Save(const std::filesystem::path &settingsJson,
                    const AppSettings &settings, std::string &errorMessage);
+#ifdef APP_SETTINGS_STORE_TESTING
+  static AppSettingsLoadResult
+  LoadLegacyCfgStreamForTesting(std::istream &input);
+#endif
 };

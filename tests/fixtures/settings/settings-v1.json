@@ -45,7 +45,7 @@
   "selectedPlayOption": "R-RANDOM",
   "selectedLnMode": "CN",
   "selectedAssistOption": "DRAG",
-  "selectedPacemakerTarget": "RATE-AAA",
+  "selectedPacemakerTarget": "AAA",
   "defaultDifficultyTablesSeeded": true,
   "audio": {
     "outputDeviceId": "device:studio",

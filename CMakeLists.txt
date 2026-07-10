@@ -652,6 +652,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(app_settings_store_tests PRIVATE cxx_std_23)
+    target_compile_definitions(app_settings_store_tests PRIVATE
+        APP_SETTINGS_STORE_TESTING
+    )
     if(TARGET SDL2::SDL2)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)

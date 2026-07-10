@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <fstream>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -29,7 +32,8 @@ bool realWriteAndSync(const std::filesystem::path &path,
     const DWORD chunk = static_cast<DWORD>(
         std::min<std::size_t>(contents.size() - offset, MAXDWORD));
     DWORD written = 0;
-    if (!WriteFile(handle, contents.data() + offset, chunk, &written, nullptr) ||
+    if (!WriteFile(handle, contents.data() + offset, chunk, &written,
+                   nullptr) ||
         written == 0) {
       errorMessage = "WriteFile failed: " + std::to_string(GetLastError());
       CloseHandle(handle);
@@ -38,8 +42,7 @@ bool realWriteAndSync(const std::filesystem::path &path,
     offset += written;
   }
   if (!FlushFileBuffers(handle)) {
-    errorMessage = "FlushFileBuffers failed: " +
-                   std::to_string(GetLastError());
+    errorMessage = "FlushFileBuffers failed: " + std::to_string(GetLastError());
     CloseHandle(handle);
     return false;
   }
@@ -87,8 +90,14 @@ bool realWriteAndSync(const std::filesystem::path &path,
 }
 
 bool realReplace(const std::filesystem::path &from,
-                 const std::filesystem::path &to,
-                 std::string &errorMessage) {
+                 const std::filesystem::path &to, std::string &errorMessage) {
+#ifdef _WIN32
+  if (!MoveFileExW(from.c_str(), to.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    errorMessage = "MoveFileEx failed: " + std::to_string(GetLastError());
+    return false;
+  }
+#else
   std::error_code ec;
   std::filesystem::rename(from, to, ec);
   if (ec) {
@@ -96,12 +105,84 @@ bool realReplace(const std::filesystem::path &from,
                    "' failed: " + ec.message();
     return false;
   }
+#endif
   return true;
 }
 
 void realRemove(const std::filesystem::path &path) {
   std::error_code ignored;
   std::filesystem::remove(path, ignored);
+}
+
+bool readExistingFile(const std::filesystem::path &path,
+                      std::vector<std::byte> &contents,
+                      std::string &errorMessage) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input.is_open()) {
+    errorMessage = "unable to open existing file for backup";
+    return false;
+  }
+  const std::streamoff end = input.tellg();
+  if (end < 0) {
+    errorMessage = "unable to determine existing file size";
+    return false;
+  }
+  contents.resize(static_cast<std::size_t>(end));
+  input.seekg(0, std::ios::beg);
+  if (!contents.empty()) {
+    input.read(reinterpret_cast<char *>(contents.data()),
+               static_cast<std::streamsize>(contents.size()));
+    if (input.gcount() != static_cast<std::streamsize>(contents.size())) {
+      errorMessage = "short read while preparing backup";
+      return false;
+    }
+  }
+  if (input.bad()) {
+    errorMessage = "I/O failure while preparing backup";
+    return false;
+  }
+  return true;
+}
+
+bool syncDirectoryMetadata(const std::filesystem::path &path,
+                           std::string &errorMessage) {
+#ifdef _WIN32
+  // realReplace uses MOVEFILE_WRITE_THROUGH. Windows does not expose a
+  // portable directory-fsync equivalent for ordinary application handles.
+  (void)path;
+  (void)errorMessage;
+  return true;
+#else
+  const std::filesystem::path directory = path.parent_path().empty()
+                                              ? std::filesystem::path(".")
+                                              : path.parent_path();
+  const int descriptor = ::open(directory.c_str(), O_RDONLY);
+  if (descriptor < 0) {
+    errorMessage =
+        "open parent directory failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  if (::fsync(descriptor) != 0) {
+    errorMessage =
+        "parent directory fsync failed: " + std::string(std::strerror(errno));
+    ::close(descriptor);
+    return false;
+  }
+  if (::close(descriptor) != 0) {
+    errorMessage =
+        "close parent directory failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  return true;
+#endif
+}
+
+void appendError(std::string &errorMessage, std::string_view prefix,
+                 const std::string &detail) {
+  if (!errorMessage.empty()) {
+    errorMessage += "; ";
+  }
+  errorMessage += std::string(prefix) + detail;
 }
 } // namespace
 
@@ -113,8 +194,7 @@ Operations defaultOperations() {
 
 bool writeWithBackup(const std::filesystem::path &path,
                      std::span<const std::byte> contents,
-                     std::string &errorMessage,
-                     const Operations *operations) {
+                     std::string &errorMessage, const Operations *operations) {
   errorMessage.clear();
   const Operations defaults = defaultOperations();
   const Operations &ops = operations == nullptr ? defaults : *operations;
@@ -134,8 +214,10 @@ bool writeWithBackup(const std::filesystem::path &path,
 
   const std::filesystem::path temporary = path.string() + ".tmp";
   const std::filesystem::path backup = path.string() + ".bak";
+  const std::filesystem::path backupCandidate = path.string() + ".bak.pending";
   const std::filesystem::path savedBackup = path.string() + ".bak.previous";
   ops.remove(temporary);
+  ops.remove(backupCandidate);
   ops.remove(savedBackup);
   if (!ops.writeAndSync(temporary, contents, errorMessage)) {
     ops.remove(temporary);
@@ -155,38 +237,103 @@ bool writeWithBackup(const std::filesystem::path &path,
     ops.remove(temporary);
     return false;
   }
-  if (hadDestination && hadBackup &&
-      !ops.replace(backup, savedBackup, errorMessage)) {
-    ops.remove(temporary);
-    return false;
-  }
 
-  if (hadDestination && !ops.replace(path, backup, errorMessage)) {
-    if (hadDestination && hadBackup) {
-      std::string ignored;
-      ops.replace(savedBackup, backup, ignored);
+  bool previousBackupMoved = false;
+  bool backupPrepared = false;
+  auto restoreBackupState = [&]() {
+    if (!hadDestination) {
+      return;
     }
-    ops.remove(temporary);
-    return false;
+    std::string restoreError;
+    if (hadBackup) {
+      if (!ops.replace(savedBackup, backup, restoreError)) {
+        appendError(errorMessage, "backup restore failed: ", restoreError);
+      }
+    } else {
+      ops.remove(backup);
+    }
+    restoreError.clear();
+    if (!syncDirectoryMetadata(path, restoreError)) {
+      appendError(errorMessage,
+                  "backup metadata restore failed: ", restoreError);
+    }
+  };
+
+  if (hadDestination) {
+    std::vector<std::byte> priorContents;
+    if (!readExistingFile(path, priorContents, errorMessage) ||
+        !ops.writeAndSync(backupCandidate, priorContents, errorMessage)) {
+      ops.remove(temporary);
+      ops.remove(backupCandidate);
+      return false;
+    }
+
+    if (hadBackup) {
+      if (!ops.replace(backup, savedBackup, errorMessage)) {
+        ops.remove(temporary);
+        ops.remove(backupCandidate);
+        return false;
+      }
+      previousBackupMoved = true;
+      if (!syncDirectoryMetadata(path, errorMessage)) {
+        restoreBackupState();
+        ops.remove(temporary);
+        ops.remove(backupCandidate);
+        return false;
+      }
+    }
+
+    if (!ops.replace(backupCandidate, backup, errorMessage)) {
+      if (previousBackupMoved) {
+        restoreBackupState();
+      }
+      ops.remove(temporary);
+      ops.remove(backupCandidate);
+      return false;
+    }
+    backupPrepared = true;
+    if (!syncDirectoryMetadata(path, errorMessage)) {
+      restoreBackupState();
+      ops.remove(temporary);
+      ops.remove(backupCandidate);
+      return false;
+    }
   }
 
   if (!ops.replace(temporary, path, errorMessage)) {
-    std::string restoreError;
-    if (hadDestination && !ops.replace(backup, path, restoreError)) {
-      errorMessage += "; destination restore failed: " + restoreError;
-    }
-    if (hadDestination && hadBackup) {
-      restoreError.clear();
-      if (!ops.replace(savedBackup, backup, restoreError)) {
-        errorMessage += "; backup restore failed: " + restoreError;
-      }
+    if (backupPrepared) {
+      restoreBackupState();
     }
     ops.remove(temporary);
+    ops.remove(backupCandidate);
     return false;
   }
 
-  if (hadDestination && hadBackup) {
+  std::string syncError;
+  if (!syncDirectoryMetadata(path, syncError)) {
+    appendError(errorMessage,
+                "installed-file metadata sync failed: ", syncError);
+    std::string rollbackError;
+    if (hadDestination) {
+      if (!ops.replace(backup, path, rollbackError)) {
+        appendError(errorMessage,
+                    "destination rollback failed: ", rollbackError);
+      } else {
+        restoreBackupState();
+      }
+    } else {
+      ops.remove(path);
+      if (!syncDirectoryMetadata(path, rollbackError)) {
+        appendError(errorMessage,
+                    "new-file rollback sync failed: ", rollbackError);
+      }
+    }
+    return false;
+  }
+
+  if (previousBackupMoved) {
     ops.remove(savedBackup);
+    syncDirectoryMetadata(path, syncError);
   }
   return true;
 }

@@ -3,6 +3,7 @@
 #include "settings/AudioVideoSettings.h"
 
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -108,8 +109,7 @@ public:
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;
   bool visibleTimeUseMilliseconds = false;
-  VisibleTimeBpmStrategy visibleTimeBpmStrategy =
-      VisibleTimeBpmStrategy::Chart;
+  VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
   bool showInvisibleNotes = false;
@@ -166,8 +166,10 @@ public:
 
 private:
   friend class AppSettingsStore;
-  static AppSettings
-  loadLegacyCfg(const std::filesystem::path &path,
-                std::vector<std::string> *diagnostics = nullptr);
+  static bool parseLegacyCfg(std::istream &input, AppSettings &settings,
+                             std::vector<std::string> *diagnostics = nullptr);
+  static bool loadLegacyCfg(const std::filesystem::path &path,
+                            AppSettings &settings,
+                            std::vector<std::string> *diagnostics = nullptr);
   static std::filesystem::path configPath();
 };

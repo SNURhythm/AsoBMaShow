@@ -1,10 +1,11 @@
 #include "VersionedJson.h"
 
+#include <cstdint>
 #include <fstream>
+#include <limits>
 
 namespace versioned_json {
-LoadResult loadAndMigrate(const std::filesystem::path &path,
-                          int currentVersion,
+LoadResult loadAndMigrate(const std::filesystem::path &path, int currentVersion,
                           std::span<const Migration> migrations) {
   LoadResult result;
   std::error_code ec;
@@ -50,19 +51,32 @@ LoadResult loadAndMigrate(const std::filesystem::path &path,
       result.diagnostics.push_back("schemaVersion must be an integer");
       return result;
     }
-    version = versionIt->get<int>();
-  }
-  if (version < 0) {
-    result.status = LoadStatus::InvalidRoot;
-    result.diagnostics.push_back("schemaVersion must be non-negative");
-    return result;
-  }
-  if (version > currentVersion) {
-    result.status = LoadStatus::FutureVersion;
-    result.diagnostics.push_back("schemaVersion " + std::to_string(version) +
-                                 " is newer than supported version " +
-                                 std::to_string(currentVersion));
-    return result;
+    if (versionIt->is_number_unsigned()) {
+      const std::uint64_t encoded = versionIt->get<std::uint64_t>();
+      if (encoded > static_cast<std::uint64_t>(currentVersion)) {
+        result.status = LoadStatus::FutureVersion;
+        result.diagnostics.push_back(
+            "schemaVersion is newer than supported version " +
+            std::to_string(currentVersion));
+        return result;
+      }
+      version = static_cast<int>(encoded);
+    } else {
+      const std::int64_t encoded = versionIt->get<std::int64_t>();
+      if (encoded < 0) {
+        result.status = LoadStatus::InvalidRoot;
+        result.diagnostics.push_back("schemaVersion must be non-negative");
+        return result;
+      }
+      if (encoded > static_cast<std::int64_t>(currentVersion)) {
+        result.status = LoadStatus::FutureVersion;
+        result.diagnostics.push_back(
+            "schemaVersion is newer than supported version " +
+            std::to_string(currentVersion));
+        return result;
+      }
+      version = static_cast<int>(encoded);
+    }
   }
 
   while (version < currentVersion) {
@@ -79,8 +93,8 @@ LoadResult loadAndMigrate(const std::filesystem::path &path,
       result.status = LoadStatus::MigrationFailed;
       result.diagnostics.push_back(
           "migration from schema version " + std::to_string(version) +
-          " failed" + (errorMessage.empty() ? std::string()
-                                              : ": " + errorMessage));
+          " failed" +
+          (errorMessage.empty() ? std::string() : ": " + errorMessage));
       return result;
     }
     ++version;
@@ -99,7 +113,7 @@ bool saveAtomic(const std::filesystem::path &path,
     return false;
   }
   const std::string encoded = document.dump(2) + "\n";
-  return atomic_file::writeWithBackup(
-      path, std::as_bytes(std::span(encoded)), errorMessage, operations);
+  return atomic_file::writeWithBackup(path, std::as_bytes(std::span(encoded)),
+                                      errorMessage, operations);
 }
 } // namespace versioned_json

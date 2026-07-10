@@ -131,8 +131,7 @@ AppSettings::JudgementIndicatorRenderMode parseJudgementIndicatorRenderMode(
     const std::string &value,
     AppSettings::JudgementIndicatorRenderMode fallback) {
   const std::string normalized = normalizeSettingToken(value);
-  if (normalized == "3d" || normalized == "world" ||
-      normalized == "world-3d") {
+  if (normalized == "3d" || normalized == "world" || normalized == "world-3d") {
     return AppSettings::JudgementIndicatorRenderMode::World3D;
   }
   if (normalized == "hud" || normalized == "2d" || normalized == "hud-2d") {
@@ -152,9 +151,9 @@ const char *judgementIndicatorRenderModeToString(
   return "3d";
 }
 
-AppSettings::JudgementCounterPosition parseJudgementCounterPosition(
-    const std::string &value,
-    AppSettings::JudgementCounterPosition fallback) {
+AppSettings::JudgementCounterPosition
+parseJudgementCounterPosition(const std::string &value,
+                              AppSettings::JudgementCounterPosition fallback) {
   const std::string normalized = normalizeSettingToken(value);
   if (normalized == "top" || normalized == "0") {
     return AppSettings::JudgementCounterPosition::Top;
@@ -181,8 +180,7 @@ const char *judgementCounterPositionToString(
   return "right";
 }
 
-AppSettings::JudgementTimingDisplayCriteria
-parseJudgementTimingDisplayCriteria(
+AppSettings::JudgementTimingDisplayCriteria parseJudgementTimingDisplayCriteria(
     const std::string &value,
     AppSettings::JudgementTimingDisplayCriteria fallback) {
   const std::string normalized = normalizeSettingToken(value);
@@ -203,8 +201,8 @@ parseJudgementTimingDisplayCriteria(
       normalized == "bad-below" || normalized == "3") {
     return AppSettings::JudgementTimingDisplayCriteria::BadOrBelow;
   }
-  if (normalized == "off" || normalized == "none" ||
-      normalized == "disabled" || normalized == "4") {
+  if (normalized == "off" || normalized == "none" || normalized == "disabled" ||
+      normalized == "4") {
     return AppSettings::JudgementTimingDisplayCriteria::Off;
   }
   return fallback;
@@ -227,8 +225,9 @@ const char *judgementTimingDisplayCriteriaToString(
   return "great_or_below";
 }
 
-AppSettings::GaugeBarPosition parseGaugeBarPosition(
-    const std::string &value, AppSettings::GaugeBarPosition fallback) {
+AppSettings::GaugeBarPosition
+parseGaugeBarPosition(const std::string &value,
+                      AppSettings::GaugeBarPosition fallback) {
   const std::string normalized = normalizeSettingToken(value);
   if (normalized == "world" || normalized == "world-space" ||
       normalized == "3d" || normalized == "0") {
@@ -243,8 +242,7 @@ AppSettings::GaugeBarPosition parseGaugeBarPosition(
   return fallback;
 }
 
-const char *gaugeBarPositionToString(
-    AppSettings::GaugeBarPosition position) {
+const char *gaugeBarPositionToString(AppSettings::GaugeBarPosition position) {
   switch (position) {
   case AppSettings::GaugeBarPosition::World:
     return "world";
@@ -256,8 +254,9 @@ const char *gaugeBarPositionToString(
   return "world";
 }
 
-AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
-    const std::string &value, AppSettings::VisibleTimeBpmStrategy fallback) {
+AppSettings::VisibleTimeBpmStrategy
+parseVisibleTimeBpmStrategy(const std::string &value,
+                            AppSettings::VisibleTimeBpmStrategy fallback) {
   const std::string normalized = normalizeSettingToken(value);
   if (normalized == "chart" || normalized == "chart-bpm" ||
       normalized == "main" || normalized == "metadata") {
@@ -270,8 +269,8 @@ AppSettings::VisibleTimeBpmStrategy parseVisibleTimeBpmStrategy(
   return fallback;
 }
 
-const char *visibleTimeBpmStrategyToString(
-    AppSettings::VisibleTimeBpmStrategy strategy) {
+const char *
+visibleTimeBpmStrategyToString(AppSettings::VisibleTimeBpmStrategy strategy) {
   switch (strategy) {
   case AppSettings::VisibleTimeBpmStrategy::Chart:
     return "chart";
@@ -281,8 +280,8 @@ const char *visibleTimeBpmStrategyToString(
   return "chart";
 }
 
-AppSettings::UiThemeMode parseUiThemeMode(
-    const std::string &value, AppSettings::UiThemeMode fallback) {
+AppSettings::UiThemeMode parseUiThemeMode(const std::string &value,
+                                          AppSettings::UiThemeMode fallback) {
   const std::string normalized = normalizeSettingToken(value);
   if (normalized == "dark" || normalized == "0") {
     return AppSettings::UiThemeMode::Dark;
@@ -367,13 +366,11 @@ std::string parseAssistOptionId(const std::string &value,
 std::string parsePacemakerTargetId(const std::string &value,
                                    const std::string &fallback) {
   const std::string normalized = normalizeUpperOptionToken(value);
-  if (normalized == "OFF" || normalized == "NONE" ||
-      normalized == "DISABLED") {
+  if (normalized == "OFF" || normalized == "NONE" || normalized == "DISABLED") {
     return "OFF";
   }
-  if (normalized == "BEST" || normalized == "PB" ||
-      normalized == "HIGHSCORE" || normalized == "HIGH-SCORE" ||
-      normalized == "PERSONAL-BEST") {
+  if (normalized == "BEST" || normalized == "PB" || normalized == "HIGHSCORE" ||
+      normalized == "HIGH-SCORE" || normalized == "PERSONAL-BEST") {
     return "BEST";
   }
   if (normalized == "A" || normalized == "AA" || normalized == "AAA" ||
@@ -440,15 +437,14 @@ void AppSettings::sanitize() {
   playAreaWidth8K = sanitizePlayAreaWidth(playAreaWidth8K);
   playAreaWidth10K = sanitizePlayAreaWidth(playAreaWidth10K);
   playAreaWidth14K = sanitizePlayAreaWidth(playAreaWidth14K);
-  judgementIndicatorY = sanitizeFloat(
-      judgementIndicatorY, kDefaultJudgementIndicatorY,
-      kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
+  judgementIndicatorY =
+      sanitizeFloat(judgementIndicatorY, kDefaultJudgementIndicatorY,
+                    kMinJudgementIndicatorY, kMaxJudgementIndicatorY);
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
-  judgementTextY =
-      sanitizeFloat(judgementTextY, kDefaultJudgementTextY, kMinJudgementTextY,
-                    kMaxJudgementTextY);
+  judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
+                                 kMinJudgementTextY, kMaxJudgementTextY);
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:
@@ -524,8 +520,7 @@ void AppSettings::sanitize() {
   selectedAssistOption =
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
-      parsePacemakerTargetId(selectedPacemakerTarget,
-                             kDefaultPacemakerTarget);
+      parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {
@@ -609,8 +604,8 @@ bool AppSettings::save() const {
        << "\n";
   file << "input_keysound_enabled=" << (sanitized.inputKeysoundEnabled ? 1 : 0)
        << "\n";
-  file << "prep_metronome_enabled="
-       << (sanitized.prepMetronomeEnabled ? 1 : 0) << "\n";
+  file << "prep_metronome_enabled=" << (sanitized.prepMetronomeEnabled ? 1 : 0)
+       << "\n";
   file << "show_invisible_notes=" << (sanitized.showInvisibleNotes ? 1 : 0)
        << "\n";
   file << "touch_visualization_enabled="
@@ -626,8 +621,8 @@ bool AppSettings::save() const {
   file << "lane_length=" << sanitized.laneLength << "\n";
   file << "lane_beam_length_percent=" << sanitized.laneBeamLengthPercent
        << "\n";
-  file << "note_start_position_percent="
-       << sanitized.noteStartPositionPercent << "\n";
+  file << "note_start_position_percent=" << sanitized.noteStartPositionPercent
+       << "\n";
   file << "floating_lane_cover_enabled="
        << (sanitized.floatingLaneCoverEnabled ? 1 : 0) << "\n";
   file << "play_area_width_4k=" << sanitized.playAreaWidth4K << "\n";
@@ -652,8 +647,7 @@ bool AppSettings::save() const {
   file << "judgement_counter_enabled="
        << (sanitized.judgementCounterEnabled ? 1 : 0) << "\n";
   file << "judgement_counter_position="
-       << judgementCounterPositionToString(
-              sanitized.judgementCounterPosition)
+       << judgementCounterPositionToString(sanitized.judgementCounterPosition)
        << "\n";
   file << "judgement_timing_fast_slow_criteria="
        << judgementTimingDisplayCriteriaToString(
@@ -677,27 +671,35 @@ bool AppSettings::save() const {
   file << "selected_play_option=" << sanitized.selectedPlayOption << "\n";
   file << "selected_ln_mode=" << sanitized.selectedLnMode << "\n";
   file << "selected_assist_option=" << sanitized.selectedAssistOption << "\n";
-  file << "selected_pacemaker_target="
-       << sanitized.selectedPacemakerTarget << "\n";
+  file << "selected_pacemaker_target=" << sanitized.selectedPacemakerTarget
+       << "\n";
   file << "default_difficulty_tables_seeded="
        << (sanitized.defaultDifficultyTablesSeeded ? 1 : 0) << "\n";
   return file.good();
 }
 
 AppSettings AppSettings::load() {
-  return loadLegacyCfg(configPath());
+  AppSettings settings;
+  loadLegacyCfg(configPath(), settings);
+  settings.sanitize();
+  return settings;
 }
 
-AppSettings AppSettings::loadLegacyCfg(
-    const std::filesystem::path &path,
-    std::vector<std::string> *diagnostics) {
-  AppSettings settings;
+bool AppSettings::loadLegacyCfg(const std::filesystem::path &path,
+                                AppSettings &settings,
+                                std::vector<std::string> *diagnostics) {
   std::ifstream file(path);
   if (!file.is_open()) {
-    settings.sanitize();
-    return settings;
+    if (diagnostics != nullptr) {
+      diagnostics->push_back("Unable to open legacy settings file");
+    }
+    return false;
   }
+  return parseLegacyCfg(file, settings, diagnostics);
+}
 
+bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
+                                 std::vector<std::string> *diagnostics) {
   std::string line;
   while (std::getline(file, line)) {
     line = trim(line);
@@ -727,8 +729,7 @@ AppSettings AppSettings::loadLegacyCfg(
         }
       } else if (key == "visible_time_bpm_strategy") {
         settings.visibleTimeBpmStrategy =
-            parseVisibleTimeBpmStrategy(value,
-                                        settings.visibleTimeBpmStrategy);
+            parseVisibleTimeBpmStrategy(value, settings.visibleTimeBpmStrategy);
       } else if (key == "input_keysound_enabled") {
         bool parsed = settings.inputKeysoundEnabled;
         if (parseBool(value, parsed)) {
@@ -817,9 +818,8 @@ AppSettings AppSettings::loadLegacyCfg(
           settings.judgementCounterEnabled = parsed;
         }
       } else if (key == "judgement_counter_position") {
-        settings.judgementCounterPosition =
-            parseJudgementCounterPosition(value,
-                                          settings.judgementCounterPosition);
+        settings.judgementCounterPosition = parseJudgementCounterPosition(
+            value, settings.judgementCounterPosition);
       } else if (key == "judgement_timing_fast_slow_criteria") {
         settings.judgementTimingFastSlowCriteria =
             parseJudgementTimingDisplayCriteria(
@@ -879,6 +879,12 @@ AppSettings AppSettings::loadLegacyCfg(
     }
   }
 
+  if (file.bad()) {
+    if (diagnostics != nullptr) {
+      diagnostics->push_back("I/O failure while reading legacy settings");
+    }
+    return false;
+  }
   settings.sanitize();
-  return settings;
+  return true;
 }
