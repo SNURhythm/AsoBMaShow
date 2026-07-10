@@ -33,13 +33,31 @@ void appendMessage(std::string &message, std::string_view addition) {
   message += addition;
 }
 
+bool sameVolumes(const Volumes &left, const Volumes &right) {
+  return left.master == right.master && left.bgm == right.bgm &&
+         left.keysound == right.keysound;
+}
+
+void updateVolumeFields(player_settings::AudioSettings &settings,
+                        const Volumes &volumes) {
+  settings.masterVolume = volumes.master;
+  settings.bgmVolume = volumes.bgm;
+  settings.keysoundVolume = volumes.keysound;
+}
+
 } // namespace
 
 AudioDeviceManager::AudioDeviceManager(
     IAudioRuntime &runtime, IPlaybackSession &playback,
     player_settings::AudioSettings lastWorkingSettings)
-    : runtime_(runtime), playback_(playback),
-      lastWorkingSettings_(std::move(lastWorkingSettings)) {}
+    : runtime_(runtime), playback_(playback) {
+  (void)lastWorkingSettings;
+  const StreamRequest effectiveRequest = runtime_.runtimeState().request;
+  lastWorkingSettings_.outputDeviceId = effectiveRequest.deviceId;
+  lastWorkingSettings_.requestedSampleRate = effectiveRequest.sampleRate;
+  lastWorkingSettings_.requestedBufferFrames = effectiveRequest.bufferFrames;
+  updateVolumeFields(lastWorkingSettings_, appliedVolumes_);
+}
 
 Capabilities AudioDeviceManager::capabilities() const {
   return runtime_.capabilities();
@@ -50,37 +68,54 @@ AudioDeviceManager::lastWorkingSettings() const {
   return lastWorkingSettings_;
 }
 
+const ApplyResult &AudioDeviceManager::lastApplyResult() const {
+  return lastApplyResult_;
+}
+
+ApplyResult AudioDeviceManager::remember(ApplyResult result) {
+  lastApplyResult_ = result;
+  return result;
+}
+
 ApplyResult
 AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
   const RuntimeState previousRuntime = runtime_.runtimeState();
   const StreamRequest request = requestFrom(candidate);
+  const Volumes candidateVolumes = volumesFrom(candidate);
+  if (!sameVolumes(candidateVolumes, appliedVolumes_)) {
+    runtime_.setVolumes(candidateVolumes);
+    appliedVolumes_ = candidateVolumes;
+  }
+  updateVolumeFields(lastWorkingSettings_, candidateVolumes);
   std::string validationMessage;
   if (!validateRequest(request, runtime_.capabilities(), validationMessage)) {
-    return {.status = ApplyStatus::Unsupported,
-            .effective = previousRuntime,
-            .message = std::move(validationMessage)};
+    return remember({.status = ApplyStatus::Unsupported,
+                     .effective = previousRuntime,
+                     .message = std::move(validationMessage)});
   }
 
   if (request == previousRuntime.request) {
-    runtime_.setVolumes(volumesFrom(candidate));
     lastWorkingSettings_ = candidate;
-    return {.status = ApplyStatus::Applied,
-            .effective = runtime_.runtimeState()};
+    return remember(
+        {.status = ApplyStatus::Applied, .effective = runtime_.runtimeState()});
   }
 
   const PlaybackSnapshot snapshot = playback_.suspendAndDrain();
   if (!snapshot.valid) {
     playback_.leavePlaybackStopped();
-    return {.status = ApplyStatus::FailedStopped,
-            .effective = runtime_.runtimeState(),
-            .message = "Playback could not be suspended and drained"};
+    return remember({
+        .status = ApplyStatus::FailedStopped,
+        .effective = runtime_.runtimeState(),
+        .message = "Playback could not be suspended and drained",
+    });
   }
   std::string restartError;
   if (!runtime_.restart(request, restartError)) {
     if (restartError.empty()) {
       restartError = "Audio stream restart failed";
     }
-    return rollback(previousRuntime, snapshot, std::move(restartError));
+    return remember(
+        rollback(previousRuntime, snapshot, std::move(restartError)));
   }
 
   std::string playbackError;
@@ -88,14 +123,14 @@ AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
     if (playbackError.empty()) {
       playbackError = "Playback could not resume on the candidate stream";
     }
-    return rollback(previousRuntime, snapshot, std::move(playbackError));
+    return remember(
+        rollback(previousRuntime, snapshot, std::move(playbackError)));
   }
 
-  runtime_.setVolumes(volumesFrom(candidate));
   lastWorkingSettings_ = candidate;
-  return {.status = ApplyStatus::Applied,
-          .effective = runtime_.runtimeState(),
-          .playbackResumed = snapshot.active};
+  return remember({.status = ApplyStatus::Applied,
+                   .effective = runtime_.runtimeState(),
+                   .playbackResumed = snapshot.active});
 }
 
 bool AudioDeviceManager::validateRequest(const StreamRequest &request,

@@ -2991,6 +2991,11 @@ void Jukebox::renderVisualsAt(long long micro) {
 }
 
 audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
+  return playWithClockState(startMicros, false);
+}
+
+audio::playback::BackendOperationResult
+Jukebox::playWithClockState(long long startMicros, bool paused) {
   std::lock_guard<std::mutex> lock(playThreadLock);
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
@@ -3044,7 +3049,8 @@ audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
         scheduleAudioFromCursor();
         playOverlappingAudioAt(startMicros);
       },
-      [this] { wakeScheduler(); });
+      [this] { wakeScheduler(); },
+      {.positionMicros = bgaTimelineMicro, .running = !paused});
   if (!started.success) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", started.diagnostic.c_str());
     return started;
@@ -3328,20 +3334,33 @@ bool Jukebox::restorePlayback(const audio::PlaybackSnapshot &snapshot,
     return false;
   }
   if (!snapshot.active) {
-    audio.seekClock(snapshot.positionMicros);
-    stopwatch->seek(snapshot.positionMicros);
-    stopwatch->pause();
-    return true;
+    jukebox_lifecycle::SessionState lifecycleState{
+        .isPlaying = isPlaying,
+        .schedulerActive = schedulerActive,
+        .stopwatch = *stopwatch,
+        .transitionMutex = playThreadLock,
+        .positionMutex = seekLock,
+        .audioCursor = audioCursor,
+        .bmpCursor = bmpCursor,
+        .bmpLayerCursor = bmpLayerCursor,
+        .currentBga = currentBga,
+        .currentBmpLayer = currentBmpLayer,
+    };
+    return jukebox_lifecycle::RestoreInactivePlayback(
+               lifecycleState,
+               {.positionMicros = snapshot.positionMicros,
+                .running = !snapshot.paused},
+               [this, &snapshot] { audio.seekClock(snapshot.positionMicros); },
+               [this] { wakeScheduler(); })
+        .success;
   }
-  const auto started = play(snapshot.positionMicros);
+  const auto started =
+      playWithClockState(snapshot.positionMicros, snapshot.paused);
   if (!started.success) {
     errorMessage = started.diagnostic.empty()
                        ? "Jukebox playback could not resume"
                        : started.diagnostic;
     return false;
-  }
-  if (snapshot.paused) {
-    pause();
   }
   return true;
 }

@@ -178,8 +178,11 @@ void testRejectsUnsupportedRequestBeforeSuspension() {
           "unknown device is rejected as unsupported");
   require(playback.suspendCount == 0,
           "unsupported request is rejected before playback suspension");
-  require(manager.lastWorkingSettings() == baseSettings(),
-          "unsupported imported intent does not replace working settings");
+  auto expectedWorking = baseSettings();
+  expectedWorking.masterVolume = 0.25F;
+  require(manager.lastWorkingSettings() == expectedWorking,
+          "unsupported imported stream intent preserves independently applied "
+          "volume settings");
   require(result.effective == runtime.runtimeState(),
           "unsupported result still reports effective runtime state");
 }
@@ -259,9 +262,8 @@ void testSuccessfulRestartRestoresPlaybackInOrder() {
           "valid stream request applies");
   require(result.playbackResumed, "active playback is reported resumed");
   require(events == std::vector<std::string>{"suspend", "restart",
-                                             "restore-playback", "set-volumes"},
-          "successful transaction suspends, restarts, restores, then commits "
-          "volumes");
+                                             "restore-playback"},
+          "successful stream transaction does not reapply unchanged volumes");
   require(manager.lastWorkingSettings() == candidate,
           "successful stream request replaces last working settings");
   require(result.effective.request.deviceId == "usb" &&
@@ -386,6 +388,63 @@ void testFixedRuntimeAcceptsOnlyDefaultStreamIntent() {
           "fixed-runtime rejection happens before suspension");
 }
 
+void testInitialWorkingStreamComesFromEffectiveRuntimeNotImportedIntent() {
+  FakeRuntime runtime;
+  FakePlayback playback;
+  runtime.capabilitiesValue = {};
+  runtime.state.request = {};
+  player_settings::AudioSettings imported;
+  imported.outputDeviceId = "portaudio:desktop-only";
+  imported.requestedSampleRate = 48000;
+  imported.requestedBufferFrames = 128;
+  imported.masterVolume = 0.25F;
+  audio::AudioDeviceManager manager(runtime, playback, imported);
+
+  const auto &working = manager.lastWorkingSettings();
+  require(working.outputDeviceId.empty() && working.requestedSampleRate == 0 &&
+              working.requestedBufferFrames == 0,
+          "last-working stream fields come from the effective fixed runtime");
+  require(std::fabs(working.masterVolume - 1.0F) < 0.00001F,
+          "last-working volumes begin at the runtime's initial app gain");
+}
+
+void testUnsupportedImportedStreamStillAppliesIndependentVolumes() {
+  FakeRuntime runtime;
+  FakePlayback playback;
+  runtime.capabilitiesValue = {};
+  runtime.state.request = {};
+  audio::AudioDeviceManager manager(runtime, playback, {});
+
+  player_settings::AudioSettings imported;
+  imported.outputDeviceId = "portaudio:desktop-only";
+  imported.requestedSampleRate = 48000;
+  imported.requestedBufferFrames = 128;
+  imported.masterVolume = 0.4F;
+  imported.bgmVolume = 0.3F;
+  imported.keysoundVolume = 0.2F;
+  const auto result = manager.apply(imported);
+
+  require(result.status == audio::ApplyStatus::Unsupported,
+          "fixed runtime preserves and reports unsupported stream intent");
+  require(manager.lastApplyResult() == result,
+          "manager retains the complete latest apply status for startup/UI "
+          "reporting");
+  require(
+      std::fabs(runtime.volumes.master - 0.4F) < 0.00001F &&
+          std::fabs(runtime.volumes.bgm - 0.3F) < 0.00001F &&
+          std::fabs(runtime.volumes.keysound - 0.2F) < 0.00001F,
+      "supported app-owned volumes apply despite unsupported stream intent");
+  const auto &working = manager.lastWorkingSettings();
+  require(working.outputDeviceId.empty() && working.requestedSampleRate == 0 &&
+              working.requestedBufferFrames == 0,
+          "unsupported stream intent does not replace the working runtime");
+  require(
+      std::fabs(working.masterVolume - 0.4F) < 0.00001F &&
+          std::fabs(working.bgmVolume - 0.3F) < 0.00001F &&
+          std::fabs(working.keysoundVolume - 0.2F) < 0.00001F,
+      "successfully applied volumes advance independently in working state");
+}
+
 } // namespace
 
 int main() {
@@ -399,5 +458,7 @@ int main() {
   testDoubleFailureLeavesPlaybackStopped();
   testFailedDrainNeverTouchesTheRuntime();
   testFixedRuntimeAcceptsOnlyDefaultStreamIntent();
+  testInitialWorkingStreamComesFromEffectiveRuntimeNotImportedIntent();
+  testUnsupportedImportedStreamStillAppliesIndependentVolumes();
   return 0;
 }

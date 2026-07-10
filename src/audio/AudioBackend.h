@@ -3,7 +3,9 @@
 #include "AudioMix.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,11 @@ struct RuntimeState {
 };
 
 using RenderCallback = void (*)(void *, std::uint32_t, int, void *);
+using BufferFrameProbe = std::function<bool(std::uint32_t)>;
+
+std::vector<std::uint32_t>
+ProbeSupportedBufferFrames(std::span<const std::uint32_t> candidates,
+                           const BufferFrameProbe &probe);
 
 class IBackend {
 public:
@@ -49,6 +56,11 @@ public:
   virtual bool start(std::string &errorMessage) = 0;
   virtual bool stop(std::string &errorMessage) = 0;
   [[nodiscard]] virtual bool isStarted() const = 0;
+  [[nodiscard]] virtual audio::playback::BackendStateObservation
+  observeState() const {
+    return {.state = isStarted() ? audio::playback::BackendRunState::Running
+                                 : audio::playback::BackendRunState::Stopped};
+  }
   [[nodiscard]] virtual RuntimeState runtimeState() const = 0;
 };
 

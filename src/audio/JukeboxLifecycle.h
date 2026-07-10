@@ -19,6 +19,11 @@ struct CursorPosition {
   size_t bmpLayer = 0;
 };
 
+struct ClockState {
+  long long positionMicros = 0;
+  bool running = true;
+};
+
 struct SessionState {
   std::atomic_bool &isPlaying;
   std::atomic_bool &schedulerActive;
@@ -36,6 +41,14 @@ struct SeekState {
   bool wasPlaying = false;
   bool wasClockRunning = false;
 };
+
+inline void RestoreClockState(Stopwatch &stopwatch, ClockState clock) {
+  stopwatch.pause();
+  stopwatch.seek(clock.positionMicros);
+  if (clock.running) {
+    stopwatch.resume();
+  }
+}
 
 inline audio::playback::BackendOperationResult
 ContextualizeFailure(audio::playback::BackendOperationResult result,
@@ -107,7 +120,8 @@ template <typename Lifecycle, typename CommitAudio, typename WakeScheduler>
 [[nodiscard]] audio::playback::BackendOperationResult
 StartPlayback(Lifecycle &lifecycle, std::string_view context,
               SessionState &state, CursorPosition target,
-              CommitAudio &&commitAudio, WakeScheduler &&wakeScheduler) {
+              CommitAudio &&commitAudio, WakeScheduler &&wakeScheduler,
+              ClockState clock = {}) {
   return RunAfterConfirmedStart(lifecycle, context, [&] {
     {
       std::lock_guard<std::mutex> positionLock(state.positionMutex);
@@ -117,11 +131,27 @@ StartPlayback(Lifecycle &lifecycle, std::string_view context,
       state.bmpLayerCursor = target.bmpLayer;
       std::invoke(std::forward<CommitAudio>(commitAudio));
       state.schedulerActive.store(true, std::memory_order_release);
-      state.stopwatch.start();
       state.isPlaying.store(true, std::memory_order_release);
+      RestoreClockState(state.stopwatch, clock);
     }
     std::invoke(std::forward<WakeScheduler>(wakeScheduler));
   });
+}
+
+template <typename CommitAudio, typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+RestoreInactivePlayback(SessionState &state, ClockState clock,
+                        CommitAudio &&commitAudio,
+                        WakeScheduler &&wakeScheduler) {
+  std::lock_guard<std::mutex> transitionLock(state.transitionMutex);
+  std::lock_guard<std::mutex> positionLock(state.positionMutex);
+  state.isPlaying.store(false, std::memory_order_release);
+  state.schedulerActive.store(false, std::memory_order_release);
+  state.stopwatch.pause();
+  std::invoke(std::forward<CommitAudio>(commitAudio));
+  RestoreClockState(state.stopwatch, clock);
+  std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  return {.success = true};
 }
 
 inline SeekState CaptureSeekState(const SessionState &state) {

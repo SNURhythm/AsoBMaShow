@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <limits>
@@ -23,6 +22,20 @@
 #endif
 
 namespace audio {
+
+std::vector<std::uint32_t>
+ProbeSupportedBufferFrames(std::span<const std::uint32_t> candidates,
+                           const BufferFrameProbe &probe) {
+  std::vector<std::uint32_t> supported;
+  supported.reserve(candidates.size());
+  for (const std::uint32_t frames : candidates) {
+    if (probe(frames)) {
+      supported.push_back(frames);
+    }
+  }
+  return supported;
+}
+
 namespace {
 
 constexpr int kOutputChannels = 2;
@@ -77,9 +90,6 @@ public:
 
   ~MiniaudioStream() override {
     if (initialized_) {
-      if (started_.load(std::memory_order_acquire)) {
-        (void)ma_device_stop(&device_);
-      }
       ma_device_uninit(&device_);
     }
   }
@@ -91,8 +101,13 @@ public:
       errorMessage = "Miniaudio device is unavailable";
       return false;
     }
-    if (isStarted()) {
+    const auto observed = observeState();
+    if (observed.state == audio::playback::BackendRunState::Running) {
       return true;
+    }
+    if (observed.state == audio::playback::BackendRunState::Unknown) {
+      errorMessage = observed.diagnostic;
+      return false;
     }
     const ma_result result = ma_device_start(&device_);
     if (result != MA_SUCCESS) {
@@ -100,13 +115,20 @@ public:
                      ma_result_description(result);
       return false;
     }
-    started_.store(true, std::memory_order_release);
     return true;
   }
 
   bool stop(std::string &errorMessage) override {
-    if (!initialized_ || !isStarted()) {
+    if (!initialized_) {
       return true;
+    }
+    const auto observed = observeState();
+    if (observed.state == audio::playback::BackendRunState::Stopped) {
+      return true;
+    }
+    if (observed.state == audio::playback::BackendRunState::Unknown) {
+      errorMessage = observed.diagnostic;
+      return false;
     }
     const ma_result result = ma_device_stop(&device_);
     if (result != MA_SUCCESS) {
@@ -114,12 +136,28 @@ public:
                      ma_result_description(result);
       return false;
     }
-    started_.store(false, std::memory_order_release);
     return true;
   }
 
   [[nodiscard]] bool isStarted() const override {
-    return initialized_ && started_.load(std::memory_order_acquire);
+    return observeState().state == audio::playback::BackendRunState::Running;
+  }
+
+  [[nodiscard]] audio::playback::BackendStateObservation
+  observeState() const override {
+    if (!initialized_) {
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "Miniaudio device is unavailable"};
+    }
+    switch (ma_device_get_state(&device_)) {
+    case ma_device_state_stopped:
+      return {.state = audio::playback::BackendRunState::Stopped};
+    case ma_device_state_started:
+      return {.state = audio::playback::BackendRunState::Running};
+    default:
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "Miniaudio device is transitioning or unavailable"};
+    }
   }
 
   [[nodiscard]] RuntimeState runtimeState() const override { return state_; }
@@ -143,7 +181,6 @@ private:
   void *renderUserData_ = nullptr;
   ma_device device_{};
   RuntimeState state_;
-  std::atomic_bool started_ = false;
   bool initialized_ = false;
 };
 
@@ -198,6 +235,55 @@ struct PortAudioDeviceRecord {
   double defaultLowOutputLatency = 0.0;
 };
 
+int portAudioProbeCallback(const void *, void *output, unsigned long frameCount,
+                           const PaStreamCallbackTimeInfo *,
+                           PaStreamCallbackFlags, void *) {
+  fillSilence(output,
+              static_cast<std::uint32_t>(std::min<unsigned long>(
+                  frameCount, std::numeric_limits<std::uint32_t>::max())),
+              kOutputChannels);
+  return paContinue;
+}
+
+bool probePortAudioBufferFrames(const PortAudioDeviceRecord &device,
+                                std::uint32_t bufferFrames) {
+  std::vector<double> rates;
+  rates.reserve(device.info.sampleRates.size() + 1);
+  if (device.defaultSampleRate > 0.0) {
+    rates.push_back(device.defaultSampleRate);
+  }
+  for (const std::uint32_t rate : device.info.sampleRates) {
+    const double candidate = static_cast<double>(rate);
+    if (std::find(rates.begin(), rates.end(), candidate) == rates.end()) {
+      rates.push_back(candidate);
+    }
+  }
+  if (rates.empty()) {
+    return false;
+  }
+
+  PaStreamParameters parameters{};
+  parameters.device = device.index;
+  parameters.channelCount = kOutputChannels;
+  parameters.sampleFormat = paInt16;
+  parameters.suggestedLatency = device.defaultLowOutputLatency;
+  const unsigned long frames =
+      bufferFrames == 0 ? paFramesPerBufferUnspecified : bufferFrames;
+  for (const double rate : rates) {
+    PaStream *stream = nullptr;
+    const PaError opened =
+        Pa_OpenStream(&stream, nullptr, &parameters, rate, frames, paNoFlag,
+                      portAudioProbeCallback, nullptr);
+    if (opened != paNoError || stream == nullptr) {
+      return false;
+    }
+    if (Pa_CloseStream(stream) != paNoError) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::vector<PortAudioDeviceRecord> enumeratePortAudioDevices() {
   constexpr std::array<std::uint32_t, 6> sampleRates{44100, 48000,  88200,
                                                      96000, 176400, 192000};
@@ -242,10 +328,13 @@ std::vector<PortAudioDeviceRecord> enumeratePortAudioDevices() {
         record.info.sampleRates.push_back(rate);
       }
     }
-    record.info.bufferFrames.assign(bufferFrames.begin(), bufferFrames.end());
     record.index = index;
     record.defaultSampleRate = device->defaultSampleRate;
     record.defaultLowOutputLatency = device->defaultLowOutputLatency;
+    record.info.bufferFrames =
+        ProbeSupportedBufferFrames(bufferFrames, [&](std::uint32_t frames) {
+          return probePortAudioBufferFrames(record, frames);
+        });
     result.push_back(std::move(record));
   }
   return result;
@@ -297,7 +386,7 @@ public:
 
   ~PortAudioStream() override {
     if (stream_ != nullptr) {
-      if (started_.load(std::memory_order_acquire)) {
+      if (observeState().state != audio::playback::BackendRunState::Stopped) {
         (void)Pa_AbortStream(stream_);
       }
       (void)Pa_CloseStream(stream_);
@@ -311,8 +400,13 @@ public:
       errorMessage = "PortAudio stream is unavailable";
       return false;
     }
-    if (isStarted()) {
+    const auto observed = observeState();
+    if (observed.state == audio::playback::BackendRunState::Running) {
       return true;
+    }
+    if (observed.state == audio::playback::BackendRunState::Unknown) {
+      errorMessage = observed.diagnostic;
+      return false;
     }
     const PaError result = Pa_StartStream(stream_);
     if (result != paNoError) {
@@ -320,13 +414,20 @@ public:
           std::string("PortAudio start failed: ") + Pa_GetErrorText(result);
       return false;
     }
-    started_.store(true, std::memory_order_release);
     return true;
   }
 
   bool stop(std::string &errorMessage) override {
-    if (stream_ == nullptr || !isStarted()) {
+    if (stream_ == nullptr) {
       return true;
+    }
+    const auto observed = observeState();
+    if (observed.state == audio::playback::BackendRunState::Stopped) {
+      return true;
+    }
+    if (observed.state == audio::playback::BackendRunState::Unknown) {
+      errorMessage = observed.diagnostic;
+      return false;
     }
     const PaError result = Pa_StopStream(stream_);
     if (result != paNoError) {
@@ -334,12 +435,24 @@ public:
           std::string("PortAudio stop failed: ") + Pa_GetErrorText(result);
       return false;
     }
-    started_.store(false, std::memory_order_release);
     return true;
   }
 
   [[nodiscard]] bool isStarted() const override {
-    return stream_ != nullptr && started_.load(std::memory_order_acquire);
+    return observeState().state == audio::playback::BackendRunState::Running;
+  }
+
+  [[nodiscard]] audio::playback::BackendStateObservation
+  observeState() const override {
+    if (stream_ == nullptr) {
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "PortAudio stream is unavailable"};
+    }
+    const PaError state = Pa_IsStreamStopped(stream_);
+    return audio::playback::InterpretStoppedQueryResult(
+        state, state < 0 ? std::string("PortAudio state query failed: ") +
+                               Pa_GetErrorText(state)
+                         : std::string{});
   }
 
   [[nodiscard]] RuntimeState runtimeState() const override { return state_; }
@@ -366,7 +479,6 @@ private:
   void *renderUserData_ = nullptr;
   PaStream *stream_ = nullptr;
   RuntimeState state_;
-  std::atomic_bool started_ = false;
 };
 
 class PortAudioFactory final : public IBackendFactory {
@@ -377,6 +489,7 @@ public:
       throw std::runtime_error(std::string("PortAudio init failed: ") +
                                Pa_GetErrorText(result));
     }
+    devices_ = enumeratePortAudioDevices();
   }
 
   ~PortAudioFactory() override { (void)Pa_Terminate(); }
@@ -385,8 +498,8 @@ public:
     Capabilities result{.canSelectOutputDevice = true,
                         .canSelectSampleRate = true,
                         .canSelectBufferFrames = true};
-    for (auto &record : enumeratePortAudioDevices()) {
-      result.outputDevices.push_back(std::move(record.info));
+    for (const auto &record : devices_) {
+      result.outputDevices.push_back(record.info);
     }
     return result;
   }
@@ -396,24 +509,22 @@ public:
                                  void *renderUserData,
                                  std::string &errorMessage) override {
     errorMessage.clear();
-    const auto devices = enumeratePortAudioDevices();
     const PortAudioDeviceRecord *selected = nullptr;
     if (request.deviceId.empty()) {
-      const auto defaultDevice =
-          std::find_if(devices.begin(), devices.end(), [](const auto &device) {
-            return device.info.isDefault;
-          });
-      if (defaultDevice != devices.end()) {
+      const auto defaultDevice = std::find_if(
+          devices_.begin(), devices_.end(),
+          [](const auto &device) { return device.info.isDefault; });
+      if (defaultDevice != devices_.end()) {
         selected = &*defaultDevice;
-      } else if (!devices.empty()) {
-        selected = &devices.front();
+      } else if (!devices_.empty()) {
+        selected = &devices_.front();
       }
     } else {
-      const auto exact =
-          std::find_if(devices.begin(), devices.end(), [&](const auto &device) {
+      const auto exact = std::find_if(
+          devices_.begin(), devices_.end(), [&](const auto &device) {
             return device.info.id == request.deviceId;
           });
-      if (exact != devices.end()) {
+      if (exact != devices_.end()) {
         selected = &*exact;
       }
     }
@@ -439,6 +550,9 @@ public:
         *selected, request, renderCallback, renderUserData, errorMessage);
     return stream->valid() ? std::move(stream) : nullptr;
   }
+
+private:
+  std::vector<PortAudioDeviceRecord> devices_;
 };
 
 class DesktopAudioFactory final : public IBackendFactory {

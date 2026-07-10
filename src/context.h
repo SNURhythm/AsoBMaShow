@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <SDL2/SDL.h>
 #include "AppSettings.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -32,6 +33,7 @@ public:
   InputDeviceRegistry inputDeviceRegistry;
   Jukebox jukebox;
   audio::AudioDeviceManager audioDeviceManager;
+  audio::ApplyResult audioStartupApplyResult;
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
@@ -60,7 +62,15 @@ public:
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {
     settings.sanitize();
-    (void)audioDeviceManager.apply(settings.audioVideo.audio);
+    audioStartupApplyResult =
+        audioDeviceManager.apply(settings.audioVideo.audio);
+    if (audioStartupApplyResult.status != audio::ApplyStatus::Applied) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO,
+                  "Saved audio settings were not fully applied: %s",
+                  audioStartupApplyResult.message.empty()
+                      ? "audio runtime remained on its effective working state"
+                      : audioStartupApplyResult.message.c_str());
+    }
     ui_theme::setActiveMode(settings.uiThemeMode == AppSettings::UiThemeMode::Light
                                 ? ui_theme::ThemeMode::Light
                                 : ui_theme::ThemeMode::Dark);

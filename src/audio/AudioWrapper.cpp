@@ -404,9 +404,7 @@ public:
       return {.state = audio::playback::BackendRunState::Unknown,
               .diagnostic = "Audio stream is unavailable"};
     }
-    return {.state = backend_->isStarted()
-                         ? audio::playback::BackendRunState::Running
-                         : audio::playback::BackendRunState::Stopped};
+    return backend_->observeState();
   }
 
   int outputSampleRate() const override {
@@ -957,11 +955,15 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
     errorMessage = "Injected audio backend does not support reconfiguration";
     return false;
   }
-  if (backend != nullptr &&
-      backend->observeState().state !=
-          audio::playback::BackendRunState::Stopped) {
-    errorMessage = "Audio playback must be suspended before reconfiguration";
-    return false;
+  if (backend != nullptr) {
+    if (backend->observeState().state !=
+        audio::playback::BackendRunState::Stopped) {
+      errorMessage = "Audio playback must be suspended before reconfiguration";
+      return false;
+    }
+    backend.reset();
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
   }
 
   auto candidate = backendFactory->open(request, configurableBackendRender,
@@ -989,13 +991,26 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
   }
   const int previousSampleRate =
       currentSampleRate.load(std::memory_order_acquire);
+  std::optional<audio::playback::OutputRateTransition> transition;
   if (previousSampleRate != targetSampleRate) {
-    auto transition = audio::playback::PrepareOutputRateTransition(
+    transition = audio::playback::PrepareOutputRateTransition(
         sounds, previousSampleRate, targetSampleRate);
     if (!transition.has_value()) {
       errorMessage = "Unable to prepare PCM for requested output sample rate";
       return false;
     }
+  }
+
+  if (!candidate->start(errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Audio backend could not start the requested stream";
+    }
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+    return false;
+  }
+
+  if (transition.has_value()) {
     audio::playback::CommitOutputRateTransition(std::move(*transition),
                                                 callbackState);
     const auto previousClockFrame =
@@ -1012,15 +1027,6 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
           std::memory_order_release);
     }
     currentSampleRate.store(targetSampleRate, std::memory_order_release);
-  }
-
-  if (!candidate->start(errorMessage)) {
-    if (errorMessage.empty()) {
-      errorMessage = "Audio backend could not start the requested stream";
-    }
-    backendState.store(audio::playback::BackendRunState::Stopped,
-                       std::memory_order_release);
-    return false;
   }
 
   runtimeState_ = candidate->runtimeState();

@@ -48,6 +48,7 @@ struct ApplyResult {
   RuntimeState effective;
   bool playbackResumed = false;
   std::string message;
+  bool operator==(const ApplyResult &) const = default;
 };
 
 class AudioDeviceManager {
@@ -58,6 +59,7 @@ public:
   [[nodiscard]] Capabilities capabilities() const;
   [[nodiscard]] const player_settings::AudioSettings &
   lastWorkingSettings() const;
+  [[nodiscard]] const ApplyResult &lastApplyResult() const;
   ApplyResult apply(const player_settings::AudioSettings &candidate);
 
 private:
@@ -67,10 +69,13 @@ private:
   ApplyResult rollback(const RuntimeState &previousRuntime,
                        const PlaybackSnapshot &snapshot,
                        std::string failureMessage);
+  ApplyResult remember(ApplyResult result);
 
   IAudioRuntime &runtime_;
   IPlaybackSession &playback_;
   player_settings::AudioSettings lastWorkingSettings_;
+  Volumes appliedVolumes_;
+  ApplyResult lastApplyResult_;
 };
 
 } // namespace audio

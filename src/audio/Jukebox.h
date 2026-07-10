@@ -221,6 +221,8 @@ private:
       std::atomic_bool &isCancelled);
   void scheduleAudioFromCursor();
   void playOverlappingAudioAt(long long micro);
+  audio::playback::BackendOperationResult
+  playWithClockState(long long startMicros, bool paused);
   void ensurePrepMetronomeSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
