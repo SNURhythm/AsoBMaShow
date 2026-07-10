@@ -6,6 +6,7 @@
 #include "SqliteRAII.h"
 #include "audio/MusicPlaylistDB.h"
 
+#include <filesystem>
 #include <utility>
 
 namespace app_database_initializer {
@@ -55,8 +56,19 @@ inline bool initializeScoreDatabase() {
   return helper.EnsureSchema();
 }
 
+inline bool initializeScoreDatabase(const std::filesystem::path &databasePath) {
+  ScoreDBHelper helper(databasePath);
+  return helper.EnsureSchema();
+}
+
 inline bool initializeReplayDatabase() {
   ReplayDBHelper &helper = ReplayDBHelper::GetInstance();
+  return helper.EnsureSchema();
+}
+
+inline bool initializeReplayDatabase(
+    const std::filesystem::path &databasePath) {
+  ReplayDBHelper helper(databasePath);
   return helper.EnsureSchema();
 }
 
@@ -71,8 +83,8 @@ inline bool initializeMusicDatabase() {
 
 inline DatabaseInitializationStatus initializeApplicationDatabases() {
   return initializeApplicationDatabasesWith(
-      initializeChartDatabase, initializeScoreDatabase,
-      initializeReplayDatabase, initializeMusicDatabase);
+      initializeChartDatabase, [] { return initializeScoreDatabase(); },
+      [] { return initializeReplayDatabase(); }, initializeMusicDatabase);
 }
 
 } // namespace app_database_initializer

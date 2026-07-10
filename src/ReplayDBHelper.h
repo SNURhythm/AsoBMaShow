@@ -48,6 +48,8 @@ struct ReplaySummary {
 
 class ReplayDBHelper {
 public:
+  static constexpr int kCurrentSchemaVersion = 3;
+
   ReplayDBHelper() = default;
   explicit ReplayDBHelper(std::filesystem::path databasePath);
   ReplayDBHelper(const ReplayDBHelper &) = delete;
