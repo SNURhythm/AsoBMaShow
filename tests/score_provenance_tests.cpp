@@ -1,4 +1,5 @@
 #include "ScoreProvenance.h"
+#include "input/InputTypes.h"
 #include "scene/play/GamePlayStartOptions.h"
 
 #include <array>
@@ -211,6 +212,42 @@ void testPlayStartCaptureIsImmutableAndShared() {
   assert(scoreProvenance == replay.provenance);
 }
 
+void testMobilePlayStartInputCategoriesPreserveResolverClasses() {
+  const std::vector resolverClasses = {
+      input::DeviceClass::Joystick, input::DeviceClass::GameController,
+      input::DeviceClass::Joystick, input::DeviceClass::Touch,
+      input::DeviceClass::GameController};
+
+  const auto categories = collectPlayStartInputDeviceCategories(
+      resolverClasses, PlayStartInputPlatform::Mobile);
+
+  assert(categories == std::vector({InputDeviceCategory::GameController,
+                                    InputDeviceCategory::Joystick,
+                                    InputDeviceCategory::Touch}));
+
+  const std::vector nonTouchResolverClasses = {
+      input::DeviceClass::GameController, input::DeviceClass::Joystick};
+  assert(collectPlayStartInputDeviceCategories(
+             nonTouchResolverClasses, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::GameController,
+                      InputDeviceCategory::Joystick}));
+}
+
+void testPlayStartInputFallbackIsUsedOnlyWhenResolverIsEmpty() {
+  const std::vector<input::DeviceClass> noResolverClasses;
+  assert(collectPlayStartInputDeviceCategories(
+             noResolverClasses, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::Touch}));
+  assert(collectPlayStartInputDeviceCategories(
+             noResolverClasses, PlayStartInputPlatform::Desktop) ==
+         std::vector({InputDeviceCategory::Keyboard}));
+
+  const std::vector controllerOnly = {input::DeviceClass::GameController};
+  assert(collectPlayStartInputDeviceCategories(
+             controllerOnly, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::GameController}));
+}
+
 void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
   bms_parser::ChartMeta meta;
   meta.MD5 = "constrained-md5";
@@ -296,6 +333,8 @@ int main() {
   testFutureSchemaIsRejected();
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
+  testMobilePlayStartInputCategoriesPreserveResolverClasses();
+  testPlayStartInputFallbackIsUsedOnlyWhenResolverIsEmpty();
   testConstrainedPlayCapturesEffectiveWindowsAsModified();
   testCourseSessionAggregatesRecordedStagesByIndex();
   std::cout << "score provenance tests passed\n";

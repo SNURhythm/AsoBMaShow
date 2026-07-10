@@ -2,17 +2,59 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
+#include "../../input/InputTypes.h"
 #include "Pacemaker.h"
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 class Scene;
+
+enum class PlayStartInputPlatform { Desktop, Mobile };
+
+[[nodiscard]] inline InputDeviceCategory
+playStartInputDeviceCategory(input::DeviceClass deviceClass) {
+  switch (deviceClass) {
+  case input::DeviceClass::Keyboard:
+    return InputDeviceCategory::Keyboard;
+  case input::DeviceClass::GameController:
+    return InputDeviceCategory::GameController;
+  case input::DeviceClass::Joystick:
+    return InputDeviceCategory::Joystick;
+  case input::DeviceClass::Touch:
+    return InputDeviceCategory::Touch;
+  case input::DeviceClass::Midi:
+    return InputDeviceCategory::Midi;
+  }
+  return InputDeviceCategory::Unknown;
+}
+
+[[nodiscard]] inline std::vector<InputDeviceCategory>
+collectPlayStartInputDeviceCategories(
+    std::span<const input::DeviceClass> resolverDeviceClasses,
+    PlayStartInputPlatform platform) {
+  std::vector<InputDeviceCategory> categories;
+  categories.reserve(resolverDeviceClasses.size());
+  for (const auto deviceClass : resolverDeviceClasses) {
+    categories.push_back(playStartInputDeviceCategory(deviceClass));
+  }
+  std::ranges::sort(categories);
+  categories.erase(std::unique(categories.begin(), categories.end()),
+                   categories.end());
+  if (categories.empty()) {
+    categories.push_back(platform == PlayStartInputPlatform::Mobile
+                             ? InputDeviceCategory::Touch
+                             : InputDeviceCategory::Keyboard);
+  }
+  return categories;
+}
 
 struct StartOptions {
   unsigned long long startPosition = 0;

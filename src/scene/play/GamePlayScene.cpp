@@ -36,27 +36,16 @@ constexpr long long kHellChargeGaugeTickMicros = 200000LL;
 constexpr long long kCoursePauseHoldMicros = 650000LL;
 constexpr long long kCoursePauseRewindMicros = 260000LL;
 constexpr float kPi = 3.14159265358979323846f;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
+constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Mobile;
+#else
+constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Desktop;
+#endif
 
 Judge makeEffectiveJudge(int rank, CourseJudgementConstraint constraint) {
   Judge judge(rank);
   judge.applyCourseJudgementConstraint(constraint);
   return judge;
-}
-
-InputDeviceCategory provenanceDeviceCategory(input::DeviceClass deviceClass) {
-  switch (deviceClass) {
-  case input::DeviceClass::Keyboard:
-    return InputDeviceCategory::Keyboard;
-  case input::DeviceClass::GameController:
-    return InputDeviceCategory::GameController;
-  case input::DeviceClass::Joystick:
-    return InputDeviceCategory::Joystick;
-  case input::DeviceClass::Touch:
-    return InputDeviceCategory::Touch;
-  case input::DeviceClass::Midi:
-    return InputDeviceCategory::Midi;
-  }
-  return InputDeviceCategory::Unknown;
 }
 
 StartOptions resolvePlayStartInputDevices(StartOptions options,
@@ -65,18 +54,12 @@ StartOptions resolvePlayStartInputDevices(StartOptions options,
   if (!options.inputDeviceCategories.empty()) {
     return options;
   }
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
-  options.inputDeviceCategories = {InputDeviceCategory::Touch};
-#else
   InputBindingResolver resolver(profile, makeGameplayInputScopes(keyMode), {});
-  for (const auto deviceClass : resolver.activeDeviceClasses()) {
-    options.inputDeviceCategories.push_back(
-        provenanceDeviceCategory(deviceClass));
-  }
-  if (options.inputDeviceCategories.empty()) {
-    options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
-  }
-#endif
+  const auto activeDeviceClasses = resolver.activeDeviceClasses();
+  const std::vector<input::DeviceClass> resolverDeviceClasses(
+      activeDeviceClasses.begin(), activeDeviceClasses.end());
+  options.inputDeviceCategories = collectPlayStartInputDeviceCategories(
+      resolverDeviceClasses, kPlayStartInputPlatform);
   return options;
 }
 
