@@ -116,7 +116,12 @@ bool ProfileSettingsController::refresh() {
                                                          : activeProfileId_;
   if (!confirmationProfileId_.empty() &&
       !contains(confirmationProfileId_)) {
+    const auto priorStatus =
+        archivePipelinePriorStatus_ ? archivePipelinePriorStatus_
+                                    : confirmationPriorStatus_;
     clearTransientPhase();
+    releaseArchivePipeline();
+    status_ = priorStatus.value_or(ProfileSettingsStatus{});
   }
   return true;
 }
@@ -127,7 +132,9 @@ bool ProfileSettingsController::select(std::string_view profileId) {
   }
   if (!confirmationProfileId_.empty() &&
       confirmationProfileId_ != profileId) {
-    const auto priorStatus = archivePipelinePriorStatus_;
+    const auto priorStatus =
+        archivePipelinePriorStatus_ ? archivePipelinePriorStatus_
+                                    : confirmationPriorStatus_;
     clearTransientPhase();
     releaseArchivePipeline();
     status_ = priorStatus.value_or(ProfileSettingsStatus{});
@@ -520,6 +527,7 @@ ProfileSettingsController::requestDelete(std::string_view profileId) {
     return result;
   }
   selectedProfileId_ = std::string(profileId);
+  confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmDelete;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
@@ -556,6 +564,7 @@ ProfileSettingsController::requestOverwrite(std::string_view profileId) {
     return result;
   }
   selectedProfileId_ = std::string(profileId);
+  confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmOverwrite;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
@@ -571,13 +580,15 @@ ProfileSettingsController::requestOverwrite(std::string_view profileId) {
 void ProfileSettingsController::clearTransientPhase() {
   phase_ = ProfileSettingsPhase::Idle;
   confirmationProfileId_.clear();
+  confirmationPriorStatus_.reset();
 }
 
 void ProfileSettingsController::cancelConfirmation() {
   if (phase_ == ProfileSettingsPhase::ConfirmDelete ||
       phase_ == ProfileSettingsPhase::ConfirmOverwrite) {
+    const auto priorStatus = confirmationPriorStatus_;
     clearTransientPhase();
-    status_ = {};
+    status_ = priorStatus.value_or(ProfileSettingsStatus{});
   }
 }
 
@@ -595,6 +606,8 @@ bool ProfileSettingsController::beginConfirmedOverwritePicker() {
       !contains(confirmationProfileId_) || !acquireArchivePipeline()) {
     return false;
   }
+  archivePipelinePriorStatus_ =
+      confirmationPriorStatus_.value_or(ProfileSettingsStatus{});
   phase_ = ProfileSettingsPhase::PickingImport;
   return true;
 }
@@ -618,9 +631,7 @@ void ProfileSettingsController::cancelPicker() {
     activeArchiveGeneration_ = 0;
     clearTransientPhase();
     releaseArchivePipeline();
-    if (priorStatus) {
-      status_ = *priorStatus;
-    }
+    status_ = priorStatus.value_or(ProfileSettingsStatus{});
   }
 }
 
@@ -670,6 +681,7 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginExport(
 
   selectedProfileId_ = std::string(profileId);
   confirmationProfileId_.clear();
+  confirmationPriorStatus_.reset();
   phase_ = ProfileSettingsPhase::PreparingExport;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
              .message = "Preparing profile archive..."};
@@ -722,6 +734,9 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginImport(
   if (!acquireArchivePipeline()) {
     return std::nullopt;
   }
+  if (allowedOverwrite && confirmationPriorStatus_) {
+    archivePipelinePriorStatus_ = *confirmationPriorStatus_;
+  }
   if (archive.empty()) {
     clearTransientPhase();
     releaseArchivePipeline();
@@ -750,6 +765,7 @@ std::optional<ProfileArchiveTask> ProfileSettingsController::beginImport(
   }
 
   confirmationProfileId_.clear();
+  confirmationPriorStatus_.reset();
   phase_ = ProfileSettingsPhase::Importing;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
              .message = "Importing profile archive..."};

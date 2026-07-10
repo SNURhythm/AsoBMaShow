@@ -556,6 +556,19 @@ void testArchivePipelineFlagClearsOnEveryTerminalPath() {
     REQUIRE(controller.requestOverwrite("bravo").ok());
     REQUIRE(controller.beginConfirmedOverwritePicker());
     REQUIRE(fake.archivePipelineActive);
+    controller.cancelPicker();
+    REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
+    REQUIRE(controller.confirmationProfileId().empty());
+    REQUIRE(controller.status().message.find("Choose Overwrite") ==
+            std::string::npos);
+    REQUIRE(!fake.archivePipelineActive);
+  }
+  {
+    FakeServices fake;
+    ProfileSettingsController controller(fake.dependencies());
+    REQUIRE(controller.requestOverwrite("bravo").ok());
+    REQUIRE(controller.beginConfirmedOverwritePicker());
+    REQUIRE(fake.archivePipelineActive);
     REQUIRE(controller.select("alpha"));
     REQUIRE(controller.phase() == ProfileSettingsPhase::Idle);
     REQUIRE(controller.confirmationProfileId().empty());

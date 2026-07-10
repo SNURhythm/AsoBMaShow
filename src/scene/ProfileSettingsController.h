@@ -175,6 +175,7 @@ private:
   std::string activeProfileId_;
   std::string selectedProfileId_;
   std::string confirmationProfileId_;
+  std::optional<ProfileSettingsStatus> confirmationPriorStatus_;
   ProfileSettingsPhase phase_ = ProfileSettingsPhase::Idle;
   ProfileSettingsStatus status_;
   std::uint64_t nextArchiveGeneration_ = 1;
