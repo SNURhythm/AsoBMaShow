@@ -791,6 +791,8 @@
 				scene/MainMenuProfileSelections.h,
 				scene/MainMenuScene.cpp,
 				scene/MusicPlayerScene.cpp,
+				scene/ProfileSettingsController.cpp,
+				scene/ProfileSettingsControllerContext.cpp,
 				scene/ResultScene.cpp,
 				scene/SettingsAudioVideoModel.cpp,
 				scene/SettingsScene.cpp,

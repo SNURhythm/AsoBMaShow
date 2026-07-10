@@ -4,6 +4,8 @@ target_sources(main PRIVATE
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    ProfileSettingsController.cpp
+    ProfileSettingsControllerContext.cpp
     SceneManager.cpp
     ResultScene.cpp
     SettingsScene.cpp
